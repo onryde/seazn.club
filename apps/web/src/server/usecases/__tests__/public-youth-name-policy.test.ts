@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { publicEntrants } from "../public";
 import { publicSuspensions } from "../discipline";
-import { publicDivisionStats } from "../player-stats";
+import { divisionPlayerStats, publicDivisionStats } from "../player-stats";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
@@ -101,9 +101,10 @@ describe.skipIf(!HAS_DB)("publicDivisionStats — the public leaderboard applies
   let quinnId: string;
 
   /** Real stats, through the real write path: a fixture in the division and
-   *  a `generic.score` attributed to each person. `publicDivisionStats`
-   *  recomputes its snapshots from the ledger on every read, so rows written
-   *  straight into `player_stat_snapshots` would be wiped before it selects. */
+   *  a `generic.score` attributed to each person. `publicDivisionStats` serves
+   *  the snapshot as it stands and never folds (owner ruling 2026-09-17, the
+   *  stats refresh), so `beforeAll` folds each division through the
+   *  organiser's own read first, the pattern `player-stats.test.ts` uses. */
   async function scoreFor(divisionId: string, scorers: { entrantId: string; personId: string; points: number }[], opponent: string) {
     await createEntrants(s.auth, divisionId, [{ kind: "individual", display_name: opponent, seed: 2, members: [] }]);
     const [stage] = await createStages(s.auth, divisionId, { seq: 1, kind: "league", name: "League", config: {} });
@@ -152,6 +153,8 @@ describe.skipIf(!HAS_DB)("publicDivisionStats — the public leaderboard applies
       payload: { by: quinnEntrant!.id, points: 1, person: quinnId },
     });
     await scoreFor(s.open.divisionId, [{ entrantId: s.open.entrantId, personId: s.open.personId, points: 3 }], "Open Opponent");
+    await divisionPlayerStats(s.auth, s.youth.divisionId, {});
+    await divisionPlayerStats(s.auth, s.open.divisionId, {});
   });
 
   it("youth division: a consented player's row carries the masked name, never the full name", async () => {
