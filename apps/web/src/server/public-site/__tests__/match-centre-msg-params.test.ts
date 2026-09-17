@@ -45,7 +45,16 @@ import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
-import { AWAY, HOME, SUPER_OVER_SCRIPT, TIE_NO_SUPER_OVER, scriptLedger, type Script, type ScriptLedger } from "./cricket-ledger";
+import {
+  AWAY,
+  HOME,
+  SUPER_OVER_SCRIPT,
+  TIE_NO_SUPER_OVER,
+  scriptLedger,
+  summaryOnlyLedger,
+  type Script,
+  type ScriptLedger,
+} from "./cricket-ledger";
 
 // --------------------------------------------------------------- dictionaries
 
@@ -126,17 +135,12 @@ const UNNAMED_PARAM_ALLOWANCE: UnnamedParamAllowance[] = [
     // hiding it.
     reasonHolds: (params) => fielderCarriesAssist(params),
   },
-  {
-    key: /^matchCentre\.result\.(super_over|boundary_count)$/,
-    param: "margin",
-    why: "`resultMsg` passes one shape to the whole result family; a method-only sentence ('won on the super over') has no room for a margin, and regulation/dls/innings do render `{margin}`",
-    // …so the excuse holds only while the family GENUINELY shares that shape:
-    // some sibling result key must be emitted with a non-empty `margin` that
-    // its own template renders in this locale. The day `resultMsg` starts
-    // tailoring its params per method, "one shape for the whole family" stops
-    // being the explanation and a margin nobody renders is just dropped.
-    reasonHolds: (_params, dict) => resultSiblingRendersMargin(dict),
-  },
+  // (A `matchCentre.result.(super_over|boundary_count)` / `margin` entry lived
+  // here while `resultMsg` passed one `{winner, margin}` shape to the whole
+  // result family. Since 2026-09-16 the params are tailored per sentence — a
+  // cricket margin is a count the key's own template places — so there is no
+  // unrendered margin left to excuse, and the "no dead allowance" test below
+  // would red on the entry.)
   {
     key: /^matchCentre\.ballLine\.wicket$/,
     param: "runs",
@@ -147,20 +151,6 @@ const UNNAMED_PARAM_ALLOWANCE: UnnamedParamAllowance[] = [
     reasonHolds: (params) => params.runs === 0,
   },
 ];
-
-/** True when the result family really does share one param shape: some OTHER
- *  `matchCentre.result.*` Msg is emitted with a non-empty `margin` that this
- *  locale's template for that key names. Derived from the emissions
- *  themselves (`EMITTED`, built below — `reasonHolds` runs at test time, long
- *  after), never from a key typed in here. */
-const resultSiblingRendersMargin = (dict: Dict): boolean =>
-  EMITTED.some(({ msg }) => {
-    if (!msg.key.startsWith("matchCentre.result.")) return false;
-    const margin = msg.params?.margin;
-    if (typeof margin !== "string" || margin === "") return false;
-    const template = lookup(dict, msg.key);
-    return typeof template === "string" && placeholdersOf(template).includes("margin");
-  });
 
 const isUniformShapeFiller = (
   key: string,
@@ -366,6 +356,36 @@ function documents(): { label: string; doc: MatchCentreDocT }[] {
       fixture: decidedFixture(decided, { outcome: outcome as PublicFixture["outcome"] }),
     });
   }
+
+  // --- the structured margin's other sentences (owner decision 2026-09-16):
+  //     the singular form, the wickets unit and the innings victory, each off
+  //     a real fold — `DECIDED_SCRIPT` above only ever reaches the plural runs
+  //     sentence. The DLS-on-wickets doc reuses the one-wicket fold with its
+  //     method set, like the loop above: this gate compares params against
+  //     placeholders, and the singular DLS sentence is the one no real fold
+  //     here reaches. Real DLS folds (abandoned chase, revised target) are
+  //     `match-centre.test.ts`'s.
+  const byOneWicket = summaryOnlyLedger([
+    { runs: 6, wickets: 1, legalBalls: 12 },
+    { runs: 7, wickets: 6, legalBalls: 10 },
+  ]);
+  push("cricket/decided+wickets-one", { events: byOneWicket.events, cfg: byOneWicket.cfg, fixture: decidedFixture(byOneWicket) });
+  push("cricket/decided+dls-wickets-one", {
+    events: byOneWicket.events,
+    cfg: byOneWicket.cfg,
+    fixture: decidedFixture(byOneWicket, {
+      outcome: { ...(byOneWicket.state.outcome as object), method: "dls" } as PublicFixture["outcome"],
+    }),
+  });
+  const byInnings = summaryOnlyLedger(
+    [
+      { runs: 100, wickets: 7, legalBalls: 300 },
+      { runs: 300, wickets: 7, legalBalls: 400 },
+      { runs: 150, wickets: 7, legalBalls: 300 },
+    ],
+    { cfg: { ...cricket.variants.test, playersPerSide: 8 } },
+  );
+  push("cricket/decided+innings", { events: byInnings.events, cfg: byInnings.cfg, fixture: decidedFixture(byInnings) });
 
   // --- the two cricket endings with their own vocabulary
   const tie = scriptLedger(TIE_NO_SUPER_OVER);

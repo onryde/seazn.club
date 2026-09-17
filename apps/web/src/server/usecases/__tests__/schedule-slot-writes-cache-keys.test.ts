@@ -184,7 +184,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const hubKey = (competitionId: string) => `pub:v1:hub:${competitionId}`;
-const fixtureKey = (fixtureId: string) => `pub:v1:fixture:${fixtureId}`;
+const fixtureKey = (fixtureId: string) => `pub:v1:fixture:v2:${fixtureId}`;
 /** Task 14 — the per-competition generation every player's match lines are
  *  keyed under: one of the keys EVERY score write drops. */
 const playerMatchesGenKey = (competitionId: string) => `pub:v1:player-matches-gen:${competitionId}`;

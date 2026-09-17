@@ -4,16 +4,17 @@
 // contract-notes}.md` in the orchestrator's worktree for the rulings this
 // suite follows (bare dictionary keys, `derivedComplete`, masking, top
 // performers). Fix round 1 rulings (post-review, see `task-6-report.md`'s
-// "Fix round 1" section): result keys come from `outcome.method` with the
-// margin string passed through verbatim (never regex-parsed), the
+// "Fix round 1" section): result keys come from `outcome.method` (and, since
+// the owner's 2026-09-16 decision, from the engine's STRUCTURED margin — a
+// kind and a count, worded per locale — never an English string), the
 // non-cricket branch resolves a PINNED `moduleVersion`, and the Info tab
 // emits its six rows in `info-tab.tsx`'s documented order.
 import { describe, expect, it } from "vitest";
-import type { EventEnvelope } from "@seazn/engine/core";
+import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { registry as engineRegistry, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { cricket, deriveCricketScorecard, type DismissalKind } from "@seazn/engine/sports/cricket";
+import { cricket, deriveCricketScorecard, type CricketCfg, type DismissalKind } from "@seazn/engine/sports/cricket";
 import { football, FootballCfg } from "@seazn/engine/sports/football";
 import { tennis } from "@seazn/engine/sports/tennis";
 import {
@@ -39,6 +40,7 @@ import {
   TIE_NO_SUPER_OVER,
   lineLedger,
   scriptLedger,
+  summaryOnlyLedger,
   type PlayerLine,
   type Script,
   type ScriptLedger,
@@ -161,7 +163,7 @@ const CHASE_SCRIPT: Script = {
 // scores heavily AND, in the second innings, bowls the wicket ball below —
 // exactly the two categories (batting + bowling-credit) the masking test
 // needs one person to appear in). Away collapse for 0/1 in reply: NOT a
-// tie (0 !== target-1 = 24), so `decideWin(home, "regulation", "by 24 runs")`.
+// tie (0 !== target-1 = 24), so `decideWin(home, "regulation", { kind: "runs", value: 24 })`.
 const DECIDED_BY_RUNS_SCRIPT: Script = {
   cfg: { ballsPerInnings: 6, ballsPerOver: 6, playersPerSide: 8, minOversForResult: 1 },
   home: HOME,
@@ -213,6 +215,64 @@ const NO_RESULT_SCRIPT: Script = {
   tossWonBy: "home",
   elected: "bat",
   innings: [{ batting: "home", bowlers: ["a7"], deliveries: [{ abandon: true }] }],
+};
+
+// Review m4 (2026-09-16) — two DLS results the ENGINE decides, never a
+// `method: "dls"` pasted onto a regulation fold. Five overs a side, DLS on,
+// minimum two overs for a result. Home make 60 off their 30 balls.
+const DLS_CFG: Partial<CricketCfg> = {
+  ballsPerInnings: 30,
+  playersPerSide: 8,
+  minOversForResult: 2,
+  dls: { enabled: true, edition: "standard" },
+};
+const DLS_FIRST_INNINGS = {
+  batting: "home" as const,
+  bowlers: ["a7", "a8"],
+  deliveries: Array.from({ length: 30 }, () => ({ bat: 2 as const })),
+};
+
+// Rain ends the chase at 12/0 after two overs — past the minimum, so
+// `applyAbandon` settles it on the DLS par score (home ahead). The chase is
+// left open: the abandon decided the match, and a close after it would throw.
+const DLS_ABANDONED_CHASE_SCRIPT: Script = {
+  cfg: DLS_CFG,
+  home: HOME,
+  away: AWAY,
+  tossWonBy: "home",
+  elected: "bat",
+  innings: [
+    DLS_FIRST_INNINGS,
+    {
+      batting: "away",
+      bowlers: ["h7", "h8"],
+      deliveries: [...Array.from({ length: 12 }, () => ({ bat: 1 as const })), { abandon: true }],
+      leaveOpen: true,
+    },
+  ],
+};
+
+// One over in (6/0), rain cuts the chase to three overs: `cricket.revise`
+// computes a DLS target, and six sixes pass it with every wicket in hand, so
+// the reducer's own auto-close decides the win by wickets under `"dls"`.
+const DLS_REVISED_TARGET_SCRIPT: Script = {
+  cfg: DLS_CFG,
+  home: HOME,
+  away: AWAY,
+  tossWonBy: "home",
+  elected: "bat",
+  innings: [
+    DLS_FIRST_INNINGS,
+    {
+      batting: "away",
+      bowlers: ["h7", "h8"],
+      deliveries: [
+        ...Array.from({ length: 6 }, () => ({ bat: 1 as const })),
+        { revise: { oversPerSide: 3 } },
+        ...Array.from({ length: 6 }, () => ({ bat: 6 as const })),
+      ],
+    },
+  ],
 };
 
 // Band 2 (line ledger), enriched with 4s/6s/dismissal on the batting side and
@@ -475,38 +535,131 @@ describe("buildMatchCentre — cricket", () => {
   });
 
   describe("decided — every required result kind is reachable, keyed by outcome.method (fix round 1)", () => {
-    it("regulation win, runs margin -> matchCentre.result.regulation, {winner, margin} byte-for-byte", () => {
+    // Owner decision 2026-09-16. These used to pass the engine's English margin
+    // ("by 24 runs") through `{margin}` verbatim, so es/fr/nl read "ganó by 24
+    // runs". The margin is now a kind and a count: the KEY names the unit and
+    // the plural form (chosen in the doc's own locale, like the ball lines),
+    // and the count rides as a number the template places itself.
+    it("regulation win by runs -> matchCentre.result.runs.other, {winner, runs} straight off the card's structured margin", () => {
       const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
       const card = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups });
       expect(ledger.state.outcome).toMatchObject({ kind: "win", method: "regulation" });
+      expect(card.result?.margin).toEqual({ kind: "runs", value: 24 });
       const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));
-      expect(doc.header.statusLine?.key).toBe("matchCentre.result.regulation");
-      expect(doc.header.statusLine?.params?.winner).toBe(HOME_SIDE.name);
-      expect(doc.header.statusLine?.params?.margin).toBe(card.result?.margin);
-      expect(card.result?.margin).toBe("by 24 runs");
+      expect(doc.header.statusLine).toEqual({
+        key: "matchCentre.result.runs.other",
+        params: { winner: HOME_SIDE.name, runs: 24 },
+      });
     });
 
-    it("regulation win, wickets margin -> matchCentre.result.regulation, {winner, margin} byte-for-byte", () => {
+    it("regulation win by wickets -> matchCentre.result.wickets.other, {winner, wickets} — the unit is the margin's, never guessed", () => {
       const ledger = scriptLedger(WIN_BY_WICKETS_SCRIPT);
       const card = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups });
       expect(ledger.state.outcome).toMatchObject({ kind: "win", method: "regulation" });
+      expect(card.result?.margin).toEqual({ kind: "wickets", value: 7 });
       const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));
-      expect(doc.header.statusLine?.key).toBe("matchCentre.result.regulation");
-      expect(doc.header.statusLine?.params?.winner).toBe(AWAY_SIDE.name);
-      expect(doc.header.statusLine?.params?.margin).toBe(card.result?.margin);
-      expect(card.result?.margin).toBe("by 7 wickets");
+      expect(doc.header.statusLine).toEqual({
+        key: "matchCentre.result.wickets.other",
+        params: { winner: AWAY_SIDE.name, wickets: 7 },
+      });
     });
 
-    it("a decided super over -> matchCentre.result.super_over, margin 'Super Over' verbatim", () => {
+    it("a margin of ONE selects the singular form — by 1 run and by 1 wicket, off real folds", () => {
+      // 6 to win 7; the reply makes 5 → target − 1 − 5 = 1 run.
+      const byRun = summaryOnlyLedger([
+        { runs: 6, wickets: 0, legalBalls: 12 },
+        { runs: 5, wickets: 2, legalBalls: 12 },
+      ]);
+      expect(byRun.state.margin).toEqual({ kind: "runs", value: 1 });
+      const runDoc = buildMatchCentre(input({ events: byRun.events, cfg: byRun.cfg, fixture: decidedFixture(byRun) }));
+      expect(runDoc.header.statusLine).toEqual({ key: "matchCentre.result.runs.one", params: { winner: HOME_SIDE.name, runs: 1 } });
+      // Eight a side is all out at seven: six down with the target reached → 1 wicket.
+      const byWicket = summaryOnlyLedger([
+        { runs: 6, wickets: 1, legalBalls: 12 },
+        { runs: 7, wickets: 6, legalBalls: 10 },
+      ]);
+      expect(byWicket.state.margin).toEqual({ kind: "wickets", value: 1 });
+      const wicketDoc = buildMatchCentre(input({ events: byWicket.events, cfg: byWicket.cfg, fixture: decidedFixture(byWicket) }));
+      expect(wicketDoc.header.statusLine).toEqual({
+        key: "matchCentre.result.wickets.one",
+        params: { winner: AWAY_SIDE.name, wickets: 1 },
+      });
+    });
+
+    it("the plural form is the DOC LOCALE's: a 0-wicket win is `one` in French and `other` in English", () => {
+      // The last man is out on the winning run — all seven down, target reached.
+      const ledger = summaryOnlyLedger([
+        { runs: 6, wickets: 1, legalBalls: 12 },
+        { runs: 7, wickets: 7, legalBalls: 10 },
+      ]);
+      expect(ledger.state.margin).toEqual({ kind: "wickets", value: 0 });
+      const keyIn = (locale: string) =>
+        buildMatchCentre(input({ locale, events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) })).header
+          .statusLine?.key;
+      expect(keyIn("en")).toBe("matchCentre.result.wickets.other");
+      expect(keyIn("fr")).toBe("matchCentre.result.wickets.one");
+    });
+
+    it("an innings victory -> matchCentre.result.inningsRuns.<form>, {winner, runs}", () => {
+      // Two innings a side, no follow-on: home 100 & 199 against away's 300
+      // — home finished both innings still one run behind.
+      const cfg = { ...cricket.variants.test, playersPerSide: 8 };
+      const byOne = summaryOnlyLedger(
+        [
+          { runs: 100, wickets: 7, legalBalls: 300 },
+          { runs: 300, wickets: 7, legalBalls: 400 },
+          { runs: 199, wickets: 7, legalBalls: 300 },
+        ],
+        { cfg },
+      );
+      expect(byOne.state.outcome).toMatchObject({ kind: "win", winner: AWAY_SIDE.entrantId, method: "innings" });
+      expect(byOne.state.margin).toEqual({ kind: "innings_and_runs", value: 1 });
+      const doc = buildMatchCentre(input({ events: byOne.events, cfg: byOne.cfg, fixture: decidedFixture(byOne) }));
+      expect(doc.header.statusLine).toEqual({
+        key: "matchCentre.result.inningsRuns.one",
+        params: { winner: AWAY_SIDE.name, runs: 1 },
+      });
+    });
+
+    it("a REAL DLS fold keeps its method in the sentence: an abandoned chase -> dlsRuns, a revised target -> dlsWickets", () => {
+      const en = enPublic as unknown as Dict;
+      const runs = scriptLedger(DLS_ABANDONED_CHASE_SCRIPT);
+      expect(runs.events.map((e) => e.type)).toContain("core.abandon");
+      expect(runs.state.outcome).toMatchObject({ kind: "win", winner: HOME_SIDE.entrantId, method: "dls" });
+      expect(runs.state.margin).toEqual({ kind: "runs", value: 11 });
+      const runsDoc = buildMatchCentre(input({ events: runs.events, cfg: runs.cfg, fixture: decidedFixture(runs) }));
+      expect(runsDoc.header.statusLine).toEqual({
+        key: "matchCentre.result.dlsRuns.other",
+        params: { winner: HOME_SIDE.name, runs: 11 },
+      });
+      expect(t(en, runsDoc.header.statusLine!.key, runsDoc.header.statusLine!.params)).toBe(
+        `${HOME_SIDE.name} won by 11 runs (DLS)`,
+      );
+
+      const wickets = scriptLedger(DLS_REVISED_TARGET_SCRIPT);
+      expect(wickets.events.map((e) => e.type)).toContain("cricket.revise");
+      expect(wickets.state.targetSource).toBe("dls");
+      expect(wickets.state.outcome).toMatchObject({ kind: "win", winner: AWAY_SIDE.entrantId, method: "dls" });
+      expect(wickets.state.margin).toEqual({ kind: "wickets", value: 7 });
+      const wicketsDoc = buildMatchCentre(input({ events: wickets.events, cfg: wickets.cfg, fixture: decidedFixture(wickets) }));
+      expect(wicketsDoc.header.statusLine).toEqual({
+        key: "matchCentre.result.dlsWickets.other",
+        params: { winner: AWAY_SIDE.name, wickets: 7 },
+      });
+      expect(t(en, wicketsDoc.header.statusLine!.key, wicketsDoc.header.statusLine!.params)).toBe(
+        `${AWAY_SIDE.name} won by 7 wickets (DLS)`,
+      );
+    });
+
+    it("a decided super over -> matchCentre.result.super_over with the winner only — the sentence IS the margin", () => {
       const ledger = scriptLedger(SUPER_OVER_SCRIPT);
       const card = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups });
       expect(ledger.state.outcome).toMatchObject({ kind: "win", method: "super_over" });
-      expect(ledger.state.margin).toBe("Super Over");
+      expect(ledger.state.margin).toEqual({ kind: "super_over" });
+      expect(card.result?.margin).toEqual({ kind: "super_over" });
       const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));
       expect(doc.header.statusLine?.key).toBe("matchCentre.result.super_over");
-      expect(doc.header.statusLine?.params?.margin).toBe(card.result?.margin);
-      expect(card.result?.margin).toBe("Super Over");
-      expect(doc.header.statusLine?.params?.winner).not.toBe("");
+      expect(doc.header.statusLine?.params).toEqual({ winner: AWAY_SIDE.name });
     });
 
     it("tie (no super over) -> matchCentre.result.tie, no params", () => {
@@ -523,15 +676,34 @@ describe("buildMatchCentre — cricket", () => {
       expect(doc.header.statusLine).toEqual({ key: "matchCentre.result.no_result" });
     });
 
-    it("an unrecognised win method falls back to matchCentre.result.regulation, margin still carried", () => {
+    it("an unrecognised win method still words the card's margin — the count is never silently dropped", () => {
       const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
-      const card = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups });
       const fixture = decidedFixture(ledger, {
         outcome: { ...(ledger.state.outcome as { kind: "win"; winner: string }), method: "some_future_method" },
       });
       const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture }));
-      expect(doc.header.statusLine?.key).toBe("matchCentre.result.regulation");
-      expect(doc.header.statusLine?.params?.margin).toBe(card.result?.margin); // never silently dropped
+      expect(doc.header.statusLine).toEqual({ key: "matchCentre.result.runs.other", params: { winner: HOME_SIDE.name, runs: 24 } });
+    });
+
+    it("a win with NO card margin to word falls back to the method's bare sentence, with no dangling {margin}", () => {
+      // A non-cricket win (no scorecard at all) is the everyday case of this.
+      const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+      const doc = buildMatchCentre(
+        input({
+          events: [],
+          sportKey: "tennis",
+          cfg: tennis.configSchema.parse({}),
+          moduleVersion: tennis.version,
+          fixture: decidedFixture(ledger, {
+            outcome: { kind: "win", winner: HOME_SIDE.entrantId, method: "regulation" } as PublicFixture["outcome"],
+            summary: { headline: "", perSide: [], detail: {} } as never,
+          }),
+        }),
+      );
+      expect(doc.header.statusLine).toEqual({ key: "matchCentre.result.regulation", params: { winner: HOME_SIDE.name } });
+      expect(t(enPublic as unknown as Dict, doc.header.statusLine!.key, doc.header.statusLine!.params)).toBe(
+        `${HOME_SIDE.name} won`,
+      );
     });
   });
 
@@ -1209,6 +1381,56 @@ describe("buildMatchCentre — cricket degrades rather than throwing", () => {
     expect(doc.header.sides).toHaveLength(2);
     expect(doc.derivedComplete).toBe(false);
     expect(doc.cricket).toBeNull();
+  });
+
+  // The positive pair of the refusal above, for the events the KERNEL folds
+  // itself. `deriveCricketScorecard` used to hand `core.suspend` and every
+  // `core.lineup.*` straight to `cricket.apply`, which refused them as unknown
+  // types — so one stoppage or one concussion replacement sent a perfectly
+  // legal fixture down the degrade path above, and spectators lost the
+  // Scorecard and Commentary tabs for the rest of the match.
+  //
+  // The replacement BOWLS on purpose. A fix that merely skipped lineup events
+  // would still refuse this ledger: `applyDelivery` checks the bowler against
+  // `state.orders`, and only the kernel's `onLineup` puts a9 there.
+  it("a stoppage and a concussion replacement who then bowls keep the scorecard and commentary tabs", () => {
+    const script: Script = { ...CHASE_SCRIPT, cfg: { ...CHASE_SCRIPT.cfg, lineupChanges: { concussionReplacements: 1 } } };
+    const ledger = scriptLedger(script);
+    // a6 bowls innings 1's second over (balls 6-11); a9 replaces a6 before it.
+    let balls = 0;
+    const overOne = ledger.events.findIndex((ev) => ev.type === "cricket.ball" && balls++ === 6);
+    const specs = [
+      ...ledger.events.slice(0, overOne),
+      { type: "core.suspend", payload: { reason: "rain" } },
+      { type: "core.resume", payload: {} },
+      {
+        type: "core.lineup.replacement",
+        payload: { side: "away", off: "a6", on: { personId: "a9", slot: "bench", orderNo: 9 }, exemption: "concussion" },
+      },
+      ...ledger.events.slice(overOne).map((ev) => {
+        const payload = ev.payload as { bowler?: string };
+        return payload.bowler === "a6" ? { type: ev.type, payload: { ...payload, bowler: "a9" } } : ev;
+      }),
+    ];
+    const events = specs.map((spec, seq) => makeEnvelope(seq, { type: spec.type, payload: spec.payload }));
+    // A ledger the pad could have written: the WHOLE stream folds strict.
+    const kernel = foldMatch(cricket, ledger.cfg, ledger.lineups, events, { strictFromSeq: 0 });
+
+    const base = lineupsFrom(HOME, AWAY);
+    const lineups = { ...base, away: [...(base.away ?? []), { personId: "a9", name: "Player A9", masked: false, slot: "bench" as const }] };
+    const doc = buildMatchCentre(cricketInput({ events, cfg: ledger.cfg, lineups }));
+
+    expect(doc.derivedComplete).toBe(true);
+    expect(doc.cricket).not.toBeNull();
+    expect(doc.tabs).toEqual(["summary", "scorecard", "commentary", "info"]);
+    const a9 = doc.cricket!.innings[0]!.bowling.find((row) => row.person.personId === "a9");
+    expect(a9).toBeDefined();
+    // The replacement's figures are the reducer's own, not merely present.
+    // (`bowlerWickets` has no key for a bowler who took none — the card's 0.)
+    expect([a9!.runs, a9!.wickets]).toEqual([kernel.innings[0]!.fine!.bowlerRuns.a9, kernel.innings[0]!.fine!.bowlerWickets.a9 ?? 0]);
+    expect(a9!.runs).toBe(12);
+    expect(kernel.innings[0]!.fine!.bowlerBalls.a9).toBe(6);
+    expect(a9!.overs).toBe("1.0");
   });
 
   // This test was written asserting the band SURVIVES a rejected config, and

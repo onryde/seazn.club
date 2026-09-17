@@ -273,8 +273,51 @@ export interface FoldContext {
  * A value at or below the stream's first seq makes the whole stream strict,
  * which is what a test simulating a pad wants.
  */
-export interface FoldOptions {
+export interface FoldOptions<State = unknown> {
   readonly strictFromSeq?: number;
+  /**
+   * Called once for every ACTIVE event — after `resolveVoids`, so never for a
+   * voided event or the void itself — AFTER the kernel has folded it, with the
+   * state and the squads as they stand after it. Kernel-owned events are
+   * observed exactly like module events: `core.suspend`, `core.resume` and the
+   * whole `core.lineup.*` family each get their call, even though the module
+   * never sees them.
+   *
+   * "Refused" means THROWN, and only a throw skips the call: the error
+   * propagates before it. Two events the fold accepts as NO-OPS are still
+   * passed in, with state and squads unchanged — a `core.lineup.*` event the
+   * replay policy refuses structurally (an unknown person, someone taken off
+   * who is not on; ignored, not thrown, on a non-strict fold), and a
+   * `core.resume` with no open stoppage. An observer must not read "was
+   * called" as "changed something".
+   *
+   * "Unchanged" is by REFERENCE: `squads` is replaced only when a lineup event
+   * is accepted, so an ignored one hands over the very objects the previous
+   * call received — an observer may compare them to tell the two apart (the
+   * cricket scorecard does). Pinned in events.test.ts.
+   *
+   * WHY IT EXISTS. A derivation that needs the state after EVERY event — the
+   * cricket scorecard's accumulators read `FineInnings` ball by ball — cannot
+   * call `foldMatch` per prefix (quadratic), so it used to replay the stream
+   * itself through `module.apply`. That is a second copy of this loop, and it
+   * got the kernel-owned half wrong: `deriveCricketScorecard` handed
+   * `core.suspend` and `core.lineup.*` to `cricket.apply`, which threw
+   * `unknown event type`, and every public consumer dropped the scorecard. A
+   * copy that merely SKIPPED them would still be wrong: a lineup event reaches
+   * the module through `onLineup`, and a concussion replacement who then bowls
+   * is refused by a module that never heard of him. Riding this fold instead
+   * leaves one implementation of which events a module sees and how.
+   *
+   * Observation only: the return value is ignored and nothing it does can move
+   * the fold. Everything handed over is typed read-only (shallowly — `State`
+   * is generic, so no deeper guarantee is expressible here without a cast at
+   * the call site); a caller must not mutate any of it.
+   */
+  readonly onFolded?: (
+    state: Readonly<State>,
+    event: Readonly<EventEnvelope>,
+    squads: Readonly<SquadState>,
+  ) => void;
 }
 
 /**
@@ -464,7 +507,7 @@ export function foldMatch<Cfg, State>(
   cfg: Cfg,
   lineups: LineupPair,
   events: readonly EventEnvelope[],
-  opts?: FoldOptions,
+  opts?: FoldOptions<State>,
 ): State {
   return foldMatchWithStoppage(module, cfg, lineups, events, opts).state;
 }
@@ -477,10 +520,11 @@ export function foldMatchWithStoppage<Cfg, State>(
   cfg: Cfg,
   lineups: LineupPair,
   events: readonly EventEnvelope[],
-  opts?: FoldOptions,
+  opts?: FoldOptions<State>,
 ): { state: State; stoppage: MatchStoppage | null; squads: SquadState } {
   const active = resolveVoids(events);
   const strictFromSeq = opts?.strictFromSeq;
+  const onFolded = opts?.onFolded;
   const postDecision = new Set([...POST_DECISION_CORE, ...(module.postDecisionTypes ?? [])]);
   const duringStoppage = new Set(DURING_STOPPAGE);
 
@@ -563,10 +607,10 @@ export function foldMatchWithStoppage<Cfg, State>(
         { eventId: event.id, stoppage },
       );
     }
-    // The time guard runs ABOVE the two kernel-owned `continue`s below, so a
+    // The time guard runs ABOVE the kernel-owned branches below, so a
     // core.suspend / core.resume stamp is checked and counted like any other.
-    // Below them it would have been dead code for the one pair §1.2 names as
-    // the reason the model is game clock at all.
+    // Inside the module branch it would have been dead code for the one pair
+    // §1.2 names as the reason the model is game clock at all.
     //
     // Two carve-outs, both load-bearing (§3.3):
     //  - An UNSTAMPED event is unconstrained. gameTimeOf returns null for every
@@ -645,18 +689,16 @@ export function foldMatchWithStoppage<Cfg, State>(
         eventId: event.id,
         ...(at === null ? {} : { at }),
       };
-      continue; // kernel-owned: the module never sees it
-    }
-    if (event.type === "core.resume") {
+      // kernel-owned: the module never sees it
+    } else if (event.type === "core.resume") {
       // A resume with no open stoppage is a NO-OP, not an error. Undo is void
       // (guarantee 3): voiding a mis-entered core.suspend leaves the resume
       // that followed it pointing at nothing, which is meaningless but not
       // contradictory — refusing it made the whole match unfoldable until the
       // scorer also voided the resume, which is not an undo anyone would find.
       stoppage = null;
-      continue; // kernel-owned: the module never sees it
-    }
-    if (isLineupEventType(event.type)) {
+      // kernel-owned: the module never sees it
+    } else if (isLineupEventType(event.type)) {
       // THE POLICY IS THE SEAM (§3.3), not a second `if (strict)` around each
       // check. On the write path the variant's own policy applies and a
       // refusal is an error the scorer can still fix. On REPLAY the reducer
@@ -681,7 +723,7 @@ export function foldMatchWithStoppage<Cfg, State>(
           });
         }
         // Replay reaches here only for a STRUCTURAL refusal — an unknown
-        // person, someone taken off who was never on — which no config edit
+        // person, someone taken off who was not on — which no config edit
         // can make coherent and which there is no longer an event to void. The
         // squads are left as they were and the fixture stays readable. Note
         // this is a no-op and NOT an approximation: applying half a swap would
@@ -690,23 +732,27 @@ export function foldMatchWithStoppage<Cfg, State>(
         squads = reduced.squads;
         if (module.onLineup !== undefined) state = module.onLineup(state, squads);
       }
-      continue; // kernel-owned: the module never sees it
+      // kernel-owned: the module never sees it
+    } else {
+      // The seam reaches the module too. Three of the eleven re-validate the
+      // stamp inside apply() — not redundantly, because the testkit calls
+      // apply() directly — and nested/kernel refuses an interruption against a
+      // cfg allowance. Each is the same fixture-bricking shape as the guard
+      // above and needs the same signal; the other eight ignore the argument.
+      state = module.apply(state, event, { strict, squads });
+      if (!decided) {
+        decided = module.outcome(state) !== null;
+        // A decided match is not awaiting resumption. core.abandon and
+        // core.forfeit are both legal mid-stoppage and both decide, and
+        // core.resume is not a post-decision type — so a stoppage left open
+        // here could never be cleared, and the read side would show an
+        // abandoned match as "play suspended, awaiting restart" forever.
+        if (decided) stoppage = null;
+      }
     }
-    // The seam reaches the module too. Three of the eleven re-validate the
-    // stamp inside apply() — not redundantly, because the testkit calls apply()
-    // directly — and nested/kernel refuses an interruption against a cfg
-    // allowance. Each is the same fixture-bricking shape as the guard above and
-    // needs the same signal; the other eight ignore the argument.
-    state = module.apply(state, event, { strict, squads });
-    if (!decided) {
-      decided = module.outcome(state) !== null;
-      // A decided match is not awaiting resumption. core.abandon and
-      // core.forfeit are both legal mid-stoppage and both decide, and
-      // core.resume is not a post-decision type — so a stoppage left open here
-      // could never be cleared, and the read side would show an abandoned
-      // match as "play suspended, awaiting restart" forever.
-      if (decided) stoppage = null;
-    }
+    // ONE call site, below every branch, so a kernel-owned event is observed
+    // exactly like a module event — see `FoldOptions.onFolded`.
+    onFolded?.(state, event, squads);
   }
   return { state, stoppage, squads };
 }

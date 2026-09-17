@@ -379,7 +379,12 @@ describe("deriveCricketScorecard — result", () => {
     expect(card.result).not.toBeNull();
     expect(card.result?.headline).toBe(summary.headline);
     expect(card.result?.winner).toBe(expectedWinner);
-    expect(card.result?.margin).toBe(summary.detail.margin ?? null);
+    // Structured since 2026-09-16 (kind + count, never English), so this is a
+    // deep comparison — and pinned to the concrete value as well, because two
+    // equal `undefined`s would satisfy the comparison alone.
+    expect(card.result?.margin).toEqual(summary.detail.margin ?? null);
+    expect(card.result?.margin).toEqual(state.margin);
+    expect(card.result?.margin).toEqual({ kind: "runs", value: 13 });
   });
 
   it("result is null while a match is still in play (one innings only)", () => {

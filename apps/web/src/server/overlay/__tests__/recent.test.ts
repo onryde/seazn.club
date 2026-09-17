@@ -21,6 +21,7 @@ import {
   buildOverlayRecent,
   diffClosedSets,
   nameCricketBundle,
+  overlayCricketBundleIds,
   personIdsIn,
   recentWindow,
   replayDerived,
@@ -675,6 +676,75 @@ describe("nameCricketBundle — the ended-card name resolution (I2/M11)", () => 
       maidens: 0,
       runs: 8,
       wickets: 1,
+    });
+  });
+});
+
+// The crease band rides `deriveCricketScorecard`, which used to hand the
+// kernel-owned events (`core.suspend`, `core.resume`, `core.lineup.*`) straight
+// to `cricket.apply` — an `unknown event type` throw, swallowed here into the
+// EMPTY bundle, so a club on air lost its batters, bowler and end-of-over card
+// for the rest of the match after one stoppage or one concussion replacement.
+describe("overlayCricketBundleIds — the events the kernel folds itself", () => {
+  const cricketModule = moduleFor("cricket");
+  const lineups = defaultLineupPair(cricketModule.positions);
+  const cfg = cricketModule.configSchema.parse({
+    ...(SIM_CONFIGS.cricket as Record<string, unknown>),
+    lineupChanges: { concussionReplacements: 1 },
+  });
+  const inputs = { sportKey: "cricket", module: cricketModule, cfg, lineups };
+  const envelopes = (stream: readonly (readonly [string, unknown])[]) =>
+    stream.map(([type, payload], i) => ({ ...makeEnvelope(i + 1, { type, payload } as never), recordedAt: WALL }));
+
+  // Over 0 is A-p1's six dots; play stops for rain; A-p2 is concussed and
+  // replaced by A-p12, who bowls over 1. A-p12 BOWLING is the point: a fold
+  // that skipped the replacement instead of folding it would refuse him.
+  const stream = [
+    ["cricket.toss", { wonBy: "H", elected: "bat" }],
+    ["core.start", {}],
+    ...[1, 2, 3, 4, 5, 6].map((n) => ball(0, n, "H-p1", "A-p1", 0)),
+    ["core.suspend", { reason: "rain" }],
+    ["core.resume", {}],
+    [
+      "core.lineup.replacement",
+      { side: "A", off: "A-p2", on: { personId: "A-p12", slot: "bench", orderNo: 12 }, exemption: "concussion" },
+    ],
+    ball(1, 1, "H-p2", "A-p12", 4, { boundary: 4 }),
+    ball(1, 2, "H-p2", "A-p12", 0),
+  ] as const;
+
+  it("keeps the whole bundle — crease band, toss, closed over — with the replacement bowling", () => {
+    const events = envelopes(stream);
+    // Legal on the WRITE path, not merely tolerated on replay.
+    const kernel = foldMatch(cricketModule as never, cfg as never, lineups, events, { strictFromSeq: 0 }) as {
+      innings: { fine: { bowlerRuns: Record<string, number> } }[];
+    };
+
+    const bundle = overlayCricketBundleIds(inputs, events);
+    expect(bundle.scoringStarted).toBe(true);
+    expect(bundle.toss).not.toBeNull();
+    expect(bundle.lastClosedOver).not.toBeNull();
+    expect(bundle.live).not.toBeNull();
+    expect(bundle.live?.bowler?.name).toBe("A-p12");
+    expect(bundle.live?.bowler?.runs).toBe(kernel.innings[0]?.fine.bowlerRuns["A-p12"]);
+    expect(bundle.live?.bowler?.runs).toBe(4);
+    expect(bundle.live?.batters.map((b) => [b.name, b.runs, b.balls])).toEqual([
+      ["H-p2", 4, 2],
+      ["H-p1", 0, 6],
+    ]);
+  });
+
+  // The negative pair: a ledger the fold REFUSES still degrades to the empty
+  // bundle, so "the bundle is present" above is a verdict on the ledger and
+  // not a function that never returns empty.
+  it("a ledger the fold refuses still degrades to the empty bundle", () => {
+    const refused = envelopes([ball(0, 1, "H-p1", "A-p1", 1)]);
+    expect(overlayCricketBundleIds(inputs, refused)).toEqual({
+      live: null,
+      toss: null,
+      lastClosedOver: null,
+      scoringStarted: false,
+      highlights: null,
     });
   });
 });

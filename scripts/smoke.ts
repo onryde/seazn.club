@@ -6530,7 +6530,8 @@ interface CricketFold {
   targetSource: "dls" | "manual" | null;
   r1: number | null;
   r2: number | null;
-  margin: string | null;
+  // Structured since 2026-09-16 (`CricketMargin`: kind + count, never English).
+  margin: { kind: string; value?: number } | null;
   outcome: { kind: string; winner?: string; loser?: string; method?: string } | null;
 }
 
@@ -6648,7 +6649,7 @@ async function cricketDlsSuite(): Promise<void> {
   );
   check(
     "dls/pairs: and the published margin is runs, not wickets",
-    bDone.margin === "by 4 runs" && bDone.outcome?.method === "dls",
+    bDone.margin?.kind === "runs" && bDone.margin.value === 4 && bDone.outcome?.method === "dls",
   );
   // The result the rest of the product reads is the `fixtures.outcome` column,
   // written beside the fold — not the fold cache the checks above read.

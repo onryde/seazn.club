@@ -12,14 +12,13 @@
 // Corrected false premises (brief vs. what the engine actually declares)
 // ---------------------------------------------------------------------------
 //
-// 1. THE BRIEF'S `summary.detail.margin` SHAPE DOES NOT EXIST. `cricket.ts`'s
-//    `CricketState.margin` (line 528) is a plain `string | null` — English
-//    prose the reducer already composed ("by 12 runs", "Super Over", "on
-//    boundary count"). There is no `{kind,value}` object anywhere in the
-//    engine. `parseMargin` below reads the NUMBER back out of that string —
-//    not re-deriving the cricket rule that decided it, only extracting the
-//    figure so the result can be a localizable `Msg` instead of the engine's
-//    raw English text reaching a spectator unchanged.
+// 1. (Superseded 2026-09-16.) When this was written `CricketState.margin`
+//    was a plain `string | null` of English prose ("by 12 runs", "Super
+//    Over", "on boundary count") and no `{kind,value}` object existed. The
+//    owner then ruled the engine must publish the margin as DATA: it is now
+//    `CricketMargin` (`{ kind, value? }` — the super-over and boundary-count
+//    margins carry no count), and `cricketMarginMsg` below words it per
+//    locale. See "Owner decision 2026-09-16" further down.
 // 2. THE PINNED LINE RANGE "cricket.ts:3300-3325" IS `apply()`'s event
 //    switch, not result construction. The real call sites are `decideWin`
 //    (847-864) and its callers in `decideAfterClose` (879-940), the DLS
@@ -38,6 +37,19 @@
 // types.ts:120-122`, populated at every `decideWin` call site) and pass the
 // margin STRING through verbatim as a param, never parsed into a number.
 // `parseMargin` is gone; see `resultMsg` below.
+//
+// ---------------------------------------------------------------------------
+// Owner decision 2026-09-16 — the margin is worded HERE, per locale
+// ---------------------------------------------------------------------------
+//
+// Passing the string through verbatim meant passing ENGLISH through verbatim:
+// every es/fr/nl result line read "ganó by 12 runs". The engine now publishes
+// `CricketMargin` (kind + count) and this builder picks a key that names the
+// unit and the plural form — `matchCentre.result.runs.one`, `….wickets.other`,
+// `….dlsRuns.*`, `….inningsRuns.*` — with the bare count as a param. The key
+// is still chosen by `outcome.method` where the method is the sentence
+// (super over, boundary count, shootout, and DLS's "(DLS)"); only the UNIT
+// comes off the margin, which is the one fact the method never carried.
 //
 // ---------------------------------------------------------------------------
 // A documented gap `BallGlyph`/`OverLog` impose (scorecard-types.ts:39-53)
@@ -65,6 +77,7 @@ import {
   type BowlingLine,
   type CricketInningsCard,
   type CricketLive,
+  type CricketMargin,
   type CricketScorecard,
   type OverLog,
 } from "@seazn/engine/sports/cricket";
@@ -339,7 +352,8 @@ function ballGlyphString(g: BallGlyph): string {
  *  `wide`/`noball` read "+{runs}" (no noun), and `wicket` carries none. */
 const PLURALISED_BALL_KINDS = new Set(["runs", "bye", "legbye", "penalty"]);
 
-/** The plural category for a ball's run count, in the doc's own locale.
+/** The plural category for a count — a ball's runs, or a result's margin —
+ *  in the doc's own locale.
  *
  *  Only `one` and `other` are ever emitted, and that is a deliberate,
  *  test-enforced narrowing rather than an oversight: the extra CLDR
@@ -355,7 +369,7 @@ const PLURALISED_BALL_KINDS = new Set(["runs", "bye", "legbye", "penalty"]);
  *  the doc is locale-specific by construction (`buildHeader` and
  *  `buildInfoView` both format dates through `Intl.DateTimeFormat(locale)`),
  *  so the `Msg` a tab renders with a plain `t()` needs no locale of its own. */
-function ballLineCategory(locale: string, count: number): "one" | "other" {
+function pluralCategory(locale: string, count: number): "one" | "other" {
   return new Intl.PluralRules(locale).select(count) === "one" ? "one" : "other";
 }
 
@@ -386,7 +400,7 @@ function ballLines(over: OverLog, personOf: PersonOf, locale: string): MsgT[] {
     // EXISTS, and it did — as the glyph label.
     const base = `matchCentre.ballLine.${ball.kind}`;
     return {
-      key: PLURALISED_BALL_KINDS.has(ball.kind) ? `${base}.${ballLineCategory(locale, runs)}` : base,
+      key: PLURALISED_BALL_KINDS.has(ball.kind) ? `${base}.${pluralCategory(locale, runs)}` : base,
       params: { over: notation, bowler: bowlerName, batter: "", runs },
     };
   });
@@ -614,6 +628,67 @@ function buildCricketView(
 
 // -------------------------------------------------------------- the result
 
+/** A margin that carries a count — derived from the engine's own union, so a
+ *  counted kind added there is a type error in the table below, not a
+ *  silently unworded result. */
+type CountedMarginKind = Extract<CricketMargin, { value: number }>["kind"];
+
+/**
+ * Which sentence family words each counted margin, and the param its template
+ * names for the count. `dls` is the "(DLS)" sibling — `null` where the engine
+ * never decides that margin by DLS (an innings victory is two-innings cricket;
+ * DLS is one-innings only), so a stray `method: "dls"` keeps the plain
+ * sentence rather than naming a key no dictionary has.
+ */
+const COUNTED_MARGIN_FAMILY: Record<CountedMarginKind, { plain: string; dls: string | null; param: "runs" | "wickets" }> = {
+  runs: { plain: "runs", dls: "dlsRuns", param: "runs" },
+  wickets: { plain: "wickets", dls: "dlsWickets", param: "wickets" },
+  innings_and_runs: { plain: "inningsRuns", dls: null, param: "runs" },
+};
+
+/** Every dictionary key `cricketMarginMsg` can emit for a COUNTED margin,
+ *  derived from the table it reads (the super-over and boundary-count keys
+ *  are `RESULT_KINDS` members already) — so the parity gate's expectation
+ *  moves with the table instead of asserting yesterday's list. */
+export const RESULT_MARGIN_KEYS: readonly string[] = Object.values(COUNTED_MARGIN_FAMILY)
+  .flatMap((family) => (family.dls === null ? [family.plain] : [family.plain, family.dls]))
+  .flatMap((base) => [`matchCentre.result.${base}.one`, `matchCentre.result.${base}.other`]);
+
+/**
+ * The ONE place a decided cricket margin becomes words (owner decision
+ * 2026-09-16). Returns a `Msg`, not a string, like every other line in this
+ * document: the key carries the unit and the plural form — chosen here, in
+ * the doc's locale, exactly as `ballLines` chooses its forms — and the count
+ * rides as a number the locale's own template places ("ganó por 12
+ * carreras", "a gagné par 1 course", "won met een innings en 50 runs"). Every
+ * surface that shows this line (court card, fixture page title, match poster)
+ * already renders `header.statusLine` with a plain `t()`, so none of them
+ * needs to know a margin exists.
+ *
+ * `method` only decides the "(DLS)" sibling; the super-over and boundary-count
+ * margins carry no count and ARE their method's sentence.
+ *
+ * The plural form is fixed into the key in the DOC's (org's) locale, as for
+ * ball lines: a client resolving this `Msg` against another locale's
+ * dictionary gets that locale's words in this locale's form (fr 0 → `.one`).
+ */
+export function cricketMarginMsg(
+  winner: string,
+  margin: CricketMargin,
+  method: string | undefined,
+  locale: string,
+): MsgT {
+  if (margin.kind === "super_over" || margin.kind === "boundary_count") {
+    return { key: `matchCentre.result.${margin.kind}`, params: { winner } };
+  }
+  const family = COUNTED_MARGIN_FAMILY[margin.kind];
+  const base = method === "dls" && family.dls !== null ? family.dls : family.plain;
+  return {
+    key: `matchCentre.result.${base}.${pluralCategory(locale, margin.value)}`,
+    params: { winner, [family.param]: margin.value },
+  };
+}
+
 /**
  * The decided-header `Msg` — `matchCentre.result.<kind>` (ruling: bare keys,
  * never `public.`-prefixed). `outcome.kind` (from `fixture.outcome`, the
@@ -622,12 +697,13 @@ function buildCricketView(
  * from a draw from a no-result (all three carry `winner:null, margin:null`).
  *
  * Fix round 1 (coordinator ruling): for a "win", the KEY comes from
- * `outcome.method` directly — never re-derived from the margin string — and
- * `margin` rides through as a param VERBATIM (never parsed into a number).
- * A method this mapper does not recognise (a future engine addition, or a
- * non-cricket sport's own method vocabulary) falls back to
- * `matchCentre.result.regulation` WITH the margin still attached — never a
- * silent drop of the figure the engine already gave a spectator.
+ * `outcome.method` directly. Since the owner's 2026-09-16 decision a cricket
+ * margin is no longer a verbatim English param: the fold's structured margin
+ * is worded by `cricketMarginMsg` (unit + plural form in the key, the count as
+ * a number). A method this mapper does not recognise (a future engine
+ * addition, or a non-cricket sport's own method vocabulary) is treated as
+ * `regulation` — and a cricket margin is STILL worded for it, never a silent
+ * drop of the figure the engine already gave a spectator.
  *
  * The WINNER prefers `card.result.winner` (contract notes: "never recompute"
  * — card.result is the cricket fold's own answer) and falls back to
@@ -645,10 +721,14 @@ function buildCricketView(
 
 function resultMsg(
   outcome: PublicFixture["outcome"],
-  marginText: string | null,
+  // The two margins belong to two win vocabularies, and the METHOD picks which
+  // one is read (see `buildHeader`): a shootout's tally ("3–0", notation, not
+  // prose) or the cricket fold's structured margin.
+  margins: { shootoutTally: string | null; cricket: CricketMargin | null },
   cardWinner: string | null,
   sides: readonly [SideT, SideT],
   sportKey: string,
+  locale: string,
 ): MsgT | null {
   if (outcome == null || outcome.kind === undefined) return null;
   const winnerName = (id: string | null | undefined): string => (id ? sideNameOf(sides, id) : "");
@@ -663,7 +743,6 @@ function resultMsg(
       return { key: "matchCentre.result.forfeit", params: { winner: winnerName(cardWinner ?? outcome.winner) } };
     case "win": {
       const winner = winnerName(cardWinner ?? outcome.winner);
-      const margin = marginText ?? "";
       const method = outcome.method;
       const kind: (typeof WIN_METHODS)[number] =
         method !== undefined && (WIN_METHODS as readonly string[]).includes(method)
@@ -676,6 +755,7 @@ function resultMsg(
       // second surface — a coarse or replayed summary carries no tally.
       if (kind === "shootout") {
         const skated = SHOOTOUT_IS_SKATED.has(sportKey);
+        const margin = margins.shootoutTally ?? "";
         if (margin === "") {
           return {
             key: skated ? "matchCentre.result.shootoutHockeyPlain" : "matchCentre.result.shootoutPlain",
@@ -687,7 +767,16 @@ function resultMsg(
           params: { winner, margin },
         };
       }
-      return { key: `matchCentre.result.${kind}`, params: { winner, margin } };
+      // A method that IS the sentence ("won on the super over") needs no count.
+      if (kind === "super_over" || kind === "boundary_count") {
+        return { key: `matchCentre.result.${kind}`, params: { winner } };
+      }
+      // Cricket: word the fold's own margin. An unrecognised method still gets
+      // its count worded — never a silent drop of the figure the engine gave.
+      if (margins.cricket !== null) return cricketMarginMsg(winner, margins.cricket, method, locale);
+      // Nothing to measure (every non-cricket sport, or a cricket card that
+      // could not be derived): the method's bare sentence, "{winner} won".
+      return { key: `matchCentre.result.${kind}`, params: { winner } };
     }
     default:
       return null;
@@ -854,7 +943,8 @@ function buildHeader(
     }
   } else if (status === "decided") {
     // The margin has TWO sources, because the two win vocabularies do. Cricket's
-    // comes off its own scorecard (`card.result.margin`, "by 23 runs"); a
+    // comes off its own scorecard (`card.result.margin`, `{ kind: "runs",
+    // value: 23 }` — worded per locale by `cricketMarginMsg`); a
     // shootout's tally is not on any card — it is in the kernel summary's
     // `detail.shootout`, which is where `LiveScoreBody` already reads it via
     // the SAME shared `shootoutScoreFromDetail`, and the en dash is that
@@ -862,20 +952,22 @@ function buildHeader(
     // read two ways on two surfaces.
     // Selected BY METHOD, not by whichever source happens to be non-null. A
     // first cut asked the cricket card first and fell back to the tally, which
-    // reads fine until both exist: a cricket ledger's "by 24 runs" then masks
+    // reads fine until both exist: a cricket ledger's 24-run margin then masks
     // the shootout score for a fixture decided on penalties. The two margins
     // belong to two different win vocabularies, so the method picks the source.
     const shootout = shootoutScoreFromDetail(fixture.summary?.detail);
-    const marginText =
-      fixture.outcome?.method === "shootout"
-        ? shootout !== null
-          ? `${shootout.home}–${shootout.away}`
-          : null
-        : typeof card?.result?.margin === "string"
-          ? card.result.margin
-          : null;
     const cardWinner = card?.result?.winner ?? null;
-    statusLine = resultMsg(fixture.outcome, marginText, cardWinner, sides, sportKey);
+    statusLine = resultMsg(
+      fixture.outcome,
+      {
+        shootoutTally: shootout !== null ? `${shootout.home}–${shootout.away}` : null,
+        cricket: card?.result?.margin ?? null,
+      },
+      cardWinner,
+      sides,
+      sportKey,
+      locale,
+    );
   } else if (status === "other") {
     statusLine = { key: `matchCentre.status.${fixture.status}` };
   } else if (status === "in_play" && card?.live) {

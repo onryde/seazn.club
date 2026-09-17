@@ -36,6 +36,11 @@ export {
   // exported so the pad's default-picker reuses it instead of forking a
   // third copy; see its own doc (cricket.ts) for the live 422 that caused.
   soEligibleBatters,
+  // Owner decision 2026-09-16 — the decided margin as data (kind + count), so
+  // the web can word it per locale instead of relaying the engine's English.
+  CRICKET_MARGIN_KINDS,
+  CRICKET_COUNTED_MARGIN_KINDS,
+  type CricketMargin,
   type ActiveInnings,
   type OverBowlerFacts,
   type CricketBallEv,

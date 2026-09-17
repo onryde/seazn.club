@@ -18,6 +18,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import { playerMatchesGenKey } from "@/server/public-site/player-matches-cache-keys";
+import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import {
   fireScoreRevalidate,
   fireDiscoveryRevalidate,
@@ -711,7 +712,7 @@ export async function invalidatePublicCache(
   // `loadCompetitionHub` and the fixture through `publicFixture`'s own query.
   // `pub:v1:div:{id}:*` backs only the public schedule, standings and entrants
   // endpoints.
-  const fixtureKey = `pub:v1:fixture:${fixtureId}`;
+  const fixtureKey = publicFixtureCacheKey(fixtureId);
   // R10h: the advanced-into fixtures' own documents ride the same DEL, after
   // the four keys every score drops. One round trip, and the pushes below then
   // wait on the delete that covers all of them.
@@ -723,7 +724,7 @@ export async function invalidatePublicCache(
         `pub:v1:org-live:${row.org_id}`,
       ]
     : [fixtureKey];
-  for (const id of alsoFixtureIds) keys.push(`pub:v1:fixture:${id}`);
+  for (const id of alsoFixtureIds) keys.push(publicFixtureCacheKey(id));
   // F4: neither call is ever left to reject unhandled. Both helpers fail open
   // inside their try, but `client()` sits outside it (cache.ts). ioredis's
   // constructor throws synchronously on a REDIS_URL it cannot parse, so every

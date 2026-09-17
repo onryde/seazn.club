@@ -12,6 +12,7 @@ import { requireFeature } from "@/lib/entitlements";
 import { cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED, REASON_CODE } from "@/lib/schedule-board";
 import { resolveVenueTz } from "@/lib/tz";
@@ -126,7 +127,7 @@ export function afterScheduleWrite(
   // (a whole-division apply, publish or start) still drops every key but sends
   // no per-fixture push: one write must not fan out hundreds of broadcasts, and
   // those match centres catch up on their poll.
-  const keys = [`pub:v1:hub:${competitionId}`, ...fixtureIds.map((id) => `pub:v1:fixture:${id}`)];
+  const keys = [`pub:v1:hub:${competitionId}`, ...fixtureIds.map(publicFixtureCacheKey)];
   // F4: never left to reject unhandled, for the reason `sweepPublicKey` gives.
   const deleted = cacheDel(...keys).catch((err: unknown) => {
     log.error({ err, keys }, "schedule: a public Redis delete failed (the write stands)");
