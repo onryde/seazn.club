@@ -19,6 +19,7 @@
 - **Rule field labels stay canonical English** (owner ruling D4). No dictionary work for the nine field labels. The panel's OWN chrome (a "Same as division" control, a lock reason, an error string) is picker chrome and DOES owe all four dictionaries (`en`, `es`, `fr`, `nl`) plus a `gen-keys` regen with zero drift.
 - **Every change ships a test that fails without it.** All four test types across the plan: unit, E2E, smoke, regression.
 - **Judge vitest green only from the JSON reporter.** `cd apps/web && npx vitest run --reporter=json --outputFile=/tmp/r.json <paths>`, then read `numPassedTests`/`numTotalTests` and confirm `.testResults[].name` are the files you meant. A wrapper summary saying `PASS(0) FAIL(0)` means the suite failed to collect.
+- **Non-DB suites need `DATABASE_URL= npx vitest run …`** (found in Task 1). With `DATABASE_URL` inherited from `.env.local` (the dev DB on 5432), `apps/web` vitest refuses to start and exits BEFORE writing `--outputFile` — so the symptom is `jq` reporting "Could not open file", which reads like a tooling glitch rather than a refusal. DB-backed suites (Tasks 3, 4, 5) need a real test database; bring it up via the `seazn-local-env` skill rather than pointing them at the dev DB.
 - **Prefix every verify command with `cd <abs worktree> &&` in the same call** — the shell cwd resets to the main checkout between tool calls, and a run that silently executes on `main` returns a false green.
 - **`git grep -n -a`**, not `rg` (returns empty in this shell) and not bare `grep` (reports source files as binary and hides lines).
 - **Never `git stash` in this worktree** — the stash stack is shared with the main checkout. Use a WIP commit.
@@ -39,7 +40,7 @@ Spec §T0. `match-rules.tsx:1` is `"use client"` and its only import is the dict
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - `export interface RuleField { key: string; label: string; help?: string; kind: "number" | "bool" | "select"; min?: number; max?: number; options?: { value: string; label: string }[]; build: (value: string, values: Record<string, string>) => Record<string, unknown>; buildOnBlank?: (values: Record<string, string>) => Record<string, unknown>; }`
+  - `RuleField` — moved verbatim, INCLUDING its existing optional `read?` member (football's two shoot-out fields already implement it). Task 6 adds implementations to that member; it does not add the member. `shootoutPointsPatch` moves too, staying module-private, because `SPORT_RULES.football` calls it.
   - `export const SPORT_RULES: Record<string, RuleField[]>`
   - `export function buildRuleOverride(sportKey: string, values: Record<string, string>): Record<string, unknown>`
   - `export function hydrateRuleValues(sportKey: string, config: unknown): Record<string, string>`
@@ -85,8 +86,29 @@ describe("configKeysFor", () => {
   it("is empty for a sport with no rules table", () => {
     expect(configKeysFor("nosuchsport").size).toBe(0);
   });
+
+  // Added after Task 1: cutting probeValuesFor down to the first option left
+  // every other test green, because no IN-SCOPE field branches its emitted key
+  // set on its value (carrom's gameTo is the only one in the whole table, and
+  // it is out of scope). Without this case the multi-probe loop is an
+  // unwitnessed guard — correct, but nothing reds if someone deletes it.
+  it("probes every option, so a value-branching build cannot hide a key", () => {
+    const branching: RuleField = {
+      key: "probe",
+      label: "Probe",
+      kind: "select",
+      options: [{ value: "a", label: "A" }, { value: "b", label: "B" }],
+      build: (v) => (v === "b" ? { onlyForB: 1 } : { always: 1 }),
+    };
+    expect(keysEmittedBy([branching])).toEqual(new Set(["always", "onlyForB"]));
+  });
 });
 ```
+
+`keysEmittedBy(fields: RuleField[]): ReadonlySet<string>` is the inner half of
+`configKeysFor`, exported from `lib/match-rules.ts` so a synthetic field can be
+passed to it; `configKeysFor(sportKey)` becomes
+`keysEmittedBy(SPORT_RULES[sportKey] ?? [])`.
 
 - [ ] **Step 2: Run it and watch it fail**
 
