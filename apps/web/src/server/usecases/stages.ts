@@ -706,7 +706,9 @@ const BYE_SLOT_LABEL = { key: "bracket.slot.bye", params: {} } as const;
 //     which is exactly what `rank_adjacent` pairs on. Seed order and cascade
 //     order are the same thing only before a ball is struck.
 //  2. A stage that declares no `rounds` gets the field's own round budget
-//     (`swissRoundsForFieldSize`) instead of generating forever.
+//     (`swissRoundsForFieldSize`) instead of generating forever, and that
+//     budget is PERSISTED into `config.rounds` at the first generation so the
+//     completion predicate can read it — see the comment at the write below.
 async function swissGen(
   tx: Tx,
   stageId: string,
@@ -718,12 +720,40 @@ async function swissGen(
   // truthiness test, so a stray `pairing: "folded"` cannot silently switch a
   // live event onto a different pairing model.
   const rankAdjacent = cfg.pairing === "rank_adjacent";
-  const rounds =
-    typeof cfg.rounds === "number"
-      ? cfg.rounds
-      : rankAdjacent
-        ? swissRoundsForFieldSize(entrants.length)
-        : null;
+  const declared = typeof cfg.rounds === "number" ? cfg.rounds : null;
+  const rounds = declared ?? (rankAdjacent ? swissRoundsForFieldSize(entrants.length) : null);
+
+  // A derived budget the generator keeps to itself is HALF a round count.
+  // `isTableStageComplete` (engine competition/stage.ts) reads `stage.rounds
+  // ?? 0` and refuses to complete a swiss at 0, and `toTableStage`
+  // (engine-db/competition.ts) sources that solely from `config.rounds` — so
+  // before this write, swiss_playoff and swiss_knockout capped generation
+  // correctly and then sat at every-fixture-decided forever, never completing
+  // and never seeding their finals half. Write it down, in this transaction,
+  // so the completer reads the same number the generator used.
+  //
+  // Written ONCE, at the first generation, and never again — the `where`
+  // clause is the guard, not the caller, so a concurrent organiser edit
+  // cannot lose a race with this statement:
+  //
+  //  - an organiser's own `rounds` (the Settings tab writes this exact key)
+  //    is never clobbered; and
+  //  - the value does not get re-derived on later rounds. That second half
+  //    matters more than it looks: a mid-stage withdrawal that drops the
+  //    field under a band edge (9 ⇒ 8) would SHRINK the budget beneath a
+  //    stage already in progress, and `isTableStageComplete` only inspects
+  //    rounds `1..budget` — it would then complete the stage with a later,
+  //    already-generated round still unplayed. A number decided once cannot
+  //    do that.
+  //
+  // A plain fold swiss derives nothing (`rounds` stays null) and so is left
+  // exactly as it was: no cap, no write, no behaviour change for live events.
+  if (declared === null && rounds !== null) {
+    await tx`
+      update stages set config = config || jsonb_build_object('rounds', ${rounds}::int)
+      where id = ${stageId} and config->>'rounds' is null`;
+  }
+
   const maxRound = existing.reduce((m, f) => Math.max(m, f.round_no), 0);
   if (rounds !== null && maxRound >= rounds) return [];
   const pending = existing.some((f) => !DECIDED.has(f.status));

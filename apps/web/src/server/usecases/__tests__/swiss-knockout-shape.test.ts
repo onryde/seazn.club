@@ -19,33 +19,31 @@
 //         directly, at the table.
 //
 // ─────────────────────────────────────────────────────────────────────────
-// BLOCKER these cases have to route around — reported, not fixed here.
+// The blocker these cases used to route around, and how it was closed.
 //
-// A swiss stage that declares no `config.rounds` can NEVER complete, so the
-// handoff into the finals half never fires at all:
+// A swiss stage that declared no `config.rounds` could NEVER complete, so the
+// handoff into the finals half never fired at all:
 //
-//   isTableStageComplete (packages/engine/src/competition/stage.ts:118-120)
+//   isTableStageComplete (packages/engine/src/competition/stage.ts:116-130)
 //     reads `stage.rounds ?? 0` and returns false when that is 0; and
-//   toTableStage (server/engine-db/competition.ts:338) only sets `rounds`
+//   toTableStage (server/engine-db/competition.ts) only sets `rounds`
 //     when `config.rounds != null`.
 //
-// swissGen (stages.ts) derives the field's budget from swissRoundsForFieldSize
-// and uses it to stop generating — but persists it nowhere, so the number is
-// known to the generator and to nobody else. Proven, not inferred: with the
-// template's own config the stage sits at 6/6 fixtures `decided` across all
-// three rounds and `completeStage` returns `completed: false`; with
-// `rounds: 3` added and nothing else changed, it completes, proposes and
-// confirms. The blocker case at the bottom of this file pins that, and it
-// applies to swiss_playoff (shipped earlier on this branch) identically —
-// the two templates emit a byte-identical swiss draft, which that case also
-// asserts, so the finding cannot be read as this format's alone.
+// swissGen (stages.ts) derived the field's budget from swissRoundsForFieldSize
+// and used it to stop generating — but persisted it nowhere, so the number was
+// known to the generator and to nobody else. It now WRITES that budget into
+// `stages.config.rounds` on the first generation, in the same transaction,
+// and only when the key is absent, so the completion predicate reads a real,
+// already-decided number. Persisting once (rather than re-deriving inside
+// toTableStage) is deliberate: a mid-stage withdrawal that drops the field
+// below a band edge would otherwise shrink the budget under a stage already
+// in progress, and isTableStageComplete only inspects rounds 1..budget — it
+// would complete the stage with a later round still unplayed.
 //
-// The shape cases below therefore set `rounds` on the swiss stage explicitly.
-// That is a real, supported configuration — the Settings tab's rounds input
-// writes exactly this key — so the half this task owns, the BRACKET, is
-// proven against real rows rather than skipped. When the derived budget is
-// made visible to the completion predicate, the blocker case must be
-// INVERTED, not deleted, and `declareRounds` below dropped.
+// The cases below therefore run the SHIPPED drafts, unmodified. The last one
+// is the old blocker case, inverted rather than deleted: it now asserts the
+// stage does complete and does seed its bracket. The persistence itself is
+// guarded directly in swiss-playoff-pairing.test.ts.
 // ─────────────────────────────────────────────────────────────────────────
 //
 // The swiss half is 4 entrants over the field's own 3-round budget, i.e. a
@@ -117,16 +115,11 @@ interface Rig {
 }
 
 /** A badminton division whose stages are the REAL Swiss Knockout template
- *  drafts for this Top N — not a hand-typed copy of them. If the catalogue
- *  entry ever stops emitting a swiss + a knockout, or stops threading the
- *  knob, these cases go red rather than quietly proving a shape the picker no
- *  longer builds. `declareRounds` is the blocker work-around documented at
- *  the top of this file, and is the ONLY deviation from the shipped drafts. */
-async function seedSwissKnockout(
-  auth: AuthCtx,
-  topN: number,
-  declareRounds: boolean,
-): Promise<Rig> {
+ *  drafts for this Top N — not a hand-typed copy of them, and with no
+ *  deviation from them at all. If the catalogue entry ever stops emitting a
+ *  swiss + a knockout, or stops threading the knob, these cases go red rather
+ *  than quietly proving a shape the picker no longer builds. */
+async function seedSwissKnockout(auth: AuthCtx, topN: number): Promise<Rig> {
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "Swiss Knockout " + randomUUID().slice(0, 6),
@@ -165,8 +158,7 @@ async function seedSwissKnockout(
       seq: i + 1,
       kind: d.kind,
       name: d.name,
-      config:
-        declareRounds && d.kind === "swiss" ? { ...d.config, rounds: SWISS_ROUNDS } : d.config,
+      config: d.config,
       progression: d.progression,
     });
     const [stage] = await createStages(auth, division.id, input);
@@ -249,7 +241,7 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
     // ever tied, the shapes below would still pass while naming the wrong
     // entrants — so it is proven here rather than assumed there.
     const { auth } = await seedOrg();
-    const rig = await seedSwissKnockout(auth, 4, true);
+    const rig = await seedSwissKnockout(auth, 4);
     await startDivision(auth, rig.divisionId);
     await playSwissOut(auth, rig);
 
@@ -270,7 +262,7 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
 
   it("N=2 — a single Final, one round, no semi-final", async () => {
     const { auth } = await seedOrg();
-    const rig = await seedSwissKnockout(auth, 2, true);
+    const rig = await seedSwissKnockout(auth, 2);
     await startDivision(auth, rig.divisionId);
     const bracket = await runToBracket(auth, rig);
 
@@ -282,7 +274,7 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
 
   it("N=3 — a bye for the swiss winner, a real 2nd-v-3rd semi, and the winner meets them in the Final", async () => {
     const { auth } = await seedOrg();
-    const rig = await seedSwissKnockout(auth, 3, true);
+    const rig = await seedSwissKnockout(auth, 3);
     await startDivision(auth, rig.divisionId);
     const bracket = await runToBracket(auth, rig);
 
@@ -334,7 +326,7 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
 
   it("N=4 — exactly TWO rounds, semi-finals then Final; no quarter-final", async () => {
     const { auth } = await seedOrg();
-    const rig = await seedSwissKnockout(auth, 4, true);
+    const rig = await seedSwissKnockout(auth, 4);
     await startDivision(auth, rig.divisionId);
     const bracket = await runToBracket(auth, rig);
 
@@ -360,40 +352,49 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
     expect(final.away_entrant_id).toBeNull();
   });
 
-  // ── The blocker, pinned ──────────────────────────────────────────────────
-  // This asserts a DEFECT as the current behaviour, deliberately and under a
-  // title that says so, because it is the one thing standing between both
-  // swiss composites and a finished tournament. When the derived budget is
-  // made visible to the completion predicate, INVERT this case (and drop
-  // seedSwissKnockout's `declareRounds` argument) — do not delete it.
-  it("DEFECT: a swiss stage with no declared rounds never completes, so the finals half is never seeded", async () => {
+  // ── The blocker, inverted ────────────────────────────────────────────────
+  // This case used to assert the DEFECT as the shipped behaviour, under a
+  // title that said so, because it was the one thing standing between both
+  // swiss composites and a finished tournament. The budget is now persisted
+  // at the first generation, so the same rig — the SHIPPED drafts, nothing
+  // declared — runs all the way through. Kept rather than deleted so the
+  // regression has a witness at the exact seam it used to fail at.
+  it("DEFECT FIXED: a swiss stage with no declared rounds persists the field's budget, completes, and seeds the finals half", async () => {
     const { auth } = await seedOrg();
-    const rig = await seedSwissKnockout(auth, 4, false); // the SHIPPED drafts
+    const rig = await seedSwissKnockout(auth, 4); // the SHIPPED drafts
     await startDivision(auth, rig.divisionId);
     await playSwissOut(auth, rig);
 
-    // The generator stopped at the field's own budget, and every fixture it
-    // issued is settled — there is nothing left for anyone to play.
+    // Unchanged from the defect case: the generator stops at the field's own
+    // budget and every fixture it issued is settled.
     const swiss = await fixturesOf(rig.swissStageId);
     expect(roundsOf(swiss)).toEqual([1, 2, 3]);
     expect(swiss.filter((f) => f.status !== "decided")).toEqual([]);
 
-    // And yet:
-    const done = await completeStage(auth, rig.swissStageId);
-    expect(done.completed, "if this is now true, invert this case").toBe(false);
-    expect(done.seed_proposal ?? null).toBeNull();
+    // What changed: the budget the generator used is now written down, so the
+    // completion predicate can see it. Read off the stage ROW, not the draft.
+    const [row] = await sql<{ config: { rounds?: number } }[]>`
+      select config from stages where id = ${rig.swissStageId}`;
+    expect(row!.config.rounds).toBe(SWISS_ROUNDS);
 
-    // The bracket stays fully TBD — day-one placeholders and nobody in them.
+    // …and therefore:
+    const done = await completeStage(auth, rig.swissStageId);
+    expect(done.completed, "the swiss must now complete on the shipped draft").toBe(true);
+    expect(done.seed_proposal, "and propose a seeding for the knockout").toBeTruthy();
+
+    // The bracket is no longer a wall of TBD: confirming the proposal seats
+    // the qualifiers. Asserted through the real confirm path, because a
+    // proposal nobody can confirm would still satisfy the two lines above.
+    await confirmSeedProposal(auth, rig.koStageId, { proposalId: done.seed_proposal!.id });
     const bracket = await fixturesOf(rig.koStageId);
     expect(bracket.length).toBeGreaterThan(0);
-    expect(bracket.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(
-      true,
-    );
+    const semis = bracket.filter((f) => f.round_no === roundsOf(bracket)[0]);
+    expect(semis.map((f) => pairOf(f, rig.nameOf)).sort()).toEqual(["E1 v E4", "E3 v E2"]);
 
-    // …and this is NOT a Swiss Knockout defect. swiss_playoff, shipped
-    // earlier on this branch, emits a byte-identical swiss draft, so it
-    // stalls at exactly the same point. Asserted here rather than paid for
-    // with a second DB run: the draft IS the whole cause.
+    // …and this was never a Swiss Knockout defect, so the fix is not a Swiss
+    // Knockout fix. swiss_playoff emits a byte-identical swiss draft — same
+    // omitted `rounds`, same derived budget, same repair. Asserted here
+    // rather than paid for with a second DB run: the draft IS the whole cause.
     const mine = buildTemplateStages("swiss_knockout", { ...KNOBS, qualified: 4 })[0]!;
     const sibling = buildTemplateStages("swiss_playoff", { ...KNOBS, qualified: 4 })[0]!;
     expect(sibling.config).toEqual(mine.config);

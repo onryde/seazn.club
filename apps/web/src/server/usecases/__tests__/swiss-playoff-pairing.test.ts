@@ -20,6 +20,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { swissRoundsForFieldSize } from "@/lib/swiss-rounds";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
@@ -87,6 +88,21 @@ async function fixturesOfRound(stageId: string, roundNo: number): Promise<Fixtur
     select id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status
     from fixtures where stage_id = ${stageId} and round_no = ${roundNo}
     order by seq_in_round`;
+}
+
+/** The stage's config as the DATABASE holds it — the row `toTableStage` reads,
+ *  not the draft the builder emitted. */
+async function configOf(stageId: string): Promise<Record<string, unknown>> {
+  const [row] = await sql<{ config: Record<string, unknown> }[]>`
+    select config from stages where id = ${stageId}`;
+  return row!.config;
+}
+
+/** The highest round the stage has any fixture in. */
+async function lastRoundOf(stageId: string): Promise<number> {
+  const [row] = await sql<{ n: number | null }[]>`
+    select max(round_no)::int as n from fixtures where stage_id = ${stageId}`;
+  return row!.n ?? 0;
 }
 
 /** Play a real best-of-3 badminton match through the append path. `games` is
@@ -328,5 +344,90 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       }
       expect(seen.size).toBe(7);
     }
+  });
+
+  // ── The derived budget has to become a DURABLE number ────────────────────
+  // `swissGen` knowing the budget is not enough: `isTableStageComplete`
+  // (packages/engine/src/competition/stage.ts) reads `stage.rounds ?? 0` and
+  // refuses to complete at 0, and `toTableStage`
+  // (server/engine-db/competition.ts) only supplies `rounds` from
+  // `config.rounds`. So a budget that lives only inside the generator caps
+  // generation correctly and still leaves the stage unable to ever finish —
+  // which is exactly what shipped, and what swiss-knockout-shape.test.ts
+  // pinned as a DEFECT before this. These two cases guard the repair itself
+  // rather than its symptom, so a future regression of "the number is derived
+  // but never written down" is caught here and not only three files away.
+  it("writes the derived round budget into config.rounds at the first generation", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedBadmintonDivision(auth, 8);
+    // The SHIPPED draft: swiss_playoff and swiss_knockout both omit `rounds`
+    // deliberately, because the field decides it.
+    const [adjacent] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { pairing: "rank_adjacent" },
+      progression: null,
+    });
+    expect(await configOf(adjacent!.id)).not.toHaveProperty("rounds");
+
+    await startDivision(auth, divisionId);
+
+    // Read off the same table the generator reads, never typed in here, so a
+    // band edit moves this assertion with it (8 entrants ⇒ 3).
+    expect(await configOf(adjacent!.id)).toMatchObject({
+      rounds: swissRoundsForFieldSize(8),
+      pairing: "rank_adjacent",
+    });
+
+    // And the other arm, which is what keeps live fold-pairing events still:
+    // a plain swiss derives no budget, so it must still have NOTHING written
+    // to it. Without this half the case passes on a change that stamps every
+    // swiss stage with a cap it never had.
+    const { divisionId: foldDivision } = await seedBadmintonDivision(auth, 8);
+    const [fold] = await createStages(auth, foldDivision, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: {},
+      progression: null,
+    });
+    await startDivision(auth, foldDivision);
+    expect(await lastRoundOf(fold!.id), "fold swiss opened").toBe(1);
+    expect(await configOf(fold!.id)).not.toHaveProperty("rounds");
+  });
+
+  it("never writes over a rounds value that is already there — the organiser's edit wins", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedBadmintonDivision(auth, 8);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { pairing: "rank_adjacent" },
+      progression: null,
+    });
+    await startDivision(auth, divisionId);
+    const derived = swissRoundsForFieldSize(8);
+    expect(await configOf(stage!.id)).toMatchObject({ rounds: derived });
+
+    // The organiser lengthens the swiss from the Settings tab — the same
+    // `rounds` key that input writes. Deliberately NOT the derived number, so
+    // a re-derivation on the next generation is visible twice over: as a
+    // changed value AND as a round that never gets generated. A test that
+    // edited it TO the derived number could not witness the regression.
+    const declared = derived + 1;
+    await sql`update stages set config = config || jsonb_build_object('rounds', ${declared}::int)
+              where id = ${stage!.id}`;
+
+    for (let round = 1; round <= declared; round++) {
+      await playRoundHomeWins(auth.orgId, stage!.id, round);
+      const made = await generateStageFixtures(auth, stage!.id);
+      expect(made.created, `generation after round ${round}`).toBe(round < declared ? 4 : 0);
+      expect(await configOf(stage!.id), `config after round ${round}`).toMatchObject({
+        rounds: declared,
+      });
+    }
+    expect(await lastRoundOf(stage!.id)).toBe(declared);
   });
 });
