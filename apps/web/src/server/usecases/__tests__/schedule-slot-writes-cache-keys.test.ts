@@ -985,8 +985,8 @@ describe.skipIf(!HAS_DB)("a manual stage completion publishes the bracket it dra
     expect([moved, deleted]).toEqual([[], []]);
 
     await sleep(40);
-    expect(probe.dels, "scoring's DEL of its fixture, the hub, player-matches generation and org-live keys, once; no second hub DEL for the draw").toEqual([
-      [fixtureKey(last!), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId)],
+    expect(probe.dels, "scoring's DEL of its fixture, the hub, player-matches generation, org-live and the division's documents, once; no second hub DEL for the draw").toEqual([
+      [fixtureKey(last!), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId)],
     ]);
     expect(probe.divisionPushes, "scoring's division push, once; no schedule push for the draw").toEqual([
       [rig.divisionId, "score"],
@@ -1182,8 +1182,8 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
     expect([deleted, created]).toEqual([[], []]);
     expect(advanced, "the winner was named into exactly the fixture this one feeds").toEqual([semi!.winner_to]);
 
-    expect(probe.dels, "scoring's own four keys, plus the advanced-into fixture's, in ONE DEL").toEqual([
-      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...advanced.map(fixtureKey)],
+    expect(probe.dels, "scoring's own keys, plus the advanced-into fixture's, in ONE DEL").toEqual([
+      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId), ...advanced.map(fixtureKey)],
     ]);
     expect(probe.inTxAtDel, "the DEL went out after the score committed, not from inside its transaction")
       .toEqual([false]);
@@ -1199,7 +1199,7 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
     expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
   }, 120_000);
 
-  it("deciding the FINAL advances nobody: the DEL and the pushes are exactly the four keys and the one push scoring sends on its own", async () => {
+  it("deciding the FINAL advances nobody: the DEL and the pushes are exactly scoring's own keys and the one push it sends on its own", async () => {
     const rig = await bracketRig();
     const semis = rig.fixtures.filter((f) => playable(f) && f.winner_to !== null);
     const finals = rig.fixtures.filter((f) => f.winner_to === null);
@@ -1219,7 +1219,7 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
       .toEqual({ moved: [], deleted: [], created: [] });
 
     expect(probe.dels, "no advanced-into key: nothing advanced").toEqual([
-      [fixtureKey(final.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId)],
+      [fixtureKey(final.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId)],
     ]);
     expect(probe.inTxAtDel).toEqual([false]);
     await releaseDel();
@@ -1257,7 +1257,7 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
       .toEqual({ moved: [], deleted: [], created: [] });
 
     expect(probe.dels, "no advanced-into key: the fill touched no row").toEqual([
-      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId)],
+      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId)],
     ]);
     await releaseDel();
     expect(probe.fixturePushes, "no second push: the fill touched no row").toEqual([[semi!.id, "event"]]);
@@ -1281,10 +1281,12 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
 
     expect(probe.dels, "one DEL").toHaveLength(1);
     const del = probe.dels[0]!;
-    expect(del.slice(0, 4), "scoring's own four keys first").toEqual([
+    const own = [
       fixtureKey(first!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId),
-    ]);
-    expect([...del.slice(4)].sort(), "then both advanced-into fixtures").toEqual(advanced.map(fixtureKey).sort());
+      ...divisionKeys(rig.divisionId),
+    ];
+    expect(del.slice(0, own.length), "scoring's own keys first").toEqual(own);
+    expect([...del.slice(own.length)].sort(), "then both advanced-into fixtures").toEqual(advanced.map(fixtureKey).sort());
     expect(probe.inTxAtDel).toEqual([false]);
     await sleep(20);
     expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);

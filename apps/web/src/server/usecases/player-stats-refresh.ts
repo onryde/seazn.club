@@ -54,8 +54,8 @@ import "server-only";
 //
 // 4. VISIBLE. After the fold commits, the public caches are cleared again: the
 //    ISR tags through `fireStatsRevalidate` (profiles chosen so Next does not
-//    drop them inside `after()`), then the hub's Redis document, then the
-//    division glob. The division then gets a second `state_changed` push, sent
+//    drop them inside `after()`), then the hub's Redis document and the
+//    division's own documents, all by name in one DEL (review r2-m4). The division then gets a second `state_changed` push, sent
 //    once the hub DEL settles and NOT awaited, so a slow realtime endpoint
 //    never holds the after-window (its fetch also times out,
 //    `lib/realtime.ts`). Next flushes after-window tags only once EVERY

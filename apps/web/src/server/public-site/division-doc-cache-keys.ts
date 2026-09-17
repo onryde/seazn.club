@@ -4,8 +4,11 @@
 //
 // Final review r2-m4: an invalidator DELs `publicDivisionCacheKeys(id)` by name
 // instead of sweeping `pub:v1:div:{id}:*`. A sweep is a SCAN over the whole
-// keyspace (cache.ts), and every page of it is a billed Upstash command, on
-// every person write, schedule write and stats refresh.
+// keyspace (cache.ts), and every page of it is a billed Upstash command — on
+// every SCORE write (`invalidatePublicCache`, usecases/scoring.ts, the most
+// frequent of them by far), every person write (`dropNamedPublicDocuments`),
+// every schedule write (`afterScheduleWrite`) and every stats refresh
+// (`invalidateAfterRefresh`).
 //
 // Adding a document? Add its builder here AND to the list below:
 // `__tests__/division-doc-cache-keys.test.ts` fails on a `pub:v1:div:` key

@@ -221,7 +221,7 @@ async function invalidateAndPush(
   // settled, whichever way it went), never before, and without holding this
   // response. Both channels have public receivers that refetch a Redis-cached
   // document on a push: `fixture:{id}` → the match centre and overlay
-  // (`pub:v1:fixture:{id}`), `division:{id}` → the hub
+  // (`pub:v1:fixture:v2:{id}`), `division:{id}` → the hub
   // (`pub:v1:hub:{competitionId}`). A refetch that beat the delete read the old
   // copy, and a subscribed page only polls as a slow safety net.
   //
@@ -711,9 +711,10 @@ export async function invalidatePublicCache(
   //     (`publicDivisionCacheKeys`, division-doc-cache-keys.ts, the same names
   //     `afterScheduleWrite` drops). These were a `pub:v1:div:{id}:*` SCAN over
   //     the whole keyspace on every score write, every page of it a billed
-  //     Upstash command (review r2-m4). Now the pushes below also wait on the
-  //     delete that covers them, so a standings refetch a push triggers never
-  //     reads the pre-score document.
+  //     Upstash command (review r2-m4). No reader of these three refetches on
+  //     a push today — they are polled — so the gain is the SCAN, not the
+  //     ordering: they now ride a DEL the pushes already wait on (and the
+  //     1500 ms bound can still fire with that DEL in flight, R10 I1).
   // No SCAN is sent. The hub rebuilds through `loadCompetitionHub` and the
   // fixture through `publicFixture`'s own query.
   const fixtureKey = publicFixtureCacheKey(fixtureId);

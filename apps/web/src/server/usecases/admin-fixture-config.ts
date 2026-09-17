@@ -348,8 +348,8 @@ export async function resnapshotFixtureConfig(
     // In `finally` (scoring's shape, R10 M3): the rewrite has committed whether
     // or not the standings recompute succeeds. AWAITED — this runs inside a
     // route handler, and Next drops a revalidation tag fired after the handler
-    // resolves — but a failure is logged, never thrown: the Redis sweeps inside
-    // stay non-blocking, and a cache that could not be dropped must not report
+    // resolves — but a failure is logged, never thrown: the Redis delete inside
+    // stays non-blocking, and a cache that could not be dropped must not report
     // a committed re-snapshot as failed.
     await invalidatePublicCache(row.org_id, fixtureId).catch((err: unknown) => {
       log.error(
