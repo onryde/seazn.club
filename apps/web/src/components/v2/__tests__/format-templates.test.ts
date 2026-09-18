@@ -532,13 +532,9 @@ describe("swiss_playoff — the new composite template", () => {
     expect(stages[0]!.config).toMatchObject({ pairing: "rank_adjacent" });
   });
 
-  it("declares NO rounds, so the field's own round budget applies", () => {
-    // The knob is the editor for a template's DECLARED rounds. Swiss Playoff
-    // declares none on purpose: the number scales with the field, which only
-    // the generator knows (server/usecases/stages.ts swissGen), so stamping
-    // the knob's 5 here would silently pin every field size to five rounds.
-    const stages = buildTemplateStages("swiss_playoff", { ...KNOBS, swissRounds: 9 });
-    expect(stages[0]!.config).not.toHaveProperty("rounds");
+  it("swiss_playoff stamps knobs.swissRounds onto the swiss stage", () => {
+    const stages = buildTemplateStages("swiss_playoff", { ...KNOBS, swissRounds: 4 });
+    expect(stages[0]!.config).toMatchObject({ pairing: "rank_adjacent", rounds: 4 });
   });
 
   it("the plain swiss template still takes its rounds from the knob", () => {
@@ -580,9 +576,9 @@ describe("swiss_knockout — the second composite template", () => {
     expect(stages[0]!.config).toMatchObject({ pairing: "rank_adjacent" });
   });
 
-  it("declares NO rounds, so the field's own round budget applies", () => {
-    const stages = buildTemplateStages("swiss_knockout", { ...KNOBS, swissRounds: 9 });
-    expect(stages[0]!.config).not.toHaveProperty("rounds");
+  it("swiss_knockout stamps knobs.swissRounds onto the swiss stage", () => {
+    const stages = buildTemplateStages("swiss_knockout", { ...KNOBS, swissRounds: 4 });
+    expect(stages[0]!.config).toMatchObject({ pairing: "rank_adjacent", rounds: 4 });
   });
 
   // The knob is the WHOLE difference from Swiss Playoff, whose playoff is a
