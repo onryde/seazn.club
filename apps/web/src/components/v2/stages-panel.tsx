@@ -54,6 +54,11 @@ import { zonedTimeInput } from "@/lib/zoned-datetime";
 // W3 item 6 — one definition of "this swiss stage is between rounds, not
 // drifted", shared with the page's tests rather than restated in each.
 import { swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
+import {
+  latestSeatedSwissRound,
+  nextUnseatedSwissRound,
+  swissRoundHasPlayedResult,
+} from "@/lib/swiss-shell";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -440,7 +445,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     }
   }
 
-  async function act(stageId: string, action: "generate" | "complete" | "delete") {
+  async function act(stageId: string, action: "generate" | "complete" | "delete" | "unpair") {
     setError(null);
     setPaywallFeature(null);
     setNotice(null);
@@ -460,6 +465,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
             : msg("schedule.notice.nothingNew"),
         );
+      } else if (action === "unpair") {
+        const out = await apiV1<{ cleared: number; round: number }>(
+          `/api/v1/stages/${stageId}/unpair`,
+          { method: "POST", json: {} },
+        );
+        setNotice(msg("schedule.notice.unpaired", { round: out.round }));
       } else {
         const out = await apiV1<{
           completed: boolean;
@@ -485,10 +496,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
       } else {
-        const classified = classifyActError(err, msg, locale);
-        if (classified.tone === "warning") setWarning(classified.text);
-        else setError(classified.text);
-        if (classified.refresh) router.refresh();
+        if (action === "unpair") {
+          setError(msg("schedule.error.unpairFailed"));
+        } else {
+          const classified = classifyActError(err, msg, locale);
+          if (classified.tone === "warning") setWarning(classified.text);
+          else setError(classified.text);
+          if (classified.refresh) router.refresh();
+        }
       }
     } finally {
       setBusy(null);
@@ -761,6 +776,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const deletable =
           stage.seq === Math.max(...stages.map((s) => s.seq)) &&
           !stageFixtures.some((f) => ["in_play", "decided", "finalized"].includes(f.status));
+        const swissShellFixtures = stageFixtures.map((f) => ({ ...f, ext_key: f.ext_key ?? null }));
+        const swissHasUnseated =
+          stage.kind === "swiss" && nextUnseatedSwissRound(swissShellFixtures) !== null;
+        const canUnpairSwiss = (() => {
+          if (stage.kind !== "swiss") return false;
+          const latest = latestSeatedSwissRound(swissShellFixtures);
+          return latest !== null && !swissRoundHasPlayedResult(swissShellFixtures, latest);
+        })();
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1106,6 +1129,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   open={openRailFor === stage.id}
                   onToggleOpen={(stageId) => setOpenRailFor(openRailFor === stageId ? null : stageId)}
                   adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
+                  swissHasUnseated={swissHasUnseated}
+                  canUnpairSwiss={canUnpairSwiss}
                   // #622 — court tags editor moves onto the rail (Task 3). Stays
                   // constructed HERE, not inside StageRail: it reads
                   // `courtTagSuggestions` off this panel's own `venues` prop, and
