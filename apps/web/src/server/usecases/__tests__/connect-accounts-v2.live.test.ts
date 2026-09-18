@@ -4,8 +4,10 @@
 // stubbed SDK; connect-accounts-v2-wire.test.ts pins the HTTP REQUEST that
 // actually goes out, against a local fixture server. Neither can answer the
 // half that belongs to Stripe: does Stripe ACCEPT these parameters, and does
-// the V1 INTEROP VIEW of the resulting account still carry the six fields
-// `syncConnectAccount` mirrors?
+// the V1 INTEROP VIEW of the resulting account still carry the health fields
+// `syncConnectAccount` and `connectStatus` read? (Which fields, and which of
+// them are asserted rather than merely named, is set out at the interop test
+// below — the count has been wrong here twice.)
 //
 // That interop view is the whole reason this migration touched one function
 // instead of ten. `syncConnectAccount`, the billing-events dispatch, the
@@ -115,14 +117,22 @@ describe.skipIf(!LIVE)("Accounts v2 create against live Stripe (test mode)", () 
   });
 
   it("the V1 INTEROP VIEW still carries every field syncConnectAccount mirrors", async () => {
-    // This is the tripwire. SIX fields are read below, and they are not all
-    // one function's: five are syncConnectAccount's (charges_enabled,
-    // payouts_enabled, default_currency, and requirements' currently_due +
-    // disabled_reason); `details_submitted` is connectStatus's (stripe-
-    // connect.ts:83) and syncConnectAccount never touches it — it is what the
+    // This is the tripwire. FIVE fields are ASSERTED below, and they are not
+    // all one function's: four are syncConnectAccount's (charges_enabled,
+    // payouts_enabled, default_currency and requirements.currently_due);
+    // `details_submitted` is connectStatus's (stripe-connect.ts:83) and
+    // syncConnectAccount never touches it — it is what the
     // return-from-onboarding page shows before the webhook lands. If any of
     // them stops being present on the v1 view of a v2 account, every Connect
     // health flag in this app silently stops updating.
+    //
+    // A sixth, `requirements.disabled_reason`, is read by syncConnectAccount
+    // but is deliberately NOT pinned by name: it is nullable, and whether
+    // Stripe emits the key at all when it is null has never been established
+    // against the live API — a key-presence assertion written on a guess
+    // would red for the wrong reason on someone else's BILLING_LIVE run.
+    // Presence of `requirements` stands in for it. Narrow this the day a live
+    // run confirms the key is always emitted.
     const v1 = await stripe.accounts.retrieve(account.id);
     expect(v1.object).toBe("account");
     expect(typeof v1.charges_enabled).toBe("boolean");

@@ -112,21 +112,22 @@ export const FIXTURE_ACCOUNT_COUNTRY = "GB";
  *  Mirrors `createConnectOnboardingLink`'s `stripe.v2.core.accounts.create`
  *  (apps/web/src/server/usecases/stripe-connect.ts — the call sits under the
  *  `if (!accountId)` branch; search for `v2.core.accounts.create` rather than
- *  trusting a line number). Every field production sends is sent here too,
- *  with exactly two deliberate differences:
+ *  trusting a line number).
  *
- *    - NO `org_id` in the metadata. This account belongs to no organization;
- *      a stray org_id would make it look like a real club's. The `fixture` and
- *      `created_at` keys stay, so the account is identifiable in the Dashboard.
- *    - The two IDENTITY fields — `contact_email` and `display_name` — are
- *      fixture constants rather than the owner's email and the org's name,
- *      because there is no org or owner here to read them from. Both are still
- *      SENT: v2 REQUIRES `contact_email` whenever `configuration.recipient` is
- *      supplied, and production sends `display_name` for every org whose name
- *      is non-blank — essentially always — so omitting it would leave the
- *      fixture a different shape from the accounts users get. Non-empty on
- *      purpose: `display_name: ""` is a 400, which is the trap production's
- *      own conditional exists to avoid.
+ *  The differences are NOT listed here. Prose counting them was wrong twice
+ *  (it said "exactly two" while omitting `metadata.tos_agreed_at`), so the
+ *  list now lives as data in `DELIBERATE` in
+ *  apps/web/src/__tests__/stripe-connect-fixture-drift.test.ts, which
+ *  captures BOTH payloads from the real calls and reds if this one gains a
+ *  difference, loses one, or misses a field production added. Read that
+ *  constant for the current answer; a comment here would go stale again.
+ *
+ *  In outline: the metadata is disjoint (no `org_id` on an account that
+ *  belongs to no club), and `contact_email` / `display_name` are fixture
+ *  constants because there is no owner or org to read them from. Both of
+ *  those are still SENT — v2 REQUIRES `contact_email` whenever
+ *  `configuration.recipient` is supplied, and `display_name: ""` is a 400,
+ *  which is the trap production's own conditional exists to avoid.
  *
  *  Why the create is followed by a v1 retrieve: `v2.core.accounts.create`
  *  answers a V2 Account, which carries none of `charges_enabled`,

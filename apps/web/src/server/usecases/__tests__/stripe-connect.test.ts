@@ -50,6 +50,7 @@ import {
   connectStatus,
   createConnectDashboardLink,
   createConnectOnboardingLink,
+  ONBOARDING_FAILED,
   syncConnectAccount,
 } from "../stripe-connect";
 
@@ -298,8 +299,7 @@ describe.skipIf(!HAS_DB)("Connect account creation goes through Accounts v2", ()
       true,
     ).catch((e) => e)) as Error & { status?: number };
     expect(err.status).toBe(502);
-    expect(err.message).toBe("Stripe couldn't start onboarding for this organization");
-    expect(err.message).not.toContain("owner's email");
+    expect(err.message).toBe(ONBOARDING_FAILED);
     expect(stripeMock.v2AccountCreate).not.toHaveBeenCalled();
     const [org] = await sql<{ stripe_account_id: string | null }[]>`
       select stripe_account_id from organizations where id = ${orgId}`;
@@ -330,11 +330,14 @@ describe.skipIf(!HAS_DB)("Onboarding masks Stripe's raw failures", () => {
   // money screen. `createConnectDashboardLink` below already guards its own
   // call the same way; these two pin the onboarding half.
   //
-  // Both halves are asserted on purpose: "the raw text is gone" alone is
-  // satisfied by any replacement (including an empty message or a 500 that
-  // says nothing), so each case also pins the status and the generic string.
+  // Each case pins the status AND the exact message. There are deliberately
+  // no `not.toContain("sk_test")`-style negatives beside them: `toBe` on the
+  // whole string already excludes every leak by construction, so such a
+  // negative can never fail independently of the line above it — it reads as
+  // extra rigour while testing nothing. What must NOT appear (Stripe's key
+  // and account id, the env var's name) is named in each case's comment.
   const RAW = "You provided a malformed API Key 'sk_test_51Hxxx' for account 'acct_1Leak'";
-  const GENERIC = "Stripe couldn't start onboarding for this organization";
+  const GENERIC = ONBOARDING_FAILED;
   /** The real text getStripe() throws with no key (lib/stripe.ts:8-11). */
   const NO_KEY = "STRIPE_SECRET_KEY is not set. Add it to .env.local (use a test key for local dev).";
 
@@ -355,10 +358,52 @@ describe.skipIf(!HAS_DB)("Onboarding masks Stripe's raw failures", () => {
       "/settings/connect",
       true,
     ).catch((e) => e)) as Error & { status?: number };
-    expect(err.message).not.toContain("STRIPE_SECRET_KEY");
-    expect(err.message).not.toContain(".env.local");
+    // Neither the env var name nor the ".env.local" hint survives.
     expect(err.status).toBe(502);
     expect(err.message).toBe(GENERIC);
+  });
+
+  it("an account Stripe created but we could not store is masked too", async () => {
+    // The fourth unmasked English 500, two branches below getStripe(): the
+    // conditional claim UPDATE matched nothing and the re-read still found no
+    // id, so the code threw 500 "Failed to store the Connect account" — a
+    // sentence the client prints verbatim (only 402 and 502 are routed to the
+    // dictionary) and which tells an owner nothing.
+    //
+    // Driven for real rather than by stubbing `sql`: a BEFORE UPDATE trigger
+    // scoped to THIS org makes the claim UPDATE return no row while leaving
+    // stripe_account_id null — precisely the state the branch answers, and
+    // the only way to hold it, since the branch needs the row to be taken at
+    // UPDATE time and empty one statement later.
+    const { owner, orgId } = await seedProOrg();
+    // Named off the org's own uuid so parallel test files cannot collide; the
+    // trigger is a no-op for every other row and is dropped in `finally`.
+    const tag = "connect_claim_sink_" + orgId.replace(/-/g, "").slice(0, 12);
+    await sql.unsafe(`create function ${tag}() returns trigger language plpgsql as $$
+      begin if OLD.id = '${orgId}'::uuid then return null; end if; return NEW; end $$`);
+    await sql.unsafe(`create trigger ${tag} before update on organizations
+      for each row execute function ${tag}()`);
+    try {
+      const err = (await createConnectOnboardingLink(
+        owner,
+        orgId,
+        "http://test.local",
+        "/settings/connect",
+        true,
+      ).catch((e) => e)) as Error & { status?: number };
+      expect(err.status).toBe(502);
+      expect(err.message).toBe(GENERIC);
+      // Independent of the two above, and of each other: together they prove
+      // this is the STORAGE branch and not the create-failure one — Stripe
+      // was called and answered, and the org still holds no account id.
+      expect(stripeMock.v2AccountCreate).toHaveBeenCalledTimes(1);
+      const [org] = await sql<{ stripe_account_id: string | null }[]>`
+        select stripe_account_id from organizations where id = ${orgId}`;
+      expect(org.stripe_account_id).toBeNull();
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${tag} on organizations`);
+      await sql.unsafe(`drop function if exists ${tag}()`);
+    }
   });
 
   it("a failing account CREATE becomes a clean 502, not Stripe's message", async () => {
@@ -373,11 +418,6 @@ describe.skipIf(!HAS_DB)("Onboarding masks Stripe's raw failures", () => {
       "/settings/connect",
       true,
     ).catch((e) => e)) as Error & { status?: number };
-    // Negative: no key material, no account id, none of Stripe's wording.
-    expect(err.message).not.toContain("malformed API Key");
-    expect(err.message).not.toMatch(/sk_test|acct_/);
-    // Positive pair: it is the generic 502 and not some other refusal that
-    // happens to lack those substrings (a 402/422 would also pass the above).
     expect(err.status).toBe(502);
     expect(err.message).toBe(GENERIC);
   });
@@ -399,9 +439,11 @@ describe.skipIf(!HAS_DB)("Onboarding masks Stripe's raw failures", () => {
       "/settings/connect",
       true,
     ).catch((e) => e)) as Error & { status?: number };
-    expect(err.message).not.toMatch(/malformed API Key|sk_test|acct_/);
+    // Stripe's key and the account id are excluded by the exact match below.
     expect(err.status).toBe(502);
     expect(err.message).toBe(GENERIC);
+    // Independent of the two above: proves this really is the RESUME branch,
+    // so the link mint was masked on its own rather than via the create.
     expect(stripeMock.v2AccountCreate).not.toHaveBeenCalled();
   });
 

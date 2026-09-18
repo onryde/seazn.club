@@ -1,6 +1,8 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import Stripe from "stripe";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { TAG, apiJson, activeOrg, loginUi } from "./helpers";
 import type { PassKey } from "../src/lib/currency";
 
@@ -1115,10 +1117,52 @@ test.describe("T12 · Connect health banner surfaces payout trouble", () => {
 // `walkthrough` project carries a real one), which is deliberate — a green
 // first-connect test that minted real Stripe accounts on every CI run would be
 // worse than no test.
+//
+// And note WHICH mask that dummy exercises: `sk_test_ci_e2e_dummy` is
+// non-empty, so getStripe() SUCCEEDS and the refusal comes from Stripe
+// rejecting the key inside the v2 create. The separate getStripe() failure
+// (no key at all) is unit-covered only — nothing in this file can reach it,
+// and a reading that treats this leg as proof of that branch is wrong.
+/** The onboarding-failure sentence as the app actually ships it. Read from
+ *  the EN catalogue (the same file `useMsg` falls back to) instead of being
+ *  typed out, so a copy change moves this test with it. An e2e spec cannot
+ *  import a JSON module, hence the fs read — the pattern several specs in
+ *  this directory already use. */
+const ONBOARD_ERR_EN: string = (() => {
+  const ui = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+  ) as Record<string, string>;
+  const copy = ui["pay.onboardErr"];
+  // A deleted or renamed key would otherwise reach `toHaveText(undefined)`,
+  // whose failure names the wrong thing entirely.
+  if (!copy) throw new Error("pay.onboardErr is missing from the EN dictionary");
+  return copy;
+})();
+
 test.describe("T13 · first connect — the ToS gate and a create that fails clean", () => {
   test("the CTA unlocks only after the chargeback terms are accepted, and a failed create leaves the org unconnected", async ({
     page,
   }) => {
+    // ENFORCED, not documented. This test CLICKS the only button in the
+    // product that creates a connected Stripe account, and it is written on
+    // the assumption that the create cannot succeed. In CI that holds —
+    // e2e.yml gives every non-walkthrough project sk_test_ci_e2e_dummy. Run
+    // locally it did NOT: `playwright test --project=parallel` against a
+    // server started from .env.local mints a REAL connected account on the
+    // owner's test-mode Stripe, one per run, with nothing to clean them up.
+    //
+    // So the precondition is a skip, and it fails CLOSED: an unset key means
+    // "unknown", not "safe", because the runner's env and the server's env
+    // are set separately here (playwright.config.ts has no webServer and
+    // loads no .env). To run it locally, start the server with an empty
+    // STRIPE_SECRET_KEY and export the same empty value to this process —
+    // getStripe() then refuses before any network call.
+    const runnerKey = process.env.STRIPE_SECRET_KEY;
+    test.skip(
+      runnerKey !== "sk_test_ci_e2e_dummy" && runnerKey !== "",
+      "STRIPE_SECRET_KEY is not a known-harmless value — this test would mint a real connected account",
+    );
+
     const org = await seedOrg({ plan: "pro" }); // NOT connected — the point of this test
     await loginAsOwner(page, org.ownerEmail);
 
@@ -1170,14 +1214,18 @@ test.describe("T13 · first connect — the ToS gate and a create that fails cle
     // because a visibility check alone passed identically whether the owner
     // read this sentence, Stripe's raw key-naming text, or the name of an
     // unset env var — the three states this whole path exists to keep apart.
+    //
+    // Exact text, from the shipped catalogue rather than typed out here: a
+    // sentence typed into a test goes on passing after the dictionary's
+    // wording moves, which is half the drift this assertion exists for. The
+    // match being exact is also what excludes Stripe's "Stripe couldn't …"
+    // and the STRIPE_SECRET_KEY hint — a `not.toContainText` for either
+    // could never fail independently of this line.
     const shown = card.locator("p.text-red-600").first();
     await expect(shown).toBeVisible({ timeout: 15_000 });
     await expect(shown, "the localized sentence, not the server's English").toHaveText(
-      "Could not start Stripe onboarding",
+      ONBOARD_ERR_EN,
     );
-    // The negative half: nothing from Stripe or our own config reaches it.
-    await expect(shown).not.toContainText("Stripe couldn't");
-    await expect(shown).not.toContainText("STRIPE_SECRET_KEY");
   });
 });
 

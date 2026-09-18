@@ -36,10 +36,13 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
 
 import { ApiV1Error } from "@/lib/client-v1";
 import { OrgPaymentInstructions } from "@/components/org-payment-instructions";
+import { ONBOARDING_FAILED } from "@/server/usecases/stripe-connect";
 
-/** The sentence the server sends on a masked Stripe failure — the literal
- *  from stripe-connect.ts. It must never be what the screen shows. */
-const SERVER_502 = "Stripe couldn't start onboarding for this organization";
+/** The sentence the server sends on a masked Stripe failure. Imported, not
+ *  typed out: this test's whole point is that the screen shows something
+ *  ELSE, and a hand-copy that drifts from the server's wording would keep
+ *  passing while proving nothing. */
+const SERVER_502 = ONBOARDING_FAILED;
 /** The ToS refusal. Deliberate, actionable copy the client shows verbatim. */
 const SERVER_422 = "Agree to the Terms of Service (entry-fee chargebacks) before connecting Stripe";
 

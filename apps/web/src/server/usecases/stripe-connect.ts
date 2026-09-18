@@ -116,13 +116,33 @@ export async function connectStatus(
 export const CONNECT_ACCOUNT_DEFAULT_COUNTRY = "GB";
 
 /**
- * The one answer an owner gets when onboarding cannot start. A const because
- * several sites use it and drifting copy would be invisible: the client maps
- * this 502 to `pay.onboardErr`, so the English below never reaches a screen —
- * it is the STATUS that carries the meaning, and a site inventing its own
- * wording would still be masked and still be untested.
+ * The one answer an owner gets when onboarding cannot start.
+ *
+ * EXPORTED so tests assert against this value rather than hand-mirroring the
+ * sentence — three copies had already been typed out, which is the drift this
+ * const exists to prevent. The client maps the 502 to `pay.onboardErr`, so the
+ * English never reaches a screen: it is the STATUS that carries the meaning.
+ *
+ * Every refusal `createConnectOnboardingLink` can reach, and why each is or is
+ * not masked — the enumeration, so the next survivor is visible:
+ *
+ *   403 requireOwnerSession ×2 · 404 orgConnect · 422 ToS gate
+ *       Deliberate, actionable copy naming what the owner must DO, and
+ *       rendered verbatim on purpose. Untranslated English today — that is
+ *       the queued per-status i18n pass, not this guard's business.
+ *   402 requireFeature (PaymentRequiredError)
+ *       Has its own client key (`pay.needPro`), so it never renders raw.
+ *   502 getStripe() · v2 accounts.create · accountLinks.create
+ *       Masked by stripeOnboardingStep below.
+ *   502 owner-email unreadable · created-account-unstorable
+ *       Masked by hand, with the detail logged. Both used to be 500s, which
+ *       the client renders verbatim.
+ *
+ * That is every `throw` on this path. `sql` can still reject with a driver
+ * error, which `v1()` answers 500 with the driver's message — a pre-existing
+ * hole shared with every use-case in this repo, not specific to Connect.
  */
-const ONBOARDING_FAILED = "Stripe couldn't start onboarding for this organization";
+export const ONBOARDING_FAILED = "Stripe couldn't start onboarding for this organization";
 
 /**
  * Run one step of the onboarding flow that can fail outside our control,
@@ -277,7 +297,19 @@ export async function createConnectOnboardingLink(
       returning stripe_account_id`;
     if (!claimed) {
       ({ stripe_account_id: accountId } = await orgConnect(orgId));
-      if (!accountId) throw new HttpError(500, "Failed to store the Connect account");
+      if (!accountId) {
+        // Same masking as the two above: a 500 renders verbatim on the client
+        // (only 402 and 502 are routed to the dictionary), and "Failed to
+        // store the Connect account" means nothing to an owner anyway. The
+        // account id is the part that matters — Stripe has one this org lost
+        // the race to record — so it goes to the log, where it can be
+        // reconciled by hand.
+        log.error(
+          { org_id: orgId, stripe_account_id: account.id },
+          "createConnectOnboardingLink: created account could not be stored",
+        );
+        throw new HttpError(502, ONBOARDING_FAILED);
+      }
     }
   }
 
