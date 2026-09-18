@@ -1,6 +1,6 @@
 # Per-stage match rules — branch state
 
-**Updated:** 2026-09-17, after Task 3. A fresh session starts HERE, then reads
+**Updated:** 2026-09-18, after Task 5b (the review-fix pass). A fresh session starts HERE, then reads
 the spec and the plan beside it.
 
 | File | Why |
@@ -21,6 +21,7 @@ Nothing pushed; no PR yet.
 | 3 — six stage-config writers made atomic | DONE | `029a496bd` |
 | 4 — `PUT /stages/:id/rules` | DONE | `c3c6204f5` |
 | 5 — pad surfaces through the resolver | DONE | `fce7d6225` |
+| 5b — review fixes (D6 carry, templates door, TOCTOU lock, minors) | DONE | `7e27c760d` |
 | 6 — `read` for the nine fields | owed | — |
 | 7 — Fixture Console stage panel | owed | — |
 | 8 — stage-aware hub format line | owed | — |
@@ -42,7 +43,7 @@ the dev DB on 5432 makes vitest refuse to start, and it exits BEFORE writing
 
 ## Plan premises that proved FALSE (expect more)
 
-The plan is a hypothesis, and three of its steps have already been wrong:
+The plan is a hypothesis, and ten of its premises have already been wrong:
 
 1. **Task 3's test shape was vacuous.** Writing `rules` and then calling the
    usecase PASSES against the un-fixed writer — the usecase re-reads the config
@@ -80,6 +81,45 @@ The plan is a hypothesis, and three of its steps have already been wrong:
    reached either pad either. Task 5 therefore fixes a SECOND pre-existing
    defect, wider than recorded: every stage-level `shootout`/`extraTime` was
    invisible on both pads, not just the new `rules`.
+
+10. **A billing freeze is not reachable by creating past the cap** (Task 5b).
+    `createCompetition` 402s at the quota BEFORE anything can freeze, so the
+    only path to a frozen competition is a DOWNGRADE: build over the cap on
+    `pro`, reading the cap from `getLimit` rather than typing a number, then
+    drop the plan. There is also no `"free"` plan key — `community` is the
+    floor.
+
+## Review — Tasks 1-5 came back Needs Fixes (2026-09-18)
+
+A reviewer pass over the committed tasks found three real defects, all of
+which a green suite had been hiding. Fixed in `7e27c760d`, each with a test
+that fails without it and a single named mutant killer:
+
+1. **`replaceStages` was silently wiping every override.** The Format tab's
+   Apply deletes and recreates every stage from a template body that cannot
+   carry `rules` (the D2a guard refuses it). D6 — carried SERVER-SIDE, keyed on
+   `seq:kind`, so a stage that changes kind drops its override.
+2. **Templates were a THIRD door onto `stages.config`.** `TemplateStage.config`
+   is an untyped record spread verbatim into the column, so a template-declared
+   `rules` reached it with no sport gate, no allowlist and no merged parse, for
+   any sport. Guard in `effectiveStageConfig` + a catalog assertion.
+3. **TOCTOU on the per-stage lock.** `putStageRules` took no division advisory
+   lock while `append-event` freezes under a FIXTURE-scoped lock, so the two
+   never serialised — a scorer could freeze the OLD format against a stage this
+   PUT had just declared saved.
+
+Plus: the allowlist ran AFTER the null strip, so `{rules:{notAKey:null}}`
+answered 200; the §T2 shape audit scanned two hardcoded paths with a per-line
+regex and could see neither a third file nor wrapped SQL; 402 was undeclared on
+the route; the freeze guard had no test.
+
+Counts re-run by the orchestrator, not taken on report: the five affected
+suites are **32/32, 0 outside the worktree**. The single red in the agent's
+full gate (`org-posts-digest.test.ts`, "sweepWeeklyDigests") is a 30001ms
+**timeout**, not an assertion — the sweep is O(orgs) and the shared `smr` DB now
+holds ~15k organizations. It reds with all three new suites `--exclude`d, and
+this branch has never touched that file (`git diff origin/main...HEAD` is empty
+for it).
 
 ## Walkthrough — the seam is NOT inert (2026-09-18)
 
