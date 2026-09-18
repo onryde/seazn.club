@@ -157,6 +157,35 @@ Two facts the render produced that no text sketch could:
   no `max-md:` and no `md:hidden` and the stage card keeps its property of
   having NO phone branch.
 
+## Reviewer pass on Task 6 — APPROVED, three minors (2026-09-18)
+
+Read-only review of `8c1e1f272` via `git show` (a Task 7 implementer was
+mutating the same worktree, so the working tree was not read, no git writes
+were made and no suite was run). Verdict: approved, no defect reaching an
+organiser. Verified clean: all nine `read`s return `undefined` on absence with
+no default anywhere; the three renamed tennis fields read the CONFIG key; the
+hoisted shape tables match the engine's own declarations and `build` copies;
+`sameShape`'s exact key-count is safe because `kernel.ts:168-183` declares both
+nested shapes as `z.strictObject` with every key required; the sweep really is
+46 assertions with no constant-satisfiable case; no import or directive added.
+
+Minors 1 and 2 are **OWED, held deliberately** until Task 7 commits rather than
+writing to `lib/match-rules.ts` beside a live implementer:
+
+1. `TENNIS_SET_SHAPES[v] ?? tb6` does NOT fall through for prototype keys —
+   `build("constructor")` yields `{set:{}}`, and `finalSet` yields a Function
+   that `JSON.stringify` drops entirely. Verified by direct probe. Not
+   product-reachable (values come only from the rendered select), but the
+   commit message claims the fall-through is "preserved and pinned" while the
+   pinning test probes only `"no-such-option"` — a claim broader than its test.
+   Fix with `Object.hasOwn` or a `Map`, plus a prototype-key probe.
+2. `hydrate.test.ts:91` gates on `>= 40` against an actual 46. Losing
+   `finalSet`'s four options would leave that field entirely unprobed and still
+   green.
+
+Minor 3 became **D9** — see the spec. The reviewer correctly called it cosmetic
+for the division editor; it is data loss for the stage fragment.
+
 ## Carried out of Task 6 — recorded, not fixed
 
 - **Carrom's `bestOf` still has no `read`** and reopens blank in the division

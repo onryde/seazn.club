@@ -319,6 +319,38 @@ the stage to today's division format permanently — the defect D2/T5 exist to
 prevent. One function, two inputs; say so in a comment, because a later reader
 will "simplify" it.
 
+**D9 — a value the picker cannot offer must be SHOWN, not swallowed**
+(ruled 2026-09-18, from a reviewer finding on Task 6).
+
+Badminton's `bestOf` offers only `[1, 3]`, but the engine's schema accepts more
+— the walkthrough override that proved this whole seam is `{"bestOf": 5}` on a
+badminton stage. Hydrating that into the select renders BLANK, above an
+`<option value="">Default`. The same shape has three different consequences,
+and only the third is a defect:
+
+- `buildRuleOverride` skips `""`, so no `Number("") === 0` is written. Safe.
+- `division-settings.tsx` builds its PATCH from a `{...division.config}` BASE,
+  so an omitted key keeps its existing value. Cosmetic there.
+- **The stage panel sends a FRAGMENT, where an omitted key means INHERIT.** So
+  building the fragment the way the division editor builds its override — the
+  obvious thing to do — turns "organiser edits Set type and saves" into a
+  SILENT DELETION of the Best-of-5 override, with the screen having said
+  "Default" the whole time.
+
+Ruled: `MatchRuleFields` renders a synthetic, selected option for a hydrated
+value not among `options`, labelled from the raw value. Fixes the division
+editor's cosmetic case in the same stroke and removes the stage data-loss path
+at its source. And generally: **the fragment PUT must be diffed against what
+was hydrated** — "the organiser touched nothing" must never produce a clear,
+and `{rules: null}` stays reachable only from the explicit "Use division
+format" control.
+
+This is failure class 19 inverted. That rule says a present, wrongly-seeded
+field can be worse than an absent one because it overrides a correct default.
+Here a PRESENT value renders as absent and is then written as absent — same
+lesson, opposite direction: pin what a control OPENS AT, and check which way
+the precedence runs before calling the gap closed.
+
 ## Design
 
 ### T0 — extract the rules table out of the client module
