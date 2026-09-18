@@ -81,6 +81,24 @@ The plan is a hypothesis, and three of its steps have already been wrong:
    defect, wider than recorded: every stage-level `shootout`/`extraTime` was
    invisible on both pads, not just the new `rules`.
 
+## Walkthrough — the seam is NOT inert (2026-09-18)
+
+Driven by hand on the prod server (label `smr`, :3355), device-link pad
+`/score/<token>`, badminton, division default `bestOf: 3`:
+
+| State | What the pad rendered |
+| --- | --- |
+| Before | **Best of 3 · Game 1** |
+| After `stage.config.rules = {"bestOf":5}` | **Best of 5 · Game 1** |
+
+Same URL, same fixture, only the stage row changed. `5` was chosen because the
+badminton skin falls back to `cfg.bestOf ?? 3` — a dead path renders 3 and looks
+correct, so only a non-default value witnesses the seam. This is what settles
+the page-wiring gap below; the unit suite cannot.
+
+The override is still in place on `stages.id = da2fbf75-97a3-4f2a-8dfc-476b003e1c4c`
+for Task 7's UI work.
+
 ## Coverage limit carried into Task 9
 
 Task 5's loader is unit-tested; **the page wiring is not**. `apps/web` vitest is

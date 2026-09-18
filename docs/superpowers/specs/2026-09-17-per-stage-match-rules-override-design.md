@@ -174,6 +174,20 @@ with the bump.
 **D5 — no entitlement gate.** Per-stage rules are core format settings.
 D2's allowlist plus D2a's sport gate are what keep `points` out of reach.
 
+**D6 — `replaceStages` preserves `rules` SERVER-SIDE** (owner, 2026-09-17,
+after the Tasks 1-4 review). D2a's `assertNoRulesKey` closes the
+create/replace door, which makes T6's original instruction — have the
+client carry each surviving stage's `rules` through `structureDraftsForApply`
+— unbuildable: the body it would send is exactly what the guard refuses.
+Meanwhile the Format tab's Apply deletes every stage and re-creates it, so
+without this ruling an unrelated knob nudge wipes every override silently,
+in precisely the window (stages configured, fixtures not yet generated)
+where format gets set. `replaceStages` therefore reads each stage's
+`config.rules` before the delete and re-applies it to the new stage at the
+same `seq`, so the guarantee holds for every client rather than only the
+one screen that remembered. An override is per stage SLOT: if the stage at
+that seq changes `kind`, the override is dropped rather than carried.
+
 **D4 — WITHDRAWN. Rule labels stay English** (owner, 2026-09-17).
 `match-rules.tsx:6-9` already records rule vocabulary as canonical English,
 like sport and format names, with only the picker chrome localised; the
