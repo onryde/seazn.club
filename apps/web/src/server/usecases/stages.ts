@@ -240,12 +240,33 @@ export async function listStages(auth: AuthCtx, divisionId: string): Promise<Sta
 }
 
 /** Define (part of) the stage graph for a division. */
+/**
+ * D2a (design 2026-09-17 §T3) — `rules` is NOT settable through a stage-config
+ * body. `PUT /stages/{id}/rules` is the only writer, and it is the only path
+ * carrying the per-sport allowlist, the sets-based sport gate and the
+ * merged-config parse. This door has to be shut explicitly because
+ * `createStages` never parses stage config through any `configSchema`, and the
+ * custom-points paywall reads `s.config.points`, never `s.config.rules.points`
+ * — so a football division could otherwise smuggle shoot-out points (a shape
+ * `SPORT_RULES.football` genuinely emits) straight past the entitlement.
+ */
+function assertNoRulesKey(inputs: readonly StageInput[]): void {
+  for (const s of inputs)
+    if (s.config && "rules" in s.config)
+      throw new HttpError(
+        400,
+        "per-stage match rules are set through PUT /stages/{id}/rules",
+        "RULES_NOT_ACCEPTED_HERE",
+      );
+}
+
 export async function createStages(
   auth: AuthCtx,
   divisionId: string,
   input: CreateStages,
 ): Promise<StageRow[]> {
   const inputs: StageInput[] = Array.isArray(input) ? input : [input];
+  assertNoRulesKey(inputs);
   // Format gates honour an Event Pass on this division's competition
   // (v3/07 §3), so resolve the competition before gating.
   const [divComp] = await sql<{ competition_id: string }[]>`
@@ -371,6 +392,11 @@ export async function replaceStages(
   divisionId: string,
   input: CreateStages,
 ): Promise<StageRow[]> {
+  // BEFORE the delete below, not merely inside the `createStages` this
+  // delegates to: that call runs in its own transaction, so a refusal there
+  // would land after this function had already dropped every stage in the
+  // division.
+  assertNoRulesKey(Array.isArray(input) ? input : [input]);
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it

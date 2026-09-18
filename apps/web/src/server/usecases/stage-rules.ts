@@ -1,0 +1,149 @@
+import "server-only";
+// Per-stage match-format override (design 2026-09-17 §T3, rulings D1/D2/D2a).
+// An organiser runs Best-of-1 in the league/Swiss stage and Best-of-3 in the
+// playoff of the same division. The stage stores a partial FRAGMENT at
+// `stages.config.rules`; `stageScopedCfg` overlays it on the division config,
+// and the existing freeze-on-first-event keeps already-scored fixtures on the
+// config they were scored under.
+//
+// This module is the reason the rules table had to leave the `"use client"`
+// component (§T0): a server module importing `@/components/v2/match-rules`
+// receives client REFERENCES, not values, and `configKeysFor` would silently
+// derive nothing. `@/lib/match-rules` is directive-free precisely so this
+// import returns real functions.
+import { EngineError } from "@seazn/engine/core";
+import { configKeysFor, STAGE_RULES_SPORTS } from "@/lib/match-rules";
+import { withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import { resolveModule } from "@/server/engine-db";
+import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
+
+export async function putStageRules(
+  auth: AuthCtx,
+  stageId: string,
+  input: { rules: Record<string, unknown> | null },
+): Promise<{ rules: Record<string, unknown> | null }> {
+  // Resolved BEFORE the transaction: `frozenCompetitionIds` runs its own
+  // pooled query, and issuing that inside a `withTenant` callback that already
+  // pins a connection is the nesting `entitlement-freeze.ts`'s header warns
+  // about — its `tx` parameter was DELETED rather than fixed so the trap could
+  // not be re-set. `assertNotFrozen` is pure and takes the competition id the
+  // transaction reads below.
+  const frozen = await frozenCompetitionIds(auth.orgId);
+
+  const out = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<
+      {
+        division_id: string;
+        competition_id: string;
+        sport_key: string;
+        module_version: string;
+        division_config: Record<string, unknown> | null;
+      }[]
+    >`
+      select s.division_id, d.competition_id, d.sport_key, d.module_version,
+             d.config as division_config
+        from stages s join divisions d on d.id = s.division_id
+       where s.id = ${stageId}`;
+    // `withTenant` scopes the read to this org, so another tenant's stage is
+    // indistinguishable from a missing one — 404, never 403.
+    if (!stage) throw new HttpError(404, "stage not found");
+    assertNotFrozen(frozen, stage.competition_id);
+
+    // D2a — the sport gate is a guard, not prose. Without it a football
+    // division could POST `rules.points`, a shape SPORT_RULES.football
+    // genuinely emits, and the overlay would feed it to standingsDelta with
+    // the standings.custom_points entitlement never consulted.
+    if (!STAGE_RULES_SPORTS.has(stage.sport_key))
+      throw new HttpError(
+        400,
+        `${stage.sport_key} does not support per-stage match rules`,
+        "SPORT_NOT_SUPPORTED",
+      );
+
+    // D1 — the lock is per stage, and its predicate is MONOTONIC.
+    // Deliberately not `fixtures.status`: `fixtureStatusFromFold` returns
+    // `in_play` only while an active `core.start` exists, so voiding a start
+    // moves a fixture back to `scheduled` and a status predicate would re-open
+    // a stage that has already been played. A frozen `config_snapshot` and a
+    // score event both only ever appear; neither goes away. The `score_events`
+    // half also covers the JSON-`null`-config carve-out, where a fixture
+    // records events and never takes a snapshot at all.
+    const [locked] = await tx<{ one: number }[]>`
+      select 1 as one from fixtures f
+       where f.stage_id = ${stageId}
+         and (f.config_snapshot is not null
+              or exists(select 1 from score_events e where e.fixture_id = f.id))
+       limit 1`;
+    if (locked)
+      throw new HttpError(
+        409,
+        "this stage has already started — its match rules are locked",
+        "STAGE_FORMAT_LOCKED",
+      );
+
+    if (input.rules === null) {
+      // `- 'rules'` removes the KEY. Writing null instead would leave a null
+      // the overlay copies over the division's value.
+      await tx`update stages set config = config - 'rules' where id = ${stageId}`;
+      return { rules: null, divisionId: stage.division_id, competitionId: stage.competition_id };
+    }
+
+    // "Inherit" is key ABSENCE, never an explicit null — the overlay spreads
+    // what it is given, so a null reaching the column blanks the division's
+    // value instead of deferring to it.
+    const fragment = Object.fromEntries(
+      Object.entries(input.rules).filter(([, v]) => v !== null && v !== undefined),
+    );
+
+    // D2 — the allowlist is the union of the CONFIG keys each field's build()
+    // emits, never the FORM keys. For tennis the two diverge three ways
+    // (setType→set, noAd→game, tiebreakWinBy→tiebreak), so a `f.key` list
+    // would refuse four of its five overrides.
+    const allowed = configKeysFor(stage.sport_key);
+    for (const key of Object.keys(fragment))
+      if (!allowed.has(key))
+        throw new HttpError(
+          400,
+          `"${key}" is not a match rule for ${stage.sport_key}`,
+          "UNKNOWN_RULE_KEY",
+        );
+
+    // Validate the MERGE, store the FRAGMENT. The fragment alone cannot be
+    // parsed — the schema's defaults would fill it out — and storing
+    // `parsed.data` would write a defaults-materialised copy of the whole
+    // division format into `config.rules`, pinning the stage to every division
+    // key forever. Note this parse ACCEPTS `points` for tennis: the allowlist
+    // above is the only thing keeping it out, which is why it is a guard.
+    const module_ = resolveModule(stage.sport_key, stage.module_version);
+    const parsed = module_.configSchema.safeParse({
+      ...(stage.division_config ?? {}),
+      ...fragment,
+    });
+    if (!parsed.success)
+      throw new EngineError("CONFIG_INVALID", `invalid ${stage.sport_key} config`, {
+        issues: parsed.error.issues,
+      });
+
+    // Server-side merge (§T2): six other writers rewrite this column from a
+    // JS-side read, and a spread of a stale read would revert this write.
+    await tx`
+      update stages set config = config || ${tx.json({ rules: fragment } as never)}
+       where id = ${stageId}`;
+    return { rules: fragment, divisionId: stage.division_id, competitionId: stage.competition_id };
+  });
+
+  // AFTER the transaction commits, and not voided. `stages.ts` has four
+  // `void fireStageRevalidate(...)` calls already recorded as a defect; this
+  // is deliberately neither of those shapes. `fireStageRevalidate` is
+  // module-private and opens a `withTenant` of its OWN purely to look up the
+  // division and competition — ids this transaction has already read — so
+  // calling it from inside the callback would re-set the nesting trap above,
+  // and calling it after would just repeat a query for nothing. The
+  // revalidation itself is synchronous (`fireDivisionRevalidate` returns
+  // void), so there is no promise left floating either way.
+  fireDivisionRevalidate(out.divisionId, out.competitionId);
+  return { rules: out.rules };
+}
