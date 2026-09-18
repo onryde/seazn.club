@@ -700,16 +700,54 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
       }),
       team("e2", "Red Rockets", null, null),
     ],
+    // The calendar corner tab is gated on the entrant having a fixture with a
+    // real `scheduledAt` (owner ruling 2026-09-17), so a document with no
+    // matches shows no calendar at all. One dated fixture, e1 v e2, is what
+    // makes every calendar assertion in this block about the CALENDAR rather
+    // than about an unscheduled division.
+    matches: [
+      m("f1", "upcoming", "2026-09-20T10:00:00.000Z", "sunday-league", {
+        header: {
+          sides: [
+            { entrantId: "e1", name: "Blue Blazers", short: "BLZ", colour: null, badgeUrl: null },
+            { entrantId: "e2", name: "Red Rockets", short: "RRK", colour: null, badgeUrl: null },
+          ],
+        },
+      }),
+    ],
   });
   const render = (d: CompetitionHubDocT = squadDoc, dd: Dict = dict, locale: "en" | "es" = "en") =>
     renderToStaticMarkup(<TeamsTab doc={d} dict={dd} locale={locale} />);
   /** One squad line, from its testid to its own `</li>` — lines never nest. */
   const line = (h: string, entrantId: string, i: number) => rowHtml(h, `mh-team-${entrantId}-member-${i}`);
-  /** A whole card, from its `<li>` to the `</details>` that closes it. */
+  /** A whole card, from its `<li>` to the `</details>` that closes it. This is
+   *  the DISCLOSURE's contents — everything a closed card hides from the
+   *  browser natively — so a negative read off it is what proves the corner
+   *  tab is not inside the `<details>`. */
   const cardHtml = (h: string, entrantId: string) => {
     const at = h.indexOf(`data-testid="mh-team-${entrantId}"`);
     expect(at, entrantId).toBeGreaterThan(-1);
     return h.slice(at, h.indexOf("</details>", at));
+  };
+  /** The whole grid CELL: the `<li>` holding a card, from its `<li` to the
+   *  `</li>` that closes IT. A team card nests a squad `<li>` per member, so
+   *  the close is found by depth — `indexOf("</li>")` would hand back the
+   *  first squad line and every assertion about the cell would read a
+   *  fragment. `cardHtml` ⊂ `cellHtml`: what is in the cell but not in the
+   *  card is exactly what survives the disclosure being closed. */
+  const cellHtml = (h: string, entrantId: string) => {
+    const at = h.indexOf(`data-testid="mh-team-${entrantId}"`);
+    expect(at, entrantId).toBeGreaterThan(-1);
+    const start = h.lastIndexOf("<li", at);
+    expect(start, `${entrantId} sits in an <li>`).toBeGreaterThan(-1);
+    const re = /<li[\s>]|<\/li>/g;
+    re.lastIndex = start;
+    let depth = 0;
+    for (let m = re.exec(h); m !== null; m = re.exec(h)) {
+      depth += m[0] === "</li>" ? -1 : 1;
+      if (depth === 0) return h.slice(start, m.index + m[0].length);
+    }
+    throw new Error(`unclosed <li> for ${entrantId}`);
   };
   const classesOf = (tag: string) => tag.match(/class="([^"]*)"/)?.[1]?.split(" ") ?? [];
 
@@ -729,7 +767,22 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
   });
 
   it("a document from BEFORE squads (cached upstream, no `members`, no `calendarHref`) makes NO squad claim — no count, no empty sentence, no calendar link — and never crashes", () => {
-    const old = hubDoc({ teams: [team("e1", "Blue Blazers", null, null)] });
+    // A DATED fixture, so the missing calendar below is the absent
+    // `calendarHref` talking and not the schedule gate — without it this
+    // passes on a document that never had a chance to render one.
+    const old = hubDoc({
+      teams: [team("e1", "Blue Blazers", null, null)],
+      matches: [
+        m("f1", "upcoming", "2026-09-20T10:00:00.000Z", "sunday-league", {
+          header: {
+            sides: [
+              { entrantId: "e1", name: "Blue Blazers", short: "BLZ", colour: null, badgeUrl: null },
+              { entrantId: "e2", name: "Red Rockets", short: "RRK", colour: null, badgeUrl: null },
+            ],
+          },
+        }),
+      ],
+    });
     delete (old.teams[0] as Partial<TeamCardT>).members;
     delete (old.teams[0] as Partial<TeamCardT>).calendarHref;
     const h = render(old);
@@ -832,26 +885,117 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
     expect(line(h, "e1", 1)).not.toContain("Suspended");
   });
 
-  it("'Add to calendar' is the team's own .ics, a 44px bordered link AFTER the lines, named by the team for a screen reader", () => {
+  it("the calendar is a CORNER TAB outside the <details> — reachable with the card still closed, not behind the disclosure", () => {
     const h = render();
+    // The premise this test exists for: the card is CLOSED on arrival, and a
+    // native `<details>` hides everything after its `<summary>` from the page
+    // and from the accessibility tree until it opens. So "in the markup" is
+    // not "reachable" — where the link sits is the whole assertion.
+    expect(tagOf(h, "mh-team-e1")).not.toMatch(/\sopen[\s=>]/);
+    expect(cardHtml(h, "e1"), "the corner tab must NOT be inside the disclosure").not.toContain(
+      `data-testid="mh-team-e1-calendar"`,
+    );
+    expect(cellHtml(h, "e1"), "…but it must still be inside the card's own grid cell").toContain(
+      `data-testid="mh-team-e1-calendar"`,
+    );
+    // And the cell is the POSITIONING ancestor — an `absolute` child of a
+    // static ancestor corners itself against the page, not against the card.
+    const cell = cellHtml(h, "e1");
+    expect(classesOf(cell.slice(0, cell.indexOf(">") + 1))).toContain("relative");
     const tag = tagOf(h, "mh-team-e1-calendar");
     expect(tag).toContain(`href="/riverside/autumn-cup/sunday-league/calendar.ics?entrant=e1"`);
-    expect(classesOf(tag)).toEqual(
-      expect.arrayContaining(["min-h-11", "rounded-lg", "border", "border-zinc-200/80", "px-3"]),
+    expect(classesOf(tag)).toEqual(expect.arrayContaining(["absolute", "-top-4", "-right-4", "z-10"]));
+    // The 44px target is on the INTERACTIVE element itself, not claimed by a
+    // bigger box beside it: the visible 28px disc is a nested span, and the
+    // link that owns the tap is the full 44 (`mobile.spec.ts`'s bar).
+    expect(classesOf(tag)).toEqual(expect.arrayContaining(["h-11", "w-11"]));
+    const inner = h.slice(h.indexOf(">", h.indexOf(`data-testid="mh-team-e1-calendar"`)) + 1, h.indexOf("</a>", h.indexOf(`data-testid="mh-team-e1-calendar"`)));
+    const disc = inner.match(/<span class="([^"]*)"/)?.[1]?.split(" ") ?? [];
+    expect(disc).toEqual(
+      expect.arrayContaining(["h-7", "w-7", "rounded-full", "border", "border-zinc-200/80", "bg-surface", "shadow-sm"]),
     );
-    const e1 = cardHtml(h, "e1");
-    expect(e1.indexOf(`data-testid="mh-team-e1-calendar"`)).toBeGreaterThan(
-      e1.indexOf(`data-testid="mh-team-e1-member-3"`),
+  });
+
+  /** One `MatchCentreHeader` side for an entrant. `m()` owns the match shape;
+   *  this is only the two fields that decide WHOSE match it is. */
+  const side = (entrantId: string, name = entrantId.toUpperCase()) => ({
+    entrantId,
+    name,
+    short: name.slice(0, 3).toUpperCase(),
+    colour: null,
+    badgeUrl: null,
+  });
+
+  it("A CALENDAR NEEDS A SCHEDULED FIXTURE: an entrant whose only matches are TBD gets no corner tab, one with a dated match does", () => {
+    // Both entrants are in the same division and BOTH carry a `calendarHref`
+    // — the builder writes one unconditionally, so the href cannot be what
+    // separates them. The only difference is the `scheduledAt` on the match
+    // each one appears in: `sch`'s is a real instant, `tbd`'s is null.
+    const doc = hubDoc({
+      teams: [team("sch", "Scheduled Rovers", null, null), team("tbd", "Undated United", null, null)],
+      matches: [
+        m("f1", "upcoming", "2026-09-20T10:00:00.000Z", "sunday-league", {
+          header: { sides: [side("sch", "Scheduled Rovers"), side("opp", "Someone Else")] },
+        }),
+        m("f2", "upcoming", null, "sunday-league", {
+          header: { sides: [side("tbd", "Undated United"), side("opp", "Someone Else")] },
+        }),
+      ],
+    });
+    const h = render(doc);
+    // The premise, stated rather than assumed: both cards are on the page and
+    // both documents offer an `.ics`, so a missing icon below is the SCHEDULE
+    // talking, not a missing card or a missing href.
+    expect(h).toContain(`data-testid="mh-team-sch"`);
+    expect(h).toContain(`data-testid="mh-team-tbd"`);
+    expect(doc.teams[0]!.calendarHref, "sch offers an .ics").toBeTruthy();
+    expect(doc.teams[1]!.calendarHref, "tbd offers one too").toBeTruthy();
+
+    expect(h).toContain(`data-testid="mh-team-sch-calendar"`);
+    expect(h, "a TBD-only entrant has nothing to add to a calendar").not.toContain(
+      `data-testid="mh-team-tbd-calendar"`,
     );
-    expect(h).toMatch(/data-testid="mh-team-e1-calendar"[^>]*>Add to calendar</);
-    // Every card's link says the same three words; `aria-labelledby` appends
-    // the team's name so a screen reader's link list is not four identical
-    // entries (the defect `matchesHub.card.label` shipped in W2 Task 7).
-    const labelledBy = tag.match(/aria-labelledby="([^"]*)"/)?.[1]?.split(" ") ?? [];
-    expect(labelledBy).toHaveLength(2);
-    expect(tag).toContain(`id="${labelledBy[0]}"`);
-    expect(h).toMatch(new RegExp(`id="${labelledBy[1]}"[^>]*>Blue Blazers<`));
-    expect(tagOf(h, "mh-team-e2-calendar")).not.toContain(`aria-labelledby="${labelledBy.join(" ")}"`);
+    // Nothing is left in its place — no empty corner, no placeholder. Read
+    // off `absolute`, which in a cell is the corner tab's own signature (the
+    // card and the chevron are both in normal flow), NOT off `<svg`: the
+    // disclosure chevron is an svg too, and that assertion would fail on a
+    // correct card.
+    expect(cellHtml(h, "tbd")).not.toContain("absolute");
+    expect(cellHtml(h, "tbd")).not.toContain("<a ");
+    // The positive pair, from the same render: the scheduled cell HAS one.
+    expect(cellHtml(h, "sch")).toContain("absolute");
+
+    // A whole division still on TBD shows NOT ONE icon — the case the rule
+    // exists for, and the one a per-entrant fixture cannot witness.
+    const allTbd = hubDoc({
+      teams: [team("sch", "Scheduled Rovers", null, null), team("tbd", "Undated United", null, null)],
+      matches: [
+        m("f1", "upcoming", null, "sunday-league", {
+          header: { sides: [side("sch", "Scheduled Rovers"), side("tbd", "Undated United")] },
+        }),
+      ],
+    });
+    expect(render(allTbd)).not.toContain("-calendar");
+  });
+
+  it("icon-only: an inline SVG glyph, no visible words, and the team's name carried on `aria-label` instead", () => {
+    const h = render();
+    const tag = tagOf(h, "mh-team-e1-calendar");
+    const from = h.indexOf(`data-testid="mh-team-e1-calendar"`);
+    const inner = h.slice(h.indexOf(">", from) + 1, h.indexOf("</a>", from));
+    // The glyph is inlined like the chevron beside it — no icon package.
+    expect(inner).toMatch(/<svg[^>]*aria-hidden="true"/);
+    // No visible text at all: strip every tag and nothing legible is left.
+    expect(inner.replace(/<[^>]*>/g, "").trim()).toBe("");
+    expect(h).not.toMatch(/data-testid="mh-team-e1-calendar"[^>]*>Add to calendar</);
+    // Every card's control means the same three words, so the NAME is what
+    // keeps a screen reader's link list from being four identical entries
+    // (the defect `matchesHub.card.label` shipped in W2 Task 7). With no
+    // visible text left to point at, `aria-labelledby` has nothing to
+    // reference — the same disambiguation now rides `aria-label`.
+    expect(tag).not.toContain("aria-labelledby=");
+    expect(tag).toContain(`aria-label="Add to calendar — Blue Blazers"`);
+    expect(tagOf(h, "mh-team-e2-calendar")).toContain(`aria-label="Add to calendar — Red Rockets"`);
   });
 
   it("no photos and no captain: a squad line carries no image", () => {
@@ -865,7 +1009,9 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
     expect(h).toContain(">0 miembros<");
     expect(h).toContain(">Sanción<");
     expect(h).toContain("Aún no hay plantilla registrada");
-    expect(h).toContain(">Añadir al calendario<");
+    // The corner tab has no visible words left — the sentence a screen reader
+    // reads is its `aria-label`, and that is the string the dictionary owns.
+    expect(h).toContain(`aria-label="Añadir al calendario — Blue Blazers"`);
     for (const english of ["members<", ">Suspended<", "No squad listed yet", "Add to calendar"]) {
       expect(h).not.toContain(english);
     }
@@ -989,6 +1135,35 @@ describe("TeamsTab — an individual entrant gets a flat card; team and pair kee
         }),
         team("l1", "Blue Blazers", null, null, { kind: "team" }),
       ],
+      // Every entrant here needs a DATED fixture or the corner tab is gated
+      // off and the calendar assertions below stop being about the card.
+      // Two matches, four sides, plus `l1` — `m()` owns the shape.
+      matches: [
+        m("f1", "upcoming", "2026-09-20T10:00:00.000Z", "sunday-league", {
+          header: {
+            sides: [
+              { entrantId: "i1", name: "Quinn Montgomery", short: "QMO", colour: null, badgeUrl: null },
+              { entrantId: "i2", name: "Priya Natarajan", short: "PNA", colour: null, badgeUrl: null },
+            ],
+          },
+        }),
+        m("f2", "upcoming", "2026-09-21T10:00:00.000Z", "sunday-league", {
+          header: {
+            sides: [
+              { entrantId: "t1", name: "Red Rockets", short: "RRK", colour: null, badgeUrl: null },
+              { entrantId: "p1", name: "Ito / Watanabe", short: "ITO", colour: null, badgeUrl: null },
+            ],
+          },
+        }),
+        m("f3", "upcoming", "2026-09-22T10:00:00.000Z", "sunday-league", {
+          header: {
+            sides: [
+              { entrantId: "l1", name: "Blue Blazers", short: "BLZ", colour: null, badgeUrl: null },
+              { entrantId: "t1", name: "Red Rockets", short: "RRK", colour: null, badgeUrl: null },
+            ],
+          },
+        }),
+      ],
     });
     delete (d.teams[4] as Partial<TeamCardT>).kind;
     return d;
@@ -1086,21 +1261,41 @@ describe("TeamsTab — an individual entrant gets a flat card; team and pair kee
     expect(flatCardOf(h, "i2")).not.toContain("Seed");
   });
 
-  it("the calendar link is reachable WITHOUT opening anything, same 44px target and same aria-labelledby pair", () => {
+  it("the flat card gets the SAME corner tab as a team card — one icon-only control, 44px, named by the entrant", () => {
     const h = render();
     const tag = tagOf(h, "mh-team-i1-calendar");
     expect(tag).toContain(`href="/riverside/autumn-cup/sunday-league/calendar.ics?entrant=i1"`);
-    expect(classesOf(tag)).toEqual(
-      expect.arrayContaining(["min-h-11", "rounded-lg", "border", "border-zinc-200/80", "px-3"]),
-    );
-    // It is INSIDE the card and behind no disclosure — the assertion above
-    // only says it exists somewhere.
+    // Visual consistency between the two card kinds is the point of the
+    // wrapper: both corner tabs are the same absolutely-positioned 44px
+    // control, so these are the team card's classes verbatim.
+    expect(classesOf(tag)).toEqual(expect.arrayContaining(["absolute", "-top-4", "-right-4", "z-10", "h-11", "w-11"]));
+    // It is INSIDE the card's cell and behind no disclosure — the assertion
+    // above only says it exists somewhere.
     expect(flatCardOf(h, "i1")).toContain(`data-testid="mh-team-i1-calendar"`);
-    const labelledBy = tag.match(/aria-labelledby="([^"]*)"/)?.[1]?.split(" ") ?? [];
-    expect(labelledBy).toEqual(["mh-team-i1-calendar", "mh-team-i1-name"]);
+    // Icon-only, so the entrant's name rides `aria-label`: `aria-labelledby`
+    // pointed at the link's own visible words, and there are none left.
+    expect(tag).not.toContain("aria-labelledby=");
+    expect(tag).toContain(`aria-label="Add to calendar — Quinn Montgomery"`);
+    expect(tagOf(h, "mh-team-i2-calendar")).toContain(`aria-label="Add to calendar — Priya Natarajan"`);
+    // The name keeps its `id` — the flat card's own player link reads it.
     expect(nameTag(h, "i1")).toContain(`id="mh-team-i1-name"`);
-    // And a document that offers none renders none.
-    const noIcs = render(hubDoc({ teams: [team("i1", "Solo", null, null, { kind: "individual", calendarHref: undefined })] }));
+    // And a document that offers none renders none — with a DATED fixture, so
+    // the absent href is what withholds it rather than the schedule gate.
+    const noIcs = render(
+      hubDoc({
+        teams: [team("i1", "Solo", null, null, { kind: "individual", calendarHref: undefined })],
+        matches: [
+          m("f1", "upcoming", "2026-09-20T10:00:00.000Z", "sunday-league", {
+            header: {
+              sides: [
+                { entrantId: "i1", name: "Solo", short: "SOL", colour: null, badgeUrl: null },
+                { entrantId: "i2", name: "Other", short: "OTH", colour: null, badgeUrl: null },
+              ],
+            },
+          }),
+        ],
+      }),
+    );
     expect(noIcs).not.toContain(`data-testid="mh-team-i1-calendar"`);
   });
 
@@ -1135,7 +1330,7 @@ describe("TeamsTab — an individual entrant gets a flat card; team and pair kee
   it("the flat card says nothing in English of its own — the calendar link is the dictionary's, in Spanish", () => {
     const h = render(mixed(), es as Dict);
     const i1 = flatCardOf(h, "i1");
-    expect(i1).toContain(">Añadir al calendario<");
+    expect(i1).toContain(`aria-label="Añadir al calendario — Quinn Montgomery"`);
     expect(i1).not.toContain("Add to calendar");
     expect(i1).toContain("Cabeza de serie 0");
   });
