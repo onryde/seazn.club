@@ -100,12 +100,21 @@ export function OrgPaymentInstructions({
       });
       window.location.assign(url);
     } catch (err) {
+      // A 502 is the use-case's masked Stripe failure
+      // (stripe-connect.ts's stripeOnboardingStep): its message is a
+      // server-authored English sentence, so rendering it verbatim put
+      // untranslated copy on a money screen in all four locales. Every other
+      // refusal here — the 422 ToS gate above all — carries deliberate,
+      // actionable copy that names what the owner must DO, so those still
+      // come through as sent.
       setConnectError(
         err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED"
           ? msg("pay.needPro")
-          : err instanceof Error
-            ? err.message
-            : msg("pay.onboardErr"),
+          : err instanceof ApiV1Error && err.status === 502
+            ? msg("pay.onboardErr")
+            : err instanceof Error
+              ? err.message
+              : msg("pay.onboardErr"),
       );
       setConnectBusy(false);
     }
