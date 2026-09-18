@@ -47,20 +47,91 @@ export interface RuleField {
    */
   buildOnBlank?: (values: Record<string, string>) => Record<string, unknown>;
   /**
-   * Inverse of `build`: given the division's saved config, return this
-   * field's current raw value (what the input should show on reopen), or
-   * `undefined` if there is nothing to show. Optional — a field with no
-   * `read` always reopens blank, same as every field did before
-   * R3.5/Task Q. Only implemented so far for the two fields that bug was
-   * actually reported against (shootoutWin/shootoutLoss): every other
-   * field's `build` above either writes a DIFFERENT key than `field.key`,
-   * derives a scaled/computed number, or chooses among several literal
-   * shapes — a correct generic inverse would have to be as bespoke as
-   * `build` itself, field by field, which is a bigger lift than this task
-   * scoped. Leaving it unimplemented is not a regression: those fields are
-   * exactly as blank-on-reopen as they always were.
+   * Inverse of `build`: given a saved config, return this field's current raw
+   * value (what the input should show on reopen), or `undefined` if there is
+   * nothing to show. Optional — a field with no `read` always reopens blank,
+   * same as every field did before R3.5/Task Q.
+   *
+   * Report ONLY what the config actually carries; NEVER fall back to a
+   * default. `hydrateRuleValues` is also fed a stage's rules FRAGMENT, where a
+   * key's absence is meaningful — it means "inherit the division" — so a
+   * defaulting `read` would make every field look overridden and the
+   * organiser's first save would pin the whole division format onto the stage.
+   *
+   * Implemented for the two fields the original bug was reported against
+   * (shootoutWin/shootoutLoss) and for the nine sets-based keys the per-stage
+   * override covers (bestOf, setTo, finalSetTo, cap, winBy, and tennis's
+   * setType/finalSet/noAd/tiebreakWinBy). The rest stay unimplemented, and
+   * that is not a regression: a `build` that writes a DIFFERENT key than
+   * `field.key`, derives a scaled number, or picks among several literal
+   * shapes needs an inverse as bespoke as itself, field by field.
    */
   read?: (config: Record<string, unknown>) => string | undefined;
+}
+
+/**
+ * The inverse of the `build: (v) => ({ <key>: Number(v) })` shape that thirteen
+ * of the sets-based fields share. Deliberately reports ONLY what the config it
+ * is handed actually carries: `hydrateRuleValues` is fed a stage's rules
+ * FRAGMENT, and a `read` that fell back to a default would make every field
+ * look overridden and turn the organiser's first save into a pin of the whole
+ * division format. A value of the wrong type reads as blank rather than as a
+ * confident wrong number.
+ */
+const readNumber =
+  (key: string) =>
+  (config: Record<string, unknown>): string | undefined =>
+    typeof config[key] === "number" ? String(config[key]) : undefined;
+
+/**
+ * Tennis's `setType` and `finalSet` are the only fields whose `build` emits a
+ * different nested object per option, so they are the only ones whose inverse
+ * could drift away from it. Both directions read these tables, so there is one
+ * source of truth rather than a hand-written inverse that silently stops
+ * matching the day an option's shape is edited.
+ *
+ * Nested config objects must be COMPLETE — a partial `set` fails the pinned
+ * module schema (v8 gotcha) — so each entry carries every key.
+ */
+const TENNIS_SET_SHAPES: Record<string, Record<string, unknown>> = {
+  tb6: { gamesTo: 6, winBy: 2, tiebreakAt: 6, tiebreakTo: 7 },
+  fast4: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5 },
+  advantage: { gamesTo: 6, winBy: 2, tiebreakAt: null, tiebreakTo: 7 },
+};
+
+/** `"same"` is a bare string here, not an object — the engine's own encoding. */
+const TENNIS_FINAL_SET_SHAPES: Record<string, unknown> = {
+  same: "same",
+  mtb10: { matchTiebreakTo: 10 },
+  mtb7: { matchTiebreakTo: 7 },
+  tb10: { tiebreakTo: 10 },
+};
+
+/**
+ * Exact match on a whole nested object, extra keys included. A config carrying
+ * a shape no option declares (hand-edited, or written by another path) must
+ * hydrate blank rather than be rounded to the nearest option and then silently
+ * rewritten to it on the next save.
+ */
+function sameShape(shape: Record<string, unknown>, value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  const keys = Object.keys(shape);
+  return keys.length === Object.keys(v).length && keys.every((k) => v[k] === shape[k]);
+}
+
+/** The option whose declared shape the config carries, or `undefined`. */
+function readShape(
+  shapes: Record<string, unknown>,
+  value: unknown,
+): string | undefined {
+  if (value === undefined) return undefined;
+  for (const [option, shape] of Object.entries(shapes)) {
+    if (typeof shape === "object" && shape !== null) {
+      if (sameShape(shape as Record<string, unknown>, value)) return option;
+    } else if (shape === value) return option;
+  }
+  return undefined;
 }
 
 const WIN_BY: RuleField = {
@@ -71,6 +142,7 @@ const WIN_BY: RuleField = {
   min: 1,
   max: 2,
   build: (v) => ({ winBy: Number(v) }),
+  read: readNumber("winBy"),
 };
 
 const VOLLEYBALL_RULES: RuleField[] = [
@@ -80,6 +152,7 @@ const VOLLEYBALL_RULES: RuleField[] = [
     kind: "select",
     options: [1, 3, 5, 7].map((n) => ({ value: String(n), label: `Best of ${n}` })),
     build: (v) => ({ bestOf: Number(v) }),
+    read: readNumber("bestOf"),
   },
   {
     key: "setTo",
@@ -88,6 +161,7 @@ const VOLLEYBALL_RULES: RuleField[] = [
     min: 1,
     max: 100,
     build: (v) => ({ setTo: Number(v) }),
+    read: readNumber("setTo"),
   },
   {
     key: "finalSetTo",
@@ -96,6 +170,7 @@ const VOLLEYBALL_RULES: RuleField[] = [
     min: 1,
     max: 100,
     build: (v) => ({ finalSetTo: Number(v) }),
+    read: readNumber("finalSetTo"),
   },
   {
     key: "cap",
@@ -105,6 +180,7 @@ const VOLLEYBALL_RULES: RuleField[] = [
     min: 15,
     max: 35,
     build: (v) => ({ cap: Number(v) }),
+    read: readNumber("cap"),
   },
   WIN_BY,
 ];
@@ -116,6 +192,7 @@ const BADMINTON_RULES: RuleField[] = [
     kind: "select",
     options: [1, 3].map((n) => ({ value: String(n), label: `Best of ${n}` })),
     build: (v) => ({ bestOf: Number(v) }),
+    read: readNumber("bestOf"),
   },
   {
     key: "setTo",
@@ -124,6 +201,7 @@ const BADMINTON_RULES: RuleField[] = [
     min: 11,
     max: 30,
     build: (v) => ({ setTo: Number(v) }),
+    read: readNumber("setTo"),
   },
   {
     key: "finalSetTo",
@@ -132,6 +210,7 @@ const BADMINTON_RULES: RuleField[] = [
     min: 11,
     max: 30,
     build: (v) => ({ finalSetTo: Number(v) }),
+    read: readNumber("finalSetTo"),
   },
   {
     key: "cap",
@@ -141,6 +220,7 @@ const BADMINTON_RULES: RuleField[] = [
     min: 15,
     max: 35,
     build: (v) => ({ cap: Number(v) }),
+    read: readNumber("cap"),
   },
   WIN_BY,
 ];
@@ -152,6 +232,7 @@ const TABLETENNIS_RULES: RuleField[] = [
     kind: "select",
     options: [1, 3, 5, 7].map((n) => ({ value: String(n), label: `Best of ${n}` })),
     build: (v) => ({ bestOf: Number(v) }),
+    read: readNumber("bestOf"),
   },
   {
     key: "setTo",
@@ -160,6 +241,7 @@ const TABLETENNIS_RULES: RuleField[] = [
     min: 1,
     max: 100,
     build: (v) => ({ setTo: Number(v) }),
+    read: readNumber("setTo"),
   },
   {
     key: "finalSetTo",
@@ -168,6 +250,7 @@ const TABLETENNIS_RULES: RuleField[] = [
     min: 1,
     max: 100,
     build: (v) => ({ finalSetTo: Number(v) }),
+    read: readNumber("finalSetTo"),
   },
   WIN_BY,
 ];
@@ -372,6 +455,7 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
       kind: "select",
       options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
       build: (v) => ({ bestOf: Number(v) }),
+      read: readNumber("bestOf"),
     },
     {
       key: "setType",
@@ -382,16 +466,13 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
         { value: "fast4", label: "Fast4 (to 4, TB at 3–3)" },
         { value: "advantage", label: "Advantage sets" },
       ],
-      // Nested config objects must be complete — a partial `set` fails the
-      // pinned module schema (v8 gotcha).
-      build: (v) => ({
-        set:
-          v === "fast4"
-            ? { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5 }
-            : v === "advantage"
-              ? { gamesTo: 6, winBy: 2, tiebreakAt: null, tiebreakTo: 7 }
-              : { gamesTo: 6, winBy: 2, tiebreakAt: 6, tiebreakTo: 7 },
-      }),
+      // Unknown values keep falling through to `tb6`, as the chained ternary
+      // this replaced did. Copied, not shared by reference: the result is
+      // spread into a config the caller owns.
+      build: (v) => ({ set: { ...(TENNIS_SET_SHAPES[v] ?? TENNIS_SET_SHAPES.tb6!) } }),
+      // Reads `set`, NOT `setType` — the field key and the config key differ
+      // for three of tennis's five fields (see `configKeysFor`).
+      read: (config) => readShape(TENNIS_SET_SHAPES, config.set),
     },
     {
       key: "finalSet",
@@ -403,16 +484,11 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
         { value: "mtb7", label: "Match tie-break to 7" },
         { value: "tb10", label: "Set with tie-break to 10" },
       ],
-      build: (v) => ({
-        finalSet:
-          v === "mtb10"
-            ? { matchTiebreakTo: 10 }
-            : v === "mtb7"
-              ? { matchTiebreakTo: 7 }
-              : v === "tb10"
-                ? { tiebreakTo: 10 }
-                : "same",
-      }),
+      build: (v) => {
+        const shape = TENNIS_FINAL_SET_SHAPES[v] ?? "same";
+        return { finalSet: typeof shape === "object" && shape !== null ? { ...shape } : shape };
+      },
+      read: (config) => readShape(TENNIS_FINAL_SET_SHAPES, config.finalSet),
     },
     {
       key: "noAd",
@@ -420,6 +496,14 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
       help: "A single deciding point at deuce.",
       kind: "bool",
       build: (v) => ({ game: { noAd: v === "on" } }),
+      // Reads `game`. A non-boolean `noAd` hydrates blank rather than
+      // coercing a truthy string into a checked box.
+      read: (config) => {
+        const game = config.game;
+        if (typeof game !== "object" || game === null) return undefined;
+        const noAd = (game as { noAd?: unknown }).noAd;
+        return typeof noAd === "boolean" ? (noAd ? "on" : "off") : undefined;
+      },
     },
     {
       key: "tiebreakWinBy",
@@ -430,6 +514,13 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
         { value: "1", label: "Sudden death (first to target wins)" },
       ],
       build: (v) => ({ tiebreak: { winBy: Number(v) } }),
+      // Reads `tiebreak`, not `tiebreakWinBy`.
+      read: (config) => {
+        const tiebreak = config.tiebreak;
+        if (typeof tiebreak !== "object" || tiebreak === null) return undefined;
+        const winBy = (tiebreak as { winBy?: unknown }).winBy;
+        return typeof winBy === "number" ? String(winBy) : undefined;
+      },
     },
   ],
   icehockey: [
