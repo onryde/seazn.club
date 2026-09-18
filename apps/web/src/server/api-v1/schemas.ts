@@ -1582,6 +1582,12 @@ export const RebuildResult = GenerateResult.extend({
   removed: z.number().int(),
 });
 
+/** POST /stages/{id}/unpair — clears the latest seated Swiss round onto kept shells. */
+export const UnpairResult = z.object({
+  cleared: z.number().int(),
+  round: z.number().int(),
+});
+
 export const CompleteResult = z.object({
   completed: z.boolean(),
   events: z.array(z.record(z.string(), z.unknown())),

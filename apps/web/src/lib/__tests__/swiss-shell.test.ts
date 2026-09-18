@@ -3,6 +3,7 @@ import {
   swissBoardsForField,
   planSwissShells,
   isSwissBoardSeated,
+  isSwissByeRow,
   nextUnseatedSwissRound,
   latestSeatedSwissRound,
   swissRoundHasPlayedResult,
@@ -115,5 +116,36 @@ describe("seating / readiness helpers", () => {
         1,
       ),
     ).toBe(true);
+  });
+  it("isSwissByeRow matches ext_key suffix and award outcome", () => {
+    expect(isSwissByeRow({ ext_key: "sw-r1-bye", outcome: null })).toBe(true);
+    expect(isSwissByeRow({ ext_key: "sw-r1-b1", outcome: { kind: "award", winner: "e1" } })).toBe(true);
+    expect(isSwissByeRow({ ext_key: "sw-r1-b1", outcome: null })).toBe(false);
+  });
+  it("latestSeatedSwissRound picks the highest fully seated round", () => {
+    const fx = [
+      {
+        round_no: 1,
+        home_entrant_id: "a",
+        away_entrant_id: "b",
+        outcome: null,
+        ext_key: "sw-r1-b1",
+      },
+      {
+        round_no: 2,
+        home_entrant_id: "c",
+        away_entrant_id: "d",
+        outcome: null,
+        ext_key: "sw-r2-b1",
+      },
+      {
+        round_no: 3,
+        home_entrant_id: null,
+        away_entrant_id: null,
+        outcome: null,
+        ext_key: "sw-r3-b1",
+      },
+    ];
+    expect(latestSeatedSwissRound(fx)).toBe(2);
   });
 });

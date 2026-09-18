@@ -60,6 +60,7 @@ import {
   latestSeatedSwissRound,
   nextUnseatedSwissRound,
   planSwissShells,
+  swissRoundHasPlayedResult,
 } from "@/lib/swiss-shell";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -1353,6 +1354,83 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
  *  the whole write itself (see above). */
 export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
   return (await generateStageFixturesWrite(auth, stageId)).outcome;
+}
+
+/** Clear the latest fully seated Swiss round back onto its shells (2026-09-18). */
+export async function unpairSwissRound(
+  auth: AuthCtx,
+  stageId: string,
+): Promise<{ cleared: number; round: number }> {
+  const write = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<StageRow[]>`
+      select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (stage.kind !== "swiss") {
+      throw new HttpError(422, "unpair only exists on swiss stages");
+    }
+    const lockState = await divisionLockState(tx, stage.division_id);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
+    const existing = await tx<SwissExistingFixture[]>`
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+      from fixtures where stage_id = ${stageId}`;
+
+    const round = latestSeatedSwissRound(existing);
+    if (round === null) {
+      throw new EngineError("STAGE_NOT_READY", "no seated swiss round to unpair", { stageId });
+    }
+    if (swissRoundHasPlayedResult(existing, round)) {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "swiss round has played results — unpair refused",
+        { stageId, round },
+      );
+    }
+
+    const inRound = existing.filter((f) => f.round_no === round);
+    const nonByeIds = inRound.filter((f) => !isSwissByeRow(f)).map((f) => f.id);
+    if (nonByeIds.length > 0) {
+      const [scored] = await tx<{ id: string }[]>`
+        select f.id from fixtures f
+        where f.id in ${tx(nonByeIds)}
+          and exists (select 1 from score_events se where se.fixture_id = f.id)
+        limit 1`;
+      if (scored) {
+        throw new EngineError(
+          "STAGE_NOT_READY",
+          "swiss round has score events — unpair refused",
+          { stageId, round },
+        );
+      }
+    }
+
+    const ids = inRound.map((f) => f.id);
+    await tx`
+      update fixtures set
+        home_entrant_id = null,
+        away_entrant_id = null,
+        status = 'scheduled',
+        outcome = null,
+        home_slot_label = null,
+        away_slot_label = null
+      where id in ${tx(ids)}`;
+
+    const [division] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${stage.division_id}`;
+    return {
+      cleared: ids.length,
+      round,
+      divisionId: stage.division_id,
+      competitionId: division!.competition_id,
+    };
+  });
+
+  void fireStageRevalidate(auth.orgId, stageId);
+  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  return { cleared: write.cleared, round: write.round };
 }
 
 async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promise<GenerateWrite> {
