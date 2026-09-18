@@ -6,16 +6,23 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const stripeMock = vi.hoisted(() => {
+  // `accounts.create` is the ACCOUNTS V1 call this codebase no longer makes.
+  // It stays stubbed rather than being deleted so the regression assertions
+  // below can prove it is never reached — a bare `vi.fn()` that nothing calls
+  // is the only way to witness a reintroduced `accounts.create({type:"express"})`.
   const accountCreate = vi.fn();
+  const v2AccountCreate = vi.fn();
   const accountLinkCreate = vi.fn();
   const loginLinkCreate = vi.fn();
   return {
     accountCreate,
+    v2AccountCreate,
     accountLinkCreate,
     loginLinkCreate,
     stripe: {
       accounts: { create: accountCreate, createLoginLink: loginLinkCreate },
       accountLinks: { create: accountLinkCreate },
+      v2: { core: { accounts: { create: v2AccountCreate } } },
     },
   };
 });
@@ -26,6 +33,7 @@ import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
+  CONNECT_ACCOUNT_DEFAULT_COUNTRY,
   connectStatus,
   createConnectDashboardLink,
   createConnectOnboardingLink,
@@ -35,14 +43,24 @@ import {
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 
-async function seedProOrg(): Promise<{ owner: AuthCtx; orgId: string }> {
+/** The params the Accounts v2 create call was actually made with, typed off
+ *  the SDK's own declaration so a shape change in the SDK moves this file
+ *  with it rather than leaving it asserting a stale field name. */
+const createdWith = (): Stripe.V2.Core.AccountCreateParams =>
+  stripeMock.v2AccountCreate.mock.calls[0][0] as Stripe.V2.Core.AccountCreateParams;
+
+async function seedProOrg(opts: { orgName?: string } = {}): Promise<{
+  owner: AuthCtx;
+  orgId: string;
+}> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: ownerId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name)
     values (${`owner-${suffix}@test.local`}, 'owner') returning id`;
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug, created_by)
-    values (${"Connect Org " + suffix}, ${"cn-org-" + suffix}, ${ownerId}) returning id`;
+    values (${opts.orgName ?? "Connect Org " + suffix}, ${"cn-org-" + suffix}, ${ownerId})
+    returning id`;
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${ownerId}, 'owner')`;
   await setOrgPlan(orgId);
   return {
@@ -59,7 +77,10 @@ async function seedProOrg(): Promise<{ owner: AuthCtx; orgId: string }> {
 
 beforeEach(() => {
   stripeMock.accountCreate.mockReset().mockImplementation(async () => ({
-    id: "acct_test_" + randomUUID().slice(0, 8),
+    id: "acct_v1_" + randomUUID().slice(0, 8),
+  }));
+  stripeMock.v2AccountCreate.mockReset().mockImplementation(async () => ({
+    id: "acct_v2_" + randomUUID().slice(0, 8),
   }));
   stripeMock.accountLinkCreate
     .mockReset()
@@ -83,6 +104,7 @@ describe.skipIf(!HAS_DB)("Connect onboarding ToS gate (PROMPT-55)", () => {
     await expect(
       createConnectOnboardingLink(owner, orgId, "http://test.local", "/settings/connect"),
     ).rejects.toMatchObject({ status: 422 });
+    expect(stripeMock.v2AccountCreate).not.toHaveBeenCalled();
     expect(stripeMock.accountCreate).not.toHaveBeenCalled();
     const [org] = await sql<{ stripe_account_id: string | null }[]>`
       select stripe_account_id from organizations where id = ${orgId}`;
@@ -99,12 +121,10 @@ describe.skipIf(!HAS_DB)("Connect onboarding ToS gate (PROMPT-55)", () => {
       true,
     );
     expect(url).toBe("https://connect.stripe.test/onboard");
-    expect(stripeMock.accountCreate).toHaveBeenCalledTimes(1);
-    const args = stripeMock.accountCreate.mock.calls[0][0] as {
-      metadata: { org_id: string; tos_agreed_at: string };
-    };
-    expect(args.metadata.org_id).toBe(orgId);
-    expect(new Date(args.metadata.tos_agreed_at).getTime()).not.toBeNaN();
+    expect(stripeMock.v2AccountCreate).toHaveBeenCalledTimes(1);
+    const args = createdWith();
+    expect(args.metadata?.org_id).toBe(orgId);
+    expect(new Date(String(args.metadata?.tos_agreed_at)).getTime()).not.toBeNaN();
     const [org] = await sql<{ stripe_account_id: string | null }[]>`
       select stripe_account_id from organizations where id = ${orgId}`;
     expect(org.stripe_account_id).not.toBeNull();
@@ -121,7 +141,158 @@ describe.skipIf(!HAS_DB)("Connect onboarding ToS gate (PROMPT-55)", () => {
       "/settings/connect",
     );
     expect(url).toBe("https://connect.stripe.test/onboard");
+    expect(stripeMock.v2AccountCreate).not.toHaveBeenCalled();
     expect(stripeMock.accountCreate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ACCOUNTS V2 create shape.
+ *
+ * Every field below was required by an actual 400 from the live v2 API, or is
+ * exact parity with the v1 call this replaced. A test that only asserted "v2
+ * create was called" would be worthless here: the whole risk of this migration
+ * is a wrong VALUE in a field v1 never had, and a wrongly-seeded field is worse
+ * than an absent one because it overrides the default Stripe would have picked.
+ */
+describe.skipIf(!HAS_DB)("Connect account creation goes through Accounts v2", () => {
+  /** The org row as the DATABASE holds it — the source the use-case reads
+   *  contact_email/display_name from, never a literal typed into this file. */
+  async function ownerProfile(orgId: string): Promise<{ name: string; email: string }> {
+    const [row] = await sql<{ name: string; email: string }[]>`
+      select o.name, u.email
+      from organizations o
+      join org_members m on m.org_id = o.id and m.role = 'owner'
+      join users u on u.id = m.user_id
+      where o.id = ${orgId}`;
+    return row;
+  }
+
+  async function connect(owner: AuthCtx, orgId: string): Promise<void> {
+    await createConnectOnboardingLink(owner, orgId, "http://test.local", "/settings/connect", true);
+  }
+
+  it("creates through v2, and never through the v1 accounts API", async () => {
+    const { owner, orgId } = await seedProOrg();
+    await connect(owner, orgId);
+    expect(stripeMock.v2AccountCreate).toHaveBeenCalledTimes(1);
+    // The regression guard: `stripe.accounts.create({type:"express"})` coming
+    // back would light this, and nothing else in the suite would notice.
+    expect(stripeMock.accountCreate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the EXPRESS dashboard, which is what createConnectDashboardLink's login links need", async () => {
+    const { owner, orgId } = await seedProOrg();
+    await connect(owner, orgId);
+    expect(createdWith().dashboard).toBe("express");
+  });
+
+  it("requests BOTH the merchant card_payments and the recipient transfers capability", async () => {
+    const { owner, orgId } = await seedProOrg();
+    await connect(owner, orgId);
+    const cfg = createdWith().configuration;
+    // MERCHANT is the half that is easy to drop — a recipient-only account can
+    // receive transfers but may never light `charges_enabled`, the flag
+    // syncConnectAccount writes and ~17 non-test sites gate registration,
+    // sponsors and public data on. Asserted as a VALUE, not a presence check.
+    expect(cfg?.merchant?.capabilities?.card_payments?.requested).toBe(true);
+    // …and RECIPIENT is v1's `transfers`, which every destination charge needs.
+    expect(cfg?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.requested).toBe(true);
+  });
+
+  it("makes the PLATFORM the fees and losses collector, as destination charges already assume", async () => {
+    const { owner, orgId } = await seedProOrg();
+    await connect(owner, orgId);
+    const responsibilities = createdWith().defaults?.responsibilities;
+    expect(responsibilities?.fees_collector).toBe("application");
+    expect(responsibilities?.losses_collector).toBe("application");
+  });
+
+  it("does NOT pin a settlement currency — syncConnectAccount owns that", async () => {
+    const { owner, orgId } = await seedProOrg();
+    await connect(owner, orgId);
+    const defaults = createdWith().defaults;
+    // Positive pair first: `defaults` IS sent, so the absence below is a real
+    // decision about `currency` and not a vacuously-empty object.
+    expect(defaults?.responsibilities).toBeDefined();
+    // syncConnectAccount deliberately handles a NULL settlement currency
+    // (an account has none until Stripe knows its country/bank). Pinning one
+    // here would defeat that and go stale — the field does not follow a later
+    // country change.
+    expect(defaults?.currency).toBeUndefined();
+  });
+
+  it("carries the owner's email as contact_email and the org's name as display_name", async () => {
+    const { owner, orgId } = await seedProOrg();
+    await connect(owner, orgId);
+    const profile = await ownerProfile(orgId);
+    const params = createdWith();
+    // Both required by v2 and absent from v1's call — `AuthCtx` carries no
+    // email and `organizations` has no contact-email column, so a broken join
+    // here is the most likely way this migration ships a 400 to a real club.
+    expect(params.contact_email).toBe(profile.email);
+    expect(params.display_name).toBe(profile.name);
+  });
+
+  it("omits display_name entirely when the org name is blank, rather than sending an empty one", async () => {
+    // `organizations.name` is `text not null` with no non-empty CHECK, so a
+    // whitespace name is reachable. `display_name: ""` is a 400 waiting to
+    // happen; omitting it lets Stripe collect one during onboarding.
+    const { owner, orgId } = await seedProOrg({ orgName: "   " });
+    await connect(owner, orgId);
+    expect(createdWith().display_name).toBeUndefined();
+    // …and the account is still created: a blank name must not block connect.
+    expect(stripeMock.v2AccountCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults identity.country to the platform country, which stays mutable through onboarding", async () => {
+    const { owner, orgId } = await seedProOrg();
+    await connect(owner, orgId);
+    const country = createdWith().identity?.country;
+    // Derived from the module's own constant, so moving the platform country
+    // moves this test with it instead of asserting yesterday's value…
+    expect(country).toBe(CONNECT_ACCOUNT_DEFAULT_COUNTRY);
+    // …and the constant itself has to be a real ISO 3166-1 alpha-2 code, which
+    // is what the create call is rejected for if it is not.
+    expect(CONNECT_ACCOUNT_DEFAULT_COUNTRY).toMatch(/^[A-Z]{2}$/);
+  });
+
+  it("refuses before Stripe when the session's user has no email row to use as contact_email", async () => {
+    // The case that DEFEATS the guard: v2 rejects a create with no
+    // contact_email, so sending the request anyway would turn a local data
+    // problem into an opaque Stripe 400. A session whose user row is gone is
+    // the only way to reach it — and it must cost nothing at Stripe.
+    const { orgId } = await seedProOrg();
+    const ghost: AuthCtx = {
+      orgId,
+      via: "session",
+      userId: randomUUID(),
+      role: "owner",
+      keyId: null,
+    };
+    await expect(
+      createConnectOnboardingLink(ghost, orgId, "http://test.local", "/settings/connect", true),
+    ).rejects.toMatchObject({ status: 500 });
+    expect(stripeMock.v2AccountCreate).not.toHaveBeenCalled();
+    const [org] = await sql<{ stripe_account_id: string | null }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    expect(org.stripe_account_id, "nothing may be stored for a refused create").toBeNull();
+  });
+
+  it("stores the id v2 returned, and mints the onboarding link against it through Account Links v1", async () => {
+    const { owner, orgId } = await seedProOrg();
+    // Run-unique: `organizations.stripe_account_id` is UNIQUE, so a literal id
+    // reds on the second run against the same database.
+    const pinned = "acct_v2_pinned_" + randomUUID().slice(0, 8);
+    stripeMock.v2AccountCreate.mockResolvedValueOnce({ id: pinned });
+    await connect(owner, orgId);
+    const [org] = await sql<{ stripe_account_id: string | null }[]>`
+      select stripe_account_id from organizations where id = ${orgId}`;
+    expect(org.stripe_account_id).toBe(pinned);
+    // The link API stays on v1 on purpose — it accepts a v2 account id.
+    expect(stripeMock.accountLinkCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ account: pinned, type: "account_onboarding" }),
+    );
   });
 });
 

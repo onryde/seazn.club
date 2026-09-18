@@ -61,8 +61,26 @@ export interface StripeFixtureServer {
   close(): Promise<void>;
 }
 
-// x-www-form-urlencoded is how the Stripe SDK sends bodies; flatten the common
-// shapes the app posts (items[0][quantity], proration_behavior, …).
+// The ACCOUNTS V2 API is JSON, not form-encoded — the SDK switches content
+// type on the `/v2/` path prefix (RequestSender: `apiMode == 'v2' ?
+// 'application/json' : …`). A v2 body run through parseForm below would land
+// in `calls` as one giant key with no value, so the recorded call would look
+// present and assert nothing. Branch on what the SDK actually sent.
+function parseBody(contentType: string | undefined, raw: string): Record<string, unknown> {
+  if (!raw) return {};
+  if ((contentType ?? "").includes("application/json")) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return parseForm(raw);
+}
+
+// x-www-form-urlencoded is how the Stripe SDK sends V1 bodies; flatten the
+// common shapes the app posts (items[0][quantity], proration_behavior, …).
 function parseForm(raw: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const pair of raw.split("&")) {
@@ -124,12 +142,35 @@ export async function startStripeFixtureServer(
   const server: Server = createServer((req, res) => {
     void (async () => {
       const raw = await readBody(req);
-      const body = raw ? parseForm(raw) : {};
+      const body = parseBody(req.headers["content-type"], raw);
       const method = req.method ?? "GET";
       const path = (req.url ?? "").split("?")[0];
       calls.push({ method, path, body });
       const send = (obj: unknown, code = 200) =>
         res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(obj));
+
+      // POST /v2/core/accounts — Connect onboarding's account create. The
+      // response is the V2 Account shape (`object: "v2.core.account"`); only
+      // `id` is read by the app, but the object tag is what a v2-vs-v1
+      // assertion can key on.
+      if (path === "/v2/core/accounts" && method === "POST") {
+        return send({
+          id: "acct_fixv2_" + Math.random().toString(36).slice(2, 10),
+          object: "v2.core.account",
+          dashboard: body.dashboard ?? null,
+          metadata: body.metadata ?? {},
+        });
+      }
+
+      // POST /v1/account_links — still V1 on purpose: the endpoint accepts a
+      // V2 account id, so onboarding links did not move with the create call.
+      if (path === "/v1/account_links" && method === "POST") {
+        return send({
+          object: "account_link",
+          url: "https://connect.stripe.test/fixture-onboarding",
+          expires_at: Math.floor(Date.now() / 1000) + 300,
+        });
+      }
 
       // GET/POST /v1/subscriptions/{id}
       const subMatch = /^\/v1\/subscriptions\/(sub_[A-Za-z0-9_]+)$/.exec(path);

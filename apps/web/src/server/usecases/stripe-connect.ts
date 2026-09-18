@@ -3,6 +3,14 @@ import "server-only";
 // connects an Express account so entry fees settle to the CLUB, with the
 // platform taking an application fee % (second revenue line). Only the
 // onboarding state lives here; entry-fee checkout is in registrations.ts.
+//
+// Accounts are created through ACCOUNTS V2 (`stripe.v2.core.accounts`); every
+// other Stripe path in this file — and in billing-events.ts, the webhook route
+// and the destination charges in registrations.ts / sponsors.ts — stays on v1,
+// which is not a half-migration but the documented interop: a v2 account id
+// passed to `/v1/accounts` returns a v1-shaped Account carrying every field
+// `syncConnectAccount` reads, and v2 accounts still emit v1 `account.updated`.
+// See `createConnectOnboardingLink` for the field-by-field reasoning.
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { isRegistrationCurrency } from "@/lib/currency";
@@ -91,6 +99,23 @@ export async function connectStatus(
 }
 
 /**
+ * ISO 3166-1 alpha-2 country a connected account is CREATED with.
+ *
+ * Accounts v2 REQUIRES `identity.country` before `configuration.merchant` can
+ * be set; the v1 call this replaced required nothing and let Stripe default the
+ * account to the PLATFORM's country, with the club confirming its own inside
+ * Stripe's hosted onboarding form. Defaulting here reproduces that exactly.
+ *
+ * Safe because the field is MUTABLE until onboarding completes — verified
+ * against the live test API on 2026-09-18: a `gb` account was updated to `IE`,
+ * and a cross-border create (an IE account from this GB platform) also
+ * succeeded. So a club outside the platform country still onboards correctly;
+ * Stripe collects and confirms the real country itself. A country PICKER is a
+ * separate product decision and deliberately not built here.
+ */
+export const CONNECT_ACCOUNT_DEFAULT_COUNTRY = "GB";
+
+/**
  * Create (once) the Express account and mint an onboarding link. Gated on
  * `registration.paid`, which V310 (D19) made free on every plan — so the gate
  * now only stops an org a staff override has denied (abuse, chargeback risk).
@@ -130,13 +155,60 @@ export async function createConnectOnboardingLink(
   }
   const stripe = getStripe();
   if (!accountId) {
-    const account = await stripe.accounts.create({
-      type: "express",
-      metadata: { org_id: orgId, tos_agreed_at: new Date().toISOString() },
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
+    // Two values Accounts v2 requires that v1 did not, and that nothing in
+    // scope already holds: `AuthCtx` carries a userId but no email, and
+    // `organizations` has no contact-email column. `requireOwnerSession` above
+    // has already established that this session IS the org owner, so the
+    // owner's `users.email` is the account's contact. One extra round trip,
+    // only ever on an org's FIRST connect.
+    const [profile] = await sql<{ org_name: string; owner_email: string | null }[]>`
+      select o.name as org_name,
+             (select email from users where id = ${auth.userId}) as owner_email
+      from organizations o
+      where o.id = ${orgId}`;
+    if (!profile?.owner_email) {
+      throw new HttpError(500, "Could not read the owner's email for the Stripe account");
+    }
+    // `organizations.name` is `text not null` with no non-empty CHECK, so a
+    // blank name is reachable — and `display_name: ""` is a 400, while an
+    // ABSENT display_name simply lets Stripe collect one during onboarding.
+    const displayName = profile.org_name.trim();
+    const account = await stripe.v2.core.accounts.create({
+      // The Express Dashboard, exactly as the v1 `type: "express"` account
+      // had. Required whenever a merchant or recipient configuration is
+      // present, and it is what keeps createConnectDashboardLink's v1 Login
+      // Link path applicable instead of forcing an embedded-components build.
+      dashboard: "express",
+      contact_email: profile.owner_email,
+      ...(displayName ? { display_name: displayName } : {}),
+      identity: { country: CONNECT_ACCOUNT_DEFAULT_COUNTRY },
+      configuration: {
+        // BOTH halves, which is exact parity with v1's `card_payments` +
+        // `transfers`. Dropping `merchant` is the trap: a recipient-only
+        // account can receive transfers but may never light `charges_enabled`
+        // — written in one place (syncConnectAccount, below) and read across
+        // ~17 non-test sites that gate registration, sponsors and public data.
+        merchant: { capabilities: { card_payments: { requested: true } } },
+        recipient: {
+          capabilities: { stripe_balance: { stripe_transfers: { requested: true } } },
+        },
       },
+      defaults: {
+        // Deliberately NO `currency`: syncConnectAccount below handles a null
+        // settlement currency on purpose (an account has none until Stripe
+        // knows its country/bank), and the field does not follow a later
+        // country change, so anything pinned here would go stale.
+        //
+        // Both collectors are `application` — not a new policy, a statement of
+        // what destination charges already do: the platform pays Stripe's
+        // processing fees and owns negative-balance liability (the recovery
+        // path is dispute-recovery.ts, and the ToS gate above is the club
+        // agreeing to it).
+        responsibilities: { fees_collector: "application", losses_collector: "application" },
+      },
+      // Unchanged from v1, and load-bearing: the ToS acceptance timestamp
+      // lives HERE, not in a DB column (see the gate above).
+      metadata: { org_id: orgId, tos_agreed_at: new Date().toISOString() },
     });
     accountId = account.id;
     // First write wins: a concurrent onboarding click must not orphan an
