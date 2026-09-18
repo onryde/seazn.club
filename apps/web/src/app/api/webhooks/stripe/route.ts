@@ -10,16 +10,30 @@ import { runEvent } from "@/server/usecases/billing-events";
 export async function POST(req: Request) {
   const rawBody = await req.text();
   const sig = req.headers.get("stripe-signature");
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  // Stripe's event-destinations UI splits "Your account" and "Connected
+  // accounts" into separate destinations, each minting its own signing
+  // secret — v1 account.updated only delivers on the Connected-accounts
+  // scope. Both destinations point at this one route, so this accepts a
+  // comma-separated list and verifies against each until one matches.
+  const secrets = (process.env.STRIPE_WEBHOOK_SECRET ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-  if (!sig || !secret) {
+  if (!sig || secrets.length === 0) {
     return NextResponse.json({ error: "Missing signature" }, { status: 400 });
   }
 
-  let event: Stripe.Event;
-  try {
-    event = getStripe().webhooks.constructEvent(rawBody, sig, secret);
-  } catch {
+  let event: Stripe.Event | undefined;
+  for (const secret of secrets) {
+    try {
+      event = getStripe().webhooks.constructEvent(rawBody, sig, secret);
+      break;
+    } catch {
+      // try the next configured secret
+    }
+  }
+  if (!event) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
