@@ -30,6 +30,7 @@ import {
   resolveSportPalette,
   sportCustomProperty,
 } from "../apps/web/src/components/v2/scorepad/v3/sport-theme.ts";
+import { swissRoundsForFieldSize } from "../apps/web/src/lib/swiss-rounds.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://localhost:3000";
 
@@ -8097,11 +8098,11 @@ async function stageProgressionSuite(): Promise<void> {
  * the swiss winner waits while 2nd plays 3rd, and the Final is seated with
  * the bye entrant before that semi is played.
  *
- * The stages are POSTed exactly as the catalogue builds them — no `rounds`,
- * no re-lay. That used to need a work-around PUT, because a swiss with no
- * declared `config.rounds` never completed and the finals half was never
- * seeded; `swissGen` now persists the field's derived budget at the first
- * generation, which this suite reads back over the wire before playing on.
+ * The stages are POSTed as the catalogue builds them at Top 3, with the
+ * organiser-set `rounds` the picker now stamps on every swiss draft. First
+ * Generate (here via `startDivision` on the empty first stage) mints every
+ * round's shells with null sides; Pair next (a later Generate) seats one round
+ * at a time while unseated future shells do not block readiness.
  */
 async function swissKnockoutSuite(): Promise<void> {
   const free = newSession();
@@ -8128,11 +8129,18 @@ async function swissKnockoutSuite(): Promise<void> {
   );
   const nameOf = new Map(entrants.map((e) => [e.id, e.display_name]));
   const rank = (id: string | null) => names.indexOf(nameOf.get(id ?? "") ?? "zz");
+  const SWISS_ROUNDS = swissRoundsForFieldSize(names.length);
 
   // Exactly what format-templates.ts's swiss_knockout build() emits at
-  // qualified: 3 — including NO `rounds` on the swiss stage.
+  // qualified: 3, with the rounds knob stamped onto the swiss stage.
   const shipped = [
-    { seq: 1, kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
+    {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { pairing: "rank_adjacent", rounds: SWISS_ROUNDS },
+      progression: null,
+    },
     {
       seq: 2,
       kind: "knockout",
@@ -8155,8 +8163,8 @@ async function swissKnockoutSuite(): Promise<void> {
     await v1(free, `/api/v1/divisions/${div.id}/stages`),
   );
   check(
-    "swiss knockout: the shipped draft declares no rounds — the field decides them",
-    stages.find((s) => s.seq === 1)!.config.rounds === undefined,
+    "swiss knockout: the shipped draft carries organiser-set rounds",
+    stages.find((s) => s.seq === 1)!.config.rounds === SWISS_ROUNDS,
   );
   const swissId = stages.find((s) => s.seq === 1)!.id;
   const koId = stages.find((s) => s.seq === 2)!.id;
@@ -8194,23 +8202,36 @@ async function swissKnockoutSuite(): Promise<void> {
       koDayOne.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null),
   );
 
-  await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");
-  // Generating writes the field's own budget down, which is the whole reason
-  // the handoff below fires at all. Read over the wire, on the shipped draft.
-  const afterGen = v1data<{ seq: number; config: { rounds?: number } }[]>(
-    await v1(free, `/api/v1/divisions/${div.id}/stages`),
-  );
-  check(
-    "swiss knockout: the first generation persists the derived 3-round budget",
-    afterGen.find((s) => s.seq === 1)!.config.rounds === 3,
-  );
-  const started = await v1(free, `/api/v1/divisions/${div.id}/start`, "POST");
-  check("swiss knockout: division starts", started.status < 300);
+  const isSeated = (f: Fx) =>
+    f.outcome?.kind === "award" || (f.home_entrant_id !== null && f.away_entrant_id !== null);
 
-  // Play the field's own 3-round budget out, lower seed winning every time,
-  // so the table is strict on wins: Ann > Bo > Cy > Di.
-  for (let round = 1; round <= 3; round++) {
+  const started = v1data<{ generated: number }>(await v1(free, `/api/v1/divisions/${div.id}/start`, "POST"));
+  check(
+    "swiss knockout: startDivision mints N×boards empty shells — none seated",
+    started.generated === SWISS_ROUNDS * 2,
+  );
+  const minted = await fixturesOf(swissId);
+  check(
+    "swiss knockout: every minted shell has null sides",
+    minted.length === SWISS_ROUNDS * 2 &&
+      minted.every((f) => f.home_entrant_id === null && f.away_entrant_id === null),
+  );
+
+  const pairR1 = v1data<{ created: number }>(await v1(free, `/api/v1/stages/${swissId}/generate`, "POST"));
+  const afterPairR1 = await fixturesOf(swissId);
+  check(
+    "swiss knockout: Pair next seats round 1 while later shells stay unseated — no STAGE_NOT_READY from future rounds",
+    pairR1.created === 2 &&
+      afterPairR1.filter((f) => f.round_no === 1).every(isSeated) &&
+      afterPairR1.filter((f) => f.round_no > 1).every((f) => !isSeated(f)),
+  );
+
+  // Play every declared round out, Pair next between rounds, lower seed winning
+  // every time so the table is strict on wins: Ann > Bo > Cy > Di.
+  for (let round = 1; round <= SWISS_ROUNDS; round++) {
+    if (round > 1) await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");
     for (const f of await fixturesOf(swissId)) {
+      if (f.round_no !== round) continue;
       if (!f.home_entrant_id || !f.away_entrant_id) continue;
       if (f.status === "decided" || f.status === "finalized") continue;
       const homeWins = rank(f.home_entrant_id) < rank(f.away_entrant_id);
@@ -8221,12 +8242,14 @@ async function swissKnockoutSuite(): Promise<void> {
         payload: homeWins ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 },
       });
     }
-    if (round < 3) await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");
   }
-  check("swiss knockout: the swiss stopped at the field's own 3-round budget", (await fixturesOf(swissId)).length === 6);
+  check(
+    "swiss knockout: the swiss stopped at the organiser-set round budget",
+    (await fixturesOf(swissId)).length === SWISS_ROUNDS * 2,
+  );
 
   const done = v1data<{ completed: boolean }>(await v1(free, `/api/v1/stages/${swissId}/complete`, "POST"));
-  check("swiss knockout: the swiss completes once its DERIVED rounds are played — nothing declared them", done.completed === true);
+  check("swiss knockout: the swiss completes once every declared round is played", done.completed === true);
   const proposal = v1data<{ id: string; computed: { qualifiers: { entrantId: string }[] } }>(
     await v1(free, `/api/v1/stages/${koId}/seed-proposal`, "POST"),
   );
