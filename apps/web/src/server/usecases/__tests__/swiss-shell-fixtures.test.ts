@@ -10,7 +10,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -29,11 +29,13 @@ interface FixtureRow {
   away_entrant_id: string | null;
   status: string;
   outcome: unknown;
+  scheduled_at: string | null;
+  ext_key: string | null;
 }
 
 async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
   return sql<FixtureRow[]>`
-    select round_no, home_entrant_id, away_entrant_id, status, outcome
+    select round_no, home_entrant_id, away_entrant_id, status, outcome, scheduled_at, ext_key
     from fixtures where stage_id = ${stageId}
     order by round_no, seq_in_round`;
 }
@@ -41,6 +43,7 @@ async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
 async function seedSwissStage(
   auth: AuthCtx,
   config: Record<string, unknown>,
+  entrantCount = 4,
 ): Promise<{ divisionId: string; stageId: string }> {
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -58,7 +61,7 @@ async function seedSwissStage(
   await createEntrants(
     auth,
     division.id,
-    Array.from({ length: 4 }, (_, i) => ({
+    Array.from({ length: entrantCount }, (_, i) => ({
       kind: "individual" as const,
       display_name: `E${i + 1}`,
       seed: i + 1,
@@ -180,5 +183,76 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Pair next seating", () => {
 
     const rows = await fixturesOf(stageId);
     expect(rows.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
+  });
+});
+
+describe.runIf(HAS_DB)("swiss shell fixtures — Unpair", () => {
+  it("Unpair clears latest seated round and keeps schedule columns", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+
+    const pinnedAt = "2030-06-15T14:00:00.000Z";
+    const [shell] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId} and round_no = 1 and ext_key = 'sw-r1-b1'`;
+    await sql`update fixtures set scheduled_at = ${pinnedAt} where id = ${shell!.id}`;
+
+    await generateStageFixtures(auth, stageId);
+    expect((await fixturesOf(stageId)).filter((f) => f.round_no === 1).every(isSeated)).toBe(true);
+
+    const out = await unpairSwissRound(auth, stageId);
+    expect(out).toEqual({ cleared: 2, round: 1 });
+
+    const after = await fixturesOf(stageId);
+    expect(after.filter((f) => f.round_no === 1).every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
+    expect(after.filter((f) => f.round_no === 1).every((f) => f.status === "scheduled" && f.outcome === null)).toBe(true);
+    const pinned = after.find((f) => f.ext_key === "sw-r1-b1")?.scheduled_at;
+    expect(pinned instanceof Date ? pinned.toISOString() : pinned).toBe(pinnedAt);
+  });
+
+  it("Unpair refuses when a match in that round is decided", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+    await playRoundHomeWins(auth.orgId, stageId, 1);
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
+  it("Unpair allows a round that only has a bye award + unplayed seated boards", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 2 }, 3);
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const before = await fixturesOf(stageId);
+    expect(before.some((f) => f.ext_key?.endsWith("-bye") && f.outcome !== null)).toBe(true);
+
+    const out = await unpairSwissRound(auth, stageId);
+    expect(out.round).toBe(1);
+    expect(out.cleared).toBeGreaterThan(0);
+
+    const after = await fixturesOf(stageId);
+    expect(after.filter((f) => f.round_no === 1).every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
+    expect(after.find((f) => f.ext_key?.endsWith("-bye"))?.outcome).toBeNull();
+  });
+
+  it("Unpair on knockout stage fails", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    const [ko] = await createStages(auth, divisionId, {
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+      progression: null,
+    });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, ko!.id);
+
+    await expect(unpairSwissRound(auth, ko!.id)).rejects.toMatchObject({ status: 422 });
   });
 });
