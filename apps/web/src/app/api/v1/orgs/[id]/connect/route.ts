@@ -21,7 +21,8 @@ export async function GET(req: Request, { params }: Ctx) {
   });
 }
 
-/** Create the Express account (once) + mint an onboarding link (Pro). */
+/** Create the connected account (once, Accounts v2 with the Express Dashboard)
+ *  + mint an onboarding link through Account Links v1 (Pro). */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;

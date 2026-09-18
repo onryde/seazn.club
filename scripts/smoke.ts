@@ -1269,6 +1269,28 @@ async function disputeSurfacesSuite() {
     return_path: "/settings/connect",
   });
   check("p55: connect refuses without ToS agreement (422)", refused.status === 422);
+
+  // Accounts v2 migration: the create call now carries two values v1's never
+  // did — the owner's `users.email` as `contact_email`, and the org's name as
+  // `display_name`. Stripe REQUIRES a contact email and rejects a blank
+  // display name, so a deployed app that cannot produce them 400s on every
+  // first connect, for every club, with nothing in the unit suites able to
+  // notice (they seed their own rows).
+  //
+  // The email half needs no probe: `users.email` is `text not null unique`, so
+  // a live session always resolves one. The NAME half does — `organizations.
+  // name` is `text not null` with no non-empty CHECK — so assert the deployed
+  // app really serves a non-blank name for the org this owner is about to
+  // connect. Stopping short of POSTing with `tos_agreed: true` is deliberate:
+  // against a smoke target holding a real test key, that would mint a genuine
+  // Stripe account on every run. The wire shape is proven in
+  // apps/web/src/server/usecases/__tests__/connect-accounts-v2-wire.test.ts.
+  const myOrgs = (await call(owner, "/api/orgs")) as { id: string; name: string }[];
+  const connecting = Array.isArray(myOrgs) ? myOrgs.find((o) => o.id === who.org_id) : undefined;
+  check(
+    "connect v2: the org an owner connects serves a non-blank name (the account's display_name)",
+    !!connecting && typeof connecting.name === "string" && connecting.name.trim().length > 0,
+  );
 }
 
 /** #403 data protection review — the two disclosures that only count if they

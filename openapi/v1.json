@@ -63824,7 +63824,7 @@
         ]
       },
       "post": {
-        "summary": "Create the Express account + onboarding link (Pro)",
+        "summary": "Create the connected account (Express Dashboard) + onboarding link (Pro)",
         "tags": [
           "registration"
         ],

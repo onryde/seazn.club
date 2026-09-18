@@ -1095,6 +1095,82 @@ test.describe("T12 · Connect health banner surfaces payout trouble", () => {
 });
 
 // ===========================================================================
+// T13 — FIRST CONNECT: the org owner attaching Stripe from settings
+// ===========================================================================
+//
+// The user-facing end of `createConnectOnboardingLink`, which now creates the
+// account through ACCOUNTS V2 (`stripe.v2.core.accounts.create`). That call is
+// pinned field-by-field in the vitest suites — stubbed in
+// usecases/__tests__/stripe-connect.test.ts, and on the wire against a real
+// Stripe HTTP fixture in connect-accounts-v2-wire.test.ts. Neither can see the
+// screen, and what a club owner actually does here is the thing that was never
+// covered: T12 below/above only ever seeds an org that is ALREADY connected,
+// so the very first click — the only moment an account is created — had no
+// browser coverage at all.
+//
+// What this leg can prove: the ToS gate as a customer meets it, that the click
+// reaches the route, and that a FAILED create leaves the org unconnected rather
+// than half-attached. What it cannot: that Stripe accepted the v2 params. The
+// parallel project runs a dummy STRIPE_SECRET_KEY (e2e.yml: only the
+// `walkthrough` project carries a real one), which is deliberate — a green
+// first-connect test that minted real Stripe accounts on every CI run would be
+// worse than no test.
+test.describe("T13 · first connect — the ToS gate and a create that fails clean", () => {
+  test("the CTA unlocks only after the chargeback terms are accepted, and a failed create leaves the org unconnected", async ({
+    page,
+  }) => {
+    const org = await seedOrg({ plan: "pro" }); // NOT connected — the point of this test
+    await loginAsOwner(page, org.ownerEmail);
+
+    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await page.waitForResponse(
+      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
+    );
+
+    const card = page.locator('[data-tour="connect-stripe"]');
+    const cta = card.getByRole("button", { name: "Connect Stripe" });
+    const tos = card.getByRole("checkbox");
+
+    // The gate, as the owner meets it. Pinned as DISABLED-then-ENABLED rather
+    // than "the checkbox exists": a reachability assertion is satisfied by a
+    // control that gates nothing.
+    await expect(cta, "an unconnected org is offered the first connect").toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(cta, "…but not before the chargeback terms are accepted").toBeDisabled();
+    await tos.check();
+    await expect(cta, "accepting the terms unlocks it").toBeEnabled();
+
+    // The click really reaches the route that creates the account.
+    const [res] = await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes(`/orgs/${org.orgId}/connect`) && r.request().method() === "POST",
+      ),
+      cta.click(),
+    ]);
+    // Dummy key in this project, so the v2 create cannot succeed. The
+    // ASSERTION is not "it failed" — it is that a failure is answered, not
+    // swallowed: a 2xx here would mean the account was created for real.
+    expect(res.status(), "no real Stripe account can be minted on a dummy key").toBeGreaterThanOrEqual(400);
+
+    // The half-connected state is the one that actually hurts: an org row
+    // carrying a stripe_account_id it never finished onboarding reads as
+    // "connected" to ~17 gates. A create that failed must store nothing.
+    const [row] = await withDb(
+      (sql) => sql<{ stripe_account_id: string | null }[]>`
+        select stripe_account_id from organizations where id = ${org.orgId}`,
+    );
+    expect(row.stripe_account_id, "a failed create must not half-attach the org").toBeNull();
+
+    // And the owner is told, rather than left looking at a button that did
+    // nothing. (The exact copy is not pinned here: the onboarding path
+    // forwards the upstream message — see the report's finding on it.)
+    await expect(card.locator("p.text-red-600").first()).toBeVisible({ timeout: 15_000 });
+  });
+});
+
+// ===========================================================================
 // T15 — Pro AI generation cap — RETIRED (v17 Phase 2 Task 5, V322)
 // ===========================================================================
 //

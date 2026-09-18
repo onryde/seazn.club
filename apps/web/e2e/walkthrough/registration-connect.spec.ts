@@ -85,6 +85,45 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
       `CONNECT>>> ${CONNECT_ACCOUNT} taken from ${connect.priorId ?? "nobody"} for ${org.slug}`,
     );
 
+    // ---- Accounts v2 migration guard -------------------------------------
+    // The onboarding route, driven against a REAL Stripe key — the only leg in
+    // the suite where that is true. It exercises the RESUME branch on purpose:
+    // an account is already attached, so `createConnectOnboardingLink` must
+    // skip the create entirely, must NOT re-ask for the chargeback terms (no
+    // `tos_agreed` is sent here, and a 422 would mean the gate moved), and
+    // must still mint the link through ACCOUNT LINKS V1 — the v1 call the
+    // Accounts v2 migration deliberately left in place because it accepts any
+    // connected-account id.
+    //
+    // It does NOT drive the CREATE branch, and must not. That branch now calls
+    // `stripe.v2.core.accounts.create`, and against this leg's real key it
+    // would mint a genuine un-onboarded connected account on every run with
+    // nothing to clean it up. The create is covered four other ways: stubbed
+    // (usecases/__tests__/stripe-connect.test.ts), on the wire
+    // (connect-accounts-v2-wire.test.ts), against Stripe itself
+    // (connect-accounts-v2.live.test.ts) and in a browser
+    // (payments-hardening.spec.ts T13) — that last one can click it safely
+    // only because the `parallel` project runs the dummy key.
+    const resume = await apiJson<{ url: string }>(
+      request,
+      `/api/v1/orgs/${org.id}/connect`,
+      "POST",
+      { return_path: "/settings/connect" },
+    );
+    expect(resume.status, "resuming onboarding on an already-attached account").toBe(200);
+    expect(resume.data!.url, "Account Links V1 still answers for this account").toContain(
+      "connect.stripe.com",
+    );
+    const attached = await apiJson<{ connected: boolean; charges_enabled: boolean }>(
+      request,
+      `/api/v1/orgs/${org.id}/connect`,
+    );
+    expect(attached.data!.connected, "the claimed fixture account is still attached").toBe(true);
+    expect(
+      attached.data!.charges_enabled,
+      "…and still chargeable, which the paid division below depends on",
+    ).toBe(true);
+
     // A team division with a real fee — this is the one we pay for.
     const team = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
       name: "Mixed Team Championship",

@@ -15,7 +15,7 @@
 // gate on the mere PRESENCE of a pass row therefore turned a staff deny into
 // something an org could walk around for $29.
 //
-// Connect is org-level plumbing — one Express account for the whole org — so
+// Connect is org-level plumbing — one connected account for the whole org — so
 // this gate is deliberately org-wide and NOT competition-scoped. That is also
 // why the pass-scoping guard does not list it: `registration.paid` is not a
 // lifted key. Nothing else would force this, hence these two cases.

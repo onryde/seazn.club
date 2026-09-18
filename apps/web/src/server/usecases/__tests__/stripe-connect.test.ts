@@ -1,7 +1,13 @@
-// ToS gate on Stripe Connect onboarding (PROMPT-55): the Express account is
+// ToS gate on Stripe Connect onboarding (PROMPT-55): the connected account is
 // only created after the owner accepts the entry-fee chargeback terms; the
 // acceptance timestamp is recorded on the Stripe account metadata. Real
 // Postgres required; skipped without DATABASE_URL.
+//
+// Since the Accounts v2 migration this file also owns the CREATE SHAPE — see
+// the "Connect account creation goes through Accounts v2" block below. These
+// assertions are against a STUBBED SDK, so they prove what we pass and nothing
+// about what is sent; connect-accounts-v2-wire.test.ts covers the wire and
+// connect-accounts-v2.live.test.ts (BILLING_LIVE=1) covers Stripe itself.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 

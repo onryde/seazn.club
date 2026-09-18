@@ -1,7 +1,7 @@
 import "server-only";
-// Stripe Connect Express onboarding (doc 16 §1.1, PROMPT-20a): an org
-// connects an Express account so entry fees settle to the CLUB, with the
-// platform taking an application fee % (second revenue line). Only the
+// Stripe Connect Express onboarding (doc 16 §1.1, PROMPT-20a): an org connects
+// a Stripe account with the EXPRESS DASHBOARD so entry fees settle to the CLUB,
+// with the platform taking an application fee % (second revenue line). Only the
 // onboarding state lives here; entry-fee checkout is in registrations.ts.
 //
 // Accounts are created through ACCOUNTS V2 (`stripe.v2.core.accounts`); every
@@ -116,7 +116,8 @@ export async function connectStatus(
 export const CONNECT_ACCOUNT_DEFAULT_COUNTRY = "GB";
 
 /**
- * Create (once) the Express account and mint an onboarding link. Gated on
+ * Create (once) the connected account — Accounts v2, Express Dashboard — and
+ * mint an onboarding link through Account Links v1. Gated on
  * `registration.paid`, which V310 (D19) made free on every plan — so the gate
  * now only stops an org a staff override has denied (abuse, chargeback risk).
  */
@@ -144,7 +145,7 @@ export async function createConnectOnboardingLink(
   let { stripe_account_id: accountId } = await orgConnect(orgId);
   // ToS gate (PROMPT-55): the org accepts the entry-fee chargeback clause
   // (lost disputes are recovered from its connected balance) BEFORE the
-  // Express account exists. Resuming onboarding never re-asks; the
+  // connected account exists. Resuming onboarding never re-asks; the
   // acceptance timestamp lives on the account metadata — no DB column.
   // Checked before getStripe() so the 422 answers even keyless.
   if (!accountId && !tosAgreed) {

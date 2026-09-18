@@ -43,8 +43,8 @@
 // sponsor-checkout fixture) just verifies it and exits, doing nothing.
 //
 // Not imported from apps/web/src/server/usecases/stripe-connect.ts, even
-// though createConnectOnboardingLink's accounts.create call is exactly what
-// createFixtureAccount below mirrors: that file starts with `import
+// though createConnectOnboardingLink's account create is what
+// createFixtureAccount below stands in for: that file starts with `import
 // "server-only"` and reaches `@/lib/db` etc. through the app's `@/` alias,
 // which tsconfig.scripts.json maps for type-checking but plain
 // `node --experimental-strip-types` cannot resolve at RUNTIME (nodenext
@@ -52,8 +52,9 @@
 // has none — the same reason stripe-sync.ts re-declares REQUIRED_CURRENCIES
 // as a literal instead of importing lib/currency.ts, and openapi-gen.ts
 // reaches into apps/web/src only via relative, extension-carrying paths).
-// Fixture-matches-production is kept by hand-mirroring the exact
-// accounts.create params instead.
+// The create below is therefore hand-written — and since the Accounts v2
+// migration it no longer mirrors production at all; see createFixtureAccount's
+// own comment for why that is deliberate and what it costs.
 import { fileURLToPath } from "node:url";
 import Stripe from "stripe";
 
@@ -90,10 +91,23 @@ function requireTestStripe(): Stripe {
   });
 }
 
-/** Mirrors createConnectOnboardingLink's accounts.create call verbatim
- *  (stripe-connect.ts:132-140): same type, same two requested capabilities,
- *  no country (Stripe defaults it during onboarding). Metadata differs only
- *  by necessity — this account starts with no org to stamp an org_id from. */
+/** DELIBERATELY STILL ACCOUNTS V1, and no longer a mirror of production.
+ *
+ *  `createConnectOnboardingLink` moved to `stripe.v2.core.accounts.create`
+ *  (stripe-connect.ts). This fixture did NOT follow it, for one reason: the
+ *  `isHealthy` check below reads `account.capabilities?.transfers` off the V1
+ *  interop view of an account, and while that view was verified to carry
+ *  `charges_enabled`, `payouts_enabled`, `details_submitted`,
+ *  `default_currency` and `requirements.*` for a v2 account, `capabilities.*`
+ *  was NOT. Moving this create blind risks a fixture that can never report
+ *  ready, which is a worse failure than a fixture account whose shape differs
+ *  from production's.
+ *
+ *  The consequence, stated so it is a known position rather than an oversight:
+ *  the local/CI destination-charge fixture is a v1 Express account while
+ *  production creates v2 ones, so no automated leg exercises a destination
+ *  charge against a v2 account. Settling it needs one live retrieve of an
+ *  ONBOARDED v2 account to see whether `capabilities.transfers` mirrors. */
 async function createFixtureAccount(stripe: Stripe): Promise<Stripe.Account> {
   return stripe.accounts.create({
     type: "express",
