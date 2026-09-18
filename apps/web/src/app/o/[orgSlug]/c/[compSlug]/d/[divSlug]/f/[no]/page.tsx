@@ -10,6 +10,7 @@ import {
   getFixtureState,
   getLineup,
   listEvents,
+  loadFixturePadCfg,
 } from "@/server/usecases/fixtures";
 import { getDivision } from "@/server/usecases/divisions";
 import { getScheduleSettings } from "@/server/usecases/schedule";
@@ -49,14 +50,21 @@ export default async function FixturePage({
   // Accepted officials scoring without edit rights get the courtside chrome.
   const isOfficialScorer = canScore && !canEdit;
   const fixture = await getFixture(auth, id);
-  const [division, state, events, recorderNames, availability, schedule] = await Promise.all([
-    getDivision(auth, fixture.division_id),
-    getFixtureState(auth, id),
-    listEvents(auth, id, 0),
-    eventRecorderNames(auth, id),
-    listFixtureAvailability(auth, id),
-    getScheduleSettings(auth, fixture.division_id),
-  ]);
+  // §T4 — the cfg the PAD renders against: the fixture's frozen snapshot if it
+  // has been scored, otherwise the division config with this stage's overlay
+  // applied. Deliberately not `division.config`, which is what this page used
+  // to hand the pad: it disagrees with the fold for any scored fixture, and it
+  // cannot see a per-stage format override at all.
+  const [division, state, events, recorderNames, availability, schedule, padCfg] =
+    await Promise.all([
+      getDivision(auth, fixture.division_id),
+      getFixtureState(auth, id),
+      listEvents(auth, id, 0),
+      eventRecorderNames(auth, id),
+      listFixtureAvailability(auth, id),
+      getScheduleSettings(auth, fixture.division_id),
+      loadFixturePadCfg(auth, id),
+    ]);
   const [competition, planKey] = await Promise.all([
     getCompetition(auth, division.competition_id),
     orgPlanKey(auth.orgId),
@@ -116,7 +124,7 @@ export default async function FixturePage({
   // section in that case, since there is no v1 fallback left.
   const scorePadV2 = await resolveScorePadBootstrap({
     sportModule,
-    rawConfig: division.config,
+    rawConfig: padCfg,
     hasFeatureFn: (key) => hasFeature(auth.orgId, key, division.competition_id),
     initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
     identity: { recordedBy: auth.userId, deviceLinkId: null },
@@ -168,7 +176,7 @@ export default async function FixturePage({
           }}
           sport={{
             key: division.sport_key,
-            config: division.config as Record<string, unknown>,
+            config: padCfg as Record<string, unknown>,
             scorerLabel: sportModule.officialLabel.scorer,
             positionGroups: lineupCatalog.groups,
             roles: lineupCatalog.roles ?? [],

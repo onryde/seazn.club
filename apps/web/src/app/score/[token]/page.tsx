@@ -5,7 +5,12 @@ export const dynamic = "force-dynamic";
 // `Authorization: Bearer dl_…`. The token lives in this tab only — never
 // localStorage.
 import { resolveDeviceLinkToken } from "@/server/usecases/device-links";
-import { getFixtureState, getLineup, listEvents } from "@/server/usecases/fixtures";
+import {
+  getFixtureState,
+  getLineup,
+  listEvents,
+  loadFixturePadCfg,
+} from "@/server/usecases/fixtures";
 import { getEntrant } from "@/server/usecases/entrants";
 import { withTenant } from "@/lib/db";
 import { resolveModule } from "@/server/engine-db";
@@ -102,8 +107,19 @@ export default async function ScorePadPage({
     : undefined;
 
   const sportModule = resolveModule(fixture.sport_key, fixture.module_version);
-  // R7 B2 — per-config catalog (see the fixture console page); the device
-  // link's fixture carries its own resolved `config` column.
+  // §T4 — the cfg this pad renders against. `fixture.config` is NOT the
+  // fixture's own config: the query above aliases `d.config`, the DIVISION's,
+  // and a comment here used to claim otherwise. So it disagrees with the fold
+  // for any scored fixture (which folds against the frozen snapshot) and it
+  // cannot see a stage overlay. `loadFixturePadCfg` resolves all three inputs;
+  // `read` is a session-shaped ctx by construction above, so the API-surface
+  // device-link refusal does not apply to it.
+  const padCfg = await loadFixturePadCfg(read, fixture.id);
+  // R7 B2 — per-config catalog (see the fixture console page). Still the raw
+  // DIVISION config, deliberately: the catalog's inputs are teamSize /
+  // playersPerSide / goalkeeper, which no sport in scope can override per
+  // stage, and the spec records these four catalog sites as a known gap to be
+  // closed the day a team sport gains a stage-overridable teamSize.
   const lineupCatalog = lineupCatalogFor(sportModule, fixture.config);
   const [state, events] = await Promise.all([
     getFixtureState(read, fixture.id),
@@ -142,7 +158,7 @@ export default async function ScorePadPage({
   // pad section in that case, since there is no v1 fallback left.
   const scorePadV2 = await resolveScorePadBootstrap({
     sportModule,
-    rawConfig: fixture.config,
+    rawConfig: padCfg,
     hasFeatureFn: (key) => hasFeature(link.org_id, key, fixture.competition_id),
     initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
     identity: { recordedBy: link.issued_by, deviceLinkId: link.id },
@@ -165,7 +181,7 @@ export default async function ScorePadPage({
         }}
         sport={{
           key: fixture.sport_key,
-          config: fixture.config as Record<string, unknown>,
+          config: padCfg as Record<string, unknown>,
           scorerLabel: sportModule.officialLabel.scorer,
           positionGroups: lineupCatalog.groups,
           roles: lineupCatalog.roles ?? [],
