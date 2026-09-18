@@ -198,6 +198,61 @@ a lock reason, an error toast — is picker chrome and DOES owe all four
 dictionaries plus the regen. Keep that line clear in review: the nine
 field labels are exempt, the panel's own copy is not.
 
+**D7 — where the editor lives. TWO OPTIONS, owner pick PENDING**
+(put to the owner 2026-09-18; Task 7 is blocked on the answer).
+
+The surface was mapped before the options were drawn, and every claim below
+was re-read in the file rather than taken from the grep:
+
+- The stage card is **inline JSX** in `stages-panel.tsx` (`:660` loop,
+  `:786` `<section className="card overflow-hidden">`, `:804`
+  `data-testid="stage-sheet"`, header `:805-810`). There is no stage-card
+  component to extend.
+- `stages-panel.tsx` carries **zero `max-md:` and zero `md:hidden`** —
+  verified, not asserted. The stage card has no phone branch at all.
+- Every phone-specific edit action lives in `desk/stage-rail.tsx`, whose
+  trigger (`:241`), backdrop (`:252`) and sheet (`:349`) are `md:hidden`
+  / `md:static`. That file is governed by the phone-composition design of
+  record.
+- Two precedents sit in the same card and point opposite ways:
+  `AddMatchForm` (`:1576`, mounted `:912`, container `:1621`
+  `border-b border-dashed bg-slate-50/60 px-4 py-3`) is an **inline
+  expanding form**; `StageCourtTagsEditor` (`:1681`) is a **modal** reached
+  from the rail.
+
+**Option A — inline format row in the stage card** (`AddMatchForm`
+precedent). One collapsed line in the card body; Edit expands
+`MatchRuleFields` in place. Its `grid gap-4 sm:grid-cols-3` collapses to one
+column below 640 on its own, so A needs **no new phone branch**.
+
+**Option B — read-only line on the card, editor in the rail**
+(`StageCourtTagsEditor` precedent). Editing joins the rail's action list —
+bottom sheet on phone, modal ≥768.
+
+Recommendation: **A**. Blast radius is the deciding argument — B opens
+`stage-rail.tsx`, a file with its own owner-approved design of record,
+while A opens none. Second, `stages-panel.tsx:786-804` records that the
+two-column layout was retired after the card was measured
+`body=262px rail=262px content=99px VOID=163px` — 62% empty at 1280 — with
+the note that "no body content short of a fixture list could have fixed
+it". A adds body content to a card measured as starved of it; B keeps it
+starved. Third, A is one tap on phone against B's two. B's honest
+advantage is that the card is already dense.
+
+Either way, three states and their copy (all four dictionaries — the nine
+field labels are exempt under D4, this chrome is not):
+
+| State | Line | Controls |
+| --- | --- | --- |
+| inherited | `Best of 3 · Same as division` | Edit |
+| overridden | `Best of 5 · Stage override` | Edit, Use division format |
+| locked (409 `STAGE_FORMAT_LOCKED`) | `Best of 5 · Locked — this stage has started` | none |
+
+There is **no existing default-vs-overridden precedent in the panel**; the
+nearest anywhere is `division-settings.tsx:991-998`
+(`divset.entrants.sportDefault` / `.overridden` plus a Reset button), and
+the new copy should read like it.
+
 ## Design
 
 ### T0 — extract the rules table out of the client module
