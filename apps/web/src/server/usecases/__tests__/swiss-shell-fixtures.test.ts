@@ -210,6 +210,26 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Unpair", () => {
     expect(pinned instanceof Date ? pinned.toISOString() : pinned).toBe(pinnedAt);
   });
 
+  it("Unpair refuses when a seated board has score_events while still scheduled", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [target] = await sql<{ id: string; status: string }[]>`
+      select id, status from fixtures
+      where stage_id = ${stageId} and round_no = 1 and away_entrant_id is not null
+      limit 1`;
+    expect(target!.status).toBe("scheduled");
+    await sql`
+      insert into score_events (fixture_id, org_id, seq, type, payload)
+      values (${target!.id}, ${auth.orgId}, 1, 'core.point', ${sql.json({ side: "home" } as never)})`;
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
   it("Unpair refuses when a match in that round is decided", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
