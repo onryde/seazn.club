@@ -193,14 +193,13 @@ async function playSwissRound(
   return played;
 }
 
-/** Generate + play the swiss until the generator stops issuing rounds. */
+/** Pair + play each swiss round until fully paired (startDivision already minted shells). */
 async function playSwissOut(auth: AuthCtx, rig: Rig): Promise<void> {
   await generateStageFixtures(auth, rig.koStageId); // day-one TBD bracket
   for (let round = 1; ; round++) {
-    const played = await playSwissRound(auth, rig.swissStageId, round, rig.nameOf);
-    if (played === 0) break;
-    const more = await generateStageFixtures(auth, rig.swissStageId);
-    if (more.created === 0) break;
+    const paired = await generateStageFixtures(auth, rig.swissStageId);
+    if (paired.created === 0) break;
+    await playSwissRound(auth, rig.swissStageId, round, rig.nameOf);
   }
 }
 
@@ -225,7 +224,7 @@ function roundsOf(bracket: FixtureRow[]): number[] {
   return [...new Set(bracket.map((f) => f.round_no))].sort((a, b) => a - b);
 }
 
-describe.runIf(HAS_DB).skip("swiss knockout — the bracket an organiser's Top N actually builds (Task 3: Pair next)", () => {
+describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actually builds", () => {
   it("plays the swiss out to a strict E1 > E2 > E3 > E4, which every shape below reads as its seeding", async () => {
     // The premise the three shape cases rest on, asserted once on its own: a
     // full round robin won by the lower number every time is 3/2/1/0 wins, so

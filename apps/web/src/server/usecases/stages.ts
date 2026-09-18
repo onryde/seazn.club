@@ -25,7 +25,11 @@ import {
   validateFeedGraph,
   generateAmericano,
   pairMexicanoRound,
+  pairRound,
+  pairKey,
   type AmericanoRound,
+  type SwissStanding,
+  type Colour,
 } from "@seazn/engine/scheduling";
 import {
   PointsRule,
@@ -49,8 +53,14 @@ import { resolveModule } from "@/server/engine-db";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
-import { planSwissShells } from "@/lib/swiss-shell";
+import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
+import {
+  isSwissBoardSeated,
+  isSwissByeRow,
+  latestSeatedSwissRound,
+  nextUnseatedSwissRound,
+  planSwissShells,
+} from "@/lib/swiss-shell";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
@@ -694,33 +704,182 @@ const DECIDED = new Set(["decided", "finalized", "forfeited"]);
  *  on the same string (public-site/competition-hub.ts's BYE_SLOT_KEY). */
 const BYE_SLOT_LABEL = { key: "bracket.slot.bye", params: {} } as const;
 
+type SwissExistingFixture = {
+  id: string;
+  ext_key: string | null;
+  round_no: number;
+  seq_in_round: number;
+  status: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  outcome: unknown;
+};
+
+type SwissGenResult = { gen: GenFixture[]; seatedCount: number };
+
 // Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
 // every round the organiser declared in `config.rounds`; Pair next (a later
 // Generate when shells already exist) seats one round at a time onto those
 // shells. The organiser-set round budget is the only authority — nothing here
 // derives or persists `rounds` from field size.
 async function swissGen(
-  _tx: Tx,
+  tx: Tx,
   stageId: string,
   cfg: Record<string, unknown>,
   entrants: ActiveEntrant[],
-  existing: { ext_key: string | null; round_no: number; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown }[],
-): Promise<GenFixture[]> {
-  // Task 3 replaces this branch with Pair-next UPDATE seating.
-  if (existing.length > 0) return [];
-
+  existing: SwissExistingFixture[],
+): Promise<SwissGenResult> {
   const rounds = cfg.rounds;
   if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
     throw new EngineError("CONFIG_INVALID", "swiss stage requires config.rounds >= 1", { stageId });
   }
 
-  return planSwissShells(rounds, entrants.length).map((shell) => ({
-    extKey: shell.extKey,
-    roundNo: shell.roundNo,
-    seqInRound: shell.seqInRound,
-    home: null,
-    away: null,
+  if (existing.length === 0) {
+    return {
+      gen: planSwissShells(rounds, entrants.length).map((shell) => ({
+        extKey: shell.extKey,
+        roundNo: shell.roundNo,
+        seqInRound: shell.seqInRound,
+        home: null,
+        away: null,
+      })),
+      seatedCount: 0,
+    };
+  }
+
+  const target = nextUnseatedSwissRound(existing);
+  if (target === null) {
+    return { gen: [], seatedCount: 0 };
+  }
+
+  if (target > 1) {
+    const seatedPrev = existing.filter(
+      (f) =>
+        f.round_no === target - 1 &&
+        isSwissBoardSeated({
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          outcome: f.outcome,
+        }),
+    );
+    if (seatedPrev.some((f) => !DECIDED.has(f.status))) {
+      throw new EngineError("STAGE_NOT_READY", "current swiss round has undecided fixtures", { stageId });
+    }
+  }
+
+  const rankAdjacent = cfg.pairing === "rank_adjacent";
+  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
+  const played = new Set<string>();
+  const colours = new Map<string, Colour[]>();
+  const byes = new Set<string>();
+  const inRound = new Map<number, Set<string>>();
+  for (const f of existing) {
+    const o = f.outcome as { kind?: string; winner?: string } | null;
+    if (o?.kind === "award" && o.winner) {
+      const forRound = inRound.get(f.round_no) ?? new Set<string>();
+      forRound.add(o.winner);
+      inRound.set(f.round_no, forRound);
+      byes.add(o.winner);
+      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+      continue;
+    }
+    if (!f.home_entrant_id || !f.away_entrant_id) continue;
+    played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
+    const forRound = inRound.get(f.round_no) ?? new Set<string>();
+    forRound.add(f.home_entrant_id).add(f.away_entrant_id);
+    inRound.set(f.round_no, forRound);
+    (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
+    (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
+    if (o?.kind === "win" && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+    else if (o?.kind === "draw" || o?.kind === "tie") {
+      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
+      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
+    }
+  }
+  const latestSeated = latestSeatedSwissRound(existing);
+  for (let r = 1; r <= (latestSeated ?? 0); r++) {
+    const inRoundR = existing.filter((f) => f.round_no === r);
+    if (
+      !inRoundR.every((f) =>
+        isSwissBoardSeated({
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          outcome: f.outcome,
+        }),
+      )
+    ) {
+      continue;
+    }
+    if (inRoundR.some((f) => isSwissByeRow(f))) continue;
+    const seen = inRound.get(r) ?? new Set();
+    for (const e of entrants) {
+      if (!seen.has(e.id)) {
+        byes.add(e.id);
+        score.set(e.id, (score.get(e.id) ?? 0) + 1);
+      }
+    }
+  }
+
+  const cascadeRank = new Map<string, number>();
+  if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {
+    const rows = await rankedStageStandings(tx, stageId);
+    for (const [i, row] of rows.entries()) {
+      cascadeRank.set(row.entrantId, row.rank ?? i + 1);
+    }
+  }
+  const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
+  const standings: SwissStanding[] = entrants.map((e, i) => ({
+    entrantId: e.id,
+    score: score.get(e.id) ?? 0,
+    rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
+  const round = pairRound(
+    standings,
+    { played, colours, byes },
+    { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
+  );
+
+  const roundShells = existing
+    .filter((f) => f.round_no === target)
+    .sort((a, b) => a.seq_in_round - b.seq_in_round);
+  const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
+  const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
+
+  let seatedCount = 0;
+  for (let i = 0; i < round.pairings.length; i++) {
+    const p = round.pairings[i]!;
+    const shell = boardShells[i];
+    if (!shell) {
+      throw new EngineError("CONFIG_INVALID", "swiss shell count mismatch for pairing", { stageId, target });
+    }
+    await tx`
+      update fixtures set
+        home_entrant_id = ${p.home},
+        away_entrant_id = ${p.away},
+        status = 'scheduled',
+        outcome = null,
+        home_slot_label = null,
+        away_slot_label = null
+      where id = ${shell.id}`;
+    seatedCount++;
+  }
+  if (round.bye !== undefined) {
+    if (!byeShell) {
+      throw new EngineError("CONFIG_INVALID", "swiss bye shell missing for pairing", { stageId, target });
+    }
+    await tx`
+      update fixtures set
+        home_entrant_id = ${round.bye},
+        away_entrant_id = null,
+        status = 'forfeited',
+        outcome = ${tx.json({ kind: "award", winner: round.bye } as never)},
+        home_slot_label = null,
+        away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+      where id = ${byeShell.id}`;
+    seatedCount++;
+  }
+
+  return { gen: [], seatedCount };
 }
 
 // Distribute seed-ordered entrants into `count` pools by seeded snake
@@ -1255,20 +1414,23 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       }
     }
 
-    const existing = await tx<
-      { id: string; ext_key: string | null; round_no: number; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown }[]
-    >`
-      select id, ext_key, round_no, status, home_entrant_id, away_entrant_id, outcome
+    const existing = await tx<SwissExistingFixture[]>`
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
       from fixtures where stage_id = ${stageId}`;
 
-    const gen =
-      stage.kind === "swiss"
-        ? await swissGen(tx, stageId, stage.config, entrants, existing)
-        : stage.kind === "americano"
-          ? await americanoGen(tx, stage.division_id, stageId, stage.config, entrants)
-          : stage.kind === "ladder"
-            ? [] // Jul3/08 §6: ladder fixtures come from challenges, on demand
-            : generate(stage.kind, stage.config, entrants, poolIds);
+    let swissSeatedCount = 0;
+    let gen: GenFixture[];
+    if (stage.kind === "swiss") {
+      const swiss = await swissGen(tx, stageId, stage.config, entrants, existing);
+      gen = swiss.gen;
+      swissSeatedCount = swiss.seatedCount;
+    } else if (stage.kind === "americano") {
+      gen = await americanoGen(tx, stage.division_id, stageId, stage.config, entrants);
+    } else if (stage.kind === "ladder") {
+      gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
+    } else {
+      gen = generate(stage.kind, stage.config, entrants, poolIds);
+    }
 
     // Guard against the misleading "nothing new — up to date" success shape
     // (design/fix-ui/03 §"misleading success message"): a `group` stage with
@@ -1402,7 +1564,8 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       });
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
     for (const r of newRows) byKey.set(r.ext_key, r.id);
-    const created = newRows.length;
+    // Pair next reports seated shell rows as `created` for UI notices.
+    const created = newRows.length + swissSeatedCount;
     const createdIds = newRows.map((r) => r.id);
 
     // 1b pass — cross-stage fill, through fillSlot (see viaFillSlot above).
@@ -1566,7 +1729,7 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     return {
-      outcome: { created, existing: gen.length - created, fixtures },
+      outcome: { created, existing: gen.length - newRows.length, fixtures },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
     };
