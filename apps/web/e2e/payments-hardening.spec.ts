@@ -1,6 +1,8 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import Stripe from "stripe";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { TAG, apiJson, activeOrg, loginUi } from "./helpers";
 import type { PassKey } from "../src/lib/currency";
 
@@ -1091,6 +1093,139 @@ test.describe("T12 · Connect health banner surfaces payout trouble", () => {
       timeout: 15_000,
     });
     await expect(page.getByText(/rk_test|sk_test|provided key|acct_/)).toHaveCount(0);
+  });
+});
+
+// ===========================================================================
+// T13 — FIRST CONNECT: the org owner attaching Stripe from settings
+// ===========================================================================
+//
+// The user-facing end of `createConnectOnboardingLink`, which now creates the
+// account through ACCOUNTS V2 (`stripe.v2.core.accounts.create`). That call is
+// pinned field-by-field in the vitest suites — stubbed in
+// usecases/__tests__/stripe-connect.test.ts, and on the wire against a real
+// Stripe HTTP fixture in connect-accounts-v2-wire.test.ts. Neither can see the
+// screen, and what a club owner actually does here is the thing that was never
+// covered: T12 below/above only ever seeds an org that is ALREADY connected,
+// so the very first click — the only moment an account is created — had no
+// browser coverage at all.
+//
+// What this leg can prove: the ToS gate as a customer meets it, that the click
+// reaches the route, and that a FAILED create leaves the org unconnected rather
+// than half-attached. What it cannot: that Stripe accepted the v2 params. The
+// parallel project runs a dummy STRIPE_SECRET_KEY (e2e.yml: only the
+// `walkthrough` project carries a real one), which is deliberate — a green
+// first-connect test that minted real Stripe accounts on every CI run would be
+// worse than no test.
+//
+// And note WHICH mask that dummy exercises: `sk_test_ci_e2e_dummy` is
+// non-empty, so getStripe() SUCCEEDS and the refusal comes from Stripe
+// rejecting the key inside the v2 create. The separate getStripe() failure
+// (no key at all) is unit-covered only — nothing in this file can reach it,
+// and a reading that treats this leg as proof of that branch is wrong.
+/** The onboarding-failure sentence as the app actually ships it. Read from
+ *  the EN catalogue (the same file `useMsg` falls back to) instead of being
+ *  typed out, so a copy change moves this test with it. An e2e spec cannot
+ *  import a JSON module, hence the fs read — the pattern several specs in
+ *  this directory already use. */
+const ONBOARD_ERR_EN: string = (() => {
+  const ui = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+  ) as Record<string, string>;
+  const copy = ui["pay.onboardErr"];
+  // A deleted or renamed key would otherwise reach `toHaveText(undefined)`,
+  // whose failure names the wrong thing entirely.
+  if (!copy) throw new Error("pay.onboardErr is missing from the EN dictionary");
+  return copy;
+})();
+
+test.describe("T13 · first connect — the ToS gate and a create that fails clean", () => {
+  test("the CTA unlocks only after the chargeback terms are accepted, and a failed create leaves the org unconnected", async ({
+    page,
+  }) => {
+    // ENFORCED, not documented. This test CLICKS the only button in the
+    // product that creates a connected Stripe account, and it is written on
+    // the assumption that the create cannot succeed. In CI that holds —
+    // e2e.yml gives every non-walkthrough project sk_test_ci_e2e_dummy. Run
+    // locally it did NOT: `playwright test --project=parallel` against a
+    // server started from .env.local mints a REAL connected account on the
+    // owner's test-mode Stripe, one per run, with nothing to clean them up.
+    //
+    // So the precondition is a skip, and it fails CLOSED: an unset key means
+    // "unknown", not "safe", because the runner's env and the server's env
+    // are set separately here (playwright.config.ts has no webServer and
+    // loads no .env). To run it locally, start the server with an empty
+    // STRIPE_SECRET_KEY and export the same empty value to this process —
+    // getStripe() then refuses before any network call.
+    const runnerKey = process.env.STRIPE_SECRET_KEY;
+    test.skip(
+      runnerKey !== "sk_test_ci_e2e_dummy" && runnerKey !== "",
+      "STRIPE_SECRET_KEY is not a known-harmless value — this test would mint a real connected account",
+    );
+
+    const org = await seedOrg({ plan: "pro" }); // NOT connected — the point of this test
+    await loginAsOwner(page, org.ownerEmail);
+
+    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await page.waitForResponse(
+      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
+    );
+
+    const card = page.locator('[data-tour="connect-stripe"]');
+    const cta = card.getByRole("button", { name: "Connect Stripe" });
+    const tos = card.getByRole("checkbox");
+
+    // The gate, as the owner meets it. Pinned as DISABLED-then-ENABLED rather
+    // than "the checkbox exists": a reachability assertion is satisfied by a
+    // control that gates nothing.
+    await expect(cta, "an unconnected org is offered the first connect").toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(cta, "…but not before the chargeback terms are accepted").toBeDisabled();
+    await tos.check();
+    await expect(cta, "accepting the terms unlocks it").toBeEnabled();
+
+    // The click really reaches the route that creates the account.
+    const [res] = await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes(`/orgs/${org.orgId}/connect`) && r.request().method() === "POST",
+      ),
+      cta.click(),
+    ]);
+    // Dummy key in this project, so the v2 create cannot succeed. Pinned to
+    // the EXACT status rather than `>= 400`: 502 is the masked answer
+    // (stripe-connect.ts's stripeOnboardingStep), and the STATUS is what makes
+    // the client render translated copy. A 500 here would mean a failure
+    // escaped the mask with Stripe's raw message aboard — and `>= 400` cannot
+    // tell those two apart, which is why it passed while the leak was open.
+    expect(res.status(), "a failed create is masked as a clean 502").toBe(502);
+
+    // The half-connected state is the one that actually hurts: an org row
+    // carrying a stripe_account_id it never finished onboarding reads as
+    // "connected" to ~17 gates. A create that failed must store nothing.
+    const [row] = await withDb(
+      (sql) => sql<{ stripe_account_id: string | null }[]>`
+        select stripe_account_id from organizations where id = ${org.orgId}`,
+    );
+    expect(row.stripe_account_id, "a failed create must not half-attach the org").toBeNull();
+
+    // And the owner is told, in the DICTIONARY's words. The copy is pinned
+    // because a visibility check alone passed identically whether the owner
+    // read this sentence, Stripe's raw key-naming text, or the name of an
+    // unset env var — the three states this whole path exists to keep apart.
+    //
+    // Exact text, from the shipped catalogue rather than typed out here: a
+    // sentence typed into a test goes on passing after the dictionary's
+    // wording moves, which is half the drift this assertion exists for. The
+    // match being exact is also what excludes Stripe's "Stripe couldn't …"
+    // and the STRIPE_SECRET_KEY hint — a `not.toContainText` for either
+    // could never fail independently of this line.
+    const shown = card.locator("p.text-red-600").first();
+    await expect(shown).toBeVisible({ timeout: 15_000 });
+    await expect(shown, "the localized sentence, not the server's English").toHaveText(
+      ONBOARD_ERR_EN,
+    );
   });
 });
 

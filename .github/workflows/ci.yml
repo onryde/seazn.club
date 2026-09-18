@@ -1132,8 +1132,12 @@ jobs:
       # It is how capture.test.ts was found, after the first draft listed only
       # the other two. That guard reads ci.yml as a whole and does not care WHICH
       # job holds the line, which is what makes this move safe.
+      # `stripe-connect-fixture-drift` joined the list for the same reason: it
+      # captures BOTH the production and fixture Connect payloads from their
+      # real calls, so it needs a database, and it sits in src/__tests__ —
+      # outside every path-selected tree. The guard caught it on the first push.
       - name: DB-gated suites outside src/server|lib|app (real Postgres)
-        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/components/v2/__tests__/public-quota-degraded-numbers.test.tsx src/config/__tests__/stripe-plans-ladder.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts
+        run: npm test --workspace apps/web -- --reporter=default --reporter=json --outputFile=vitest-results-outliers.json src/components/__tests__/upgrade-gate-pass-features.test.ts src/components/v2/__tests__/public-quota-degraded-numbers.test.tsx src/config/__tests__/stripe-plans-ladder.test.ts src/demo/ai-templates/__capture__/__tests__/seeds.test.ts src/demo/ai-templates/__capture__/capture.test.ts src/__tests__/stripe-connect-fixture-drift.test.ts
 
       # The DB-gated suites under src/app. src/lib is NOT repeated here — and
       # note the original reason still holds under the split, for a different

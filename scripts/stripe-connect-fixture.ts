@@ -19,8 +19,10 @@
 // charges_enabled: true by itself, in test mode or otherwise, and does not
 // try to fake it.
 //
-// Why: Express is a Stripe-hosted-Dashboard account type, and Stripe's own
-// docs (docs.stripe.com/connect/updating-service-agreements) say API-driven
+// Why: Express means Stripe-hosted Dashboard access — under Accounts v2 that
+// is the `dashboard: "express"` property rather than v1's `type: "express"`,
+// but it is the same access and the same consequence. Stripe's own docs
+// (docs.stripe.com/connect/updating-service-agreements) say API-driven
 // service-agreement acceptance and identity-verification submission is
 // available only "for accounts with no Stripe-hosted Dashboard access,
 // including Custom accounts" — Express accounts are explicitly outside that
@@ -43,8 +45,8 @@
 // sponsor-checkout fixture) just verifies it and exits, doing nothing.
 //
 // Not imported from apps/web/src/server/usecases/stripe-connect.ts, even
-// though createConnectOnboardingLink's accounts.create call is exactly what
-// createFixtureAccount below mirrors: that file starts with `import
+// though createConnectOnboardingLink's account create is what
+// createFixtureAccount below stands in for: that file starts with `import
 // "server-only"` and reaches `@/lib/db` etc. through the app's `@/` alias,
 // which tsconfig.scripts.json maps for type-checking but plain
 // `node --experimental-strip-types` cannot resolve at RUNTIME (nodenext
@@ -52,8 +54,11 @@
 // has none — the same reason stripe-sync.ts re-declares REQUIRED_CURRENCIES
 // as a literal instead of importing lib/currency.ts, and openapi-gen.ts
 // reaches into apps/web/src only via relative, extension-carrying paths).
-// Fixture-matches-production is kept by hand-mirroring the exact
-// accounts.create params instead.
+// The create below is therefore hand-written, but it DOES mirror production
+// field for field — Accounts v2, both capability halves, both responsibility
+// collectors — so the fixture exercises the account users actually get. The
+// one literal that had to be copied rather than imported, the account country,
+// is held to production's by a drift test; see FIXTURE_ACCOUNT_COUNTRY.
 import { fileURLToPath } from "node:url";
 import Stripe from "stripe";
 
@@ -90,22 +95,74 @@ function requireTestStripe(): Stripe {
   });
 }
 
-/** Mirrors createConnectOnboardingLink's accounts.create call verbatim
- *  (stripe-connect.ts:132-140): same type, same two requested capabilities,
- *  no country (Stripe defaults it during onboarding). Metadata differs only
- *  by necessity — this account starts with no org to stamp an org_id from. */
-async function createFixtureAccount(stripe: Stripe): Promise<Stripe.Account> {
-  return stripe.accounts.create({
-    type: "express",
+/** ISO 3166-1 alpha-2 country the fixture account is created with.
+ *
+ *  HAND-MIRRORED from `CONNECT_ACCOUNT_DEFAULT_COUNTRY` in
+ *  apps/web/src/server/usecases/stripe-connect.ts, for the same reason
+ *  stripe-sync.ts re-declares REQUIRED_CURRENCIES instead of importing
+ *  lib/currency.ts: this file runs under plain `node
+ *  --experimental-strip-types`, which resolves neither `server-only` nor the
+ *  `@/` alias (see the header). The copy is not left to trust —
+ *  apps/web/src/__tests__/stripe-connect-fixture-drift.test.ts imports BOTH
+ *  and fails if they ever diverge. */
+export const FIXTURE_ACCOUNT_COUNTRY = "GB";
+
+/** Create the fixture account the same way production creates a real one.
+ *
+ *  Mirrors `createConnectOnboardingLink`'s `stripe.v2.core.accounts.create`
+ *  (apps/web/src/server/usecases/stripe-connect.ts — the call sits under the
+ *  `if (!accountId)` branch; search for `v2.core.accounts.create` rather than
+ *  trusting a line number).
+ *
+ *  The differences are NOT listed here. Prose counting them was wrong twice
+ *  (it said "exactly two" while omitting `metadata.tos_agreed_at`), so the
+ *  list now lives as data in `DELIBERATE` in
+ *  apps/web/src/__tests__/stripe-connect-fixture-drift.test.ts, which
+ *  captures BOTH payloads from the real calls and reds if this one gains a
+ *  difference, loses one, or misses a field production added. Read that
+ *  constant for the current answer; a comment here would go stale again.
+ *
+ *  In outline: the metadata is disjoint (no `org_id` on an account that
+ *  belongs to no club), and `contact_email` / `display_name` are fixture
+ *  constants because there is no owner or org to read them from. Both of
+ *  those are still SENT — v2 REQUIRES `contact_email` whenever
+ *  `configuration.recipient` is supplied, and `display_name: ""` is a 400,
+ *  which is the trap production's own conditional exists to avoid.
+ *
+ *  Why the create is followed by a v1 retrieve: `v2.core.accounts.create`
+ *  answers a V2 Account, which carries none of `charges_enabled`,
+ *  `payouts_enabled` or `capabilities` — the fields `isHealthy` and
+ *  `reportNotReady` below are written against. Reading the new account back
+ *  through `/v1/accounts` returns the V1-interop view that the rest of this
+ *  script (and `syncConnectAccount` in the app) already speaks.
+ *  connect-accounts-v2.live.test.ts settled against the live test API that
+ *  this view really does carry `capabilities.transfers` for a v2 account,
+ *  which is what made this migration safe to make. */
+export async function createFixtureAccount(stripe: Stripe): Promise<Stripe.Account> {
+  const created = await stripe.v2.core.accounts.create({
+    dashboard: "express",
+    contact_email: "stripe-connect-fixture@seazn.test",
+    display_name: "Seazn Connect Fixture",
+    identity: { country: FIXTURE_ACCOUNT_COUNTRY },
+    configuration: {
+      // BOTH halves — exact parity with the v1 `card_payments` + `transfers`
+      // this replaced. A recipient-only account can take transfers but may
+      // never light `charges_enabled`, and `charges_enabled` is half of what
+      // isHealthy gates on (and all of what the app's own checkout gate reads).
+      merchant: { capabilities: { card_payments: { requested: true } } },
+      recipient: {
+        capabilities: { stripe_balance: { stripe_transfers: { requested: true } } },
+      },
+    },
+    defaults: {
+      responsibilities: { fees_collector: "application", losses_collector: "application" },
+    },
     metadata: {
       fixture: "scripts/stripe-connect-fixture.ts",
       created_at: new Date().toISOString(),
     },
-    capabilities: {
-      card_payments: { requested: true },
-      transfers: { requested: true },
-    },
   });
+  return stripe.accounts.retrieve(created.id);
 }
 
 /** Healthy = still exists AND can actually carry the registration checkout

@@ -1,8 +1,16 @@
 import "server-only";
-// Stripe Connect Express onboarding (doc 16 §1.1, PROMPT-20a): an org
-// connects an Express account so entry fees settle to the CLUB, with the
-// platform taking an application fee % (second revenue line). Only the
+// Stripe Connect Express onboarding (doc 16 §1.1, PROMPT-20a): an org connects
+// a Stripe account with the EXPRESS DASHBOARD so entry fees settle to the CLUB,
+// with the platform taking an application fee % (second revenue line). Only the
 // onboarding state lives here; entry-fee checkout is in registrations.ts.
+//
+// Accounts are created through ACCOUNTS V2 (`stripe.v2.core.accounts`); every
+// other Stripe path in this file — and in billing-events.ts, the webhook route
+// and the destination charges in registrations.ts / sponsors.ts — stays on v1,
+// which is not a half-migration but the documented interop: a v2 account id
+// passed to `/v1/accounts` returns a v1-shaped Account carrying every field
+// `syncConnectAccount` reads, and v2 accounts still emit v1 `account.updated`.
+// See `createConnectOnboardingLink` for the field-by-field reasoning.
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { isRegistrationCurrency } from "@/lib/currency";
@@ -91,7 +99,95 @@ export async function connectStatus(
 }
 
 /**
- * Create (once) the Express account and mint an onboarding link. Gated on
+ * ISO 3166-1 alpha-2 country a connected account is CREATED with.
+ *
+ * Accounts v2 REQUIRES `identity.country` before `configuration.merchant` can
+ * be set; the v1 call this replaced required nothing and let Stripe default the
+ * account to the PLATFORM's country, with the club confirming its own inside
+ * Stripe's hosted onboarding form. Defaulting here reproduces that exactly.
+ *
+ * Safe because the field is MUTABLE until onboarding completes — verified
+ * against the live test API on 2026-09-18: a `gb` account was updated to `IE`,
+ * and a cross-border create (an IE account from this GB platform) also
+ * succeeded. So a club outside the platform country still onboards correctly;
+ * Stripe collects and confirms the real country itself. A country PICKER is a
+ * separate product decision and deliberately not built here.
+ */
+export const CONNECT_ACCOUNT_DEFAULT_COUNTRY = "GB";
+
+/**
+ * The one answer an owner gets when onboarding cannot start.
+ *
+ * EXPORTED so tests assert against this value rather than hand-mirroring the
+ * sentence — three copies had already been typed out, which is the drift this
+ * const exists to prevent. The client maps the 502 to `pay.onboardErr`, so the
+ * English never reaches a screen: it is the STATUS that carries the meaning.
+ *
+ * That now holds for EVERY refusal below, not just this one:
+ * org-payment-instructions.tsx picks translated copy per status and renders
+ * none of these sentences. They are an operator- and log-facing record of
+ * what went wrong, so keep them specific — the screen no longer depends on
+ * their wording, and a vaguer one here would only cost a debugger.
+ *
+ * Every refusal `createConnectOnboardingLink` can reach, and why each is or is
+ * not masked — the enumeration, so the next survivor is visible:
+ *
+ *   403 requireOwnerSession ×2 · 422 ToS gate
+ *       Actionable: the client has a key each (`pay.connectOwnerOnly`,
+ *       `pay.connectTosFirst`) saying the same thing in the reader's
+ *       language. Do not collapse either into the generic — the 422 is the
+ *       one refusal here an owner can clear unaided.
+ *   404 orgConnect
+ *       Not actionable to a human; the client lands it on `pay.onboardErr`.
+ *   402 requireFeature (PaymentRequiredError)
+ *       Has its own client key (`pay.needPro`), so it never renders raw.
+ *   502 getStripe() · v2 accounts.create · accountLinks.create
+ *       Masked by stripeOnboardingStep below.
+ *   502 owner-email unreadable · created-account-unstorable
+ *       Masked by hand, with the detail logged. Both used to be 500s, which
+ *       the client renders verbatim.
+ *
+ * That is every `throw` on this path. `sql` can still reject with a driver
+ * error, which `v1()` answers 500 with the driver's message — a pre-existing
+ * hole shared with every use-case in this repo, not specific to Connect.
+ */
+export const ONBOARDING_FAILED = "Stripe couldn't start onboarding for this organization";
+
+/**
+ * Run one step of the onboarding flow that can fail outside our control,
+ * masking the failure.
+ *
+ * Without this, `v1()`'s catch-all (server/api-v1/http.ts:245-247) puts
+ * `err.message` straight into the response body and `startOnboarding()` in
+ * org-payment-instructions.tsx renders it verbatim — so Stripe's raw text
+ * ("You provided a malformed API Key 'sk_test_…' for account 'acct_…'") is
+ * printed on a money screen, naming the PLATFORM key and account id.
+ *
+ * `getStripe()` goes INSIDE this guard, exactly as it does inside
+ * `createConnectDashboardLink`'s try below. Client construction throws a bare
+ * Error naming STRIPE_SECRET_KEY when the key is missing (lib/stripe.ts:8-11),
+ * and a bare Error is not an HttpError — so leaving it outside answered 500
+ * with the env var's name in the body, and 500 is not a status the client
+ * translates either. Hence `run` may be sync or async: so the call can be
+ * passed straight in.
+ *
+ * Deliberately wraps only these steps, not the whole function body: the
+ * refusals around them — the 422 ToS gate above all — are deliberate answers
+ * whose copy tells the owner what to DO, and a catch-all over the lot would
+ * relabel them, and a failing `sql` query, as "Stripe couldn't".
+ */
+async function stripeOnboardingStep<T>(run: () => T | Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    log.error({ err }, "createConnectOnboardingLink failed");
+    throw new HttpError(502, ONBOARDING_FAILED);
+  }
+}
+
+/**
+ * Create (once) the connected account — Accounts v2, Express Dashboard — and
+ * mint an onboarding link through Account Links v1. Gated on
  * `registration.paid`, which V310 (D19) made free on every plan — so the gate
  * now only stops an org a staff override has denied (abuse, chargeback risk).
  */
@@ -119,7 +215,7 @@ export async function createConnectOnboardingLink(
   let { stripe_account_id: accountId } = await orgConnect(orgId);
   // ToS gate (PROMPT-55): the org accepts the entry-fee chargeback clause
   // (lost disputes are recovered from its connected balance) BEFORE the
-  // Express account exists. Resuming onboarding never re-asks; the
+  // connected account exists. Resuming onboarding never re-asks; the
   // acceptance timestamp lives on the account metadata — no DB column.
   // Checked before getStripe() so the 422 answers even keyless.
   if (!accountId && !tosAgreed) {
@@ -128,16 +224,79 @@ export async function createConnectOnboardingLink(
       "Agree to the Terms of Service (entry-fee chargebacks) before connecting Stripe",
     );
   }
-  const stripe = getStripe();
+  const stripe = await stripeOnboardingStep(() => getStripe());
   if (!accountId) {
-    const account = await stripe.accounts.create({
-      type: "express",
-      metadata: { org_id: orgId, tos_agreed_at: new Date().toISOString() },
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
-      },
-    });
+    // Two values Accounts v2 requires that v1 did not, and that nothing in
+    // scope already holds: `AuthCtx` carries a userId but no email, and
+    // `organizations` has no contact-email column. `requireOwnerSession` above
+    // has already established that this session IS the org owner, so the
+    // owner's `users.email` is the account's contact. One extra round trip,
+    // only ever on an org's FIRST connect.
+    const [profile] = await sql<{ org_name: string; owner_email: string | null }[]>`
+      select o.name as org_name,
+             (select email from users where id = ${auth.userId}) as owner_email
+      from organizations o
+      where o.id = ${orgId}`;
+    if (!profile?.owner_email) {
+      // Not a Stripe failure, but the same dead end for the owner: onboarding
+      // cannot start and there is nothing they can do about it. Answered with
+      // the SAME masked 502 rather than a 500 carrying its own sentence —
+      // a 500 renders verbatim on the client, so this was a new English-only
+      // string on a money screen. The actionable detail goes to the log,
+      // where an operator can act on it.
+      log.error(
+        { org_id: orgId, user_id: auth.userId },
+        "createConnectOnboardingLink: no owner email for contact_email",
+      );
+      throw new HttpError(502, ONBOARDING_FAILED);
+    }
+    // `organizations.name` is `text not null` with no non-empty CHECK, so a
+    // blank name is reachable — and `display_name: ""` is a 400, while an
+    // ABSENT display_name simply lets Stripe collect one during onboarding.
+    const displayName = profile.org_name.trim();
+    // Pinned for the same reason as `linkAccount` below: the guard above
+    // narrows `owner_email` to a string, but TypeScript drops that narrowing
+    // for a property read inside a callback.
+    const contactEmail = profile.owner_email;
+    const account = await stripeOnboardingStep(() =>
+      stripe.v2.core.accounts.create({
+        // The Express Dashboard, exactly as the v1 `type: "express"` account
+        // had. Required whenever a merchant or recipient configuration is
+        // present, and it is what keeps createConnectDashboardLink's v1 Login
+        // Link path applicable instead of forcing an embedded-components build.
+        dashboard: "express",
+        contact_email: contactEmail,
+        ...(displayName ? { display_name: displayName } : {}),
+        identity: { country: CONNECT_ACCOUNT_DEFAULT_COUNTRY },
+        configuration: {
+          // BOTH halves, which is exact parity with v1's `card_payments` +
+          // `transfers`. Dropping `merchant` is the trap: a recipient-only
+          // account can receive transfers but may never light `charges_enabled`
+          // — written in one place (syncConnectAccount, below) and read across
+          // ~17 non-test sites that gate registration, sponsors and public data.
+          merchant: { capabilities: { card_payments: { requested: true } } },
+          recipient: {
+            capabilities: { stripe_balance: { stripe_transfers: { requested: true } } },
+          },
+        },
+        defaults: {
+          // Deliberately NO `currency`: syncConnectAccount below handles a null
+          // settlement currency on purpose (an account has none until Stripe
+          // knows its country/bank), and the field does not follow a later
+          // country change, so anything pinned here would go stale.
+          //
+          // Both collectors are `application` — not a new policy, a statement of
+          // what destination charges already do: the platform pays Stripe's
+          // processing fees and owns negative-balance liability (the recovery
+          // path is dispute-recovery.ts, and the ToS gate above is the club
+          // agreeing to it).
+          responsibilities: { fees_collector: "application", losses_collector: "application" },
+        },
+        // Unchanged from v1, and load-bearing: the ToS acceptance timestamp
+        // lives HERE, not in a DB column (see the gate above).
+        metadata: { org_id: orgId, tos_agreed_at: new Date().toISOString() },
+      }),
+    );
     accountId = account.id;
     // First write wins: a concurrent onboarding click must not orphan an
     // account that Stripe already created for this org.
@@ -147,16 +306,33 @@ export async function createConnectOnboardingLink(
       returning stripe_account_id`;
     if (!claimed) {
       ({ stripe_account_id: accountId } = await orgConnect(orgId));
-      if (!accountId) throw new HttpError(500, "Failed to store the Connect account");
+      if (!accountId) {
+        // Same masking as the two above: a 500 renders verbatim on the client
+        // (only 402 and 502 are routed to the dictionary), and "Failed to
+        // store the Connect account" means nothing to an owner anyway. The
+        // account id is the part that matters — Stripe has one this org lost
+        // the race to record — so it goes to the log, where it can be
+        // reconciled by hand.
+        log.error(
+          { org_id: orgId, stripe_account_id: account.id },
+          "createConnectOnboardingLink: created account could not be stored",
+        );
+        throw new HttpError(502, ONBOARDING_FAILED);
+      }
     }
   }
 
-  const link = await stripe.accountLinks.create({
-    account: accountId,
-    type: "account_onboarding",
-    refresh_url: `${origin}${returnPath}?connect=refresh`,
-    return_url: `${origin}${returnPath}?connect=return`,
-  });
+  // Pinned to a const: `accountId` is a `let`, and TypeScript drops its
+  // non-null narrowing inside a callback (the closure could run later).
+  const linkAccount = accountId;
+  const link = await stripeOnboardingStep(() =>
+    stripe.accountLinks.create({
+      account: linkAccount,
+      type: "account_onboarding",
+      refresh_url: `${origin}${returnPath}?connect=refresh`,
+      return_url: `${origin}${returnPath}?connect=return`,
+    }),
+  );
   return { url: link.url };
 }
 

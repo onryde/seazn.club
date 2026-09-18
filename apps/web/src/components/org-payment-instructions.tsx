@@ -5,10 +5,140 @@
 // offline instructions (divisions can override both per-division).
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api } from "@/lib/client";
+import { api, ApiError } from "@/lib/client";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ProseEditor } from "@/components/prose-editor";
 import { useMsg } from "@/components/i18n/dict-provider";
+
+type Msg = ReturnType<typeof useMsg>;
+
+/** The copy an owner reads when CONNECT ONBOARDING is refused.
+ *
+ *  Keyed on STATUS, never on the server's sentence — every message behind
+ *  these statuses is server-authored English, and rendering one put
+ *  untranslated copy on a money screen in all four locales.
+ *
+ *  Two different rules decide the rows, which is why this is not one generic:
+ *
+ *   - A refusal that tells the owner what to DO, or WHO to ask, keeps that
+ *     actionability as a translated key saying the same thing. The 422 is the
+ *     one refusal here an owner can clear unaided ("tick the box"), so
+ *     collapsing it into "something went wrong" would be a REGRESSION.
+ *   - A refusal that only means "it did not work" gets the generic. 404
+ *     ("organization not found") is one of those: true, and useless.
+ *
+ *  Reads `status` rather than `code` because the v1 envelope collapses 500
+ *  and 502 onto the same code (`INTERNAL`) — see server/api-v1/http.ts.
+ *
+ *  EVERY status POST /api/v1/orgs/{id}/connect can answer, derived from the
+ *  handlers rather than from what happened to come up. "Generic" below means
+ *  DELIBERATELY generic, not forgotten — the two are indistinguishable in a
+ *  switch, which is how the 401 was missed once already:
+ *
+ *    400  parseBody's bad JSON · a ZodError on CreateConnectOnboarding
+ *         → generic. A malformed request from our own client; the owner has
+ *           no move.
+ *    401  requireUser "Not authenticated" · "You are not a member of this
+ *         organization" — both AuthError, both 401 (http.ts). NOTE there is
+ *         no role refusal in this set: an authenticated member with the
+ *         wrong role is a 403 below.
+ *         → pay.signedOut, because on an isOwner-gated page the live cause is
+ *           an expired session, and "ask an owner" would be nonsense advice
+ *           to the owner. Same shape as extraOrgsErrorKey's own 401 row.
+ *    402  requireFeature("registration.paid") · a frozen ADMIN seat
+ *         (assertMemberNotFrozen). Owners are exempt from the freeze, so from
+ *         this screen it is only ever the plan gate.
+ *         → pay.needPro.
+ *    403  requireOwnerSession ×2 · requireOrgAuth's role check · the device-
+ *         link and API-key refusals (not reachable from a session).
+ *         → pay.connectOwnerOnly: every one means "you are not the owner".
+ *    404  assertUuid · orgConnect
+ *         → generic. True, and useless to a human.
+ *    422  the ToS gate
+ *         → pay.connectTosFirst. The one refusal an owner clears unaided —
+ *           never collapse it.
+ *    429  the API-key rate limiter. Session traffic cannot reach it.
+ *         → generic.
+ *    500  anything unhandled, e.g. a driver error out of `sql`.
+ *         → generic.
+ *    502  the five masked Stripe failures (stripeOnboardingStep and the two
+ *         hand-masked ones).
+ *         → pay.onboardErr, which is that refusal's own key, not a fallback. */
+function onboardingCopy(err: unknown, msg: Msg): string {
+  if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") return msg("pay.needPro");
+  const status = err instanceof ApiV1Error ? err.status : 0;
+  switch (status) {
+    // "Agree to the Terms of Service (entry-fee chargebacks) before
+    // connecting Stripe" — the gate in createConnectOnboardingLink.
+    case 422:
+      return msg("pay.connectTosFirst");
+    // Not a permission problem: this path's 401s are "not signed in" and "not
+    // a member", and the role refusal it might be confused with answers 403.
+    case 401:
+      return msg("pay.signedOut");
+    // Both of the use-case's 403s ("Wrong organization", "Only the org owner
+    // can manage Stripe Connect") and requireOrgAuth's role check
+    // ("Insufficient permissions", api-v1/auth.ts:218 — an HttpError, unlike
+    // the AuthErrors above it). All three mean the same thing to a human: you
+    // are not the owner, and an owner has to do this.
+    case 403:
+      return msg("pay.connectOwnerOnly");
+    default:
+      return msg("pay.onboardErr");
+  }
+}
+
+/** The copy an organiser reads when SAVING the payments card is refused.
+ *
+ *  Same rule, different statuses — these two writes go to the legacy
+ *  `/api/orgs/{id}` envelope, whose handler maps AuthError onto 401 rather
+ *  than 403 (lib/http.ts), so "not allowed" arrives as 401 here.
+ *
+ *  EVERY status PATCH /api/orgs/{id} can answer for the two fields this card
+ *  sends, again derived from the handler, with the deliberate generics named:
+ *
+ *    400  a ZodError on orgPatchSchema · "Nothing to update" (unreachable
+ *         from here — both handlers always send a field)
+ *         → generic.
+ *    401  requireOrgRole's three AuthErrors: "Not authenticated", "You are
+ *         not a member…", AND "Insufficient permissions" (lib/auth.ts:485).
+ *         → pay.saveNotAllowed. Deliberately NOT the same answer as the
+ *           onboarding 401 above, and the difference is in the SERVER, not
+ *           here: the legacy handler folds a role refusal into 401 while the
+ *           v1 one answers 403, so this set has a permission member and that
+ *           one does not. The copy is right for the set's dominant member; an
+ *           expired session reads it as slightly wrong advice, which is the
+ *           cost of the fold. Splitting AuthError into 401/403 in lib/http.ts
+ *           would fix it for every legacy route at once — out of scope here,
+ *           and raised in the report rather than done quietly.
+ *    404  "Organization not found" (×4 sites)
+ *         → generic.
+ *    409  "Stripe is not ready to accept charges yet" · the settlement-
+ *         currency lock (a different field, not sent by this card)
+ *         → pay.methodNeedsCharges.
+ *    500  anything unhandled.
+ *         → generic.
+ *
+ *  402 is NOT reachable: nothing on this PATCH path calls requireFeature. */
+function saveCopy(err: unknown, msg: Msg): string {
+  const status = err instanceof ApiError ? err.status : 0;
+  switch (status) {
+    // requireOrgRole's AuthError — signed out, not a member, or a member
+    // without an editor role. One sentence covers all three honestly, and it
+    // names who to ask.
+    case 401:
+      return msg("pay.saveNotAllowed");
+    // "Stripe is not ready to accept charges yet" — the server's half of the
+    // rule the radio already enforces client-side, so this is the state a
+    // stale page lands in. Actionable: finish verification. (The route's
+    // other 409, the settlement-currency lock, is a different field and is
+    // not reachable from this card.)
+    case 409:
+      return msg("pay.methodNeedsCharges");
+    default:
+      return msg("pay.saveFailed");
+  }
+}
 
 interface ConnectStatus {
   connected: boolean;
@@ -69,7 +199,8 @@ export function OrgPaymentInstructions({
       setSaved(true);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("pay.saveFailed"));
+      console.error("save payment instructions failed", err);
+      setError(saveCopy(err, msg));
     } finally {
       setBusy(false);
     }
@@ -86,7 +217,8 @@ export function OrgPaymentInstructions({
       router.refresh();
     } catch (err) {
       setMethod(prev);
-      setError(err instanceof Error ? err.message : msg("pay.saveFailed"));
+      console.error("save default payment method failed", err);
+      setError(saveCopy(err, msg));
     }
   }
 
@@ -100,13 +232,10 @@ export function OrgPaymentInstructions({
       });
       window.location.assign(url);
     } catch (err) {
-      setConnectError(
-        err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED"
-          ? msg("pay.needPro")
-          : err instanceof Error
-            ? err.message
-            : msg("pay.onboardErr"),
-      );
+      // The server's sentence is never what the owner reads — onboardingCopy
+      // above picks a translated key per status, and the English goes here.
+      console.error("connect onboarding failed", err);
+      setConnectError(onboardingCopy(err, msg));
       setConnectBusy(false);
     }
   }

@@ -466,7 +466,7 @@ export async function startSponsorCheckout(
 
   // Connect gate (v9 ordering): the org must be onboarded — same refusal as
   // entry fees — before any order exists. The ToS chargeback clause was
-  // accepted when the Express account was created (createConnectOnboardingLink).
+  // accepted when the connected account was created (createConnectOnboardingLink).
   const [org] = await sql<
     { slug: string; name: string; stripe_account_id: string | null; stripe_charges_enabled: boolean }[]
   >`
