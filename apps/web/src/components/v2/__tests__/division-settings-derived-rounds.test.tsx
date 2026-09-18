@@ -50,6 +50,22 @@ function stagesFor(templateKey: string, rounds: number): StageProp[] {
   }));
 }
 
+/** Persisted stage rows — `rounds` is layered on AFTER buildTemplateStages
+ *  (which used the default KNOBS.swissRounds of 5) so the input must read the
+ *  STAGE config, not the knob default. AGENTS.md #19: a reachability check
+ *  satisfied by ANY value; pin persisted ≠ default. */
+function persistedStagesFor(templateKey: string, persistedRounds: number): StageProp[] {
+  return buildTemplateStages(templateKey, KNOBS).map((d) => ({
+    name: d.name,
+    kind: d.kind,
+    config:
+      d.kind === "swiss"
+        ? { ...d.config, rounds: persistedRounds }
+        : (d.config as Record<string, unknown>),
+    progression: d.progression,
+  }));
+}
+
 function mount(stages: StageProp[], locked: boolean) {
   return renderIsland(DivisionSettings, {
     division: {
@@ -96,6 +112,12 @@ describe("division settings — editable swiss rounds on every swiss template", 
     it(`${template}: hides the rounds input when the format is locked`, () => {
       activeDict.current = enUi as Record<string, string>;
       expect(roundsInputValue(stagesFor(template, 7), true)).toBeNull();
+    });
+
+    it(`${template}: input seeds from persisted stage config, not the knob default of 5`, () => {
+      activeDict.current = enUi as Record<string, string>;
+      expect(roundsInputValue(persistedStagesFor(template, 4), false)).toBe("4");
+      expect(roundsInputValue(persistedStagesFor(template, 4), false)).not.toBe("5");
     });
   }
 
