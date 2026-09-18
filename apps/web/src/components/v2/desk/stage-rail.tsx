@@ -84,7 +84,11 @@ export interface StageRailProps {
   busy: string | null;
   fixtureCount: number;
   deletable: boolean;
-  onAct: (stageId: string, action: "generate" | "complete" | "delete") => void;
+  onAct: (stageId: string, action: "generate" | "complete" | "delete" | "unpair") => void;
+  /** Swiss-only: lowest round still has unseated shells — drives Pair next label. */
+  swissHasUnseated: boolean;
+  /** Swiss-only: latest seated round has no played results — shows Unpair. */
+  canUnpairSwiss: boolean;
   onDelete: (stage: { id: string; name: string }) => void;
   /** Stage id whose inline "Add match" form is currently open (owned by the
    *  panel's `addingTo` state) — used only to reflect the trigger's disclosure
@@ -152,6 +156,8 @@ export function StageRail({
   adhoc,
   courtTagsSlot,
   unscheduledBadgeSlot,
+  swissHasUnseated,
+  canUnpairSwiss,
 }: StageRailProps) {
   const msg = useMsg();
   // Derived, not `useId()`: `stage.id` is already unique and already a prop
@@ -439,9 +445,24 @@ export function StageRail({
                 {busy === stage.id
                   ? msg("schedule.working")
                   : stage.kind === "swiss"
-                    ? msg("schedule.pairNext")
+                    ? fixtureCount === 0
+                      ? msg("schedule.generate")
+                      : swissHasUnseated
+                        ? msg("schedule.pairNext")
+                        : msg("schedule.generate")
                     : msg("schedule.generate")}
               </button>
+              {stage.kind === "swiss" && canUnpairSwiss && (
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => onAct(stage.id, "unpair")}
+                  data-testid="stage-unpair"
+                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                >
+                  {busy === stage.id ? msg("schedule.working") : msg("schedule.unpair")}
+                </button>
+              )}
               {fixtureCount > 0 && (
                 <button
                   type="button"

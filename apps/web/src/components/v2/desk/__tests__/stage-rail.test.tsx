@@ -28,6 +28,8 @@ const NEUTRAL = {
   unscheduledBadgeSlot: null,
   open: false,
   onToggleOpen: () => {},
+  swissHasUnseated: false,
+  canUnpairSwiss: false,
 };
 const BADGE = <p data-testid="stage-unscheduled-count">3</p>;
 
@@ -129,13 +131,48 @@ describe("StageRail", () => {
     expect(html).not.toContain('data-testid="stage-unscheduled-count"');
   });
 
+  it("Swiss with zero fixtures labels Generate; with unseated shells labels Pair next", () => {
+    const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
+    const empty = renderToStaticMarkup(
+      <StageRail stage={swiss} canEdit busy={null} fixtureCount={0} deletable={false}
+        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+    );
+    expect(empty).toContain("Generate fixtures");
+    expect(empty).not.toContain("Pair next round");
+
+    const unseated = renderToStaticMarkup(
+      <StageRail stage={swiss} canEdit busy={null} fixtureCount={8} deletable={false}
+        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated canUnpairSwiss={false} />,
+    );
+    expect(unseated).toContain("Pair next round");
+    expect(unseated).not.toContain("Generate fixtures");
+  });
+
+  it("renders stage-unpair only when canUnpairSwiss is true on a swiss stage", () => {
+    const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
+    const withUnpair = renderToStaticMarkup(
+      <StageRail stage={swiss} canEdit busy={null} fixtureCount={4} deletable={false}
+        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated={false} canUnpairSwiss />,
+    );
+    expect(withUnpair).toContain('data-testid="stage-unpair"');
+
+    const without = renderToStaticMarkup(
+      <StageRail stage={swiss} canEdit busy={null} fixtureCount={4} deletable={false}
+        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+    );
+    expect(without).not.toContain('data-testid="stage-unpair"');
+  });
+
   it("renders whatever unscheduledBadgeSlot element it is given, verbatim — the rail builds no badge markup of its own", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null}
-        unscheduledBadgeSlot={<p data-testid="stage-unscheduled-count" data-marker="from-panel">7</p>}
-        open={false} onToggleOpen={() => {}} />,
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL}
+        unscheduledBadgeSlot={<p data-testid="stage-unscheduled-count" data-marker="from-panel">7</p>} />,
     );
     expect(html).toContain('data-marker="from-panel"');
     const match = /data-testid="stage-unscheduled-count"[^>]*>(\d+)</.exec(html);
