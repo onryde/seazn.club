@@ -20,12 +20,8 @@ import {
   generateDoubleElim,
   generatePagePlayoff,
   generateStepladder,
-  pairRound,
-  pairKey,
   type BracketFixtureGen,
   type GeneratedBracket,
-  type SwissStanding,
-  type Colour,
   validateFeedGraph,
   generateAmericano,
   pairMexicanoRound,
@@ -53,12 +49,8 @@ import { resolveModule } from "@/server/engine-db";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
-// Swiss Playoff's round budget. Client-safe on purpose — the format
-// catalogue (config/format-gallery.tsx, components/v2/format-templates.ts)
-// reads the SAME table, so what the picker promises and what this generator
-// produces cannot drift.
-import { swissRoundsForFieldSize } from "@/lib/swiss-rounds";
+import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
+import { planSwissShells } from "@/lib/swiss-shell";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
@@ -773,174 +765,33 @@ const DECIDED = new Set(["decided", "finalized", "forfeited"]);
  *  on the same string (public-site/competition-hub.ts's BYE_SLOT_KEY). */
 const BYE_SLOT_LABEL = { key: "bracket.slot.bye", params: {} } as const;
 
-// Swiss next round (spec 05 §2.2): score groups from prior outcomes (win 1,
-// draw/tie ½, bye 1), history from persisted fixtures, then pairRound.
-//
-// Swiss Playoff (`config.pairing: "rank_adjacent"`) changes two things and
-// nothing else — an omitted `pairing` leaves every byte of the behaviour
-// below as it was, because the live fold-pairing stages must not move:
-//
-//  1. `SwissStanding.rank` stops being the entrant's SEED and becomes the
-//     division's real finishing position, from the same fold + tiebreaker
-//     cascade the standings tab renders (`rankedStageStandings`). The score
-//     GROUPS are still the Swiss score (win 1, draw ½, bye 1) — equals still
-//     meet, as Swiss requires; the cascade decides the order WITHIN a group,
-//     which is exactly what `rank_adjacent` pairs on. Seed order and cascade
-//     order are the same thing only before a ball is struck.
-//  2. A stage that declares no `rounds` gets the field's own round budget
-//     (`swissRoundsForFieldSize`) instead of generating forever, and that
-//     budget is PERSISTED into `config.rounds` at the first generation so the
-//     completion predicate can read it — see the comment at the write below.
+// Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
+// every round the organiser declared in `config.rounds`; Pair next (a later
+// Generate when shells already exist) seats one round at a time onto those
+// shells. The organiser-set round budget is the only authority — nothing here
+// derives or persists `rounds` from field size.
 async function swissGen(
-  tx: Tx,
+  _tx: Tx,
   stageId: string,
   cfg: Record<string, unknown>,
   entrants: ActiveEntrant[],
   existing: { ext_key: string | null; round_no: number; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown }[],
 ): Promise<GenFixture[]> {
-  // Anything but the literal opt-in is the historical fold — never a
-  // truthiness test, so a stray `pairing: "folded"` cannot silently switch a
-  // live event onto a different pairing model.
-  const rankAdjacent = cfg.pairing === "rank_adjacent";
-  const declared = typeof cfg.rounds === "number" ? cfg.rounds : null;
-  const rounds = declared ?? (rankAdjacent ? swissRoundsForFieldSize(entrants.length) : null);
+  // Task 3 replaces this branch with Pair-next UPDATE seating.
+  if (existing.length > 0) return [];
 
-  // A derived budget the generator keeps to itself is HALF a round count.
-  // `isTableStageComplete` (engine competition/stage.ts) reads `stage.rounds
-  // ?? 0` and refuses to complete a swiss at 0, and `toTableStage`
-  // (engine-db/competition.ts) sources that solely from `config.rounds` — so
-  // before this write, swiss_playoff and swiss_knockout capped generation
-  // correctly and then sat at every-fixture-decided forever, never completing
-  // and never seeding their finals half. Write it down, in this transaction,
-  // so the completer reads the same number the generator used.
-  //
-  // Written ONCE, at the first generation, and never again — the `where`
-  // clause is the guard, not the caller, so a concurrent organiser edit
-  // cannot lose a race with this statement:
-  //
-  //  - an organiser's own `rounds` (the Settings tab writes this exact key)
-  //    is never clobbered; and
-  //  - the value does not get re-derived on later rounds. That second half
-  //    matters more than it looks: a mid-stage withdrawal that drops the
-  //    field under a band edge (9 ⇒ 8) would SHRINK the budget beneath a
-  //    stage already in progress, and `isTableStageComplete` only inspects
-  //    rounds `1..budget` — it would then complete the stage with a later,
-  //    already-generated round still unplayed. A number decided once cannot
-  //    do that.
-  //
-  // A plain fold swiss derives nothing (`rounds` stays null) and so is left
-  // exactly as it was: no cap, no write, no behaviour change for live events.
-  if (declared === null && rounds !== null) {
-    await tx`
-      update stages set config = config || jsonb_build_object('rounds', ${rounds}::int)
-      where id = ${stageId} and config->>'rounds' is null`;
+  const rounds = cfg.rounds;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
+    throw new EngineError("CONFIG_INVALID", "swiss stage requires config.rounds >= 1", { stageId });
   }
 
-  const maxRound = existing.reduce((m, f) => Math.max(m, f.round_no), 0);
-  if (rounds !== null && maxRound >= rounds) return [];
-  const pending = existing.some((f) => !DECIDED.has(f.status));
-  if (pending) {
-    throw new EngineError("STAGE_NOT_READY", "current swiss round has undecided fixtures", { stageId });
-  }
-
-  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
-  const played = new Set<string>();
-  const colours = new Map<string, Colour[]>();
-  const byes = new Set<string>();
-  const inRound = new Map<number, Set<string>>();
-  for (const f of existing) {
-    const o = f.outcome as { kind?: string; winner?: string } | null;
-    // Persisted swiss bye row (W3 item 6 follow-up): award fixture with one
-    // side null. Score it here so the absence fallback below does not
-    // double-count once the row exists — and so stages generated before
-    // this fix (no bye row) still score via that fallback.
-    if (o?.kind === "award" && o.winner) {
-      const forRound = inRound.get(f.round_no) ?? new Set<string>();
-      forRound.add(o.winner);
-      inRound.set(f.round_no, forRound);
-      byes.add(o.winner);
-      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-      continue;
-    }
-    if (!f.home_entrant_id || !f.away_entrant_id) continue;
-    played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
-    const forRound = inRound.get(f.round_no) ?? new Set<string>();
-    forRound.add(f.home_entrant_id).add(f.away_entrant_id);
-    inRound.set(f.round_no, forRound);
-    (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
-    (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
-    if (o?.kind === "win" && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-    else if (o?.kind === "draw" || o?.kind === "tie") {
-      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
-      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
-    }
-  }
-  // Legacy odd-swiss rounds with no bye fixture row: an entrant absent from
-  // a played round sat out = bye (scored 1). After the bye-row fix this only
-  // fires for pre-fix stages that never wrote the award fixture.
-  for (let r = 1; r <= maxRound; r++) {
-    const seen = inRound.get(r) ?? new Set();
-    for (const e of entrants) {
-      if (!seen.has(e.id)) {
-        byes.add(e.id);
-        score.set(e.id, (score.get(e.id) ?? 0) + 1);
-      }
-    }
-  }
-
-  // Swiss Playoff's pairing rank: the division's REAL standings position.
-  // Round 1 has no decided fixture to rank on, so `rankedStageStandings`
-  // comes back empty and the seed fallback below carries the opening board —
-  // which is what a Swiss round 1 is.
-  const cascadeRank = new Map<string, number>();
-  if (rankAdjacent && existing.length > 0) {
-    const rows = await rankedStageStandings(tx, stageId);
-    for (const [i, row] of rows.entries()) {
-      cascadeRank.set(row.entrantId, row.rank ?? i + 1);
-    }
-  }
-  // The pre-Swiss-Playoff rank, unchanged: the entrant's seed, or a stable
-  // tail slot for an unseeded one.
-  const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
-  const standings: SwissStanding[] = entrants.map((e, i) => ({
-    entrantId: e.id,
-    score: score.get(e.id) ?? 0,
-    // An entrant the table does not know — reinstated mid-stage, never yet
-    // placed on a board — falls back to its seed OFFSET past the whole
-    // ranked block, so it sorts after everyone who has actually played
-    // while still ordering sensibly among its fellow late arrivals. When
-    // there is no table at all (round 1, or any fold-pairing stage) the
-    // offset is 0 and this is byte-for-byte the expression it replaced.
-    rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
+  return planSwissShells(rounds, entrants.length).map((shell) => ({
+    extKey: shell.extKey,
+    roundNo: shell.roundNo,
+    seqInRound: shell.seqInRound,
+    home: null,
+    away: null,
   }));
-  const round = pairRound(
-    standings,
-    { played, colours, byes },
-    { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
-  );
-  const roundNo = maxRound + 1;
-  const fixtures: GenFixture[] = round.pairings.map((p, i) => ({
-    extKey: `sw-r${roundNo}-b${i + 1}`,
-    roundNo,
-    seqInRound: i + 1,
-    home: p.home,
-    away: p.away,
-  }));
-  // Persist pairRound's sit-out the way knockout already does — a real
-  // forfeited award row — so roster drift sees the entrant as referenced
-  // and the run sheet can render the bye. Shared insert path branches on
-  // `g.award` (status forfeited + outcome.kind award); no swiss-only writer.
-  if (round.bye !== undefined) {
-    fixtures.push({
-      extKey: `sw-r${roundNo}-bye`,
-      roundNo,
-      seqInRound: fixtures.length + 1,
-      home: round.bye,
-      away: null,
-      award: round.bye,
-    });
-  }
-  return fixtures;
 }
 
 // Distribute seed-ordered entrants into `count` pools by seeded snake
