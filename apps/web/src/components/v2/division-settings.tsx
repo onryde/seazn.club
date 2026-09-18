@@ -364,33 +364,7 @@ export function DivisionSettings({
   const [swissRounds, setSwissRounds] = useState(
     ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ?? 5,
   );
-  // swiss_playoff / swiss_knockout declare no rounds: the budget scales with
-  // the field (lib/swiss-rounds.ts) and swissGen writes it into the stage's
-  // config at the first generation. Read the STAGE, never `swissRounds` —
-  // that state falls back to 5 when the key is absent, and a confidently
-  // wrong round count on screen is worse than none at all. null until the
-  // swiss has actually been generated and the field has decided it.
-  const derivedSwissRounds =
-    ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ??
-    null;
-  // Read-only on purpose. buildTemplateStages deliberately declines to stamp
-  // the rounds knob onto a template that declares none, so an editable input
-  // would look live and then drop the organiser's number on save. Gated on
-  // the TEMPLATE as well as the value: a plain `swiss` stage's rounds were
-  // CHOSEN by the organiser, and captioning those "decided by the size of the
-  // field" would be a lie. One node, rendered from both branches of the
-  // locked/editable split below, because the value and the lock arrive
-  // together and a single-branch version renders nowhere.
-  const derivedRoundsLine =
-    ["swiss_playoff", "swiss_knockout"].includes(template) && derivedSwissRounds !== null ? (
-      <p className="mt-2 text-xs text-slate-600">
-        <span className="font-medium text-slate-700">{msg("divset.rounds")}</span>{" "}
-        <span data-testid="division-settings-derived-rounds" className="font-semibold text-slate-800">
-          {derivedSwissRounds}
-        </span>{" "}
-        <span className="text-slate-500">{msg("divset.roundsFromField")}</span>
-      </p>
-    ) : null;
+  const templateHasSwissRounds = ["swiss", "swiss_playoff", "swiss_knockout"].includes(template);
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
   );
@@ -781,13 +755,6 @@ export function DivisionSettings({
               <Link href={fixturesHref} className="text-purple-700 underline">{msg("divset.fixtures")}</Link>
               {msg("divset.lockedNotePost")}
             </p>
-            {/* This is the ONLY branch that can actually show the number:
-                swissGen writes config.rounds at the first generation, and
-                generating is exactly what creates the fixture that sets
-                `locked`. Rendered in the editable branch too (below), which
-                covers a stage whose rounds were set over the API before any
-                fixture existed. */}
-            {derivedRoundsLine}
           </div>
         ) : (
           <>
@@ -840,14 +807,21 @@ export function DivisionSettings({
                       onChange={(e) => setPoolCount(Number(e.target.value))} className="input mt-1 w-full" />
                   </label>
                 )}
-                {template === "swiss" && (
+                {templateHasSwissRounds && (
                   <label className="block text-xs text-slate-500">
                     {msg("divset.rounds")}
-                    <input type="number" min={3} max={15} disabled={!canEdit} value={swissRounds}
-                      onChange={(e) => setSwissRounds(Number(e.target.value))} className="input mt-1 w-full" />
+                    <input
+                      type="number"
+                      min={3}
+                      max={15}
+                      disabled={!canEdit}
+                      value={swissRounds}
+                      data-testid="division-settings-swiss-rounds"
+                      onChange={(e) => setSwissRounds(Number(e.target.value))}
+                      className="input mt-1 w-full"
+                    />
                   </label>
                 )}
-                {derivedRoundsLine}
                 {["league", "league_ko", "groups_ko"].includes(template) && (
                   <label className="block text-xs text-slate-500">
                     {msg("divset.legs")}

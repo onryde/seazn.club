@@ -194,10 +194,8 @@ export const STAGE_TEMPLATES: {
     // re-ranked by the division's OWN tiebreaker cascade and neighbours meet,
     // rather than the top half folding onto the bottom half.
     //
-    // It deliberately declares NO `rounds`: the budget scales with the field
-    // (lib/swiss-rounds.ts) and only the generator knows how many entrants
-    // actually turned up, so `swissGen` derives it. See buildTemplateStages
-    // below for why the rounds knob then leaves this template alone.
+    // The organiser sets `rounds` via the same knob as plain swiss
+    // (buildTemplateStages stamps knobs.swissRounds on every swiss draft).
     //
     // The finals half is byte-for-byte group_playoffs' — the fixed four-team
     // Page playoff, rankRange(1,4)/rank_order/setup — so the two formats
@@ -336,14 +334,9 @@ export function buildTemplateStages(templateKey: string, knobs: TemplateKnobs): 
   const t = STAGE_TEMPLATES.find((s) => s.key === templateKey) ?? STAGE_TEMPLATES[0]!;
   return t.build(knobs).map((d) => {
     const config = { ...d.config };
-    // The rounds knob EDITS a template's declared rounds; it does not invent
-    // one. `swiss` declares `rounds: 5` and the builder/Settings tab show an
-    // input for it, so the knob applies there exactly as it always has.
-    // `swiss_playoff` and `swiss_knockout` declare none — their budget scales
-    // with the field and is derived at generation time — and stamping the
-    // knob's default 5 on them would silently pin a 40-entrant event to five
-    // rounds with no control anywhere on screen that says so.
-    if (d.kind === "swiss" && "rounds" in d.config) config.rounds = knobs.swissRounds;
+    // Every swiss stage — plain, Playoff, Knockout — carries the organiser's
+    // chosen round budget. startDivision refuses a swiss stage without one.
+    if (d.kind === "swiss") config.rounds = knobs.swissRounds;
     if (d.kind === "league" || d.kind === "group") config.legs = knobs.legs;
     if (d.kind === "group") config.pools = { count: knobs.poolCount };
     return { ...d, config };

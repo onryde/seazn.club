@@ -834,7 +834,7 @@ export function DivisionBuilder({
               />
             </label>
           )}
-          {template === "swiss" && (
+          {["swiss", "swiss_playoff", "swiss_knockout"].includes(template) && (
             <label className="block">
               <span className="label">{msg("wizard.rounds")}</span>
               <input
