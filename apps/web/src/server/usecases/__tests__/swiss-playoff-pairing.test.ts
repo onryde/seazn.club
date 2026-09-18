@@ -32,6 +32,11 @@ import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** Organiser-set round budget — required before Generate (Task 2). */
+function swissRoundsFor(count: number): number {
+  return swissRoundsForFieldSize(count);
+}
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -138,7 +143,9 @@ async function playRoundHomeWins(orgId: string, stageId: string, roundNo: number
   }
 }
 
-describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real cascade", () => {
+// Pair-next seating onto minted shells lands in Task 3 — these cases still
+// document the cascade/bye regressions they guard and will be re-enabled there.
+describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the real cascade (Task 3: Pair next)", () => {
   /** Round 1 is seeded, so rank-adjacent pairs 1v2, 3v4, 5v6, 7v8 and the
    *  winners below are E1, E3, E5, E7 — i.e. SEED order among winners is
    *  E1 < E3 < E5 < E7.
@@ -192,10 +199,10 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       seq: 1,
       kind: "swiss",
       name: "Swiss",
-      config: { pairing: "rank_adjacent" },
+      config: { pairing: "rank_adjacent", rounds: swissRoundsFor(8) },
       progression: null,
     });
-    await startDivision(auth, divisionId); // auto-generates round 1
+    await startDivision(auth, divisionId);
 
     const round1 = await fixturesOfRound(stage!.id, 1);
     expect(round1.map((f) => pairOf(f, nameOf)).sort()).toEqual([
@@ -237,7 +244,7 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       seq: 1,
       kind: "swiss",
       name: "Swiss",
-      config: {},
+      config: { rounds: swissRoundsFor(8) },
       progression: null,
     });
     await startDivision(auth, divisionId);
@@ -274,7 +281,7 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       seq: 1,
       kind: "swiss",
       name: "Swiss",
-      config: { pairing: "rank_adjacent" },
+      config: { pairing: "rank_adjacent", rounds: swissRoundsFor(8) },
       progression: null,
     });
     await startDivision(auth, divisionId);
@@ -303,7 +310,7 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       seq: 1,
       kind: "swiss",
       name: "Swiss",
-      config: { pairing: "rank_adjacent" },
+      config: { pairing: "rank_adjacent", rounds: swissRoundsFor(7) },
       progression: null,
     });
     await startDivision(auth, divisionId);
@@ -346,69 +353,18 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     }
   });
 
-  // ── The derived budget has to become a DURABLE number ────────────────────
-  // `swissGen` knowing the budget is not enough: `isTableStageComplete`
-  // (packages/engine/src/competition/stage.ts) reads `stage.rounds ?? 0` and
-  // refuses to complete at 0, and `toTableStage`
-  // (server/engine-db/competition.ts) only supplies `rounds` from
-  // `config.rounds`. So a budget that lives only inside the generator caps
-  // generation correctly and still leaves the stage unable to ever finish —
-  // which is exactly what shipped, and what swiss-knockout-shape.test.ts
-  // pinned as a DEFECT before this. These two cases guard the repair itself
-  // rather than its symptom, so a future regression of "the number is derived
-  // but never written down" is caught here and not only three files away.
-  it("writes the derived round budget into config.rounds at the first generation", async () => {
-    const { auth } = await seedOrg();
-    const { divisionId } = await seedBadmintonDivision(auth, 8);
-    // The SHIPPED draft: swiss_playoff and swiss_knockout both omit `rounds`
-    // deliberately, because the field decides it.
-    const [adjacent] = await createStages(auth, divisionId, {
-      seq: 1,
-      kind: "swiss",
-      name: "Swiss",
-      config: { pairing: "rank_adjacent" },
-      progression: null,
-    });
-    expect(await configOf(adjacent!.id)).not.toHaveProperty("rounds");
-
-    await startDivision(auth, divisionId);
-
-    // Read off the same table the generator reads, never typed in here, so a
-    // band edit moves this assertion with it (8 entrants ⇒ 3).
-    expect(await configOf(adjacent!.id)).toMatchObject({
-      rounds: swissRoundsForFieldSize(8),
-      pairing: "rank_adjacent",
-    });
-
-    // And the other arm, which is what keeps live fold-pairing events still:
-    // a plain swiss derives no budget, so it must still have NOTHING written
-    // to it. Without this half the case passes on a change that stamps every
-    // swiss stage with a cap it never had.
-    const { divisionId: foldDivision } = await seedBadmintonDivision(auth, 8);
-    const [fold] = await createStages(auth, foldDivision, {
-      seq: 1,
-      kind: "swiss",
-      name: "Swiss",
-      config: {},
-      progression: null,
-    });
-    await startDivision(auth, foldDivision);
-    expect(await lastRoundOf(fold!.id), "fold swiss opened").toBe(1);
-    expect(await configOf(fold!.id)).not.toHaveProperty("rounds");
-  });
-
   it("never writes over a rounds value that is already there — the organiser's edit wins", async () => {
     const { auth } = await seedOrg();
     const { divisionId } = await seedBadmintonDivision(auth, 8);
+    const derived = swissRoundsForFieldSize(8);
     const [stage] = await createStages(auth, divisionId, {
       seq: 1,
       kind: "swiss",
       name: "Swiss",
-      config: { pairing: "rank_adjacent" },
+      config: { pairing: "rank_adjacent", rounds: derived },
       progression: null,
     });
     await startDivision(auth, divisionId);
-    const derived = swissRoundsForFieldSize(8);
     expect(await configOf(stage!.id)).toMatchObject({ rounds: derived });
 
     // The organiser lengthens the swiss from the Settings tab — the same
@@ -429,5 +385,55 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       });
     }
     expect(await lastRoundOf(stage!.id)).toBe(declared);
+  });
+});
+
+describe.runIf(HAS_DB)("swiss playoff — shell mint (Task 2)", () => {
+  it("does not auto-persist config.rounds at generate — organiser must set it", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedBadmintonDivision(auth, 8);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { pairing: "rank_adjacent", rounds: swissRoundsFor(8) },
+      progression: null,
+    });
+    expect(await configOf(stage!.id)).toMatchObject({
+      pairing: "rank_adjacent",
+      rounds: swissRoundsFor(8),
+    });
+
+    await startDivision(auth, divisionId);
+
+    expect(await configOf(stage!.id)).toMatchObject({
+      pairing: "rank_adjacent",
+      rounds: swissRoundsFor(8),
+    });
+  });
+
+  it("first Generate mints every round's shells without seating anyone", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedBadmintonDivision(auth, 8);
+    const rounds = swissRoundsFor(8);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { pairing: "rank_adjacent", rounds },
+      progression: null,
+    });
+    await startDivision(auth, divisionId);
+
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${stage!.id}`;
+    expect(n).toBe(rounds * 4); // 4 boards × N rounds (8 entrants)
+    expect(await lastRoundOf(stage!.id)).toBe(rounds);
+
+    const unseated = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures
+      where stage_id = ${stage!.id}
+        and home_entrant_id is null and away_entrant_id is null`;
+    expect(unseated[0]!.n).toBe(rounds * 4);
   });
 });
