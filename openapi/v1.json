@@ -21477,7 +21477,7 @@
         "tags": [
           "stages"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "manage",
         "parameters": [
           {
             "name": "id",

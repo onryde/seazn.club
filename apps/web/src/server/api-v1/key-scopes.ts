@@ -245,6 +245,7 @@ const RULES: RouteRule[] = [
   { method: "PUT", path: "/stages/:id/court-tags", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/fixtures", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/generate", scope: "manage", pin: "stage" },
+  { method: "POST", path: "/stages/:id/unpair", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/officials/source", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/rebuild", scope: "manage", pin: "stage" },
   // Per-stage match-format override (design 2026-09-17 §T3). Same scope and
