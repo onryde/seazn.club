@@ -227,11 +227,10 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
 // Final already holding the bye entrant. Not "the API returned 200": the
 // assertions below read the division page's own bracket panel and run sheet.
 //
-// This runs the stages EXACTLY as the picker lays them down — no rounds PUT.
-// It used to need one: a swiss with no `config.rounds` could never complete,
-// so the finals half was never seeded. `swissGen` now persists the field's
-// derived budget at the first generation, which this test pins below off the
-// live API rather than trusting the unit suite for it.
+// This runs the stages EXACTLY as the picker lays them down — the wizard's
+// rounds knob stamps `config.rounds` on the swiss stage, first Generate (here
+// via startDivision on the empty first stage) mints every round's shells, and
+// Pair next seats one round at a time through the desk control.
 test("swiss_knockout template: Top 3 builds a one-bye bracket the division page renders", async ({ page, request }) => {
   test.setTimeout(180_000);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
@@ -270,6 +269,10 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   );
   expect([Math.min(...span), Math.max(...span)]).toEqual([2, 32]);
   await qualify.selectOption({ label: "Top 3" });
+  // Three rounds is a full round robin for four entrants — the strict Ann >
+  // Bo > Cy > Di table the knockout half reads below. Default wizard rounds
+  // is 5; pin the organiser-set budget here rather than trusting the default.
+  await page.getByLabel("Rounds", { exact: true }).fill("3");
 
   await page.getByRole("button", { name: "Scheduling", exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
@@ -293,8 +296,7 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
     timing: "setup",
   });
 
-  // The picker declares no rounds, and nothing here adds any.
-  expect(stages.data!.find((s) => s.seq === 1)!.config).not.toHaveProperty("rounds");
+  expect(stages.data!.find((s) => s.seq === 1)!.config).toMatchObject({ rounds: 3 });
   const swissId = stages.data!.find((s) => s.seq === 1)!.id;
   const koId = stages.data!.find((s) => s.seq === 2)!.id;
 
@@ -309,17 +311,12 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
     return (all.data ?? []).filter((f) => f.stage_id === stageId);
   };
 
-  // Day one: the bracket exists as placeholders before a ball is struck.
+  // Day one: the knockout bracket exists as placeholders before a ball is struck.
   const dayOne = await apiJson<{ created: number }>(request, `/api/v1/stages/${koId}/generate`, "POST");
   expect(dayOne.data!.created).toBe(3); // 2 round-0 lines + the Final
-  await apiJson(request, `/api/v1/stages/${swissId}/generate`, "POST");
-  // Generating the swiss writes the field's own budget down. Read back off the
-  // live API, not the unit suite: this is the number the completion predicate
-  // will read, and without it everything below this line stalls at the
-  // handoff into the knockout.
-  const generated = await apiJson<Stage[]>(page.request, `/api/v1/divisions/${divisionId}/stages`);
-  expect(generated.data!.find((s) => s.seq === 1)!.config).toMatchObject({ rounds: 3 });
-  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  const started = await apiJson<{ generated: number }>(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.data!.generated).toBe(6); // 3 rounds × 2 boards — all shells, none seated
+  expect((await fixturesOf(swissId)).every((f) => !f.home_entrant_id && !f.away_entrant_id)).toBe(true);
 
   // Play the swiss out, TAPPING the organiser's own "Pair next round" control
   // between rounds rather than POSTing /generate — the pairing seam is only
@@ -332,24 +329,26 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
       payload: { p1Score: a, p2Score: b },
     });
   };
-  // 4 entrants get the field's own 3-round budget (lib/swiss-rounds.ts), and
-  // the loop is written to that number rather than to "until nothing grows":
-  // "Pair next round" stays on screen past the cap, so a growth-driven loop
-  // reads its own last no-op tap as a failure.
   const SWISS_ROUNDS = 3;
   for (let round = 1; round <= SWISS_ROUNDS; round++) {
+    await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
+    await page.getByRole("button", { name: /pair next round/i }).first().click();
+    await expect
+      .poll(
+        async () =>
+          (await fixturesOf(swissId))
+            .filter((f) => f.round_no === round)
+            .every((f) => f.home_entrant_id !== null && f.away_entrant_id !== null),
+        { timeout: 20_000 },
+      )
+      .toBe(true);
     for (const f of await fixturesOf(swissId)) {
+      if (f.round_no !== round) continue;
       if (!f.home_entrant_id || !f.away_entrant_id) continue;
       if (["decided", "finalized"].includes(f.status)) continue;
       const homeWins = rank(f.home_entrant_id) < rank(f.away_entrant_id);
       await decide(f.id, homeWins ? 2 : 0, homeWins ? 0 : 2);
     }
-    if (round === SWISS_ROUNDS) break;
-    await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-    await page.getByRole("button", { name: /pair next round/i }).first().click();
-    await expect
-      .poll(async () => (await fixturesOf(swissId)).length, { timeout: 20_000 })
-      .toBe(2 * (round + 1));
   }
   // Every pair met exactly once over those three rounds, so the table is
   // strict on wins: Ann > Bo > Cy > Di.
