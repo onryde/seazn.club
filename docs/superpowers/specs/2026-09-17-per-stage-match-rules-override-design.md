@@ -331,11 +331,22 @@ and only the third is a defect:
 - `buildRuleOverride` skips `""`, so no `Number("") === 0` is written. Safe.
 - `division-settings.tsx` builds its PATCH from a `{...division.config}` BASE,
   so an omitted key keeps its existing value. Cosmetic there.
-- **The stage panel sends a FRAGMENT, where an omitted key means INHERIT.** So
-  building the fragment the way the division editor builds its override — the
-  obvious thing to do — turns "organiser edits Set type and saves" into a
-  SILENT DELETION of the Best-of-5 override, with the screen having said
-  "Default" the whole time.
+- **The stage panel sends a FRAGMENT, where an omitted key means INHERIT.**
+
+**CORRECTION (Task 7, proved in the browser): the badminton case does NOT lose
+data, and the ruling's stated reason was wrong.** `values` keeps `"5"` in React
+state even while the select paints blank, so `buildRuleOverride` re-emits it and
+an untouched save is a no-op. The badminton defect is MISREPRESENTATION — the
+screen reads "Default" over a live override — which is real but cosmetic.
+
+The genuine data-loss case is narrower and was found only by implementing the
+guard: **a stored value that NO field can hydrate** — a tennis `set` matching no
+declared shape — because `hydrateRuleValues` returns nothing for it, so
+`buildRuleOverride` can never re-emit it and a rebuilt fragment drops it. That
+one is unreachable from React state, and it is what `stageFormatSaveFragment`
+actually protects by re-sending the STORED fragment verbatim when nothing was
+touched. The ruling's OUTCOME stands — both the synthetic option and the diff
+are owed — but the badminton example motivates only the first of them.
 
 Ruled: `MatchRuleFields` renders a synthetic, selected option for a hydrated
 value not among `options`, labelled from the raw value. Fixes the division

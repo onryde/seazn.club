@@ -23,7 +23,7 @@ Nothing pushed; no PR yet.
 | 5 — pad surfaces through the resolver | DONE | `fce7d6225` |
 | 5b — review fixes (D6 carry, templates door, TOCTOU lock, minors) | DONE | `7e27c760d` |
 | 6 — `read` for the nine fields | DONE | `8c1e1f272` |
-| 7 — Fixture Console stage panel (Option A, D7) | owed | — |
+| 7 — Fixture Console stage panel (Option A, D7) | DONE | `9c3b586f4` |
 | 8 — stage-aware hub format line | owed | — |
 | 9 — e2e, smoke, gates | owed | — |
 
@@ -185,6 +185,43 @@ writing to `lib/match-rules.ts` beside a live implementer:
 
 Minor 3 became **D9** — see the spec. The reviewer correctly called it cosmetic
 for the division editor; it is data loss for the stage fragment.
+
+## Task 7 — orchestrator verification (2026-09-18)
+
+Counts re-run here, not taken on report: `components/v2/__tests__/` plus
+`stage-rules.test.ts` = **1153/1153 across 117 suites, 0 paths outside the
+worktree**. The agent's wider gate reported 1725/1725 across 141.
+
+Claims I checked rather than accepted:
+
+- **The cross-sport label borrow is sound.** `stageFormatHeadline` falls back to
+  another in-scope sport's `bestOf` option label when this sport does not offer
+  the stored value. That rests on "every sport labels this field identically" —
+  verified by enumerating all four: tennis/badminton/tabletennis/volleyball all
+  use field label `"Best of (sets)"` and options `Best of N`. True today.
+  **OWED: a guard test pinning that agreement**, or the day a sport labels it
+  differently this line renders another sport's noun with nothing to catch it.
+  The final `return raw` fallback limits the blast to a bare number.
+- **`stageFormatSaveFragment` does what D9 asked**: `opened` vs `values`, and an
+  untouched save re-sends the STORED fragment verbatim.
+
+### My D9 premise was PARTLY FALSE — premise 11
+
+I ruled D9 on the claim that the blank badminton select would silently DELETE
+the override on the next save. It does not: `values` keeps `"5"` in React state
+while the select paints blank, so `buildRuleOverride` re-emits it and an
+untouched save is a no-op. The badminton defect is MISREPRESENTATION, not data
+loss. The real data-loss case is narrower — a stored value NO field can hydrate
+(a tennis `set` matching no declared shape), which `hydrateRuleValues` cannot
+return and `buildRuleOverride` therefore cannot re-emit. The ruling's outcome
+stands, its stated reason did not. The implementer caught this and said so.
+
+Also worth keeping: **dropping only the `score_events` half of the shared lock
+predicate survives every test**, and that is not a sharing failure — the
+snapshot freezes on the same first event and no production path clears one, so
+for these four sports the halves always fire together and the carve-out is not
+constructible (the engine cannot fold a tennis fixture with a null cfg). Pinned
+as an explicit invariant test rather than faked with a hand-written row.
 
 ## Carried out of Task 6 — recorded, not fixed
 
