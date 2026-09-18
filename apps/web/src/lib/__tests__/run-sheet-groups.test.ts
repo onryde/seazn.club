@@ -460,4 +460,48 @@ describe("buildRunSheet — byes are structural, never schedulable (R7)", () => 
     );
     expect(out.map((b) => b.kind)).toEqual(["day", "bracket", "unscheduled"]);
   });
+
+  it("a Swiss awarded bye appears in settled-untimed (organiser must see who sat out)", () => {
+    const SWISS = { id: "sw", seq: 1, kind: "swiss" };
+    const out = buildRunSheet(
+      input({
+        stages: [SWISS],
+        fixtures: [
+          bye({
+            id: "swbye",
+            stage_id: "sw",
+            round_no: 1,
+            home_entrant_id: "gus",
+            away_entrant_id: null,
+            status: "forfeited",
+            outcome: { kind: "award", winner: "gus" },
+          }),
+          fx({
+            id: "swboard",
+            stage_id: "sw",
+            round_no: 1,
+            seq_in_round: 1,
+            scheduled_at: null,
+            status: "scheduled",
+          }),
+        ],
+      }),
+    );
+    const settled = out.find((b) => b.kind === "settled");
+    expect(settled?.kind === "settled" && settled.fixtures.map((f) => f.id)).toEqual(["swbye"]);
+    const unscheduled = out.find((b) => b.kind === "unscheduled");
+    expect(unscheduled?.kind === "unscheduled" && unscheduled.fixtures.map((f) => f.id)).toEqual([
+      "swboard",
+    ]);
+  });
+
+  it("a league awarded bye still leaves the sheet (R7c unchanged)", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [bye({ id: "lgbye", stage_id: "s1", status: "forfeited" })],
+      }),
+    );
+    expect(out).toEqual([]);
+  });
 });
