@@ -123,13 +123,22 @@ export const CONNECT_ACCOUNT_DEFAULT_COUNTRY = "GB";
  * const exists to prevent. The client maps the 502 to `pay.onboardErr`, so the
  * English never reaches a screen: it is the STATUS that carries the meaning.
  *
+ * That now holds for EVERY refusal below, not just this one:
+ * org-payment-instructions.tsx picks translated copy per status and renders
+ * none of these sentences. They are an operator- and log-facing record of
+ * what went wrong, so keep them specific — the screen no longer depends on
+ * their wording, and a vaguer one here would only cost a debugger.
+ *
  * Every refusal `createConnectOnboardingLink` can reach, and why each is or is
  * not masked — the enumeration, so the next survivor is visible:
  *
- *   403 requireOwnerSession ×2 · 404 orgConnect · 422 ToS gate
- *       Deliberate, actionable copy naming what the owner must DO, and
- *       rendered verbatim on purpose. Untranslated English today — that is
- *       the queued per-status i18n pass, not this guard's business.
+ *   403 requireOwnerSession ×2 · 422 ToS gate
+ *       Actionable: the client has a key each (`pay.connectOwnerOnly`,
+ *       `pay.connectTosFirst`) saying the same thing in the reader's
+ *       language. Do not collapse either into the generic — the 422 is the
+ *       one refusal here an owner can clear unaided.
+ *   404 orgConnect
+ *       Not actionable to a human; the client lands it on `pay.onboardErr`.
  *   402 requireFeature (PaymentRequiredError)
  *       Has its own client key (`pay.needPro`), so it never renders raw.
  *   502 getStripe() · v2 accounts.create · accountLinks.create
