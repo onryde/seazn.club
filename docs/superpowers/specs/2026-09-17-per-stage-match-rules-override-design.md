@@ -198,8 +198,11 @@ a lock reason, an error toast — is picker chrome and DOES owe all four
 dictionaries plus the regen. Keep that line clear in review: the nine
 field labels are exempt, the panel's own copy is not.
 
-**D7 — where the editor lives. TWO OPTIONS, owner pick PENDING**
-(put to the owner 2026-09-18; Task 7 is blocked on the answer).
+**D7 — where the editor lives. OPTION A, ruled by the owner 2026-09-18.**
+Both options were rendered into the LIVE division page and shown to the owner
+as screenshots (real CSS, real neighbouring controls, real data: stage 1 was
+genuinely Complete so its locked state was not a mock-up, and stage 2 genuinely
+carried `config.rules = {"bestOf": 5}`). The owner picked **A**.
 
 The surface was mapped before the options were drawn, and every claim below
 was re-read in the file rather than taken from the grep:
@@ -229,7 +232,22 @@ column below 640 on its own, so A needs **no new phone branch**.
 (`StageCourtTagsEditor` precedent). Editing joins the rail's action list —
 bottom sheet on phone, modal ≥768.
 
-Recommendation: **A**. Blast radius is the deciding argument — B opens
+The render settled an argument no text sketch could: **B puts the editor entry
+point inside the destructive row.** At 1280 `Match format…` lands between
+`Generate fixtures` and `Complete stage` / `Delete`, and in the phone sheet it
+sits directly above the same two. That rail is a list of IRREVERSIBLE stage
+actions; changing Best-of is a reversible setting that the API refuses outright
+once the stage has started. A also renders the locked state with no control at
+all — `Best of 3 · Locked — this stage has started` occupies the slot the Edit
+button otherwise holds — where B must explain the same thing inside a sheet the
+organiser has already tapped twice to reach.
+
+A's cost, equally visible in the render: the open editor pushes the counts and
+the fixtures link down ~150px, and at 320 it fills most of the viewport.
+Measured at 320 with the editor open: `scrollWidth 320 = clientWidth 320`, no
+horizontal scroll, fields stacked, both buttons on one row.
+
+Recommendation was: **A**. Blast radius is the deciding argument — B opens
 `stage-rail.tsx`, a file with its own owner-approved design of record,
 while A opens none. Second, `stages-panel.tsx:786-804` records that the
 two-column layout was retired after the card was measured
@@ -252,6 +270,16 @@ There is **no existing default-vs-overridden precedent in the panel**; the
 nearest anywhere is `division-settings.tsx:991-998`
 (`divset.entrants.sportDefault` / `.overridden` plus a Reset button), and
 the new copy should read like it.
+
+**What A is, concretely** (validated in the browser against the live card):
+the row is inserted immediately BEFORE `[data-testid="stage-progress"]`
+inside `stage-sheet`, as a `border-b border-slate-100 px-4 py-3` band — the
+same band the header uses. Expanding reuses `AddMatchForm`'s container
+(`border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3`) and
+mounts `MatchRuleFields` unchanged; its `grid gap-4 sm:grid-cols-3` does the
+phone stacking, so **A adds no `max-md:` and no `md:hidden`** and the stage
+card keeps its property of having no phone branch. Buttons are the card's
+own `btn btn-primary` / `btn btn-ghost` with `min-h-11 px-3 py-1.5 text-xs`.
 
 ## Design
 

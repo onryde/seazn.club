@@ -22,8 +22,8 @@ Nothing pushed; no PR yet.
 | 4 — `PUT /stages/:id/rules` | DONE | `c3c6204f5` |
 | 5 — pad surfaces through the resolver | DONE | `fce7d6225` |
 | 5b — review fixes (D6 carry, templates door, TOCTOU lock, minors) | DONE | `7e27c760d` |
-| 6 — `read` for the nine fields | owed | — |
-| 7 — Fixture Console stage panel | owed | — |
+| 6 — `read` for the nine fields | DONE | `8c1e1f272` |
+| 7 — Fixture Console stage panel (Option A, D7) | owed | — |
 | 8 — stage-aware hub format line | owed | — |
 | 9 — e2e, smoke, gates | owed | — |
 
@@ -138,6 +138,40 @@ the page-wiring gap below; the unit suite cannot.
 
 The override is still in place on `stages.id = da2fbf75-97a3-4f2a-8dfc-476b003e1c4c`
 for Task 7's UI work.
+
+## Owner ruling D7 — Option A (2026-09-18)
+
+Both options were injected into the LIVE division page at
+`/o/v11-1ca82625/c/league-ko-89bee4/d/open-c72669?tab=fixtures` on the `smr`
+server and screenshotted at 1280 and 320 — real CSS, real neighbouring
+controls, real data. The owner picked **A** (inline format row in the stage
+card). Full argument and the concrete markup in the spec under D7.
+
+Two facts the render produced that no text sketch could:
+
+- **B puts the editor entry point inside the destructive row** — between
+  `Generate fixtures` and `Complete stage` / `Delete` at 1280, and directly
+  above the same two in the phone sheet.
+- **A at 320 with the editor open: `scrollWidth 320 = clientWidth 320`** —
+  no horizontal scroll, fields stacked by `sm:grid-cols-3` alone, so A adds
+  no `max-md:` and no `md:hidden` and the stage card keeps its property of
+  having NO phone branch.
+
+## Carried out of Task 6 — recorded, not fixed
+
+- **Carrom's `bestOf` still has no `read`** and reopens blank in the division
+  editor. Out of the nine in-scope fields, deliberately untouched.
+- **Task 6's fix is live for `division-settings.tsx:409,436`**, so the
+  division editor now prefills inputs that used to show blank. No unit test
+  can see that (`environment: "node"`) — it owes a look in the Task 9
+  walkthrough.
+- **The `smr` DB is accumulating.** Task 6's wider gate showed four
+  pre-existing reds in `credits-monthly-cron.test.ts` /
+  `credits-bootstrap-grant.test.ts` — three timeouts and one
+  `expected 13 to be less than or equal to 6` per-wallet statement cost, the
+  same family as 5b's `org-posts-digest`. None reference match-rules and all
+  fail identically in isolation. **Rebuild the label's DB before Task 9's
+  gates** rather than reading these as regressions.
 
 ## Coverage limit carried into Task 9
 
