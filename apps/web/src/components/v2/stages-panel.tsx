@@ -32,6 +32,17 @@ import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
+// Per-stage match format (design §T5, D7). `MatchRuleFields` is mounted
+// UNCHANGED — the same grid the division builder and Settings tab render, so
+// the three format editors cannot drift. The table itself comes from
+// `@/lib/match-rules` via the same re-export.
+import { MatchRuleFields } from "@/components/v2/match-rules";
+import {
+  SPORT_RULES,
+  STAGE_RULES_SPORTS,
+  buildRuleOverride,
+  hydrateRuleValues,
+} from "@/lib/match-rules";
 import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
@@ -190,6 +201,26 @@ interface Props {
    *  predate this field. */
   rosterDrift?: Record<string, RosterDrift>;
   canEdit: boolean;
+  /** The division's sport — gates the per-stage "Match format" row, which
+   *  renders only for `STAGE_RULES_SPORTS` (the server 400s
+   *  `SPORT_NOT_SUPPORTED` for anything else). Optional for the same reason
+   *  `venues`/`phase` are: a dozen pre-existing `stages-panel-*.test.tsx`
+   *  files build props without it, and an absent sport renders no row, which
+   *  is the safe direction. */
+  sportKey?: string;
+  /** The division's `config` — the base the stage's `rules` fragment overlays.
+   *  Needed because the format row's SUMMARY must state the number the stage
+   *  will actually be played at, which for an inherited stage lives entirely
+   *  in the division. Never used to hydrate the EDITOR (see StageFormatRow). */
+  divisionConfig?: Record<string, unknown>;
+  /** Stage ids whose match format is LOCKED, resolved server-side by
+   *  `formatLockedStageIds` (usecases/stage-rules.ts) from the same predicate
+   *  the PUT refuses on. Deliberately a server fact rather than anything
+   *  derived here: the only client-visible signal is `fixtures.status`, which
+   *  is non-monotonic (voiding a start moves it back to `scheduled`), so a
+   *  panel deriving the lock from it would offer an Edit button whose save
+   *  comes back 409. */
+  formatLockedStageIds?: string[];
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
   /** The GOVERNING venue clock (`settings.orgTz`, #448), resolved server-side.
@@ -337,7 +368,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -931,6 +962,32 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     Same pattern Ruling T3-A already set for `courtTagsEditor`
                     just below. */}
                 {!canEdit && unscheduledBadge}
+
+                {/* Per-stage match format (design 2026-09-17 §T5, owner ruling
+                    D7 "Option A", 2026-09-18): one collapsed line in the card
+                    body, Edit expands `MatchRuleFields` in place on the
+                    `AddMatchForm` precedent above. Deliberately NOT on
+                    StageRail — that rail is a list of irreversible stage
+                    actions (Generate / Complete / Delete) and Best-of is a
+                    reversible setting the API refuses outright once the stage
+                    has started. Adds NO width-conditional classes: the field
+                    grid's own small-screen column rule does the phone
+                    stacking, so this card keeps its property of having no
+                    phone branch at all. (Spelling the class names out here
+                    would feed the Tailwind scanner, which reads comments and
+                    emits junk CSS for anything class-shaped.) */}
+                {sportKey !== undefined && STAGE_RULES_SPORTS.has(sportKey) && (
+                  <StageFormatRow
+                    msg={msg}
+                    stageId={stage.id}
+                    sportKey={sportKey}
+                    divisionConfig={divisionConfig}
+                    stageConfig={stage.config}
+                    locked={formatLockedStageIds.includes(stage.id)}
+                    canEdit={canEdit}
+                    onSaved={() => router.refresh()}
+                  />
+                )}
 
                 {/* Owner-approved redesign, "Option A" — the body's fixtures-
                     progress counts line. Renders for a stage that HAS
@@ -1665,6 +1722,280 @@ function AddMatchForm({
       {error !== null && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
+}
+
+/**
+ * The stage card's "Match format" row (design §T5, owner ruling D7 "Option A").
+ *
+ * THE SUBTLE PART, and the reason this component exists rather than a few
+ * inline lines: `hydrateRuleValues` is called with TWO DIFFERENT INPUTS here,
+ * and swapping them is a data-loss defect, not a refactor.
+ *
+ *  - The SUMMARY line reads the EFFECTIVE config (`{...division, ...rules}`),
+ *    because "Best of 3 · Same as division" has to state the number the stage
+ *    will actually be played at, and an inherited stage's own fragment is
+ *    empty.
+ *  - The EDITOR hydrates the FRAGMENT ONLY (`stage.config.rules`). In a
+ *    fragment a key's ABSENCE means "inherit the division". Hydrating the
+ *    editor from the merge would arrive with every field filled, and the first
+ *    save would PUT all of them — pinning the stage to today's division format
+ *    forever, an override the organiser never asked for.
+ *
+ * A future reader will see one function called twice and want to simplify it.
+ * Don't.
+ */
+function StageFormatRow({
+  msg,
+  stageId,
+  sportKey,
+  divisionConfig,
+  stageConfig,
+  locked,
+  canEdit,
+  onSaved,
+}: {
+  msg: Msg;
+  stageId: string;
+  sportKey: string;
+  divisionConfig: Record<string, unknown>;
+  stageConfig: Record<string, unknown>;
+  locked: boolean;
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  /** What the editor was opened with — the save path diffs against this so
+   *  "the organiser touched nothing" can never be mistaken for a clear. */
+  const [opened, setOpened] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const rules = useMemo(
+    () => (isPlainRules(stageConfig.rules) ? stageConfig.rules : {}),
+    [stageConfig.rules],
+  );
+  const overridden = Object.keys(rules).length > 0;
+  // SUMMARY — effective config. See the header.
+  const effective = useMemo(() => ({ ...divisionConfig, ...rules }), [divisionConfig, rules]);
+  const headline = stageFormatHeadline(sportKey, effective);
+
+  const state = locked ? "locked" : overridden ? "overridden" : "inherited";
+  const clause = msg(
+    locked
+      ? "schedule.stageFormat.locked"
+      : overridden
+        ? "schedule.stageFormat.overridden"
+        : "schedule.stageFormat.inherited",
+  );
+
+  function openEditor() {
+    // FRAGMENT, never `effective`. See the header.
+    const hydrated = stageFormatEditorValues(sportKey, stageConfig);
+    setValues(hydrated);
+    setOpened(hydrated);
+    setError(null);
+    setOpen(true);
+  }
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      // Always a fragment object, NEVER `null`: `{rules: null}` clears the
+      // override and is reserved for the explicit "Use division format"
+      // control below. A Save that reached it would turn "I changed one field"
+      // into "I cleared everything".
+      await apiV1(`/api/v1/stages/${stageId}/rules`, {
+        method: "PUT",
+        json: { rules: stageFormatSaveFragment(sportKey, rules, opened, values) },
+      });
+      setOpen(false);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiV1Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    setSaving(true);
+    setError(null);
+    try {
+      await apiV1(`/api/v1/stages/${stageId}/rules`, { method: "PUT", json: { rules: null } });
+      setOpen(false);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiV1Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div
+        className="border-b border-slate-100 px-4 py-3"
+        data-testid="stage-format"
+        data-stage-format-state={state}
+      >
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="text-xs font-semibold text-slate-800">
+            {msg("schedule.stageFormat.heading")}
+          </span>
+          <span className="min-w-0 text-xs text-slate-600" data-testid="stage-format-summary">
+            {headline === null ? clause : `${headline} · ${clause}`}
+          </span>
+          {canEdit && !locked && (
+            <button
+              type="button"
+              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+              data-testid="stage-format-edit"
+              onClick={() => (open ? setOpen(false) : openEditor())}
+            >
+              {msg(open ? "schedule.cancel" : "schedule.stageFormat.edit")}
+            </button>
+          )}
+          {canEdit && !locked && overridden && !open && (
+            <button
+              type="button"
+              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+              data-testid="stage-format-clear"
+              disabled={saving}
+              onClick={() => void clear()}
+            >
+              {msg("schedule.stageFormat.useDivision")}
+            </button>
+          )}
+        </div>
+        {error !== null && !open && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      </div>
+
+      {open && (
+        <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
+          {/* `MatchRuleFields` unchanged, and unwrapped: its own
+              `grid gap-4 sm:grid-cols-3` is what stacks these fields on a
+              phone, so nothing here needs a width class. */}
+          <MatchRuleFields sportKey={sportKey} values={values} onChange={setValues} disabled={saving} />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
+              data-testid="stage-format-save"
+              disabled={saving}
+              onClick={() => void save()}
+            >
+              {saving ? msg("schedule.working") : msg("schedule.stageFormat.save")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+              disabled={saving}
+              onClick={() => setOpen(false)}
+            >
+              {msg("schedule.cancel")}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">{msg("schedule.stageFormat.hint")}</p>
+          {error !== null && <p className="mt-1 text-xs text-red-600">{error}</p>}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** `stages.config.rules` as a plain object, or nothing. A JSON `null` and a
+ *  non-object both mean "no override" — never spread either into a config. */
+function isPlainRules(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * What the format EDITOR opens with: the stage's own `rules` FRAGMENT, and
+ * nothing else. Exported as its own function — like `boardSlotOptionsFor`
+ * above — because the distinction it encodes cannot be tested through the
+ * rendered row: the editor only hydrates on click, and this panel's tests run
+ * in `environment: "node"` with no DOM to click.
+ *
+ * It takes `stageConfig`, NOT the effective config, and that is the whole
+ * point. In a fragment a key's absence means "inherit the division"; hydrating
+ * from `{...divisionConfig, ...rules}` would fill every field, and the first
+ * save would PUT all of them and pin the stage to today's division format.
+ */
+export function stageFormatEditorValues(
+  sportKey: string,
+  stageConfig: Record<string, unknown>,
+): Record<string, string> {
+  return hydrateRuleValues(sportKey, isPlainRules(stageConfig.rules) ? stageConfig.rules : {});
+}
+
+/**
+ * The fragment a Save actually PUTs, diffed against what the editor OPENED
+ * with. "The organiser touched nothing" must never produce a clear.
+ *
+ * `buildRuleOverride` is not a total inverse of the stored fragment: a stored
+ * value that no field can hydrate — a tennis `set` whose shape matches none of
+ * the three declared options, say — comes back from `hydrateRuleValues` as
+ * `undefined`, so a rebuilt fragment would silently DROP it. On the division
+ * editor that is cosmetic, because its PATCH is built over a `{...config}`
+ * base. Here it is data loss: this endpoint takes a FRAGMENT, where an omitted
+ * key means "inherit the division".
+ *
+ * So when nothing was touched, the stored fragment is re-sent verbatim — a
+ * genuine no-op. Only an actual edit goes through `buildRuleOverride`.
+ * Clearing is NOT reachable from here at all; `{rules: null}` belongs to the
+ * explicit "Use division format" control.
+ */
+export function stageFormatSaveFragment(
+  sportKey: string,
+  stored: Record<string, unknown>,
+  opened: Record<string, string>,
+  values: Record<string, string>,
+): Record<string, unknown> {
+  const untouched =
+    Object.keys(opened).length === Object.keys(values).length &&
+    Object.keys(opened).every((k) => opened[k] === values[k]);
+  return untouched ? stored : buildRuleOverride(sportKey, values);
+}
+
+/**
+ * "Best of 3" for the summary line — the `bestOf` field's OWN option label,
+ * looked up through `SPORT_RULES`, never a string assembled here. A change to
+ * the table's labels moves this line with it (AGENTS.md rule 19).
+ *
+ * Reads the EFFECTIVE config, unlike `stageFormatEditorValues` above: the line
+ * must state the number the stage will actually be played at, and an inherited
+ * stage's own fragment is empty.
+ *
+ * Returns null when the effective config names no `bestOf` at all, in which
+ * case the row shows its state clause alone rather than inventing a number.
+ */
+export function stageFormatHeadline(
+  sportKey: string,
+  effective: Record<string, unknown>,
+): string | null {
+  const field = (SPORT_RULES[sportKey] ?? []).find((f) => f.key === "bestOf");
+  if (!field) return null;
+  const raw = hydrateRuleValues(sportKey, effective).bestOf;
+  if (raw === undefined) return null;
+  const own = (field.options ?? []).find((o) => o.value === raw)?.label;
+  if (own !== undefined) return own;
+  // The saved value is valid but THIS sport's picker does not offer it —
+  // badminton offers [1,3] while `{"bestOf":5}` is a perfectly good config
+  // (D9). Borrowing the label from a sport that does offer it keeps the line
+  // reading "Best of 5 · Stage override" as the design table specifies,
+  // without assembling an English string here: every sport labels this one
+  // field identically, so the table is still the source of truth. Verified in
+  // the browser — before this, the live walkthrough stage read "5 · Stage
+  // override" directly under "Best of 3 · Locked".
+  for (const key of STAGE_RULES_SPORTS) {
+    const borrowed = (SPORT_RULES[key] ?? [])
+      .find((f) => f.key === "bestOf")
+      ?.options?.find((o) => o.value === raw)?.label;
+    if (borrowed !== undefined) return borrowed;
+  }
+  return raw;
 }
 
 // #622 — per-stage required court tags, stage-wide and per round role.

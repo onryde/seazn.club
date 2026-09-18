@@ -39,9 +39,14 @@ export function MatchRuleFields({
   if (fields.length === 0) return null;
   return (
     <div className="grid gap-4 sm:grid-cols-3">
-      {fields.map((field) => (
-        <label key={field.key} className="block">
-          <span className="label">{field.label}</span>
+      {fields.map((field) => {
+        const current = values[field.key] ?? "";
+        const offered =
+          field.kind === "bool" ? ["on", "off"] : (field.options ?? []).map((o) => o.value);
+        const unofferable = current !== "" && !offered.includes(current);
+        return (
+          <label key={field.key} className="block">
+            <span className="label">{field.label}</span>
           {field.kind === "number" ? (
             <input
               type="number"
@@ -61,6 +66,18 @@ export function MatchRuleFields({
               className="select"
             >
               <option value="">{msg("rules.default")}</option>
+              {/* D9 (owner ruling 2026-09-18) — a SAVED value this select
+                  cannot offer must be shown, not swallowed. Badminton's
+                  `bestOf` offers [1,3] while `{"bestOf":5}` is a perfectly
+                  valid saved config, and without this option the browser has
+                  nothing to land on and falls back to "Default" — telling the
+                  organiser the field is unset over a config that really
+                  carries a value. That misreading is one tap from data loss on
+                  the stage panel, whose PUT is a FRAGMENT where an omitted key
+                  means INHERIT. Labelled from the raw value: there is no
+                  declared label for a value the table does not declare, and
+                  inventing one would be a second lie. */}
+              {unofferable && <option value={current}>{current}</option>}
               {field.kind === "bool" ? (
                 <>
                   <option value="on">{msg("rules.on")}</option>
@@ -81,9 +98,10 @@ export function MatchRuleFields({
                4.5:1 floor); text-slate-600 clears 7.58:1. Task I's
                shootoutWin/shootoutLoss help text renders through here. */
             <span className="mt-0.5 block text-[11px] text-slate-600">{field.help}</span>
-          )}
-        </label>
-      ))}
+            )}
+          </label>
+        );
+      })}
     </div>
   );
 }

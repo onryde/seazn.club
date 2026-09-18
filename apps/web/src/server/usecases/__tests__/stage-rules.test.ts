@@ -22,7 +22,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
-import { putStageRules } from "../stage-rules";
+import { formatLockedStageIds, putStageRules } from "../stage-rules";
 import { frozenCompetitionIds } from "../entitlement-freeze";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -406,5 +406,123 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
         progression: null,
       }),
     ).rejects.toMatchObject({ status: 400, code: "RULES_NOT_ACCEPTED_HERE" });
+  }, 30_000);
+});
+
+// Task 7 — the READ half of the same lock. The fixtures panel decides whether
+// to OFFER the format editor; `putStageRules` decides whether to REFUSE the
+// write. They share ONE predicate (`lockedStageIdsAmong`) precisely because
+// the failure mode of two copies is an organiser shown an Edit button that
+// then 409s. These tests are the second half of that proof: breaking either
+// half of the single predicate must red BOTH this describe and the
+// `putStageRules` one above.
+describe.skipIf(!HAS_DB)("formatLockedStageIds (design §T3, Task 7)", () => {
+  it("reports nothing while no fixture in the division has started", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    await generateStageFixtures(auth, stageId);
+
+    expect(await formatLockedStageIds(auth, divisionId)).toEqual([]);
+  }, 30_000);
+
+  it("reports the started stage and NOT its untouched sibling", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    const siblingId = await seedStage(auth, divisionId, 2);
+    await generateStageFixtures(auth, stageId);
+    const [fixture] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId} limit 1`;
+
+    await appendEvent(auth.orgId, fixture!.id, 0, { type: "core.start", payload: {} });
+
+    const locked = await formatLockedStageIds(auth, divisionId);
+    expect(locked).toEqual([stageId]);
+    expect(locked).not.toContain(siblingId);
+    // The two halves agree: what the reader reports locked, the writer refuses.
+    await expect(putStageRules(auth, stageId, { rules: { bestOf: 5 } })).rejects.toMatchObject({
+      status: 409,
+      code: "STAGE_FORMAT_LOCKED",
+    });
+    await expect(putStageRules(auth, siblingId, { rules: { bestOf: 5 } })).resolves.toBeTruthy();
+  }, 30_000);
+
+  // THE test this prop exists for. `fixtures.status` is non-monotonic: voiding
+  // a start moves it back to `scheduled`. A panel deriving its locked state
+  // from status would re-open the editor here and the organiser's save would
+  // come back 409 — the exact disagreement the shared predicate prevents.
+  it("still reports the stage after the start is VOIDED and the fixture is scheduled again", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    await generateStageFixtures(auth, stageId);
+    const [fixture] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId} limit 1`;
+
+    const start = await appendEvent(auth.orgId, fixture!.id, 0, {
+      type: "core.start",
+      payload: {},
+    });
+    await appendEvent(auth.orgId, fixture!.id, 1, {
+      type: "core.void",
+      payload: {},
+      voids: start.event.id,
+    });
+
+    // The premise, asserted rather than assumed — status really went backwards.
+    const [after] = await sql<{ status: string }[]>`
+      select status from fixtures where id = ${fixture!.id}`;
+    expect(after!.status).toBe("scheduled");
+    // …and the reader still says LOCKED, agreeing with the writer.
+    expect(await formatLockedStageIds(auth, divisionId)).toEqual([stageId]);
+  }, 30_000);
+
+  // WHY NEITHER HALF OF THE PREDICATE HAS ITS OWN KILLER, pinned as an
+  // invariant rather than left for the next reader to re-derive.
+  //
+  // `append-event.ts:255` freezes the snapshot on the FIRST event whenever the
+  // resolved cfg is non-null, and no production path ever clears one
+  // (`admin-fixture-config.ts:184-194` only sets it when not already frozen).
+  // So for the four sports that can reach this lock at all, "has events" and
+  // "has a snapshot" arrive together and either half alone answers correctly —
+  // a mutant deleting one SURVIVES. The `score_events` half is defence in
+  // depth for the carve-out that comment names (a division whose config is a
+  // JSON null), which is not constructible here: the engine cannot fold a
+  // tennis fixture with a null cfg at all — it throws
+  // `Cannot read properties of null (reading 'bestOf')` before any event lands.
+  //
+  // This test is what would red if that gate ever changed, which is the point
+  // at which the two halves stop being redundant.
+  it("freezes a snapshot on the same first event that writes the ledger", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    await generateStageFixtures(auth, stageId);
+    const [fixture] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId} limit 1`;
+
+    await appendEvent(auth.orgId, fixture!.id, 0, { type: "core.start", payload: {} });
+
+    const [row] = await sql<{ config_snapshot: unknown; events: number }[]>`
+      select f.config_snapshot,
+             (select count(*)::int from score_events e where e.fixture_id = f.id) as events
+        from fixtures f where f.id = ${fixture!.id}`;
+    expect(row!.events).toBeGreaterThan(0);
+    expect(row!.config_snapshot).not.toBeNull();
+  }, 30_000);
+
+  it("is scoped to the division asked for, not the whole org", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const other = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    await generateStageFixtures(auth, stageId);
+    const [fixture] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId} limit 1`;
+    await appendEvent(auth.orgId, fixture!.id, 0, { type: "core.start", payload: {} });
+
+    expect(await formatLockedStageIds(auth, divisionId)).toEqual([stageId]);
+    expect(await formatLockedStageIds(auth, other.divisionId)).toEqual([]);
   }, 30_000);
 });

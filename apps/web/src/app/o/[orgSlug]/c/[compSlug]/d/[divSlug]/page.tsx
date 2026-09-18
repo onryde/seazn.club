@@ -12,6 +12,8 @@ import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
+import { formatLockedStageIds } from "@/server/usecases/stage-rules";
+import { STAGE_RULES_SPORTS } from "@/lib/match-rules";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
 // predicate is a second copy of the rule (F3 ultrareview finding 9 was a
@@ -340,6 +342,19 @@ export default async function DivisionPage({
           ),
         )
       : {};
+  // Per-stage match format (design §T5, D7) — which stages the API will refuse
+  // a format write on, so the panel's row can decline to OFFER the editor
+  // instead of letting the organiser discover the 409 after pressing Save. The
+  // panel cannot derive this: `FIXTURE_COLS` does not carry `config_snapshot`
+  // (a payload-budget ruling, stages.ts:147-162) and `score_events` reaches no
+  // prop, leaving only the non-monotonic `fixtures.status`. Same per-stage
+  // shape as `rosterDrift` above, and skipped entirely for a sport with no
+  // per-stage rules — the row never renders there, so the page should not pay
+  // for the query.
+  const formatLockedStages =
+    tab === "fixtures" && editable && STAGE_RULES_SPORTS.has(division.sport_key)
+      ? await formatLockedStageIds(auth, id)
+      : [];
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.
@@ -681,6 +696,9 @@ export default async function DivisionPage({
               venues={panelVenues}
               rosterDrift={rosterDrift}
               canEdit={editable}
+              sportKey={division.sport_key}
+              divisionConfig={(division.config ?? {}) as Record<string, unknown>}
+              formatLockedStageIds={formatLockedStages}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page
               // resolves it for the board: `ScheduleSettingsWire` serves only
