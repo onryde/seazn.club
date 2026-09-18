@@ -20,7 +20,7 @@ Nothing pushed; no PR yet.
 | 2 — overlay `stage.config.rules` in `stageScopedCfg` + bench mirror | DONE | `3d36a08e8` |
 | 3 — six stage-config writers made atomic | DONE | `029a496bd` |
 | 4 — `PUT /stages/:id/rules` | DONE | `c3c6204f5` |
-| 5 — pad surfaces through the resolver | owed | — |
+| 5 — pad surfaces through the resolver | DONE | `fce7d6225` |
 | 6 — `read` for the nine fields | owed | — |
 | 7 — Fixture Console stage panel | owed | — |
 | 8 — stage-aware hub format line | owed | — |
@@ -68,6 +68,26 @@ The plan is a hypothesis, and three of its steps have already been wrong:
    Task 4's file list. `key-scopes.test.ts` enforces it. A new route also owes
    `src/server/api-v1/__tests__/` (`openapi-coverage.test.ts`), which is NOT in
    the usecases directory most gates name.
+8. **`getFixture` must NOT be widened** (Task 5). Its result IS the published
+   `GET /fixtures/{id}` response, returned unmapped and declared
+   `response: S.Fixture` (`openapi.ts:156`), so adding `config_snapshot` and the
+   stage config there would push two undeclared fields — one an entire frozen
+   config — into the public API, with nothing in the repo catching the drift.
+   Both pad routes use `loadFixturePadCfg` instead; `config_snapshot` is named
+   in exactly one select.
+9. **The spec's regression case (b) was false.** "A stage carrying only
+   `shootout` overlays as before" — it did not: the decider overlay never
+   reached either pad either. Task 5 therefore fixes a SECOND pre-existing
+   defect, wider than recorded: every stage-level `shootout`/`extraTime` was
+   invisible on both pads, not just the new `rules`.
+
+## Coverage limit carried into Task 9
+
+Task 5's loader is unit-tested; **the page wiring is not**. `apps/web` vitest is
+node-env and never renders those two server components, so nothing yet proves
+`padCfg` actually reaches the pad — only that the function feeding it returns
+the right config. That is the inert-seam class; the e2e in Task 9 owes it, and a
+walkthrough by hand is what settles it before then.
 
 ## Findings carried forward
 
