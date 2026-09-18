@@ -281,6 +281,44 @@ phone stacking, so **A adds no `max-md:` and no `md:hidden`** and the stage
 card keeps its property of having no phone branch. Buttons are the card's
 own `btn btn-primary` / `btn btn-ghost` with `min-h-11 px-3 py-1.5 text-xs`.
 
+**D8 — the panel's lock needs a server-fed prop; the page cannot derive it**
+(ruled 2026-09-18, during Task 7, on the implementer's blocked report).
+
+The server locks a stage on `f.config_snapshot is not null OR exists(score_events)`
+(`stage-rules.ts:87-92`), deliberately NOT on `fixtures.status`, because voiding
+a `core.start` moves a fixture BACK to `scheduled`. Nothing client-side can see
+either fact: `FIXTURE_COLS` (`stages.ts:139-145`) carries no `config_snapshot`
+and `score_events` reaches no page prop. The only client-visible "has started"
+is `hasPlayedFixture` (`lib/division-phase.ts:414`), which is exactly the status
+predicate the server avoided — and it under-reports after a void, i.e. it fails
+in the BAD direction: server locked, UI offers Edit, organiser gets a 409 on a
+control the product had just offered.
+
+**Widening `FIXTURE_COLS` is refused.** `stages.ts:147-162` records a payload-
+budget regression (PR #606, `board-v3.spec.ts` "gap 15", 279043 bytes against a
+250000 budget) caused by five SCALAR columns; `config_snapshot` is an entire
+frozen config per fixture.
+
+Ruled: a division-scoped `formatLockedStageIds` in `stage-rules.ts`, called from
+`page.tsx` the way `getStageRosterDrift` already is, skipped entirely when the
+sport is not in `STAGE_RULES_SPORTS`. **Its predicate and `putStageRules`'s must
+be ONE shared SQL fragment, not two kept in step** — this is a lock whose halves
+are a UI that OFFERS a control and a server that REFUSES it, so drift is
+invisible until an organiser is told "saved" by one and 409'd by the other.
+Mutating one half of the fragment must red BOTH call sites' tests.
+
+Two further props, both already on the page: `sportKey` (`page.tsx:263`) and
+`divisionConfig` (`:829`).
+
+**D8a — the summary line and the editor read DIFFERENT things.** The line shows
+the EFFECTIVE config (`{...divisionConfig, ...rules}`), because an inherited
+stage's fragment is empty and the line must still state the number the stage
+will be played at. The editor hydrates the FRAGMENT ONLY. Hydrating the editor
+from the merge fills every field, so the first save writes every key and pins
+the stage to today's division format permanently — the defect D2/T5 exist to
+prevent. One function, two inputs; say so in a comment, because a later reader
+will "simplify" it.
+
 ## Design
 
 ### T0 — extract the rules table out of the client module
