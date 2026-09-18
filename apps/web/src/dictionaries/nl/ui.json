@@ -2937,6 +2937,7 @@
   "pay.onboardErr": "Kon Stripe-onboarding niet starten",
   "pay.connectTosFirst": "Ga akkoord met de Servicevoorwaarden, inclusief chargebacks op inschrijfgelden, voordat je Stripe verbindt.",
   "pay.connectOwnerOnly": "Alleen de eigenaar van de organisatie kan Stripe verbinden. Vraag de eigenaar om dit in te stellen.",
+  "pay.signedOut": "Je bent afgemeld. Meld je aan en probeer het opnieuw.",
   "pay.methodLegend": "Hoe werken inschrijfgelden meestal?",
   "pay.methodHint": "Voorgeselecteerd wanneer je inschrijving instelt voor een nieuwe divisie — elke divisie kan nog steeds zijn eigen keuze maken.",
   "pay.methodOffline": "Betaal de organisator",

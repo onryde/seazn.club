@@ -3928,6 +3928,7 @@ export type DictionaryKey =
   | "pay.saveNotAllowed"
   | "pay.saved"
   | "pay.saving"
+  | "pay.signedOut"
   | "pay.statusIncomplete"
   | "pay.statusLive"
   | "pay.statusNone"

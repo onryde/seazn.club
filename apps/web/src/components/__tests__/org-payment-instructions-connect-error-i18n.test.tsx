@@ -75,6 +75,11 @@ const SERVER_403 = "Only the org owner can manage Stripe Connect";
 const SERVER_404 = "organization not found";
 const SERVER_409 = "Stripe is not ready to accept charges yet";
 const SERVER_401 = "Insufficient permissions";
+/** The v1 401, which is a DIFFERENT SET from the legacy one above: it holds
+ *  "Not authenticated" and "You are not a member…" and NO role refusal — a
+ *  member with the wrong role answers 403 there. Different set, different
+ *  copy, and the two cases below pin that they stay different. */
+const SERVER_401_V1 = "Not authenticated";
 
 /** Read from the shipped catalog, never typed out here: if the copy is
  *  reworded, these follow it instead of asserting yesterday's sentence. */
@@ -82,6 +87,7 @@ const EN = uiEn as Record<string, string>;
 const ONBOARD_ERR = EN["pay.onboardErr"];
 const TOS_FIRST = EN["pay.connectTosFirst"];
 const OWNER_ONLY = EN["pay.connectOwnerOnly"];
+const SIGNED_OUT = EN["pay.signedOut"];
 const NEEDS_CHARGES = EN["pay.methodNeedsCharges"];
 const SAVE_NOT_ALLOWED = EN["pay.saveNotAllowed"];
 const SAVE_FAILED = EN["pay.saveFailed"];
@@ -207,6 +213,26 @@ describe("Stripe onboarding failure copy", () => {
     expect(text).toContain(OWNER_ONLY);
   });
 
+  it("tells an owner to sign in again on a 401 — NOT that only an owner may connect", async () => {
+    // The gap the first pass left: 401 had no case, so it fell to the
+    // generic — actionable copy going generic, the very thing the 422 case
+    // above exists to prevent. Reachable twice on this POST
+    // (requireUser's "Not authenticated" and requireOrgAuth's "You are not a
+    // member…", both AuthError → 401 in api-v1/http.ts).
+    const island = mountWithFailure(new ApiV1Error(SERVER_401_V1, 401, "UNAUTHENTICATED"));
+    await clickConnect(island);
+    const text = island.text();
+    expect(text).not.toContain(SERVER_401_V1);
+    expect(SIGNED_OUT).toBeTruthy();
+    expect(text).toContain(SIGNED_OUT);
+    // Independent of the line above, and the point of choosing this key: an
+    // OWNER whose session expired must not be told to go and ask an owner.
+    expect(text).not.toContain(OWNER_ONLY);
+    // Independent again: it must not have fallen through to the generic,
+    // which is where it used to land.
+    expect(text).not.toContain(ONBOARD_ERR);
+  });
+
   it("falls to the generic on a 404 — 'organization not found' tells an owner nothing", async () => {
     // The other half of the rule, and the reason this is a per-status map
     // rather than a key per status: a refusal with no action in it gets the
@@ -252,6 +278,11 @@ describe("Payments-card SAVE failure copy", () => {
     expect(text).not.toContain(SERVER_401);
     expect(SAVE_NOT_ALLOWED).toBeTruthy();
     expect(text).toContain(SAVE_NOT_ALLOWED);
+    // Independent, and deliberate: this 401 set CONTAINS a role refusal
+    // (lib/auth.ts:485 throws AuthError, not HttpError(403)), so it does not
+    // get the onboarding path's signed-out sentence. If someone "unifies" the
+    // two 401s, this is what says no.
+    expect(text).not.toContain(SIGNED_OUT);
   });
 
   it("falls to the generic save copy on a 500, and logs the server's sentence", async () => {

@@ -29,9 +29,41 @@ type Msg = ReturnType<typeof useMsg>;
  *
  *  Reads `status` rather than `code` because the v1 envelope collapses 500
  *  and 502 onto the same code (`INTERNAL`) — see server/api-v1/http.ts.
- *  Statuses not named here (400 from `parseBody`/`assertUuid`, 429 from the
- *  API-key limiter, 500) are developer- or integration-facing and land on the
- *  generic by design. */
+ *
+ *  EVERY status POST /api/v1/orgs/{id}/connect can answer, derived from the
+ *  handlers rather than from what happened to come up. "Generic" below means
+ *  DELIBERATELY generic, not forgotten — the two are indistinguishable in a
+ *  switch, which is how the 401 was missed once already:
+ *
+ *    400  parseBody's bad JSON · a ZodError on CreateConnectOnboarding
+ *         → generic. A malformed request from our own client; the owner has
+ *           no move.
+ *    401  requireUser "Not authenticated" · "You are not a member of this
+ *         organization" — both AuthError, both 401 (http.ts). NOTE there is
+ *         no role refusal in this set: an authenticated member with the
+ *         wrong role is a 403 below.
+ *         → pay.signedOut, because on an isOwner-gated page the live cause is
+ *           an expired session, and "ask an owner" would be nonsense advice
+ *           to the owner. Same shape as extraOrgsErrorKey's own 401 row.
+ *    402  requireFeature("registration.paid") · a frozen ADMIN seat
+ *         (assertMemberNotFrozen). Owners are exempt from the freeze, so from
+ *         this screen it is only ever the plan gate.
+ *         → pay.needPro.
+ *    403  requireOwnerSession ×2 · requireOrgAuth's role check · the device-
+ *         link and API-key refusals (not reachable from a session).
+ *         → pay.connectOwnerOnly: every one means "you are not the owner".
+ *    404  assertUuid · orgConnect
+ *         → generic. True, and useless to a human.
+ *    422  the ToS gate
+ *         → pay.connectTosFirst. The one refusal an owner clears unaided —
+ *           never collapse it.
+ *    429  the API-key rate limiter. Session traffic cannot reach it.
+ *         → generic.
+ *    500  anything unhandled, e.g. a driver error out of `sql`.
+ *         → generic.
+ *    502  the five masked Stripe failures (stripeOnboardingStep and the two
+ *         hand-masked ones).
+ *         → pay.onboardErr, which is that refusal's own key, not a fallback. */
 function onboardingCopy(err: unknown, msg: Msg): string {
   if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") return msg("pay.needPro");
   const status = err instanceof ApiV1Error ? err.status : 0;
@@ -40,10 +72,15 @@ function onboardingCopy(err: unknown, msg: Msg): string {
     // connecting Stripe" — the gate in createConnectOnboardingLink.
     case 422:
       return msg("pay.connectTosFirst");
+    // Not a permission problem: this path's 401s are "not signed in" and "not
+    // a member", and the role refusal it might be confused with answers 403.
+    case 401:
+      return msg("pay.signedOut");
     // Both of the use-case's 403s ("Wrong organization", "Only the org owner
-    // can manage Stripe Connect") and requireOrgAuth's "Insufficient
-    // permissions". All three mean the same thing to a human: you are not the
-    // owner, and an owner has to do this.
+    // can manage Stripe Connect") and requireOrgAuth's role check
+    // ("Insufficient permissions", api-v1/auth.ts:218 — an HttpError, unlike
+    // the AuthErrors above it). All three mean the same thing to a human: you
+    // are not the owner, and an owner has to do this.
     case 403:
       return msg("pay.connectOwnerOnly");
     default:
@@ -55,7 +92,34 @@ function onboardingCopy(err: unknown, msg: Msg): string {
  *
  *  Same rule, different statuses — these two writes go to the legacy
  *  `/api/orgs/{id}` envelope, whose handler maps AuthError onto 401 rather
- *  than 403 (lib/http.ts), so "not allowed" arrives as 401 here. */
+ *  than 403 (lib/http.ts), so "not allowed" arrives as 401 here.
+ *
+ *  EVERY status PATCH /api/orgs/{id} can answer for the two fields this card
+ *  sends, again derived from the handler, with the deliberate generics named:
+ *
+ *    400  a ZodError on orgPatchSchema · "Nothing to update" (unreachable
+ *         from here — both handlers always send a field)
+ *         → generic.
+ *    401  requireOrgRole's three AuthErrors: "Not authenticated", "You are
+ *         not a member…", AND "Insufficient permissions" (lib/auth.ts:485).
+ *         → pay.saveNotAllowed. Deliberately NOT the same answer as the
+ *           onboarding 401 above, and the difference is in the SERVER, not
+ *           here: the legacy handler folds a role refusal into 401 while the
+ *           v1 one answers 403, so this set has a permission member and that
+ *           one does not. The copy is right for the set's dominant member; an
+ *           expired session reads it as slightly wrong advice, which is the
+ *           cost of the fold. Splitting AuthError into 401/403 in lib/http.ts
+ *           would fix it for every legacy route at once — out of scope here,
+ *           and raised in the report rather than done quietly.
+ *    404  "Organization not found" (×4 sites)
+ *         → generic.
+ *    409  "Stripe is not ready to accept charges yet" · the settlement-
+ *         currency lock (a different field, not sent by this card)
+ *         → pay.methodNeedsCharges.
+ *    500  anything unhandled.
+ *         → generic.
+ *
+ *  402 is NOT reachable: nothing on this PATCH path calls requireFeature. */
 function saveCopy(err: unknown, msg: Msg): string {
   const status = err instanceof ApiError ? err.status : 0;
   switch (status) {

@@ -2937,6 +2937,7 @@
   "pay.onboardErr": "No se pudo iniciar la incorporación de Stripe",
   "pay.connectTosFirst": "Acepta los Términos del servicio, incluidas las devoluciones de cargos sobre las cuotas de inscripción, antes de conectar Stripe.",
   "pay.connectOwnerOnly": "Solo el propietario de la organización puede conectar Stripe. Pídele que lo configure.",
+  "pay.signedOut": "Se ha cerrado tu sesión. Inicia sesión e inténtalo de nuevo.",
   "pay.methodLegend": "¿Cómo funcionan normalmente las cuotas de inscripción?",
   "pay.methodHint": "Preseleccionado cuando configuras la inscripción en una nueva división; cada división aún puede elegir la suya.",
   "pay.methodOffline": "Pagar al organizador",

@@ -2982,6 +2982,7 @@
   "pay.onboardErr": "Could not start Stripe onboarding",
   "pay.connectTosFirst": "Agree to the Terms of Service, including entry-fee chargebacks, before connecting Stripe.",
   "pay.connectOwnerOnly": "Only an organisation owner can connect Stripe. Ask an owner to set it up.",
+  "pay.signedOut": "You’ve been signed out. Sign in and try again.",
   "pay.methodLegend": "How do entry fees usually work?",
   "pay.methodHint": "Preselected when you set up registration on a new division — each division can still choose its own.",
   "pay.methodOffline": "Pay the organiser",

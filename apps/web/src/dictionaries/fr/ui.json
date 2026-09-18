@@ -2982,6 +2982,7 @@
   "pay.onboardErr": "Impossible de démarrer la configuration Stripe",
   "pay.connectTosFirst": "Acceptez les Conditions d’utilisation, y compris les rétrofacturations sur les frais d’inscription, avant de connecter Stripe.",
   "pay.connectOwnerOnly": "Seul le propriétaire de l’organisation peut connecter Stripe. Demandez-lui de le configurer.",
+  "pay.signedOut": "Vous avez été déconnecté. Connectez-vous et réessayez.",
   "pay.methodLegend": "Comment fonctionnent habituellement les frais d'inscription ?",
   "pay.methodHint": "Présélectionné lorsque vous configurez l'inscription sur une nouvelle division — chaque division peut toujours choisir la sienne.",
   "pay.methodOffline": "Payer l'organisateur",
