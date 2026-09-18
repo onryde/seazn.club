@@ -3,20 +3,27 @@
 //
 // DIVISION-PAGE PARITY (owner ruling 2026-09-16). A team's or a pair's card is
 // a native `<details>` whose body is its SQUAD — number, name, position or a
-// Suspended tag — and its own "Add to calendar" link, which is what the
-// division page's Entrants tab showed. The card used to LINK to that tab; it
-// no longer does, because the division page is about to redirect here and the
-// link would loop. `TeamCard.href` stays in the document for that decision.
-// Cards open independently (no `name` on the details), and an open card spans
-// the whole grid row so a squad is never read in a 150px column.
+// Suspended tag — which is what the division page's Entrants tab showed. The
+// card used to LINK to that tab; it no longer does, because the division page
+// is about to redirect here and the link would loop. `TeamCard.href` stays in
+// the document for that decision. Cards open independently (no `name` on the
+// details), and an open card spans the whole grid row so a squad is never read
+// in a 150px column.
 //
 // A SINGLES ENTRANT IS NOT A TEAM (owner ruling 2026-09-17, option A). An
 // `individual` card has no squad to disclose, so it is one flat row — crest,
-// name, seed chip, calendar — with no chevron, no member count and no "No
-// squad listed yet". Those three were claims the product could not make, and a
-// live singles division published all three under a lone player ("0 members").
-// The branch is on `TeamCard.kind`, and a document that carries no `kind` (an
-// ISR entry baked before the field shipped) keeps the disclosure.
+// name, seed chip — with no chevron, no member count and no "No squad listed
+// yet". Those three were claims the product could not make, and a live singles
+// division published all three under a lone player ("0 members"). The branch
+// is on `TeamCard.kind`, and a document that carries no `kind` (an ISR entry
+// baked before the field shipped) keeps the disclosure.
+//
+// THE CALENDAR IS A CORNER TAB (owner ruling 2026-09-17, option A of three
+// mockups). Both card kinds carry one icon-only `.ics` link, half-overlapping
+// the card's top-right edge, and on BOTH it is a sibling of the card rather
+// than a child — a `<details>` hides its body from the page and from the
+// accessibility tree until it opens, so the squad-body link this replaced was
+// unreachable on every card as it arrived. See `calendarIcon` below.
 //
 // The document decides who is here and what they are called: `doc.teams` is
 // built one division at a time, already through `maskPublicEntrantNames`,
@@ -150,6 +157,23 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
     );
   }
 
+  // WHO HAS SOMETHING TO PUT IN A CALENDAR (owner ruling 2026-09-17). Built
+  // ONCE per document, not per card: `doc.matches` is every fixture the
+  // competition carries, so re-scanning it inside the render loop would be
+  // O(entrants × fixtures) for an answer that does not vary by card.
+  //
+  // `tm.calendarHref` cannot answer this — the builder writes one for every
+  // entrant unconditionally, so it is non-null even for a division whose
+  // fixtures are all still TBD, and the `.ics` it points at would hold no
+  // dated event. "Scheduled" means a REAL `scheduledAt`, not a placeholder:
+  // `HubMatch.scheduledAt` is null exactly while the fixture has no time yet
+  // (schema: "ISO instant, or null when the fixture has no time yet"), which
+  // is the same null a TBD/unresolved slot carries.
+  const scheduledEntrants = new Set<string>();
+  for (const match of doc.matches) {
+    if (match.scheduledAt === null) continue;
+    for (const s of match.header.sides) scheduledEntrants.add(s.entrantId);
+  }
   // Reconciled against the chips on screen — the Knockout tab's rule.
   const choices = divisionChoices(doc.teams);
   const division = choices.some((d) => d.slug === chosenDivision) ? chosenDivision : null;
@@ -218,40 +242,93 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                 // row keeps the closed card's height. Both arms carry it, so
                 // a card is the same height whether the person is linked.
                 const nameClass = "block min-w-0 truncate py-3 -my-2 text-sm font-medium text-ink";
-                // ONE calendar link, rendered in both arms: on the team card
-                // it stays in the disclosure body, on the flat card it sits on
-                // the row itself. Named "Add to calendar" + the team, so a
-                // screen reader's link list is not N identical entries.
-                const calendar = tm.calendarHref ? (
+                // ONE calendar control, drawn identically on both card kinds:
+                // an icon-only CORNER TAB, half-overlapping the card's
+                // top-right edge (owner's pick, option A, from the 2026-09-17
+                // mockup round). It replaced a text link that read "Add to
+                // calendar" on the row.
+                //
+                // It is rendered as a SIBLING of the card, never inside it,
+                // and both arms below wrap it in a `relative` `<li>`. That is
+                // not cosmetic: on a team or pair card the body is a native
+                // `<details>`, which hides EVERYTHING after its `<summary>`
+                // from the page and from the accessibility tree until it
+                // opens — so a calendar link nested in the squad body (where
+                // this one lived) was unreachable without first opening the
+                // squad. Outside the `<details>`, it is reachable closed.
+                //
+                // Named "Add to calendar" + the entrant on `aria-label`, for
+                // the reason the old text link gave for its `aria-labelledby`:
+                // every card's control means the same three words, and a
+                // screen reader's link list must not be N identical entries.
+                // `aria-labelledby` pointed at the link's own visible text,
+                // and an icon-only control has none left to point at.
+                const calendarLabel = `${t(dict, "info.calendar")} — ${tm.name}`;
+                // The tap target is the LINK: 44×44, as `MemberLine`'s rows
+                // and the summary are. The visible disc is 28px drawn inside
+                // it, so the corner tab reads as a small tab without the
+                // control being a 28px target (`mobile.spec.ts`'s bar, and it
+                // measures the interactive element, not a box beside it).
+                // `-top-4 -right-4` centres that disc on `-top-2 -right-2` —
+                // 8px proud of the corner, which is exactly the grid's `gap-2`
+                // row gap, so the disc meets the card above rather than
+                // crossing into it.
+                // BOTH conditions, and the schedule one is the stricter: the
+                // document offers an `.ics` for every entrant, so on its own
+                // the href renders a corner tab on a division nobody has
+                // given a time to yet. Nothing takes its place when it is
+                // withheld — no empty corner, no placeholder.
+                const calendarIcon = tm.calendarHref && scheduledEntrants.has(tm.entrantId) ? (
                   <Link
                     data-testid={calendarId}
-                    id={calendarId}
                     href={tm.calendarHref}
-                    aria-labelledby={`${calendarId} ${nameId}`}
-                    className="inline-flex min-h-11 items-center rounded-lg border border-zinc-200/80 px-3 text-sm font-medium text-ink transition hover:border-accent hover:text-accent-strong"
+                    aria-label={calendarLabel}
+                    title={calendarLabel}
+                    className="group absolute -top-4 -right-4 z-10 flex h-11 w-11 items-center justify-center"
                   >
-                    {t(dict, "info.calendar")}
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-zinc-200/80 bg-surface text-ink-muted shadow-sm transition group-hover:border-accent group-hover:text-accent-strong">
+                      {/* Inlined like the chevron below it — this file draws
+                          its own glyphs rather than importing an icon set. */}
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 16 16"
+                        className="h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      >
+                        <rect x="2.25" y="3.25" width="11.5" height="10.5" rx="2" />
+                        <path d="M2.25 6.75h11.5" />
+                        <path d="M5.5 1.75v3" />
+                        <path d="M10.5 1.75v3" />
+                      </svg>
+                    </span>
                   </Link>
                 ) : null;
                 if (flat) {
                   return (
-                    <li key={tm.entrantId} className="min-w-0">
+                    // `relative`: the corner tab below is positioned against
+                    // this cell. The flat card has no disclosure to sit
+                    // outside of, but it is wrapped the same way so both card
+                    // kinds carry the identical control in the identical
+                    // place.
+                    <li key={tm.entrantId} className="relative min-w-0">
                       <div
                         data-testid={`mh-team-${tm.entrantId}`}
                         className="min-w-0 rounded-xl border border-zinc-200/80 bg-surface"
                       >
-                        {/* The closed card's own row, without the chevron —
-                            and the calendar the disclosure used to hide rides
-                            the SECOND line, beside the seed chip, for the
-                            reason the seed chip is there in the first place: a
-                            person's name is what this card is for. Measured in
-                            Chromium on this page, a one-row card (crest, name,
-                            calendar) left the name 121px at 1280, 160 at 768
-                            and 84 at 320, against 239/278/202 on a team card —
-                            "Alexander Montgomery-Fitzwilliam" cut to
-                            "Alexander Mo…" on a desktop with a whole row
-                            spare. Nothing is hidden either way; the two lines
-                            are what let the name have the width. */}
+                        {/* The closed card's own row, without the chevron. The
+                            calendar no longer rides the SECOND line here — it
+                            is the corner tab now — so this row is crest, name
+                            and, when the entrant has one, the seed chip.
+                            Measured in Chromium on this page, a one-row card
+                            (crest, name, calendar) left the name 121px at
+                            1280, 160 at 768 and 84 at 320, against 239/278/202
+                            on a team card — "Alexander Montgomery-Fitzwilliam"
+                            cut to "Alexander Mo…" on a desktop with a whole
+                            row spare. Lifting the calendar out of the row is
+                            what gives that width back. */}
                         <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-2">
                           <EntityLogo src={tm.badgeUrl} name={tm.name} colour={tm.colour} size={32} />
                           <span className="min-w-0 flex-1">
@@ -269,28 +346,32 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                                 {tm.name}
                               </span>
                             )}
-                            {tm.seed !== null || calendar ? (
+                            {/* `!== null`, never truthiness: seed 0 is a seed,
+                                and a singles entrant can be seeded. */}
+                            {tm.seed !== null ? (
                               <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                                {/* `!== null`, never truthiness: seed 0 is a
-                                    seed, and a singles entrant can be seeded. */}
-                                {tm.seed !== null ? (
-                                  <span className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
-                                    {t(dict, "teams.seed", { seed: tm.seed })}
-                                  </span>
-                                ) : null}
-                                {calendar}
+                                <span className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
+                                  {t(dict, "teams.seed", { seed: tm.seed })}
+                                </span>
                               </span>
                             ) : null}
                           </span>
                         </div>
                       </div>
+                      {calendarIcon}
                     </li>
                   );
                 }
                 return (
                   // An OPEN card takes the whole row. The class is on the GRID
                   // ITEM (the `<li>`), because `grid-column` is the item's.
-                  <li key={tm.entrantId} className="min-w-0 [&:has(details[open])]:col-span-full">
+                  // `relative` for the corner tab, which is a SIBLING of the
+                  // `<details>` — nested inside it, the browser would hide it
+                  // whenever the squad is closed, which is every card on
+                  // arrival. The tab corners itself against this cell, so it
+                  // lands on the card's top-right whether the cell is one
+                  // column wide or spanning the whole row.
+                  <li key={tm.entrantId} className="relative min-w-0 [&:has(details[open])]:col-span-full">
                     <details
                       data-testid={`mh-team-${tm.entrantId}`}
                       className="group min-w-0 rounded-xl border border-zinc-200/80 bg-surface"
@@ -356,9 +437,9 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                             ))}
                           </ul>
                         )}
-                        {calendar}
                       </div>
                     </details>
+                    {calendarIcon}
                   </li>
                 );
               })}
