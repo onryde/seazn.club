@@ -143,9 +143,7 @@ async function playRoundHomeWins(orgId: string, stageId: string, roundNo: number
   }
 }
 
-// Pair-next seating onto minted shells lands in Task 3 — these cases still
-// document the cascade/bye regressions they guard and will be re-enabled there.
-describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the real cascade (Task 3: Pair next)", () => {
+describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real cascade", () => {
   /** Round 1 is seeded, so rank-adjacent pairs 1v2, 3v4, 5v6, 7v8 and the
    *  winners below are E1, E3, E5, E7 — i.e. SEED order among winners is
    *  E1 < E3 < E5 < E7.
@@ -203,6 +201,7 @@ describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the r
       progression: null,
     });
     await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stage!.id);
 
     const round1 = await fixturesOfRound(stage!.id, 1);
     expect(round1.map((f) => pairOf(f, nameOf)).sort()).toEqual([
@@ -248,6 +247,7 @@ describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the r
       progression: null,
     });
     await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stage!.id);
 
     const round1 = await fixturesOfRound(stage!.id, 1);
     expect(round1.map((f) => pairOf(f, nameOf)).sort()).toEqual([
@@ -285,16 +285,17 @@ describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the r
       progression: null,
     });
     await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stage!.id);
     await playRoundHomeWins(auth.orgId, stage!.id, 1);
 
-    // Rounds 2 and 3 exist; the fourth Generate is a no-op.
+    // Rounds 2 and 3 are seated one at a time; a fifth Pair is a no-op.
     for (const round of [2, 3]) {
       const made = await generateStageFixtures(auth, stage!.id);
       expect(made.created, `round ${round} created`).toBe(4);
       await playRoundHomeWins(auth.orgId, stage!.id, round);
     }
-    const fourth = await generateStageFixtures(auth, stage!.id);
-    expect(fourth.created).toBe(0);
+    const fifth = await generateStageFixtures(auth, stage!.id);
+    expect(fifth.created).toBe(0);
     const [{ n }] = await sql<{ n: number }[]>`
       select max(round_no)::int as n from fixtures where stage_id = ${stage!.id}`;
     expect(n).toBe(3);
@@ -314,6 +315,7 @@ describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the r
       progression: null,
     });
     await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stage!.id);
 
     // Round 1 is adjacent over the six pairable seeds with the bottom seed
     // sitting out — NOT the fold (which would have been E1vE4, E2vE5, E3vE6).
@@ -364,7 +366,6 @@ describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the r
       config: { pairing: "rank_adjacent", rounds: derived },
       progression: null,
     });
-    await startDivision(auth, divisionId);
     expect(await configOf(stage!.id)).toMatchObject({ rounds: derived });
 
     // The organiser lengthens the swiss from the Settings tab — the same
@@ -375,15 +376,18 @@ describe.runIf(HAS_DB).skip("swiss playoff — rank-adjacent repairing off the r
     const declared = derived + 1;
     await sql`update stages set config = config || jsonb_build_object('rounds', ${declared}::int)
               where id = ${stage!.id}`;
+    await startDivision(auth, divisionId);
 
     for (let round = 1; round <= declared; round++) {
-      await playRoundHomeWins(auth.orgId, stage!.id, round);
       const made = await generateStageFixtures(auth, stage!.id);
-      expect(made.created, `generation after round ${round}`).toBe(round < declared ? 4 : 0);
+      expect(made.created, `pair round ${round}`).toBe(4);
+      await playRoundHomeWins(auth.orgId, stage!.id, round);
       expect(await configOf(stage!.id), `config after round ${round}`).toMatchObject({
         rounds: declared,
       });
     }
+    const done = await generateStageFixtures(auth, stage!.id);
+    expect(done.created).toBe(0);
     expect(await lastRoundOf(stage!.id)).toBe(declared);
   });
 });
