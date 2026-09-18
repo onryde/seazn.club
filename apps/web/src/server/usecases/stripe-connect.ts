@@ -116,6 +116,32 @@ export async function connectStatus(
 export const CONNECT_ACCOUNT_DEFAULT_COUNTRY = "GB";
 
 /**
+ * Run one Stripe call for the onboarding flow, masking any failure.
+ *
+ * Without this, `v1()`'s catch-all (server/api-v1/http.ts) puts `err.message`
+ * straight into the 500 body and `startOnboarding()` in
+ * org-payment-instructions.tsx renders it verbatim — so Stripe's raw text
+ * ("You provided a malformed API Key 'sk_test_…' for account 'acct_…'") is
+ * printed on a money screen, naming the PLATFORM key and account id.
+ * `createConnectDashboardLink` below already guards its own call this way;
+ * this is the same shape — log the detail, answer clean 502.
+ *
+ * Deliberately wraps only the Stripe calls, not the whole function body: the
+ * refusals around them (the 422 ToS gate, the two 500s) are already clean,
+ * deliberate answers whose copy tells the owner what to do, and a catch-all
+ * over the lot would relabel them — and a failing `sql` query — as "Stripe
+ * couldn't", which is both wrong and unactionable.
+ */
+async function stripeOnboardingStep<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    log.error({ err }, "createConnectOnboardingLink failed");
+    throw new HttpError(502, "Stripe couldn't start onboarding for this organization");
+  }
+}
+
+/**
  * Create (once) the connected account — Accounts v2, Express Dashboard — and
  * mint an onboarding link through Account Links v1. Gated on
  * `registration.paid`, which V310 (D19) made free on every plan — so the gate
@@ -174,43 +200,49 @@ export async function createConnectOnboardingLink(
     // blank name is reachable — and `display_name: ""` is a 400, while an
     // ABSENT display_name simply lets Stripe collect one during onboarding.
     const displayName = profile.org_name.trim();
-    const account = await stripe.v2.core.accounts.create({
-      // The Express Dashboard, exactly as the v1 `type: "express"` account
-      // had. Required whenever a merchant or recipient configuration is
-      // present, and it is what keeps createConnectDashboardLink's v1 Login
-      // Link path applicable instead of forcing an embedded-components build.
-      dashboard: "express",
-      contact_email: profile.owner_email,
-      ...(displayName ? { display_name: displayName } : {}),
-      identity: { country: CONNECT_ACCOUNT_DEFAULT_COUNTRY },
-      configuration: {
-        // BOTH halves, which is exact parity with v1's `card_payments` +
-        // `transfers`. Dropping `merchant` is the trap: a recipient-only
-        // account can receive transfers but may never light `charges_enabled`
-        // — written in one place (syncConnectAccount, below) and read across
-        // ~17 non-test sites that gate registration, sponsors and public data.
-        merchant: { capabilities: { card_payments: { requested: true } } },
-        recipient: {
-          capabilities: { stripe_balance: { stripe_transfers: { requested: true } } },
+    // Pinned for the same reason as `linkAccount` below: the guard above
+    // narrows `owner_email` to a string, but TypeScript drops that narrowing
+    // for a property read inside a callback.
+    const contactEmail = profile.owner_email;
+    const account = await stripeOnboardingStep(() =>
+      stripe.v2.core.accounts.create({
+        // The Express Dashboard, exactly as the v1 `type: "express"` account
+        // had. Required whenever a merchant or recipient configuration is
+        // present, and it is what keeps createConnectDashboardLink's v1 Login
+        // Link path applicable instead of forcing an embedded-components build.
+        dashboard: "express",
+        contact_email: contactEmail,
+        ...(displayName ? { display_name: displayName } : {}),
+        identity: { country: CONNECT_ACCOUNT_DEFAULT_COUNTRY },
+        configuration: {
+          // BOTH halves, which is exact parity with v1's `card_payments` +
+          // `transfers`. Dropping `merchant` is the trap: a recipient-only
+          // account can receive transfers but may never light `charges_enabled`
+          // — written in one place (syncConnectAccount, below) and read across
+          // ~17 non-test sites that gate registration, sponsors and public data.
+          merchant: { capabilities: { card_payments: { requested: true } } },
+          recipient: {
+            capabilities: { stripe_balance: { stripe_transfers: { requested: true } } },
+          },
         },
-      },
-      defaults: {
-        // Deliberately NO `currency`: syncConnectAccount below handles a null
-        // settlement currency on purpose (an account has none until Stripe
-        // knows its country/bank), and the field does not follow a later
-        // country change, so anything pinned here would go stale.
-        //
-        // Both collectors are `application` — not a new policy, a statement of
-        // what destination charges already do: the platform pays Stripe's
-        // processing fees and owns negative-balance liability (the recovery
-        // path is dispute-recovery.ts, and the ToS gate above is the club
-        // agreeing to it).
-        responsibilities: { fees_collector: "application", losses_collector: "application" },
-      },
-      // Unchanged from v1, and load-bearing: the ToS acceptance timestamp
-      // lives HERE, not in a DB column (see the gate above).
-      metadata: { org_id: orgId, tos_agreed_at: new Date().toISOString() },
-    });
+        defaults: {
+          // Deliberately NO `currency`: syncConnectAccount below handles a null
+          // settlement currency on purpose (an account has none until Stripe
+          // knows its country/bank), and the field does not follow a later
+          // country change, so anything pinned here would go stale.
+          //
+          // Both collectors are `application` — not a new policy, a statement of
+          // what destination charges already do: the platform pays Stripe's
+          // processing fees and owns negative-balance liability (the recovery
+          // path is dispute-recovery.ts, and the ToS gate above is the club
+          // agreeing to it).
+          responsibilities: { fees_collector: "application", losses_collector: "application" },
+        },
+        // Unchanged from v1, and load-bearing: the ToS acceptance timestamp
+        // lives HERE, not in a DB column (see the gate above).
+        metadata: { org_id: orgId, tos_agreed_at: new Date().toISOString() },
+      }),
+    );
     accountId = account.id;
     // First write wins: a concurrent onboarding click must not orphan an
     // account that Stripe already created for this org.
@@ -224,12 +256,17 @@ export async function createConnectOnboardingLink(
     }
   }
 
-  const link = await stripe.accountLinks.create({
-    account: accountId,
-    type: "account_onboarding",
-    refresh_url: `${origin}${returnPath}?connect=refresh`,
-    return_url: `${origin}${returnPath}?connect=return`,
-  });
+  // Pinned to a const: `accountId` is a `let`, and TypeScript drops its
+  // non-null narrowing inside a callback (the closure could run later).
+  const linkAccount = accountId;
+  const link = await stripeOnboardingStep(() =>
+    stripe.accountLinks.create({
+      account: linkAccount,
+      type: "account_onboarding",
+      refresh_url: `${origin}${returnPath}?connect=refresh`,
+      return_url: `${origin}${returnPath}?connect=return`,
+    }),
+  );
   return { url: link.url };
 }
 

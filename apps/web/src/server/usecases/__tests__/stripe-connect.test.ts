@@ -302,6 +302,74 @@ describe.skipIf(!HAS_DB)("Connect account creation goes through Accounts v2", ()
   });
 });
 
+describe.skipIf(!HAS_DB)("Onboarding masks Stripe's raw failures", () => {
+  // `v1()`'s catch-all (server/api-v1/http.ts) puts `err.message` straight into
+  // the 500 body, and org-payment-instructions.tsx's startOnboarding() renders
+  // that message verbatim — so an unguarded Stripe throw here is printed on a
+  // money screen. `createConnectDashboardLink` below already guards its own
+  // call the same way; these two pin the onboarding half.
+  //
+  // Both halves are asserted on purpose: "the raw text is gone" alone is
+  // satisfied by any replacement (including an empty message or a 500 that
+  // says nothing), so each case also pins the status and the generic string.
+  const RAW = "You provided a malformed API Key 'sk_test_51Hxxx' for account 'acct_1Leak'";
+  const GENERIC = "Stripe couldn't start onboarding for this organization";
+
+  it("a failing account CREATE becomes a clean 502, not Stripe's message", async () => {
+    const { owner, orgId } = await seedProOrg();
+    stripeMock.v2AccountCreate.mockRejectedValue(
+      Object.assign(new Error(RAW), { type: "StripeAuthenticationError", statusCode: 401 }),
+    );
+    const err = (await createConnectOnboardingLink(
+      owner,
+      orgId,
+      "http://test.local",
+      "/settings/connect",
+      true,
+    ).catch((e) => e)) as Error & { status?: number };
+    // Negative: no key material, no account id, none of Stripe's wording.
+    expect(err.message).not.toContain("malformed API Key");
+    expect(err.message).not.toMatch(/sk_test|acct_/);
+    // Positive pair: it is the generic 502 and not some other refusal that
+    // happens to lack those substrings (a 402/422 would also pass the above).
+    expect(err.status).toBe(502);
+    expect(err.message).toBe(GENERIC);
+  });
+
+  it("a failing LINK mint is masked too — the resume path throws no account create", async () => {
+    // An org that already holds an account takes the resume branch, so the
+    // only Stripe call left is accountLinks.create. Without its own guard this
+    // one leaks even when the create path is wrapped.
+    const { owner, orgId } = await seedProOrg();
+    await sql`update organizations set stripe_account_id = ${"acct_link_" + orgId.slice(0, 8)}
+              where id = ${orgId}`;
+    stripeMock.accountLinkCreate.mockRejectedValue(
+      Object.assign(new Error(RAW), { type: "StripeAuthenticationError", statusCode: 401 }),
+    );
+    const err = (await createConnectOnboardingLink(
+      owner,
+      orgId,
+      "http://test.local",
+      "/settings/connect",
+      true,
+    ).catch((e) => e)) as Error & { status?: number };
+    expect(err.message).not.toMatch(/malformed API Key|sk_test|acct_/);
+    expect(err.status).toBe(502);
+    expect(err.message).toBe(GENERIC);
+    expect(stripeMock.v2AccountCreate).not.toHaveBeenCalled();
+  });
+
+  it("the org's OWN refusals still answer as themselves, not as a Stripe 502", async () => {
+    // The guard must mask Stripe, not swallow the deliberate answers around
+    // it. Without this, wrapping the whole body in one catch-all would look
+    // green: the ToS 422 is the copy that tells an owner what to DO.
+    const { owner, orgId } = await seedProOrg();
+    await expect(
+      createConnectOnboardingLink(owner, orgId, "http://test.local", "/settings/connect"),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+});
+
 describe.skipIf(!HAS_DB)("Express dashboard login link", () => {
   it("connected org gets a fresh login link for its account", async () => {
     const { owner, orgId } = await seedProOrg();
