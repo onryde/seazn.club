@@ -115,10 +115,14 @@ describe.skipIf(!LIVE)("Accounts v2 create against live Stripe (test mode)", () 
   });
 
   it("the V1 INTEROP VIEW still carries every field syncConnectAccount mirrors", async () => {
-    // This is the tripwire. The five reads below are exactly
-    // syncConnectAccount's, and if any of them stops being present on the v1
-    // view of a v2 account, every Connect health flag in this app silently
-    // stops updating.
+    // This is the tripwire. SIX fields are read below, and they are not all
+    // one function's: five are syncConnectAccount's (charges_enabled,
+    // payouts_enabled, default_currency, and requirements' currently_due +
+    // disabled_reason); `details_submitted` is connectStatus's (stripe-
+    // connect.ts:83) and syncConnectAccount never touches it — it is what the
+    // return-from-onboarding page shows before the webhook lands. If any of
+    // them stops being present on the v1 view of a v2 account, every Connect
+    // health flag in this app silently stops updating.
     const v1 = await stripe.accounts.retrieve(account.id);
     expect(v1.object).toBe("account");
     expect(typeof v1.charges_enabled).toBe("boolean");
@@ -134,15 +138,19 @@ describe.skipIf(!LIVE)("Accounts v2 create against live Stripe (test mode)", () 
     expect(v1.requirements).toBeDefined();
   });
 
-  it("settles whether the v1 view exposes `capabilities`, which the fixture script depends on", async () => {
-    // scripts/stripe-connect-fixture.ts is the ONE remaining v1
-    // `accounts.create` in this repo, and it is still v1 precisely because its
-    // `isHealthy()` reads `account.capabilities?.transfers` off this view and
-    // nobody had confirmed that survives for a v2 account.
+  it("the v1 view exposes `capabilities`, which the fixture script depends on", async () => {
+    // This assertion is what UNBLOCKED the fixture migration. While it was
+    // open, scripts/stripe-connect-fixture.ts was the last v1
+    // `accounts.create` in the repo, held there because its `isHealthy()`
+    // reads `account.capabilities?.transfers` off this view and nobody had
+    // confirmed that survives for a v2 account. It does, so the script now
+    // creates through v2 and reads the account back through this same view.
     //
-    // A RED here is the answer, not a flake: it means the fixture script must
-    // stay on v1 (or `isHealthy` must be rewritten against the v2 account's
-    // own capability status) — record it and leave the script alone.
+    // A RED here is therefore no longer "leave the script alone" — it is the
+    // opposite. It means the SHIPPED fixture is broken: every local and CI
+    // destination-charge fixture would report not-ready for ever, sending
+    // operators back through onboarding that can never satisfy it. Fix the
+    // script (or `isHealthy`) rather than recording the result.
     const v1 = await stripe.accounts.retrieve(account.id);
     expect(v1.capabilities).toBeDefined();
     expect(v1.capabilities?.transfers).toBeDefined();

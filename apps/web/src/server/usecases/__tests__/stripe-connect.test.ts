@@ -20,11 +20,18 @@ const stripeMock = vi.hoisted(() => {
   const v2AccountCreate = vi.fn();
   const accountLinkCreate = vi.fn();
   const loginLinkCreate = vi.fn();
+  // A spy rather than a fixed arrow, so a test can make CLIENT CONSTRUCTION
+  // itself fail. That is a real production path — getStripe() throws a plain
+  // Error naming the env var when STRIPE_SECRET_KEY is unset
+  // (lib/stripe.ts:8-11) — and because it is not a call ON the client, a stub
+  // that always hands one back cannot reach it.
+  const getStripe = vi.fn();
   return {
     accountCreate,
     v2AccountCreate,
     accountLinkCreate,
     loginLinkCreate,
+    getStripe,
     stripe: {
       accounts: { create: accountCreate, createLoginLink: loginLinkCreate },
       accountLinks: { create: accountLinkCreate },
@@ -33,7 +40,7 @@ const stripeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
+vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.getStripe() }));
 
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
@@ -82,6 +89,7 @@ async function seedProOrg(opts: { orgName?: string } = {}): Promise<{
 }
 
 beforeEach(() => {
+  stripeMock.getStripe.mockReset().mockReturnValue(stripeMock.stripe);
   stripeMock.accountCreate.mockReset().mockImplementation(async () => ({
     id: "acct_v1_" + randomUUID().slice(0, 8),
   }));
@@ -276,9 +284,22 @@ describe.skipIf(!HAS_DB)("Connect account creation goes through Accounts v2", ()
       role: "owner",
       keyId: null,
     };
-    await expect(
-      createConnectOnboardingLink(ghost, orgId, "http://test.local", "/settings/connect", true),
-    ).rejects.toMatchObject({ status: 500 });
+    // Answered as the SAME masked 502 the Stripe failures use, not a 500
+    // carrying its own English sentence. Status alone is not the assertion:
+    // this message is what startOnboarding() would have rendered verbatim, so
+    // the copy is pinned too. The 502 is what routes it to `pay.onboardErr` on
+    // the client — org-payment-instructions-connect-error-i18n.test.tsx owns
+    // the render half of that chain.
+    const err = (await createConnectOnboardingLink(
+      ghost,
+      orgId,
+      "http://test.local",
+      "/settings/connect",
+      true,
+    ).catch((e) => e)) as Error & { status?: number };
+    expect(err.status).toBe(502);
+    expect(err.message).toBe("Stripe couldn't start onboarding for this organization");
+    expect(err.message).not.toContain("owner's email");
     expect(stripeMock.v2AccountCreate).not.toHaveBeenCalled();
     const [org] = await sql<{ stripe_account_id: string | null }[]>`
       select stripe_account_id from organizations where id = ${orgId}`;
@@ -314,6 +335,31 @@ describe.skipIf(!HAS_DB)("Onboarding masks Stripe's raw failures", () => {
   // says nothing), so each case also pins the status and the generic string.
   const RAW = "You provided a malformed API Key 'sk_test_51Hxxx' for account 'acct_1Leak'";
   const GENERIC = "Stripe couldn't start onboarding for this organization";
+  /** The real text getStripe() throws with no key (lib/stripe.ts:8-11). */
+  const NO_KEY = "STRIPE_SECRET_KEY is not set. Add it to .env.local (use a test key for local dev).";
+
+  it("a failing getStripe() is masked too — it throws a plain Error, so it reached the client as a 500", async () => {
+    // The path the first pass missed. getStripe() sat OUTSIDE the mask, and
+    // because it throws a bare Error rather than an HttpError, v1()'s
+    // catch-all (http.ts:245-247) answered 500 with the message verbatim —
+    // which the client's 502-only routing does not translate either, so a
+    // misconfigured deploy printed the env var's NAME on a money screen.
+    const { owner, orgId } = await seedProOrg();
+    stripeMock.getStripe.mockImplementation(() => {
+      throw new Error(NO_KEY);
+    });
+    const err = (await createConnectOnboardingLink(
+      owner,
+      orgId,
+      "http://test.local",
+      "/settings/connect",
+      true,
+    ).catch((e) => e)) as Error & { status?: number };
+    expect(err.message).not.toContain("STRIPE_SECRET_KEY");
+    expect(err.message).not.toContain(".env.local");
+    expect(err.status).toBe(502);
+    expect(err.message).toBe(GENERIC);
+  });
 
   it("a failing account CREATE becomes a clean 502, not Stripe's message", async () => {
     const { owner, orgId } = await seedProOrg();

@@ -1149,10 +1149,13 @@ test.describe("T13 · first connect — the ToS gate and a create that fails cle
       ),
       cta.click(),
     ]);
-    // Dummy key in this project, so the v2 create cannot succeed. The
-    // ASSERTION is not "it failed" — it is that a failure is answered, not
-    // swallowed: a 2xx here would mean the account was created for real.
-    expect(res.status(), "no real Stripe account can be minted on a dummy key").toBeGreaterThanOrEqual(400);
+    // Dummy key in this project, so the v2 create cannot succeed. Pinned to
+    // the EXACT status rather than `>= 400`: 502 is the masked answer
+    // (stripe-connect.ts's stripeOnboardingStep), and the STATUS is what makes
+    // the client render translated copy. A 500 here would mean a failure
+    // escaped the mask with Stripe's raw message aboard — and `>= 400` cannot
+    // tell those two apart, which is why it passed while the leak was open.
+    expect(res.status(), "a failed create is masked as a clean 502").toBe(502);
 
     // The half-connected state is the one that actually hurts: an org row
     // carrying a stripe_account_id it never finished onboarding reads as
@@ -1163,10 +1166,18 @@ test.describe("T13 · first connect — the ToS gate and a create that fails cle
     );
     expect(row.stripe_account_id, "a failed create must not half-attach the org").toBeNull();
 
-    // And the owner is told, rather than left looking at a button that did
-    // nothing. (The exact copy is not pinned here: the onboarding path
-    // forwards the upstream message — see the report's finding on it.)
-    await expect(card.locator("p.text-red-600").first()).toBeVisible({ timeout: 15_000 });
+    // And the owner is told, in the DICTIONARY's words. The copy is pinned
+    // because a visibility check alone passed identically whether the owner
+    // read this sentence, Stripe's raw key-naming text, or the name of an
+    // unset env var — the three states this whole path exists to keep apart.
+    const shown = card.locator("p.text-red-600").first();
+    await expect(shown).toBeVisible({ timeout: 15_000 });
+    await expect(shown, "the localized sentence, not the server's English").toHaveText(
+      "Could not start Stripe onboarding",
+    );
+    // The negative half: nothing from Stripe or our own config reaches it.
+    await expect(shown).not.toContainText("Stripe couldn't");
+    await expect(shown).not.toContainText("STRIPE_SECRET_KEY");
   });
 });
 

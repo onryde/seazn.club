@@ -154,6 +154,13 @@ describe("createFixtureAccount", () => {
     expect(p.dashboard).toBe("express");
     // Required by the v2 API whenever configuration.recipient is supplied.
     expect(p.contact_email).toMatch(/@/);
+    // Production sends display_name (from organizations.name) for every org
+    // whose name is non-blank — essentially always. The fixture sends one too,
+    // so the account Stripe creates here has the same SHAPE as a real one, and
+    // so the row is identifiable in the test Dashboard rather than nameless.
+    // Pinned NON-EMPTY, not merely present: `display_name: ""` is a 400 from
+    // the v2 API, which is exactly the trap production's own guard avoids.
+    expect(String(p.display_name ?? "").trim()).not.toBe("");
     // Required before configuration.merchant may be set.
     expect(p.identity?.country).toBe(FIXTURE_ACCOUNT_COUNTRY);
     // BOTH capability halves — parity with the v1 card_payments + transfers

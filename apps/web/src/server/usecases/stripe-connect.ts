@@ -116,28 +116,43 @@ export async function connectStatus(
 export const CONNECT_ACCOUNT_DEFAULT_COUNTRY = "GB";
 
 /**
- * Run one Stripe call for the onboarding flow, masking any failure.
+ * The one answer an owner gets when onboarding cannot start. A const because
+ * several sites use it and drifting copy would be invisible: the client maps
+ * this 502 to `pay.onboardErr`, so the English below never reaches a screen —
+ * it is the STATUS that carries the meaning, and a site inventing its own
+ * wording would still be masked and still be untested.
+ */
+const ONBOARDING_FAILED = "Stripe couldn't start onboarding for this organization";
+
+/**
+ * Run one step of the onboarding flow that can fail outside our control,
+ * masking the failure.
  *
- * Without this, `v1()`'s catch-all (server/api-v1/http.ts) puts `err.message`
- * straight into the 500 body and `startOnboarding()` in
+ * Without this, `v1()`'s catch-all (server/api-v1/http.ts:245-247) puts
+ * `err.message` straight into the response body and `startOnboarding()` in
  * org-payment-instructions.tsx renders it verbatim — so Stripe's raw text
  * ("You provided a malformed API Key 'sk_test_…' for account 'acct_…'") is
  * printed on a money screen, naming the PLATFORM key and account id.
- * `createConnectDashboardLink` below already guards its own call this way;
- * this is the same shape — log the detail, answer clean 502.
  *
- * Deliberately wraps only the Stripe calls, not the whole function body: the
- * refusals around them (the 422 ToS gate, the two 500s) are already clean,
- * deliberate answers whose copy tells the owner what to do, and a catch-all
- * over the lot would relabel them — and a failing `sql` query — as "Stripe
- * couldn't", which is both wrong and unactionable.
+ * `getStripe()` goes INSIDE this guard, exactly as it does inside
+ * `createConnectDashboardLink`'s try below. Client construction throws a bare
+ * Error naming STRIPE_SECRET_KEY when the key is missing (lib/stripe.ts:8-11),
+ * and a bare Error is not an HttpError — so leaving it outside answered 500
+ * with the env var's name in the body, and 500 is not a status the client
+ * translates either. Hence `run` may be sync or async: so the call can be
+ * passed straight in.
+ *
+ * Deliberately wraps only these steps, not the whole function body: the
+ * refusals around them — the 422 ToS gate above all — are deliberate answers
+ * whose copy tells the owner what to DO, and a catch-all over the lot would
+ * relabel them, and a failing `sql` query, as "Stripe couldn't".
  */
-async function stripeOnboardingStep<T>(run: () => Promise<T>): Promise<T> {
+async function stripeOnboardingStep<T>(run: () => T | Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (err) {
     log.error({ err }, "createConnectOnboardingLink failed");
-    throw new HttpError(502, "Stripe couldn't start onboarding for this organization");
+    throw new HttpError(502, ONBOARDING_FAILED);
   }
 }
 
@@ -180,7 +195,7 @@ export async function createConnectOnboardingLink(
       "Agree to the Terms of Service (entry-fee chargebacks) before connecting Stripe",
     );
   }
-  const stripe = getStripe();
+  const stripe = await stripeOnboardingStep(() => getStripe());
   if (!accountId) {
     // Two values Accounts v2 requires that v1 did not, and that nothing in
     // scope already holds: `AuthCtx` carries a userId but no email, and
@@ -194,7 +209,17 @@ export async function createConnectOnboardingLink(
       from organizations o
       where o.id = ${orgId}`;
     if (!profile?.owner_email) {
-      throw new HttpError(500, "Could not read the owner's email for the Stripe account");
+      // Not a Stripe failure, but the same dead end for the owner: onboarding
+      // cannot start and there is nothing they can do about it. Answered with
+      // the SAME masked 502 rather than a 500 carrying its own sentence —
+      // a 500 renders verbatim on the client, so this was a new English-only
+      // string on a money screen. The actionable detail goes to the log,
+      // where an operator can act on it.
+      log.error(
+        { org_id: orgId, user_id: auth.userId },
+        "createConnectOnboardingLink: no owner email for contact_email",
+      );
+      throw new HttpError(502, ONBOARDING_FAILED);
     }
     // `organizations.name` is `text not null` with no non-empty CHECK, so a
     // blank name is reachable — and `display_name: ""` is a 400, while an
