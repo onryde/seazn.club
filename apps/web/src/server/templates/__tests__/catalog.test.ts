@@ -155,6 +155,26 @@ describe("template catalog", () => {
     });
   });
 
+  // D2a, review 2026-09-18 — `TemplateStage.config` is an untyped record that
+  // `effectiveStageConfig` spreads verbatim into `stages.config`, so a `rules`
+  // key declared here would reach the column with no sport gate, no allowlist
+  // and no merged parse, for any sport. `effectiveStageConfig` now refuses one
+  // at runtime; this is the half that fails in CI instead of in production,
+  // where a catalog author would otherwise ship a template that 400s on every
+  // instantiation. Per-stage rules are set through PUT /stages/{id}/rules.
+  it("declares no per-stage match rules on any template stage", () => {
+    const offenders: string[] = [];
+    for (const template of TEMPLATE_CATALOG)
+      for (const division of template.divisions)
+        for (const [i, stage] of division.stages.entries())
+          if (stage.config && "rules" in stage.config)
+            offenders.push(`${template.key}/${division.i18nNameKey}/stage[${i}]`);
+    expect(offenders).toEqual([]);
+    // Non-vacuous: the catalog really does have stages to scan.
+    expect(TEMPLATE_CATALOG.flatMap((t) => t.divisions.flatMap((d) => d.stages)).length)
+      .toBeGreaterThan(0);
+  });
+
   describe("league-playoff — league table into a page_playoff", () => {
     it("pins the page_playoff stage's progression: rankRange 1..4, rank_order, setup timing", () => {
       const lp = getTemplate("league-playoff")!;

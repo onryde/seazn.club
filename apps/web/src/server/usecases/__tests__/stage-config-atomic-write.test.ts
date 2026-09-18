@@ -17,7 +17,7 @@
 // shape audit at the bottom is what keeps them converted.
 import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -158,22 +158,38 @@ describe.skipIf(!HAS_DB)("stage config writes merge server-side (design §T2)", 
 
   // The behavioural test above can only park the two sites that lock after
   // their read. This keeps the other four converted: every `update stages set
-  // config` in these two files must merge server-side (`config || …`), never
-  // re-write a spread of a value read into JS. Deleting a site is fine; turning
-  // one back into a spread is not.
-  it("leaves no read-modify-write stage-config writer in stages.ts or scoring.ts", () => {
-    const root = process.cwd();
+  // config` must merge server-side (`config || …`) or delete a key
+  // (`config - '…'`), never re-write a spread of a value read into JS.
+  // Deleting a site is fine; turning one back into a spread is not.
+  //
+  // Reviewed 2026-09-18. It used to name `stages.ts` and `scoring.ts` and scan
+  // LINE BY LINE, which failed twice over: a seventh writer in a third file was
+  // invisible to it (`templates.ts` and `stage-rules.ts` both write this column
+  // now), and this repo's SQL is routinely wrapped across lines, so the
+  // per-line regex could not see the very shape it exists to catch. Glob the
+  // directory and scan the FLATTENED source.
+  it("leaves no read-modify-write stage-config writer anywhere in usecases/", () => {
+    const dir = join(process.cwd(), "src/server/usecases");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".ts"));
+    // Non-vacuous: a glob that silently matched nothing would pass forever.
+    expect(files.length).toBeGreaterThan(20);
+
     const offenders: string[] = [];
-    for (const file of ["src/server/usecases/stages.ts", "src/server/usecases/scoring.ts"]) {
-      const src = readFileSync(join(root, file), "utf8");
-      src.split("\n").forEach((line, i) => {
-        if (/update stages\s+set config\s*=\s*\$\{/.test(line)) offenders.push(`${file}:${i + 1}`);
-      });
-      // The write is often split across lines; catch the spread form too.
-      const flat = src.replace(/\s+/g, " ");
-      for (const m of flat.matchAll(/update stages set config = \$\{[^}]*\.\.\./g))
-        offenders.push(`${file}: spread form — ${m[0].slice(0, 80)}`);
+    let writersSeen = 0;
+    for (const file of files) {
+      const flat = readFileSync(join(dir, file), "utf8").replace(/\s+/g, " ");
+      for (const m of flat.matchAll(/update stages set config = (.{0,120})/g)) {
+        writersSeen++;
+        const tail = m[1]!;
+        // Server-side merge (`config || …`) and key delete (`config - 'rules'`)
+        // are the two legal shapes. Anything else interpolates a JS-side value
+        // straight into the column, which is the read-modify-write window.
+        if (!/^\$\{/.test(tail)) continue; // `config || …` / `config - '…'` — legal
+        offenders.push(`${file}: ${m[0].slice(0, 90)}`);
+      }
     }
+    // …and the scan really is looking at writers, not at an empty match set.
+    expect(writersSeen).toBeGreaterThan(0);
     expect(offenders).toEqual([]);
   });
 });

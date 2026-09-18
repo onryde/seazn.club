@@ -250,14 +250,17 @@ export async function listStages(auth: AuthCtx, divisionId: string): Promise<Sta
  * — so a football division could otherwise smuggle shoot-out points (a shape
  * `SPORT_RULES.football` genuinely emits) straight past the entitlement.
  */
+export function assertConfigCarriesNoRules(config: Record<string, unknown> | null | undefined): void {
+  if (config && "rules" in config)
+    throw new HttpError(
+      400,
+      "per-stage match rules are set through PUT /stages/{id}/rules",
+      "RULES_NOT_ACCEPTED_HERE",
+    );
+}
+
 function assertNoRulesKey(inputs: readonly StageInput[]): void {
-  for (const s of inputs)
-    if (s.config && "rules" in s.config)
-      throw new HttpError(
-        400,
-        "per-stage match rules are set through PUT /stages/{id}/rules",
-        "RULES_NOT_ACCEPTED_HERE",
-      );
+  for (const s of inputs) assertConfigCarriesNoRules(s.config);
 }
 
 export async function createStages(
@@ -402,7 +405,7 @@ export async function replaceStages(
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
-  await withTenant(auth.orgId, async (tx) => {
+  const carried = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
@@ -414,9 +417,51 @@ export async function replaceStages(
     if (locked) {
       throw new HttpError(409, "Format is locked — fixtures exist", "FORMAT_LOCKED");
     }
+    // Per-stage match-rules overrides survive the delete (design 2026-09-17,
+    // owner ruling 2026-09-18). The Format tab's Apply is a delete-and-recreate
+    // from the template body, and that body cannot carry `rules` — the guard
+    // above refuses it, because a stage-config body is not a path that
+    // validates one. So the carry-forward has to happen HERE, server-side,
+    // rather than by asking the client to re-issue a PUT afterwards: it then
+    // holds for every caller of this function, not just the one screen we
+    // happened to fix.
+    const rows = await tx<{ seq: number; kind: string; config: Record<string, unknown> }[]>`
+      select seq, kind, config from stages where division_id = ${divisionId}`;
+    const keep = new Map<string, Record<string, unknown>>();
+    for (const r of rows) {
+      const rules = r.config?.rules;
+      // Keyed on seq AND kind. A format override belongs to a stage SLOT, and
+      // "the knockout is Best-of-5" does not mean "whatever now sits at seq 2
+      // is Best-of-5" — an Apply that turns seq 2 from knockout into league is
+      // a different competition shape, and silently dressing the new stage in
+      // the old stage's format is the kind of invisible carry nobody audits.
+      // Dropping it makes the organiser set it again, which is a visible,
+      // correctable state; carrying it wrongly is not. Note this is a
+      // JUDGEMENT, not a validity constraint: the allowlist is per SPORT and
+      // the sport cannot change here, so a carried fragment would still pass
+      // every guard. That is exactly why the rule has to be written down.
+      if (rules !== null && rules !== undefined) keep.set(`${r.seq}:${r.kind}`, rules as Record<string, unknown>);
+    }
     await tx`delete from stages where division_id = ${divisionId}`;
+    return keep;
   });
-  return createStages(auth, divisionId, input);
+  const created = await createStages(auth, divisionId, input);
+  if (carried.size > 0) {
+    await withTenant(auth.orgId, async (tx) => {
+      for (const stage of created) {
+        const rules = carried.get(`${stage.seq}:${stage.kind}`);
+        if (rules === undefined) continue;
+        // Server-side merge (§T2), same shape as every other writer of this
+        // column: the row was just inserted by createStages, so this adds the
+        // key back without re-writing anything createStages decided.
+        await tx`
+          update stages set config = config || ${tx.json({ rules } as never)}
+           where id = ${stage.id}`;
+        stage.config = { ...stage.config, rules };
+      }
+    });
+  }
+  return created;
 }
 
 /**

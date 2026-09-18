@@ -1,14 +1,19 @@
 // Per-stage match rules, Task 4 (design 2026-09-17 §T3, rulings D1/D2/D2a) —
-// `PUT /stages/:id/rules`. This suite is also what proves Task 1's extraction
-// actually reaches the SERVER: `configKeysFor` is imported here through the
-// real usecase, in the server graph. A unit test of the derivation passes
-// whether or not the extraction worked, because vitest has no RSC boundary.
+// `PUT /stages/:id/rules`.
+//
+// This suite does NOT prove Task 1's extraction reaches the server graph, and
+// a header here used to claim it did (corrected 2026-09-18). Nothing in vitest
+// is an RSC boundary: `configKeysFor` would resolve to real values from this
+// file whether or not it had been moved out of the `"use client"` module, so
+// the claim contradicted its own next sentence. What actually settles the
+// extraction is the production import in `usecases/stage-rules.ts` plus a
+// build; this suite settles the endpoint's BEHAVIOUR, which is plenty.
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
-import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { buildRuleOverride } from "@/lib/match-rules";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
@@ -18,16 +23,17 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { putStageRules } from "../stage-rules";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 
-async function seedOrg(): Promise<AuthCtx> {
+async function seedOrg(plan: "pro" | "community" = "pro"): Promise<AuthCtx> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Sr " + suffix}, ${"sr-" + suffix})
     returning id`;
-  await setOrgPlan(orgId);
+  await setOrgPlan(orgId, plan);
   await invalidateOrgEntitlements(orgId);
   return { orgId, via: "session", userId: null, role: "owner", keyId: null };
 }
@@ -238,6 +244,136 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
       code: "STAGE_FORMAT_LOCKED",
     });
   }, 30_000);
+
+  it("rejects an unknown key even when its VALUE is null", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+
+    // The null strip and the allowlist are order-dependent, and the wrong order
+    // is invisible: stripping first leaves an empty fragment that never meets
+    // the allowlist, so a misspelled rule answers 200 and saves nothing. The
+    // organiser is told it worked. 400 is the only honest answer.
+    await expect(
+      putStageRules(auth, stageId, { rules: { notAKey: null } }),
+    ).rejects.toMatchObject({ status: 400, code: "UNKNOWN_RULE_KEY" });
+    expect((await stageConfig(stageId)).rules).toBeUndefined();
+  }, 30_000);
+
+  it("treats an empty fragment as a CLEAR, not a stored empty object", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    await putStageRules(auth, stageId, { rules: { bestOf: 3 } });
+    expect((await stageConfig(stageId)).rules).toEqual({ bestOf: 3 });
+
+    // `{}` and `{bestOf: null}` both mean "inherit the division's format", so
+    // both must land on `- 'rules'`. A stored `rules: {}` would override
+    // nothing while reading as an override to every `"rules" in config` check.
+    await putStageRules(auth, stageId, { rules: {} });
+    expect("rules" in (await stageConfig(stageId))).toBe(false);
+
+    await putStageRules(auth, stageId, { rules: { bestOf: 3 } });
+    await putStageRules(auth, stageId, { rules: { bestOf: null } });
+    expect("rules" in (await stageConfig(stageId))).toBe(false);
+  }, 30_000);
+
+  it("402s when the competition is frozen by the billing quota", async () => {
+    // The freeze guard had no test at all (review 2026-09-18). Driven through
+    // the real selector rather than a hand-set flag.
+    //
+    // A billing freeze is what a DOWNGRADE does to data already created — it
+    // is not reachable by creating past the cap, because `createCompetition`
+    // 402s at the quota first (found the hard way: the obvious version of this
+    // test failed inside its own setup). So: build over the small plan's cap
+    // while on `pro`, then drop to `community` and let `selectFrozen` retire
+    // the least recently active ones. The cap is read from the plan rather than
+    // typed in, so a repricing moves this test instead of breaking it.
+    const auth = await seedOrg("pro");
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${divisionId}`;
+
+    // It is editable BEFORE the freeze — otherwise a 402 below proves nothing.
+    await expect(putStageRules(auth, stageId, { rules: { bestOf: 3 } })).resolves.toBeTruthy();
+
+    await setOrgPlan(auth.orgId, "community");
+    await invalidateOrgEntitlements(auth.orgId);
+    const cap = await getLimit(auth.orgId, "competitions.max_active");
+    expect(cap).not.toBeNull(); // an unlimited community plan would make this vacuous
+
+    await setOrgPlan(auth.orgId, "pro");
+    await invalidateOrgEntitlements(auth.orgId);
+    for (let i = 0; i < cap!; i++)
+      await createCompetition(auth, {
+        ends_on: "2030-12-31",
+        name: "Filler " + randomUUID().slice(0, 6),
+        visibility: "private",
+        branding: {},
+      });
+
+    await setOrgPlan(auth.orgId, "community");
+    await invalidateOrgEntitlements(auth.orgId);
+    // The oldest competition — the one holding our stage — is the one retired.
+    expect((await frozenCompetitionIds(auth.orgId)).has(competitionId)).toBe(true);
+
+    await expect(putStageRules(auth, stageId, { rules: { bestOf: 5 } })).rejects.toMatchObject({
+      status: 402,
+    });
+    // …and the pre-freeze override is untouched.
+    expect((await stageConfig(stageId)).rules).toEqual({ bestOf: 3 });
+  }, 60_000);
+
+  it("serialises on the division advisory lock its sibling writers take", async () => {
+    // A lock has no single-threaded symptom, so nothing above could kill it and
+    // it would have shipped as decoration. The race it closes: `append-event`
+    // resolves cfg and then freezes the snapshot under a FIXTURE-scoped lock,
+    // which does not serialise against this endpoint at all — so without a
+    // division lock a scorer can read the old cfg, this PUT commits 200, and
+    // the fixture freezes the OLD format while the stage is locked forever.
+    // Proven the way `stage-config-atomic-write.test.ts` proves its own race:
+    // hold the lock from a second connection and show the usecase PARKS.
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+
+    let release!: () => void;
+    const mayRelease = new Promise<void>((r) => (release = r));
+    let holding!: () => void;
+    const holderHasLock = new Promise<void>((r) => (holding = r));
+
+    const holder = sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+      holding();
+      await mayRelease;
+    });
+    await holderHasLock;
+
+    let settled = false;
+    const call = putStageRules(auth, stageId, { rules: { bestOf: 3 } }).then((r) => {
+      settled = true;
+      return r;
+    });
+
+    // Wait for it to actually reach the lock, then confirm it is STUCK there.
+    for (let i = 0; i < 200 && !settled; i++) {
+      const [{ waiting }] = await sql<{ waiting: number }[]>`
+        select count(*)::int as waiting from pg_locks
+        where locktype = 'advisory' and not granted
+          and objid = hashtext(${"division:" + divisionId})::bigint & 4294967295`;
+      if (waiting > 0) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    // The whole point: it has NOT committed while another writer holds the
+    // division. Without the lock this line is where the test reds.
+    expect(settled).toBe(false);
+
+    release();
+    await holder;
+    await call;
+    expect((await stageConfig(stageId)).rules).toEqual({ bestOf: 3 });
+  }, 60_000);
 
   it("404s for a stage in another org", async () => {
     const owner = await seedOrg();

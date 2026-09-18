@@ -63,6 +63,19 @@ export async function putStageRules(
         "SPORT_NOT_SUPPORTED",
       );
 
+    // The division advisory lock every sibling stage writer takes
+    // (`stages.ts` replaceStages/deleteStage, overrideStandings, issueChallenge)
+    // — and this endpoint needs it for a reason of its own. Without it the
+    // lock-predicate read below races the freeze in `append-event.ts`, which
+    // resolves cfg and then snapshots under a FIXTURE-scoped lock: the two
+    // never serialise against each other. A scorer reads the old cfg, this PUT
+    // sees no snapshot and commits 200, and the fixture then freezes the OLD
+    // format while the stage is permanently locked — the organiser is told the
+    // save worked, the pad disagrees, and there is no retry that fixes it.
+    // Taken BEFORE the read it guards, so the predicate and the write are one
+    // atomic decision.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
     // D1 — the lock is per stage, and its predicate is MONOTONIC.
     // Deliberately not `fixtures.status`: `fixtureStatusFromFold` returns
     // `in_play` only while an active `core.start` exists, so voiding a start
@@ -84,32 +97,49 @@ export async function putStageRules(
         "STAGE_FORMAT_LOCKED",
       );
 
-    if (input.rules === null) {
-      // `- 'rules'` removes the KEY. Writing null instead would leave a null
-      // the overlay copies over the division's value.
-      await tx`update stages set config = config - 'rules' where id = ${stageId}`;
-      return { rules: null, divisionId: stage.division_id, competitionId: stage.competition_id };
+    // D2 — the allowlist is the union of the CONFIG keys each field's build()
+    // emits, never the FORM keys. For tennis the two diverge three ways
+    // (setType→set, noAd→game, tiebreakWinBy→tiebreak), so a `f.key` list
+    // would refuse four of its five overrides.
+    //
+    // Checked over the keys AS SENT, BEFORE the null strip below. The other
+    // order looks equivalent and is not: `{notAKey: null}` would strip to an
+    // empty fragment and never meet the allowlist at all, so a misspelled rule
+    // would answer 200 and change nothing — the worst shape available, because
+    // the organiser is told the save worked.
+    if (input.rules !== null) {
+      const allowed = configKeysFor(stage.sport_key);
+      for (const key of Object.keys(input.rules))
+        if (!allowed.has(key))
+          throw new HttpError(
+            400,
+            `"${key}" is not a match rule for ${stage.sport_key}`,
+            "UNKNOWN_RULE_KEY",
+          );
     }
 
     // "Inherit" is key ABSENCE, never an explicit null — the overlay spreads
     // what it is given, so a null reaching the column blanks the division's
     // value instead of deferring to it.
-    const fragment = Object.fromEntries(
-      Object.entries(input.rules).filter(([, v]) => v !== null && v !== undefined),
-    );
+    const fragment =
+      input.rules === null
+        ? {}
+        : Object.fromEntries(
+            Object.entries(input.rules).filter(([, v]) => v !== null && v !== undefined),
+          );
 
-    // D2 — the allowlist is the union of the CONFIG keys each field's build()
-    // emits, never the FORM keys. For tennis the two diverge three ways
-    // (setType→set, noAd→game, tiebreakWinBy→tiebreak), so a `f.key` list
-    // would refuse four of its five overrides.
-    const allowed = configKeysFor(stage.sport_key);
-    for (const key of Object.keys(fragment))
-      if (!allowed.has(key))
-        throw new HttpError(
-          400,
-          `"${key}" is not a match rule for ${stage.sport_key}`,
-          "UNKNOWN_RULE_KEY",
-        );
+    // `{rules: null}`, `{rules: {}}` and `{rules: {bestOf: null}}` are one
+    // intent — inherit the division's format — so all three land on the same
+    // `- 'rules'`. Storing an empty `rules: {}` instead would leave a key that
+    // overrides nothing: the overlay would walk it for no reason, and every
+    // `"rules" in config` reader (the panel's "Same as division" state) would
+    // report an override that is not there.
+    if (Object.keys(fragment).length === 0) {
+      // `- 'rules'` removes the KEY. Writing null instead would leave a null
+      // the overlay copies over the division's value.
+      await tx`update stages set config = config - 'rules' where id = ${stageId}`;
+      return { rules: null, divisionId: stage.division_id, competitionId: stage.competition_id };
+    }
 
     // Validate the MERGE, store the FRAGMENT. The fragment alone cannot be
     // parsed — the schema's defaults would fill it out — and storing
