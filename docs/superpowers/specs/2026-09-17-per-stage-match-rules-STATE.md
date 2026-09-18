@@ -19,7 +19,7 @@ Nothing pushed; no PR yet.
 | 1 — extract the rules table to `lib/match-rules.ts` | DONE | `ce3277243`, plus `7ac5bffdf` (probe-loop pin) |
 | 2 — overlay `stage.config.rules` in `stageScopedCfg` + bench mirror | DONE | `3d36a08e8` |
 | 3 — six stage-config writers made atomic | DONE | `029a496bd` |
-| 4 — `PUT /stages/:id/rules` | IN FLIGHT | — |
+| 4 — `PUT /stages/:id/rules` | DONE | `c3c6204f5` |
 | 5 — pad surfaces through the resolver | owed | — |
 | 6 — `read` for the nine fields | owed | — |
 | 7 — Fixture Console stage panel | owed | — |
@@ -54,6 +54,20 @@ The plan is a hypothesis, and three of its steps have already been wrong:
    that kill them.
 3. **`seedNextStage` is not exported**, so "the usecase that owns stages.ts:3176"
    was not executable; Task 3 drove `overrideStandings` instead.
+4. **Task 4's import paths were wrong** — `withTenant` is `@/lib/db` and
+   `HttpError` is `@/lib/errors`, not the `@/server/...` paths written down.
+5. **Task 4's "export and await `fireStageRevalidate`" was unnecessary.** That
+   private function only re-queries `division_id`/`competition_id` and calls
+   `fireDivisionRevalidate`, which is synchronous (`: void`) — so calling
+   `fireDivisionRevalidate` directly with ids the transaction already read is
+   equivalent, one query cheaper, and floats no promise. Do not re-open it.
+6. **`EngineError` carries no `status`**, so a test cannot assert `status: 422`
+   on `CONFIG_INVALID`; assert the code. `ENGINE_HTTP` in `api-v1/http.ts` maps
+   it to 422, which is what the route actually answers.
+7. **`key-scopes.ts` is load-bearing for any new route** and was missing from
+   Task 4's file list. `key-scopes.test.ts` enforces it. A new route also owes
+   `src/server/api-v1/__tests__/` (`openapi-coverage.test.ts`), which is NOT in
+   the usecases directory most gates name.
 
 ## Findings carried forward
 
