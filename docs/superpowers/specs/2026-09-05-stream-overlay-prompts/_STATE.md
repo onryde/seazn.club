@@ -28,11 +28,33 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** Task 4 RE-REVIEW 2 — fix round 2 committed `8b5072457` (relay 297/272/0/25 exit 0; 15/15 mutants + 6 regression re-runs). Round 1 `09f3aeea6` fixed the CRITICAL: retention was sent NESTED inside `recording` (the shape measured as silently dropped, specs/2026-09-11-cloudflare-stream-measured.md:26,92) — now top-level with a read-back that throws on mismatch.
+- Task 3 ports + fakes → `4a11c1b4a` — clean (15 tests, 53/53 mutants). 9 minors deferred to the lane-A sweep.
+- Task 4 Cloudflare Stream ingest adapter → `32c3c8b82` + fix rounds `09f3aeea6` (1), `8b5072457` (2). **COMPLETE** —
+  re-review 2 Approved (task-4-rereview-2.md). Round 1 fixed the CRITICAL: retention was sent NESTED inside
+  `recording` (the shape measured as silently dropped, specs/2026-09-11-cloudflare-stream-measured.md:26,92) — now a
+  top-level `deleteRecordingAfterDays` with a read-back that best-effort deletes the new input and THROWS on mismatch.
+  Relay 297 total / 272 passed / 0 failed / 25 pending, exit 0; ingest-cf 16/16; tsc 0; eslint 0; 13 mutants killed.
+  2 Minor parked (I-3's 2xx tolerance could mask an orphan; the refusal message is untranslated English — Task 10 must
+  map it to a dictionary code and never render `err.message`).
 
-**OPEN OWNER DECISION (N-3, blocker):** the echo's expected values are INFERRED, never measured. A wrong inference makes every session create throw. `RELAY_DRIVERS=live` must NOT be flipped until a real Cloudflare create is observed and recorded in specs/2026-09-11-cloudflare-stream-measured.md. Orchestrator recommended a one-shot live CF probe (create + delete; outward-facing, needs owner go-ahead) after lane A closes; it would also settle the recordings page ceiling and whether `limit` is the accepted param name, what `DELETE /live_inputs/{uid}` returns, and the output-status shape. Alternative: defer to Task 17 and keep the block.
+**In flight at time of writing:** Task 5A (Fly Machines API client, `apps/web/src/server/relay/fly-client.ts`) — brief
+generated, dispatch next. Its Step 5 writes an OPT-IN live test (`fly-client.live.test.ts`, gated on `FLY_API_TOKEN` +
+`RELAY_LIVE_FLY=1`, `describe.skipIf`). **The live leg is NOT to be run** — it creates REAL Fly Machines (outward-facing,
+costs money). Implementer writes it and proves it SKIPS loudly; running it needs an explicit owner go-ahead.
 
-**PLAN OWED (lane-A plan pass, before Task 12):** plan:4686, 4730, 4797 still carry the nested retention shape. The Task 12 brief owes the N-1 acceptance criteria: `length === LIST_VIDEOS_PAGE_LIMIT` means an INCOMPLETE listing (import the constant); on truncation re-list with `createdBefore` = the oldest `created` seen, or record a `listing_truncated` event — never silently under-delete; the test must build a fixture of exactly LIMIT videos because `FakeIngest.listVideos` ignores `limit`.
+**OPEN OWNER DECISION (N-3):** the Cloudflare echo's expected values are INFERRED, never measured. A wrong inference makes
+every session create throw. `RELAY_DRIVERS=live` must NOT be flipped until a real Cloudflare create is observed and
+recorded in specs/2026-09-11-cloudflare-stream-measured.md. It does NOT block the lane-A merge — `config.ts:141–146`
+defaults `relayDriverMode()` to `"fake"`, so an unflipped deploy never constructs `CloudflareIngest`. Orchestrator
+recommends ONE live CF probe (create + delete; outward-facing, needs owner go-ahead) after lane A closes; it would also
+settle the recordings page ceiling, whether `limit` is the accepted param name, what `DELETE /live_inputs/{uid}` returns,
+and the output-status shape. Alternative: defer to Task 17 and keep the block.
+
+**PLAN OWED (lane-A plan pass, before Task 12):** plan:4686, 4730, 4797 still carry the nested retention shape. The Task 12
+brief owes the N-1 acceptance criteria: `length === LIST_VIDEOS_PAGE_LIMIT` means an INCOMPLETE listing (import the
+constant); on truncation re-list with `createdBefore` = the oldest `created` seen, or record a `listing_truncated` event —
+never silently under-delete; the test must build a fixture of exactly LIMIT videos because `FakeIngest.listVideos` ignores
+`limit`; and any orphan-reclaim test must drive the REAL adapter (`FakeIngest` cannot reach the orphan path at all).
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
