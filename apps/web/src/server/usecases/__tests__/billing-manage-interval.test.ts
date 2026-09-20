@@ -1,17 +1,21 @@
-// Originally Task 7 (Pro Plus tier): live-subscription plan change Pro ↔ Pro
-// Plus. pro_plus is retired (entitlements v18, V393) — `applyPlanChange` /
-// `previewPlanChange` still exist (they back `/api/billing/plan` + its
-// `preview` sibling, and their shared `resolvePriceChange` is also what the
-// separate `/api/billing/interval` endpoint calls), but "pro" is now the
-// only plan `PurchasablePlanKey` admits, so a real PLAN-to-PLAN switch is no
-// longer reachable. What's left worth pinning is the underlying mechanism —
-// price lookup keyed by (planKey, TARGET interval), not by whatever the
-// subscription is currently on — exercised here via an interval switch
-// (pro monthly ↔ pro annual) through this same code path, with Stripe + db +
-// downstream entitlement/analytics calls mocked (no network, no
+// The interval switch (monthly ↔ annual) — `previewIntervalChange` /
+// `applyIntervalChange`, which back GET /api/billing/interval/preview and
+// POST /api/billing/interval.
+//
+// Originally Task 7 (Pro Plus tier), written against `previewPlanChange` /
+// `applyPlanChange`. pro_plus is retired (entitlements v18, V393), so a real
+// PLAN-to-PLAN switch was no longer reachable and those two functions plus
+// their `/api/billing/plan` routes have been deleted. The mechanism they
+// shared with the interval endpoints — `resolvePriceChange`: price lookup
+// keyed by (planKey, TARGET interval), not by whatever the subscription is
+// currently on; the plan ITEM picked by elimination, never `data[0]`; the
+// refusal when the item is already on the requested price — is live, and is
+// pinned here through the functions that actually ship. Stripe + db +
+// downstream entitlement/analytics calls are mocked (no network, no
 // DATABASE_URL needed).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { proPrice } from "@/lib/currency";
+import { ORG_ADDON_FEATURE_KEY } from "@/lib/org-addons";
 
 type SubFixture = {
   plan_key: string;
@@ -73,7 +77,7 @@ vi.mock("@/lib/billing", () => ({
   syncSubscription: billingMock.syncSubscription,
 }));
 
-// V314: the plan change lands on the billing GROUP, so the cache drop is
+// V314: the change lands on the billing GROUP, so the cache drop is
 // invalidateEntitlementsForOrgGroup — still called with the org id.
 const entitlementsMock = vi.hoisted(() => ({
   invalidateOrgEntitlements: vi.fn(),
@@ -86,7 +90,7 @@ vi.mock("@/lib/entitlements", () => ({
 
 vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn() }));
 
-import { applyPlanChange, previewPlanChange } from "../billing-manage";
+import { applyIntervalChange, previewIntervalChange } from "../billing-manage";
 
 const ORG_ID = "org_1";
 
@@ -115,7 +119,7 @@ beforeEach(() => {
   };
 });
 
-describe("previewPlanChange refusal (resolvePriceChange)", () => {
+describe("previewIntervalChange refusal (resolvePriceChange)", () => {
   it("refuses when the target plan+interval is already the live price", async () => {
     db.sub = sub({ plan_key: "pro" });
     stripeMock.retrieveSubscription.mockResolvedValue({
@@ -124,15 +128,15 @@ describe("previewPlanChange refusal (resolvePriceChange)", () => {
       items: { data: [{ id: "si_1", price: { id: "price_pro_m" } }] },
     });
 
-    await expect(previewPlanChange(ORG_ID, "pro", "monthly")).rejects.toMatchObject({
+    await expect(previewIntervalChange(ORG_ID, "monthly")).rejects.toMatchObject({
       status: 400,
-      message: "Already on this plan",
+      message: "You are already billed monthly.",
     });
     expect(stripeMock.createPreview).not.toHaveBeenCalled();
   });
 });
 
-/** Two previews are taken per plan change, and they must not be confused:
+/** Two previews are taken per change, and they must not be confused:
  *  the PRORATION one (no preview_mode) drives "due today"/credit, and the
  *  RECURRING one (preview_mode: "recurring") drives the renewal quote. Distinct
  *  totals here so each assertion proves which call it came from. */
@@ -145,12 +149,11 @@ function previewByMode(prorationTotal: number, recurringTotal: number) {
     });
 }
 
-describe("previewPlanChange price-id selection", () => {
+describe("previewIntervalChange price-id selection", () => {
   it("looks the target price up under the TARGET interval, not the current one", async () => {
-    // Current sub is on pro MONTHLY; the request targets pro ANNUAL. planKey
-    // is "pro" on both sides now (pro_plus retired) — this proves the lookup
-    // still keys off the requested row, not a naive reuse of the current
-    // Stripe item's price id, now that plan can no longer do that proving.
+    // Current sub is on pro MONTHLY; the request targets pro ANNUAL. The
+    // target price must come from the `plans` row read under the REQUESTED
+    // interval, not from a naive reuse of the current Stripe item's price id.
     db.sub = sub({ plan_key: "pro" });
     stripeMock.retrieveSubscription.mockResolvedValue({
       status: "active",
@@ -159,7 +162,7 @@ describe("previewPlanChange price-id selection", () => {
     });
     stripeMock.createPreview.mockImplementation(previewByMode(2500, 5800));
 
-    const preview = await previewPlanChange(ORG_ID, "pro", "annual");
+    const preview = await previewIntervalChange(ORG_ID, "annual");
 
     expect(stripeMock.createPreview).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -184,6 +187,42 @@ describe("previewPlanChange price-id selection", () => {
     );
   });
 
+  it("reprices the PLAN item, not whichever item Stripe happens to list first", async () => {
+    // #329: a group with an extra-organisation rider carries two items and
+    // Stripe does not promise the order. `data[0]` would move the RIDER onto
+    // the plan price and leave the plan itself on its old interval. The plan
+    // item is identified by ELIMINATION (subscription-items.planItem), so the
+    // rider is skipped wherever it sits — the rider's marker is read from the
+    // add-on catalogue here rather than typed in, so a change of marker moves
+    // this fixture with it.
+    db.sub = sub({ plan_key: "pro" });
+    stripeMock.retrieveSubscription.mockResolvedValue({
+      status: "active",
+      currency: "usd",
+      items: {
+        data: [
+          {
+            id: "si_org_rider",
+            price: { id: "price_org_addon" },
+            metadata: { feature_key: ORG_ADDON_FEATURE_KEY },
+          },
+          { id: "si_plan", price: { id: "price_pro_m" } },
+        ],
+      },
+    });
+    stripeMock.createPreview.mockImplementation(previewByMode(2500, 5800));
+
+    await previewIntervalChange(ORG_ID, "annual");
+
+    expect(stripeMock.createPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subscription_details: expect.objectContaining({
+          items: [{ id: "si_plan", price: "price_pro_y" }],
+        }),
+      }),
+    );
+  });
+
   it("quotes an annual → monthly switch from the recurring preview, credit from the proration one", async () => {
     db.sub = sub({ plan_key: "pro" });
     stripeMock.retrieveSubscription.mockResolvedValue({
@@ -193,7 +232,7 @@ describe("previewPlanChange price-id selection", () => {
     });
     stripeMock.createPreview.mockImplementation(previewByMode(-1500, 2800));
 
-    const preview = await previewPlanChange(ORG_ID, "pro", "monthly");
+    const preview = await previewIntervalChange(ORG_ID, "monthly");
 
     expect(stripeMock.createPreview).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -225,7 +264,7 @@ describe("previewPlanChange price-id selection", () => {
           }),
     );
 
-    const preview = await previewPlanChange(ORG_ID, "pro", "annual");
+    const preview = await previewIntervalChange(ORG_ID, "annual");
 
     // One line of the confirm dialog goes missing; "due today" still renders.
     expect(preview.renewalAmountMinor).toBeNull();
@@ -233,7 +272,7 @@ describe("previewPlanChange price-id selection", () => {
   });
 });
 
-describe("applyPlanChange", () => {
+describe("applyIntervalChange", () => {
   it("invalidates cached entitlements after syncSubscription — the price changes here", async () => {
     db.sub = sub({ plan_key: "pro" });
     stripeMock.retrieveSubscription.mockResolvedValue({
@@ -249,7 +288,7 @@ describe("applyPlanChange", () => {
     };
     stripeMock.updateSubscription.mockResolvedValue(updated);
 
-    const result = await applyPlanChange(ORG_ID, "pro", "annual", 1_770_000_000);
+    const result = await applyIntervalChange(ORG_ID, "annual", 1_770_000_000);
 
     expect(billingMock.syncSubscription).toHaveBeenCalledWith(ORG_ID, updated);
     expect(entitlementsMock.invalidateEntitlementsForOrgGroup).toHaveBeenCalledWith(ORG_ID);
@@ -258,12 +297,13 @@ describe("applyPlanChange", () => {
 
   it("hands the client secret back when the change needs SCA/3DS (requires_action)", async () => {
     // SCA makes 3DS the normal path for European cards and Indian card mandates
-    // require it. When Stripe leaves the plan-change invoice OPEN pending
-    // confirmation, applyPlanChange must return the confirmation client_secret so
-    // the client can complete 3DS — a silent { requires_action: false } would
-    // look to the buyer like "I clicked upgrade and nothing happened" while
-    // Stripe holds an unconfirmed PaymentIntent. Only the false branch was
-    // covered before (the test above). (issue #205)
+    // require it. When Stripe leaves the interval-change invoice OPEN pending
+    // confirmation, applyIntervalChange must return the confirmation
+    // client_secret so the client can complete 3DS — a silent
+    // { requires_action: false } would look to the buyer like "I clicked
+    // upgrade and nothing happened" while Stripe holds an unconfirmed
+    // PaymentIntent. Only the false branch was covered before (the test
+    // above). (issue #205)
     db.sub = sub({ plan_key: "pro" });
     stripeMock.retrieveSubscription.mockResolvedValue({
       status: "active",
@@ -281,11 +321,11 @@ describe("applyPlanChange", () => {
     };
     stripeMock.updateSubscription.mockResolvedValue(updated);
 
-    const result = await applyPlanChange(ORG_ID, "pro", "annual", 1_770_000_000);
+    const result = await applyIntervalChange(ORG_ID, "annual", 1_770_000_000);
 
     expect(result).toEqual({ requires_action: true, client_secret: "pi_3ds_secret_abc" });
-    // The plan is still synced and the group cache still dropped BEFORE 3DS is
-    // handed back — the confirmation completes an already-applied change.
+    // The change is still synced and the group cache still dropped BEFORE 3DS
+    // is handed back — the confirmation completes an already-applied change.
     expect(billingMock.syncSubscription).toHaveBeenCalledWith(ORG_ID, updated);
     expect(entitlementsMock.invalidateEntitlementsForOrgGroup).toHaveBeenCalledWith(ORG_ID);
   });
