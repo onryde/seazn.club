@@ -52,6 +52,21 @@ orchestrator commits (implementers never commit).
   `RELAY_DRIVERS=live` is no longer blocked by an inferred echo. Full measurements appended to
   specs/2026-09-11-cloudflare-stream-measured.md; verdict in `.superpowers/sdd/.../n3-probe-report.md`.
 
+- Task 3 ports + fakes → `4a11c1b4a` — clean (15 tests, 53/53 mutants). 9 minors deferred to the lane-A sweep.
+- Task 4 Cloudflare Stream ingest adapter → `32c3c8b82` + fix rounds `09f3aeea6` (1), `8b5072457` (2). **COMPLETE** —
+  re-review 2 Approved (task-4-rereview-2.md). Round 1 fixed the CRITICAL: retention was sent NESTED inside
+  `recording` (the shape measured as silently dropped) — now a top-level `deleteRecordingAfterDays` with a read-back
+  that best-effort deletes the new input and THROWS on mismatch. Relay 297/272/0/25 exit 0; ingest-cf 16/16; tsc 0;
+  eslint 0; 13 mutants killed. 2 Minor parked (I-3's 2xx tolerance could mask an orphan; the refusal message is
+  untranslated English — Task 10 must map it to a dictionary code and never render `err.message`).
+- **N-3 CLOSED by live measurement** → `5b40fdf0c` (doc only). Owner authorised live create+delete 2026-09-20
+  ("yes, you can create and delete"). The probe created ONE live input (`r1-n3-probe-1789901523`), deleted it in the
+  same run and confirmed the delete with a 404/10003 re-read; post-sweep 0 inputs, videoCount 0 — NO LEAK, no secret
+  printed. Verdict: `ingest-cf.ts`'s read-back HOLDS — the API echoes `recording.timeoutSeconds` 180 and
+  `deleteRecordingAfterDays` 30 at the TOP LEVEL, exactly where :160–161 read them; the :178 throw is unreachable.
+  `RELAY_DRIVERS=live` is no longer blocked by an inferred echo. Full measurements appended to
+  specs/2026-09-11-cloudflare-stream-measured.md; verdict in `.superpowers/sdd/.../n3-probe-report.md`.
+
 **In flight at time of writing:** Task 5A (Fly Machines API client, `apps/web/src/server/relay/fly-client.ts`) —
 dispatched on opus at BASE `a6f5d9f32` with `task-5A-carries.md`. Its Step 5 live leg IS authorised and IS to be run
 (real Machines, real money): every Machine destroyed in the same run with the destroy CONFIRMED by re-read, everything
@@ -59,12 +74,14 @@ tagged `seazn_session`, an end-of-file sweep (a timed-out test never runs `final
 reported on the first line. An untracked `__tests__/fly-client.test.ts` in this worktree is THAT implementer, not a
 foreign session.
 
-**NEW BLOCKER N-5 (live mode only; does NOT block the lane-A merge):** `ingest-cf.ts:79–82` reads
-`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_STREAM_TOKEN`; the keys that EXIST in both `.env.local` files (key-name check
-only) are `CF_ACCOUNT_ID` / `CF_API_TOKEN`, which is also what the measured spec uses. With `RELAY_DRIVERS=live` the
-constructor throws at :81 before anything else runs. Ruling: adopt `CF_ACCOUNT_ID` / `CF_API_TOKEN` (the names that
-exist; nothing deployed carries the other pair) — renamed in the LANE-A MINORS SWEEP, both error strings included.
-Flagged to the owner. `config.ts:141–146` defaults `relayDriverMode()` to `"fake"`, so an unflipped deploy is unaffected.
+**N-5 CLOSED on the ENV side — the code is correct, the minors-sweep rename is CANCELLED.** The owner re-keyed both
+`.env.local` files to `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_STREAM_TOKEN`, the pair `ingest-cf.ts:79–82` reads; the old
+`CF_ACCOUNT_ID` / `CF_API_TOKEN` names are gone. Do NOT rename anything in the code. One residual typo was found on
+re-read and fixed: the key was spelled `CLOUDFLARE_STREAM_TOKEN.=` (trailing dot inside the KEY name) at root:48 and
+apps/web:52, so `process.env.CLOUDFLARE_STREAM_TOKEN` would still have been undefined; renamed the key in place through
+the resolved path, both worktree symlinks verified intact afterwards, no value read/printed/copied, backups deleted in
+the same call. Verified live read-only: `GET /accounts/{acct}/stream/live_inputs` → HTTP 200, `success: true`, 0 inputs
+(which also re-confirms the N-3 probe left no leak). Live credentials now work under the names the adapter expects.
 
 **PLAN OWED (lane-A plan pass, before Task 12):** plan:4686 (comment), plan:4552–4557 (the create-body assertion) and
 plan:4797 (the create body) still carry the retention field NESTED inside `recording` — sync all three to the MEASURED
