@@ -362,6 +362,40 @@ Here a PRESENT value renders as absent and is then written as absent — same
 lesson, opposite direction: pin what a control OPENS AT, and check which way
 the precedence runs before calling the gap closed.
 
+**D10 — a `bestOf` override can CRASH standings through `pointsMap`**
+(owner-requested check, 2026-09-20; guard ruled in, task owed).
+
+The owner asked whether per-stage overrides reach standings, brackets and the
+hub. Four surfaces already resolve the overlay through the one resolver —
+`append-event.ts:245`, `fold.ts:155`, **`competition.ts:291` (standings and the
+competition tables)** and `match-centre-load.ts:291`. The hub is Task 8. Brackets,
+slideshow, embed and exports are UNVERIFIED and owed a sweep.
+
+The hole is on the money path. `pointsMap` is looked up by the FINAL SET SCORE
+(`setbased/kernel.ts:2252-2257`): exact `"W-L"`, else `"*"`, else `invalid()` —
+it THROWS. And `pointsMap` is deliberately NOT in the per-stage allowlist, so it
+cannot move with the format. Therefore:
+
+> A volleyball division with `pointsMap = {"3-0":…,"3-1":…,"3-2":…}` and **no
+> `"*"`**, plus a stage overridden to **Bo3**, yields `2-0`/`2-1` — no entry,
+> no wildcard, standings THROW. Not a wrong number: a crash.
+
+Stock defaults all carry `"*"` (badminton/tabletennis `{"*":[2,0]}`, volleyball
+`{"*":[3,0],"3-2":[2,1]}`), so this needs a hand-edited map, reachable through
+division settings' advanced JSON box. Narrow, but caused by a per-stage
+override and landing on standings.
+
+Ruled: `putStageRules` already validates the MERGED config; extend it to refuse
+a `bestOf` override whose resolved `pointsMap` cannot answer every reachable
+set score. The organiser gets a refusal at save time, naming the missing
+scores, instead of broken standings later. Tennis is unaffected — it pays a
+flat `points{win,loss}` with no score lookup.
+
+**Related, not a defect — worth saying once.** `finalSetTo` applies to the LAST
+possible set (`setbased/kernel.ts:448`, `setIndex === bestOf - 1`), so a stage
+override from Bo3 to Bo5 moves the decider from set 3 to set 5 and set 3
+becomes an ordinary `setTo` set. Intended behaviour; surprising if unstated.
+
 ## Design
 
 ### T0 — extract the rules table out of the client module
