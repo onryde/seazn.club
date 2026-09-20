@@ -37,24 +37,44 @@ orchestrator commits (implementers never commit).
   2 Minor parked (I-3's 2xx tolerance could mask an orphan; the refusal message is untranslated English — Task 10 must
   map it to a dictionary code and never render `err.message`).
 
-**In flight at time of writing:** Task 5A (Fly Machines API client, `apps/web/src/server/relay/fly-client.ts`) — brief
-generated, dispatch next. Its Step 5 writes an OPT-IN live test (`fly-client.live.test.ts`, gated on `FLY_API_TOKEN` +
-`RELAY_LIVE_FLY=1`, `describe.skipIf`). **The live leg is NOT to be run** — it creates REAL Fly Machines (outward-facing,
-costs money). Implementer writes it and proves it SKIPS loudly; running it needs an explicit owner go-ahead.
+- Task 3 ports + fakes → `4a11c1b4a` — clean (15 tests, 53/53 mutants). 9 minors deferred to the lane-A sweep.
+- Task 4 Cloudflare Stream ingest adapter → `32c3c8b82` + fix rounds `09f3aeea6` (1), `8b5072457` (2). **COMPLETE** —
+  re-review 2 Approved (task-4-rereview-2.md). Round 1 fixed the CRITICAL: retention was sent NESTED inside
+  `recording` (the shape measured as silently dropped) — now a top-level `deleteRecordingAfterDays` with a read-back
+  that best-effort deletes the new input and THROWS on mismatch. Relay 297/272/0/25 exit 0; ingest-cf 16/16; tsc 0;
+  eslint 0; 13 mutants killed. 2 Minor parked (I-3's 2xx tolerance could mask an orphan; the refusal message is
+  untranslated English — Task 10 must map it to a dictionary code and never render `err.message`).
+- **N-3 CLOSED by live measurement** → `5b40fdf0c` (doc only). Owner authorised live create+delete 2026-09-20
+  ("yes, you can create and delete"). The probe created ONE live input (`r1-n3-probe-1789901523`), deleted it in the
+  same run and confirmed the delete with a 404/10003 re-read; post-sweep 0 inputs, videoCount 0 — NO LEAK, no secret
+  printed. Verdict: `ingest-cf.ts`'s read-back HOLDS — the API echoes `recording.timeoutSeconds` 180 and
+  `deleteRecordingAfterDays` 30 at the TOP LEVEL, exactly where :160–161 read them; the :178 throw is unreachable.
+  `RELAY_DRIVERS=live` is no longer blocked by an inferred echo. Full measurements appended to
+  specs/2026-09-11-cloudflare-stream-measured.md; verdict in `.superpowers/sdd/.../n3-probe-report.md`.
 
-**OPEN OWNER DECISION (N-3):** the Cloudflare echo's expected values are INFERRED, never measured. A wrong inference makes
-every session create throw. `RELAY_DRIVERS=live` must NOT be flipped until a real Cloudflare create is observed and
-recorded in specs/2026-09-11-cloudflare-stream-measured.md. It does NOT block the lane-A merge — `config.ts:141–146`
-defaults `relayDriverMode()` to `"fake"`, so an unflipped deploy never constructs `CloudflareIngest`. Orchestrator
-recommends ONE live CF probe (create + delete; outward-facing, needs owner go-ahead) after lane A closes; it would also
-settle the recordings page ceiling, whether `limit` is the accepted param name, what `DELETE /live_inputs/{uid}` returns,
-and the output-status shape. Alternative: defer to Task 17 and keep the block.
+**In flight at time of writing:** Task 5A (Fly Machines API client, `apps/web/src/server/relay/fly-client.ts`) —
+dispatched on opus at BASE `a6f5d9f32` with `task-5A-carries.md`. Its Step 5 live leg IS authorised and IS to be run
+(real Machines, real money): every Machine destroyed in the same run with the destroy CONFIRMED by re-read, everything
+tagged `seazn_session`, an end-of-file sweep (a timed-out test never runs `finally`), and any unconfirmed Machine
+reported on the first line. An untracked `__tests__/fly-client.test.ts` in this worktree is THAT implementer, not a
+foreign session.
 
-**PLAN OWED (lane-A plan pass, before Task 12):** plan:4686, 4730, 4797 still carry the nested retention shape. The Task 12
-brief owes the N-1 acceptance criteria: `length === LIST_VIDEOS_PAGE_LIMIT` means an INCOMPLETE listing (import the
-constant); on truncation re-list with `createdBefore` = the oldest `created` seen, or record a `listing_truncated` event —
-never silently under-delete; the test must build a fixture of exactly LIMIT videos because `FakeIngest.listVideos` ignores
-`limit`; and any orphan-reclaim test must drive the REAL adapter (`FakeIngest` cannot reach the orphan path at all).
+**NEW BLOCKER N-5 (live mode only; does NOT block the lane-A merge):** `ingest-cf.ts:79–82` reads
+`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_STREAM_TOKEN`; the keys that EXIST in both `.env.local` files (key-name check
+only) are `CF_ACCOUNT_ID` / `CF_API_TOKEN`, which is also what the measured spec uses. With `RELAY_DRIVERS=live` the
+constructor throws at :81 before anything else runs. Ruling: adopt `CF_ACCOUNT_ID` / `CF_API_TOKEN` (the names that
+exist; nothing deployed carries the other pair) — renamed in the LANE-A MINORS SWEEP, both error strings included.
+Flagged to the owner. `config.ts:141–146` defaults `relayDriverMode()` to `"fake"`, so an unflipped deploy is unaffected.
+
+**PLAN OWED (lane-A plan pass, before Task 12):** plan:4686 (comment), plan:4552–4557 (the create-body assertion) and
+plan:4797 (the create body) still carry the retention field NESTED inside `recording` — sync all three to the MEASURED
+top-level shape. plan:4730 / plan:4189 are the `capabilities` object, not a request body: correct as written, leave them.
+The Task 12 brief owes the N-1 acceptance criteria: `length === LIST_VIDEOS_PAGE_LIMIT` means an INCOMPLETE listing
+(import the constant); on truncation re-list by `createdBefore` = the oldest `created` seen, or record a
+`listing_truncated` event — never silently under-delete; the fixture must hold exactly LIMIT videos because
+`FakeIngest.listVideos` ignores `limit`; and any orphan-reclaim test must drive the REAL adapter (`FakeIngest` cannot
+reach the orphan path). The probe confirmed `limit` IS the param name and 1000 a HARD ceiling (1001 → 400/10005), but
+the account held zero videos, so TRUNCATION ITSELF remains unobserved and this carry stands.
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
