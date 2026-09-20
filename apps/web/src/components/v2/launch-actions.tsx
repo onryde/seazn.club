@@ -14,6 +14,8 @@ import { routes } from "@/lib/routes";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
+import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
+import { startClosesEntrantList } from "@/lib/open-entry-stages";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
 
 interface Props {
@@ -30,6 +32,12 @@ interface Props {
    *  worth a second query on every division page load. */
   fixtures: BoardFixture[];
   entrantNames: Record<string, string>;
+  /** The `kind` of every stage in this division, and nothing else — the
+   *  confirmation has to know whether starting really closes the entrant list
+   *  before it says so. `enrollEntrants` exempts the WHOLE division when ANY
+   *  stage is an open format, so this cannot be answered from one stage.
+   *  The page already holds the stages, so it costs no extra read. */
+  stageKinds: string[];
   viewerPlan: ViewerPlan;
 }
 
@@ -42,6 +50,7 @@ export function LaunchActions({
   canEdit,
   fixtures,
   entrantNames,
+  stageKinds,
   viewerPlan,
 }: Props) {
   const msg = useMsg();
@@ -58,6 +67,13 @@ export function LaunchActions({
   const [gate, setGate] = useState<{ kind: "blocking" | "warnings"; conflicts: BoardConflict[] } | null>(
     null,
   );
+  // THE always-on confirmation (design 2026-09-20). Start publishes the
+  // timetable to players and moves the division to `active`, and status is
+  // forward-only — so nothing here may POST until this is true. It is a
+  // separate piece of state from `gate` on purpose: `gate` is the REACTIVE
+  // refusal and still opens, unchanged, when the server turns a confirmed
+  // start down.
+  const [confirming, setConfirming] = useState(false);
 
   async function start(acknowledgeWarnings = false) {
     setBusy(true);
@@ -106,7 +122,12 @@ export function LaunchActions({
           type="button"
           data-testid="launch-start-division"
           disabled={busy}
-          onClick={() => void start()}
+          // Opens the confirmation. It does NOT start: the POST lives on the
+          // dialog's own confirm, below.
+          onClick={() => {
+            setError(null);
+            setConfirming(true);
+          }}
           className="btn btn-primary px-3 py-1.5 text-xs"
           title={msg("launch.startTitle")}
         >
@@ -118,6 +139,19 @@ export function LaunchActions({
       </Link>
       {paywall && <UpgradeGate feature={paywall} compact viewerPlan={viewerPlan} />}
       {error && <span className="text-xs text-red-600">{error}</span>}
+      {/* Closed BEFORE the POST, not after it: a confirmed start that the
+          server then refuses has to land in the gate dialog below, and two
+          sheets open at once is not a state this surface has. */}
+      <StartConfirmDialog
+        open={confirming}
+        entrantsLock={startClosesEntrantList(stageKinds)}
+        busy={busy}
+        onConfirm={() => {
+          setConfirming(false);
+          void start();
+        }}
+        onCancel={() => setConfirming(false)}
+      />
       {/* The way through the gate — and, for a blocking board, the honest report
           that there is none. Same dialog the board's start button opens, so the
           two paths to the same endpoint refuse identically. */}

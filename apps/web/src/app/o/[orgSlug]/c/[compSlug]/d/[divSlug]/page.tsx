@@ -562,6 +562,10 @@ export default async function DivisionPage({
               // is about. Both are already loaded above for the tabs.
               fixtures={fixtures}
               entrantNames={entrantNames}
+              // Whether starting really closes the entrant list — open-format
+              // stages (ladder/americano) keep it open, so the confirmation
+              // must not claim otherwise. Already loaded above.
+              stageKinds={stages.map((s) => s.kind)}
               viewerPlan={viewerPlan}
             />
           </div>
