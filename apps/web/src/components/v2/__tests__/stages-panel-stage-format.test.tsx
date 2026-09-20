@@ -203,16 +203,35 @@ describe("the two derivations — one function, two different inputs", () => {
   });
 
   it("labels a value the sport's own picker cannot offer (D9)", () => {
-    // Badminton offers [1,3]; 5 is still a valid saved config, and the live
-    // walkthrough stage carries exactly that. Found in the browser: this read
+    // Badminton offers [1,3,5] since the 2026-09-20 widen, so 5 is answered by
+    // its OWN option and cannot witness the borrow any more. 7 is the live
+    // case: tabletennis and volleyball declare it, badminton and tennis do
+    // not. Found in the browser with the original value: this read
     // "5 · Stage override" directly beneath "Best of 3 · Locked". The label is
-    // borrowed from a sport that does offer 5 — still the table, never a
-    // string typed here.
-    const borrowed = (SPORT_RULES.tennis ?? [])
+    // borrowed from a sport that does offer the value — still the table, never
+    // a string typed here.
+    expect(
+      (SPORT_RULES.badminton ?? [])
+        .find((f) => f.key === "bestOf")!
+        .options!.map((o) => o.value),
+    ).not.toContain("7");
+    const borrowed = (SPORT_RULES.tabletennis ?? [])
+      .find((f) => f.key === "bestOf")!
+      .options!.find((o) => o.value === "7")!.label;
+    expect(stageFormatHeadline("badminton", { bestOf: 7 })).toBe(borrowed);
+    expect(stageFormatHeadline("badminton", { bestOf: 7 })).toBe("Best of 7");
+  });
+
+  it("states badminton's own 5 from its own option, not a borrow (2026-09-20)", () => {
+    // The widen's half of this surface: the summary line that started the
+    // whole D9 thread — "Best of 5" over a picker that could not offer 5 —
+    // now reads off badminton's OWN declaration, so summary and dropdown
+    // agree without the borrow being involved at all.
+    const own = (SPORT_RULES.badminton ?? [])
       .find((f) => f.key === "bestOf")!
       .options!.find((o) => o.value === "5")!.label;
-    expect(stageFormatHeadline("badminton", { bestOf: 5 })).toBe(borrowed);
-    expect(stageFormatHeadline("badminton", { bestOf: 5 })).toBe("Best of 5");
+    expect(own).toBe("Best of 5");
+    expect(stageFormatHeadline("badminton", { bestOf: 5 })).toBe(own);
   });
 
   it("borrows through the SAME lookup the editor's synthetic option uses", () => {
@@ -223,7 +242,9 @@ describe("the two derivations — one function, two different inputs", () => {
     // override". Anchoring both on `ruleOptionLabel` is what makes that
     // impossible; this pins the summary half to it.
     // (`match-rules-unofferable-value.test.tsx` pins the option half.)
-    for (const value of ["1", "3", "5", "9"]) {
+    // 1/3/5 are badminton's own options, 7 is the borrow, 9 the bare-value
+    // fallback — all three branches of `ruleOptionLabel`, through both paths.
+    for (const value of ["1", "3", "5", "7", "9"]) {
       const expected = ruleOptionLabel("badminton", "bestOf", value) ?? value;
       expect(stageFormatHeadline("badminton", { bestOf: Number(value) })).toBe(expected);
     }

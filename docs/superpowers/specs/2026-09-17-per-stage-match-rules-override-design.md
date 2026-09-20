@@ -322,8 +322,9 @@ will "simplify" it.
 **D9 — a value the picker cannot offer must be SHOWN, not swallowed**
 (ruled 2026-09-18, from a reviewer finding on Task 6).
 
-Badminton's `bestOf` offers only `[1, 3]`, but the engine's schema accepts more
-— the walkthrough override that proved this whole seam is `{"bestOf": 5}` on a
+Badminton's `bestOf` offered only `[1, 3]` when this was ruled (see the
+2026-09-20 follow-on below), but the engine's schema accepts more — the
+walkthrough override that proved this whole seam is `{"bestOf": 5}` on a
 badminton stage. Hydrating that into the select renders BLANK, above an
 `<option value="">Default`. The same shape has three different consequences,
 and only the third is a defect:
@@ -361,6 +362,25 @@ field can be worse than an absent one because it overrides a correct default.
 Here a PRESENT value renders as absent and is then written as absent — same
 lesson, opposite direction: pin what a control OPENS AT, and check which way
 the precedence runs before calling the gap closed.
+
+**FOLLOW-ON (ruled 2026-09-20): badminton's picker widened to `[1, 3, 5]`.**
+D9 made the stored 5 legible; it did not make it *choosable*. The organiser
+still read "Best of 5" above a dropdown that could only offer 1 and 3, so the
+only way to keep the stage was to never touch the field. The owner ruled the
+PICKER wrong rather than the data: `BADMINTON_RULES`'s `bestOf` now declares
+`[1, 3, 5]`. Legal because the engine genuinely runs it — driving
+`packages/engine`'s badminton module with `{bestOf: 5}` parses without clamping
+or refusing (the kernel's only bound is `positive` and `bestOf % 2 === 1`),
+does NOT resolve the match at two games won where `bestOf: 3` does, and awards
+at three games won over five.
+
+D9 itself is untouched and still live: a picker never offers everything its
+module accepts. But **badminton + `bestOf: 5` was the case every D9 test used
+to witness the borrow**, and once the `own` branch answers first those tests
+pass without exercising it (failure class 3). The witness value is now **7** —
+declared by tabletennis and volleyball, by neither badminton nor tennis, and
+labelled "Best of (sets)" by all four so the borrow's field-label agreement
+rule still permits it. `9` remains the no-sport-declares-it fallback case.
 
 **D10 — a `bestOf` override can CRASH standings through `pointsMap`**
 (owner-requested check, 2026-09-20; guard ruled in, task owed).

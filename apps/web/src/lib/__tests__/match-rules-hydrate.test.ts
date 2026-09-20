@@ -104,7 +104,8 @@ describe("hydrateRuleValues round-trips every in-scope rule field", () => {
     // field that still has others left the old lower bound green. Nineteen
     // fields across four sports, each probed at every value it can take.
     // Adding or removing an option must move this number deliberately.
-    expect(Object.values(probed).reduce((a, b) => a + b, 0)).toBe(46);
+    // 46 → 47 on 2026-09-20: badminton's `bestOf` gained a third option (5).
+    expect(Object.values(probed).reduce((a, b) => a + b, 0)).toBe(47);
   });
 
   it("hydrates tennis's three renamed fields from their CONFIG keys, not their field keys", () => {

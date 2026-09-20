@@ -68,7 +68,7 @@ export function MatchRuleFields({
               <option value="">{msg("rules.default")}</option>
               {/* D9 (owner ruling 2026-09-18) — a SAVED value this select
                   cannot offer must be shown, not swallowed. Badminton's
-                  `bestOf` offers [1,3] while `{"bestOf":5}` is a perfectly
+                  `bestOf` offers [1,3,5] while `{"bestOf":7}` is a perfectly
                   valid saved config, and without this option the browser has
                   nothing to land on and falls back to "Default" — telling the
                   organiser the field is unset over a config that really
@@ -81,9 +81,12 @@ export function MatchRuleFields({
                   bare value, so the open dropdown read
                   `Default · 5 · Best of 1 · Best of 3` directly under a
                   summary line saying "Best of 5": one value, two labels, one
-                  screen. Falls back to the raw value when NO sport declares
-                  one — inventing copy for a value the table does not declare
-                  would be a second lie. */}
+                  screen. (That case was `bestOf: 5` against a picker offering
+                  [1,3]; the owner widened badminton to [1,3,5] on 2026-09-20,
+                  so 5 is now a real option and this branch no longer fires for
+                  it.) Falls back to the raw value when NO sport declares one —
+                  inventing copy for a value the table does not declare would
+                  be a second lie. */}
               {unofferable && (
                 <option value={current}>
                   {ruleOptionLabel(sportKey, field.key, current) ?? current}

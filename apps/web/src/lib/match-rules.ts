@@ -213,7 +213,13 @@ const BADMINTON_RULES: RuleField[] = [
     key: "bestOf",
     label: "Best of (sets)",
     kind: "select",
-    options: [1, 3].map((n) => ({ value: String(n), label: `Best of ${n}` })),
+    // 5 added by owner ruling 2026-09-20. `{"bestOf": 5}` was already real
+    // stored data (the walkthrough Finals stage), and the organiser read
+    // "Best of 5" on the summary line above a picker that could not offer it.
+    // The engine runs it: badminton's module parses bestOf 5 without clamping
+    // and awards at three games won over five, so widening the picker is the
+    // fix rather than correcting the data.
+    options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
     build: (v) => ({ bestOf: Number(v) }),
     read: readNumber("bestOf"),
   },
@@ -869,12 +875,20 @@ export function configKeysFor(sportKey: string): ReadonlySet<string> {
  *
  * Two surfaces show a value the sport's own picker cannot offer: the stage
  * card's summary line (`stageFormatHeadline`) and the synthetic `<option>`
- * D9 put inside `MatchRuleFields`. Badminton's `bestOf` offers [1, 3] while
- * `{"bestOf": 5}` is a perfectly valid saved config, and the walkthrough stage
- * carries exactly that. They shipped from two code paths and DISAGREED: the
- * open dropdown read `Default · 5 · Best of 1 · Best of 3` under a summary
- * line saying "Best of 5". One value, two labels, one screen. This is the one
- * lookup both now use.
+ * D9 put inside `MatchRuleFields`. A module accepts more values than any
+ * picker lists, so a stored config can always name one the list does not.
+ * They shipped from two code paths and DISAGREED: the open dropdown read
+ * `Default · 5 · Best of 1 · Best of 3` under a summary line saying
+ * "Best of 5". One value, two labels, one screen. This is the one lookup both
+ * now use.
+ *
+ * That original case was badminton `bestOf: 5` against a picker offering
+ * [1, 3]. The owner ruled on 2026-09-20 that the PICKER was wrong rather than
+ * the data, so badminton now declares [1, 3, 5] and 5 is answered by the
+ * `own` branch below. The live unofferable values for badminton are 7 — which
+ * tabletennis and volleyball declare and this borrows from — and anything no
+ * in-scope sport declares at all, such as 9, which falls through to the bare
+ * value.
  *
  * The borrow is deliberately narrow. It happens only BETWEEN the four
  * stage-rules sports, and only from a peer that labels the FIELD identically —

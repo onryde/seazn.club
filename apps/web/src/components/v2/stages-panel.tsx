@@ -2003,14 +2003,16 @@ export function stageFormatHeadline(
   const raw = hydrateRuleValues(sportKey, effective).bestOf;
   if (raw === undefined) return null;
   // The saved value may be valid while THIS sport's picker does not offer it —
-  // badminton offers [1,3] while `{"bestOf":5}` is a perfectly good config
+  // badminton offers [1,3,5] while `{"bestOf":7}` is a perfectly good config
   // (D9). `ruleOptionLabel` borrows the label from a peer in-scope sport that
-  // does offer it, so the line reads "Best of 5 · Stage override" as the
+  // does offer it, so the line reads "Best of 7 · Stage override" as the
   // design table specifies without assembling an English string here. It is
   // the SAME lookup `MatchRuleFields` labels its synthetic option with: the
   // two shipped from separate code paths and disagreed on screen. Verified in
   // the browser — before the borrow, the live walkthrough stage read
-  // "5 · Stage override" directly under "Best of 3 · Locked".
+  // "5 · Stage override" directly under "Best of 3 · Locked". (That original
+  // case was `bestOf: 5` against a picker offering [1,3]; the owner widened
+  // badminton to [1,3,5] on 2026-09-20, so 5 is now the sport's OWN label.)
   return ruleOptionLabel(sportKey, "bestOf", raw) ?? raw;
 }
 

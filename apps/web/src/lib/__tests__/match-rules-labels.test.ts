@@ -1,17 +1,18 @@
 // The cross-sport label BORROW, and the agreement it rests on.
 //
 // Two surfaces show a stored option value the sport's own picker does not
-// offer — badminton's `bestOf` offers [1, 3] while `{"bestOf": 5}` is a
-// perfectly valid saved config, and the walkthrough stage carries exactly
-// that:
+// offer:
 //
 //  - the stage card's summary line (`stageFormatHeadline`), and
 //  - the synthetic `<option>` D9 put inside `MatchRuleFields`.
 //
-// Both now route through ONE function, `ruleOptionLabel`, so the dropdown
-// cannot read `Default · 5 · Best of 1 · Best of 3` under a summary line that
-// says "Best of 5" — which is what the panel actually rendered in the browser
-// before this file existed.
+// Both route through ONE function, `ruleOptionLabel`, so the dropdown cannot
+// read `Default · 5 · Best of 1 · Best of 3` under a summary line that says
+// "Best of 5" — which is what the panel actually rendered in the browser
+// before this file existed. (That original case was badminton `bestOf: 5`
+// against a picker offering [1, 3]; the owner widened the picker to [1, 3, 5]
+// on 2026-09-20, so the live unofferable case here is now 7 — declared by
+// tabletennis and volleyball, by neither badminton nor tennis.)
 //
 // The borrow only works because every in-scope sport labels `bestOf`
 // identically. That was TRUE but UNPINNED: the day a sport relabels the field
@@ -49,10 +50,10 @@ describe("the four in-scope sports agree on how `bestOf` is labelled", () => {
   });
 
   it("gives every SHARED option value one label across all four", () => {
-    // Enumerated, not sampled: `5` is offered by tennis, tabletennis and
-    // volleyball and is exactly the value the borrow is built for, but `1` and
-    // `3` are shared by all four and `7` by two. A single pair would not
-    // witness a relabel in the third.
+    // Enumerated, not sampled: `1`, `3` and `5` are shared by all four since
+    // badminton's 2026-09-20 widen, and `7` by the two that the borrow is now
+    // built for (tabletennis and volleyball). A single pair would not witness
+    // a relabel in the third.
     const byValue = new Map<string, Map<string, string>>();
     for (const sport of IN_SCOPE)
       for (const option of bestOfField(sport).options ?? [])
@@ -75,9 +76,17 @@ describe("ruleOptionLabel", () => {
   });
 
   it("borrows a peer's label for a value this sport's picker cannot offer", () => {
-    expect(bestOfField("badminton").options!.map((o) => o.value)).not.toContain("5");
-    const peer = bestOfField("tennis").options!.find((o) => o.value === "5")!.label;
-    expect(ruleOptionLabel("badminton", "bestOf", "5")).toBe(peer);
+    // 7, not 5: badminton offers 5 itself since the 2026-09-20 widen, so a 5
+    // here would be answered by the OWN branch and never reach the borrow at
+    // all. 7 is declared by tabletennis and volleyball and by neither
+    // badminton nor tennis, so it is the live unofferable case.
+    expect(bestOfField("badminton").options!.map((o) => o.value)).not.toContain("7");
+    const peer = bestOfField("tabletennis").options!.find((o) => o.value === "7")!.label;
+    expect(ruleOptionLabel("badminton", "bestOf", "7")).toBe(peer);
+    // Tennis is iterated before tabletennis and declares no 7 — so this also
+    // walks past a label-agreeing peer that simply lacks the option, rather
+    // than stopping at the first peer.
+    expect(bestOfField("tennis").options!.map((o) => o.value)).not.toContain("7");
   });
 
   it("returns nothing when no in-scope sport offers the value at all", () => {
