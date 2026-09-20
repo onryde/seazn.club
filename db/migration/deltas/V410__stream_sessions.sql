@@ -1,9 +1,16 @@
--- V408 — Streaming R1: relay sessions, ingest inputs, destinations, credits
+-- V410 — Streaming R1: relay sessions, ingest inputs, destinations, credits
 -- (design of record docs/superpowers/specs/2026-09-07-streaming-programme-design.md
--- §5.2 and §6.1; overriding corrections R0-CORRECTIONS-FOR-R1.md C3; re-pinned
--- 2026-09-16: `ls db/migration/deltas | sort -V | tail -1` → V404__retire_scorer_role.sql,
--- all-refs scan → V407__lichess_lobby_ready.sql (claimed on the unmerged
--- feat/chess-lichess-external-play), both re-confirmed immediately before writing this file).
+-- §5.2 and §6.1; overriding corrections R0-CORRECTIONS-FOR-R1.md C3).
+--
+-- VERSION, re-pinned 2026-09-20 (this file was written as V408 on 2026-09-16, when the
+-- tree tail was V404__retire_scorer_role.sql and the all-refs tail was
+-- V407__lichess_lobby_ready.sql, claimed on the unmerged feat/chess-lichess-external-play).
+-- `main` has since merged V409__player_stat_folds.sql, which leaves V405-V408 as gaps below
+-- it. Flyway does not run with outOfOrder here, so a V408 arriving at a database that has
+-- already applied V409 is refused or skipped — and a database built fresh from this branch
+-- applies 408 then 409 quite happily, which is why local green could not see it. Renumbered
+-- to V410 (the all-refs scan on 2026-09-20 shows V405-V407 still claimed on
+-- feat/chess-lichess-external-play, V409 on main, and V410 free on every ref).
 --
 -- Eight tables — four of STATE, four of CAPTURE (owner ruling 13, 2026-09-14:
 -- "capture all data as possible"; schema growth pre-approved). RLS is ENABLED
@@ -65,11 +72,15 @@
 -- organizations.timezone (null, V305__org_timezone.sql).
 --
 -- FS10 — RULED 2026-09-14 ("all good"): balance_after with its `>= 0` CHECK is
--- §5.2's own DDL, built verbatim and KEPT. Consume rows are written under
--- `select … for update` (stream-credits.ts) after the pure `debit` in
--- server/relay/domain/credits.ts refused a negative in memory, so the CHECK is
--- the third floor under the same lock — the one a bug in the other two cannot
--- talk past.
+-- §5.2's own DDL, built verbatim and KEPT. Every org_stream_credits write
+-- (purchase, consume, grant, refund, revoke) first takes the org's MONEY lock,
+-- pg_advisory_xact_lock(hashtext('stream-credits-org:' || org_id))
+-- (stream-credits.ts lockOrg), which also serialises an EMPTY ledger's first
+-- writes, where `select … for update` over the org's rows would lock nothing.
+-- A debit (consume, revoke) runs the pure `debit` in
+-- server/relay/domain/credits.ts, which refuses a negative in memory, so the
+-- CHECK is the third floor under the same lock — the one a bug in the other two
+-- cannot talk past.
 --
 -- M3 / owner ruling R-B: multi-camera is N INPUT ROWS under ONE session, never
 -- N sessions — fixture_stream_sessions_one_active stays a true statement about
@@ -111,6 +122,13 @@ create table fixture_stream_sessions (
   machine_id           text null,               -- Fly Machine id (composed only)
   last_heartbeat       jsonb null,
   heartbeat_at         timestamptz null,
+  -- Task 2C review I4 (orchestrator ruling A — one authority per fact): heartbeat_at is the last
+  -- beat RECEIVED (only the beat route writes it; the organiser panel serves it as lastBeatAt).
+  -- beat_window_at is the stale-beat WINDOW anchor, written when a decision acts on a missing beat
+  -- (domain/session.ts's stale-beat arm) and when a retry boots a replacement (its retry arm).
+  -- domain/expiry.ts times the beat from the LATER of the two, so a stale-beat decision is bounded
+  -- to once per STALE_HEARTBEAT_SECONDS and never freshens the panel. Null until the first one.
+  beat_window_at       timestamptz null,
   started_at           timestamptz null,
   ended_at             timestamptz null,
   -- F22: when ENDING began. The ending backstop (domain/expiry.ts) measures from HERE, never from the
@@ -119,7 +137,9 @@ create table fixture_stream_sessions (
   -- the transition into 'ending' (Task 10's persist), exactly like state and end_reason.
   ending_at            timestamptz null,
   egress_bytes         bigint not null default 0,
-  max_duration_minutes integer not null default 300,
+  -- > 0: domain/expiry.ts deadlineOf reads `maxDurationMinutes || MAX_DURATION_MINUTES`,
+  -- so a stored 0 would silently become the 300-minute default. Refused here instead.
+  max_duration_minutes integer not null default 300 check (max_duration_minutes > 0),
   runner_retries       smallint not null default 0 check (runner_retries >= 0),
   -- The Fly machine lifecycle (plan §"Fly machine lifecycle"; domain/runner.ts).
   -- runner_state is the runner SUB-STATE of the aggregate; runner_name is the
@@ -209,7 +229,7 @@ create table org_stream_credits (
   id              uuid primary key default gen_random_uuid(),
   org_id          uuid not null references organizations(id) on delete cascade,
   delta           integer not null check (delta <> 0),
-  reason          text not null check (reason in ('purchase','consume','refund','grant','expire')),
+  reason          text not null check (reason in ('purchase','consume','refund','grant','revoke','expire')),
   session_id      uuid null references fixture_stream_sessions(id),
   stripe_event_id text null unique,
   -- per-row snapshot + the oversell guard, copied from ai_credit_ledger (V320):
@@ -225,10 +245,22 @@ create table org_stream_credits (
   currency        text null check (currency is null or currency ~ '^[a-z]{3}$'),
   note            text null,
   created_by      uuid null,
+  -- Staff adjustments (Task 7A, orchestrator rulings 2026-09-16 — donor parity with
+  -- ai_credit_ledger.idempotency_key): the /admin panel mints one key per submission
+  -- and keeps it across retries; stream-credits.ts looks it up under the org's money
+  -- lock. An EXACT replay writes nothing; the same key with a different org, reason,
+  -- delta or session is refused (409 idempotency_key_reused). Null on purchase
+  -- (stripe_event_id is that row's key) and consume rows.
+  idempotency_key text null,
   created_at      timestamptz not null default now()
 );
 create index on org_stream_credits (org_id, created_at);
 create index on org_stream_credits (stripe_checkout_session_id) where stripe_checkout_session_id is not null;
+-- One key per TABLE, the donor's scope (V320: ai_credit_ledger.idempotency_key text
+-- unique): the writer compares a stored row's org with the request's, which needs the
+-- key to name at most one row anywhere. A NULL key (every non-staff row) is outside the index.
+create unique index org_stream_credits_idempotency_key
+  on org_stream_credits (idempotency_key) where idempotency_key is not null;
 alter table fixture_stream_sessions
   add constraint fixture_stream_sessions_credit_ledger_fk
   foreign key (credit_ledger_id) references org_stream_credits(id);

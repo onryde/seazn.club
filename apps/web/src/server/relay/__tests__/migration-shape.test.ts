@@ -282,4 +282,83 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
              fixture_scheduled_at = null, venue_id = gen_random_uuid(), venue_address = null, org_timezone = null
        where id = ${sid}`;
   });
+
+  // ---- The Task 7 / 7A amend to V410 (orchestrator rulings 2026-09-16) ----
+
+  it("org_stream_credits reason: 'revoke' (a negative staff row) lands; an unknown reason is still refused (the Task 7A amend)", async () => {
+    const r = await rig();
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, 3, 'grant', 3)`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, -1, 'revoke', 2)`;
+    await expect(
+      sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, -1, 'reverse', 1)`,
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("org_stream_credits idempotency_key: unique across the TABLE (the donor's V320 scope) — a second row with one key is refused in the same org AND in another org; a different key, and any number of NULL keys, land; and the index is pinned by NAME and predicate, which no insert can witness (the Task 7A amend)", async () => {
+    const a = await rig();
+    const b = await rig();
+    const key = `idem-shape-${a.orgId}`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${a.orgId}, 1, 'grant', 1, ${key})`;
+    await expect(
+      sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${a.orgId}, 1, 'grant', 2, ${key})`,
+    ).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${b.orgId}, 1, 'grant', 1, ${key})`,
+    ).rejects.toMatchObject({ code: "23505" });
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${b.orgId}, 1, 'grant', 1, ${key + "-b"})`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${a.orgId}, 1, 'grant', 2)`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${a.orgId}, 1, 'grant', 3)`;
+    // The two NULL rows above do NOT prove the partial predicate: a plain unique index is
+    // NULLS DISTINCT by default, so dropping `where idempotency_key is not null` leaves every
+    // insert in this test behaving identically (measured — that mutant survived the whole
+    // suite). The predicate keeps the index off every purchase and consume row, and the NAME
+    // is what stream-credits.ts matches a 23505 on to answer 409 idempotency_key_reused
+    // (Task 7A). Neither is reachable from behaviour, so both are pinned as text here.
+    const [idx] = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+       where schemaname = current_schema() and tablename = 'org_stream_credits'
+         and indexname = 'org_stream_credits_idempotency_key'`;
+    expect(idx?.indexdef, "org_stream_credits_idempotency_key is missing or renamed").toMatch(
+      /^CREATE UNIQUE INDEX org_stream_credits_idempotency_key ON \w+\.org_stream_credits USING btree \(idempotency_key\) WHERE \(idempotency_key IS NOT NULL\)$/,
+    );
+  });
+
+  it("max_duration_minutes: 0 is refused by check (max_duration_minutes > 0) — domain/expiry.ts deadlineOf would read a stored 0 as 300; 1 lands, and the default is still 300 (the Task 7 amend, Task 2B review M4)", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const minutes = async () =>
+      (await sql<{ max_duration_minutes: number }[]>`
+        select max_duration_minutes from fixture_stream_sessions where id = ${sid}`)[0]!.max_duration_minutes;
+    expect(await minutes()).toBe(300);
+    await expect(
+      sql`update fixture_stream_sessions set max_duration_minutes = 0 where id = ${sid}`,
+    ).rejects.toMatchObject({ code: "23514" });
+    // -1 as well as 0: `>= 0` would refuse the negative and still let the zero through, which is
+    // the exact mutant the 0 case alone cannot see.
+    await expect(
+      sql`update fixture_stream_sessions set max_duration_minutes = -1 where id = ${sid}`,
+    ).rejects.toMatchObject({ code: "23514" });
+    expect(await minutes()).toBe(300);
+    await sql`update fixture_stream_sessions set max_duration_minutes = 1 where id = ${sid}`;
+    expect(await minutes()).toBe(1);
+  });
+
+  it("beat_window_at: a NULLABLE timestamptz with NO default, separate from heartbeat_at — a new session reads null in both, and writing the window anchor leaves the last beat received untouched (Task 2C review I4, ruling A; the Task 7 amend)", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const beats = async () =>
+      (await sql<{ heartbeat_at: Date | null; beat_window_at: Date | null }[]>`
+        select heartbeat_at, beat_window_at from fixture_stream_sessions where id = ${sid}`)[0]!;
+    expect(await beats()).toEqual({ heartbeat_at: null, beat_window_at: null });
+    // The shape itself, pinned: a DEFAULT (now(), say) would read as an anchor on every new row and silently
+    // restart every session's first beat window at insert time.
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'beat_window_at'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+    await sql`update fixture_stream_sessions set beat_window_at = '2026-09-16T10:02:00Z' where id = ${sid}`;
+    const after = await beats();
+    expect(after.beat_window_at?.toISOString()).toBe("2026-09-16T10:02:00.000Z");
+    expect(after.heartbeat_at).toBeNull(); // two facts, two columns: the anchor never writes the panel's last beat
+  });
 });

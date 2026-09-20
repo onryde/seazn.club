@@ -245,7 +245,7 @@ describe("evaluate", () => {
     expect(d.effects).toEqual([{ type: "complete_now" }]);
     expect(decide(p, { type: "expire", expiry: { kind: "none" } }, T0).events).toEqual([]);
   });
-  // Orchestrator ruling (Task 2B dispatch, V408): fixture_id is `on delete set null`. A deleted fixture must NOT
+  // Orchestrator ruling (Task 2B dispatch, V410): fixture_id is `on delete set null`. A deleted fixture must NOT
   // stop expiry — this policy is the backstop that ends an orphaned live stream, so it may never read fixtureId.
   it("a session whose fixture was DELETED (fixtureId null) expires exactly like one with a fixture — every expiry kind, same instant, same answer", () => {
     const grace = RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS;

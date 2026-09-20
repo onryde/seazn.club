@@ -20,7 +20,7 @@ export const isTerminal = (s: SessionState): boolean => TERMINAL_STATES.includes
 export const isActive = (s: SessionState): boolean => ACTIVE_STATES.includes(s);
 
 export interface Session {
-  // fixtureId is NULL once the fixture is deleted (V408: `on delete set null`) — the session, its money and
+  // fixtureId is NULL once the fixture is deleted (V410: `on delete set null`) — the session, its money and
   // its history outlive the fixture and it ends through the normal commands. Nothing in this file reads it.
   id: string; fixtureId: string | null; orgId: string; mode: Mode; state: SessionState;
   desiredState: "live" | "ending"; failReason: FailReason | null; endReason: "stopped" | "max_duration" | null;
@@ -30,7 +30,7 @@ export interface Session {
   // Task 2C review I4 (orchestrator ruling A — one authority per fact). heartbeatAt is the last beat RECEIVED, and only a
   // beat writes it (Task 10 serves it as the panel's lastBeatAt). beatWindowAt is the stale-beat WINDOW anchor: a decision
   // that acted on a missing beat (the stale-beat arm) or booted a replacement (the retry arm) restarts the window here.
-  // `evaluate` times the beat from the later of the two. Persisted as beat_window_at (Task 7's V408 amend, Task 10).
+  // `evaluate` times the beat from the later of the two. Persisted as beat_window_at (Task 7's V410 amend, Task 10).
   beatWindowAt: Date | null;
 }
 

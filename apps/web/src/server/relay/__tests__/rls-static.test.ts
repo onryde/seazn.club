@@ -8,7 +8,7 @@ import { MIGRATION, STREAM_TABLES } from "./_stream-migration";
 // SQL, not prose: `--` comments are stripped before either claim reads the file. The
 // migration's own header says "A future `grant … to app_user` lands on a table that is
 // already sealed" — a sentence, not a grant — and a commented-out `-- alter table … force
-// row level security;` must not satisfy claim 1 either. (V408 has no `--` inside a string
+// row level security;` must not satisfy claim 1 either. (V410 has no `--` inside a string
 // literal, so the strip cannot eat SQL.)
 const SQL_ONLY = MIGRATION.replace(/--.*$/gm, "");
 

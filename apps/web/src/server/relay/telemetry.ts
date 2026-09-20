@@ -39,9 +39,9 @@ export interface EventInput {
  *  cannot race because they cannot both hold the lock.
  *
  *  ROOT transaction only: call it inside `sql.begin`, never inside `withTenant`.
- *  `withTenant` runs `set local role app_user`, and V408 grants app_user nothing
+ *  `withTenant` runs `set local role app_user`, and V410 grants app_user nothing
  *  on the relay tables — under that role this insert fails with `permission
- *  denied for table fixture_stream_events` (measured 2026-09-16 on the V408
+ *  denied for table fixture_stream_events` (measured 2026-09-16 on the V410
  *  schema). If a grant is ever added, FORCE row level security with ZERO
  *  policies still denies app_user every row. `Tx` types both transactions
  *  alike, so this sentence is the only thing that tells them apart. */

@@ -173,7 +173,7 @@ describe("decide — legal edges", () => {
   });
 });
 
-// Orchestrator ruling (Task 1 review, V408 amended): fixture_stream_sessions.fixture_id is NULLABLE,
+// Orchestrator ruling (Task 1 review, V410 amended): fixture_stream_sessions.fixture_id is NULLABLE,
 // `on delete set null` — a deleted fixture must not destroy money, paid-resource and history rows. A
 // session whose fixture was deleted keeps running until its normal end; the domain never reads fixtureId.
 describe("a session whose fixture was deleted (fixtureId null)", () => {
