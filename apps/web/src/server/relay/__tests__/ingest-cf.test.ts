@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { CLOUDFLARE_STREAM_BASE, CloudflareIngest } from "../ingest-cf";
+import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT } from "../ingest-cf";
 import { FakeIngest, FakeRecorder } from "../fakes";
 import { pathTemplate } from "../sanitise";
 import type { ProviderCallRecord } from "../ports";
@@ -19,13 +19,16 @@ import {
 } from "../config";
 
 type Call = { url: string; init: RequestInit };
-function recorder(reply: (c: Call) => { status: number; body: unknown }) {
+type Reply = { status: number; body: unknown; headers?: Record<string, string> };
+function recorder(reply: (c: Call) => Reply) {
   const calls: Call[] = [];
   const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const c = { url: String(url), init: init ?? {} };
     calls.push(c);
     const r = reply(c);
-    return new Response(JSON.stringify(r.body), { status: r.status, headers: { "content-type": "application/json" } });
+    // `JSON.stringify(undefined)` is undefined, which builds a body-less
+    // Response — that is how the I-3 fixtures answer a DELETE with no JSON.
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { "content-type": "application/json", ...(r.headers ?? {}) } });
   }) as unknown as typeof fetch;
   return { calls, fetchImpl };
 }
@@ -34,6 +37,10 @@ function recorder(reply: (c: Call) => { status: number; body: unknown }) {
 // `streamId` and `passphrase` are separate fields and never ride in a query
 // string. The plan's own fixture showed `?passphrase=…&streamid=…`; that shape
 // would hide Task 2's query-strip AND its sealing of {passphrase, streamId}.
+// The create response ECHOES the settings back (U1-S1's own dump, measured
+// 2026-09-10): `recording` carries five keys and NOT the retention one, which
+// is a TOP-LEVEL sibling. Both echoes are derived from config, never typed as
+// literals, so moving a constant moves this fixture with it.
 const CREATE_RESULT = {
   uid: "in_abc",
   rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: "rk" },
@@ -41,10 +48,31 @@ const CREATE_RESULT = {
   webRTC: { url: "https://x/webrtc/publish" },
   webRTCPlayback: { url: "https://x/webrtc/play" },
   status: null,
+  recording: { allowedOrigins: null, hideLiveViewerCount: false, mode: "automatic", requireSignedURLs: false, timeoutSeconds: INGEST_TIMEOUT_SECONDS },
+  deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
+};
+/** The MEASURED consequence of nesting the retention key: a green 200 whose
+ *  `recording` echo does not carry it and whose top-level value is null. */
+const CREATE_RESULT_DROPPED = {
+  ...CREATE_RESULT,
+  recording: { allowedOrigins: null, hideLiveViewerCount: false, mode: "automatic", requireSignedURLs: false, timeoutSeconds: INGEST_TIMEOUT_SECONDS },
+  deleteRecordingAfterDays: null,
+};
+/** U1-S8: a `timeoutSeconds` Cloudflare declined comes back null, not applied. */
+const CREATE_RESULT_TIMEOUT_NULL = {
+  ...CREATE_RESULT,
+  recording: { allowedOrigins: null, hideLiveViewerCount: false, mode: "automatic", requireSignedURLs: false, timeoutSeconds: null },
 };
 
-function cfReply(c: Call): { status: number; body: unknown } {
-  if (c.init.method === "POST" && c.url.endsWith("/live_inputs")) return { status: 200, body: { success: true, result: CREATE_RESULT } };
+function cfReply(c: Call): Reply {
+  if (c.init.method === "POST" && c.url.endsWith("/live_inputs")) {
+    // Keyed on the session id the adapter puts in `meta.name`, so one fixture
+    // can answer three different creates.
+    const name = String((JSON.parse(String(c.init.body)) as { meta?: { name?: string } }).meta?.name ?? "");
+    if (name.includes("s_dropped")) return { status: 200, body: { success: true, result: CREATE_RESULT_DROPPED } };
+    if (name.includes("s_notimeout")) return { status: 200, body: { success: true, result: CREATE_RESULT_TIMEOUT_NULL } };
+    return { status: 200, body: { success: true, result: CREATE_RESULT } };
+  }
   if (c.init.method === "GET" && /\/live_inputs\/in_abc$/.test(c.url))
     return { status: 200, body: { success: true, result: { uid: "in_abc", status: { current: { ingestProtocol: "srt", state: "connected", reason: "connected_to_live_input", statusEnteredAt: "2026-09-13T10:00:00Z", statusLastSeen: "2026-09-13T10:00:05Z" }, history: [] } } } };
   if (c.init.method === "GET" && /\/live_inputs\/in_never$/.test(c.url))
@@ -55,6 +83,10 @@ function cfReply(c: Call): { status: number; body: unknown } {
     return { status: 200, body: { success: true, result: [] } };
   if (c.init.method === "GET" && /\/live_inputs\/in_okout\/outputs$/.test(c.url))
     return { status: 200, body: { success: true, result: [{ uid: "out_2", enabled: true, status: { current: { state: "connected" } } }] } };
+  // I-2: an output Cloudflare has never tried to push to. There is no `status`
+  // key at all — the common case for the whole of `warming`.
+  if (c.init.method === "GET" && /\/live_inputs\/in_pending\/outputs$/.test(c.url))
+    return { status: 200, body: { success: true, result: [{ uid: "out_3", enabled: true }] } };
   if (c.init.method === "GET" && /\/live_inputs\/in_gone$/.test(c.url))
     return { status: 404, body: { success: false, errors: [{ code: 10003, message: "not found" }] } };
   if (c.init.method === "POST" && /\/outputs$/.test(c.url)) return { status: 200, body: { success: true, result: { uid: "out_1" } } };
@@ -76,6 +108,10 @@ function cfReply(c: Call): { status: number; body: unknown } {
   if (c.init.method === "DELETE" && /\/stream\/v_gone$/.test(c.url)) return { status: 404, body: { success: false, errors: [{ code: 10003 }] } };
   if (c.init.method === "DELETE" && /\/live_inputs\/in_abc$/.test(c.url)) return { status: 200, body: { success: true } };
   if (c.init.method === "DELETE" && /\/live_inputs\/in_gone$/.test(c.url)) return { status: 404, body: { success: false } };
+  // I-3: a 2xx with NO parseable body, on both delete paths. `call()` reads an
+  // unbodied answer as { success: false }, which the two used to treat oppositely.
+  if (c.init.method === "DELETE" && /\/live_inputs\/in_nobody$/.test(c.url)) return { status: 204, body: undefined };
+  if (c.init.method === "DELETE" && /\/stream\/v_nobody$/.test(c.url)) return { status: 200, body: undefined };
   return { status: 500, body: { success: false, errors: [{ message: `unexpected ${String(c.init.method)} ${c.url}` }] } };
 }
 
@@ -88,22 +124,36 @@ describe("CloudflareIngest", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("create: mode automatic, timeoutSeconds and deleteRecordingAfterDays from config, inside Cloudflare's range (C1, C4, C8)", async () => {
+  it("create: deleteRecordingAfterDays is a TOP-LEVEL sibling of recording, never a member of it (U1-S1), with mode automatic and timeoutSeconds from config inside Cloudflare's range (C1, C4, C8)", async () => {
     await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
     const c = rec.calls[0]!;
     expect(c.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs`);
     expect((c.init.headers as Record<string, string>).authorization).toBe("Bearer tok");
-    const body = JSON.parse(String(c.init.body)) as { recording: Record<string, unknown> };
-    expect(body.recording).toEqual({
-      mode: "automatic",
-      timeoutSeconds: INGEST_TIMEOUT_SECONDS,
-      deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
-    });
+    const body = JSON.parse(String(c.init.body)) as { recording: Record<string, unknown>; deleteRecordingAfterDays?: unknown };
+    // MEASURED 2026-09-10 (U1-S1): nested, the key is accepted with a green 200
+    // and dropped on the floor. `toEqual` is exact, so this reds the moment the
+    // nesting returns — and the explicit membership check says why out loud.
+    expect(body.recording).toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS });
+    expect("deleteRecordingAfterDays" in body.recording).toBe(false);
+    expect(body.deleteRecordingAfterDays).toBe(DELETE_RECORDING_AFTER_DAYS);
     // The constant itself is held to the measured range — 1 and 7 are HTTP 400
     // code 10060 on this account (C1). A mutant "7" dies here, not only above.
     expect(DELETE_RECORDING_AFTER_DAYS).toBeGreaterThanOrEqual(CLOUDFLARE_RETENTION_RANGE.min);
     expect(DELETE_RECORDING_AFTER_DAYS).toBeLessThanOrEqual(CLOUDFLARE_RETENTION_RANGE.max);
     expect("preferLowLatency" in body).toBe(false);
+  });
+
+  it("create: READS THE SETTINGS BACK — a retention echo of null (the nested-drop signature, U1-S1) and a timeoutSeconds echo of null (U1-S8) each refuse the create and delete the misconfigured input; the good echo passes", async () => {
+    // A 200 cannot see any of the three silent-acceptance traps; only the echo can.
+    await expect(ingest.createLiveInput({ sessionId: "s_dropped", slot: 0 })).rejects.toThrow(/deleteRecordingAfterDays/);
+    // …and the input it created is not left behind to record forever.
+    expect(rec.calls.map((x) => `${String(x.init.method)} ${x.url}`)).toEqual([
+      `POST ${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs`,
+      `DELETE ${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`,
+    ]);
+    await expect(ingest.createLiveInput({ sessionId: "s_notimeout", slot: 0 })).rejects.toThrow(/timeoutSeconds/);
+    // Positive twin: the echo Cloudflare sends when the settings DID apply.
+    await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0 })).resolves.toMatchObject({ inputId: "in_abc" });
   });
 
   it("create: returns both credential shapes, a BARE srt URL (C1), and drops webRTC / webRTCPlayback (C10)", async () => {
@@ -149,11 +199,15 @@ describe("CloudflareIngest", () => {
     expect(rec.calls).toHaveLength(1);   // exactly once
     expect(outputUid).toBe("out_1");   // what Task 10 persists as sessions.output_uid
     expect(await ingest.outputState("in_abc")).toBe("rejected");
-    // Positive pair for the "rejected" negative, and the empty-list guard:
-    // an input carrying a healthy output is "ok"; one carrying NO output at
-    // all is "unknown", never "ok" — there is nothing to be ok about.
+    // Positive pair for the "rejected" negative, and the two absent-evidence
+    // cases: an input carrying a healthy output is "ok"; one carrying NO output
+    // is "unknown"; and one whose output has NO STATUS YET — the common case for
+    // the whole of warming, since Cloudflare cannot push before inbound video —
+    // is "unknown" too, never "ok". Task 10 writes this into
+    // fixture_stream_samples.output_state, so "ok" there would be a fact we made up.
     expect(await ingest.outputState("in_okout")).toBe("ok");
     expect(await ingest.outputState("in_noout")).toBe("unknown");
+    expect(await ingest.outputState("in_pending")).toBe("unknown");
   });
 
   it("storageUsage returns the three fields raw — no headroom arithmetic in the adapter (C3)", async () => {
@@ -162,7 +216,11 @@ describe("CloudflareIngest", () => {
 
   it("listVideos filters by created-before, flags live-inprogress, and maps the recording facts — every -1/0 placeholder to null, on the VALUE not the state (Dd); deleteVideo maps 200/409-10046/404 (C2)", async () => {
     const vids = await ingest.listVideos({ createdBefore: new Date("2026-09-10T00:00:00Z") });
-    expect(rec.calls[0]!.url).toContain("/stream?end=2026-09-10T00%3A00%3A00.000Z");
+    // I-4: the list endpoint is paged. The bound is EXPLICIT and ours, never the
+    // platform's silent default, and it is pinned by the exported constant so a
+    // change to it moves this assertion instead of leaving it on yesterday's number.
+    expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream?end=2026-09-10T00%3A00%3A00.000Z&limit=${LIST_VIDEOS_PAGE_LIMIT}`);
+    expect(Number.isInteger(LIST_VIDEOS_PAGE_LIMIT) && LIST_VIDEOS_PAGE_LIMIT > 0).toBe(true);
     expect(vids).toEqual([
       { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
       { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null },
@@ -176,9 +234,18 @@ describe("CloudflareIngest", () => {
     expect(await ingest.deleteVideo("v_gone")).toBe("absent");
   });
 
-  it("deleteInput resolves on 200 and on 404", async () => {
+  it("both DELETEs treat a 2xx with no parseable body as SUCCESS, and deleteInput still resolves on 404 (I-3)", async () => {
     await expect(ingest.deleteInput("in_abc")).resolves.toBeUndefined();
     await expect(ingest.deleteInput("in_gone")).resolves.toBeUndefined();
+    // A 204 with an empty body is what a DELETE may well answer; `call()` reads
+    // it as { success: false }, and throwing there would fail the sweep's happy
+    // path permanently. The two paths now agree.
+    await expect(ingest.deleteInput("in_nobody")).resolves.toBeUndefined();
+    expect(await ingest.deleteVideo("v_nobody")).toBe("deleted");
+    // …and the call is still recorded, exactly like every other.
+    expect(rec.calls.map((x) => x.url.split("/stream")[1])).toEqual([
+      "/live_inputs/in_abc", "/live_inputs/in_gone", "/live_inputs/in_nobody", "/v_nobody",
+    ]);
   });
 
   it("refuses to construct in live mode without account id and token", () => {
@@ -201,7 +268,11 @@ describe("CloudflareIngest", () => {
 
   it("records every call through the ProviderCallRecorder: raw URL + the ids to template, cf-ray as requestId, the CF error code on a failure, and a thrown fetch as status null", async () => {
     const port = new FakeRecorder();
-    const { fetchImpl } = recorder((c) => c.url.endsWith("/live_inputs") ? { status: 200, body: { success: true, result: CREATE_RESULT } } : { status: 400, body: { success: false, errors: [{ code: 10005, message: "not found" }] } });
+    // I-1: only the FIRST reply carries a cf-ray, so the mapping is pinned with
+    // its negative pair — a response without the header records null, not "".
+    const { fetchImpl } = recorder((c) => c.url.endsWith("/live_inputs")
+      ? { status: 200, body: { success: true, result: CREATE_RESULT }, headers: { "cf-ray": "9a3f0c2b1d4e5f60-LHR" } }
+      : { status: 400, body: { success: false, errors: [{ code: 10005, message: "not found" }] } });
     const cf = new CloudflareIngest({ fetchImpl, accountId: "acc1", token: "tok-secret", recorder: port });
     const creds = await cf.createLiveInput({ sessionId: "s1", slot: 0 });
     await cf.inputStatus("in-missing").catch(() => undefined);
@@ -213,6 +284,9 @@ describe("CloudflareIngest", () => {
     await new Promise((r) => setImmediate(r));
     expect(port.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual([["createLiveInput", 200, null], ["inputStatus", 400, "10005"], ["storageUsage", null, "network"]]);
     expect(port.calls[0]!.sessionId).toBe("s1");
+    // Cloudflare's cf-ray IS the request id — the only handle a support ticket
+    // on a failed broadcast has, and Ruling 13 puts it on every row.
+    expect(port.calls.map((c) => c.requestId)).toEqual(["9a3f0c2b1d4e5f60-LHR", null, null]);
     expect(port.calls[1]!.ids).toEqual(["acc1", "in-missing"]);
     for (const c of port.calls) { expect(c.url).toContain("acc1"); expect(JSON.stringify(c)).not.toContain("tok-secret"); }
     expect(creds.inputId).toBeTruthy();

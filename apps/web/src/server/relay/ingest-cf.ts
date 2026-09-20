@@ -39,6 +39,15 @@ import type {
 } from "./ports";
 
 export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/accounts";
+/** The page bound `listVideos` sends. A provider-protocol constant, like the
+ *  base URL above — config.ts holds the PRODUCT's numbers and is committed.
+ *  The list endpoint is paged, and sending no `limit` takes whatever silent
+ *  default the platform applies today; an explicit bound makes the page size
+ *  OURS. UNMEASURED (R0 never listed more than a handful): Task 17 verifies
+ *  the real ceiling on the live account. Until then a full page
+ *  (`result.length === LIST_VIDEOS_PAGE_LIMIT`) means "there may be more", and
+ *  the sweep that consumes this owes a second pass — see task-4-report.md. */
+export const LIST_VIDEOS_PAGE_LIMIT = 1000;
 
 interface CfEnvelope<T> { success: boolean; result?: T; errors?: { code?: number; message?: string }[] }
 
@@ -117,16 +126,43 @@ export class CloudflareIngest implements IngestProvider {
       uid: string;
       rtmps: { url: string; streamKey: string };
       srt: { url: string; streamId: string; passphrase: string };
+      /** The settings ECHO. `recording` comes back as
+       *  { allowedOrigins, hideLiveViewerCount, mode, requireSignedURLs,
+       *  timeoutSeconds } — the retention key is NOT in it (U1-S1), and a
+       *  `timeoutSeconds` Cloudflare declined comes back null (U1-S8). */
+      recording?: { timeoutSeconds?: number | null } | null;
+      deleteRecordingAfterDays?: number | null;
     }>("POST", "/live_inputs", {
       meta: { name: `seazn-session-${spec.sessionId}-slot-${spec.slot}` },
-      recording: {
-        mode: "automatic",
-        timeoutSeconds: INGEST_TIMEOUT_SECONDS,
-        deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
-      },
+      // U1-S1, MEASURED 2026-09-10: `deleteRecordingAfterDays` is a TOP-LEVEL
+      // SIBLING of `recording`, never a member of it. Nested, Cloudflare answers
+      // HTTP 200 / success:true, echoes a `recording` block that does not carry
+      // the key at all, and leaves top-level `deleteRecordingAfterDays` null —
+      // retention is then never configured, the prepaid storage block never
+      // recycles, and §6.5's 503 storage_exhausted starts refusing every
+      // session, with a green create call at every step.
+      recording: { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS },
+      deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId, subjectOf: (result) => result?.uid ?? null });
     if (!r.json.success || !r.json.result) CloudflareIngest.fail("create live input", r);
     const { uid, rtmps, srt } = r.json.result;
+    // The rule U1-S1, U1-S4 and U1-S8 imply: EVERY setting we send is read back
+    // and compared, because all three silent-acceptance traps answer 200. A
+    // mismatch is an ERROR and not a warning — `IngestCredentials` has no
+    // channel to carry one (ports.ts:20), Task 10 maps a create failure to a
+    // visible 503, and an unconfigured retention is visible nowhere at all.
+    const echoedTimeout = r.json.result.recording?.timeoutSeconds ?? null;
+    const echoedRetention = r.json.result.deleteRecordingAfterDays ?? null;
+    const notApplied: string[] = [];
+    if (echoedTimeout !== INGEST_TIMEOUT_SECONDS) notApplied.push(`timeoutSeconds sent ${INGEST_TIMEOUT_SECONDS}, echoed ${String(echoedTimeout)}`);
+    if (echoedRetention !== DELETE_RECORDING_AFTER_DAYS) notApplied.push(`deleteRecordingAfterDays sent ${DELETE_RECORDING_AFTER_DAYS}, echoed ${String(echoedRetention)}`);
+    if (notApplied.length > 0) {
+      // The input exists and is misconfigured. Nothing has connected yet, so it
+      // holds no recording for `deleteInput` to leak (C2) — dropping it here is
+      // what keeps a refused create from leaving an orphan input behind.
+      await this.deleteInput(uid).catch(() => undefined);
+      throw new Error(`cloudflare create live input: settings were not applied — ${notApplied.join("; ")}`);
+    }
     return {
       inputId: uid,
       srt: { url: srt.url, streamId: srt.streamId, passphrase: srt.passphrase },
@@ -169,13 +205,23 @@ export class CloudflareIngest implements IngestProvider {
       { operation: "outputState", ids: [inputId], subjectId: inputId },
     );
     if (!r.json.success || !r.json.result || r.json.result.length === 0) return "unknown";
-    return r.json.result.some((o) => o.status?.current?.state === "error") ? "rejected" : "ok";
+    const states = r.json.result.map((o) => o.status?.current?.state).filter((s): s is string => typeof s === "string");
+    if (states.includes("error")) return "rejected";
+    // An output Cloudflare has not tried to push to yet carries NO status at
+    // all: its `status.current.state` cannot move before inbound video. "ok"
+    // there would be a positive claim about something never observed, and Task
+    // 10 writes this answer straight into fixture_stream_samples.output_state.
+    // Absent evidence is `unknown` — the port has the word for it (ports.ts:33).
+    return states.length === 0 ? "unknown" : "ok";
   }
 
   async deleteInput(inputId: string): Promise<void> {
     const r = await this.call("DELETE", `/live_inputs/${encodeURIComponent(inputId)}`, undefined,
       { operation: "deleteInput", ids: [inputId], subjectId: inputId });
-    if (r.status === 404 || r.json.success) return;
+    // A 2xx carrying an empty or unparseable body is SUCCESS, on this path and
+    // on deleteVideo's alike — `call()` reports an unbodied 200/204 as
+    // { success: false }, and the two DELETEs used to read that oppositely.
+    if (r.status === 404 || r.json.success || (r.status >= 200 && r.status < 300)) return;
     CloudflareIngest.fail("delete input", r);
   }
 
@@ -193,7 +239,7 @@ export class CloudflareIngest implements IngestProvider {
       status?: { state?: string; errorReasonCode?: string | null };
       duration?: number; size?: number; input?: { width?: number; height?: number } | null;
     }[]>(
-      "GET", `?end=${encodeURIComponent(opts.createdBefore.toISOString())}`, undefined,
+      "GET", `?end=${encodeURIComponent(opts.createdBefore.toISOString())}&limit=${LIST_VIDEOS_PAGE_LIMIT}`, undefined,
       { operation: "listVideos", ids: [] },
     );
     if (!r.json.success || !r.json.result) CloudflareIngest.fail("list videos", r);
