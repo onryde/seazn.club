@@ -77,12 +77,25 @@ export function isUnestablishedCreate(e: unknown): e is FlyApiError {
   return e.code === "deadline" || e.code === "malformed" || isRetryable(e.status, e.code);
 }
 
+/** The port's three-value summary of a Machine the provider still holds.
+ *  Review I3: derived from `fromFlyState`, NOT from Fly's raw state. Reading the
+ *  raw state here made `suspended` answer `"other"` from `list()` and `"stopped"`
+ *  from `observe()` — one vocabulary read two ways in one file, with only the
+ *  map swept for parity. Anything that is neither running nor stopped is
+ *  `"other"`, and that INCLUDES a Machine still coming up: Task 10's orphan
+ *  sweep must not read `"other"` as "not alive" (measured live 2026-09-20 — a
+ *  `created` Machine lists as `"other"` and bills like any other). */
+function listStateOf(m: Machine): RunnerListing["state"] {
+  const observed = fromFlyState(m.state);
+  return observed === "running" ? "running" : observed === "stopped" ? "stopped" : "other";
+}
+
 function listingOf(m: Machine): RunnerListing {
   return {
     runnerId: m.id,
     sessionId: m.config?.metadata?.[SESSION_METADATA_KEY] ?? null,
     name: m.name || null, // T5-a: `machineNameFor(sessionId, attempt)` for ours — the attempt identity Task 10 matches on
-    state: m.state === "started" ? "running" : m.state === "stopped" ? "stopped" : "other",
+    state: listStateOf(m),
   };
 }
 
@@ -173,12 +186,21 @@ export class FlyRunner implements RunnerProvider {
   private async adoptNamed(name: string, sessionId: string, refusal: FlyApiError): Promise<Machine> {
     const named = machineIdNamedIn(refusal.message);
     if (named) {
+      // Review I1 — DO NOT "let the real error through, it's more informative".
+      // `getMachine` has no `onAmbiguous`, so its 503 keeps `retryable: true`
+      // (fly-client.ts, `withAttempts`' default) and escaping with it would tell
+      // the domain Fly holds NO Machine — inside the one refusal that PROVES it
+      // does. The 409 below is the only honest answer. Pinned by
+      // "T5-c/I1: the named-id handle failing must not turn a 409 into a retryable".
       const m = await this.client.getMachine(named).catch(() => null);
       if (m && m.name === name) return m;
     }
     const listed = await this.client
       .listMachines({ metadata: { [SESSION_METADATA_KEY]: sessionId } })
       .then((ms) => ms.find((m) => m.name === name) ?? null)
+      // Review I1, the second half: same argument, and it is a SEPARATE guard —
+      // the two do not cover for each other, so each has its own defeating case.
+      // Pinned by "T5-c/I1: the session-lookup handle failing …".
       .catch(() => null);
     if (listed) return listed;
     throw new FlyApiError(

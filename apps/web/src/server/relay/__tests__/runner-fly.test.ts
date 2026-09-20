@@ -24,7 +24,8 @@ import { OBSERVED_STATES, machineNameFor } from "../domain/runner";
 import { relayDrivers, setRelayDriversForTest } from "../drivers";
 import { FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
 import { CloudflareIngest } from "../ingest-cf";
-import type { RunnerSpec } from "../ports";
+import { pathTemplate } from "../sanitise";
+import type { ProviderCallRecord, ProviderCallRecorder, RunnerSpec } from "../ports";
 
 // Ruling 13: `drivers.ts` binds the PRODUCTION recorder into every adapter it
 // builds, fake branch included. Mocking the telemetry module lets the last `it`
@@ -119,7 +120,7 @@ describe("the provisioning budget the COMPOSED create + wait path needs (carry T
   });
 });
 
-function scripted(reply: (url: string, init: RequestInit) => { status: number; body?: unknown }) {
+function scripted(reply: (url: string, init: RequestInit) => { status: number; body?: unknown }, recorder?: ProviderCallRecorder) {
   const calls: { url: string; init: RequestInit }[] = [];
   const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const c = { url: String(url), init: init ?? {} };
@@ -131,7 +132,7 @@ function scripted(reply: (url: string, init: RequestInit) => { status: number; b
   // `config.env`; it can NEVER be in a constructor list, so leaving the list empty
   // is what makes the redaction `it` below prove the per-request path (C25) rather
   // than the ordinary one.
-  const client = new FlyClient({ token: "fly-token", app: "seazn-relay", fetchImpl, sleep: async () => {}, random: () => 0, secrets: [] });
+  const client = new FlyClient({ token: "fly-token", app: "seazn-relay", fetchImpl, sleep: async () => {}, random: () => 0, secrets: [], recorder });
   return { calls, client };
 }
 
@@ -271,6 +272,83 @@ describe("FlyRunner", () => {
     expect(err!.message).toContain(NAME);
   });
 
+  it("T5-c/I1: the named-id handle FAILING must not turn a 409 into a retryable — the refusal proves a Machine exists", async () => {
+    // `getMachine` has no `onAmbiguous`, so its 503 leaves with `retryable: true`
+    // intact. Letting that escape tells the domain Fly holds NO Machine, inside the
+    // one refusal that proves it does — the domain then posts `relay-<sid>-r2`, a
+    // name Fly has never refused, and the r1 Machine bills under a name no row
+    // carries. Invariant 1 by the exact door Task 5A's N-C1 closed. The `.catch`
+    // in `adoptNamed`'s FIRST handle is the only thing holding it.
+    const s = scripted((url, init) => {
+      if (init.method === "POST") return { status: 409, body: { error: `already_exists: unique machine name violation, machine ID m_held already exists with name "${NAME}"` } };
+      if (url.includes("/machines/m_held")) return { status: 503, body: { error: "unavailable" } };
+      return { status: 200, body: [] }; // the session lookup answers, and finds nothing
+    });
+    const err = await new FlyRunner({ client: s.client, image: "img" }).create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    expect(err).toBeInstanceOf(FlyApiError);
+    expect(err!.status).toBe(409);
+    expect(err!.retryable).toBe(false);
+  });
+
+  it("T5-c/I1: the session-lookup handle FAILING must not turn a 409 into a retryable either — a SEPARATE guard, defeated on its own", async () => {
+    // The refusal names no id, so handle 1 never runs and cannot cover for this
+    // one. `listMachines` 503s, and its `retryable: true` must not escape.
+    const s = scripted((_url, init) => {
+      if (init.method === "POST") return { status: 409, body: { error: "already_exists: unique machine name violation" } };
+      return { status: 503, body: { error: "unavailable" } };
+    });
+    const err = await new FlyRunner({ client: s.client, image: "img" }).create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    expect(err).toBeInstanceOf(FlyApiError);
+    expect(err!.status).toBe(409);
+    expect(err!.retryable).toBe(false);
+  });
+
+  it("T5-h/I2: the ATTEMPT is in the Machine name — a create at attempt 2 posts relay-<sid>-r2, not r1", async () => {
+    // Fly allows a destroyed Machine's name to be reused, so the attempt is the
+    // only thing separating a retry's Machine from the one it replaces. Every
+    // other test in this file runs at attempt 1, where the right answer and the
+    // collapsed constant coincide (AGENTS.md rule 19).
+    const s = scripted(() => ({ status: 200, body: { id: "m_r2", name: machineNameFor(SPEC.sessionId, 2), state: "created" } }));
+    const runner = new FlyRunner({ client: s.client, image: "img" });
+    await runner.create({ ...SPEC, attempt: 2 });
+    expect(JSON.parse(String(s.calls[0]!.init.body)).name).toBe(`relay-${SPEC.sessionId}-r2`);
+    expect(machineNameFor(SPEC.sessionId, 2)).not.toBe(NAME); // the twin: r2 really is a different name from r1
+  });
+
+  it("T5-h/I2: a 409 on attempt 2 adopts the r2 Machine and NEVER the dying r1 the refusal happens to name", async () => {
+    // The failure a collapsed attempt number produces: the retry posts r1, collides
+    // with the Machine it is replacing, and the adopt — working perfectly — hands
+    // the dead one back as the replacement. The session then never provisions.
+    const r1 = { id: "m_r1_dying", name: machineNameFor(SPEC.sessionId, 1), state: "stopping", config: { metadata: { [SESSION_METADATA_KEY]: SPEC.sessionId } } };
+    const r2 = { id: "m_r2_live", name: machineNameFor(SPEC.sessionId, 2), state: "started", config: { metadata: { [SESSION_METADATA_KEY]: SPEC.sessionId } } };
+    const s = scripted((url, init) => {
+      if (init.method === "POST") return { status: 409, body: { error: `already_exists: unique machine name violation, machine ID ${r1.id} already exists with name "${r1.name}"` } };
+      if (url.includes(`/machines/${r1.id}`)) return { status: 200, body: r1 };
+      return { status: 200, body: [r1, r2] };
+    });
+    const adopted = await new FlyRunner({ client: s.client, image: "img" }).create({ ...SPEC, attempt: 2 });
+    expect(adopted).toEqual({ runnerId: "m_r2_live" });
+  });
+
+  it("I4: an ORDINARY non-retryable refusal (400) is NOT unestablished and is never marked create_outcome_unknown", async () => {
+    // The negative pair for T5-g. `create_outcome_unknown` is the one signal that
+    // means "we may be holding a Machine we cannot see"; stamping it on every
+    // refusal makes it mean nothing. 400 is Fly's answer to, among other things,
+    // a performance-8x guest under 16384 MB — an ordinary, knowable refusal.
+    const rec = new FakeRecorder();
+    // ONE recorder behind both the client (per-attempt rows) and the adapter (the
+    // operation verdict), so "no mark" is distinguishable from "nothing recorded".
+    const s = scripted(() => ({ status: 400, body: { error: "invalid guest" } }), rec);
+    const runner = new FlyRunner({ client: s.client, image: "img", recorder: rec });
+    const err = await runner.create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    expect(err!.status).toBe(400);
+    expect(err!.retryable).toBe(false);
+    expect(isUnestablishedCreate(err)).toBe(false);
+    await Promise.resolve();
+    expect(rec.calls.filter((c) => c.errorCode === CREATE_OUTCOME_UNKNOWN)).toHaveLength(0);
+    expect(rec.calls.length).toBeGreaterThan(0); // the twin: the attempt itself WAS recorded
+  });
+
   it("T5-g: a create whose OUTCOME was never established is marked as its own thing in telemetry and stays non-retryable", async () => {
     // The client downgrades a retryable failure whose lookup could not answer:
     // `retryable: true` out of a create is the domain's licence to create attempt+1
@@ -324,6 +402,32 @@ describe("FlyRunner", () => {
       { runnerId: "m_b", sessionId: "y", name: "relay-y", state: "stopped" },
       { runnerId: "m_c", sessionId: null, name: "something-else", state: "running" },
     ]);
+  });
+
+  it("I3: list() and observe() read ONE vocabulary — every documented Fly state summarises the same way in both, and a booting Machine is 'other', never absent", async () => {
+    // Before this, `listingOf` read the RAW Fly state while `observe` went through
+    // FLY_STATE_MAP, so `suspended` was "other" from one and "stopped" from the
+    // other. This sweeps the whole documented set and compares the two code paths
+    // against EACH OTHER rather than against a table typed in here.
+    const documented = Object.keys(FLY_STATE_MAP);
+    const s = scripted((url) => {
+      if (url.endsWith("/events")) return { status: 200, body: [] };
+      const one = /\/machines\/m_([a-z_]+)$/.exec(url);
+      if (one) return { status: 200, body: { id: `m_${one[1]}`, name: `relay-${one[1]}-r1`, state: one[1] } };
+      return { status: 200, body: documented.map((st) => ({ id: `m_${st}`, name: `relay-${st}-r1`, state: st, config: { metadata: { [SESSION_METADATA_KEY]: st } } })) };
+    });
+    const runner = new FlyRunner({ client: s.client, image: "img" });
+    const listed = new Map((await runner.list()).map((l) => [l.sessionId!, l.state]));
+    expect(listed.size).toBe(documented.length); // the twin: the sweep really saw all seventeen
+    for (const st of documented) {
+      const observed = (await runner.observe(`m_${st}`)).state;
+      const summary = observed === "running" ? "running" : observed === "stopped" ? "stopped" : "other";
+      expect(listed.get(st), `${st} (observe says ${observed})`).toBe(summary);
+    }
+    // …and the three product facts the agreement alone cannot pin.
+    expect(listed.get("started")).toBe("running");
+    expect(listed.get("suspended")).toBe("stopped"); // read RAW this answered "other"
+    expect(listed.get("created")).toBe("other"); // still coming up — and still billing (live, 2026-09-20)
   });
 
   it("no secret reaches a thrown error (the client's per-request env redaction, seen from the adapter)", async () => {
@@ -424,5 +528,124 @@ describe("relayDrivers()", () => {
       setRelayDriversForTest(null);
       restoreEnv(keep);
     }
+  });
+
+  it("I5: the LIVE branch binds the production recorder into BOTH adapters — a call through either reaches recordProviderCall (ruling 13)", async () => {
+    // The fake branch was pinned and the live one was not, so ruling 13 could have
+    // gone silently unrecorded in the only branch production runs: zero rows, no
+    // error, the money ledger simply empty. Both adapters are driven through a
+    // stubbed global fetch — each captures `fetch` at CONSTRUCTION, which is
+    // inside `relayDrivers()` / the lazy runner's first use, so the stub must be
+    // in place before either.
+    const keep = {
+      RELAY_DRIVERS: process.env.RELAY_DRIVERS, FLY_API_TOKEN: process.env.FLY_API_TOKEN, RELAY_IMAGE: process.env.RELAY_IMAGE,
+      CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_STREAM_TOKEN: process.env.CLOUDFLARE_STREAM_TOKEN,
+    };
+    try {
+      process.env.RELAY_DRIVERS = "live";
+      process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
+      process.env.CLOUDFLARE_STREAM_TOKEN = "tok";
+      process.env.FLY_API_TOKEN = "fly-tok";
+      process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:abc";
+      vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) =>
+        String(url).includes("api.machines.dev")
+          ? new Response("[]", { status: 200, headers: { "content-type": "application/json" } })
+          : new Response(JSON.stringify({ success: true, result: { uid: "in-1" }, errors: [] }), { status: 200, headers: { "content-type": "application/json" } }),
+      ));
+      telemetry.recordProviderCall.mockClear();
+      setRelayDriversForTest(null);
+      const d = relayDrivers();
+      await d.ingest.inputStatus("in-1");
+      await d.runner.list();
+      await Promise.resolve();
+      expect(telemetry.recordProviderCall.mock.calls.map(([, p]) => p.provider)).toEqual(["cloudflare", "fly"]);
+    } finally {
+      vi.unstubAllGlobals();
+      setRelayDriversForTest(null);
+      restoreEnv(keep);
+    }
+  });
+});
+
+// Carry C4 / Task 3 review G1, the RUNNER half. Task 10's DB tests drive the
+// FAKE; if the fake's recorded path shapes or subject ids drift from the real
+// adapter's, those tests prove the fake and nothing else. The ingest half lives
+// in ingest-cf.test.ts; this is the same comparison through the same REAL
+// `pathTemplate`, per operation, so either side drifting reds.
+describe("fake/real runner provider-call parity (carry C4, the runner half of G1)", () => {
+  type Shape = { operation: string; method: string; template: string; idCount: number; subject: string; session: string };
+
+  function shapes(calls: readonly ProviderCallRecord[], known: { runner: string; session: string }): Shape[] {
+    return calls.map((c) => ({
+      operation: c.operation,
+      method: c.method,
+      template: pathTemplate(c.url, c.ids),
+      idCount: c.ids.length,
+      subject: c.subjectId == null ? "none" : c.subjectId === known.runner ? "runner" : "other",
+      session: c.sessionId == null ? "none" : c.sessionId === known.session ? "session" : "other",
+    }));
+  }
+
+  /** create → observe(running) → stop → destroy → list, on both sides. `observe`
+   *  runs BEFORE the stop on purpose: the ONE place the two diverge is observing
+   *  a Machine that is no longer running, and that divergence gets its own `it`
+   *  below rather than being smuggled into the comparison. */
+  it("every RunnerProvider operation records the same path template, id count, subject and session kind on both sides", async () => {
+    const realPort = new FakeRecorder();
+    const s = scripted((url, init) => {
+      if (url.endsWith("/stop")) return { status: 200 };
+      if (init.method === "DELETE") return { status: 200 };
+      if (url.endsWith("/machines") && init.method === "GET") return { status: 200, body: [] };
+      return { status: 200, body: { id: "m_real", name: NAME, state: "started" } };
+    }, realPort);
+    const real = new FlyRunner({ client: s.client, image: "img" });
+    const realHandle = await real.create(SPEC);
+    await real.observe(realHandle.runnerId);
+    await real.stop(realHandle.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
+    await real.destroy(realHandle.runnerId);
+    await real.list();
+
+    const fakePort = new FakeRecorder();
+    const fake = new FakeRunner({ recorder: fakePort });
+    const fakeHandle = await fake.create(SPEC);
+    await fake.observe(fakeHandle.runnerId);
+    await fake.stop(fakeHandle.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
+    await fake.destroy(fakeHandle.runnerId);
+    await fake.list();
+
+    await new Promise((r) => setImmediate(r));
+    const realShapes = shapes(realPort.calls, { runner: realHandle.runnerId, session: SPEC.sessionId });
+    const fakeShapes = shapes(fakePort.calls, { runner: fakeHandle.runnerId, session: SPEC.sessionId });
+    // Present twins for the comparison's own vacuity: five operations in order,
+    // the templates really are the Machines API's app-scoped paths, and the
+    // create really is the one call that carries the session.
+    expect(realShapes.map((x) => x.operation)).toEqual(["createMachine", "getMachine", "stopMachine", "destroyMachine", "listMachines"]);
+    expect(realShapes[0]!.template).toBe("/v1/apps/{id}/machines");
+    expect(realShapes[1]!.template).toBe("/v1/apps/{id}/machines/{id}");
+    expect(realShapes[2]!.template).toBe("/v1/apps/{id}/machines/{id}/stop");
+    expect(realShapes.map((x) => x.subject)).toEqual(["none", "runner", "runner", "runner", "none"]);
+    expect(realShapes.map((x) => x.session)).toEqual(["session", "none", "none", "none", "none"]);
+    expect(fakeShapes).toEqual(realShapes);
+  });
+
+  it("the ONE declared divergence: observing a Machine that is NOT running costs the real adapter a second call (events) the fake never makes", async () => {
+    // Asserted rather than excused. `FakeRunner.observe` records one call whatever
+    // the state; the real adapter fetches the exit events for anything that is
+    // neither running nor pending. Task 10 counting provider rows off the fake
+    // will under-count by exactly one per terminal observe — and if this
+    // divergence ever grows, this is where it reds.
+    const realPort = new FakeRecorder();
+    const s = scripted((url) => (url.endsWith("/events") ? { status: 200, body: [] } : { status: 200, body: { id: "m_real", name: NAME, state: "stopped" } }), realPort);
+    await new FlyRunner({ client: s.client, image: "img" }).observe("m_real");
+
+    const fakePort = new FakeRecorder();
+    const fake = new FakeRunner({ recorder: fakePort });
+    const h = await fake.create(SPEC);
+    fake.setObserved(h.runnerId, "stopped", { exitCode: 0, oomKilled: false, requestedStop: true });
+    await fake.observe(h.runnerId);
+
+    await new Promise((r) => setImmediate(r));
+    expect(realPort.calls.map((c) => c.operation)).toEqual(["getMachine", "machineEvents"]);
+    expect(fakePort.calls.map((c) => c.operation)).toEqual(["createMachine", "getMachine"]);
   });
 });
