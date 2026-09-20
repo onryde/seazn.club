@@ -124,7 +124,10 @@ export interface FlyClientOptions {
  *  `retryable: true` as PROOF that Fly holds no Machine (carry T5-b). A lookup
  *  that was never attempted, or that could not answer, is not evidence of
  *  absence — it is the one state that must never grant attempt + 1. */
-type LookupOutcome<T> = { kind: "found"; value: T } | { kind: "absent" } | { kind: "unknown"; why: string };
+/**  `absent` carries whether the absence was CONFIRMED (the settle + confirming re-list ran) or
+ *  merely observed once: `retryable: true` out of a create is the domain's licence to create
+ *  attempt + 1 under a DIFFERENT name, so only a confirmed absence may earn it (re-review N-C1). */
+type LookupOutcome<T> = { kind: "found"; value: T } | { kind: "absent"; confirmed: boolean } | { kind: "unknown"; why: string };
 
 /** What `once` needs to record an attempt: the method's name, the machine it is about, the ids in the path. */
 interface CallMeta { operation: string; subjectId?: string | null; sessionId?: string | null; ids: readonly string[] }
@@ -263,6 +266,19 @@ export class FlyClient {
       } catch (e) {
         const err = e instanceof FlyApiError ? e : new FlyApiError(this.red(String((e as Error)?.message ?? e)), "network", null, true, null, attempt);
         if (!err.retryable) throw withAttempts(err, attempt);
+        // The next wait is computed BEFORE the lookup, because whether this call is ENDING decides
+        // what the lookup has to prove. There are two terminal exits that carry `retryable` out —
+        // attempts exhausted, and the deadline — and the first draft told the lookup about only the
+        // first (re-review N-C1): a create whose deadline blew on attempt 1 reported `retryable: true`
+        // on ONE unsettled list. That is the C1 breach by another door: the domain's retry posts
+        // `relay-<sid>-r2`, a name Fly has no reason to refuse, so the r1 Machine — if Fly held one —
+        // is orphaned under a name no row carries.
+        const retryAfter = err.status === 429 && err.retryAfterSeconds !== null ? err.retryAfterSeconds * 1000 : null;
+        const wait = retryAfter ?? Math.floor(Math.min(this.o.maxBackoffMs, this.o.baseBackoffMs * 2 ** (attempt - 1)) * this.o.random());
+        const ending = attempt >= this.o.maxAttempts || this.o.clock() - started + wait > this.o.deadlineMs;
+        // An operation with no lookup cannot have created anything, so there is no absence to
+        // establish and its retryable stays exactly as it was (a list, a get, a destroy).
+        let absenceConfirmed = !onAmbiguous;
         if (onAmbiguous) {
           // T5-b (post-2C plan sync): a RETRYABLE create failure reaches the domain as `create_failed { retryable: true }`, which
           // lets the runner table schedule attempt + 1 (invariant 1) — so it must MEAN "Fly holds no Machine under this name".
@@ -272,7 +288,7 @@ export class FlyClient {
           // a lookup that could not answer — or could not even be attempted (C1) — is `unknown` and is downgraded here.
           let outcome: LookupOutcome<T>;
           try {
-            outcome = await onAmbiguous(attempt >= this.o.maxAttempts);
+            outcome = await onAmbiguous(ending);
           } catch (lookupErr) {
             outcome = { kind: "unknown", why: this.red(String((lookupErr as Error)?.message ?? lookupErr)) };
           }
@@ -280,12 +296,16 @@ export class FlyClient {
           if (outcome.kind === "unknown") {
             throw new FlyApiError(`fly: create outcome unknown — the lookup after "${err.message}" could not answer (${outcome.why})`, err.code, err.status, false, err.requestId, attempt);
           }
+          absenceConfirmed = outcome.confirmed;
         }
-        if (attempt >= this.o.maxAttempts) throw withAttempts(err, attempt);
-        const retryAfter = err.status === 429 && err.retryAfterSeconds !== null ? err.retryAfterSeconds * 1000 : null;
-        const wait = retryAfter ?? Math.floor(Math.min(this.o.maxBackoffMs, this.o.baseBackoffMs * 2 ** (attempt - 1)) * this.o.random());
+        // Both terminal exits ask the same question, and neither may answer `retryable: true` on an
+        // absence nobody established. `ending` normally makes the lookup confirm before either is
+        // reached; it can still be false here when the LOOKUP ITSELF is what consumed the budget,
+        // and that race is exactly what this refuses to hand the domain as proof of absence.
+        if (attempt >= this.o.maxAttempts) throw withAttempts(err, attempt, absenceConfirmed);
         if (this.o.clock() - started + wait > this.o.deadlineMs) {
-          throw new FlyApiError(`fly: deadline of ${this.o.deadlineMs} ms exceeded after ${attempt} attempt(s) (${err.message})`, "deadline", err.status, true, err.requestId, attempt);
+          const unproven = absenceConfirmed ? "" : " — and the Machine's absence was never confirmed, so this is not a licence to create another";
+          throw new FlyApiError(`fly: deadline of ${this.o.deadlineMs} ms exceeded after ${attempt} attempt(s) (${err.message})${unproven}`, "deadline", err.status, absenceConfirmed, err.requestId, attempt);
         }
         await this.o.sleep(wait);
       }
@@ -297,7 +317,7 @@ export class FlyClient {
     const meta: CallMeta = { operation: "createMachine", ids: [], sessionId: sessionKey ?? null };
     return this.withRetry(
       async (attempt) => (await this.once("POST", "/machines", input, MachineSchema, attempt, meta)).data!,
-      async (lastAttempt): Promise<LookupOutcome<Machine>> => {
+      async (ending): Promise<LookupOutcome<Machine>> => {
         // C1: with no session key there is nothing to look the Machine up BY, so no lookup is
         // possible. That is `unknown`, never `absent` — returning "nothing there" here reported
         // `retryable: true` after ZERO GETs, and the domain would have read that as proof Fly
@@ -309,17 +329,19 @@ export class FlyClient {
         const mine = (ms: readonly Machine[]): Machine | undefined => ms.find((m) => m.name === input.name);
         const found = mine(await this.listMachines({ metadata: { [SESSION_METADATA_KEY]: sessionKey } }));
         if (found) return { kind: "found", value: found };
-        // I6: an empty answer only has to be RIGHT on the last attempt. Before that it merely
-        // permits another POST, and a POST under a name Fly already holds is refused 409 rather
-        // than duplicated (measured 2026-09-20) — so an unsettled list cannot make a second
-        // Machine there. On the LAST attempt the same empty answer becomes `retryable: true`,
-        // which the domain reads as proof of absence, so it is confirmed once after a settle.
-        // The confirm is a SINGLE attempt: a confirm that cannot answer throws, and `unknown`
-        // is the right verdict for "we still do not know".
-        if (!lastAttempt) return { kind: "absent" };
+        // I6: an empty answer only has to be RIGHT when this call is ENDING — at maxAttempts, or
+        // because the next wait already ends past the deadline (N-C1: the deadline is a terminal
+        // exit too, and telling the lookup about only maxAttempts left it unconfirmed there).
+        // Mid-ladder an empty answer merely permits another POST under the SAME name, which Fly
+        // refuses 409 rather than duplicating (measured 2026-09-20). Ending, the same empty answer
+        // would become `retryable: true`, which the domain reads as proof of absence AND acts on
+        // under a DIFFERENT name — so it is confirmed once after a settle, and the verdict says
+        // which of the two it is. The confirm is a SINGLE attempt: one that cannot answer throws,
+        // and `unknown` is the right verdict for "we still do not know".
+        if (!ending) return { kind: "absent", confirmed: false };
         await this.o.sleep(this.o.lookupSettleMs);
         const confirmed = mine((await this.once("GET", this.listPath({ metadata: { [SESSION_METADATA_KEY]: sessionKey } }), undefined, z.array(MachineSchema), 1, { operation: "listMachines", ids: [] })).data!);
-        return confirmed ? { kind: "found", value: confirmed } : { kind: "absent" };
+        return confirmed ? { kind: "found", value: confirmed } : { kind: "absent", confirmed: true };
       },
     );
   }
@@ -486,6 +508,9 @@ function abortError(): Error {
   return Object.assign(new Error("aborted"), { name: "AbortError" });
 }
 
-function withAttempts(err: FlyApiError, attempts: number): FlyApiError {
-  return new FlyApiError(err.message, err.code, err.status, err.retryable, err.requestId, attempts, err.retryAfterSeconds);
+/** `absenceConfirmed` false DOWNGRADES a retryable error: it is only ever passed from a create,
+ *  where `retryable` means "Fly holds no Machine" and not merely "the call failed" (N-C1). */
+function withAttempts(err: FlyApiError, attempts: number, absenceConfirmed = true): FlyApiError {
+  const message = absenceConfirmed ? err.message : `${err.message} — and the Machine's absence was never confirmed, so this is not a licence to create another`;
+  return new FlyApiError(message, err.code, err.status, err.retryable && absenceConfirmed, err.requestId, attempts, err.retryAfterSeconds);
 }

@@ -14,7 +14,10 @@ import { FakeRecorder } from "../fakes";
 /** `stallBody` is C2's shape: headers arrive, the body never does, and the stream
  *  does NOT honour the AbortSignal — so it proves the timeout bounds the read
  *  itself rather than relying on the mock to co-operate. */
-type Scripted = { status: number; body?: unknown; headers?: Record<string, string>; delayMs?: number; networkError?: boolean; stallBody?: boolean };
+/** `clockJumpMs` advances the fake clock and then ANSWERS — a slow call that
+ *  succeeds, which `delayMs` cannot express (that one hangs until the abort).
+ *  It is what puts a create's own ambiguity lookup past the deadline. */
+type Scripted = { status: number; body?: unknown; headers?: Record<string, string>; delayMs?: number; networkError?: boolean; stallBody?: boolean; clockJumpMs?: number };
 
 function rig(script: Scripted[], opts: Partial<ConstructorParameters<typeof FlyClient>[0]> = {}) {
   let now = 1_000_000;
@@ -32,6 +35,7 @@ function rig(script: Scripted[], opts: Partial<ConstructorParameters<typeof FlyC
         now += step.delayMs!;
       });
     }
+    if (step.clockJumpMs !== undefined) now += step.clockJumpMs;
     if (step.stallBody) {
       // A body that never arrives AND never reacts to the abort. `new ReadableStream`
       // with an empty start() leaves `res.text()` pending for ever.
@@ -172,6 +176,33 @@ describe("FlyClient — retries, timeouts, deadline", () => {
     });
     expect(r.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);   // there is no attempt 2
     expect(r.sleeps).toEqual([]);                                         // and no backoff was waited
+  });
+
+  it("a create that ends at the DEADLINE reports retryable only on a CONFIRMED absence — the third terminal exit", async () => {
+    // Re-review N-C1. `retryable: true` out of a create is the domain's licence to create
+    // attempt + 1 under a DIFFERENT name (`relay-<sid>-r2`), which Fly will NOT refuse, so it is
+    // only ever safe on an absence that was CONFIRMED. The deadline is a terminal exit like
+    // maxAttempts, and it used to hand out that licence on one unsettled list.
+    //
+    // (a) The deadline is FORESEEABLE — the next wait already ends past it — so the lookup is
+    // told this is the end and the settle + confirm runs. The absence is established, and the
+    // retryable deadline error is earned.
+    const foreseen = rig([{ status: 503, body: { error: "down" } }, { status: 200, body: [] }, { status: 200, body: [] }],
+      { deadlineMs: 100, maxAttempts: 4 });
+    await expect(foreseen.client.createMachine(CREATE)).rejects.toMatchObject({ code: "deadline", retryable: true, attempts: 1 });
+    expect(foreseen.calls.map((c) => c.init.method)).toEqual(["POST", "GET", "GET"]);   // the confirm ran
+    expect(foreseen.sleeps).toEqual([50]);                                              // the settle, not a backoff
+    // (b) The deadline is NOT foreseeable: the lookup itself is what consumes the budget. The
+    // absence was observed once, unsettled and unconfirmed — so the error is NOT retryable.
+    const raced = rig([{ status: 503, body: { error: "down" } }, { status: 200, body: [], clockJumpMs: 20_000 }],
+      { deadlineMs: 10_000, maxAttempts: 4 });
+    const e = await raced.client.createMachine(CREATE).catch((x: unknown) => x as FlyApiError);
+    expect(e).toMatchObject({ code: "deadline", retryable: false, attempts: 1 });
+    expect(e.message).toContain("absence was never confirmed");
+    expect(raced.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);
+    expect(raced.sleeps).toEqual([]);
+    // (c) An op that cannot create anything keeps the plain retryable deadline — see the
+    // `listMachines` deadline test above, which this must not have changed.
   });
 
   it("C1: a create whose metadata carries no seazn_session is NOT retryable — no lookup is possible, and 'nobody looked' is never 'nothing there'", async () => {
