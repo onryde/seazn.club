@@ -29,7 +29,9 @@ interface FixtureRow {
   away_entrant_id: string | null;
   status: string;
   outcome: unknown;
-  scheduled_at: string | null;
+  /** postgres.js parses `timestamptz` into a JS Date; the union keeps the
+   *  assertion below honest if that ever changes. */
+  scheduled_at: Date | string | null;
   ext_key: string | null;
 }
 

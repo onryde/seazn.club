@@ -14,6 +14,7 @@ import {
   type BracketFixture,
   type BracketStage,
   type DivisionEvent,
+  type FixtureResult,
   type FixtureStatus,
   type StandingsRow,
   type TableFixture,
@@ -124,8 +125,10 @@ function awardByeDelta(
     home: { entrantId: seatedHome ? winnerId : BYE_PHANTOM, slots: [] },
     away: { entrantId: seatedHome ? BYE_PHANTOM : winnerId, slots: [] },
   });
-  let pair = sportModule.standingsDelta(outcome, cfg, ctx, state);
-  if (pointsRule) pair = applyPointsRule(outcome, pair, pointsRule);
+  // `standingsDelta` returns a mutable pair, `applyPointsRule` a readonly
+  // `FixtureResult` — so this is a new local, not a reassignment (TS4104).
+  const rawPair = sportModule.standingsDelta(outcome, cfg, ctx, state);
+  const pair: FixtureResult = pointsRule ? applyPointsRule(outcome, rawPair, pointsRule) : rawPair;
   const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
   if (winner.entrantId !== winnerId) {
     throw new EngineError("CONFIG_INVALID", "award bye standings delta missing winner", {
