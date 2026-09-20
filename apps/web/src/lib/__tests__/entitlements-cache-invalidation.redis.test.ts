@@ -142,7 +142,7 @@ describe.skipIf(!HAS_DB || !HAS_REDIS)("entitlement cache invalidation (real Red
       passKey: "event_pass",
       paymentIntent: intent,
     });
-    expect(result).toEqual({ recorded: false, duplicateIntent: null });
+    expect(result).toEqual({ recorded: false, duplicateIntent: null, unknownCompetition: false });
 
     // (4) Pre-fix the fallthrough returned WITHOUT invalidating, so the stale
     // deny warmed in (1) outlived the healed purchase for up to 5 minutes —

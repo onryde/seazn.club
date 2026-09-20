@@ -56,6 +56,7 @@ import {
   sendCreditPackGrantFailedAlertEmail,
   sendSizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
+  sendPassUnknownCompetitionAlertEmail,
 } from "@/lib/email";
 import type { StaffDisputeAlertArgs } from "@/lib/email-templates";
 import {
@@ -237,6 +238,40 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         paymentIntent:
           typeof session.payment_intent === "string" ? session.payment_intent : null,
       });
+      // The competition this payment names is not a row in this database, so
+      // there is nothing to record and no retry can change that. ACK the
+      // webhook — the same reasoning as the mint guard above — but NEVER
+      // silently: for a competition deleted after the buyer paid, this is a
+      // real customer charged for nothing, and the only way anyone learns of
+      // it is this alert. The money trace below is deliberately skipped: it
+      // would describe a purchase we did not record, against an org that may
+      // not exist here either.
+      if (res.unknownCompetition) {
+        log.error(
+          {
+            sessionId: session.id,
+            orgId,
+            competitionId,
+            passKey,
+            paymentIntent: session.payment_intent,
+          },
+          "billing: event pass paid but the competition does not exist in this database — acked, not retried",
+        );
+        const alertTo = process.env.STAFF_ALERT_EMAIL;
+        if (alertTo) {
+          void sendPassUnknownCompetitionAlertEmail({
+            to: alertTo,
+            sessionId: session.id,
+            orgId,
+            competitionId,
+            passKey,
+            paymentIntent:
+              typeof session.payment_intent === "string" ? session.payment_intent : null,
+            source: "webhook",
+          }).catch(() => {});
+        }
+        return;
+      }
       // Second owner / second tab paid for an already-passed comp — send it
       // straight back. The refund is outside any tx and swallows its own
       // failure, so the webhook still ACKs (P0-3b).
