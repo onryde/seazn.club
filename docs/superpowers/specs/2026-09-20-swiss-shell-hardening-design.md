@@ -209,10 +209,18 @@ just changed.
 The 5→6 growth direction is reachable only BEFORE Start, and is the less
 important half.
 
-**Build:** make the next round seat correctly against the CURRENT active field
-— either by re-minting that round's shells to match it, or by seating the round
-without depending on pre-minted shells. **Owner decision needed — see Open
-question 1.**
+**Build (owner ruled 2026-09-20 — option (a), reconcile).** Before seating the
+target round, reconcile its shells against the CURRENT active field:
+`boards = floor(n / 2)`, `bye = n % 2`. Delete surplus boards from the highest
+`seq_in_round` down, mint only the shortfall, and add or remove the `-bye`
+shell as parity requires.
+
+**It must be a reconcile, never a delete-and-recreate.** Scheduling a shell
+ahead of Pair is a shipped, tested feature — `swiss-shell.spec.ts` pins a TBD
+shell's `scheduled_at` and asserts it survives Pair AND re-Pair. Recreating the
+round changes fixture ids and discards `scheduled_at` / `court_id`, losing an
+organiser's advance layout. Surviving rows keep their ids and their slots.
+Full reasoning in Open question 1.
 
 **Acceptance:**
 - Withdraw one entrant from a 6-player Swiss after Start, mid-tournament, and
@@ -224,6 +232,14 @@ question 1.**
   is not a parity sweep; enumerate the table.
 - Already-seated and already-played rounds must be untouched.
 - Recovery must not require deleting the stage.
+- **A shell scheduled ahead keeps its slot across the reconcile.** Pin
+  `scheduled_at` and `court_id` on a surviving shell, withdraw an entrant,
+  Pair, and assert the slot is unchanged — the same assertion
+  `swiss-shell.spec.ts` already makes across Pair/re-Pair, now across a field
+  change. This is the assertion that distinguishes a reconcile from a
+  recreate; without it both implementations pass.
+- Re-run `swiss-shell.spec.ts` itself. It covers schedule-ahead directly and is
+  the existing guard against this regression.
 
 ### Task 1.1 — a bye never freezes `config_snapshot`
 
@@ -460,14 +476,49 @@ them together means one screenshot pass instead of two.
      delete rows as the pairing requires, so the shell set stops being a
      fixed-size assumption.
 
-   **Recommendation: (a).** It is the smaller change, it keeps the shell model
-   the rest of this feature is built on, and it confines the write to exactly
-   one round that by definition has no results yet. (b) is the cleaner end
-   state — the fixed-size assumption is the root cause — but it rewrites the
-   seating path wholesale, on the same destructive surface that produced C1.
+   **Recommendation was (a).** It is the smaller change, it keeps the shell
+   model the rest of this feature is built on, and it confines the write to
+   exactly one round that by definition has no results yet. (b) is the cleaner
+   end state — the fixed-size assumption is the root cause — but it rewrites
+   the seating path wholesale, on the same destructive surface that produced
+   C1.
 
-   Either way the guard is the canonical one, evidence-of-play is monotonic,
-   and the round being re-minted must be proven unseated and unplayed first.
+   **OWNER RULING 2026-09-20: (a).** Re-mint the affected round.
+
+   **One refinement, flagged to the owner — taken literally, (a) breaks a
+   shipped feature.** Scheduling a shell AHEAD of Pair is supported and tested:
+   `apps/web/e2e/swiss-shell.spec.ts` schedules a TBD shell before Pair and
+   then asserts the slot survives both Pair and re-Pair
+   (`expect(rescheduled.scheduled_at).toBe(pinnedAt)`). A delete-and-recreate
+   re-mint changes fixture ids and discards `scheduled_at` / `court_id`, so an
+   organiser who had laid out round 4 in advance would silently lose it — and
+   the existing e2e would red, correctly.
+
+   **So the ruling is implemented as a RECONCILE, not a recreate.** Compute the
+   shape the current active field needs — `boards = floor(n / 2)`,
+   `bye = n % 2` — and move only the delta:
+   - surplus boards: delete from the HIGHEST `seq_in_round` down, so the
+     lower-indexed shells (and their scheduling) survive
+   - missing boards: mint only the shortfall
+   - bye shell: mint or delete exactly as parity requires, preserving the
+     `-bye` `ext_key` convention that Unpair and the bye classifier depend on
+
+   Surviving rows keep their ids, their `scheduled_at` and their `court_id`.
+   Nothing is rewritten that does not have to be.
+
+   Guards, either way: the canonical destructive guard rather than a subset,
+   evidence-of-play monotonic (`config_snapshot is not null OR
+   exists(score_events)`), the advisory lock taken BEFORE the guard is read
+   (Task 2.4), and the round being reconciled proven unseated and unplayed
+   first.
+
+   **Deliberately left open:** rounds BEYOND the one being paired are also
+   wrong-sized after a withdrawal. Reconciling lazily — each round when it is
+   paired — is simpler and touches less, but leaves later shells stale, which
+   any UI counting fixtures will report. Reconciling all unseated rounds at
+   once is consistent but widens the write. Decide when building Task 1.0; the
+   lazy option is the safer default and is what the acceptance criteria above
+   assume.
 2. **Task 2.2 — a round-count decrease with seated rounds beyond the new
    budget.** Refuse outright, or clear the seated rounds above the budget?
    **Recommendation: refuse** — clearing seated rounds is exactly the
