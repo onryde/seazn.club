@@ -28,7 +28,7 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** NOTHING — OWNER HOLD (2026-09-17, "wait after this review"). Task 3 COMPLETE (`4a11c1b4a`, review approved 0 Critical/0 Important; 9 minors + G3/G4/G5 queued for the lane-A close sweep; carries m4/G1/G2 → Task 4, G1 → Task 5, hostname-reject + G6 → Task 10 — all in the ledger). On the owner's "go": dispatch Task 4 (task-brief 4 + carries). Verification rule: judge vitest by EXIT code AND JSON.
+**In flight at time of writing:** Lane A Task 4 (Cloudflare Stream adapter `ingest-cf.ts`) implementer (opus), BASE `a7817041c`; brief `task-4-brief.md`, carries `task-4-carries.md`, report `task-4-report.md`. Owner hold of 2026-09-17 LIFTED 2026-09-20. Task 3 complete (`4a11c1b4a`). If lost: `git status` + the report; uncommitted relay files are the implementer's.
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
