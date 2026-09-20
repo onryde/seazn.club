@@ -1266,6 +1266,27 @@ const UI_EN = JSON.parse(
   ),
 ) as Record<string, string>;
 
+/** Load the connect settings page and wait for ITS read to land.
+ *
+ *  Armed BEFORE the navigation, deliberately. `goto()` / `reload()` followed
+ *  by `waitForResponse()` is a race — the response can arrive before the
+ *  waiter exists, and the test then burns its whole budget waiting for a
+ *  response that already happened. That failed once here after a rebase having
+ *  passed five runs, which is exactly how a flake earns its reputation. */
+async function openConnectSettings(
+  page: Page,
+  orgSlug: string,
+  orgId: string,
+): Promise<void> {
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes(`/orgs/${orgId}/connect`) && r.status() === 200,
+      { timeout: 30_000 },
+    ),
+    page.goto(`/o/${orgSlug}/settings/connect`),
+  ]);
+}
+
 test.describe("T16 · Connect payout health banner", () => {
   test("a failed payout raises the banner, a paid one takes it down", async ({ page }) => {
     const org = await seedOrg({
@@ -1285,10 +1306,7 @@ test.describe("T16 · Connect payout health banner", () => {
     // Healthy first. This is the positive pair for every "banner is gone"
     // assertion below — without it, a banner that never rendered at all would
     // satisfy them.
-    await page.goto(`/o/${org.orgSlug}/settings/connect`);
-    await page.waitForResponse(
-      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
-    );
+    await openConnectSettings(page, org.orgSlug, org.orgId);
     await expect(page.getByTestId("connect-payout-alert")).toHaveCount(0);
     // ...and the OTHER banner is absent too, so a later appearance is
     // attributable to this change and not to the P1-8 health mirror.
@@ -1310,10 +1328,7 @@ test.describe("T16 · Connect payout health banner", () => {
     });
     expect(failed.status()).toBe(200);
 
-    await page.reload();
-    await page.waitForResponse(
-      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
-    );
+    await openConnectSettings(page, org.orgSlug, org.orgId);
     const banner = page.getByTestId("connect-payout-alert");
     await expect(banner).toBeVisible({ timeout: 20_000 });
     await expect(banner).toHaveAttribute("data-alert", "payout_failed");
@@ -1343,7 +1358,7 @@ test.describe("T16 · Connect payout health banner", () => {
     // viewport at every width, which is the thing this wave can break.
     for (const width of [320, 768, 1280]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto(`/o/${org.orgSlug}/settings/connect`);
+      await openConnectSettings(page, org.orgSlug, org.orgId);
       await expect(banner).toBeVisible({ timeout: 20_000 });
       const box = await banner.boundingBox();
       expect(box, `the banner has a box at ${width}px`).not.toBeNull();
@@ -1357,7 +1372,7 @@ test.describe("T16 · Connect payout health banner", () => {
       });
     }
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await openConnectSettings(page, org.orgSlug, org.orgId);
     await expect(banner).toBeVisible({ timeout: 20_000 });
 
     // The next successful payout is proof the money is flowing again, so the
@@ -1374,10 +1389,7 @@ test.describe("T16 · Connect payout health banner", () => {
     });
     expect(paid.status()).toBe(200);
 
-    await page.reload();
-    await page.waitForResponse(
-      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
-    );
+    await openConnectSettings(page, org.orgSlug, org.orgId);
     await expect(page.getByTestId("connect-payout-alert")).toHaveCount(0);
   });
 
@@ -1409,10 +1421,7 @@ test.describe("T16 · Connect payout health banner", () => {
     });
     expect(deleted.status()).toBe(200);
 
-    await page.goto(`/o/${org.orgSlug}/settings/connect`);
-    await page.waitForResponse(
-      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
-    );
+    await openConnectSettings(page, org.orgSlug, org.orgId);
     const banner = page.getByTestId("connect-payout-alert");
     await expect(banner).toBeVisible({ timeout: 20_000 });
     await expect(banner).toHaveAttribute("data-alert", "bank_removed");
@@ -1423,7 +1432,7 @@ test.describe("T16 · Connect payout health banner", () => {
     await expect(page.locator("body")).not.toContainText("6789");
 
     await page.setViewportSize({ width: 320, height: 900 });
-    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await openConnectSettings(page, org.orgSlug, org.orgId);
     await expect(banner).toBeVisible({ timeout: 20_000 });
     const box = await banner.boundingBox(); // see the width-bar note in the test above
     expect(box, "the banner has a box at 320px").not.toBeNull();
