@@ -495,7 +495,24 @@ describe("relayDrivers()", () => {
       setRelayDriversForTest(null);
       const d = relayDrivers();
       expect(d.ingest).toBeInstanceOf(CloudflareIngest);
-      await expect(d.runner.list()).rejects.toThrow(/FLY_API_TOKEN/);
+      // ALL FIVE, one at a time. `lazyRunner` constructs on first use and the
+      // constructor THROWS without a token, so each method has to turn that into a
+      // REJECTED PROMISE — the port's contract is a rejection, not a throw at the
+      // call site, and a caller's `.catch()` never sees a synchronous throw. Only
+      // `list` used to be driven here, so a per-method collapse to a non-async
+      // arrow survived on the other four (review round 2). A single call that
+      // exercised all five would hide exactly that, which is why each is asserted
+      // separately: the call must NOT throw, and the promise it returns must reject.
+      const rejectsNotThrows = async (what: string, call: () => Promise<unknown>) => {
+        let p: Promise<unknown> | undefined;
+        expect(() => { p = call(); }, `${what} threw at the call site instead of returning a rejected promise`).not.toThrow();
+        await expect(p, what).rejects.toThrow(/FLY_API_TOKEN/);
+      };
+      await rejectsNotThrows("create", () => d.runner.create(SPEC));
+      await rejectsNotThrows("stop", () => d.runner.stop("m_1", { signal: "SIGINT", timeoutSeconds: 10 }));
+      await rejectsNotThrows("observe", () => d.runner.observe("m_1"));
+      await rejectsNotThrows("destroy", () => d.runner.destroy("m_1"));
+      await rejectsNotThrows("list", () => d.runner.list());
     } finally {
       setRelayDriversForTest(null);
       restoreEnv(keep);
