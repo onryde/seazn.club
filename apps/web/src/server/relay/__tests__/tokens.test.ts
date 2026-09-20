@@ -14,8 +14,20 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SignJWT, decodeJwt, generateKeyPair } from "jose";
-import { mintRelayToken, relayTokenExpiry, verifyRelayToken, type RelayScope } from "../tokens";
-import { MAX_DURATION_MINUTES, TOKEN_GRACE_MINUTES } from "../config";
+import {
+  MAX_ANCHOR_DRIFT_SECONDS,
+  mintRelayToken,
+  relayTokenExpiry,
+  verifyRelayToken,
+  type RelayScope,
+} from "../tokens";
+import {
+  MAX_DURATION_MINUTES,
+  PROVISION_TIMEOUT_SECONDS,
+  REQUESTED_TIMEOUT_SECONDS,
+  TOKEN_GRACE_MINUTES,
+  WARMING_TIMEOUT_MINUTES,
+} from "../config";
 import { deadlineOf } from "../domain/expiry";
 
 // Both ≥ 64 bytes so the same literal can sign HS512 as well as HS256 — the
@@ -296,23 +308,76 @@ describe("relay tokens", () => {
     // The literals below are only legitimate while these two hold.
     expect(TOKEN_GRACE_MINUTES).toBe(30);
     expect(MAX_DURATION_MINUTES).toBe(300);
-    const from = new Date("2026-09-13T10:00:00.000Z");
-    expect(relayTokenExpiry(from, 300).toISOString()).toBe("2026-09-13T15:30:00.000Z");
+    const createdAt = new Date("2026-09-13T10:00:00.000Z");
+    const unstarted = (maxDurationMinutes: number) => ({ createdAt, startedAt: null, maxDurationMinutes });
+    expect(relayTokenExpiry(unstarted(300)).toISOString()).toBe("2026-09-13T15:30:00.000Z");
     // A 90-minute booking: the differential that kills "always the constant".
-    expect(relayTokenExpiry(from, 90).toISOString()).toBe("2026-09-13T12:00:00.000Z");
+    expect(relayTokenExpiry(unstarted(90)).toISOString()).toBe("2026-09-13T12:00:00.000Z");
     // 0 is not "no time": deadlineOf reads a falsy max_duration as the default
     // (expiry.ts:28), and a token that expires before its own session's hard
     // stop kills a paid stream mid-flight.
-    expect(relayTokenExpiry(from, 0).toISOString()).toBe("2026-09-13T15:30:00.000Z");
+    expect(relayTokenExpiry(unstarted(0)).toISOString()).toBe("2026-09-13T15:30:00.000Z");
     for (const maxDurationMinutes of [300, 90, 1, 0]) {
-      expect(relayTokenExpiry(from, maxDurationMinutes).getTime(), `max_duration ${maxDurationMinutes}`).toBe(
-        deadlineOf({ createdAt: from, startedAt: null, maxDurationMinutes }).getTime() + TOKEN_GRACE_MINUTES * 60_000,
+      expect(relayTokenExpiry(unstarted(maxDurationMinutes)).getTime(), `max_duration ${maxDurationMinutes}`).toBe(
+        deadlineOf(unstarted(maxDurationMinutes)).getTime() + TOKEN_GRACE_MINUTES * 60_000,
       );
     }
   });
 
+  it("the anchor is startedAt, NOT createdAt — a started session's token is minted off the start (I1)", () => {
+    const createdAt = new Date("2026-09-13T10:00:00.000Z");
+    const startedAt = new Date("2026-09-13T10:14:00.000Z");
+    const started = { createdAt, startedAt, maxDurationMinutes: 300 };
+    const asIfUnstarted = { ...started, startedAt: null };
+
+    // The right answer DIFFERS from the wrong one's value, so this cannot be
+    // satisfied by "a Date came back": anchoring on createdAt says 15:30, and
+    // that token dies 14 minutes BEFORE the session it belongs to.
+    expect(relayTokenExpiry(started).toISOString()).toBe("2026-09-13T15:44:00.000Z");
+    expect(relayTokenExpiry(asIfUnstarted).toISOString()).toBe("2026-09-13T15:30:00.000Z");
+    expect(relayTokenExpiry(started).getTime() - relayTokenExpiry(asIfUnstarted).getTime()).toBe(14 * 60_000);
+
+    // …and whichever anchor applies, the gap to that session's own hard stop is
+    // exactly the grace — derived from deadlineOf, not from the literals above.
+    for (const s of [started, asIfUnstarted]) {
+      expect(relayTokenExpiry(s).getTime() - deadlineOf(s).getTime()).toBe(TOKEN_GRACE_MINUTES * 60_000);
+    }
+  });
+
+  it("the grace absorbs the whole admission→warming anchor drift, derived from config (failure class 20)", () => {
+    // Derived from the constants, never a number typed here: raising any leg of
+    // the ladder moves this test with it instead of leaving it asserting
+    // yesterday's margin.
+    expect(MAX_ANCHOR_DRIFT_SECONDS).toBe(
+      REQUESTED_TIMEOUT_SECONDS + PROVISION_TIMEOUT_SECONDS + WARMING_TIMEOUT_MINUTES * 60,
+    );
+    // The margin itself, from the constants: the grace must cover the drift.
+    expect(TOKEN_GRACE_MINUTES * 60).toBeGreaterThanOrEqual(MAX_ANCHOR_DRIFT_SECONDS);
+
+    // Driven, not merely asserted. A job token is minted at `requested`, when
+    // startedAt is still null, so it anchors on created_at — while the SAME
+    // session's final deadline will anchor on started_at, up to the full drift
+    // later. The token must still outlive it.
+    const createdAt = new Date("2026-09-13T10:00:00.000Z");
+    const atRequested = { createdAt, startedAt: null, maxDurationMinutes: 300 };
+    const token = relayTokenExpiry(atRequested);
+    const startedAsLateAsLegal = {
+      ...atRequested,
+      startedAt: new Date(createdAt.getTime() + MAX_ANCHOR_DRIFT_SECONDS * 1000),
+    };
+    expect(token.getTime()).toBeGreaterThanOrEqual(deadlineOf(startedAsLateAsLegal).getTime());
+
+    // The boundary is real, not slack: one second past the grace is NOT covered.
+    const startedPastTheGrace = {
+      ...atRequested,
+      startedAt: new Date(createdAt.getTime() + (TOKEN_GRACE_MINUTES * 60 + 1) * 1000),
+    };
+    expect(token.getTime()).toBeLessThan(deadlineOf(startedPastTheGrace).getTime());
+  });
+
   it("a token minted at its own expiry is already dead — relayTokenExpiry feeds mint end to end", async () => {
-    const t = await mintRelayToken({ sid: SID, scope: "relay-job", expiresAt: relayTokenExpiry(new Date(), 300) });
+    const expiresAt = relayTokenExpiry({ createdAt: new Date(), startedAt: null, maxDurationMinutes: 300 });
+    const t = await mintRelayToken({ sid: SID, scope: "relay-job", expiresAt });
     const c = await verifyRelayToken(t, JOB);
     // 300 + 30 minutes of life, measured from the claims themselves.
     expect(c.exp - Math.floor(Date.now() / 1000)).toBeGreaterThan(329 * 60);

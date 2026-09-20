@@ -19,8 +19,14 @@
 // only "is this token genuine, unexpired, for this sid and this scope".
 import { SignJWT, jwtVerify } from "jose";
 import { HttpError } from "@/lib/errors";
-import { TOKEN_GRACE_MINUTES } from "./config";
+import {
+  PROVISION_TIMEOUT_SECONDS,
+  REQUESTED_TIMEOUT_SECONDS,
+  TOKEN_GRACE_MINUTES,
+  WARMING_TIMEOUT_MINUTES,
+} from "./config";
 import { deadlineOf } from "./domain/expiry";
+import type { Session } from "./domain/session";
 
 export type RelayScope = "relay-job" | "relay-page";
 export interface RelayClaims {
@@ -80,12 +86,38 @@ export async function verifyRelayToken(
   return { sid: expected.sid, scope: expected.scope, exp: payload.exp };
 }
 
-/** When a token minted at `from` for a session booked for `maxDurationMinutes`
- *  expires: the session's own hard stop plus the grace. It reads the deadline
- *  through the domain's `deadlineOf` rather than re-deriving it, so a token can
- *  never expire before the session it belongs to — including for a falsy
- *  max_duration, which `deadlineOf` reads as the default rather than as zero. */
-export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
-  const deadline = deadlineOf({ createdAt: from, startedAt: null, maxDurationMinutes });
-  return new Date(deadline.getTime() + TOKEN_GRACE_MINUTES * 60_000);
+/** When a token for `session` expires: the session's own hard stop plus the
+ *  grace. It reads the deadline through the domain's `deadlineOf` rather than
+ *  re-deriving it, so a token can never expire before the session it belongs to
+ *  — including for a falsy max_duration, which `deadlineOf` reads as the default
+ *  rather than as zero.
+ *
+ *  It takes the SESSION, not a bare instant, on purpose (review I1). The anchor
+ *  is `startedAt ?? createdAt` (expiry.ts:27), and as a loose `from: Date` that
+ *  was a caller obligation nothing enforced: a caller passing `createdAt` for a
+ *  session that had already started minted a token on the wrong basis, and the
+ *  only thing covering it was the grace happening to exceed the drift. The type
+ *  now carries the obligation, and `MAX_ANCHOR_DRIFT_SECONDS` below states that
+ *  margin so a test can assert it instead of the code relying on it.
+ *
+ *  I3, recorded deliberately: the token OUTLIVES the session's hard stop by
+ *  TOKEN_GRACE_MINUTES, so it is still valid after the session is over — the
+ *  caller's re-read of the row (410 on a terminal session) is the only kill
+ *  switch, and Tasks 10 and 14 owe it. */
+export function relayTokenExpiry(session: Pick<Session, "createdAt" | "startedAt" | "maxDurationMinutes">): Date {
+  return new Date(deadlineOf(session).getTime() + TOKEN_GRACE_MINUTES * 60_000);
 }
+
+/** The worst legal gap between a session's `created_at` and its `started_at`:
+ *  the whole admission → provisioning → warming ladder, every leg of it a
+ *  config constant. A job token is minted BEFORE the Machine exists, when
+ *  `startedAt` is still null, so its expiry anchors on `created_at` while the
+ *  session's final deadline will anchor on `started_at` — up to this much
+ *  later. Derived, never typed: raising any of the three moves this with it.
+ *
+ *  TOKEN_GRACE_MINUTES must stay at or above this, or a token minted at
+ *  `requested` dies before the session it was minted for — the margin the loose
+ *  signature used to lean on unstated (failure class 20: a flat number beside a
+ *  derived cost). tokens.test.ts asserts both the derivation and the margin. */
+export const MAX_ANCHOR_DRIFT_SECONDS =
+  REQUESTED_TIMEOUT_SECONDS + PROVISION_TIMEOUT_SECONDS + WARMING_TIMEOUT_MINUTES * 60;
