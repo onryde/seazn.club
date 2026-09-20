@@ -1,48 +1,30 @@
 app = "seazn-club-prod"
 primary_region = "lhr"
 
+[env]
+  OAUTH_BASE_URL = "https://seazn.club"
+
 [build]
   # NEXT_PUBLIC_* vars baked into bundle at build time — not secrets.
   [build.args]
-    NEXT_PUBLIC_SUPABASE_URL          = "https://hoksroegadfdfwererzu.supabase.co"
-    NEXT_PUBLIC_SUPABASE_ANON_KEY     = "sb_publishable_jsKiT5L45u-yNlyCMIDGCg_GIIoj4H9"
-    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_live_REPLACE_ME"
-    NEXT_PUBLIC_BASE_URL              = "https://seazn-club-prod.fly.dev"
-    # NEXT_PUBLIC_SENTRY_DSN          = "https://..."  # uncomment when Sentry project created
+    NEXT_PUBLIC_SUPABASE_URL          = "https://mdkqvykjsnjmuzdhygxd.supabase.co"
+    NEXT_PUBLIC_SUPABASE_ANON_KEY     = "sb_publishable_IKT-7qoQhOKPbV2VcxK3-A_vY8939Rw"
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "pk_live_51C2ImvAy22H0xqqxgyR2ApR8e7CmW5JFy2abbBFvk3bWPeL69Hk446YoOc1PO0G6c68i0QUcOzmj2tWGwDTZSVPf00lL1B0gIF"
+    NEXT_PUBLIC_BASE_URL              = "https://seazn.club"
+    NEXT_PUBLIC_POSTHOG_KEY            = "phc_ACmj7g38QKBUqi6dEtY25ccDJQfHKRotSS8RSedXAbdb"
+    NEXT_PUBLIC_POSTHOG_HOST           = "https://eu.posthog.com"
+    NEXT_PUBLIC_SENTRY_DSN          = "https://7ce8d8933b2291575f99fd0e7e1c6447@o4512107033198592.ingest.de.sentry.io/4512107042963536"  # uncomment when Sentry project created
 
 [http_service]
-  internal_port       = 3000
-  force_https         = true
-  # "suspend", not "stop": a suspended machine "preserve[s] memory and disk
-  # state, and resume[s] faster than `stopped`" (Fly's machine-states docs),
-  # so a burst machine rejoining under load does not pay a cold Next.js boot
-  # in front of a real request.
-  #
-  # Only machines ABOVE min_machines_running are ever affected — the floor of
-  # 2 never stops or suspends, so the deploy-overlap and matchday-headroom
-  # guarantees below are untouched.
-  #
-  # ONE REAL DIFFERENCE FROM "stop", and it is the reason this needed a
-  # decision rather than a config tweak. `broadcastRevalidate`
-  # (src/lib/peer-revalidate.ts) fans revalidateTag out over 6PN to every
-  # peer. A suspended machine cannot answer that POST, and — unlike a stopped
-  # machine, which boots with an EMPTY cache — it resumes with its in-memory
-  # ISR cache exactly as it was, including entries invalidated while it slept.
-  #
-  # That is acceptable because it is the failure mode this design already
-  # declares and bounds: the broadcast is fail-open — tags go out in batches
-  # the peer route accepts, every POST in parallel with its own 2s timeout,
-  # and callers void it, so nothing waits on a peer. A peer that misses one
-  # keeps what it has until its cache entries expire: 30s for competition,
-  # division and fixture pages (REVALIDATE_FAST), 300s for player cards
-  # (REVALIDATE_SLOW). A resumed machine is precisely a lost-broadcast peer,
-  # and converges on the same bounds. If those windows are ever tightened to
-  # where that staleness matters, or if `expire` mode gains a correctness
-  # requirement SWR does not have, revisit this line first.
-  auto_stop_machines  = "suspend"
-  auto_start_machines = true
-  min_machines_running = 2          # deploy overlap + matchday headroom; peers
-                                    # stay ISR-coherent via /api/internal/revalidate
+  internal_port        = 3000
+  force_https          = true
+  auto_stop_machines   = "suspend"
+  auto_start_machines  = true
+  min_machines_running = 1          # floor auto_stop_machines won't cross; peers
+                                    # stay ISR-coherent via /api/internal/revalidate.
+                                    # Ceiling is 3 machines total, set via
+                                    # `fly scale count 3 -a seazn-club-prod` —
+                                    # fly.toml has no max_machines_running key.
 
   [http_service.concurrency]
     type       = "connections"
@@ -58,29 +40,9 @@ primary_region = "lhr"
     timeout      = "5s"
 
 [[vm]]
-  size   = "shared-cpu-1x"
-  memory = "1gb"
-
-[env]
-  # Postgres connections per machine (lib/db.ts connectionOptions, 1..50,
-  # default 5). Background work sizes itself from this value, e.g. the
-  # player-stats read check runs at most 20% of the pool at once. Each
-  # machine opens up to this many sessions on the Supabase SESSION pooler,
-  # so machines × DB_POOL_MAX must stay within the project's pooler pool
-  # size. A `fly secrets set DB_POOL_MAX` overrides this line.
-  DB_POOL_MAX = "20"
-
-# ── Secrets (set via `fly secrets set KEY=value`) ─────────────────────────────
-# DATABASE_URL             — Supabase SESSION pooler URL (port 5432, Supavisor).
-#                            The app is an always-on server: session mode keeps
-#                            prepared statements (transaction pooler :6543
-#                            disables them — lib/db.ts auto-detects either).
-# DB_POOL_MAX              — set in [env] above (20); not a secret.
-# AUTH_SECRET              — random 32-byte hex; `openssl rand -hex 32`
-# SUPABASE_SERVICE_ROLE_KEY
-# SUPABASE_JWT_SECRET
-# STRIPE_SECRET_KEY
-# STRIPE_WEBHOOK_SECRET
-# RESEND_API_KEY
-# SENTRY_AUTH_TOKEN        — only needed if uploading source maps in CI
-# PEER_REVALIDATE=1 — enable multi-machine tag fan-out (requires CRON_SECRET)
+    cpu_kind = "shared"
+    cpus = 4
+    memory = "1gb"
+    memory_mb = 1_024
+    processes = [ "app" ]
+    size = "shared-cpu-4x"

@@ -1,20 +1,9 @@
 app = "seazn-club-stg"
 primary_region = "lhr"
 
-# Runtime env (non-secret). OAUTH_BASE_URL makes server-side redirect/base-URL
-# resolution deterministic behind Fly's proxy (req.url is the internal
-# 0.0.0.0:3000 binding; NEXT_PUBLIC_* build args are not in server process.env).
 [env]
   OAUTH_BASE_URL   = "https://stg.seazn.club"
   NEXT_PUBLIC_BASE_URL = "https://stg.seazn.club"
-  # Staging-only: debug-level pino output for the scheduler logging added in
-  # #536. This file is dedicated to seazn-club-stg (unlike
-  # services/placement/fly.toml, which is deliberately shared with prod), so
-  # setting it here does not touch production.
-  LOG_LEVEL = "debug"
-  # Server-side Sentry reads the DSN at RUNTIME (NEXT_PUBLIC_* build args are
-  # not in server process.env — see note above). A DSN is public, safe to commit.
-  NEXT_PUBLIC_SENTRY_DSN = "https://7a6130059e6f32edb2703b0b6504a7c1@o4511704992382976.ingest.de.sentry.io/4512096272973905"
 
 [build]
   [build.args]
@@ -24,29 +13,14 @@ primary_region = "lhr"
     NEXT_PUBLIC_BASE_URL               = "https://stg.seazn.club"
     NEXT_PUBLIC_POSTHOG_KEY            = "phc_rjdhs5RCqJEg5jTH3UG4Dt9DxsLemdiejW3Upkbe4ERM"
     NEXT_PUBLIC_POSTHOG_HOST           = "https://eu.posthog.com"
-    NEXT_PUBLIC_SENTRY_DSN             = "https://7a6130059e6f32edb2703b0b6504a7c1@o4511704992382976.ingest.de.sentry.io/4512096272973905"
-    SENTRY_ORG                         = "seazn-club"
-    SENTRY_PROJECT                     = "seazn-club-stg"
+    NEXT_PUBLIC_SENTRY_DSN             = "https://77cd7f66bdb8a600423328d6e561b6e9@o4512107033198592.ingest.de.sentry.io/4512119703208016"
 
 [http_service]
   internal_port        = 3000
   force_https          = true
-  # "suspend", not "stop": a suspended machine "preserve[s] memory and disk
-  # state, and resume[s] faster than `stopped`" (Fly's machine-states docs).
-  # Same scale-to-zero cost shape, materially faster first request — which on
-  # staging is usually a human waiting on a cold Next.js boot, or an e2e run
-  # whose first navigation would otherwise eat the cold start. Billing for the
-  # suspended state is not documented by Fly (the pricing page covers
-  # `stopped` only, rootfs at $0.15/GB per 30 days); the amounts are cents
-  # either way. If an invoice ever disagrees, "stop" is a one-word revert.
-  #
-  # Unlike services/placement/fly.toml, no .flycast work is owed here: this app
-  # is reached over the PUBLIC internet through Fly Proxy, which is what
-  # performs the autostart. The .internal-bypasses-the-proxy trap applies only
-  # to private 6PN callers.
   auto_stop_machines   = "suspend"
   auto_start_machines  = true
-  min_machines_running = 0            # staging can cold-start; saves cost
+  min_machines_running = 0
 
   [http_service.concurrency]
     type       = "connections"
@@ -60,11 +34,11 @@ primary_region = "lhr"
     path         = "/api/health"
     protocol     = "http"
     timeout      = "5s"
-    
+
 [[vm]]
-cpu_kind = "shared"
-cpus = 4
-memory = "1gb"
-memory_mb = 1_024
-processes = [ "app" ]
-size = "shared-cpu-4x"
+    cpu_kind = "shared"
+    cpus = 4
+    memory = "1gb"
+    memory_mb = 1_024
+    processes = [ "app" ]
+    size = "shared-cpu-4x"
