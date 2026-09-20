@@ -2401,6 +2401,7 @@
   "launch.confirm.title": "Start this tournament?",
   "launch.confirm.lead": "The timetable goes live to players now.",
   "launch.confirm.entrants": "Entrant list closes. Withdrawals still work; no one new can be added.",
+  "launch.confirm.competition": "The competition moves from published to live.",
   "launch.confirm.format": "The format is already locked — fixtures exist.",
   "launch.confirm.rules": "Match rules stay editable for stages that have not begun. Once a stage's first match is scored, its format locks too.",
   "launch.schedule": "Schedule",

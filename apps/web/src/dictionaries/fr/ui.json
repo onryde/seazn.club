@@ -2401,6 +2401,7 @@
   "launch.confirm.title": "Démarrer ce tournoi ?",
   "launch.confirm.lead": "Le calendrier devient visible par les joueurs dès maintenant.",
   "launch.confirm.entrants": "La liste des inscrits se ferme. Les retraits restent possibles ; plus aucun nouvel inscrit ne peut être ajouté.",
+  "launch.confirm.competition": "La compétition passe de publiée à en direct.",
   "launch.confirm.format": "Le format est déjà verrouillé — des matchs existent.",
   "launch.confirm.rules": "Les règles de match restent modifiables pour les phases qui n'ont pas commencé. Dès que le premier match d'une phase est pointé, son format se verrouille aussi.",
   "launch.schedule": "Planifier",

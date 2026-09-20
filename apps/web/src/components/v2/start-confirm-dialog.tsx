@@ -15,11 +15,12 @@
 // on that refusal. A second, advisory copy of the conflict report here would
 // only be able to go stale between the preview and the commit.
 //
-// The three consequences are the verified lock table from the design, not a
-// guess: start closes the entrant list (withdrawals excepted, and open formats
-// exempt); it does NOT lock the format, which locked at Generate the moment
-// fixtures existed; and it does NOT lock match rules, which lock per stage as
-// each stage's first match is scored.
+// The consequences are the verified lock table from the design, not a guess:
+// start closes the entrant list (withdrawals excepted, and open formats
+// exempt); it moves the PARENT competition published → live, but only from
+// `published`; it does NOT lock the format, which locked at Generate the
+// moment fixtures existed; and it does NOT lock match rules, which lock per
+// stage as each stage's first match is scored.
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -31,12 +32,19 @@ export function StartConfirmDialog({
    *  those divisions it is simply untrue, and a dialog that lies once is not
    *  read again. */
   entrantsLock,
+  /** Does starting also move the PARENT competition published → live? TRUE
+   *  only for a competition that is currently `published` —
+   *  `lib/start-promotes-competition.ts` mirrors the server's own `where`.
+   *  Omitted, never softened, for the same reason as the entrants line: for a
+   *  draft or an already-live competition it is simply untrue. */
+  competitionPromotes,
   busy = false,
   onConfirm,
   onCancel,
 }: {
   open: boolean;
   entrantsLock: boolean;
+  competitionPromotes: boolean;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -62,6 +70,15 @@ export function StartConfirmDialog({
       <ul className="list-disc space-y-1 pl-5" data-testid="start-confirm-consequences">
         {entrantsLock && (
           <li data-testid="start-confirm-entrants">{msg("launch.confirm.entrants")}</li>
+        )}
+        {/* Grouped with the entrants line because both are things that CHANGE;
+            the two below are clarifications about what does not lock. The
+            sentence states the status move and stops there — published and
+            live are both in PUBLIC_DASHBOARD_STATUSES and
+            `public_competitions_v` does not read status at all, so "now
+            visible to players" would be false. */}
+        {competitionPromotes && (
+          <li data-testid="start-confirm-competition">{msg("launch.confirm.competition")}</li>
         )}
         <li>{msg("launch.confirm.format")}</li>
         <li>{msg("launch.confirm.rules")}</li>

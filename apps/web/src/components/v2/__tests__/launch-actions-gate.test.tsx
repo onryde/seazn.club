@@ -117,6 +117,7 @@ const baseProps = (): LaunchProps => ({
   fixtures: FIXTURES,
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   stageKinds: ["league"],
+  competitionStatus: "published",
   viewerPlan: "community",
 });
 

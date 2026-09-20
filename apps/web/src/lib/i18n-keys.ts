@@ -2533,6 +2533,7 @@ export type DictionaryKey =
   | "landing.tables"
   | "landing.tabsLabel"
   | "landing.today"
+  | "launch.confirm.competition"
   | "launch.confirm.entrants"
   | "launch.confirm.format"
   | "launch.confirm.lead"

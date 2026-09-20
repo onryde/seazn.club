@@ -16,6 +16,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startClosesEntrantList } from "@/lib/open-entry-stages";
+import { startPromotesCompetition } from "@/lib/start-promotes-competition";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
 
 interface Props {
@@ -38,6 +39,14 @@ interface Props {
    *  stage is an open format, so this cannot be answered from one stage.
    *  The page already holds the stages, so it costs no extra read. */
   stageKinds: string[];
+  /** The PARENT competition's status, raw. `startDivision` promotes it
+   *  published → live from `published` ONLY, so the confirmation cannot say
+   *  the promotion happens without knowing which status the competition is in.
+   *  The page already reads the competition (COLS carries `status`), so it
+   *  costs no extra query — and the derivation lives here, beside
+   *  `startClosesEntrantList`, so a unit test can drive all five statuses
+   *  through it. */
+  competitionStatus: string;
   viewerPlan: ViewerPlan;
 }
 
@@ -51,6 +60,7 @@ export function LaunchActions({
   fixtures,
   entrantNames,
   stageKinds,
+  competitionStatus,
   viewerPlan,
 }: Props) {
   const msg = useMsg();
@@ -145,6 +155,7 @@ export function LaunchActions({
       <StartConfirmDialog
         open={confirming}
         entrantsLock={startClosesEntrantList(stageKinds)}
+        competitionPromotes={startPromotesCompetition(competitionStatus)}
         busy={busy}
         onConfirm={() => {
           setConfirming(false);

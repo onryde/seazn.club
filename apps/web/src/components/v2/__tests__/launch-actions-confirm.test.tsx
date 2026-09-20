@@ -16,7 +16,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import {
+  COMPETITION_STATUS_START_PROMOTES_FROM,
+  COMPETITION_STATUS_START_PROMOTES_TO,
+} from "@/lib/start-promotes-competition";
 import type { BoardFixture } from "../board/types";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }));
@@ -44,6 +51,12 @@ import { LaunchActions } from "../launch-actions";
 import { StartConfirmDialog } from "../start-confirm-dialog";
 
 const enDict = en as unknown as Dict;
+const DICTS: Record<string, Dict> = {
+  en: en as unknown as Dict,
+  es: es as unknown as Dict,
+  fr: fr as unknown as Dict,
+  nl: nl as unknown as Dict,
+};
 
 const FIXTURES = [
   {
@@ -76,6 +89,7 @@ const baseProps = (over: Partial<LaunchProps> = {}): LaunchProps => ({
   fixtures: FIXTURES,
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   stageKinds: ["league"],
+  competitionStatus: "published",
   viewerPlan: "community",
   ...over,
 });
@@ -107,9 +121,9 @@ const pressStart = async (island: { tree: () => ReactElement[] }) => {
 const esc = (text: string) =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/'/g, "&#x27;");
 
-const renderDialog = (props: Parameters<typeof StartConfirmDialog>[0]) =>
+const renderDialog = (props: Parameters<typeof StartConfirmDialog>[0], locale = "en") =>
   renderToStaticMarkup(
-    <DictProvider locale={"en" as Locale} dict={enDict}>
+    <DictProvider locale={locale as Locale} dict={DICTS[locale]!}>
       <StartConfirmDialog {...props} />
     </DictProvider>,
   );
@@ -180,6 +194,79 @@ describe("Start tournament confirms first", () => {
       // The other two consequences still stand — the carve-out is one line.
       expect(html).toContain(esc(enDict["launch.confirm.format"] as string));
       expect(html).toContain(esc(enDict["launch.confirm.rules"] as string));
+    }
+  });
+
+  it("names the competition promotion only when the competition is published", async () => {
+    // `startDivision` promotes the parent competition with
+    // `... where id = $1 and status = 'published'` — so the line is true for
+    // exactly one status and false for the other four. Omitted, never
+    // softened, for the same reason the entrants line is: a dialog that lies
+    // once is not read again.
+    const published = renderIsland(LaunchActions, baseProps({ competitionStatus: "published" }));
+    await pressStart(published);
+    const publishedProps = confirmProps(published.tree());
+    expect(publishedProps.competitionPromotes).toBe(true);
+    const publishedHtml = renderDialog(publishedProps);
+    expect(publishedHtml).toContain(esc(enDict["launch.confirm.competition"] as string));
+    expect(publishedHtml).toContain('data-testid="start-confirm-competition"');
+
+    for (const competitionStatus of ["draft", "live", "completed", "archived"]) {
+      const island = renderIsland(LaunchActions, baseProps({ competitionStatus }));
+      await pressStart(island);
+      const props = confirmProps(island.tree());
+      expect(props.competitionPromotes, competitionStatus).toBe(false);
+      const html = renderDialog(props);
+      expect(html, competitionStatus).not.toContain(esc(enDict["launch.confirm.competition"] as string));
+      expect(html, competitionStatus).not.toContain('data-testid="start-confirm-competition"');
+      // The rest of the dialog is untouched by the carve-out — one line.
+      expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.entrants"] as string));
+      expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.format"] as string));
+      expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.rules"] as string));
+    }
+  });
+
+  it("says nothing about the competition becoming visible, because it does not", async () => {
+    // PUBLIC_DASHBOARD_STATUSES is ["published","live"] and
+    // `public_competitions_v` does not read `status` at all, so a
+    // published -> live move changes nothing anyone can see. The promotion
+    // line states the status move and stops there.
+    const island = renderIsland(LaunchActions, baseProps({ competitionStatus: "published" }));
+    await pressStart(island);
+    const html = renderDialog(confirmProps(island.tree()));
+    // Read the sentence back OUT of the rendered markup, not out of the JSON:
+    // the claim under test is what the organiser is shown.
+    const rendered = /<li data-testid="start-confirm-competition">([^<]*)<\/li>/.exec(html);
+    expect(rendered, "the promotion line did not render").not.toBeNull();
+    const line = rendered![1]!.toLowerCase();
+    for (const claim of ["visible", "discover", "public", "players", "anyone"]) {
+      expect(line, claim).not.toContain(claim);
+    }
+    // Non-vacuity: the sentence does name both ends of the move it claims.
+    expect(line).toContain(COMPETITION_STATUS_START_PROMOTES_FROM);
+    expect(line).toContain(COMPETITION_STATUS_START_PROMOTES_TO);
+  });
+
+  it("carries the promotion line in all four locales, translated", async () => {
+    // Not a key-presence check on the JSON: a key that exists but never
+    // reaches the markup, or one that renders English in every locale, passes
+    // that and fails the organiser. This renders the real dialog under each
+    // locale's real dictionary and reads the sentence out of the HTML.
+    const island = renderIsland(LaunchActions, baseProps({ competitionStatus: "published" }));
+    await pressStart(island);
+    const props = confirmProps(island.tree());
+    const english = enDict["launch.confirm.competition"] as string;
+
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const line = DICTS[locale]!["launch.confirm.competition"] as string | undefined;
+      expect(line, `${locale} is missing launch.confirm.competition`).toBeTruthy();
+      expect(typeof line, locale).toBe("string");
+      const html = renderDialog(props, locale);
+      expect(html, locale).toContain(esc(line!));
+      expect(html, locale).toContain('data-testid="start-confirm-competition"');
+      // The three non-English locales must not be shipping the English
+      // sentence — the failure mode a parity check cannot see.
+      if (locale !== "en") expect(line, locale).not.toBe(english);
     }
   });
 

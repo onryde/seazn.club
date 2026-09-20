@@ -2356,6 +2356,7 @@
   "launch.confirm.title": "¿Iniciar este torneo?",
   "launch.confirm.lead": "El calendario se publica para los jugadores ahora.",
   "launch.confirm.entrants": "La lista de inscritos se cierra. Las retiradas siguen funcionando; ya no se podrá añadir a nadie nuevo.",
+  "launch.confirm.competition": "La competición pasa de publicada a en vivo.",
   "launch.confirm.format": "El formato ya está bloqueado: los enfrentamientos existen.",
   "launch.confirm.rules": "Las reglas de juego siguen siendo editables en las fases que aún no han empezado. En cuanto se puntúa el primer partido de una fase, su formato también se bloquea.",
   "launch.schedule": "Programar",

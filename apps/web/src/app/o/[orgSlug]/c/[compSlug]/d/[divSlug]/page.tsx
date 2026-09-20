@@ -566,6 +566,12 @@ export default async function DivisionPage({
               // stages (ladder/americano) keep it open, so the confirmation
               // must not claim otherwise. Already loaded above.
               stageKinds={stages.map((s) => s.kind)}
+              // Whether starting also moves the PARENT competition published
+              // → live. `startDivision` guards that on the competition's
+              // current status, so the confirmation needs it to know whether
+              // the line is true. `competition` is already loaded above and
+              // `status` is in its COLS — no extra query.
+              competitionStatus={competition.status}
               viewerPlan={viewerPlan}
             />
           </div>
