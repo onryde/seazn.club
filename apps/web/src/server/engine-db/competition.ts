@@ -1,6 +1,11 @@
 import "server-only";
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
+// ONE bye predicate, client-safe so `lib/swiss-shell.ts` can share it. This
+// used to be a private copy here; the 2026-09-20 review found the Swiss copy
+// had drifted into calling any award outcome a bye, which let Unpair destroy
+// real two-sided forfeits. See that module's header.
+import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { log } from "@/server/logger";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
@@ -86,22 +91,6 @@ function toEngineStatus(dbStatus: string): FixtureStatus {
  *  bye delta — never written to the DB, never appears in the folded table
  *  (only the winner's half of the pair is kept as `awardDelta`). */
 const BYE_PHANTOM = "__bye__";
-
-function isOneSidedAwardBye(f: {
-  outcome: unknown;
-  home_entrant_id: string | null;
-  away_entrant_id: string | null;
-}): boolean {
-  if (!f.outcome || typeof f.outcome !== "object") return false;
-  const o = f.outcome as MatchOutcome;
-  if (o.kind !== "award" || !o.winner) return false;
-  const home = f.home_entrant_id;
-  const away = f.away_entrant_id;
-  const oneSided = (home !== null && away === null) || (home === null && away !== null);
-  if (!oneSided) return false;
-  const seated = home ?? away;
-  return seated === o.winner;
-}
 
 /**
  * One-sided award bye → a single win delta via the sport module's own

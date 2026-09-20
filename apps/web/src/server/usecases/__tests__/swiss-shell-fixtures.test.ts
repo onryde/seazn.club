@@ -287,6 +287,182 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Unpair", () => {
     );
   });
 
+  // --- C1 (2026-09-20 review) -----------------------------------------
+  // Every case below sets its evidence by DIRECT SQL and appends NO events,
+  // so each one is killed by exactly one clause of the guard. The suite's
+  // pre-existing "decided"/"score_events" cases both go through appendEvent,
+  // which writes score_events AND config_snapshot AND a match_state — so the
+  // score_events clause refuses first there and no other clause is pinned.
+
+  /** The seated (two-sided) board ids of round 1, in seq order. */
+  async function seatedRound1(stageId: string): Promise<string[]> {
+    const rows = await sql<{ id: string }[]>`
+      select id from fixtures
+      where stage_id = ${stageId} and round_no = 1
+        and home_entrant_id is not null and away_entrant_id is not null
+      order by seq_in_round`;
+    return rows.map((r) => r.id);
+  }
+
+  it("Unpair refuses a TWO-SIDED forfeit award in the round — no events at all", async () => {
+    // THE C1 REPRO. `swiss-shell.ts` called any `outcome.kind === "award"` a
+    // bye, which both skipped this row in the played-result guard AND
+    // excluded it from the score_events guard, so Unpair nulled a real
+    // retirement's entrants, status and outcome in one click. Written by SQL
+    // with no score_events precisely so the status guard is the ONLY thing
+    // that can refuse: mutate `swissRoundHasPlayedResult` to `return false`
+    // and this test is the one that reds.
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [board] = await seatedRound1(stageId);
+    const [row] = await sql<{ away_entrant_id: string }[]>`
+      select away_entrant_id from fixtures where id = ${board!}`;
+    await sql`
+      update fixtures set status = 'forfeited',
+        outcome = ${sql.json({ kind: "award", winner: row!.away_entrant_id } as never)}
+      where id = ${board!}`;
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+
+    // …and the result is still there. A green refusal that had already
+    // cleared the row would be worthless.
+    const after = await fixturesOf(stageId);
+    const kept = after.find((f) => f.round_no === 1 && f.status === "forfeited");
+    expect(kept?.home_entrant_id).not.toBeNull();
+    expect(kept?.away_entrant_id).not.toBeNull();
+    expect(kept?.outcome).toEqual({ kind: "award", winner: row!.away_entrant_id });
+  });
+
+  it("Unpair refuses a row set 'decided' by SQL with NO score_events", async () => {
+    // Pins the `decided` arm of the status guard on its own — the suite's
+    // other decided case plays through appendEvent, where score_events
+    // refuses first and this arm is dead weight.
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [board] = await seatedRound1(stageId);
+    await sql`update fixtures set status = 'decided' where id = ${board!}`;
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
+  it("Unpair refuses a frozen config_snapshot while the row is still 'scheduled'", async () => {
+    // Monotonic evidence. `fixtures.status` walks BACKWARDS to 'scheduled'
+    // when a core.start is voided (append-event.ts fixtureStatusFromFold),
+    // so status can never be the sole test. config_snapshot is written once,
+    // at the first event, and never cleared.
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [board] = await seatedRound1(stageId);
+    await sql`
+      update fixtures set config_snapshot = ${sql.json({ bestOf: 3 } as never)}, config_snapshot_at = now()
+      where id = ${board!}`;
+
+    const [check] = await sql<{ status: string }[]>`select status from fixtures where id = ${board!}`;
+    expect(check!.status).toBe("scheduled");
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
+  it("Unpair refuses a match_state with no score_events and a 'scheduled' status", async () => {
+    // Pins the match_states clause the old guard did not consult at all.
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [board] = await seatedRound1(stageId);
+    await sql`
+      insert into match_states (fixture_id, org_id, last_seq, state, summary)
+      values (${board!}, ${auth.orgId}, 0, ${sql.json({} as never)}, ${sql.json({} as never)})`;
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
+  /** persons → officials → fixture_officials, the chain `official_marks` and
+   *  `match_reports` both hang off. */
+  async function seedFixtureOfficial(orgId: string, fixtureId: string): Promise<{ foId: string; officialId: string }> {
+    const [person] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${orgId}, 'Ref Person') returning id`;
+    const [official] = await sql<{ id: string }[]>`
+      insert into officials (org_id, person_id, display_name, role_keys)
+      values (${orgId}, ${person!.id}, 'The Ref', ${sql.json(["referee"] as never)}) returning id`;
+    const [fo] = await sql<{ id: string }[]>`
+      insert into fixture_officials (fixture_id, official_id, org_id, role_key, source, response)
+      values (${fixtureId}, ${official!.id}, ${orgId}, 'referee', 'manual', 'accepted') returning id`;
+    return { foId: fo!.id, officialId: official!.id };
+  }
+
+  it("Unpair refuses a fixture carrying an official_marks row", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [board] = await seatedRound1(stageId);
+    const { foId, officialId } = await seedFixtureOfficial(auth.orgId, board!);
+    await sql`
+      insert into official_marks (org_id, fixture_official_id, official_id, fixture_id, mark)
+      values (${auth.orgId}, ${foId}, ${officialId}, ${board!}, 4)`;
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
+  it("Unpair refuses a fixture carrying a match_reports row", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [board] = await seatedRound1(stageId);
+    const { foId, officialId } = await seedFixtureOfficial(auth.orgId, board!);
+    await sql`
+      insert into match_reports (org_id, fixture_official_id, official_id, fixture_id, status, body, incidents)
+      values (${auth.orgId}, ${foId}, ${officialId}, ${board!}, 'draft', 'as it happened', ${sql.json([] as never)})`;
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
+  it("Unpair refuses a fixture named by a suspension", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const [board] = await seatedRound1(stageId);
+    const [person] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name) values (${auth.orgId}, 'Banned Player') returning id`;
+    await sql`
+      insert into suspensions (org_id, division_id, person_id, fixture_id, status, source,
+                               reason, matches_total, matches_served)
+      values (${auth.orgId}, ${divisionId}, ${person!.id}, ${board!}, 'active', 'manual',
+              'violent conduct', 2, 0)`;
+
+    await expect(unpairSwissRound(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+  });
+
   it("Unpair refuses when a match in that round is decided", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });

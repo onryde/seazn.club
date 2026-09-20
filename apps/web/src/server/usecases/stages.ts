@@ -56,12 +56,12 @@ import { resolveModule } from "@/server/engine-db";
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
 import {
   isSwissBoardSeated,
-  isSwissByeRow,
   latestSeatedSwissRound,
   nextUnseatedSwissRound,
   planSwissShells,
   swissRoundHasPlayedResult,
 } from "@/lib/swiss-shell";
+import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
@@ -882,7 +882,11 @@ async function swissGen(
     ) {
       continue;
     }
-    if (inRoundR.some((f) => isSwissByeRow(f))) continue;
+    // This round already carries an explicit bye row, so the award loop above
+    // has credited whoever sat out; inferring a second one here would
+    // double-count. (C1: this used to fire for a two-sided forfeit as well,
+    // which silently suppressed the implicit-bye inference for that round.)
+    if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
     const seen = inRound.get(r) ?? new Set();
     for (const e of entrants) {
       if (!seen.has(e.id)) {
@@ -1358,6 +1362,35 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
   return (await generateStageFixturesWrite(auth, stageId)).outcome;
 }
 
+/**
+ * The result-evidence tables EVERY destructive fixture path must consult,
+ * as one SQL fragment. `f` must be the `fixtures` alias in the enclosing
+ * query; the caller supplies its own status clause and its own row scope.
+ *
+ * Shared deliberately (2026-09-20 review, C1): `unpairSwissRound` shipped
+ * with a subset of this list — `score_events` only — and a bye predicate that
+ * excluded real results from even that. A subset guard on a destructive path
+ * is exactly how the defect happened, so the list is written once and both
+ * callers read it.
+ *
+ * Why `config_snapshot` is in here and not only the event tables: V347 freezes
+ * the resolved cfg onto the fixture when the FIRST event lands
+ * (`append-event.ts`), and `fixture-cfg.ts`'s own header states that
+ * `config_snapshot is null` is precisely "not scored yet". It is monotonic,
+ * which `fixtures.status` is NOT — `fixtureStatusFromFold` walks a fixture
+ * back to `scheduled` when a `core.start` is voided, so a status test alone
+ * can silently stop refusing.
+ */
+function fixtureEvidenceSql(tx: Tx) {
+  return tx`
+    f.config_snapshot is not null
+    or exists (select 1 from score_events se where se.fixture_id = f.id)
+    or exists (select 1 from match_states ms where ms.fixture_id = f.id)
+    or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
+    or exists (select 1 from official_marks om where om.fixture_id = f.id)
+    or exists (select 1 from suspensions s where s.fixture_id = f.id)`;
+}
+
 /** Clear the latest fully seated Swiss round back onto its shells (2026-09-18). */
 export async function unpairSwissRound(
   auth: AuthCtx,
@@ -1393,23 +1426,29 @@ export async function unpairSwissRound(
     }
 
     const inRound = existing.filter((f) => f.round_no === round);
-    const nonByeIds = inRound.filter((f) => !isSwissByeRow(f)).map((f) => f.id);
-    if (nonByeIds.length > 0) {
-      const [scored] = await tx<{ id: string }[]>`
-        select f.id from fixtures f
-        where f.id in ${tx(nonByeIds)}
-          and exists (select 1 from score_events se where se.fixture_id = f.id)
-        limit 1`;
-      if (scored) {
-        throw new EngineError(
-          "STAGE_NOT_READY",
-          "swiss round has score events — unpair refused",
-          { stageId, round },
-        );
-      }
+
+    // C1 (2026-09-20 review). This check runs over EVERY row in the round —
+    // it used to run over a "non-bye" subset computed by a predicate that
+    // called any award outcome a bye, so a played board carrying a real
+    // forfeit or retirement was excluded from the one guard that could still
+    // have caught it after the status guard above had also been fooled.
+    // Nothing is exempt here: a genuine bye never goes through appendEvent,
+    // so it has no events, no state and no frozen cfg, and the exemption
+    // belongs in the STATUS test above where `forfeited` would otherwise
+    // block every odd-field round.
+    const ids = inRound.map((f) => f.id);
+    const [blocked] = await tx<{ id: string }[]>`
+      select f.id from fixtures f
+      where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
+      limit 1`;
+    if (blocked) {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "swiss round has recorded match data — unpair refused",
+        { stageId, round, fixtureId: blocked.id },
+      );
     }
 
-    const ids = inRound.map((f) => f.id);
     await tx`
       update fixtures set
         home_entrant_id = null,
@@ -2160,17 +2199,21 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
     // (fixtures.court_id is RESTRICT but points OUT at courts, so it
     // constrains deleting a COURT, never this delete.)
+    // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
+    // literal, shared with `unpairSwissRound`'s guard, because the
+    // 2026-09-20 review found Unpair shipping a SUBSET of this list and
+    // destroying real results through the gap. Only the status clause is
+    // per-caller. (`config_snapshot is not null` joins the list there; it is
+    // implied by `exists(score_events)` for this guard — nothing in apps/web
+    // ever deletes a score event — so it adds no refusal here, only
+    // monotonicity where status is unreliable.)
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.stage_id = ${stageId}
         and (
           f.status in ('in_play', 'decided', 'finalized', 'abandoned')
           or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
-          or exists (select 1 from score_events se where se.fixture_id = f.id)
-          or exists (select 1 from match_states ms where ms.fixture_id = f.id)
-          or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
-          or exists (select 1 from official_marks om where om.fixture_id = f.id)
-          or exists (select 1 from suspensions s where s.fixture_id = f.id)
+          or (${fixtureEvidenceSql(tx)})
         )
       limit 1`;
     if (blocked) {
