@@ -189,15 +189,19 @@ export const deleteAccountSchema = z.object({
 // ---- billing request schemas -------------------------------------------------
 
 /**
- * The plan keys a self-serve `POST /api/billing/checkout` — and a plan
- * SWITCH via `/api/billing/plan` + its `preview` sibling, which validate a
- * different request shape but draw from the same purchasable set — may
- * name. Narrower than `PlanKey` below: `enterprise` is never self-serve
- * (design §4 — comped only, through `admin-plan.ts` or a bespoke Stripe
- * subscription mapped by `planKeyForPrice`) and `community` is never
- * something checkout buys, only a state you leave. One named constant so
- * the three `z.enum` sites that used to hand-type this list independently
- * can't drift from each other or silently reopen a path to a retired plan.
+ * The plan keys a self-serve `POST /api/billing/checkout` may name. Narrower
+ * than `PlanKey` below: `enterprise` is never self-serve (design §4 — comped
+ * only, through `admin-plan.ts` or a bespoke Stripe subscription mapped by
+ * `planKeyForPrice`) and `community` is never something checkout buys, only a
+ * state you leave.
+ *
+ * This backed THREE `z.enum` sites that used to hand-type the list
+ * independently; `/api/billing/plan` and its `preview` sibling have since been
+ * deleted (entitlements v18 left "pro" as the only key, so a plan-to-plan
+ * switch could only ever ask for the plan you were already on), leaving
+ * `checkoutSchema` below as the single one. Still a named constant rather than
+ * an inline list: it is what stops a future second site reopening a path to a
+ * retired plan, and it is the type source for `PurchasablePlanKey`.
  */
 export const PURCHASABLE_PLAN_KEYS = ["pro"] as const;
 export type PurchasablePlanKey = (typeof PURCHASABLE_PLAN_KEYS)[number];
