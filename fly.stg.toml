@@ -1,6 +1,10 @@
 app = "seazn-club-stg"
 primary_region = "lhr"
 
+[env]
+  OAUTH_BASE_URL   = "https://stg.seazn.club"
+  NEXT_PUBLIC_BASE_URL = "https://stg.seazn.club"
+
 [build]
   [build.args]
     NEXT_PUBLIC_SUPABASE_URL           = "https://hoksroegadfdfwererzu.supabase.co"

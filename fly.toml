@@ -1,6 +1,9 @@
 app = "seazn-club-prod"
 primary_region = "lhr"
 
+[env]
+  OAUTH_BASE_URL = "https://seazn.club"
+
 [build]
   # NEXT_PUBLIC_* vars baked into bundle at build time — not secrets.
   [build.args]
