@@ -18,6 +18,7 @@ import { buildRuleOverride } from "@/lib/match-rules";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
+import { recomputeStandings } from "@/server/engine-db/competition";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -45,6 +46,7 @@ async function seedDivision(
   sportKey: string,
   variantKey: string,
   entrantCount = 2,
+  config: Record<string, unknown> = {},
 ): Promise<{ divisionId: string; entrants: string[] }> {
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -57,7 +59,7 @@ async function seedDivision(
     slug: "open-" + randomUUID().slice(0, 6),
     sport_key: sportKey,
     variant_key: variantKey,
-    config: {},
+    config,
   });
   if (entrantCount === 0) return { divisionId: division.id, entrants: [] };
   const entrants = await createEntrants(
@@ -524,5 +526,176 @@ describe.skipIf(!HAS_DB)("formatLockedStageIds (design §T3, Task 7)", () => {
 
     expect(await formatLockedStageIds(auth, divisionId)).toEqual([stageId]);
     expect(await formatLockedStageIds(auth, other.divisionId)).toEqual([]);
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// D10 — a `bestOf` override can CRASH standings through `pointsMap`.
+//
+// `pointsMap` is looked up by the FINAL SET SCORE
+// (`setbased/kernel.ts:2251-2258`): exact `"W-L"`, else `"*"`, else `invalid()`,
+// which THROWS. And `pointsMap` is deliberately NOT in the per-stage allowlist
+// (no `RuleField` writes it), so it cannot move with the format. A division
+// whose map enumerates only the scores its OWN bestOf can reach, plus a stage
+// overridden to a different bestOf, yields a score no entry answers.
+//
+// Not a wrong number — a crash, on the standings page, caused by a save the
+// endpoint reported as successful.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("D10 — a bestOf override must not outrun the pointsMap", () => {
+  /** A Bo3 badminton map with no `"*"`: fine for the division's own format,
+   *  and blind to every score a Bo5 stage can produce. Stock defaults all
+   *  carry `"*"` (badminton/tabletennis `{"*":[2,0]}`, volleyball
+   *  `{"*":[3,0],"3-2":[2,1]}`), so this is the hand-edited shape reachable
+   *  through division settings' advanced JSON box. */
+  const BO3_ONLY: Record<string, [number, number]> = { "2-0": [2, 0], "2-1": [2, 0] };
+
+  /** core.start + one game summary per set score — the same stream shape the
+   *  engine's own set-based goldens fold. */
+  async function score(orgId: string, fixtureId: string, sets: Array<[number, number]>) {
+    let seq = 0;
+    await appendEvent(orgId, fixtureId, seq++, { type: "core.start", payload: {} });
+    for (const [home, away] of sets)
+      await appendEvent(orgId, fixtureId, seq++, {
+        type: "badminton.game.summary",
+        payload: { home, away },
+      });
+    return seq;
+  }
+
+  it("PREMISE — the crash is real, and the override is what causes it", async () => {
+    // Driven through the real consumer, not inferred from reading the kernel.
+    // Both stages sit in the SAME division under the SAME pointsMap; the only
+    // difference is the stage override, so nothing else can be blamed.
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 2, {
+      pointsMap: BO3_ONLY,
+    });
+    const okStage = await seedStage(auth, divisionId, 1);
+    const badStage = await seedStage(auth, divisionId, 2);
+
+    // The stage the guard now refuses, written STRAIGHT TO THE COLUMN — this
+    // test has to reach the state `putStageRules` exists to prevent.
+    await sql`update stages set config = config || ${sql.json({
+      rules: { bestOf: 5 },
+    } as never)} where id = ${badStage}`;
+
+    const played: Array<{ stageId: string; sets: Array<[number, number]> }> = [
+      // Bo3 → 2-0; Bo5 → 3-0. Both are the shortest decided score their own
+      // format allows, so each fixture really does end at the set score its
+      // stage's bestOf makes reachable.
+      { stageId: okStage, sets: [[21, 15], [21, 18]] },
+      { stageId: badStage, sets: [[21, 15], [21, 18], [21, 12]] },
+    ];
+    for (const { stageId, sets } of played) {
+      await generateStageFixtures(auth, stageId);
+      const [fixture] = await sql<{ id: string }[]>`
+        select id from fixtures where stage_id = ${stageId} limit 1`;
+      await score(auth.orgId, fixture!.id, sets);
+    }
+
+    // The division's OWN format is fine — this map answers every Bo3 score, so
+    // a failure below cannot be "the division was already broken".
+    const rows = await recomputeStandings(auth.orgId, okStage);
+    expect(rows.length).toBeGreaterThan(0);
+
+    // …and the overridden stage THROWS, naming the score nothing answers.
+    await expect(recomputeStandings(auth.orgId, badStage)).rejects.toThrow(/pointsMap.*3-0/);
+  }, 60_000);
+
+  it("refuses the save, naming every reachable set score the map cannot answer", async () => {
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 2, {
+      pointsMap: BO3_ONLY,
+    });
+    const stageId = await seedStage(auth, divisionId, 1);
+
+    // Bo5 → a winner needs 3 sets, so 3-0 / 3-1 / 3-2 are reachable and none
+    // is in the map. The message has to NAME them: "invalid config" would
+    // leave the organiser with no idea which entries to add.
+    const err = await putStageRules(auth, stageId, { rules: { bestOf: 5 } }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE" });
+    for (const scoreKey of ["3-0", "3-1", "3-2"])
+      expect((err as Error).message).toContain(scoreKey);
+    // A 2-x score is already answered and must NOT be listed as missing.
+    expect((err as Error).message).not.toContain("2-0");
+    expect((await stageConfig(stageId)).rules).toBeUndefined();
+  }, 30_000);
+
+  it("accepts the same override once the map carries a wildcard", async () => {
+    // The negative pair. `"*"` answers every score, so the guard must not fire
+    // — otherwise it refuses every stock division, which all ship one.
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 2, {
+      pointsMap: { ...BO3_ONLY, "*": [2, 0] },
+    });
+    const stageId = await seedStage(auth, divisionId, 1);
+    await expect(putStageRules(auth, stageId, { rules: { bestOf: 5 } })).resolves.toBeTruthy();
+    expect((await stageConfig(stageId)).rules).toEqual({ bestOf: 5 });
+  }, 30_000);
+
+  it("accepts an override whose reachable scores are all enumerated", async () => {
+    // The other negative pair, and the one that stops the guard degenerating
+    // into "a map without `*` can never be overridden".
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 2, {
+      pointsMap: { ...BO3_ONLY, "3-0": [2, 0], "3-1": [2, 0], "3-2": [2, 0] },
+    });
+    const stageId = await seedStage(auth, divisionId, 1);
+    await expect(putStageRules(auth, stageId, { rules: { bestOf: 5 } })).resolves.toBeTruthy();
+  }, 30_000);
+
+  it("does not fire for an override that leaves bestOf alone", async () => {
+    // A division already missing entries for its OWN format is a division-level
+    // problem the organiser cannot fix from this endpoint. Refusing an
+    // unrelated `setTo` override would block a save for a defect this override
+    // did not cause.
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "badminton", "bwf", 2, {
+      pointsMap: { "9-9": [2, 0] },
+    });
+    const stageId = await seedStage(auth, divisionId, 1);
+    await expect(putStageRules(auth, stageId, { rules: { setTo: 15 } })).resolves.toBeTruthy();
+    expect((await stageConfig(stageId)).rules).toEqual({ setTo: 15 });
+  }, 30_000);
+
+  it("leaves TENNIS alone — it pays flat points with no score lookup", async () => {
+    // Tennis's configSchema carries a top-level `points {win, loss}` and NO
+    // `pointsMap` at all, so there is no lookup to miss. Gating it would refuse
+    // every tennis override for a hazard that cannot exist there. Asserted
+    // against the module's own parse, not a sport list typed into the guard.
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "tennis", "tour");
+    const stageId = await seedStage(auth, divisionId, 1);
+    const [div] = await sql<
+      { sport_key: string; module_version: string; config: Record<string, unknown> }[]
+    >`select sport_key, module_version, config from divisions where id = ${divisionId}`;
+    const parsed = resolveModule(div!.sport_key, div!.module_version).configSchema.parse({
+      ...div!.config,
+      bestOf: 5,
+    });
+    expect(parsed).not.toHaveProperty("pointsMap");
+
+    await expect(putStageRules(auth, stageId, { rules: { bestOf: 5 } })).resolves.toBeTruthy();
+  }, 30_000);
+
+  it("refuses a VOLLEYBALL Bo3 override against a Bo5-only map (the spec's own case)", async () => {
+    // One sample is not a parity sweep, and D10 is written against volleyball:
+    // {"3-0","3-1","3-2"} with no `"*"`, plus a stage at Bo3, yields 2-0 / 2-1.
+    // The direction is the mirror of the badminton case above — the map is too
+    // LONG for the override rather than too short.
+    const auth = await seedOrg();
+    const { divisionId } = await seedDivision(auth, "volleyball", "indoor", 0, {
+      pointsMap: { "3-0": [3, 0], "3-1": [3, 0], "3-2": [2, 1] },
+    });
+    const stageId = await seedStage(auth, divisionId, 1);
+    const err = await putStageRules(auth, stageId, { rules: { bestOf: 3 } }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE" });
+    for (const scoreKey of ["2-0", "2-1"]) expect((err as Error).message).toContain(scoreKey);
+    expect((await stageConfig(stageId)).rules).toBeUndefined();
   }, 30_000);
 });

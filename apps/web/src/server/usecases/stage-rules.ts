@@ -72,6 +72,49 @@ export async function formatLockedStageIds(auth: AuthCtx, divisionId: string): P
   });
 }
 
+/**
+ * D10 — the final set scores a `bestOf` match can END on that the division's
+ * `pointsMap` cannot answer.
+ *
+ * `pointsMap` is looked up by the final set score (`setbased/kernel.ts`
+ * `matchPoints`): exact `"W-L"`, else `"*"`, else `invalid()`, which THROWS.
+ * And `pointsMap` is deliberately NOT in the per-stage allowlist — no
+ * `RuleField` writes it — so it cannot move with the format. A division whose
+ * map enumerates only the scores ITS OWN bestOf reaches, plus a stage
+ * overridden to a different bestOf, produces a score no entry answers and the
+ * standings page throws. Not a wrong number: a crash, on a save this endpoint
+ * had already reported as successful.
+ *
+ * The reachable set is DERIVED, never a table typed in here: a side wins on
+ * `⌈bestOf/2⌉` sets (the kernel's `majority`, and the schema refuses an even
+ * `bestOf`), so the loser holds 0..⌈bestOf/2⌉−1 and no other final score
+ * exists. A forfeit is the one other payer and it uses `cleanSweepPair`, which
+ * falls back rather than looking a score up.
+ *
+ * Returns `[]` — no opinion — for a config with no `pointsMap` at all. That is
+ * what excludes TENNIS, which pays a flat `points {win, loss}`: derived from
+ * the parsed config rather than from a sport list that would need keeping in
+ * step with `STAGE_RULES_SPORTS`.
+ */
+function unansweredSetScores(bestOf: unknown, pointsMap: unknown): string[] {
+  if (typeof bestOf !== "number" || !Number.isInteger(bestOf) || bestOf < 1) return [];
+  if (typeof pointsMap !== "object" || pointsMap === null || Array.isArray(pointsMap)) return [];
+  const map = pointsMap as Record<string, unknown>;
+  // `Object.hasOwn` rather than `in` or a truthiness check. Be honest about
+  // what that buys HERE: nothing yet. Every key looked up below is CONSTRUCTED
+  // (`"*"`, `"${w}-${l}"`), and `Object.prototype` declares none of those, so
+  // `in` would answer identically today — this is an equivalent mutant, not a
+  // live guard, and no test can kill it. It is written this way because the
+  // engine reads the SAME map with a bare `cfg.pointsMap[key]`
+  // (`setbased/kernel.ts` `matchPoints`), and if a future caller ever looks up
+  // a key it did not build, `hasOwn` is the form that stays correct.
+  if (Object.hasOwn(map, "*")) return [];
+  const winning = Math.ceil(bestOf / 2);
+  return Array.from({ length: winning }, (_, lost) => `${winning}-${lost}`).filter(
+    (scoreKey) => !Object.hasOwn(map, scoreKey),
+  );
+}
+
 export async function putStageRules(
   auth: AuthCtx,
   stageId: string,
@@ -198,6 +241,27 @@ export async function putStageRules(
       throw new EngineError("CONFIG_INVALID", `invalid ${stage.sport_key} config`, {
         issues: parsed.error.issues,
       });
+
+    // D10 — the merged config is structurally valid and can still crash
+    // standings. Checked only when the fragment actually moves `bestOf`: a
+    // division already missing entries for its OWN format is a division-level
+    // problem this endpoint did not cause and cannot fix, so refusing an
+    // unrelated `setTo` override for it would block a save for no reason.
+    // See `unansweredSetScores` for why the reachable set is derived.
+    if (Object.hasOwn(fragment, "bestOf")) {
+      const merged = parsed.data as { bestOf?: unknown; pointsMap?: unknown };
+      const missing = unansweredSetScores(merged.bestOf, merged.pointsMap);
+      if (missing.length > 0)
+        throw new HttpError(
+          422,
+          `best of ${String(merged.bestOf)} can end ${missing.join(", ")}, ` +
+            `and this division's points table has no entry for ` +
+            `${missing.length === 1 ? "that score" : "those scores"} and no "*" fallback — ` +
+            `add them to the division's points table first, or standings for this stage ` +
+            `would fail`,
+          "POINTS_MAP_INCOMPLETE",
+        );
+    }
 
     // Server-side merge (§T2): six other writers rewrite this column from a
     // JS-side read, and a spread of a stale read would revert this write.
