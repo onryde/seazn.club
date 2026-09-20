@@ -186,6 +186,25 @@ writing to `lib/match-rules.ts` beside a live implementer:
 Minor 3 became **D9** — see the spec. The reviewer correctly called it cosmetic
 for the division editor; it is data loss for the stage fragment.
 
+## Interrupted 2026-09-18 by a weekly rate limit — NOTHING LOST
+
+The implementer died with HTTP 429 before writing a byte; the tree was clean at
+`55da1adce`. Two pieces were dispatched and neither started:
+
+1. **The two held Task 6 minors** (prototype-key fall-through in
+   `TENNIS_SET_SHAPES[v] ?? tb6`, and `hydrate.test.ts:91`'s `>= 40` floor
+   against an actual 46), plus a third I found: **nothing pins the cross-sport
+   label agreement** `stageFormatHeadline` borrows against.
+2. **Task 8**, the stage-aware hub format line. Its brief added five things the
+   plan omits: feed `describeFormat` the Task 2 resolver rather than forking the
+   overlay; keep `formatLine` as the division default and the new field
+   OPTIONAL (the hub answers `s-maxage=30, stale-while-revalidate=300`, so a new
+   bundle polls documents built before the field existed); re-read the cache key
+   rather than trusting the plan's `pub-hub-v3`; it is a PUBLIC surface so it
+   owes the OpenAPI regen and the 1280/768/320 visual gate; and emit per-stage
+   lines ONLY when the resolved configs actually DIFFER, decided from the
+   resolved configs rather than from whether `rules` is present.
+
 ## Task 7 — orchestrator verification (2026-09-18)
 
 Counts re-run here, not taken on report: `components/v2/__tests__/` plus
