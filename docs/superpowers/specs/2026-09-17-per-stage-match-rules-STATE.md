@@ -266,6 +266,54 @@ node-env and never renders those two server components, so nothing yet proves
 the right config. That is the inert-seam class; the e2e in Task 9 owes it, and a
 walkthrough by hand is what settles it before then.
 
+## CI on the merged branch — four reds, THREE are one defect (2026-09-20)
+
+Runs `35505768729` (`af448ffa7`) and `35506625577` (`b166711bf`) fail the same
+way. `Smoke — build + server + e2e`, unit ×4, typecheck+lint+drift, security and
+docker are GREEN on both.
+
+| Red | Root cause |
+| --- | --- |
+| `stage-roster-drift.test.ts` ×3 | `stages.ts:806` |
+| `card-stats-tbd.test.ts` ×1 ("a swiss generation-time bye counts in played") | `stages.ts:806` |
+| `tiebreakers.ts` lines 99.64% < 100% threshold | uncovered line **738** |
+| e2e `run-sheet-dates-and-court.spec.ts:209` (`Expected: 2 / Received: 1`) | **PRE-EXISTING ON MAIN** |
+
+The e2e red is not this branch's: dispatch run `35505869592` against `main` at
+`d9d020736` fails the same test with the same numbers (1 failed / 269 passed).
+Do not fix it here; do not let it be attributed here either.
+
+Three of the four are ONE defect. #803 replaced main's rounds derivation
+(`stages.ts:734-735`, `declared ?? (rankAdjacent ? swissRoundsForFieldSize(...) : null)`)
+with a hard `EngineError("CONFIG_INVALID", "swiss stage requires config.rounds >= 1")`.
+Both failing test files are **byte-identical to main** — they create swiss stages
+with `config: {}` and pass there. `tiebreakers.ts:738` is the new awards-loop
+`throw` for an entrant outside the entrant set; its results-loop twin at `:726`
+is covered.
+
+### Owner ruling — 2026-09-20
+
+**The guard is RIGHT; a Swiss round count is a format decision fixed before
+play, not something the system guesses mid-tournament.** Two facts support it:
+`division-settings.tsx:364` already defaults `swissRounds` to 5 and always
+writes it for `swiss`/`swiss_playoff`/`swiss_knockout`; and main's own comment
+concedes an uncapped swiss "sat at every-fixture-decided forever, never
+completing". My Option A (restore the derivation) is WITHDRAWN.
+
+**But the refusal is in the wrong place.** `createStages` (`stages.ts:269`)
+validates entitlements, the feed DAG and points rules and says nothing about
+`config.rounds` — so an invalid swiss stage is still creatable over the API and
+the 500 only arrives later, when the organiser presses Generate.
+
+**No backfill** — ruled 2026-09-20, there is no prod data yet.
+
+Owed:
+1. `createStages` refuses a `swiss*` stage with no `config.rounds >= 1` — 422,
+   translated copy in all four dictionaries, `gen-keys` regen.
+2. `stages.ts:806` stays as the last line of defence, now unreachable from the
+   product.
+3. The four tests declare `rounds`; one engine test kills `tiebreakers.ts:738`.
+
 ## Findings carried forward
 
 - No in-scope rule field branches its emitted config-key set on its value
