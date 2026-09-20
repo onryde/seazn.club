@@ -48,6 +48,8 @@ import {
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
 import { appendDivisionEvent } from "@/server/engine-db";
+import { captureServer } from "@/lib/posthog-server";
+import { competitionLifecycleEvent } from "./competitions";
 import { legacyConflictDetail } from "@/server/api-v1/conflict-detail-legacy";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
@@ -3761,7 +3763,9 @@ export async function startDivision(
     const fixtureIds = (
       await tx<{ id: string }[]>`select id from fixtures where division_id = ${divisionId}`
     ).map((f) => f.id);
-    if (!division || division.status === "active") return { started: false, fixtureIds };
+    if (!division || division.status === "active") {
+      return { started: false, fixtureIds, competitionPromoted: false };
+    }
 
     // Rolling quick-start times (doc 12 §1.A) — only for a straight
     // setup→active start; a published timetable is left untouched.
@@ -3812,8 +3816,47 @@ export async function startDivision(
       from: division.status,
     });
     await tx`update divisions set seq = ${seq} where id = ${divisionId}`;
-    return { started: true, fixtureIds };
+
+    // Owner ruling 2026-09-20: play has started, so the parent competition is
+    // `live` — the column is not maintained by the competition PATCH alone.
+    //
+    // Upward-only and NARROW, and the narrowness is the point. `draft` is left
+    // alone: PUBLIC_DASHBOARD_STATUSES is ["published", "live"], so promoting
+    // a draft would PUBLISH a competition nobody published — a visibility
+    // change as a side effect of starting a division. `completed`/`archived`
+    // are left alone in the other direction: restarting a division inside a
+    // wrapped-up competition must not reopen it.
+    //
+    // The guard is the `where`, not a read-then-write in JS, so a concurrent
+    // PATCH cannot lose a race with it — the house idiom (stages.ts's
+    // `update divisions set status = 'active' where id = … and status =
+    // 'completed'` reopen, and fillSlot's `… and home_entrant_id is null
+    // returning id`). `returning` reports whether THIS call made the
+    // transition, so the analytics event below fires on the transition only
+    // and never on the state.
+    const [promoted] = await tx<{ id: string }[]>`
+      update competitions set status = 'live'
+      where id = ${division.competition_id} and status = 'published'
+      returning id`;
+    return { started: true, fixtureIds, competitionPromoted: !!promoted };
   });
   afterScheduleWrite(divisionId, pre.competition_id, "start", out.fixtureIds);
+  // Outside the transaction, mirroring the competition PATCH's own lifecycle
+  // block (competitions.ts) — analytics never rolls back the write it rides
+  // on. Routed through `competitionLifecycleEvent` rather than naming the
+  // event here so the two callers cannot drift: a status change without its
+  // event would leave the column looking maintained while the signal stayed
+  // missing.
+  if (out.competitionPromoted) {
+    const lifecycleEvent = competitionLifecycleEvent("live");
+    if (lifecycleEvent) {
+      await captureServer({
+        event: lifecycleEvent,
+        distinctId: auth.userId ?? `org:${auth.orgId}`,
+        orgId: auth.orgId,
+        properties: { competition_id: pre.competition_id },
+      });
+    }
+  }
   return { division_id: divisionId, status: "active", started: out.started, generated };
 }
