@@ -11,7 +11,7 @@
 // like sport + format names; only the picker chrome (Default / On / Off)
 // localizes, and that chrome is what lives here.
 import { useMsg } from "@/components/i18n/dict-provider";
-import { SPORT_RULES } from "@/lib/match-rules";
+import { SPORT_RULES, ruleOptionLabel } from "@/lib/match-rules";
 
 export type { RuleField } from "@/lib/match-rules";
 export {
@@ -74,10 +74,21 @@ export function MatchRuleFields({
                   organiser the field is unset over a config that really
                   carries a value. That misreading is one tap from data loss on
                   the stage panel, whose PUT is a FRAGMENT where an omitted key
-                  means INHERIT. Labelled from the raw value: there is no
-                  declared label for a value the table does not declare, and
-                  inventing one would be a second lie. */}
-              {unofferable && <option value={current}>{current}</option>}
+                  means INHERIT.
+
+                  Labelled through `ruleOptionLabel` — the SAME lookup the
+                  stage card's summary line uses. This option shipped as a
+                  bare value, so the open dropdown read
+                  `Default · 5 · Best of 1 · Best of 3` directly under a
+                  summary line saying "Best of 5": one value, two labels, one
+                  screen. Falls back to the raw value when NO sport declares
+                  one — inventing copy for a value the table does not declare
+                  would be a second lie. */}
+              {unofferable && (
+                <option value={current}>
+                  {ruleOptionLabel(sportKey, field.key, current) ?? current}
+                </option>
+              )}
               {field.kind === "bool" ? (
                 <>
                   <option value="on">{msg("rules.on")}</option>

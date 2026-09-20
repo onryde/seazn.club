@@ -38,10 +38,10 @@ import { TagChipInput } from "@/components/ui/tag-chip-input";
 // `@/lib/match-rules` via the same re-export.
 import { MatchRuleFields } from "@/components/v2/match-rules";
 import {
-  SPORT_RULES,
   STAGE_RULES_SPORTS,
   buildRuleOverride,
   hydrateRuleValues,
+  ruleOptionLabel,
 } from "@/lib/match-rules";
 import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -1975,27 +1975,18 @@ export function stageFormatHeadline(
   sportKey: string,
   effective: Record<string, unknown>,
 ): string | null {
-  const field = (SPORT_RULES[sportKey] ?? []).find((f) => f.key === "bestOf");
-  if (!field) return null;
   const raw = hydrateRuleValues(sportKey, effective).bestOf;
   if (raw === undefined) return null;
-  const own = (field.options ?? []).find((o) => o.value === raw)?.label;
-  if (own !== undefined) return own;
-  // The saved value is valid but THIS sport's picker does not offer it —
+  // The saved value may be valid while THIS sport's picker does not offer it —
   // badminton offers [1,3] while `{"bestOf":5}` is a perfectly good config
-  // (D9). Borrowing the label from a sport that does offer it keeps the line
-  // reading "Best of 5 · Stage override" as the design table specifies,
-  // without assembling an English string here: every sport labels this one
-  // field identically, so the table is still the source of truth. Verified in
-  // the browser — before this, the live walkthrough stage read "5 · Stage
-  // override" directly under "Best of 3 · Locked".
-  for (const key of STAGE_RULES_SPORTS) {
-    const borrowed = (SPORT_RULES[key] ?? [])
-      .find((f) => f.key === "bestOf")
-      ?.options?.find((o) => o.value === raw)?.label;
-    if (borrowed !== undefined) return borrowed;
-  }
-  return raw;
+  // (D9). `ruleOptionLabel` borrows the label from a peer in-scope sport that
+  // does offer it, so the line reads "Best of 5 · Stage override" as the
+  // design table specifies without assembling an English string here. It is
+  // the SAME lookup `MatchRuleFields` labels its synthetic option with: the
+  // two shipped from separate code paths and disagreed on screen. Verified in
+  // the browser — before the borrow, the live walkthrough stage read
+  // "5 · Stage override" directly under "Best of 3 · Locked".
+  return ruleOptionLabel(sportKey, "bestOf", raw) ?? raw;
 }
 
 // #622 — per-stage required court tags, stage-wide and per round role.

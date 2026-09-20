@@ -18,7 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MatchRuleFields, buildRuleOverride } from "@/components/v2/match-rules";
-import { SPORT_RULES } from "@/lib/match-rules";
+import { SPORT_RULES, ruleOptionLabel } from "@/lib/match-rules";
 
 function render(sportKey: string, values: Record<string, string>): string {
   return renderToStaticMarkup(
@@ -39,10 +39,28 @@ describe("a hydrated value the select cannot offer", () => {
 
   it("renders as the SELECTED option instead of falling through to Default", () => {
     const html = render("badminton", { bestOf: "5" });
-    // Selected, and labelled from the raw value — there is no declared label
-    // for a value the table does not declare, and inventing one is a new lie.
-    expect(html).toContain('<option value="5" selected="">5</option>');
+    // Selected, and labelled through `ruleOptionLabel` — the SAME lookup the
+    // stage card's summary line uses. Found in the browser: the synthetic
+    // option shipped as a bare "5", so the open dropdown read
+    // `Default · 5 · Best of 1 · Best of 3` directly under a summary line
+    // saying "Best of 5". One value, two labels, one screen.
+    const label = ruleOptionLabel("badminton", "bestOf", "5");
+    expect(label).toBe("Best of 5");
+    expect(html).toContain(`<option value="5" selected="">${label}</option>`);
+    // …and NOT the bare value it used to render.
+    expect(html).not.toContain('<option value="5" selected="">5</option>');
     // The whole point: "Default" is NOT what this field now shows.
+    expect(html).not.toContain('<option value="" selected="">Default</option>');
+  });
+
+  it("still shows a value NO sport can label, rather than dropping the option", () => {
+    // The fallback pair. 9 is in no picker anywhere, so there is no label to
+    // borrow — the option must still exist and still be selected, labelled
+    // with the raw value, or the control goes back to reading "Default" over
+    // a live override.
+    expect(ruleOptionLabel("badminton", "bestOf", "9")).toBeUndefined();
+    const html = render("badminton", { bestOf: "9" });
+    expect(html).toContain('<option value="9" selected="">9</option>');
     expect(html).not.toContain('<option value="" selected="">Default</option>');
   });
 

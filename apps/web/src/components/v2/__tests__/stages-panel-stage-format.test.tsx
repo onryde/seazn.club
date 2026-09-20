@@ -15,7 +15,7 @@ import {
   stageFormatHeadline,
   stageFormatSaveFragment,
 } from "@/components/v2/stages-panel";
-import { SPORT_RULES, buildRuleOverride } from "@/lib/match-rules";
+import { SPORT_RULES, buildRuleOverride, ruleOptionLabel } from "@/lib/match-rules";
 
 // Same two mocks every `stages-panel-*.test.tsx` uses — this panel is rendered
 // bare, with no provider tree.
@@ -213,6 +213,20 @@ describe("the two derivations — one function, two different inputs", () => {
       .options!.find((o) => o.value === "5")!.label;
     expect(stageFormatHeadline("badminton", { bestOf: 5 })).toBe(borrowed);
     expect(stageFormatHeadline("badminton", { bestOf: 5 })).toBe("Best of 5");
+  });
+
+  it("borrows through the SAME lookup the editor's synthetic option uses", () => {
+    // The two halves of D9 are one screen: the summary line above the open
+    // editor, and the synthetic <option> inside it. They shipped from two
+    // different code paths and disagreed — the dropdown read
+    // `Default · 5 · Best of 1 · Best of 3` under "Best of 5 · Stage
+    // override". Anchoring both on `ruleOptionLabel` is what makes that
+    // impossible; this pins the summary half to it.
+    // (`match-rules-unofferable-value.test.tsx` pins the option half.)
+    for (const value of ["1", "3", "5", "9"]) {
+      const expected = ruleOptionLabel("badminton", "bestOf", value) ?? value;
+      expect(stageFormatHeadline("badminton", { bestOf: Number(value) })).toBe(expected);
+    }
   });
 
   it("falls back to the bare value when no sport offers it at all", () => {

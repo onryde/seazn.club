@@ -108,6 +108,29 @@ const TENNIS_FINAL_SET_SHAPES: Record<string, unknown> = {
 };
 
 /**
+ * `shapes[v] ?? fallback` is NOT a fall-through for an inherited key: a plain
+ * object answers `constructor`, `toString` and friends from `Object.prototype`,
+ * and those answers are not `undefined`, so `??` never fires. `build("constructor")`
+ * therefore yielded `{ set: {} }` for `setType`, and for `finalSet` a Function
+ * that `JSON.stringify` DROPS on the way into jsonb — silence, not an error.
+ *
+ * Not product-reachable (values come only from the rendered select), but the
+ * commit that introduced these tables claimed the fall-through was preserved,
+ * and a claim broader than its test is how the next reader gets it wrong.
+ * `Object.hasOwn` makes "unknown" mean unknown for every string.
+ */
+function ownOr<T>(table: Record<string, T>, key: string, fallback: T): T {
+  return Object.hasOwn(table, key) ? table[key]! : fallback;
+}
+
+/** The same trap one level up, where it is a CRASH rather than a wrong value:
+ *  `SPORT_RULES["constructor"] ?? []` answers the Object constructor, and
+ *  `for (const f of <Function>)` throws "function is not iterable". */
+function rulesFor(sportKey: string): RuleField[] {
+  return ownOr<RuleField[]>(SPORT_RULES, sportKey, []);
+}
+
+/**
  * Exact match on a whole nested object, extra keys included. A config carrying
  * a shape no option declares (hand-edited, or written by another path) must
  * hydrate blank rather than be rounded to the nearest option and then silently
@@ -467,9 +490,10 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
         { value: "advantage", label: "Advantage sets" },
       ],
       // Unknown values keep falling through to `tb6`, as the chained ternary
-      // this replaced did. Copied, not shared by reference: the result is
-      // spread into a config the caller owns.
-      build: (v) => ({ set: { ...(TENNIS_SET_SHAPES[v] ?? TENNIS_SET_SHAPES.tb6!) } }),
+      // this replaced did — `ownOr`, not `??`, so an INHERITED key is unknown
+      // too. Copied, not shared by reference: the result is spread into a
+      // config the caller owns.
+      build: (v) => ({ set: { ...ownOr(TENNIS_SET_SHAPES, v, TENNIS_SET_SHAPES.tb6!) } }),
       // Reads `set`, NOT `setType` — the field key and the config key differ
       // for three of tennis's five fields (see `configKeysFor`).
       read: (config) => readShape(TENNIS_SET_SHAPES, config.set),
@@ -485,7 +509,7 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
         { value: "tb10", label: "Set with tie-break to 10" },
       ],
       build: (v) => {
-        const shape = TENNIS_FINAL_SET_SHAPES[v] ?? "same";
+        const shape = ownOr<unknown>(TENNIS_FINAL_SET_SHAPES, v, "same");
         return { finalSet: typeof shape === "object" && shape !== null ? { ...shape } : shape };
       },
       read: (config) => readShape(TENNIS_FINAL_SET_SHAPES, config.finalSet),
@@ -770,7 +794,7 @@ export function buildRuleOverride(
   values: Record<string, string>,
 ): Record<string, unknown> {
   const override: Record<string, unknown> = {};
-  for (const field of SPORT_RULES[sportKey] ?? []) {
+  for (const field of rulesFor(sportKey)) {
     const value = values[field.key];
     if (value !== undefined && value !== "") {
       Object.assign(override, field.build(value, values));
@@ -794,7 +818,7 @@ export function buildRuleOverride(
 export function hydrateRuleValues(sportKey: string, config: unknown): Record<string, string> {
   const cfg = (config ?? {}) as Record<string, unknown>;
   const values: Record<string, string> = {};
-  for (const field of SPORT_RULES[sportKey] ?? []) {
+  for (const field of rulesFor(sportKey)) {
     const value = field.read?.(cfg);
     if (value !== undefined) values[field.key] = value;
   }
@@ -836,5 +860,68 @@ export function keysEmittedBy(fields: RuleField[]): ReadonlySet<string> {
  *  `division-settings.tsx:273` maps `f.key`; copying that here would 400 four
  *  of tennis's five overrides, because `build` renames three of them. */
 export function configKeysFor(sportKey: string): ReadonlySet<string> {
-  return keysEmittedBy(SPORT_RULES[sportKey] ?? []);
+  return keysEmittedBy(rulesFor(sportKey));
+}
+
+/**
+ * The picker label for a stored option VALUE — this sport's own if it declares
+ * one, otherwise a peer in-scope sport's.
+ *
+ * Two surfaces show a value the sport's own picker cannot offer: the stage
+ * card's summary line (`stageFormatHeadline`) and the synthetic `<option>`
+ * D9 put inside `MatchRuleFields`. Badminton's `bestOf` offers [1, 3] while
+ * `{"bestOf": 5}` is a perfectly valid saved config, and the walkthrough stage
+ * carries exactly that. They shipped from two code paths and DISAGREED: the
+ * open dropdown read `Default · 5 · Best of 1 · Best of 3` under a summary
+ * line saying "Best of 5". One value, two labels, one screen. This is the one
+ * lookup both now use.
+ *
+ * The borrow is deliberately narrow. It happens only BETWEEN the four
+ * stage-rules sports, and only from a peer that labels the FIELD identically —
+ * so the day a sport relabels `bestOf`, the line falls back to the bare value
+ * instead of rendering another sport's noun. (Carrom calls it "Best of
+ * (games)"; it is out of scope and out of the loop either way.) Returns
+ * `undefined` rather than a string when nothing declares the value, because
+ * inventing copy for a value the table does not declare is a second lie — the
+ * caller renders the raw value.
+ */
+export function ruleOptionLabel(
+  sportKey: string,
+  fieldKey: string,
+  value: string,
+): string | undefined {
+  const field = rulesFor(sportKey).find((f) => f.key === fieldKey);
+  if (field === undefined) return undefined;
+  const own = field.options?.find((o) => o.value === value)?.label;
+  if (own !== undefined) return own;
+  if (!STAGE_RULES_SPORTS.has(sportKey)) return undefined;
+  const peers = [...STAGE_RULES_SPORTS]
+    .filter((k) => k !== sportKey)
+    .flatMap((k) => rulesFor(k).filter((f) => f.key === fieldKey));
+  return borrowOptionLabel(field, peers, value);
+}
+
+/**
+ * The borrow's own rule: take a peer's label for `value` only from a peer that
+ * labels the FIELD identically.
+ *
+ * Exported, and taking its peers as an argument, because `ruleOptionLabel`
+ * cannot witness the refusal — all four in-scope sports label `bestOf`
+ * identically today, which `match-rules-labels.test.ts` pins. Without this
+ * seam the agreement check would be a branch nothing could kill, i.e.
+ * decoration (AGENTS.md failure class 3). With it, the day a sport relabels
+ * the field the line falls back to the bare value instead of rendering
+ * another sport's noun, and a test proves that is what happens.
+ */
+export function borrowOptionLabel(
+  field: RuleField,
+  peers: RuleField[],
+  value: string,
+): string | undefined {
+  for (const peer of peers) {
+    if (peer.label !== field.label) continue;
+    const borrowed = peer.options?.find((o) => o.value === value)?.label;
+    if (borrowed !== undefined) return borrowed;
+  }
+  return undefined;
 }

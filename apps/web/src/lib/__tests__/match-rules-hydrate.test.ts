@@ -31,6 +31,8 @@ import { describe, expect, it } from "vitest";
 import {
   SPORT_RULES,
   STAGE_RULES_SPORTS,
+  buildRuleOverride,
+  configKeysFor,
   hydrateRuleValues,
   type RuleField,
 } from "@/lib/match-rules";
@@ -69,7 +71,11 @@ describe("hydrateRuleValues round-trips every in-scope rule field", () => {
   });
 
   it("reads back the exact value that built it, for every option of every field", () => {
-    let assertions = 0;
+    /** Probes actually run, PER FIELD. A bare total cannot see a field going
+     *  dark: the old `>= 40` floor stood against an actual 46, so `finalSet`
+     *  could have lost all four of its options — leaving that field entirely
+     *  unprobed — and this sweep would still have passed with 42. */
+    const probed: Record<string, number> = {};
     for (const sport of IN_SCOPE) {
       for (const field of SPORT_RULES[sport]!) {
         for (const probe of probesFor(field)) {
@@ -82,13 +88,23 @@ describe("hydrateRuleValues round-trips every in-scope rule field", () => {
             hydrated[field.key],
             `${sport}.${field.key} did not round-trip probe "${probe}"`,
           ).toBe(probe);
-          assertions++;
+          probed[`${sport}.${field.key}`] = (probed[`${sport}.${field.key}`] ?? 0) + 1;
         }
       }
     }
-    // Nineteen fields across four sports, each probed at every value it can
-    // take — a lower bound, so adding an option cannot silently shrink it.
-    expect(assertions).toBeGreaterThanOrEqual(40);
+    // EVERY declared field contributed at least one probe. A field whose
+    // options vanished produces no probes at all and simply drops out of
+    // `probed`, so the comparison — not a count — is what catches it.
+    const declared = IN_SCOPE.flatMap((s) => SPORT_RULES[s]!.map((f) => `${s}.${f.key}`)).sort();
+    expect(declared).toHaveLength(19);
+    expect(Object.keys(probed).sort()).toEqual(declared);
+    for (const [name, n] of Object.entries(probed))
+      expect(n, `${name} contributed no probe`).toBeGreaterThan(0);
+    // And the TOTAL is pinned exactly, not floored: an option removed from a
+    // field that still has others left the old lower bound green. Nineteen
+    // fields across four sports, each probed at every value it can take.
+    // Adding or removing an option must move this number deliberately.
+    expect(Object.values(probed).reduce((a, b) => a + b, 0)).toBe(46);
   });
 
   it("hydrates tennis's three renamed fields from their CONFIG keys, not their field keys", () => {
@@ -176,6 +192,49 @@ describe("tennis's branching builds keep their fall-through", () => {
 
   it("falls an unknown deciding set through to same", () => {
     expect(fields.finalSet!.build("no-such-option", {})).toEqual({ finalSet: "same" });
+  });
+
+  // A plain-object lookup answers for INHERITED keys too, and `?? default`
+  // never fires for them because they are not `undefined`. The commit that
+  // introduced these tables claimed the fall-through was "preserved and
+  // pinned" while the pinning test above probed only `"no-such-option"` — a
+  // claim broader than its test. Not product-reachable (values come only from
+  // the rendered select), but "unknown" must mean unknown for EVERY string.
+  const PROTOTYPE_KEYS = ["constructor", "toString", "hasOwnProperty", "__proto__"];
+
+  it("falls PROTOTYPE keys through too, not just undeclared ones", () => {
+    for (const key of PROTOTYPE_KEYS) {
+      expect(fields.setType!.build(key, {}), `setType("${key}")`).toEqual(
+        fields.setType!.build("tb6", {}),
+      );
+      expect(fields.finalSet!.build(key, {}), `finalSet("${key}")`).toEqual({ finalSet: "same" });
+    }
+  });
+
+  it("survives JSON round-tripping for a prototype key, where a Function silently vanishes", () => {
+    // The sharp edge: `TENNIS_FINAL_SET_SHAPES["constructor"]` was the Object
+    // constructor — a Function, which `JSON.stringify` DROPS entirely rather
+    // than erroring, so the key disappeared on its way into jsonb.
+    for (const key of PROTOTYPE_KEYS) {
+      const built = fields.finalSet!.build(key, {}) as Record<string, unknown>;
+      expect(JSON.parse(JSON.stringify(built)), `finalSet("${key}") through JSON`).toEqual(built);
+      expect(typeof built.finalSet).not.toBe("function");
+      const set = fields.setType!.build(key, {}) as { set: Record<string, unknown> };
+      expect(Object.keys(set.set).length, `setType("${key}") emitted an empty set`).toBeGreaterThan(
+        0,
+      );
+    }
+  });
+
+  it("treats a prototype SPORT key as an unknown sport rather than throwing", () => {
+    // Same defect one level up: `SPORT_RULES[sportKey] ?? []` answered the
+    // Object constructor for "constructor", and `for (const f of <Function>)`
+    // throws "function is not iterable" — a crash, not a wrong value.
+    for (const key of PROTOTYPE_KEYS) {
+      expect(hydrateRuleValues(key, { bestOf: 3 }), `hydrateRuleValues("${key}")`).toEqual({});
+      expect(buildRuleOverride(key, { bestOf: "3" }), `buildRuleOverride("${key}")`).toEqual({});
+      expect([...configKeysFor(key)], `configKeysFor("${key}")`).toEqual([]);
+    }
   });
 
   it("hands out a fresh object each time, so one division's config cannot alias another's", () => {
