@@ -36,19 +36,36 @@ export const WARMING_TIMEOUT_MINUTES = 10;
  *  Machine retries the internal heartbeat route forever. Sized ABOVE Task 5A's create budget (client
  *  timeout + jittered retries), so a slow-but-working create is never failed, and far below the warming
  *  timeout it hands over to.
- *  PROVISIONAL — 120 is a judgement, not a measurement. Task 5A measures the real create budget (client
- *  timeout × attempts + backoff); this constant is retuned THERE, and never deleted to make a slow create
- *  pass. */
+ *
+ *  CHECKED against the real create budget, Task 5A, 2026-09-20 — 120 HOLDS, unchanged. The arithmetic,
+ *  by `fly-client.ts`'s own option names at their defaults (redo it when one of them moves):
+ *    one attempt              = `requestTimeoutMs`                     = 10 s
+ *    the jittered ladder      = Σ min(`maxBackoffMs`, `baseBackoffMs` × 2^(n−1)), n = 1…`maxAttempts`−1
+ *                             ≤ 0.5 + 1 + 2                            = 3.5 s
+ *    all attempts             = `maxAttempts` × `requestTimeoutMs` + ladder = 43.5 s   ← also `listMachines`
+ *    `deadlineMs` gates only the decision to SLEEP, so an operation overruns it by whatever is still in
+ *    flight, and `createMachine` pays a NESTED `listMachines` (the T5-a/T5-b lookup) after every ambiguous
+ *    attempt: worst case = `deadlineMs` + `requestTimeoutMs` + 43.5 s   = 98.5 s < 120 s.
+ *  The 429 `Retry-After` path cannot extend that: the wait is honoured verbatim, but the same pre-sleep gate
+ *  refuses any wait ending past `deadlineMs` and raises `code: "deadline"` instead of sleeping.
+ *  MEASURED live the same day, against the real Fly API in lhr on a shared-cpu-1x: create returned in
+ *  1,123 ms and create→`started` was 2,846 ms — three orders below the budget this bounds. */
 export const PROVISION_TIMEOUT_SECONDS = 120;
 /** F18, the same rule at the other end: a session that was inserted and never admitted. Nothing has been
  *  asked of any provider yet, so the exit is a plain failure and the window only has to outlast the
- *  admission transaction. PROVISIONAL, like the two beside it. */
+ *  admission transaction. CHECKED 2026-09-20 (Task 5A, brief step 5b(c)): no part of the create budget above
+ *  sits inside the admission path — admission makes no provider call at all, and `fly-client.ts` is reached
+ *  only from the runner adapter, which Task 5 calls AFTER admission has committed. Unchanged at 60. */
 export const REQUESTED_TIMEOUT_SECONDS = 60;
 /** F19: an `ending` session whose completion was lost — a passthrough whose `complete_now` effect never ran,
  *  or a composed one whose runner carries no stop mark (the stop grace only times a MARKED runner). Measured
  *  from `ending_at` (F22 — the instant ending BEGAN), falling back to `deadlineOf` when that write was lost,
  *  so an early stop is timed from the stop and not from its original booking. Well above RUNNER_STOP_GRACE_SECONDS +
- *  RUNNER_OBSERVE_SLACK_SECONDS so it never pre-empts the ordinary teardown. PROVISIONAL. */
+ *  RUNNER_OBSERVE_SLACK_SECONDS so it never pre-empts the ordinary teardown.
+ *  CHECKED 2026-09-20 (Task 5A) against the same client constants — 300 HOLDS, unchanged. Neither
+ *  `stopMachine` nor `destroyMachine` performs the nested lookup `createMachine` does, so each is bounded by
+ *  `deadlineMs` + `requestTimeoutMs` = 55 s; the worst ordinary teardown is
+ *  RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + stop 55 s + destroy 55 s = 140 s < 300 s. */
 export const ENDING_TIMEOUT_SECONDS = 300;
 /** §6.4: a live COMPOSED session whose heartbeat is older than this gets ONE retry. */
 export const STALE_HEARTBEAT_SECONDS = 90;
