@@ -195,12 +195,20 @@ export function RunSheetRow({
 
   // R7(a)/(b): a bye is structural, never schedulable, never actionable —
   // rendered exactly as FixtureLine's own (retired) bye branch did.
+  //
+  // Swiss Pair sits the award on the bye shell (`forfeited` + outcome.award).
+  // Showing only "{name} has a bye" hid that the sit-out was already decided
+  // — Gus looked awarded after the points fix, then Finn's R2 bye looked like
+  // a bare sit-out again. `isBye` requires an award outcome, so always pair
+  // the bye label with the walkover result (`schedule.outcome.wonWo`).
   if (isBye(fixture)) {
     const who = fixture.home_entrant_id ?? fixture.away_entrant_id;
+    const name = entrantNames[who ?? ""] ?? "?";
+    const awarded = outcomeText(msg, fixture.outcome, entrantNames);
     return (
-      <li className="px-4 py-2 text-sm text-slate-500 italic">
-        {msg("schedule.round", { n: fixture.round_no })} ·{" "}
-        {msg("schedule.bye", { name: entrantNames[who ?? ""] ?? "?" })}
+      <li className="px-4 py-2 text-sm text-slate-500 italic" data-testid="run-sheet-bye">
+        {msg("schedule.round", { n: fixture.round_no })} · {msg("schedule.bye", { name })}
+        {awarded ? ` · ${awarded}` : null}
       </li>
     );
   }

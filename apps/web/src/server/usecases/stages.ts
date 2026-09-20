@@ -1326,6 +1326,8 @@ interface GenerateWrite {
   outcome: GenerateOutcome;
   divisionId: string;
   competitionId: string;
+  /** Swiss Pair next: how many shells were seated this pass (0 on mint). */
+  swissSeatedCount?: number;
 }
 
 /** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
@@ -1427,6 +1429,11 @@ export async function unpairSwissRound(
       competitionId: division!.competition_id,
     };
   });
+
+  // Bye awards (and their removal) never go through appendEvent, so the
+  // standings snapshot would otherwise keep the unpaired bye's points until
+  // the next scored match — Dan after Unpair R3. Fold from the cleared rows.
+  await recomputeStandings(auth.orgId, stageId);
 
   void fireStageRevalidate(auth.orgId, stageId);
   afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
@@ -1881,9 +1888,16 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       outcome: { created, existing: gen.length - newRows.length, fixtures },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
+      swissSeatedCount,
     };
   });
   const outcome = write.outcome;
+  // Pair next seats bye awards without score_events — same snapshot trap as
+  // Unpair. Recompute whenever a Swiss round was seated so the table shows
+  // the bye win immediately (Finn/Gus), not after the next real match.
+  if ((write.swissSeatedCount ?? 0) > 0) {
+    await recomputeStandings(auth.orgId, stageId);
+  }
   void fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {

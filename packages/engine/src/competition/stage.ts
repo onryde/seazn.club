@@ -21,12 +21,19 @@ const COUNTS_FOR_STANDINGS: ReadonlySet<FixtureStatus> = new Set(["decided", "wa
 // A league/group/swiss fixture as the stage sees it: a status and, once
 // decided, the sport module's [home, away] delta pair (void fixtures carry no
 // result and never reach the standings fold).
+//
+// `awardDelta` is the one-sided sit-out path (Swiss odd-field bye, KO seeded
+// bye): forfeited + `outcome.kind === "award"` with the other seat null, so
+// there is no [home, away] pair and no match_state for `standingsDelta`. The
+// adapter synthesises a single win delta; the fold treats it like any other
+// played win. Buchholz/SB see it as an unplayed game (opponent null).
 export interface TableFixture {
   id: string;
   poolId?: string;
   roundNo?: number;
   status: FixtureStatus;
   result?: FixtureResult;
+  awardDelta?: StandingsDelta;
 }
 
 // A bracket fixture (knockout / double_elim / stepladder). `round` is 0-based
@@ -170,9 +177,12 @@ function entrantsOfPool(
   if (single) return [...allEntrants];
   const ids = new Set<EntrantId>();
   for (const fixture of fixtures) {
-    if (poolOf(fixture) !== pool || fixture.result === undefined) continue;
-    ids.add(fixture.result[0].entrantId);
-    ids.add(fixture.result[1].entrantId);
+    if (poolOf(fixture) !== pool) continue;
+    if (fixture.result !== undefined) {
+      ids.add(fixture.result[0].entrantId);
+      ids.add(fixture.result[1].entrantId);
+    }
+    if (fixture.awardDelta !== undefined) ids.add(fixture.awardDelta.entrantId);
   }
   // Include declared entrants that happen to sit in this pool but have no
   // counted result yet (e.g. all their games void) via the allEntrants order.
@@ -204,12 +214,15 @@ export function completeTableStage(
     const results = poolFixtures
       .filter((fixture) => COUNTS_FOR_STANDINGS.has(fixture.status) && fixture.result !== undefined)
       .map((fixture) => fixture.result as FixtureResult);
+    const awardDeltas = poolFixtures
+      .filter((fixture) => COUNTS_FOR_STANDINGS.has(fixture.status) && fixture.awardDelta !== undefined)
+      .map((fixture) => fixture.awardDelta as StandingsDelta);
 
     const entrantSet = new Set(entrants);
     const openings = (stage.openingDeltas ?? []).filter((d) => entrantSet.has(d.entrantId));
     const rows =
-      openings.length > 0
-        ? foldStandings(entrants, [...openings, ...results.flat()])
+      openings.length > 0 || awardDeltas.length > 0
+        ? foldStandings(entrants, [...openings, ...results.flat(), ...awardDeltas])
         : foldResults(entrants, results);
     const ranked = rankStandings(rows, {
       cascade: stage.cascade,
@@ -218,7 +231,7 @@ export function completeTableStage(
       ...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),
       ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
       ...(stage.h2hScope === undefined ? {} : { h2hScope: stage.h2hScope }),
-      ...(stage.swiss === true ? { swiss: buildSwissTable(entrants, results) } : {}),
+      ...(stage.swiss === true ? { swiss: buildSwissTable(entrants, results, awardDeltas) } : {}),
     });
     // Manual override wins — it is the final structural word (Jul3/05 §8).
     if (stage.rankLocks !== undefined && stage.rankLocks.length > 0) {
