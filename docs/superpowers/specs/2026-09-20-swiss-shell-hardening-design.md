@@ -71,7 +71,14 @@ dispatch brief should restate the relevant ones inline.
 
 ## The sequencing principle
 
-Ordered by **blast radius, not by effort**. Two hard dependencies:
+Ordered by **blast radius, not by effort** — where blast radius means "what
+does this stop an organiser doing", not "how many rows does it touch". The
+ranking moved once already: a defect filed as setup-time roster drift turned
+out to be reachable through the ordinary mid-tournament withdrawal path, which
+promoted it from Wave 2 to the head of Wave 1. Expect the ranking to move again
+as premises are re-pinned.
+
+Two hard dependencies:
 
 - **Wave 0 precedes everything.** Nine tests in this area do not constrain the
   code. Fixing behaviour behind them means the suite cannot witness a
@@ -155,10 +162,68 @@ unmoved, and the killer names are recorded.
 
 ---
 
-## Wave 1 — stop showing wrong numbers
+## Wave 1 — stop the tournament being un-runnable, then stop the wrong numbers
 
-**Goal:** three defects that corrupt standings silently. All are contained.
-None changes a user-facing string.
+**Goal:** one defect that halts a live Swiss event, then three that corrupt
+standings silently. None changes a user-facing string.
+
+**Re-ranked 2026-09-20 (owner challenge).** Task 1.0 was Task 2.1 and was
+described as a setup-time mistake. It is not — see below. It now leads the
+programme, ahead of the standings fixes: wrong Buchholz misorders a table,
+whereas this stops the event being run at all, on the most ordinary
+interruption a Swiss tournament has.
+
+### Task 1.0 — a mid-tournament withdrawal bricks Pair next
+
+**This is the common path, not an edge case.** Establish the chain before
+touching anything, because the severity rests on it:
+
+1. After Start, the ONLY roster change possible is a withdrawal.
+   `enrollEntrants` refuses additions once the division is `active` or
+   `completed` (`entrants.ts:300-306`), exempting only `ladder` / `americano`,
+   neither of which is Swiss. Its own message says so: "This tournament has
+   started — the entrant list is locked. Withdrawing entrants still works."
+2. A withdrawal is a STATUS FLIP, not a delete (`withdrawal.ts:122`). The
+   entrant row stays; `status` becomes `withdrawn`.
+3. The generate/pair path counts only ACTIVE entrants (`stages.ts:1606-1609`):
+   `select id, seed from entrants where division_id = $1 and status in
+   ('registered', 'confirmed')`. `withdrawn` is not in that set.
+
+So the field the pairer sees shrinks by one the moment anyone withdraws, while
+the shells were minted for the old field size and are never revisited. Then the
+seating loop walks the pre-minted shells against the newly-sized
+`round.pairings` and throws: `"swiss bye shell missing for pairing"` when the
+parity now needs a bye that was not minted, or `"swiss shell count mismatch for
+pairing"` when it goes the other way.
+
+**A field's parity changing is the NORMAL consequence of a withdrawal**, not an
+exotic one. A player gets injured or does not show for round 3, and Pair next
+throws `CONFIG_INVALID` for the remainder of the tournament.
+
+Note the asymmetry this exposes: `withdrawEntrantCascade` already does careful
+post-start work — walkovers for pending fixtures, voids for resulted ones — so
+that path is plainly DESIGNED for mid-tournament use. It settles the existing
+fixtures correctly and then leaves the shell set inconsistent with the field it
+just changed.
+
+The 5→6 growth direction is reachable only BEFORE Start, and is the less
+important half.
+
+**Build:** make the next round seat correctly against the CURRENT active field
+— either by re-minting that round's shells to match it, or by seating the round
+without depending on pre-minted shells. **Owner decision needed — see Open
+question 1.**
+
+**Acceptance:**
+- Withdraw one entrant from a 6-player Swiss after Start, mid-tournament, and
+  Pair next must seat the next round — including the bye the new odd parity
+  requires.
+- Drive it through the REAL withdrawal path (`withdrawEntrantCascade`), not by
+  editing entrant rows in a fixture. A fixture on both ends proves the fixture.
+- Cover a withdrawal that flips parity odd→even as well as even→odd. One sample
+  is not a parity sweep; enumerate the table.
+- Already-seated and already-played rounds must be untouched.
+- Recovery must not require deleting the stage.
 
 ### Task 1.1 — a bye never freezes `config_snapshot`
 
@@ -212,26 +277,17 @@ just unit-asserted.
 
 ## Wave 2 — stop bricking operations
 
-**Goal:** two failure modes whose only recovery is deleting and re-creating the
-stage, and two correctness gaps on the destructive path.
+**Goal:** one failure mode whose only recovery is deleting and re-creating the
+stage (Task 2.2), and two correctness gaps on the destructive path. The other
+failure mode originally filed here is now Task 1.0.
 
-### Task 2.1 — roster drift after minting bricks Pair next
+### Task 2.1 — MOVED to Task 1.0
 
-Field 6→5 throws `CONFIG_INVALID "swiss bye shell missing for pairing"`; 5→6
-throws `"swiss shell count mismatch for pairing"`. Every subsequent Generate
-throws. Untested.
-
-Recoverable by deleting and re-creating the stage (see the correction at the
-top of this document) — but that silently discards any scheduling work already
-done on those shells, and the organiser is given no hint that it is the way
-out.
-
-**Build:** reconcile the shell set against the current roster, or refuse the
-roster change with a message that says what to do. **Owner decision needed —
-see Open questions.**
-**Acceptance:** drive 6→5 and 5→6 and show Pair next still works (or refuses
-legibly). Both directions; a one-directional test cannot distinguish a fix from
-a guard that refuses everything.
+Roster drift after minting was originally filed here as a setup-time mistake.
+The owner established that it is reachable mid-tournament through the ordinary
+withdrawal path, which makes it the programme's most severe finding rather than
+a Wave 2 item. It now leads Wave 1. This heading is kept so the predecessor
+doc's ordering still resolves.
 
 ### Task 2.2 — a round-count change after minting is a silent no-op
 
@@ -386,13 +442,32 @@ them together means one screenshot pass instead of two.
 
 ## Open questions for the owner
 
-1. **Task 2.1 — roster drift.** Should a roster change after minting
-   (a) reconcile the shell set automatically, or (b) refuse with "unpair the
-   seated rounds first"? (a) is friendlier and more destructive; (b) is safer
-   and makes the organiser do the work. **Recommendation: (b)** — this sits on
-   the path that already produced C1, and an automatic reconcile silently
-   rewrites rows the organiser has not looked at. Revisit if (b) proves
-   annoying in practice.
+1. **Task 1.0 — how should the next round seat after a mid-tournament
+   withdrawal?**
+
+   **This question was previously answered wrongly and the answer is
+   withdrawn.** The earlier recommendation was "refuse, and tell the organiser
+   to unpair the seated rounds first". That was written on the belief that this
+   was a pre-start setup mistake. As the response to a withdrawal in round 3 it
+   is unacceptable: it asks the organiser to unpair rounds that have already
+   been PLAYED, and refusing outright leaves the event un-runnable, which is
+   the defect itself rather than a fix for it.
+
+   The real options:
+   - **(a) Re-mint the affected round's shells** to match the current active
+     field, leaving seated and played rounds untouched.
+   - **(b) Seat the round without depending on pre-minted shells** — create or
+     delete rows as the pairing requires, so the shell set stops being a
+     fixed-size assumption.
+
+   **Recommendation: (a).** It is the smaller change, it keeps the shell model
+   the rest of this feature is built on, and it confines the write to exactly
+   one round that by definition has no results yet. (b) is the cleaner end
+   state — the fixed-size assumption is the root cause — but it rewrites the
+   seating path wholesale, on the same destructive surface that produced C1.
+
+   Either way the guard is the canonical one, evidence-of-play is monotonic,
+   and the round being re-minted must be proven unseated and unplayed first.
 2. **Task 2.2 — a round-count decrease with seated rounds beyond the new
    budget.** Refuse outright, or clear the seated rounds above the budget?
    **Recommendation: refuse** — clearing seated rounds is exactly the
