@@ -14938,11 +14938,15 @@ async function uiSystemSuite(admin: Session, proOrgSlug: string): Promise<void> 
     freeShared.status === 200 && freeShared.body.includes("noindex"),
   );
 
-  // --- v3/11 in-app billing: the portal is dead by default, the manage
-  // endpoints exist behind owner auth and degrade cleanly without a Stripe
-  // customer, and the billing page renders with no portal button. ---
+  // --- v3/11 in-app billing: the Stripe-hosted portal route is GONE, the
+  // manage endpoints exist behind owner auth and degrade cleanly without a
+  // Stripe customer, and the billing page renders with no portal button. ---
+  // The route used to answer 404 unless BILLING_PORTAL_FALLBACK=1; that one
+  // release elapsed and route.ts is deleted, so the 404 now comes from the
+  // router having nothing to match. Same status, no flag left to set — kept
+  // as a probe that nothing has quietly re-introduced a portal redirect.
   const portalDead = await raw(admin, "/api/billing/portal", "POST", {});
-  check("v3/11 portal route 404s without the fallback flag (pro)", portalDead.status === 404);
+  check("v3/11 portal route is gone — POST 404s (pro)", portalDead.status === 404);
   const proSetup = await raw(admin, "/api/billing/setup-intent", "POST", {});
   check(
     "v3/11 setup-intent wants a Stripe customer first (comped pro)",
