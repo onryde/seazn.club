@@ -61,7 +61,14 @@ export const FLY_STATE_MAP: Record<string, ObservedRunnerState> = {
   destroyed: "destroyed", replaced: "destroyed", migrated: "destroyed",
 };
 export function fromFlyState(state: string | null | undefined): ObservedRunnerState {
-  return (state && FLY_STATE_MAP[state]) || "unknown"; // typed unknown — never a crash, never "running"
+  // `Object.hasOwn`, never a bare `MAP[state]`: `state` is a `z.string()` straight off
+  // Fly's JSON, and a plain object answers for every key Object.prototype carries —
+  // `"constructor"` returned the `Object` FUNCTION and `"__proto__"` the prototype, i.e.
+  // values this function's own declared return type forbids and tsc cannot see (lane-A
+  // minors, Task 5 review M1). Own-property only; anything else is the typed `unknown`,
+  // never a crash and never "running".
+  if (state === null || state === undefined || !Object.hasOwn(FLY_STATE_MAP, state)) return "unknown";
+  return FLY_STATE_MAP[state] ?? "unknown";
 }
 
 /** T5-g. `fly-client.ts` reports "the create's outcome is unknown" by DOWNGRADING

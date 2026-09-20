@@ -95,7 +95,13 @@ export class CloudflareIngest implements IngestProvider {
    *  call that made it exactly as FakeIngest records it. The record never
    *  fails the call. */
   private async call<T>(
-    method: "GET" | "POST" | "PUT" | "DELETE", path: string, body: unknown,
+    // C4 is a TYPE here, not only a regex (lane-A minors, Task 4 round-0 minor 5).
+    // The union used to admit "PUT", which `ingest-cf.test.ts`'s static C4 ban
+    // forbids anywhere in this file — so the one thing that could cause the C4
+    // outage (updating a live input's `recording`) was refused by a source scan and
+    // welcomed by the compiler. Narrowed to what this adapter actually calls; the
+    // scan stays, because a raw `fetch` beside this helper would dodge the type.
+    method: "GET" | "POST" | "DELETE", path: string, body: unknown,
     meta: { operation: string; ids: string[]; subjectId?: string | null; subjectOf?: (result: T | undefined) => string | null; sessionId?: string | null },
   ): Promise<{ status: number; json: CfEnvelope<T> }> {
     const url = `${this.base}${path}`;
@@ -117,7 +123,12 @@ export class CloudflareIngest implements IngestProvider {
       throw e;
     }
     const json = (await res.json().catch(() => ({ success: false }))) as CfEnvelope<T>;
-    record(res.status, res.headers.get("cf-ray"), json.errors?.[0] ? String(json.errors[0].code) : null,
+    // The `code != null` test, not a bare `errors?.[0]` (lane-A minors, Task 4
+    // round-0 minor 1): an error object carrying a MESSAGE but no code wrote the
+    // literal string "undefined" into `error_code`. That is worse than an empty
+    // column, because it looks like a code and groups and counts as one. The
+    // status still tells the row apart from a success.
+    record(res.status, res.headers.get("cf-ray"), json.errors?.[0]?.code != null ? String(json.errors[0].code) : null,
       meta.subjectId ?? meta.subjectOf?.(json.result) ?? null);
     return { status: res.status, json };
   }
@@ -244,6 +255,16 @@ export class CloudflareIngest implements IngestProvider {
     // A 2xx carrying an empty or unparseable body is SUCCESS, on this path and
     // on deleteVideo's alike — `call()` reports an unbodied 200/204 as
     // { success: false }, and the two DELETEs used to read that oppositely.
+    // The COST of that tolerance, stated rather than left to be rediscovered
+    // (lane-A minors, Task 4 re-review 2): a 200 carrying `{ success: false,
+    // errors: [...] }` also resolves here. On the create's cleanup path that means
+    // `cleanupFailure` is null and the refusal prints no orphan warning while the
+    // input survives — an input nothing will ever reclaim. Theoretical: Cloudflare
+    // reports errors with a non-2xx status, which is why I-3 ruled the tolerance in
+    // (it is symmetric and safe either way against the UNMEASURED real reply). The
+    // Task 17 live-watch item "what DELETE /live_inputs/{uid} actually returns" is
+    // what closes it; until then, do not tighten this without that measurement, and
+    // do not widen it either.
     if (r.status === 404 || r.json.success || (r.status >= 200 && r.status < 300)) return;
     CloudflareIngest.fail("delete input", r);
   }
@@ -253,6 +274,16 @@ export class CloudflareIngest implements IngestProvider {
       { operation: "storageUsage", ids: [] });
     if (!r.json.success || !r.json.result) CloudflareIngest.fail("storage usage", r);
     const { totalStorageMinutes, totalStorageMinutesLimit, videoCount } = r.json.result;
+    // The three numbers are CHECKED, not just destructured out of a cast envelope
+    // (lane-A minors, Task 4 round-0 minor 2). `{ success: true, result: {} }` used
+    // to hand back `{ undefined, undefined, undefined }` TYPED as StorageUsage, and
+    // Task 10's headroom arithmetic became NaN three call sites downstream. It fails
+    // closed either way, so this is diagnosability rather than money — but a NaN is a
+    // bad way to learn that Cloudflare renamed a field. `typeof` rather than a
+    // truthiness test: a legitimate 0 must pass.
+    if (typeof totalStorageMinutes !== "number" || typeof totalStorageMinutesLimit !== "number" || typeof videoCount !== "number") {
+      CloudflareIngest.fail("storage usage: the 2xx result is missing totalStorageMinutes / totalStorageMinutesLimit / videoCount", r);
+    }
     return { totalStorageMinutes, totalStorageMinutesLimit, videoCount };
   }
 

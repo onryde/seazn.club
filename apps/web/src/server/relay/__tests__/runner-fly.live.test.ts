@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { FlyClient, SESSION_METADATA_KEY } from "../fly-client";
 import { FlyRunner } from "../runner-fly";
-import type { RunnerSpec } from "../ports";
+import type { ProviderCallRecord, RunnerSpec } from "../ports";
 
 /** The token from the environment, or from `apps/web/.env.local`, which is where
  *  it lands — so the run command needs no shell substitution. */
@@ -42,8 +42,14 @@ function flyToken(): string | undefined {
   }
 }
 
-const TOKEN = flyToken();
-const ENABLED = !!TOKEN && process.env.RELAY_LIVE_FLY === "1";
+// Lane-A minors, Task 5A review m8, applied to THIS leg too: the flag is read
+// first and the token only behind it. `flyToken()` ran at module scope on every
+// ordinary unit run of this file, pulling a live Fly credential off disk into the
+// worker's heap for no reason — the exact shape m8 named in fly-client.live.test.ts.
+// Fixing one sibling and leaving the other is half a fix.
+const WANTS_LIVE = process.env.RELAY_LIVE_FLY === "1";
+const TOKEN = WANTS_LIVE ? flyToken() : undefined;
+const ENABLED = !!TOKEN && WANTS_LIVE;
 if (!ENABLED) console.log("SKIP  runner-fly live adopt test (needs FLY_API_TOKEN in apps/web/.env.local or the environment and RELAY_LIVE_FLY=1)");
 
 const seen: string[] = [];
@@ -58,7 +64,15 @@ describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", 
   const image = "registry-1.docker.io/library/nginx:1.27-alpine";
   // A create can take tens of seconds on a cold image pull, so this leg's client
   // gets a budget of its own rather than the shipped defaults.
-  const client = new FlyClient({ token: TOKEN!, app, requestTimeoutMs: 120_000, deadlineMs: 300_000, maxAttempts: 2 });
+  /** Every provider row this leg's client writes, in order. The client records one
+   *  row per ATTEMPT with the status Fly actually answered, which is the only place
+   *  a live test can read the 409 itself — `FlyRunner.create` swallows the refusal
+   *  by design (lane-A minors, Task 5 review M4). */
+  const rec: { calls: ProviderCallRecord[] } = { calls: [] };
+  const client = new FlyClient({
+    token: TOKEN!, app, requestTimeoutMs: 120_000, deadlineMs: 300_000, maxAttempts: 2,
+    recorder: { record(c) { rec.calls.push(c); } },
+  });
   /** The sweep gets its OWN short budget: with the client above, one hung destroy
    *  can outlast the hook and leave the rest of the ledger unvisited. */
   const sweeper = new FlyClient({ token: TOKEN!, app, requestTimeoutMs: 20_000, deadlineMs: 45_000, maxAttempts: 2 });
@@ -100,9 +114,18 @@ describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", 
     // which never reaches the client's ambiguity lookup — the adapter is the only
     // thing that can turn it into anything but a failure.
     const t1 = Date.now();
+    // Lane-A minors, Task 5 review M4: the title says "a real duplicate create 409s"
+    // and nothing asserted a 409 ever happened — the test could not tell "409 →
+    // adopted" from "Fly returned 200 with the same Machine", which is the whole
+    // premise the adopt is built on. The client records one row per attempt, so the
+    // refusal's own STATUS is readable here.
+    const before = rec.calls.length;
     const second = await runner.create(spec);
     note(`create 2 (same session+attempt) → runnerId=${second.runnerId} in ${Date.now() - t1} ms`);
     expect(second.runnerId).toBe(first.runnerId);
+    const statuses = rec.calls.slice(before).map((c) => c.status);
+    note(`create 2 recorded statuses → ${JSON.stringify(statuses)}`);
+    expect(statuses, "the duplicate create must be REFUSED by Fly, not quietly answered 200").toContain(409);
 
     // …and Fly really does hold exactly ONE Machine for this session: the adopt
     // returned an id rather than minting one. This is the assertion that would
@@ -114,7 +137,17 @@ describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", 
     // The adapter's own vocabulary over the same Machine.
     const listed = (await runner.list()).filter((l) => l.sessionId === session);
     note(`runner.list() → ${JSON.stringify(listed)}`);
-    expect(listed).toEqual([{ runnerId: first.runnerId, sessionId: session, name: `relay-${session}-r1`, state: expect.any(String) }]);
+    expect(listed).toHaveLength(1);
+    // Lane-A minors, Task 5 review M3: `state: expect.any(String)` was a reachability
+    // assertion satisfied by ANY value (failure class 19), on precisely the field the
+    // report calls surprising — `listStateOf` answers `"other"` for a Machine that is
+    // still coming up, so a green here proved nothing about it. The summary is a
+    // closed three-value union, so pinning TWO of the three is the strongest honest
+    // assertion: seconds after its own successful create the Machine is up or coming
+    // up, and `"stopped"` would mean it died on the way.
+    const { state: listedState, ...identity } = listed[0]!;
+    expect(identity).toEqual({ runnerId: first.runnerId, sessionId: session, name: `relay-${session}-r1` });
+    expect(["running", "other"], "a Machine seconds after a successful create is running or coming up — `stopped` means it died").toContain(listedState);
 
     // Teardown through the adapter, then CONFIRMED by re-read: 200 `destroyed`
     // (or `destroying`) — never a 404 (C1).

@@ -294,7 +294,13 @@ describe("CloudflareIngest", () => {
       expect(() => new CloudflareIngest()).toThrow(/CLOUDFLARE_STREAM_TOKEN/);
     } finally {
       // Assigning `undefined` to process.env stores the STRING "undefined" and
-      // would leak a bogus account id into every later file in this process.
+      // would leak a bogus account id into every later test in THIS FILE — not,
+      // as this comment used to say, into every later file in the process
+      // (lane-A minors, Task 4 round-0 minor 4). `apps/web/vitest.config.ts` sets
+      // `isolate: true` with `pool: "threads"`, so each file gets its own worker
+      // and its own `process.env`. Still a real leak, and still restored here;
+      // the blast radius is one file, and the guard this would defeat — "refuses
+      // to construct without env", two lines up — lives in this file.
       if (keep.a === undefined) delete process.env.CLOUDFLARE_ACCOUNT_ID;
       else process.env.CLOUDFLARE_ACCOUNT_ID = keep.a;
       if (keep.t === undefined) delete process.env.CLOUDFLARE_STREAM_TOKEN;
@@ -326,6 +332,79 @@ describe("CloudflareIngest", () => {
     expect(port.calls[1]!.ids).toEqual(["acc1", "in-missing"]);
     for (const c of port.calls) { expect(c.url).toContain("acc1"); expect(JSON.stringify(c)).not.toContain("tok-secret"); }
     expect(creds.inputId).toBeTruthy();
+  });
+
+  // Lane-A minors, Task 4 round-0 minor 6: the twin above scans for the API TOKEN
+  // alone, so a row leaking the SRT `passphrase` or the RTMPS `streamKey` — both
+  // secrets this adapter handles, and both arriving in a RESPONSE rather than a
+  // header, so redaction has no standing list to catch them — would have passed it.
+  // It gets its OWN fixture rather than extending that loop: the shared
+  // CREATE_RESULT's secrets are two characters ("rk", "pp"), and "rk" is a
+  // substring of the word `network` that a failed row's errorCode carries, so a
+  // whole-row `not.toContain` over them is unreliable in BOTH directions. A probe
+  // for a secret has to be distinctive enough that matching it means something.
+  it("no recorded row carries the SRT passphrase or the RTMPS stream key either — not just the API token", async () => {
+    const SRT_SECRET = "srt-passphrase-DO-NOT-LEAK-8f3a";
+    const RTMPS_SECRET = "rtmps-streamkey-DO-NOT-LEAK-2b91";
+    const port = new FakeRecorder();
+    const { fetchImpl } = recorder((c) => c.init.method === "POST" && c.url.endsWith("/live_inputs")
+      ? { status: 200, body: { success: true, result: { ...CREATE_RESULT, rtmps: { ...CREATE_RESULT.rtmps, streamKey: RTMPS_SECRET }, srt: { ...CREATE_RESULT.srt, passphrase: SRT_SECRET } } } }
+      : { status: 200, body: { success: true, result: { uid: "in_abc", status: { current: { state: "connected", reason: null } } } } });
+    const cf = new CloudflareIngest({ fetchImpl, accountId: "acc1", token: "tok-secret", recorder: port });
+    const creds = await cf.createLiveInput({ sessionId: "s1", slot: 0 });
+    await cf.inputStatus(creds.inputId);
+    await new Promise((r) => setImmediate(r));
+    // Not vacuous, in two directions: rows WERE written, and the credentials really
+    // do carry the values being looked for.
+    expect(port.calls.length).toBeGreaterThan(0);
+    expect(creds.srt.passphrase).toBe(SRT_SECRET);
+    expect(creds.rtmps.streamKey).toBe(RTMPS_SECRET);
+    for (const c of port.calls) {
+      const row = JSON.stringify(c);
+      expect(row, c.operation).not.toContain(SRT_SECRET);
+      expect(row, c.operation).not.toContain(RTMPS_SECRET);
+      expect(row, c.operation).not.toContain("tok-secret");
+    }
+  });
+
+  // Lane-A minors, Task 4 round-0 minor 1: `String(json.errors[0].code)` wrote the
+  // LITERAL string "undefined" into `error_code` whenever Cloudflare returned an
+  // error object carrying a message but no code — a shape the test file's own
+  // catch-all reply already had. A ledger column reading "undefined" is worse than
+  // an empty one: it looks like a code, so it groups and counts as one.
+  it("an error object with a message but NO code records error_code null, never the string \"undefined\"", async () => {
+    const port = new FakeRecorder();
+    const { fetchImpl } = recorder(() => ({ status: 500, body: { success: false, errors: [{ message: "internal" }] } }));
+    const cf = new CloudflareIngest({ fetchImpl, accountId: "acc1", token: "tok", recorder: port });
+    await cf.inputStatus("in_x").catch(() => undefined);
+    await new Promise((r) => setImmediate(r));
+    expect(port.calls).toHaveLength(1);
+    expect(port.calls[0]!.errorCode).toBeNull();
+    // The positive twin — a code that IS present still lands, so this is not just
+    // "null everywhere".
+    const port2 = new FakeRecorder();
+    const cf2 = new CloudflareIngest({ fetchImpl: recorder(() => ({ status: 400, body: { success: false, errors: [{ code: 10005, message: "nope" }] } })).fetchImpl, accountId: "acc1", token: "tok", recorder: port2 });
+    await cf2.inputStatus("in_y").catch(() => undefined);
+    await new Promise((r) => setImmediate(r));
+    expect(port2.calls[0]!.errorCode).toBe("10005");
+  });
+
+  // Lane-A minors, Task 4 round-0 minor 2: `storageUsage` destructured three
+  // numbers straight out of a CAST envelope. `{ success: true, result: {} }` handed
+  // back `{ undefined, undefined, undefined }` TYPED as StorageUsage, and Task 10's
+  // headroom arithmetic then became NaN. It fails closed either way, so this is
+  // diagnosability rather than money — but a NaN three call-sites downstream is a
+  // bad way to learn that Cloudflare changed a field name.
+  it("storageUsage REFUSES a 2xx whose result is missing the numbers, rather than returning undefined typed as a number", async () => {
+    const cf = new CloudflareIngest({ fetchImpl: recorder(() => ({ status: 200, body: { success: true, result: {} } })).fetchImpl, accountId: "acc1", token: "tok" });
+    await expect(cf.storageUsage()).rejects.toThrow(/storage usage/);
+    // and a result carrying a NON-number is refused too, not coerced
+    const bad = new CloudflareIngest({ fetchImpl: recorder(() => ({ status: 200, body: { success: true, result: { totalStorageMinutes: "396.84", totalStorageMinutesLimit: 1000, videoCount: 7 } } })).fetchImpl, accountId: "acc1", token: "tok" });
+    await expect(bad.storageUsage()).rejects.toThrow(/storage usage/);
+    // The positive twin: a well-formed result still passes straight through (C3 —
+    // no arithmetic in the adapter), including a legitimate ZERO.
+    const ok = new CloudflareIngest({ fetchImpl: recorder(() => ({ status: 200, body: { success: true, result: { totalStorageMinutes: 0, totalStorageMinutesLimit: 1000, videoCount: 0 } } })).fetchImpl, accountId: "acc1", token: "tok" });
+    await expect(ok.storageUsage()).resolves.toEqual({ totalStorageMinutes: 0, totalStorageMinutesLimit: 1000, videoCount: 0 });
   });
 
   it("a recorder that THROWS never fails the call it records (the port's best-effort contract)", async () => {

@@ -387,6 +387,71 @@ describe("relay tokens", () => {
   it("tokens.ts never names SUPABASE_JWT_SECRET (P3, every review)", () => {
     const src = readFileSync(resolve(import.meta.dirname, "../tokens.ts"), "utf8");
     expect(src).not.toContain("SUPABASE_JWT_SECRET");
-    expect(src).toContain("AUTH_SECRET"); // present twin
+    // Lane-A minors, Task 6 review m2: the present twin used to be
+    // `toContain("AUTH_SECRET")`, which this file's own HEADER COMMENT satisfies —
+    // so it would have stayed green if the module stopped READING the variable and
+    // only kept talking about it. Anchored on the read itself.
+    expect(src).toContain("process.env.AUTH_SECRET");
+    // Lane-A minors, Task 6 review m5: the two secret-reading relay modules carry
+    // `server-only`, so a stray client import is a BUILD failure rather than a
+    // key read bundled into a browser. Nothing else can witness this — the marker
+    // is inert in node — so it is pinned as a source fact, on both files.
+    // ANCHORED AT THE START OF A LINE, not `toContain`: my own first spelling was
+    // `toContain('import "server-only"')`, and commenting the import out —
+    // `// import "server-only";` — left the substring in place and SURVIVED
+    // (mutants N and O, both 22/22 green). A marker this test cannot see removed
+    // is a marker it is not pinning.
+    expect(src).toMatch(/^import "server-only";$/m);
+    expect(readFileSync(resolve(import.meta.dirname, "../crypto.ts"), "utf8")).toMatch(/^import "server-only";$/m);
+  });
+});
+
+// Lane-A minors, Task 6 review m1 + m7. Both entry points took their own arguments
+// on trust, and TypeScript was the only guard — which holds exactly until a route
+// passes an unvalidated body field, which is the shape this repo has shipped before.
+describe("the module checks its OWN arguments, not just the token's claims", () => {
+  it("m1: a malformed `expected` is REFUSED before the verify — an undefined sid must never match a token that carries no sid", async () => {
+    // The defect this closes: with `expected.sid === undefined`, a token minted
+    // without a `sid` claim passed `payload.sid !== expected.sid` (undefined ===
+    // undefined) and the function RETURNED `{ sid: undefined }` typed as `string`.
+    // Not exploitable today — `mintRelayToken` always sets both claims, so no such
+    // token exists — but the refusal is one line and the type lie is invisible to tsc.
+    const noSid = await new SignJWT({ scope: "relay-job" })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+      .setAudience("seazn-relay")
+      .sign(new TextEncoder().encode(AUTH));
+    await expect(verifyRelayToken(noSid, { sid: undefined as unknown as string, scope: "relay-job" })).rejects.toMatchObject({ status: 401 });
+
+    // The whole malformed set, each refused, and each against a GENUINE token so the
+    // refusal is the expectation's and not the token's.
+    const good = await mintRelayToken({ sid: "s1", scope: "relay-job", expiresAt: new Date(Date.now() + 600_000) });
+    for (const bad of [undefined, null, "", 7, {}]) {
+      await expect(verifyRelayToken(good, { sid: bad as unknown as string, scope: "relay-job" }), JSON.stringify(bad)).rejects.toMatchObject({ status: 401 });
+    }
+    for (const bad of [undefined, null, "", "relay", "admin"]) {
+      await expect(verifyRelayToken(good, { sid: "s1", scope: bad as unknown as RelayScope }), JSON.stringify(bad)).rejects.toMatchObject({ status: 401 });
+    }
+    // The positive twin — a well-formed expectation over the same token still passes,
+    // so the guard has not simply closed the seam.
+    await expect(verifyRelayToken(good, { sid: "s1", scope: "relay-job" })).resolves.toMatchObject({ sid: "s1", scope: "relay-job" });
+  });
+
+  it("m7: mint refuses its own bad inputs LOUDLY — never a raw TypeError from inside jose, and never a token with an empty sid", async () => {
+    const ok = new Date(Date.now() + 600_000);
+    // `new Date(NaN)` used to reach `setExpirationTime` and throw
+    // `TypeError: Invalid setExpirationTime input` — a 500 with jose's wording
+    // rather than ours, three frames from the caller that got it wrong.
+    await expect(mintRelayToken({ sid: "s1", scope: "relay-job", expiresAt: new Date(NaN) })).rejects.toThrow(/expiresAt/);
+    await expect(mintRelayToken({ sid: "s1", scope: "relay-job", expiresAt: undefined as unknown as Date })).rejects.toThrow(/expiresAt/);
+    await expect(mintRelayToken({ sid: "", scope: "relay-job", expiresAt: ok })).rejects.toThrow(/sid/);
+    await expect(mintRelayToken({ sid: "s1", scope: "admin" as unknown as RelayScope, expiresAt: ok })).rejects.toThrow(/scope/);
+    // A misuse is OUR bug, so it is a plain Error and NOT the 401 — reporting a
+    // programming error as "this token is invalid" is how a config outage gets
+    // read as "every token expired" (the same argument `key()` makes above it).
+    await expect(mintRelayToken({ sid: "", scope: "relay-job", expiresAt: ok })).rejects.not.toMatchObject({ status: 401 });
+    // The positive twin: a well-formed mint still round-trips.
+    await expect(mintRelayToken({ sid: "s1", scope: "relay-page", expiresAt: ok })).resolves.toMatch(/^ey/);
   });
 });

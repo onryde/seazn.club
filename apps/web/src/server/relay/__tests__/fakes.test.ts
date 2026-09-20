@@ -6,7 +6,7 @@
 // a scripted 409-once on deleteVideo; outputState rejects on a host that
 // says so and is `ok` otherwise (positive pair).
 import { describe, expect, it } from "vitest";
-import { FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
 import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS } from "../config";
 import { pathTemplate } from "../sanitise";
 
@@ -50,6 +50,43 @@ describe("FakeIngest", () => {
     expect((await fake.inputStatus("fake-in-40000-abc")).state).toBe("connected");
     expect((await fake.inputStatus("fake-in-48000-abc")).state).toBe("disconnected");
     expect((await fake.inputStatus("not-a-fake-id")).state).toBe("unknown");
+  });
+
+  // Lane-A minors, Task 3 review m3: `Number(process.env.FAKE_INGEST_CONNECT_AFTER_MS)`
+  // took whatever it was given. An EMPTY or whitespace value became 0 — an instant
+  // connect, so a server-mode e2e that meant to watch warming would see live at once.
+  // A non-numeric one became NaN, and `enteredAt` is computed UNCONDITIONALLY from it,
+  // so `new Date(NaN).toISOString()` threw RangeError on EVERY poll of a live input:
+  // a 500 per heartbeat, not the "never connects" the report expected. Parsed strictly
+  // and refused loudly instead, exactly as `relayDriverMode()` refuses a junk
+  // RELAY_DRIVERS — a fake driver's env is still an operator-facing switch.
+  it("FAKE_INGEST_CONNECT_AFTER_MS is parsed STRICTLY: junk and empty are refused at construction, never silently 0 or NaN", async () => {
+    const keep = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
+    try {
+      for (const bad of ["", "   ", "soon", "3s", "-1", "1.5", "NaN"]) {
+        process.env.FAKE_INGEST_CONNECT_AFTER_MS = bad;
+        expect(() => new FakeIngest(), JSON.stringify(bad)).toThrow(/FAKE_INGEST_CONNECT_AFTER_MS/);
+      }
+      // The positive twin, and the two ends that must still work: a good value is
+      // taken, and 0 is a LEGITIMATE setting (connect immediately) rather than the
+      // accident the empty string used to produce.
+      process.env.FAKE_INGEST_CONNECT_AFTER_MS = "7000";
+      const at7 = new FakeIngest({ clock: () => 6999 });
+      const { inputId } = await at7.createLiveInput({ sessionId: "s1", slot: 0 });
+      expect((await at7.inputStatus(inputId)).state).toBe("disconnected");
+      process.env.FAKE_INGEST_CONNECT_AFTER_MS = "0";
+      const now = new FakeIngest({ clock: () => 0 });
+      const zero = await now.createLiveInput({ sessionId: "s1", slot: 0 });
+      expect((await now.inputStatus(zero.inputId)).state).toBe("connected");
+      // Unset falls back to the declared default, not to 0.
+      delete process.env.FAKE_INGEST_CONNECT_AFTER_MS;
+      const dflt = new FakeIngest({ clock: () => FAKE_CONNECT_AFTER_MS_DEFAULT - 1 });
+      const d = await dflt.createLiveInput({ sessionId: "s1", slot: 0 });
+      expect((await dflt.inputStatus(d.inputId)).state).toBe("disconnected");
+    } finally {
+      if (keep === undefined) delete process.env.FAKE_INGEST_CONNECT_AFTER_MS;
+      else process.env.FAKE_INGEST_CONNECT_AFTER_MS = keep;
+    }
   });
 
   it("setState overrides the clock (the scripted mode unit tests drive)", async () => {
@@ -108,7 +145,12 @@ describe("FakeIngest", () => {
       durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null,
     });
     expect(done).toMatchObject({ durationSeconds: 61, sizeBytes: 734_003_200, width: 1280, height: 720, state: "ready", errorReasonCode: null });
-    // createdBefore is STRICT: a video created at the cutoff instant is not yet old enough for the retention sweep.
+    // `createdBefore` is STRICT (`<`, not `<=`) — a FAKE CONVENTION, pinned so both
+    // sides of the port agree, and nothing more. Lane-A minors, Task 3 review m5:
+    // this used to be justified as "not yet old enough for the retention sweep",
+    // which is wrong twice over — the sweep lists with `createdBefore: now` and
+    // applies retention itself, and Cloudflare's own `end` parameter is inclusive
+    // or exclusive by a measurement nobody has taken (a Task 17 live-watch item).
     expect(await fake.listVideos({ createdBefore: new Date(0) })).toEqual([]);
   });
 
@@ -133,12 +175,21 @@ describe("FakeIngest", () => {
 describe("FakeRunner", () => {
   it("create records the spec and destroy is idempotent", async () => {
     const runner = new FakeRunner();
-    const h = await runner.create({
+    const spec = {
       sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app",
-      guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" }, region: "lhr", deadlineAt: new Date(0),
-    });
+      guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0),
+    };
+    const h = await runner.create(spec);
     expect(h.runnerId).toMatch(/^fake-machine-/);
-    expect(runner.created).toHaveLength(1);
+    // Lane-A minors, Task 3 review m8: the title says "records the spec" and the
+    // assertion was `toHaveLength(1)` — satisfied by recording ANY object, including
+    // an empty one. Task 10's rigs read `created[0].jobToken`, `.deadlineAt` and
+    // `.attempt` off this array, so what it holds is the point, not how many.
+    expect(runner.created).toEqual([spec]);
+    // …and it is a COPY: the fake clones the spec and its guest, so a caller
+    // mutating what it passed cannot rewrite the ledger after the fact.
+    expect(runner.created[0]).not.toBe(spec);
+    expect(runner.created[0]!.guest).not.toBe(spec.guest);
     await runner.destroy(h.runnerId);
     await runner.destroy(h.runnerId);
     await runner.destroy("never-existed");
@@ -158,7 +209,25 @@ describe("FakeRunner", () => {
     const crashed = await runner.create({ ...spec, sessionId: "s2" });
     runner.setObserved(crashed.runnerId, "failed", { exitCode: 137, oomKilled: true, requestedStop: false });
     expect(await runner.observe(crashed.runnerId)).toEqual({ state: "failed", exit: { exitCode: 137, oomKilled: true, requestedStop: false } });
-    expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null });   // the port: absent = destroyed, exit null
+    expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null });   // the port: NEVER EXISTED = destroyed, exit null
+    // Lane-A minors, Task 3 review m1: the OTHER absent case — a Machine the
+    // provider knew and has now destroyed — keeps its exit, and that is the branch
+    // the fake models on purpose. It is what the real adapter does: C1 measured that
+    // a destroyed Fly Machine still answers GET 200 with its events readable, and
+    // only a 404 (an id that never existed) yields `exit: null`. Unpinned, hunt
+    // mutant D survived; pinned here with BOTH sides, because a fake that dropped
+    // the exit would let Task 10 read `machine_crash` where the real path reads
+    // `machine_exit_nonzero`.
+    const exited = await runner.create({ ...spec, sessionId: "s_exit" });
+    runner.setObserved(exited.runnerId, "stopped", { exitCode: 3, oomKilled: false, requestedStop: false });
+    await runner.destroy(exited.runnerId);
+    expect(await runner.observe(exited.runnerId)).toEqual({ state: "destroyed", exit: { exitCode: 3, oomKilled: false, requestedStop: false } });
+    // Lane-A minors, Task 3 review m2: `stop` on a runner the fake never knew is a
+    // no-op that still records, and the observe after it is unchanged. Hunt mutant E
+    // survived on this; the port declares stop idempotent for an absent runner.
+    await runner.stop("never-created", { signal: "SIGINT", timeoutSeconds: 10 });
+    expect(runner.stops.at(-1)).toEqual({ runnerId: "never-created", signal: "SIGINT", timeoutSeconds: 10 });
+    expect(await runner.observe("never-created")).toEqual({ state: "destroyed", exit: null });
     runner.failNextCreate(true);
     await expect(runner.create({ ...spec, sessionId: "s3" })).rejects.toMatchObject({ retryable: true });
     expect((await runner.create({ ...spec, sessionId: "s4" })).runnerId).toMatch(/^fake-machine-/);   // ONE create fails, not every one after

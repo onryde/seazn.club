@@ -13,6 +13,11 @@
 // A per-row DEK means rotating RELAY_KEK is a re-wrap of 32 bytes per row, not
 // a re-encryption of every stream key; GCM's tag means a flipped byte throws
 // instead of decrypting to a plausible wrong key.
+// Lane-A minors, Task 6 review m5: the lane-wide `server-only` gap. This module
+// reads RELAY_KEK and holds the seal/open pair; a client import would pull the
+// key read into a browser bundle, and this marker is what turns that into a
+// build failure rather than a shipped secret. See tokens.ts for the same note.
+import "server-only";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 const VERSION = 0x01;

@@ -3,8 +3,15 @@
 //  * CLOCK-DERIVED (a server started with RELAY_DRIVERS=fake): an input is
 //    "connected" once `connectAfterMs` has passed since its creation, and the
 //    creation time is ENCODED IN THE INPUT ID (`fake-in-<ms>-<rand>`), so the
-//    answer survives a process restart and needs no shared memory — the e2e
-//    drives a real server and waits, exactly as an organiser would.
+//    e2e drives a real server and waits, exactly as an organiser would.
+//    HOW FAR that survives a restart, narrowed (lane-A minors, Task 3 review m7 —
+//    the header claimed it for the whole fake): `inputStatus` alone. It is the
+//    only method that reconstructs a row from the id. After a restart
+//    `addOutput` THROWS on an id this instance does not hold, `outputState`
+//    reads "unknown", and an input deleted before the restart reads "connected"
+//    again because the `deleted` flag was in memory. Every one of those fails
+//    LOUDLY (a red e2e), not into a false green, which is why the fake is left
+//    as it is rather than made to adopt id-derived rows lazily.
 // The fake mirrors what R0 measured, not what would be convenient: the
 // per-input status shape (C5), the recording leak on deleteInput (C2), the
 // BARE srt:// URL with streamId and passphrase as separate fields (Task 2
@@ -23,6 +30,25 @@ import type {
 } from "./ports";
 
 export const FAKE_CONNECT_AFTER_MS_DEFAULT = 3000;
+
+/** `FAKE_INGEST_CONNECT_AFTER_MS`, parsed STRICTLY (lane-A minors, Task 3 review
+ *  m3). A bare `Number(...)` took whatever it was given, and both failure modes
+ *  were silent and wrong in different ways: an empty or whitespace value became
+ *  **0**, an instant connect, so a server-mode e2e meaning to watch `warming`
+ *  saw `live` at once and its wait proved nothing; a non-numeric value became
+ *  **NaN**, and because `inputStatus` computes `enteredAt` unconditionally,
+ *  `new Date(NaN).toISOString()` threw RangeError on EVERY poll of a live input
+ *  — a 500 per heartbeat rather than "never connects". Nothing sets this env
+ *  today, so neither has bitten; it is refused at CONSTRUCTION, the way
+ *  `relayDriverMode()` refuses a junk RELAY_DRIVERS, because a fake driver's env
+ *  is still an operator-facing switch and the failure it causes is three layers
+ *  from its cause. 0 stays legal — "connect immediately", asked for on purpose. */
+function connectAfterMsFromEnv(): number {
+  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
+  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
+  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be a whole number of milliseconds, got ${JSON.stringify(raw)}`);
+  return Number(raw);
+}
 
 /** Dd: a test names the fields it cares about; the fake supplies the rest. */
 export type FakeVideoInput = Pick<IngestVideo, "videoId" | "inputId" | "createdAt" | "inProgress"> & Partial<IngestVideo>;
@@ -49,8 +75,7 @@ export class FakeIngest implements IngestProvider {
 
   constructor(opts: { clock?: () => number; connectAfterMs?: number; recorder?: ProviderCallRecorder } = {}) {
     this.clock = opts.clock ?? (() => Date.now());
-    this.connectAfterMs =
-      opts.connectAfterMs ?? Number(process.env.FAKE_INGEST_CONNECT_AFTER_MS ?? FAKE_CONNECT_AFTER_MS_DEFAULT);
+    this.connectAfterMs = opts.connectAfterMs ?? connectAfterMsFromEnv();
     this.rec = opts.recorder ?? NOOP_RECORDER;
   }
 

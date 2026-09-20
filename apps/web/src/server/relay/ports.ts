@@ -85,7 +85,19 @@ export interface RunnerObservation { state: ObservedRunnerState; exit: ExitInfo 
 export interface RunnerProvider {
   create(spec: RunnerSpec): Promise<RunnerHandle>;   // idempotent per (sessionId, attempt): a retry after an ambiguous failure returns the SAME runner
   stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void>;   // the stop sequence; idempotent (already stopped / absent = success)
-  observe(runnerId: string): Promise<RunnerObservation>;   // GET + events → { state, exit }; absent = { state: "destroyed", exit: null }
+  /** GET + events → { state, exit }. "Absent" is TWO cases and they answer
+   *  differently (lane-A minors, Task 3 review m1 — this line said only
+   *  `absent = { destroyed, exit: null }`, which the fake appeared to contradict):
+   *    * an id the provider never had → `{ state: "destroyed", exit: null }`.
+   *      Fly 404s; there are no events to read.
+   *    * a Machine it HAD and has since destroyed → `{ state: "destroyed", exit }`,
+   *      carrying the exit it ended on. C1 measured that a destroyed Fly Machine
+   *      still answers GET 200 with its events readable, which is the whole reason
+   *      `FlyRunner.observe` fetches events for every non-running state.
+   *  `FakeRunner` models the same split, and `fakes.test.ts` pins both sides — a
+   *  fake that dropped the exit would let Task 10 read `machine_crash` where the
+   *  real path reads `machine_exit_nonzero`. */
+  observe(runnerId: string): Promise<RunnerObservation>;
   destroy(runnerId: string): Promise<void>;          // force; idempotent: an absent runner is success
   list(): Promise<RunnerListing[]>;                  // every runner the provider still holds for this app, with the session it was created for and its name (T5-a) — the daily orphan sweep's source
 }
@@ -93,8 +105,13 @@ export interface RunnerProvider {
  *  Adapters RECORD through this port and never touch SQL; telemetry.ts's
  *  recordProviderCall is bound behind it in drivers.ts, FakeRecorder in tests.
  *  Best-effort by contract: a recorder that throws never fails the call it
- *  records (the adapter catches and logs ONCE per process) — telemetry must
- *  not take a broadcast down. `url` is the URL as called; the recorder templates
+ *  records — telemetry must not take a broadcast down. WHERE that happens
+ *  (lane-A minors, Task 3 review m6 — this line used to say "the adapter catches
+ *  and logs ONCE per process", and the adapters do not log at all): every adapter
+ *  and fake swallows the throw SILENTLY, inside its own fire-and-forget `record`.
+ *  The once-per-process warning lives in `drivers.ts`'s `dbRecorder`, which is the
+ *  only recorder that can actually fail, and which is bound in one place. An
+ *  adapter that logged here would log once per CALL. `url` is the URL as called; the recorder templates
  *  it (sanitise.ts pathTemplate) — the adapter passes the ids it interpolated. */
 export interface ProviderCallRecord {
   provider: "cloudflare" | "fly" | "stripe"; operation: string; subjectId?: string | null; sessionId?: string | null;

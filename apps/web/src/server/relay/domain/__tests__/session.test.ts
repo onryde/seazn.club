@@ -645,7 +645,12 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(gone.next).toMatchObject({ state: "live", runnerRetries: 1, runner: { state: "destroyed", attempt: 1 } });
   });
 
-  it("R4, liveness — ENDING: an ending session whose destroyed runner gets a late create_ok (now lost) still COMPLETES at its ending timeout with its own end reason, re-issuing the teardown", () => {
+  // SEEDED, and unreachable by any planned caller since F-A (lane-A minors, Task 2C
+  // post-review m3 — the sibling at fix5-I1 says so about its own seed and this one
+  // did not). F-A completes the row at the stop grace, so an ending session no longer
+  // survives to its ending timeout on this path. The guard is defence in depth and the
+  // walk below owns the reachable set; this `it` pins the arm itself.
+  it("R4, liveness — ENDING (seeded): an ending session whose destroyed runner gets a late create_ok (now lost) still COMPLETES at its ending timeout with its own end reason, re-issuing the teardown", () => {
     const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
     for (const endReason of ["stopped", "max_duration"] as const) {
       const s = C({ state: "ending", desiredState: "ending", endReason, startedAt: T0, endingAt: T0, runner: { ...BOOTING, state: "destroyed" } });
@@ -667,7 +672,7 @@ describe("decide — a composed session's Machine events go through the runner t
   // late create_ok on a COMPLETED row (C27: torn down, session untouched) — pinned first below. No stop reaches `ending` with a
   // destroyed runner any more, so the guard itself is witnessed from that position SEEDED as the no-signal cell left it (the
   // R4 / R3 liveness rows seed theirs the same way): the arms keep their ending guards as defence in depth.
-  it("I1: an ENDING session whose late create_ok (now lost) is then CONFIRMED destroyed completes with its OWN end reason and the replay fill — at attempt 1 (retry signal) and at the LAST attempt (failed signal), by destroy_ok or observed destroyed; since F-A the stop grace completes first, and the same late create_ok and confirmation on that COMPLETED row change nothing but the runner", () => {
+  it("fix5-I1: an ENDING session whose late create_ok (now lost) is then CONFIRMED destroyed completes with its OWN end reason and the replay fill — at attempt 1 (retry signal) and at the LAST attempt (failed signal), by destroy_ok or observed destroyed; since F-A the stop grace completes first, and the same late create_ok and confirmation on that COMPLETED row change nothing but the runner", () => {
     const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
     const grace = RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS;
     const confirms: RunnerTrigger[] = [{ type: "destroy_ok" }, { type: "observed", state: "destroyed" }];
@@ -834,7 +839,12 @@ describe("decide — a composed session's Machine events go through the runner t
     const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
     const cases: [string, Session][] = [
       ["live, went live", C({ state: "live", startedAt: T0, heartbeatAt: T0, runner: { ...BOOTING, state: "playing" } })],
-      ["warming, never went live", C({ state: "warming", runner: BOOTING })],
+      // SEEDED past its own earlier exit (lane-A minors, Task 2C post-review m4): a
+      // warming row fails `warming_timeout` at 10 minutes, so it cannot really still
+      // be warming at MAX_DURATION. It is kept because it is the "never went live"
+      // half of the replay-fill claim and it stays consistent with `evaluate`'s
+      // ordering; the live row above carries the reachable version of the claim.
+      ["warming, never went live (seeded: warming_timeout would have failed it first)", C({ state: "warming", runner: BOOTING })],
     ];
     for (const [name, before] of cases) {
       expect(evaluate(before, at(deadline)), name).toEqual({ kind: "wall_clock" });
@@ -873,7 +883,12 @@ describe("decide — a composed session's Machine events go through the runner t
   // playing runner in provisioning / warming / live, F19's ending_timeout, and the three failures that tear a Machine down),
   // at both attempts, walk EVERY command decide accepts: no decision anywhere emits retry_runner, and each forced destroy of a
   // still-ending row completes it with the reason it already had.
-  it("F-A: a grace-forced destroy is never followed by retry_runner — walked through decide from every session that can stop a Machine; each forced destroy on an ending row completes it with its own end reason", () => {
+  // Lane-A minors, Task 2C post-review m4: the title said "every session that can stop
+  // a Machine" and the seeds below omit F16's provisioning/playing and warming/playing
+  // origins, which a plan-gated walk does reach. Nothing is lost — they land on the
+  // same (ending|failed, stopping) walk keys as the booting seeds already here — but
+  // the title is narrowed to what the seeds actually enumerate rather than over-claiming.
+  it("F-A: a grace-forced destroy is never followed by retry_runner — walked through decide from every BOOTING-or-PLAYING seed that can stop a Machine; each forced destroy on an ending row completes it with its own end reason", () => {
     const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
     const seeds: [string, Session, Command][] = [];
     for (const attempt of [1, RUNNER_MAX_ATTEMPTS]) {
@@ -944,7 +959,14 @@ describe("decide — a composed session's Machine events go through the runner t
     ];
     for (const [s, command, reason] of cases) {
       const d = decide(s, command, T0);
-      expect(d.next, reason).toMatchObject({ state: "failed", failReason: reason, endReason: null, runner: { state: "destroyed" } });
+      // `desiredState` is pinned too (lane-A minors, Task 2C re-review 3 m3): without
+      // it, reverting provisioning/lost's failed row to `desiredState: "live"` left
+      // this row green (mutant G1p), and the heartbeat reply is the one reader — a
+      // failed session still answering "live" tells its Machine to carry on. The three
+      // rows reach "ending" by THREE different routes: credit_refused sets it
+      // explicitly, and the two timeouts inherit it from the lost runner's own
+      // `completed` signal through the teardown step.
+      expect(d.next, reason).toMatchObject({ state: "failed", failReason: reason, endReason: null, desiredState: "ending", runner: { state: "destroyed" } });
       expect(d.events, reason).toEqual([{ type: "RunnerChanged", from: "lost", to: "destroyed", trigger: "session_stop" }, { type: "SessionEnded", reason }]);
       expect(d.effects, reason).toEqual([FORCE]);
     }

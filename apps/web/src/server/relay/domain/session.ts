@@ -179,9 +179,14 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
       if (s.state !== "live" && s.state !== "warming" && s.state !== "provisioning") return { next, events, effects };
       return { next: { ...next, state: "ending", desiredState: "ending", endReason: step.signal.endReason, endingAt: now }, events: [...events, { type: "SessionEnding", endReason: step.signal.endReason }], effects };
     case "completed": {
-      // Fix round 5 (re-review 2 G1): provisioning too. Its only `completed` source without an `ending` first is a LOST
-      // runner's session_stop (F16 makes provisioning/lost reachable); dropping the signal swallowed the organiser's stop,
-      // and the session later failed provision_timeout. Only `requested` still ignores it: no planned caller creates before `provision`.
+      // Fix round 5 (re-review 2 G1): provisioning too. Under the EVALUATE-DRIVEN expiries that are Task 10's only
+      // source, its one `completed` source without an `ending` first is a LOST runner's session_stop (F16 makes
+      // provisioning/lost reachable); dropping the signal swallowed the organiser's stop, and the session later failed
+      // provision_timeout. Stated against the callers, not the table (lane-A minors, Task 2C re-review 3 m2 — this said
+      // "the only source" flatly and the TABLE has two more): `creating × grace_expired` completes with or without a
+      // mark, and `lost × deadline` also emits completed. Neither is reachable from a planned caller, because
+      // `expiry.ts` gates them; a task that ever hands `decide` a RAW grace_expired or deadline re-opens both.
+      // Only `requested` still ignores the signal: no planned caller creates before `provision`.
       if (s.state !== "ending" && s.state !== "live" && s.state !== "warming" && s.state !== "provisioning") return { next, events, effects };
       // F17: when the completion IS the ending, the signal carries the reason; P1-F-a's mid-create teardown and
       // F-A's grace-forced destroy leave it out and the session keeps the one its `ending` step already stored.
@@ -209,10 +214,13 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
       return { next: { ...next, runnerRetries: next.runner.attempt, beatWindowAt: now }, events: [...events, { type: "RunnerRetried", attempt: next.runner.attempt + 1 }], effects: [...effects, { type: "retry_runner" }] };
     }
     case "failed": {
-      // Fix round 5 (re-review 2 I1): the retry arm's rule, for the LAST attempt. A session already ending chose its end when
+      // Fix round 5 (re-review 2 I1): the retry arm's rule, typically for the LAST attempt. A session already ending chose its end when
       // the organiser stopped or the deadline hit; a Machine confirmed gone after that (a late create_ok's lost runner,
       // destroyed on the final attempt) is the teardown finishing, not a crash — complete with the session's own reason
       // and the replay fill, never failed(machine_crash).
+      // "the LAST attempt" is the reachable case, not the arm's condition (lane-A minors, Task 2C re-review 3 m2):
+      // this also completes an ending session on a NON-RETRYABLE `create_failed` at attempt 1. That is unreachable
+      // today and is still what the code does, so it is written down rather than implied.
       if (s.state === "ending" || s.desiredState === "ending") {
         const c = complete(next, now);
         return { next: c.next, events: [...events, ...c.events], effects: [...effects, ...c.effects] };

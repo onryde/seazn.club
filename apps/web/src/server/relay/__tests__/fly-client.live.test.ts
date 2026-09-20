@@ -16,6 +16,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom } from "../fly-client";
+// Lane-A minors, Task 5A review m9: the Machine name was spelled `relay-${session}-r${attempt}`
+// here as well as in `domain/runner.ts`, and a second spelling of an idempotency key is a
+// second key — this file's whole point is that a 409 on the SAME name is what makes a create
+// idempotent. A test file may import the domain; one authority per fact.
+import { machineNameFor } from "../domain/runner";
 
 /** The token from the environment, or from `apps/web/.env.local`, which is
  *  where it lands. Reading it HERE is what lets the run command below stay free
@@ -33,8 +38,20 @@ function flyToken(): string | undefined {
   }
 }
 
-const TOKEN = flyToken();
-const ENABLED = !!TOKEN && process.env.RELAY_LIVE_FLY === "1";
+// Lane-A minors, Task 5A review m8: the flag is read FIRST and the token only
+// behind it. `flyToken()` used to run at module scope on every run of this file —
+// including the ~40 ordinary unit runs a day that never set RELAY_LIVE_FLY — pulling
+// a live Fly credential off disk into the worker's heap for no reason. The suite's
+// standing convention for an outbound credential is two gates (vitest.config.ts
+// deletes POSTHOG / RESEND / ANTHROPIC, and STRIPE except under BILLING_LIVE=1);
+// this leg had one. `FLY_API_TOKEN` is not added to that delete list, deliberately:
+// the delete list drops a value `.env.local` supplied, and `flyToken()` reads that
+// FILE directly, so the list could not stop it anyway. The two live legs (this one
+// and runner-fly.live.test.ts) are the token's only readers, and BOTH now read
+// nothing unless asked to — the sibling carries the same gate for the same reason.
+const WANTS_LIVE = process.env.RELAY_LIVE_FLY === "1";
+const TOKEN = WANTS_LIVE ? flyToken() : undefined;
+const ENABLED = !!TOKEN && WANTS_LIVE;
 if (!ENABLED) console.log("SKIP  fly-client live lifecycle test (needs FLY_API_TOKEN in apps/web/.env.local or the environment and RELAY_LIVE_FLY=1; the app FLY_RELAY_APP in org seazn-club must exist)");
 
 const image = "registry-1.docker.io/library/alpine:3.20";
@@ -83,7 +100,7 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
   }, 300_000);
 
   const create = (session: string, attempt: number, cmd: string[]) => client.createMachine({
-    name: `relay-${session}-r${attempt}`, region,
+    name: machineNameFor(session, attempt), region,
     config: { image, guest, auto_destroy: true, restart: { policy: "no" }, env: { RELAY_LIVE_TEST: "1" }, metadata: { seazn_session: session }, ...({ init: { cmd } } as object) },
   });
 
@@ -96,7 +113,7 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
     expect((await client.listMachines({ metadata: { seazn_session: session } })).map((x) => x.id)).toEqual([m.id]);
     const started = await client.waitMachine(m.id, "started", 60);
     note(`wait started → ${JSON.stringify(started)} (create→started ${Date.now() - t0} ms)`);
-    const again = await client.createMachine({ name: `relay-${session}-r1`, region, config: { image, guest, auto_destroy: true, restart: { policy: "no" }, env: {}, metadata: { seazn_session: session } } }).catch((e: unknown) => e);
+    const again = await client.createMachine({ name: machineNameFor(session, 1), region, config: { image, guest, auto_destroy: true, restart: { policy: "no" }, env: {}, metadata: { seazn_session: session } } }).catch((e: unknown) => e);
     note(`second create, same name+session → ${again instanceof Error ? `error: ${again.message}` : `id ${(again as { id: string }).id}`}`);
     if (!(again instanceof Error)) { created.push((again as { id: string }).id); }
     // review I2: this was guarded by `if (!(again instanceof Error))`, and the measured answer
@@ -130,7 +147,7 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
     expect(["destroyed", "destroying"]).toContain(afterDestroy);
     alive.splice(alive.indexOf(m.id), 1);
     // name reuse after destroy: record, do not assert
-    const reuse = await client.createMachine({ name: `relay-${session}-r1`, region, config: { image, guest, auto_destroy: true, restart: { policy: "no" }, env: {}, metadata: { seazn_session: `${session}-reuse` } } }).catch((e: unknown) => e);
+    const reuse = await client.createMachine({ name: machineNameFor(session, 1), region, config: { image, guest, auto_destroy: true, restart: { policy: "no" }, env: {}, metadata: { seazn_session: `${session}-reuse` } } }).catch((e: unknown) => e);
     note(`name reuse after destroy → ${reuse instanceof Error ? `refused: ${reuse.message}` : "allowed"}`);
     if (!(reuse instanceof Error)) { created.push((reuse as { id: string }).id); await client.destroyMachine((reuse as { id: string }).id); }
   }, 300_000);
@@ -177,7 +194,7 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
     // POST client-side AFTER the request is on the wire (live creates take 1.1-2.5 s, so 600 ms
     // lands mid-flight), then look immediately and again after a settle.
     const session = `${tag}-d`;
-    const name = `relay-${session}-r1`;
+    const name = machineNameFor(session, 1);
     const hairTrigger = new FlyClient({ token: TOKEN!, app, requestTimeoutMs: 600, maxAttempts: 1, deadlineMs: 5_000, lookupSettleMs: 1 });
     const outcome = await hairTrigger.createMachine({
       name, region,

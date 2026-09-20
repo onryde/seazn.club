@@ -120,11 +120,32 @@ describe("FlyClient — retries, timeouts, deadline", () => {
     await expect(r.client.createMachine(CREATE)).rejects.toMatchObject({ status: 400, retryable: false, attempts: 1 });
     expect(r.calls).toHaveLength(1);
   });
-  it("a network error is retried; 502/503/504 are retryable; 401/403/404/409/422 are not", () => {
+  it("isRetryable: network and timeout are retryable; 502/503/504 are; 401/403/404/409/422 are not", () => {
     expect(isRetryable(null, "network")).toBe(true);
     expect(isRetryable(null, "timeout")).toBe(true);
     for (const s of [429, 502, 503, 504]) expect(isRetryable(s, "http"), String(s)).toBe(true);
     for (const s of [400, 401, 403, 404, 409, 422, 500]) expect(isRetryable(s, "http"), String(s)).toBe(false);
+  });
+
+  // Lane-A minors, Task 5A review m1: the rig has carried a `networkError` capability
+  // that no test ever used, and the `it` above was TITLED "a network error is retried"
+  // while only calling `isRetryable` directly. So collapsing `isAbort ? "timeout" :
+  // "network"` to a constant survived the whole file. It is telemetry only — both
+  // classify retryable — but `retryReason` is how Task 17 tells a Fly outage apart
+  // from our own request budget firing, and the two must not read the same.
+  it("a network error DRIVEN through the loop is retried, and both the error and its row say network — our own AbortSignal firing says timeout", async () => {
+    const net = new FakeRecorder();
+    const r = rig([{ status: 0, networkError: true }, { status: 200, body: [MACHINE] }], { recorder: net });
+    await r.client.listMachines();
+    expect(r.calls).toHaveLength(2);                                   // not vacuous: it RETRIED past the network error
+    expect(net.calls[0]).toMatchObject({ status: null, errorCode: "network", retryReason: "network" });
+
+    const timeout = new FakeRecorder();
+    const r2 = rig([{ status: 200, body: [MACHINE], delayMs: 5000 }, { status: 200, body: [MACHINE] }], { recorder: timeout });
+    await r2.client.listMachines();
+    expect(timeout.calls[0]).toMatchObject({ status: null, errorCode: "timeout", retryReason: "timeout" });
+    // the pair is the assertion: a constant on either side makes these two identical
+    expect(net.calls[0]!.errorCode).not.toBe(timeout.calls[0]!.errorCode);
   });
   it("a create that TIMES OUT is looked up before any retry: the machine exists → returned, no second POST", async () => {
     const r = rig([{ status: 200, body: MACHINE, delayMs: 5000 }, { status: 200, body: [MACHINE] }]);
@@ -135,7 +156,13 @@ describe("FlyClient — retries, timeouts, deadline", () => {
   it("the deadline is honoured: attempts stop when the next wait would end past it, with code deadline", async () => {
     const r = rig(Array.from({ length: 10 }, () => ({ status: 503, body: { error: "down" } })), { deadlineMs: 1500, maxAttempts: 10 });
     await expect(r.client.listMachines()).rejects.toMatchObject({ code: "deadline", retryable: true });
-    expect(r.calls.length).toBeLessThan(10);
+    // Lane-A minors, Task 5A review m5: `toBeLessThan(10)` had six of slack over the
+    // real count, so the deadline could stop the ladder one attempt early or late and
+    // this stayed green. Derived from the ladder rather than typed: attempt 1 sleeps
+    // 250 ms (full jitter at random 0.5 × 500), attempt 2 sleeps 500 — 750 ms elapsed
+    // — and the third attempt's 1000 ms wait would end past deadlineMs 1500, so the
+    // loop stops with exactly three calls made.
+    expect(r.calls).toHaveLength(3);
   });
   it("maxAttempts caps the retries even with deadline to spare", async () => {
     const r = rig(Array.from({ length: 10 }, () => ({ status: 503, body: { error: "down" } })), { deadlineMs: 1_000_000, maxAttempts: 3 });
@@ -351,6 +378,33 @@ describe("FlyClient — boundary parsing, request id, redaction", () => {
     const r2 = rig([{ status: 200, body: "not json {" }]);
     await expect(r2.client.listMachines()).rejects.toMatchObject({ code: "malformed" });
   });
+
+  // Lane-A minors, Task 5A review m2: the attempt row used to be written ABOVE the
+  // parse, so a 2xx whose body we could not read left a row saying the call
+  // SUCCEEDED (status 200, errorCode null) and then threw `malformed`. The ledger is
+  // what Task 17 reconciles against the provider, and `malformed` is one of the three
+  // codes `isUnestablishedCreate` treats as "the create's outcome was never
+  // established" — so a row calling it a success is the ledger disagreeing with the
+  // money decision taken off the same event.
+  it("a 2xx body we could not parse is recorded as an ATTEMPT THAT FAILED, not as a success (the row carries errorCode malformed)", async () => {
+    const rec = new FakeRecorder();
+    const r = rig([{ status: 200, body: { nope: true } }], { recorder: rec });
+    await expect(r.client.createMachine(CREATE)).rejects.toMatchObject({ code: "malformed" });
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0]).toMatchObject({ operation: "createMachine", status: 200, errorCode: "malformed", retryReason: null });
+    // The positive twin, or the assertion passes just as happily if every row said
+    // "malformed": a 2xx we COULD parse still records the clean success row.
+    const ok = new FakeRecorder();
+    const r2 = rig([{ status: 200, body: MACHINE }], { recorder: ok });
+    await r2.client.createMachine(CREATE);
+    expect(ok.calls[0]).toMatchObject({ status: 200, errorCode: null });
+    // …and a body-less 2xx (no schema — destroy/stop) keeps its clean row: the parse
+    // never runs there, so `malformed` must not leak onto it.
+    const noSchema = new FakeRecorder();
+    const r3 = rig([{ status: 200 }], { recorder: noSchema });
+    await r3.client.destroyMachine("m_1");
+    expect(noSchema.calls[0]).toMatchObject({ operation: "destroyMachine", status: 200, errorCode: null });
+  });
   it("carries fly-request-id from the response header when present, null otherwise", async () => {
     const r = rig([{ status: 500, body: { error: "x" }, headers: { "fly-request-id": "01HREQ" } }, { status: 500, body: { error: "x" } }]);
     await expect(r.client.getMachine("m")).rejects.toMatchObject({ requestId: "01HREQ" });
@@ -410,5 +464,17 @@ describe("FlyClient — the provider-call ledger (ruling 13)", () => {
     await expect(t.client.getMachine("m_2")).rejects.toMatchObject({ code: "timeout" });
     await new Promise((res) => setImmediate(res));
     expect(rec.calls.at(-1)).toMatchObject({ operation: "getMachine", status: null, errorCode: "timeout", retryReason: "timeout", attempt: 1 });
+  });
+
+  // Lane-A minors, Task 5A review m3: an explicit `recorder: undefined` really does
+  // overwrite the constructor's `NOOP_RECORDER` default through the `...opts` spread —
+  // every optional-parameter rig in this wave passes exactly that — so the branch IS
+  // taken. What the review asked for, a killer, does not exist and cannot: see the
+  // comment at `record()`. This `it` pins the half that IS observable, that a client
+  // built with no recorder still completes its calls.
+  it("a client constructed with an explicit `recorder: undefined` still completes its calls (the record fallback absorbs it)", async () => {
+    const r = rig([{ status: 200, body: MACHINE }], { recorder: undefined });
+    await expect(r.client.getMachine("m_1")).resolves.toMatchObject({ id: "m_1" });
+    await new Promise((res) => setImmediate(res));   // the record is fire-and-forget; let it run
   });
 });

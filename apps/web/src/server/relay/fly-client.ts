@@ -11,8 +11,15 @@
 //  * Bounded retries with exponential backoff + FULL jitter, only on
 //    retryable failures: network error, timeout, 429 (Retry-After honoured
 //    when present), 502/503/504. Never another 4xx. Rate limits are
-//    documented as 1 req/s per action per machine (burst 3; Get Machine 5/10)
-//    — the backoff floor keeps a retry storm under that.
+//    documented as 1 req/s per action per machine (burst 3; Get Machine 5/10).
+//    There is NO backoff FLOOR (lane-A minors, Task 5A review m4 — this line
+//    claimed one and there has never been one): the jitter is FULL, so a wait's
+//    minimum is 0 ms and a 429 carrying no `Retry-After` can be retried
+//    immediately. What actually bounds a storm is `maxAttempts` (4) plus the
+//    per-operation `deadlineMs`, and, where Fly sends one, `Retry-After`
+//    verbatim. Full jitter is the deliberate choice — it is what stops several
+//    sessions retrying in lockstep — so the honest statement is "bounded in
+//    COUNT, not spaced by a floor". A floor would need its own measurement.
 //  * Create is made idempotent HERE: a deterministic `name` (unique per app)
 //    + `metadata.seazn_session`; after ANY ambiguous failure (timeout,
 //    network, 5xx) the client lists by that metadata and matches the NAME before
@@ -69,7 +76,14 @@ export type Machine = z.infer<typeof MachineSchema>;
 /** What `GET /machines/{id}/wait` actually answers — the spec's
  *  `WaitMachineResponse { event_id, ok, state, version }`, confirmed live on
  *  2026-09-20 as `{"ok":true,"state":"destroyed"}`. Every field is optional
- *  because the spec marks none of them required. */
+ *  because the spec marks none of them required.
+ *  CONSEQUENCE, stated rather than discovered (lane-A minors, Task 5A review m6):
+ *  all-optional plus `.passthrough()` means this schema can refuse NO JSON object,
+ *  so `waitMachine` has no reachable `malformed` case and `{}` parses with `ok`
+ *  undefined. That is deliberate — requiring a field the spec does not mark
+ *  required would turn a successful wait into a client-side failure — and it is why
+ *  no caller may branch on `ok` alone. Anyone tightening this owes a live
+ *  measurement of which fields Fly really always sends, not a reading of the spec. */
 export const WaitResultSchema = z.object({ ok: z.boolean().optional(), state: z.string().optional(), event_id: z.string().optional(), version: z.string().optional() }).passthrough();
 export type WaitResult = z.infer<typeof WaitResultSchema>;
 
@@ -155,8 +169,15 @@ export class FlyClient {
       // Ruling 13: the recorder is bound HERE, which is what makes
       // `this.o.recorder` satisfy the `Required<…>` above. `record()` keeps its
       // `?? NOOP_RECORDER` all the same — the `...opts` spread below overwrites
-      // this default when a caller passes an explicit `recorder: undefined`, so
-      // that fallback is live, not dead code.
+      // this default when a caller passes an explicit `recorder: undefined`, which
+      // every optional-parameter rig in this wave does, so the branch really is
+      // taken. Lane-A minors, Task 5A review m3, stated precisely because the old
+      // wording ("live, not dead code") invited a test that cannot exist: taking
+      // the branch has NO observable consequence. `NOOP_RECORDER.record` is empty,
+      // and without the fallback the `undefined.record` TypeError is absorbed by
+      // `record()`'s own `.catch(() => undefined)` — same outcome, no row either
+      // way. It is defence for the day that `.catch` narrows, not a live path,
+      // and no mutant can kill it.
       recorder: NOOP_RECORDER,
       ...opts,
     };
@@ -178,12 +199,16 @@ export class FlyClient {
    *  pathTemplate turns every id into `{id}` (and a residual machine id into
    *  `{id}` by its long-hex rule). retryReason is what the retry loop will act
    *  on — `status_429`, `status_5xx`, `timeout`, `network` — or null. */
-  private record(meta: CallMeta, method: string, url: string, r: { status: number | null; latencyMs: number; attempt: number; requestId: string | null; retryAfterSeconds: number | null; errorCode: string | null; retryable: boolean }): void {
+  private record(meta: CallMeta, method: ProviderCallRecord["method"], url: string, r: { status: number | null; latencyMs: number; attempt: number; requestId: string | null; retryAfterSeconds: number | null; errorCode: string | null; retryable: boolean }): void {
     const retryReason = !r.retryable ? null : r.errorCode === "timeout" || r.errorCode === "network" ? r.errorCode : r.status === 429 ? "status_429" : r.status !== null && r.status >= 500 ? "status_5xx" : null;
     void Promise.resolve()
       .then(() => (this.o.recorder ?? NOOP_RECORDER).record({
         provider: "fly", operation: meta.operation, subjectId: meta.subjectId ?? null, sessionId: meta.sessionId ?? null,
-        method: method as ProviderCallRecord["method"], url, ids: [this.o.app, ...meta.ids],
+        // Lane-A minors, Task 5A review m7: `method` is now typed as the record's own
+        // union all the way down from `once`, so there is no cast here. Every call
+        // site passes a literal, so a method the ledger has no column for is a tsc
+        // error rather than a runtime value a cast waved through.
+        method, url, ids: [this.o.app, ...meta.ids],
         status: r.status, latencyMs: r.latencyMs, attempt: r.attempt, retryReason, retryAfterSeconds: r.retryAfterSeconds, requestId: r.requestId, errorCode: r.errorCode,
       }))
       .catch(() => undefined);
@@ -191,7 +216,7 @@ export class FlyClient {
 
   /** A request that never produced a body: classified for the retry loop and
    *  recorded as an attempt. An AbortError is OUR `requestTimeoutMs` firing. */
-  private transportFailure(e: unknown, meta: CallMeta, method: string, path: string, url: string, started: number, attempts: number): FlyApiError {
+  private transportFailure(e: unknown, meta: CallMeta, method: ProviderCallRecord["method"], path: string, url: string, started: number, attempts: number): FlyApiError {
     const isAbort = (e as { name?: string })?.name === "AbortError";
     const code = isAbort ? "timeout" : "network";
     this.record(meta, method, url, { status: null, latencyMs: this.o.clock() - started, attempt: attempts, requestId: null, retryAfterSeconds: null, errorCode: code, retryable: true });
@@ -199,7 +224,7 @@ export class FlyClient {
   }
 
   /** ONE attempt. Returns the parsed body or throws a FlyApiError classified for the retry loop. */
-  private async once<T>(method: string, path: string, body: unknown, schema: z.ZodType<T> | null, attempts: number, meta: CallMeta): Promise<{ status: number; data: T | null; requestId: string | null }> {
+  private async once<T>(method: ProviderCallRecord["method"], path: string, body: unknown, schema: z.ZodType<T> | null, attempts: number, meta: CallMeta): Promise<{ status: number; data: T | null; requestId: string | null }> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), this.o.requestTimeoutMs);
     const url = `${FLY_MACHINES_BASE}/apps/${encodeURIComponent(this.o.app)}${path}`;
@@ -244,9 +269,16 @@ export class FlyClient {
         this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds, errorCode: `http_${res.status}`, retryable });
         throw new FlyApiError(`fly ${method} ${path}: HTTP ${res.status} ${this.redFor(body, detail)}`, "http", res.status, retryable, requestId, attempts, retryAfterSeconds);
       }
-      this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds: null, errorCode: null, retryable: false });
-      if (!schema) return { status: res.status, data: null, requestId };
-      const parsed = schema.safeParse(safeJson(text));
+      // The parse runs BEFORE the row is written (lane-A minors, Task 5A review m2).
+      // Recorded above it, a 2xx whose body we could not read left a row saying the
+      // call SUCCEEDED — status 200, errorCode null — and then threw `malformed`.
+      // `malformed` is one of the three codes `isUnestablishedCreate` reads as "the
+      // create's outcome was never established", so that row had the ledger
+      // contradicting the money decision taken off the same event. `latencyMs` is
+      // still the one measured at the end of the body read: parsing is ours, not Fly's.
+      const parsed = schema ? schema.safeParse(safeJson(text)) : null;
+      this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds: null, errorCode: parsed !== null && !parsed.success ? "malformed" : null, retryable: false });
+      if (parsed === null) return { status: res.status, data: null, requestId };
       if (!parsed.success) throw new FlyApiError(`fly ${method} ${path}: malformed response (${this.redFor(body, parsed.error.issues[0]?.message ?? "unparseable")})`, "malformed", res.status, false, requestId, attempts);
       return { status: res.status, data: parsed.data, requestId };
     } finally {
@@ -302,6 +334,16 @@ export class FlyClient {
         // absence nobody established. `ending` normally makes the lookup confirm before either is
         // reached; it can still be false here when the LOOKUP ITSELF is what consumed the budget,
         // and that race is exactly what this refuses to hand the domain as proof of absence.
+        // THE INVARIANT, named so a "simplification" cannot perform S1 invisibly (lane-A
+        // minors, Task 5A re-review 2): `absenceConfirmed` is ALREADY true on every path
+        // that reaches this line with a lookup behind it — `ending` is true here by
+        // construction, so the `if (onAmbiguous)` block above has run, and its only
+        // fall-through arm assigns `outcome.confirmed`. Replacing the argument with
+        // `true` therefore SURVIVES every test, and it is not a defect today. It is kept
+        // because the equivalence is TEXTUAL — two expressions twenty-odd lines apart —
+        // and the moment either moves, passing `true` re-opens N-C1: a create reporting
+        // `retryable: true` on an absence nobody established, which is the domain's
+        // licence to start a second Machine. Do not inline it.
         if (attempt >= this.o.maxAttempts) throw withAttempts(err, attempt, absenceConfirmed);
         if (this.o.clock() - started + wait > this.o.deadlineMs) {
           const unproven = absenceConfirmed ? "" : " — and the Machine's absence was never confirmed, so this is not a licence to create another";

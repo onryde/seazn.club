@@ -21,7 +21,8 @@ import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "
 import { ENDING_TIMEOUT_SECONDS, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { CREATE_OUTCOME_UNKNOWN, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, fromFlyState, isUnestablishedCreate } from "../runner-fly";
 import { OBSERVED_STATES, machineNameFor } from "../domain/runner";
-import { relayDrivers, setRelayDriversForTest } from "../drivers";
+import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
+import { log } from "@/server/logger";
 import { FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
 import { CloudflareIngest } from "../ingest-cf";
 import { pathTemplate } from "../sanitise";
@@ -40,9 +41,12 @@ const telemetry = vi.hoisted(() => ({
 vi.mock("../telemetry", () => ({ recordProviderCall: telemetry.recordProviderCall }));
 
 /** `process.env.X = saved` stores the STRING "undefined" when `saved` is
- *  undefined, which leaves a truthy bogus value behind for every later file in
- *  the same vitest process — and a "refuses to construct without env" guard then
- *  stops refusing. Restore through this, never by assignment. */
+ *  undefined, which leaves a truthy bogus value behind for every later test in
+ *  THIS FILE — and a "refuses to construct without env" guard then stops refusing.
+ *  Not the whole process: `apps/web/vitest.config.ts` sets `isolate: true` with
+ *  `pool: "threads"`, so each file has its own worker and its own `process.env`
+ *  (lane-A minors, Task 4 round-0 minor 4, corrected at both sites that said it).
+ *  Restore through this, never by assignment. */
 function restoreEnv(entries: Record<string, string | undefined>): void {
   for (const [k, v] of Object.entries(entries)) {
     if (v === undefined) delete process.env[k];
@@ -84,6 +88,15 @@ describe("the provisioning budget the COMPOSED create + wait path needs (carry T
     // The positive twin, and the reason the constant moved: the old value is BELOW
     // the composed cost. Without this line the gate passes just as happily at 120.
     expect(composedWorstMs).toBeGreaterThan(PROVISION_BEFORE_COMPOSED_SECONDS * 1000);
+    // Lane-A minors, Task 5 review M2: every clause above is a LOWER bound, so the
+    // gate was one-sided — `PROVISION_TIMEOUT_SECONDS = 3600` passed all three, and
+    // too loose costs money (a stranded `provisioning` session bills its Machine
+    // until the sweep reaps it). The upper bound is config.ts's OWN stated rule —
+    // "worst case + one requestTimeoutMs of slack, rounded up to the next round ten"
+    // — recomputed here rather than typed, so moving a client constant moves both
+    // ends of the gate together (failure class 20 / rule 19).
+    const roundedUpToTenSeconds = Math.ceil((composedWorstMs + d.requestTimeoutMs) / 10_000) * 10_000;
+    expect(PROVISION_TIMEOUT_SECONDS * 1000).toBeLessThanOrEqual(roundedUpToTenSeconds);
   });
 
   it("a wait whose long poll outlasts the client's own per-request budget is not a wait at all: it reads as a timeout (which is why the sizing is owed here)", async () => {
@@ -187,6 +200,15 @@ describe("FlyRunner", () => {
     expect(fromFlyState("hibernating")).toBe("unknown");
     expect(fromFlyState(null)).toBe("unknown");
     expect(fromFlyState(undefined)).not.toBe("running");
+    // Lane-A minors, Task 5 review M1: the map is an OBJECT, so a bare `MAP[state]`
+    // also answers for every key `Object.prototype` carries — `fromFlyState("constructor")`
+    // returned the `Object` FUNCTION, and `"__proto__"` returned the prototype itself.
+    // Neither is an ObservedRunnerState, so `observe()` handed the domain a value its
+    // own declared return type forbids and tsc could not see it. Own-property only.
+    for (const k of ["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString"]) {
+      expect(fromFlyState(k), k).toBe("unknown");
+      expect(OBSERVED_STATES, k).toContain(fromFlyState(k));   // the declared return type, checked as a VALUE
+    }
   });
 
   it("stop POSTs the SIGINT stop with the grace; observe maps GET + events to { state, exit }; an absent Machine observes as destroyed", async () => {
@@ -288,6 +310,22 @@ describe("FlyRunner", () => {
     expect(err).toBeInstanceOf(FlyApiError);
     expect(err!.status).toBe(409);
     expect(err!.retryable).toBe(false);
+  });
+
+  // Lane-A minors, Task 5 review M7: the named handle answering 404 is a DIFFERENT
+  // branch from it throwing — `getMachine` maps 404 to `null` inside the client, so
+  // no `.catch` runs and the `m &&` test is what falls the adopt through to the list.
+  // The shipped behaviour was already right; nothing visited it. This is Fly's own
+  // list-consistency window seen from the other side: the refusal names an id the
+  // GET cannot see yet, and the session lookup is the handle that still answers.
+  it("T5-c: the refusal names an id that GETs 404 — the adopt falls through to the session lookup rather than refusing", async () => {
+    const s = scripted((url, init) => {
+      if (init.method === "POST") return { status: 409, body: { error: `already_exists: unique machine name violation, machine ID m_notyet already exists with name "${NAME}"` } };
+      if (url.includes("/machines/m_notyet")) return { status: 404, body: { error: "machine not found" } };
+      return { status: 200, body: [{ id: "m_notyet", name: NAME, state: "started" }] };
+    });
+    expect(await new FlyRunner({ client: s.client, image: "img" }).create(SPEC)).toEqual({ runnerId: "m_notyet" });
+    expect(s.calls.map((c) => c.init.method)).toEqual(["POST", "GET", "GET"]);   // create, the blind named GET, then the list
   });
 
   it("T5-c/I1: the session-lookup handle FAILING must not turn a 409 into a retryable either — a SEPARATE guard, defeated on its own", async () => {
@@ -580,6 +618,48 @@ describe("relayDrivers()", () => {
       vi.unstubAllGlobals();
       setRelayDriversForTest(null);
       restoreEnv(keep);
+    }
+  });
+
+  // Lane-A minors, Task 5 review M5 + M6. Both are about `dbRecorder` ITSELF rather
+  // than about which adapter it is bound into, and neither can be witnessed through
+  // an adapter: the port's best-effort contract makes every adapter swallow whatever
+  // a recorder does, so a TypeError and a clean return look identical from there.
+  // Driven through the exported recorder instead. LAST in this describe on purpose —
+  // `warned` is a module-scope latch, so a test that makes the insert fail can only
+  // count "exactly once" while nothing before it has already tripped the latch.
+  it("dbRecorder: a SYNCHRONOUS recordProviderCall still yields a promise (M6), and a failing insert warns exactly ONCE per process (M5)", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const CALL: ProviderCallRecord = {
+      provider: "fly", operation: "listMachines", subjectId: null, sessionId: null,
+      method: "GET", url: `${FLY_MACHINES_BASE}/apps/seazn-relay/machines`, ids: ["seazn-relay"],
+      status: 200, latencyMs: 1, attempt: 1,
+    };
+    try {
+      // M6 (deviation 5 / false premise 7): the port ALLOWS a synchronous recorder,
+      // and `recordProviderCall`'s declared `Promise<void>` is the only thing that
+      // made the wrap look redundant. Drop `Promise.resolve(...)` and `.catch` runs
+      // on `undefined` — a TypeError thrown straight out of a best-effort recorder,
+      // i.e. the one thing the port says can never happen.
+      telemetry.recordProviderCall.mockImplementation(() => undefined as unknown as Promise<void>);
+      const pending = dbRecorder.record(CALL);
+      expect(pending).toBeInstanceOf(Promise);
+      await pending;
+      expect(warn).not.toHaveBeenCalled();   // a synchronous recorder is not an error path
+
+      // M5: the once-per-process guard, which `if (true)` survived. Two failures, ONE line.
+      telemetry.recordProviderCall.mockImplementation(() => Promise.reject(new Error("insert refused")));
+      await dbRecorder.record(CALL);
+      await dbRecorder.record(CALL);
+      expect(warn).toHaveBeenCalledTimes(1);
+      // The latch is PERMANENT by design (a degraded capture is one line, not a loop),
+      // so a third failure is still silent — pinned so a future "warn again after N"
+      // is a deliberate change rather than an accident.
+      await dbRecorder.record(CALL);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+      telemetry.recordProviderCall.mockImplementation(async () => {});
     }
   });
 });

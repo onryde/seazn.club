@@ -1,7 +1,21 @@
 // server/relay/config.ts — the ONE authority for every relay number (§9a "one
 // authority per fact"). Nothing under server/relay, server/usecases/stream-*,
-// or the panel types a relay constant of its own; a change here moves every
+// or the panel types a relay POLICY number of its own; a change here moves every
 // test with it. Each value names what measured it.
+//
+// Lane-A minors (Task 4 re-review 1, ruled once here for both): "policy number"
+// is the boundary, and it is narrower than "constant". A number that expresses
+// what the PRODUCT promises — a timeout, a retention, a guest size, a window —
+// belongs here, because two spellings of it are two promises. A number that is
+// one adapter's own protocol or harness detail, meaningful only inside that file
+// and never compared against anything here, stays with its adapter:
+//   * `ingest-cf.ts`'s `LIST_VIDEOS_PAGE_LIMIT` — a page size for ONE Cloudflare
+//     endpoint, whose real ceiling is still an open Task 17 live-watch item;
+//   * `fakes.ts`'s `FAKE_CONNECT_AFTER_MS_DEFAULT` — a test-double's own default,
+//     which no production path reads.
+// Neither is a promise this file could be the authority for, so moving them here
+// would buy nothing and widen this file's blast radius. Recorded rather than
+// changed; the header's claim is narrowed to match what it actually governs.
 
 /** Cloudflare `recording.timeoutSeconds` — a RECORDING setting: it governs when
  *  a disconnect starts a NEW recorded video, and R0 §4a measured that it ALSO
@@ -72,7 +86,16 @@ export const WARMING_TIMEOUT_MINUTES = 10;
  *  The 429 `Retry-After` path cannot extend that: the wait is honoured verbatim, but the same pre-sleep gate
  *  refuses any wait ending past `deadlineMs` and raises `code: "deadline"` instead of sleeping.
  *  MEASURED live 2026-09-20, against the real Fly API in lhr on a shared-cpu-1x: create returned in
- *  1,123 ms and create→`started` was 2,846 ms — three orders below the budget this bounds. */
+ *  1,123 ms and create→`started` was 2,846 ms — three orders below the budget this bounds.
+ *  WHICH CLOCK (lane-A minors, Task 5 review M9 — say it, because a future tightening would otherwise be
+ *  reasoned from the wrong 180): `expiry.ts` measures `provision_timeout` from `session.createdAt`, NOT
+ *  from the instant provisioning began. `REQUESTED_TIMEOUT_SECONDS` runs off that SAME instant, so a
+ *  session admitted late starts its create with up to that many seconds already spent — the window really
+ *  available to create + wait is `180 − (time spent in requested)`, i.e. as little as 120 s, which the
+ *  164.5 s worst case above does NOT fit. It cannot bite today: the measured composed cost is ~4 s and the
+ *  worst ever observed is 87 s, both far inside 120. Whoever narrows either constant, or re-anchors
+ *  `provision_timeout` to a provisioning-start timestamp, owes this arithmetic again — this is a recorded
+ *  premise, not a closed one. */
 export const PROVISION_TIMEOUT_SECONDS = 180;
 /** F18, the same rule at the other end: a session that was inserted and never admitted. Nothing has been
  *  asked of any provider yet, so the exit is a plain failure and the window only has to outlast the
