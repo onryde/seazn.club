@@ -72,6 +72,42 @@ describe("completion predicates (spec 05 §1)", () => {
     expect(isTableStageComplete({ ...swiss, rounds: 3 }, fixtures)).toBe(false);
   });
 
+  it("a one-sided award bye counts as a played win on the table", () => {
+    // Swiss odd-field sit-out: walkover + awardDelta, no [home,away] pair.
+    // Without folding awardDelta the bye winner stays P0/pts=0 while pairing
+    // still treats them as having scored — the Gus defect on Swiss 7.
+    const swiss: TableStage = {
+      id: "sw",
+      kind: "swiss",
+      swiss: true,
+      entrants: ["A", "B", "C"],
+      cascade: ["points", "wins", "lots"],
+      rounds: 1,
+      rngSeed: 1,
+    };
+    const fixtures: TableFixture[] = [
+      { id: "board", roundNo: 1, status: "decided", result: fb("A", "B", 1, 0) },
+      {
+        id: "bye",
+        roundNo: 1,
+        status: "walkover",
+        awardDelta: {
+          entrantId: "C",
+          played: 1,
+          won: 1,
+          drawn: 0,
+          lost: 0,
+          points: 2,
+          metrics: {},
+        },
+      },
+    ];
+    const { tables } = completeTableStage(swiss, fixtures);
+    const byId = new Map((tables.overall ?? []).map((r) => [r.entrantId, r]));
+    expect(byId.get("C")).toMatchObject({ played: 1, won: 1, points: 2 });
+    expect(byId.get("A")).toMatchObject({ played: 1, won: 1, points: 3 });
+  });
+
   it("a bracket completes when its final is decided", () => {
     const stage: BracketStage = { id: "ko", kind: "knockout" };
     const semis: BracketFixture[] = [

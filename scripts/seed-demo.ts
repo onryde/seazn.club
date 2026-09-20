@@ -15,6 +15,7 @@
 // divisions that already exist, so tweak the PLANs below and rerun.
 import { writeFileSync, readFileSync } from "node:fs";
 import { findOrCreateCompetition } from "./seed-resume.ts";
+import { completeStageIntoNext } from "./seed-progression.ts";
 import { TEMPLATES } from "./seed-demo-templates.ts";
 
 const BASE = process.env.SEED_BASE ?? "http://localhost:3000";
@@ -854,12 +855,17 @@ async function main() {
         return gen;
       })();
       let note = `${first.played}/${first.total}`;
-      // Second stage only when the first fully decided. Completing stage 1
-      // FIRST is what resolves progression (rankRange/picks) into the next
-      // stage's config.qualified — generating without it would bracket every
-      // division entrant instead of the qualifiers.
+      // Second stage only when the first fully decided. Completing stage 1 is
+      // what resolves progression (rankRange/picks) into stage 2's slots — but
+      // the slots have to EXIST first, which is why the generate leads. The old
+      // worry this comment used to carry ("generating without completing would
+      // bracket every division entrant") belonged to the retired `on_complete`
+      // mechanism; these templates are `timing: "setup"` throughout
+      // (seed-demo-templates.ts, gated by its own test), so an early generate
+      // mints TBD placeholders off the take rules and seats nobody.
+      // See seed-progression.ts for the failure this ordering fixes.
       if (stages[1] && first.played === first.total) {
-        await call(`/api/v1/stages/${stages[0].id}/complete`, "POST");
+        await completeStageIntoNext(call, stages[0].id, stages[1].id);
         const second = await playStage(stages[1].id, d.sport, d.variant, 0.6 + Math.random() * 0.4);
         note += ` + ${stages[1].kind} ${second.played}/${second.total}`;
       }

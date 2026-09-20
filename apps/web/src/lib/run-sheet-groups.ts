@@ -11,9 +11,12 @@
 //   R7 — byes are structural, never schedulable: (a) never enter the
 //         unscheduled group and never carry an action; (b) a bracket stage
 //         keeps its byes as ghost rows inside their round section; (c) a
-//         non-bracket stage's untimed bye does not appear on the sheet at
-//         all (accepted, flagged information loss — a bye is not work, and a
-//         time spine has no slot for a fixture with no time and no opponent).
+//         plain league/group untimed bye does not appear on the sheet
+//         (accepted information loss on a time spine). Swiss is the
+//         exception to (c): after Pair next the sit-out is a real award the
+//         organiser must see ("who got the bye?"), so awarded Swiss byes
+//         land in the settled-untimed block as ghost rows — still never
+//         schedulable, never actionable.
 //
 // The governing clock is the VENUE zone (`scheduleSettings.tz`) for BOTH
 // bucketing and printing — amendment 4. Never the org zone: two zones in one
@@ -144,6 +147,10 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
   const bracketStageIds = new Set(
     stages.filter((s) => BRACKET_STAGE_KINDS.has(s.kind)).map((s) => s.id),
   );
+  // Swiss sit-outs must stay visible after Pair (shell programme). Not a
+  // bracket — day-grouping unchanged — only bye *visibility* differs from
+  // league/group R7(c).
+  const swissStageIds = new Set(stages.filter((s) => s.kind === "swiss").map((s) => s.id));
   const rank = (f: RunSheetFixture) =>
     [seqOf.get(f.stage_id) ?? Number.MAX_SAFE_INTEGER, f.round_no, f.seq_in_round] as const;
   const byRank = (a: RunSheetFixture, b: RunSheetFixture) => {
@@ -162,12 +169,15 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
     // FIRST, before the scheduled_at test, or an untimed bye reaches the
     // unscheduled pile and is offered a "Set time" for a match nobody plays.
     if (isBye(f)) {
-      // (b) a bracket stage keeps its byes as ghost rows in their round; (c) a
-      // non-bracket bye leaves the sheet entirely.
+      // (b) a bracket stage keeps its byes as ghost rows in their round.
+      // Swiss: show the award in settled-untimed (never unscheduled — R7a).
+      // Other non-bracket kinds: leave the sheet (R7c).
       if (bracketStageIds.has(f.stage_id)) {
         const list = bracketed.get(f.stage_id) ?? [];
         list.push(f);
         bracketed.set(f.stage_id, list);
+      } else if (swissStageIds.has(f.stage_id)) {
+        settledUntimed.push(f);
       }
       continue;
     }

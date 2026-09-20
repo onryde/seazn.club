@@ -41,6 +41,31 @@ describe("Swiss ledger error paths", () => {
     const results: FixtureResult[] = [[delta("A", 2, 1), delta("Z", 0)]];
     expect(() => buildSwissTable(["A"], results)).toThrow(/outside the entrant set/);
   });
+
+  // The AWARDS loop's own guard, not the results loop's above. Both throw the
+  // same sentence, so `results` is deliberately EMPTY here — otherwise a
+  // results-loop throw would satisfy this test and the awards guard could be
+  // deleted with the suite still green. The entrant id is pinned in the
+  // pattern for the same reason: it names which loop raised it.
+  //
+  // A sit-out delta is how a Swiss/KO bye reaches the ledger (opponent null,
+  // unplayed), so an award naming an entrant the stage does not hold means
+  // the caller assembled a bye against a foreign roster — the Buchholz /
+  // Sonneborn-Berger virtual opponent would otherwise be computed from it.
+  it("rejects building a ledger from an AWARD outside the entrant set", () => {
+    expect(() => buildSwissTable(["A"], [], [delta("Z", 1, 1)])).toThrow(
+      /"Z" outside the entrant set/,
+    );
+  });
+
+  // The positive pair: the guard refuses a FOREIGN award, not every award.
+  // Without this, `throw` on every award would pass the case above.
+  it("accepts an award for an entrant inside the set, as an unplayed card", () => {
+    const table = buildSwissTable(["A"], [], [delta("A", 1, 1)]);
+    expect(table).toEqual([
+      { entrant: "A", score: 1, games: [{ opponent: null, result: "win", scored: 1, unplayed: true }] },
+    ]);
+  });
 });
 
 describe("directEncounter branches", () => {

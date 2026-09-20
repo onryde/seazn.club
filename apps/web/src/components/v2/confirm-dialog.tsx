@@ -27,6 +27,12 @@ interface Props {
    *  default) changes nothing — every existing caller keeps its
    *  `typedName`-only armed check byte-for-byte unchanged. */
   confirmDisabled?: boolean;
+  /** The confirm button's intent. Defaults to `danger`: every caller that
+   *  existed before the Start-tournament confirmation (design 2026-09-20)
+   *  confirms a deletion or a refusal override, and none of them move. Start
+   *  is irreversible but not destructive — it is the action the organiser came
+   *  to take — so it renders as the primary affordance the design calls for. */
+  confirmVariant?: "danger" | "primary";
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -46,6 +52,7 @@ export function ConfirmDialog({
   confirmLabel,
   typedName,
   confirmDisabled = false,
+  confirmVariant = "danger",
   busy = false,
   onConfirm,
   onCancel,
@@ -55,6 +62,9 @@ export function ConfirmDialog({
   const [typed, setTyped] = useState("");
   const [lastOpen, setLastOpen] = useState(open);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  /** The control that had focus when this opened, so focus can go home. */
+  const triggerRef = useRef<HTMLElement | null>(null);
 
   // Reset the typed challenge on every open (adjust-state-during-render — no
   // effect, no cascading re-render).
@@ -63,15 +73,61 @@ export function ConfirmDialog({
     if (open) setTyped("");
   }
 
+  // Escape, and the Tab trap. Keyed on `onCancel` as well as `open` because a
+  // caller that passes an inline arrow mints a new one every render and the
+  // handler must not close over a stale one.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") {
+        onCancel();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const items = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (items.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      const inside = active instanceof Node && panel.contains(active);
+      if (e.shiftKey && (!inside || active === first)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (!inside || active === last)) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener("keydown", onKey);
-    inputRef.current?.focus();
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onCancel]);
+
+  // Initial focus, and where focus goes when this closes. Keyed on `open`
+  // ALONE: folding it into the effect above would re-run it on every render a
+  // caller's inline `onCancel` causes, yanking focus back to the trigger and
+  // then into the panel again mid-interaction.
+  useEffect(() => {
+    if (!open) return;
+    triggerRef.current = document.activeElement as HTMLElement | null;
+    // The typed challenge when there is one, otherwise the panel itself —
+    // never the confirm button, which would arm an irreversible action on a
+    // stray Enter.
+    if (inputRef.current) inputRef.current.focus();
+    else panelRef.current?.focus();
+    return () => {
+      const back = triggerRef.current;
+      if (back?.isConnected) back.focus();
+    };
+  }, [open]);
 
   if (!open) return null;
   const armed = isConfirmArmed(typedName, typed);
@@ -87,8 +143,14 @@ export function ConfirmDialog({
         if (e.target === e.currentTarget) onCancel();
       }}
     >
-      {/* Bottom sheet under `sm` (v3/02 pattern 3). */}
-      <div className="card w-full space-y-4 rounded-t-2xl rounded-b-none p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-xl sm:max-w-md sm:rounded-2xl sm:pb-6">
+      {/* Bottom sheet under `sm` (v3/02 pattern 3). `tabIndex={-1}` makes the
+          panel programmatically focusable so opening moves focus INTO the
+          dialog without arming a button; it stays out of the tab order. */}
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="card w-full space-y-4 rounded-t-2xl rounded-b-none p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-xl outline-none sm:max-w-md sm:rounded-2xl sm:pb-6"
+      >
         <span className="sheet-handle" aria-hidden />
         <h2 className="text-base font-semibold text-slate-900">{title}</h2>
         <div className="space-y-2 text-sm text-slate-600">{children}</div>
@@ -124,7 +186,7 @@ export function ConfirmDialog({
             <button
               type="button"
               data-testid={testId ? `${testId}-confirm` : undefined}
-              className="btn btn-danger min-h-11"
+              className={`btn min-h-11 ${confirmVariant === "primary" ? "btn-primary" : "btn-danger"}`}
               onClick={onConfirm}
               disabled={busy || !armed || confirmDisabled}
             >

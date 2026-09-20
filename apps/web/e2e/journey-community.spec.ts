@@ -82,6 +82,10 @@ test.describe.serial("community lifecycle", () => {
     // poll the API for the status flip (the button label churns meanwhile).
     await page.goto(await divisionPath(page.request, divisionId));
     await page.getByRole("button", { name: "Start tournament" }).click();
+    // Start now confirms first (design 2026-09-20) — the button opens a dialog
+    // and POSTs nothing. Selected by testid, not by copy: the confirm carries
+    // the same "Start tournament" label as the trigger.
+    await page.getByTestId("start-confirm-confirm").click();
     await expect
       .poll(
         async () =>

@@ -20,16 +20,16 @@ import {
   generateDoubleElim,
   generatePagePlayoff,
   generateStepladder,
-  pairRound,
-  pairKey,
   type BracketFixtureGen,
   type GeneratedBracket,
-  type SwissStanding,
-  type Colour,
   validateFeedGraph,
   generateAmericano,
   pairMexicanoRound,
+  pairRound,
+  pairKey,
   type AmericanoRound,
+  type SwissStanding,
+  type Colour,
 } from "@seazn/engine/scheduling";
 import {
   PointsRule,
@@ -54,11 +54,16 @@ import { resolveModule } from "@/server/engine-db";
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
-// Swiss Playoff's round budget. Client-safe on purpose — the format
-// catalogue (config/format-gallery.tsx, components/v2/format-templates.ts)
-// reads the SAME table, so what the picker promises and what this generator
-// produces cannot drift.
-import { swissRoundsForFieldSize } from "@/lib/swiss-rounds";
+import {
+  isSwissBoardSeated,
+  latestSeatedSwissRound,
+  nextUnseatedSwissRound,
+  planSwissShells,
+  swissRoundHasPlayedResult,
+  SWISS_ROUNDS_REQUIRED_CODE,
+  SWISS_ROUNDS_REQUIRED_MESSAGE,
+} from "@/lib/swiss-shell";
+import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
@@ -240,12 +245,69 @@ export async function listStages(auth: AuthCtx, divisionId: string): Promise<Sta
 }
 
 /** Define (part of) the stage graph for a division. */
+/**
+ * D2a (design 2026-09-17 §T3) — `rules` is NOT settable through a stage-config
+ * body. `PUT /stages/{id}/rules` is the only writer, and it is the only path
+ * carrying the per-sport allowlist, the sets-based sport gate and the
+ * merged-config parse. This door has to be shut explicitly because
+ * `createStages` never parses stage config through any `configSchema`, and the
+ * custom-points paywall reads `s.config.points`, never `s.config.rules.points`
+ * — so a football division could otherwise smuggle shoot-out points (a shape
+ * `SPORT_RULES.football` genuinely emits) straight past the entitlement.
+ */
+export function assertConfigCarriesNoRules(config: Record<string, unknown> | null | undefined): void {
+  if (config && "rules" in config)
+    throw new HttpError(
+      400,
+      "per-stage match rules are set through PUT /stages/{id}/rules",
+      "RULES_NOT_ACCEPTED_HERE",
+    );
+}
+
+function assertNoRulesKey(inputs: readonly StageInput[]): void {
+  for (const s of inputs) assertConfigCarriesNoRules(s.config);
+}
+
+/**
+ * A swiss stage declares its round budget at create time, or it is not created
+ * (owner ruling 2026-09-20).
+ *
+ * `swissGen` (this file, the `CONFIG_INVALID` throw) refuses the same shapes,
+ * and correctly so — a Swiss round count is a format decision fixed before
+ * play, never something the system guesses mid-tournament. But it fires at
+ * GENERATE, so before this guard an invalid stage was creatable over the API
+ * and the organiser met a 500 later, on a screen that had nothing to do with
+ * the mistake. This is the same refusal at the door; the engine throw stays as
+ * the last line of defence for a row written around the usecase.
+ *
+ * `swiss` is the only `StageKind` involved. `swiss_playoff` / `swiss_knockout`
+ * are TEMPLATE keys (components/v2/format-templates.ts) that each BUILD a
+ * `swiss` stage plus a bracket stage — checking them here would test a value
+ * `kind` can never hold.
+ *
+ * The predicate is spelled out rather than shared with `swissGen`'s: that one
+ * is an engine-layer `EngineError` on a persisted config, this one an
+ * `HttpError` on request input, and a test in swiss-shell-fixtures.test.ts
+ * enumerates every refused shape against both so they cannot drift.
+ */
+function assertSwissRoundsDeclared(inputs: readonly StageInput[]): void {
+  for (const s of inputs) {
+    if (s.kind !== "swiss") continue;
+    const rounds = (s.config as { rounds?: unknown } | null | undefined)?.rounds;
+    if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
+      throw new HttpError(422, SWISS_ROUNDS_REQUIRED_MESSAGE, SWISS_ROUNDS_REQUIRED_CODE);
+    }
+  }
+}
+
 export async function createStages(
   auth: AuthCtx,
   divisionId: string,
   input: CreateStages,
 ): Promise<StageRow[]> {
   const inputs: StageInput[] = Array.isArray(input) ? input : [input];
+  assertNoRulesKey(inputs);
+  assertSwissRoundsDeclared(inputs);
   // Format gates honour an Event Pass on this division's competition
   // (v3/07 §3), so resolve the competition before gating.
   const [divComp] = await sql<{ competition_id: string }[]>`
@@ -371,12 +433,20 @@ export async function replaceStages(
   divisionId: string,
   input: CreateStages,
 ): Promise<StageRow[]> {
+  // BEFORE the delete below, not merely inside the `createStages` this
+  // delegates to: that call runs in its own transaction, so a refusal there
+  // would land after this function had already dropped every stage in the
+  // division. The swiss round-count guard rides along for the same reason —
+  // this is the PUT the Format tab's Apply calls, so a bad round count would
+  // otherwise cost the organiser their whole stage graph.
+  assertNoRulesKey(Array.isArray(input) ? input : [input]);
+  assertSwissRoundsDeclared(Array.isArray(input) ? input : [input]);
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
-  await withTenant(auth.orgId, async (tx) => {
+  const carried = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
@@ -388,9 +458,51 @@ export async function replaceStages(
     if (locked) {
       throw new HttpError(409, "Format is locked — fixtures exist", "FORMAT_LOCKED");
     }
+    // Per-stage match-rules overrides survive the delete (design 2026-09-17,
+    // owner ruling 2026-09-18). The Format tab's Apply is a delete-and-recreate
+    // from the template body, and that body cannot carry `rules` — the guard
+    // above refuses it, because a stage-config body is not a path that
+    // validates one. So the carry-forward has to happen HERE, server-side,
+    // rather than by asking the client to re-issue a PUT afterwards: it then
+    // holds for every caller of this function, not just the one screen we
+    // happened to fix.
+    const rows = await tx<{ seq: number; kind: string; config: Record<string, unknown> }[]>`
+      select seq, kind, config from stages where division_id = ${divisionId}`;
+    const keep = new Map<string, Record<string, unknown>>();
+    for (const r of rows) {
+      const rules = r.config?.rules;
+      // Keyed on seq AND kind. A format override belongs to a stage SLOT, and
+      // "the knockout is Best-of-5" does not mean "whatever now sits at seq 2
+      // is Best-of-5" — an Apply that turns seq 2 from knockout into league is
+      // a different competition shape, and silently dressing the new stage in
+      // the old stage's format is the kind of invisible carry nobody audits.
+      // Dropping it makes the organiser set it again, which is a visible,
+      // correctable state; carrying it wrongly is not. Note this is a
+      // JUDGEMENT, not a validity constraint: the allowlist is per SPORT and
+      // the sport cannot change here, so a carried fragment would still pass
+      // every guard. That is exactly why the rule has to be written down.
+      if (rules !== null && rules !== undefined) keep.set(`${r.seq}:${r.kind}`, rules as Record<string, unknown>);
+    }
     await tx`delete from stages where division_id = ${divisionId}`;
+    return keep;
   });
-  return createStages(auth, divisionId, input);
+  const created = await createStages(auth, divisionId, input);
+  if (carried.size > 0) {
+    await withTenant(auth.orgId, async (tx) => {
+      for (const stage of created) {
+        const rules = carried.get(`${stage.seq}:${stage.kind}`);
+        if (rules === undefined) continue;
+        // Server-side merge (§T2), same shape as every other writer of this
+        // column: the row was just inserted by createStages, so this adds the
+        // key back without re-writing anything createStages decided.
+        await tx`
+          update stages set config = config || ${tx.json({ rules } as never)}
+           where id = ${stage.id}`;
+        stage.config = { ...stage.config, rules };
+      }
+    });
+  }
+  return created;
 }
 
 /**
@@ -702,76 +814,70 @@ const DECIDED = new Set(["decided", "finalized", "forfeited"]);
  *  on the same string (public-site/competition-hub.ts's BYE_SLOT_KEY). */
 const BYE_SLOT_LABEL = { key: "bracket.slot.bye", params: {} } as const;
 
-// Swiss next round (spec 05 §2.2): score groups from prior outcomes (win 1,
-// draw/tie ½, bye 1), history from persisted fixtures, then pairRound.
-//
-// Swiss Playoff (`config.pairing: "rank_adjacent"`) changes two things and
-// nothing else — an omitted `pairing` leaves every byte of the behaviour
-// below as it was, because the live fold-pairing stages must not move:
-//
-//  1. `SwissStanding.rank` stops being the entrant's SEED and becomes the
-//     division's real finishing position, from the same fold + tiebreaker
-//     cascade the standings tab renders (`rankedStageStandings`). The score
-//     GROUPS are still the Swiss score (win 1, draw ½, bye 1) — equals still
-//     meet, as Swiss requires; the cascade decides the order WITHIN a group,
-//     which is exactly what `rank_adjacent` pairs on. Seed order and cascade
-//     order are the same thing only before a ball is struck.
-//  2. A stage that declares no `rounds` gets the field's own round budget
-//     (`swissRoundsForFieldSize`) instead of generating forever, and that
-//     budget is PERSISTED into `config.rounds` at the first generation so the
-//     completion predicate can read it — see the comment at the write below.
+type SwissExistingFixture = {
+  id: string;
+  ext_key: string | null;
+  round_no: number;
+  seq_in_round: number;
+  status: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  outcome: unknown;
+};
+
+type SwissGenResult = { gen: GenFixture[]; seatedCount: number };
+
+// Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
+// every round the organiser declared in `config.rounds`; Pair next (a later
+// Generate when shells already exist) seats one round at a time onto those
+// shells. The organiser-set round budget is the only authority — nothing here
+// derives or persists `rounds` from field size.
 async function swissGen(
   tx: Tx,
   stageId: string,
   cfg: Record<string, unknown>,
   entrants: ActiveEntrant[],
-  existing: { ext_key: string | null; round_no: number; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown }[],
-): Promise<GenFixture[]> {
-  // Anything but the literal opt-in is the historical fold — never a
-  // truthiness test, so a stray `pairing: "folded"` cannot silently switch a
-  // live event onto a different pairing model.
+  existing: SwissExistingFixture[],
+): Promise<SwissGenResult> {
+  const rounds = cfg.rounds;
+  if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
+    throw new EngineError("CONFIG_INVALID", "swiss stage requires config.rounds >= 1", { stageId });
+  }
+
+  if (existing.length === 0) {
+    return {
+      gen: planSwissShells(rounds, entrants.length).map((shell) => ({
+        extKey: shell.extKey,
+        roundNo: shell.roundNo,
+        seqInRound: shell.seqInRound,
+        home: null,
+        away: null,
+      })),
+      seatedCount: 0,
+    };
+  }
+
+  const target = nextUnseatedSwissRound(existing);
+  if (target === null) {
+    return { gen: [], seatedCount: 0 };
+  }
+
+  if (target > 1) {
+    const seatedPrev = existing.filter(
+      (f) =>
+        f.round_no === target - 1 &&
+        isSwissBoardSeated({
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          outcome: f.outcome,
+        }),
+    );
+    if (seatedPrev.some((f) => !DECIDED.has(f.status))) {
+      throw new EngineError("STAGE_NOT_READY", "current swiss round has undecided fixtures", { stageId });
+    }
+  }
+
   const rankAdjacent = cfg.pairing === "rank_adjacent";
-  const declared = typeof cfg.rounds === "number" ? cfg.rounds : null;
-  const rounds = declared ?? (rankAdjacent ? swissRoundsForFieldSize(entrants.length) : null);
-
-  // A derived budget the generator keeps to itself is HALF a round count.
-  // `isTableStageComplete` (engine competition/stage.ts) reads `stage.rounds
-  // ?? 0` and refuses to complete a swiss at 0, and `toTableStage`
-  // (engine-db/competition.ts) sources that solely from `config.rounds` — so
-  // before this write, swiss_playoff and swiss_knockout capped generation
-  // correctly and then sat at every-fixture-decided forever, never completing
-  // and never seeding their finals half. Write it down, in this transaction,
-  // so the completer reads the same number the generator used.
-  //
-  // Written ONCE, at the first generation, and never again — the `where`
-  // clause is the guard, not the caller, so a concurrent organiser edit
-  // cannot lose a race with this statement:
-  //
-  //  - an organiser's own `rounds` (the Settings tab writes this exact key)
-  //    is never clobbered; and
-  //  - the value does not get re-derived on later rounds. That second half
-  //    matters more than it looks: a mid-stage withdrawal that drops the
-  //    field under a band edge (9 ⇒ 8) would SHRINK the budget beneath a
-  //    stage already in progress, and `isTableStageComplete` only inspects
-  //    rounds `1..budget` — it would then complete the stage with a later,
-  //    already-generated round still unplayed. A number decided once cannot
-  //    do that.
-  //
-  // A plain fold swiss derives nothing (`rounds` stays null) and so is left
-  // exactly as it was: no cap, no write, no behaviour change for live events.
-  if (declared === null && rounds !== null) {
-    await tx`
-      update stages set config = config || jsonb_build_object('rounds', ${rounds}::int)
-      where id = ${stageId} and config->>'rounds' is null`;
-  }
-
-  const maxRound = existing.reduce((m, f) => Math.max(m, f.round_no), 0);
-  if (rounds !== null && maxRound >= rounds) return [];
-  const pending = existing.some((f) => !DECIDED.has(f.status));
-  if (pending) {
-    throw new EngineError("STAGE_NOT_READY", "current swiss round has undecided fixtures", { stageId });
-  }
-
   const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
   const played = new Set<string>();
   const colours = new Map<string, Colour[]>();
@@ -779,10 +885,6 @@ async function swissGen(
   const inRound = new Map<number, Set<string>>();
   for (const f of existing) {
     const o = f.outcome as { kind?: string; winner?: string } | null;
-    // Persisted swiss bye row (W3 item 6 follow-up): award fixture with one
-    // side null. Score it here so the absence fallback below does not
-    // double-count once the row exists — and so stages generated before
-    // this fix (no bye row) still score via that fallback.
     if (o?.kind === "award" && o.winner) {
       const forRound = inRound.get(f.round_no) ?? new Set<string>();
       forRound.add(o.winner);
@@ -804,10 +906,25 @@ async function swissGen(
       score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
     }
   }
-  // Legacy odd-swiss rounds with no bye fixture row: an entrant absent from
-  // a played round sat out = bye (scored 1). After the bye-row fix this only
-  // fires for pre-fix stages that never wrote the award fixture.
-  for (let r = 1; r <= maxRound; r++) {
+  const latestSeated = latestSeatedSwissRound(existing);
+  for (let r = 1; r <= (latestSeated ?? 0); r++) {
+    const inRoundR = existing.filter((f) => f.round_no === r);
+    if (
+      !inRoundR.every((f) =>
+        isSwissBoardSeated({
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          outcome: f.outcome,
+        }),
+      )
+    ) {
+      continue;
+    }
+    // This round already carries an explicit bye row, so the award loop above
+    // has credited whoever sat out; inferring a second one here would
+    // double-count. (C1: this used to fire for a two-sided forfeit as well,
+    // which silently suppressed the implicit-bye inference for that round.)
+    if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
     const seen = inRound.get(r) ?? new Set();
     for (const e of entrants) {
       if (!seen.has(e.id)) {
@@ -817,29 +934,17 @@ async function swissGen(
     }
   }
 
-  // Swiss Playoff's pairing rank: the division's REAL standings position.
-  // Round 1 has no decided fixture to rank on, so `rankedStageStandings`
-  // comes back empty and the seed fallback below carries the opening board —
-  // which is what a Swiss round 1 is.
   const cascadeRank = new Map<string, number>();
-  if (rankAdjacent && existing.length > 0) {
+  if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {
     const rows = await rankedStageStandings(tx, stageId);
     for (const [i, row] of rows.entries()) {
       cascadeRank.set(row.entrantId, row.rank ?? i + 1);
     }
   }
-  // The pre-Swiss-Playoff rank, unchanged: the entrant's seed, or a stable
-  // tail slot for an unseeded one.
   const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
   const standings: SwissStanding[] = entrants.map((e, i) => ({
     entrantId: e.id,
     score: score.get(e.id) ?? 0,
-    // An entrant the table does not know — reinstated mid-stage, never yet
-    // placed on a board — falls back to its seed OFFSET past the whole
-    // ranked block, so it sorts after everyone who has actually played
-    // while still ordering sensibly among its fellow late arrivals. When
-    // there is no table at all (round 1, or any fold-pairing stage) the
-    // offset is 0 and this is byte-for-byte the expression it replaced.
     rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
   const round = pairRound(
@@ -847,29 +952,48 @@ async function swissGen(
     { played, colours, byes },
     { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
   );
-  const roundNo = maxRound + 1;
-  const fixtures: GenFixture[] = round.pairings.map((p, i) => ({
-    extKey: `sw-r${roundNo}-b${i + 1}`,
-    roundNo,
-    seqInRound: i + 1,
-    home: p.home,
-    away: p.away,
-  }));
-  // Persist pairRound's sit-out the way knockout already does — a real
-  // forfeited award row — so roster drift sees the entrant as referenced
-  // and the run sheet can render the bye. Shared insert path branches on
-  // `g.award` (status forfeited + outcome.kind award); no swiss-only writer.
-  if (round.bye !== undefined) {
-    fixtures.push({
-      extKey: `sw-r${roundNo}-bye`,
-      roundNo,
-      seqInRound: fixtures.length + 1,
-      home: round.bye,
-      away: null,
-      award: round.bye,
-    });
+
+  const roundShells = existing
+    .filter((f) => f.round_no === target)
+    .sort((a, b) => a.seq_in_round - b.seq_in_round);
+  const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
+  const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
+
+  let seatedCount = 0;
+  for (let i = 0; i < round.pairings.length; i++) {
+    const p = round.pairings[i]!;
+    const shell = boardShells[i];
+    if (!shell) {
+      throw new EngineError("CONFIG_INVALID", "swiss shell count mismatch for pairing", { stageId, target });
+    }
+    await tx`
+      update fixtures set
+        home_entrant_id = ${p.home},
+        away_entrant_id = ${p.away},
+        status = 'scheduled',
+        outcome = null,
+        home_slot_label = null,
+        away_slot_label = null
+      where id = ${shell.id}`;
+    seatedCount++;
   }
-  return fixtures;
+  if (round.bye !== undefined) {
+    if (!byeShell) {
+      throw new EngineError("CONFIG_INVALID", "swiss bye shell missing for pairing", { stageId, target });
+    }
+    await tx`
+      update fixtures set
+        home_entrant_id = ${round.bye},
+        away_entrant_id = null,
+        status = 'forfeited',
+        outcome = ${tx.json({ kind: "award", winner: round.bye } as never)},
+        home_slot_label = null,
+        away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+      where id = ${byeShell.id}`;
+    seatedCount++;
+  }
+
+  return { gen: [], seatedCount };
 }
 
 // Distribute seed-ordered entrants into `count` pools by seeded snake
@@ -1244,6 +1368,8 @@ interface GenerateWrite {
   outcome: GenerateOutcome;
   divisionId: string;
   competitionId: string;
+  /** Swiss Pair next: how many shells were seated this pass (0 on mint). */
+  swissSeatedCount?: number;
 }
 
 /** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
@@ -1272,6 +1398,123 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
  *  the whole write itself (see above). */
 export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
   return (await generateStageFixturesWrite(auth, stageId)).outcome;
+}
+
+/**
+ * The result-evidence tables EVERY destructive fixture path must consult,
+ * as one SQL fragment. `f` must be the `fixtures` alias in the enclosing
+ * query; the caller supplies its own status clause and its own row scope.
+ *
+ * Shared deliberately (2026-09-20 review, C1): `unpairSwissRound` shipped
+ * with a subset of this list — `score_events` only — and a bye predicate that
+ * excluded real results from even that. A subset guard on a destructive path
+ * is exactly how the defect happened, so the list is written once and both
+ * callers read it.
+ *
+ * Why `config_snapshot` is in here and not only the event tables: V347 freezes
+ * the resolved cfg onto the fixture when the FIRST event lands
+ * (`append-event.ts`), and `fixture-cfg.ts`'s own header states that
+ * `config_snapshot is null` is precisely "not scored yet". It is monotonic,
+ * which `fixtures.status` is NOT — `fixtureStatusFromFold` walks a fixture
+ * back to `scheduled` when a `core.start` is voided, so a status test alone
+ * can silently stop refusing.
+ */
+function fixtureEvidenceSql(tx: Tx) {
+  return tx`
+    f.config_snapshot is not null
+    or exists (select 1 from score_events se where se.fixture_id = f.id)
+    or exists (select 1 from match_states ms where ms.fixture_id = f.id)
+    or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
+    or exists (select 1 from official_marks om where om.fixture_id = f.id)
+    or exists (select 1 from suspensions s where s.fixture_id = f.id)`;
+}
+
+/** Clear the latest fully seated Swiss round back onto its shells (2026-09-18). */
+export async function unpairSwissRound(
+  auth: AuthCtx,
+  stageId: string,
+): Promise<{ cleared: number; round: number }> {
+  const write = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<StageRow[]>`
+      select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+    if (!stage) throw new HttpError(404, "stage not found");
+    if (stage.kind !== "swiss") {
+      throw new HttpError(422, "unpair only exists on swiss stages");
+    }
+    const lockState = await divisionLockState(tx, stage.division_id);
+    if (lockState.frozen) {
+      throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
+    }
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
+    const existing = await tx<SwissExistingFixture[]>`
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+      from fixtures where stage_id = ${stageId}`;
+
+    const round = latestSeatedSwissRound(existing);
+    if (round === null) {
+      throw new EngineError("STAGE_NOT_READY", "no seated swiss round to unpair", { stageId });
+    }
+    if (swissRoundHasPlayedResult(existing, round)) {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "swiss round has played results — unpair refused",
+        { stageId, round },
+      );
+    }
+
+    const inRound = existing.filter((f) => f.round_no === round);
+
+    // C1 (2026-09-20 review). This check runs over EVERY row in the round —
+    // it used to run over a "non-bye" subset computed by a predicate that
+    // called any award outcome a bye, so a played board carrying a real
+    // forfeit or retirement was excluded from the one guard that could still
+    // have caught it after the status guard above had also been fooled.
+    // Nothing is exempt here: a genuine bye never goes through appendEvent,
+    // so it has no events, no state and no frozen cfg, and the exemption
+    // belongs in the STATUS test above where `forfeited` would otherwise
+    // block every odd-field round.
+    const ids = inRound.map((f) => f.id);
+    const [blocked] = await tx<{ id: string }[]>`
+      select f.id from fixtures f
+      where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
+      limit 1`;
+    if (blocked) {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "swiss round has recorded match data — unpair refused",
+        { stageId, round, fixtureId: blocked.id },
+      );
+    }
+
+    await tx`
+      update fixtures set
+        home_entrant_id = null,
+        away_entrant_id = null,
+        status = 'scheduled',
+        outcome = null,
+        home_slot_label = null,
+        away_slot_label = null
+      where id in ${tx(ids)}`;
+
+    const [division] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${stage.division_id}`;
+    return {
+      cleared: ids.length,
+      round,
+      divisionId: stage.division_id,
+      competitionId: division!.competition_id,
+    };
+  });
+
+  // Bye awards (and their removal) never go through appendEvent, so the
+  // standings snapshot would otherwise keep the unpaired bye's points until
+  // the next scored match — Dan after Unpair R3. Fold from the cleared rows.
+  await recomputeStandings(auth.orgId, stageId);
+
+  void fireStageRevalidate(auth.orgId, stageId);
+  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  return { cleared: write.cleared, round: write.round };
 }
 
 async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promise<GenerateWrite> {
@@ -1404,20 +1647,23 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       }
     }
 
-    const existing = await tx<
-      { id: string; ext_key: string | null; round_no: number; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown }[]
-    >`
-      select id, ext_key, round_no, status, home_entrant_id, away_entrant_id, outcome
+    const existing = await tx<SwissExistingFixture[]>`
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
       from fixtures where stage_id = ${stageId}`;
 
-    const gen =
-      stage.kind === "swiss"
-        ? await swissGen(tx, stageId, stage.config, entrants, existing)
-        : stage.kind === "americano"
-          ? await americanoGen(tx, stage.division_id, stageId, stage.config, entrants)
-          : stage.kind === "ladder"
-            ? [] // Jul3/08 §6: ladder fixtures come from challenges, on demand
-            : generate(stage.kind, stage.config, entrants, poolIds);
+    let swissSeatedCount = 0;
+    let gen: GenFixture[];
+    if (stage.kind === "swiss") {
+      const swiss = await swissGen(tx, stageId, stage.config, entrants, existing);
+      gen = swiss.gen;
+      swissSeatedCount = swiss.seatedCount;
+    } else if (stage.kind === "americano") {
+      gen = await americanoGen(tx, stage.division_id, stageId, stage.config, entrants);
+    } else if (stage.kind === "ladder") {
+      gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
+    } else {
+      gen = generate(stage.kind, stage.config, entrants, poolIds);
+    }
 
     // Guard against the misleading "nothing new — up to date" success shape
     // (design/fix-ui/03 §"misleading success message"): a `group` stage with
@@ -1551,7 +1797,8 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       });
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
     for (const r of newRows) byKey.set(r.ext_key, r.id);
-    const created = newRows.length;
+    // Pair next reports seated shell rows as `created` for UI notices.
+    const created = newRows.length + swissSeatedCount;
     const createdIds = newRows.map((r) => r.id);
 
     // 1b pass — cross-stage fill, through fillSlot (see viaFillSlot above).
@@ -1715,12 +1962,19 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     return {
-      outcome: { created, existing: gen.length - created, fixtures },
+      outcome: { created, existing: gen.length - newRows.length, fixtures },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
+      swissSeatedCount,
     };
   });
   const outcome = write.outcome;
+  // Pair next seats bye awards without score_events — same snapshot trap as
+  // Unpair. Recompute whenever a Swiss round was seated so the table shows
+  // the bye win immediately (Finn/Gus), not after the next real match.
+  if ((write.swissSeatedCount ?? 0) > 0) {
+    await recomputeStandings(auth.orgId, stageId);
+  }
   void fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
@@ -1983,17 +2237,21 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
     // (fixtures.court_id is RESTRICT but points OUT at courts, so it
     // constrains deleting a COURT, never this delete.)
+    // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
+    // literal, shared with `unpairSwissRound`'s guard, because the
+    // 2026-09-20 review found Unpair shipping a SUBSET of this list and
+    // destroying real results through the gap. Only the status clause is
+    // per-caller. (`config_snapshot is not null` joins the list there; it is
+    // implied by `exists(score_events)` for this guard — nothing in apps/web
+    // ever deletes a score event — so it adds no refusal here, only
+    // monotonicity where status is unreliable.)
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.stage_id = ${stageId}
         and (
           f.status in ('in_play', 'decided', 'finalized', 'abandoned')
           or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
-          or exists (select 1 from score_events se where se.fixture_id = f.id)
-          or exists (select 1 from match_states ms where ms.fixture_id = f.id)
-          or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
-          or exists (select 1 from official_marks om where om.fixture_id = f.id)
-          or exists (select 1 from suspensions s where s.fixture_id = f.id)
+          or (${fixtureEvidenceSql(tx)})
         )
       limit 1`;
     if (blocked) {
@@ -3172,9 +3430,14 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
       carriedMode = carryMode;
       carriedDeltas = buildCarryDeltas(sourceTables, entrants, carryMode);
     }
+    // Server-side merge, not a spread of `next.config` read earlier in this
+    // transaction (design §T2): any other key written between that read and
+    // this write — a per-stage `rules` override, most immediately — would
+    // otherwise be silently reverted. Not `stages.ts`'s write-once `rounds`
+    // pattern: that one is guarded `and config->>'rounds' is null`, which is
+    // right for a key set once and wrong for one that must stay replaceable.
     await tx`
-      update stages set config = ${tx.json({
-        ...next.config,
+      update stages set config = config || ${tx.json({
         qualified: entrants,
         ...(carriedDeltas !== undefined ? { carry_deltas: carriedDeltas } : {}),
       } as never)}
@@ -3261,9 +3524,12 @@ export async function overrideStandings(
     const ranks = new Set(input.rows.map((r) => r.rank));
     if (ranks.size !== input.rows.length) throw new HttpError(422, "duplicate ranks in override");
 
+    // Server-side merge (design §T2). `stage.config` was read BEFORE the
+    // advisory lock above, so a writer that committed while this transaction
+    // waited is already invisible to it; spreading that stale object back
+    // reverts the other writer's key with no error.
     await tx`
-      update stages set config = ${tx.json({
-        ...stage.config,
+      update stages set config = config || ${tx.json({
         rank_overrides: input.rows.map((r) => ({ entrant_id: r.entrant_id, rank: r.rank })),
       } as never)}
       where id = ${stageId}`;
@@ -3695,8 +3961,9 @@ export async function confirmSeedProposal(
       }
       const entrants = [...new Set(expandedEntries.map(([, id]) => id))];
       const carriedDeltas = buildCarryDeltas(tables, entrants, carryMode);
+      // Server-side merge (design §T2) — see seedNextStage's write.
       await tx`
-        update stages set config = ${tx.json({ ...stage.config, carry_deltas: carriedDeltas } as never)}
+        update stages set config = config || ${tx.json({ carry_deltas: carriedDeltas } as never)}
         where id = ${stageId}`;
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events
@@ -3873,7 +4140,10 @@ export async function issueChallenge(
         where division_id = ${stage.division_id} and status in ('registered','confirmed')
         order by seed nulls last, created_at, id`;
       order = entrants.map((e) => e.id);
-      await tx`update stages set config = ${tx.json({ ...stage.config, ladder_order: order } as never)}
+      // Server-side merge (design §T2): `stage.config` was read before the
+      // advisory lock, so anything written while this transaction waited must
+      // not be spread back over.
+      await tx`update stages set config = config || ${tx.json({ ladder_order: order } as never)}
                where id = ${stageId}`;
     }
     const ci = order.indexOf(input.challenger_id);

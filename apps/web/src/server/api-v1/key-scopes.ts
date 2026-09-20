@@ -245,8 +245,14 @@ const RULES: RouteRule[] = [
   { method: "PUT", path: "/stages/:id/court-tags", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/fixtures", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/generate", scope: "manage", pin: "stage" },
+  { method: "POST", path: "/stages/:id/unpair", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/officials/source", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/rebuild", scope: "manage", pin: "stage" },
+  // Per-stage match-format override (design 2026-09-17 §T3). Same scope and
+  // pin as its closest sibling `PUT /stages/:id/court-tags`, and it grants a
+  // key nothing it did not already have: `POST /divisions/:id/stages` is
+  // `manage` and sets a stage's format at creation time.
+  { method: "PUT", path: "/stages/:id/rules", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/schedule/apply", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/schedule/auto", scope: "manage", pin: "stage" },
   { method: "GET", path: "/stages/:id/schedule/health", scope: "read", pin: "stage" },

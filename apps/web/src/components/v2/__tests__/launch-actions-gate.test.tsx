@@ -63,6 +63,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 
 import { LaunchActions } from "../launch-actions";
 import { ScheduleGateDialog } from "../board/schedule-gate-dialog";
+import { StartConfirmDialog } from "../start-confirm-dialog";
 
 const enDict = en as unknown as Dict;
 
@@ -115,6 +116,8 @@ const baseProps = (): LaunchProps => ({
   canEdit: true,
   fixtures: FIXTURES,
   entrantNames: { e1: "Alpha", e2: "Bravo" },
+  stageKinds: ["league"],
+  competitionStatus: "published",
   viewerPlan: "community",
 });
 
@@ -133,8 +136,16 @@ const gateProps = (tree: ReactElement[]) => {
   return propsOf(el) as Parameters<typeof ScheduleGateDialog>[0];
 };
 
+/** Tap Start, then confirm. Since the always-on confirmation (design
+ *  2026-09-20) the button itself POSTs nothing — the gate refusals these tests
+ *  are about are only reachable through the dialog's own confirm, so driving
+ *  the button alone would assert against a request that never leaves. */
 const pressStart = async (island: { tree: () => ReactElement[] }) => {
   await (propsOf(withTestId(island.tree(), "launch-start-division")).onClick as () => void)();
+  await flush();
+  const confirmation = island.tree().find((node) => node.type === StartConfirmDialog);
+  if (!confirmation) throw new Error("the launch actions mount no start confirmation");
+  (propsOf(confirmation).onConfirm as () => void)();
   await flush();
 };
 

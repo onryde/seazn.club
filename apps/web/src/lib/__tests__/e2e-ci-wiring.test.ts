@@ -287,6 +287,17 @@ const WALKTHROUGH_SPECS: string[] = [
   "spectator-hub.spec.ts",
   "spectator-org-home.spec.ts",
   "spectator-player.spec.ts",
+
+  // Per-stage match rules — one organiser's path through the three things that
+  // branch shipped, in the order they happen to them: a stage given its own
+  // Best-of while its neighbour keeps the division's, the Start-tournament
+  // confirmation and the four consequences it states, and the parent
+  // competition moving published → live as the division starts. It is also the
+  // only spec that drives BOTH directions of the per-stage format lock (a
+  // played stage refuses, the stage beside it still saves), which is the half
+  // a refusal-only test cannot distinguish from a lock that refuses
+  // everything.
+  "stage-rules-start-promotion.spec.ts",
 ];
 
 afterEach(() => {

@@ -2441,7 +2441,7 @@ describe("STAGE_DECIDER_KEYS — the mirror is diffed against apps/web, not itse
   });
 });
 
-describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
+describe("stageScopedFoldCfg — the product's stage overlay (two decider keys + rules)", () => {
   // A goalless football match, ended by its two period markers. With
   // `shootout` off it is a decided draw; with `shootout` on the same events
   // leave the match in its SHOOTOUT phase, undecided. The division declares
@@ -2612,7 +2612,7 @@ describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
     ).toBe("special.state");
   });
 
-  it("overlays ONLY shootout and extraTime", () => {
+  it("overlays ONLY shootout and extraTime from the stage's own top level", () => {
     const base = { setTo: 21, shootout: false };
     expect(
       stageScopedFoldCfg(base, {
@@ -2627,6 +2627,34 @@ describe("stageScopedFoldCfg — the product's two-key stage overlay", () => {
     const base = { setTo: 21 };
     expect(stageScopedFoldCfg(base, { legs: 3 })).toBe(base);
     expect(stageScopedFoldCfg(base, undefined)).toBe(base);
+  });
+
+  // Per-stage match rules (design 2026-09-17 §T1). The mirror gained the same
+  // second source as the product resolver; without these three the bench could
+  // silently lose the `rules` half and fold every overridden stage under the
+  // division's format, which is precisely what the header above says this
+  // mirror exists to prevent.
+  it("overlays the stage's rules fragment per key", () => {
+    expect(stageScopedFoldCfg({ bestOf: 1, setTo: 21 }, { rules: { bestOf: 3 } })).toEqual({
+      bestOf: 3,
+      setTo: 21,
+    });
+  });
+
+  it("lets the stage's own decider keys win over anything in rules", () => {
+    const out = stageScopedFoldCfg(
+      { shootout: "none" },
+      { shootout: "best_of_five", rules: { shootout: "sudden_death" } },
+    ) as Record<string, unknown>;
+    expect(out.shootout).toBe("best_of_five");
+  });
+
+  it("treats an explicit null in rules as inherit, not as a value", () => {
+    const out = stageScopedFoldCfg({ bestOf: 3 }, { rules: { bestOf: null } }) as Record<
+      string,
+      unknown
+    >;
+    expect(out.bestOf).toBe(3);
   });
 });
 

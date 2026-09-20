@@ -29,21 +29,10 @@
 //   toTableStage (server/engine-db/competition.ts) only sets `rounds`
 //     when `config.rounds != null`.
 //
-// swissGen (stages.ts) derived the field's budget from swissRoundsForFieldSize
-// and used it to stop generating — but persisted it nowhere, so the number was
-// known to the generator and to nobody else. It now WRITES that budget into
-// `stages.config.rounds` on the first generation, in the same transaction,
-// and only when the key is absent, so the completion predicate reads a real,
-// already-decided number. Persisting once (rather than re-deriving inside
-// toTableStage) is deliberate: a mid-stage withdrawal that drops the field
-// below a band edge would otherwise shrink the budget under a stage already
-// in progress, and isTableStageComplete only inspects rounds 1..budget — it
-// would complete the stage with a later round still unplayed.
-//
-// The cases below therefore run the SHIPPED drafts, unmodified. The last one
-// is the old blocker case, inverted rather than deleted: it now asserts the
-// stage does complete and does seed its bracket. The persistence itself is
-// guarded directly in swiss-playoff-pairing.test.ts.
+// Task 2 (2026-09-18 shell programme): the organiser must set `config.rounds`
+// before Generate; first Generate mints empty shells for every round. Pair
+// next (Task 3) seats one round at a time. The bracket-shape cases below still
+// document the Top-N shapes they guard and are skipped until Pair next lands.
 // ─────────────────────────────────────────────────────────────────────────
 //
 // The swiss half is 4 entrants over the field's own 3-round budget, i.e. a
@@ -158,7 +147,10 @@ async function seedSwissKnockout(auth: AuthCtx, topN: number): Promise<Rig> {
       seq: i + 1,
       kind: d.kind,
       name: d.name,
-      config: d.config,
+      config:
+        d.kind === "swiss"
+          ? { ...d.config, rounds: SWISS_ROUNDS }
+          : d.config,
       progression: d.progression,
     });
     const [stage] = await createStages(auth, division.id, input);
@@ -201,14 +193,13 @@ async function playSwissRound(
   return played;
 }
 
-/** Generate + play the swiss until the generator stops issuing rounds. */
+/** Pair + play each swiss round until fully paired (startDivision already minted shells). */
 async function playSwissOut(auth: AuthCtx, rig: Rig): Promise<void> {
   await generateStageFixtures(auth, rig.koStageId); // day-one TBD bracket
   for (let round = 1; ; round++) {
-    const played = await playSwissRound(auth, rig.swissStageId, round, rig.nameOf);
-    if (played === 0) break;
-    const more = await generateStageFixtures(auth, rig.swissStageId);
-    if (more.created === 0) break;
+    const paired = await generateStageFixtures(auth, rig.swissStageId);
+    if (paired.created === 0) break;
+    await playSwissRound(auth, rig.swissStageId, round, rig.nameOf);
   }
 }
 
@@ -352,52 +343,24 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
     expect(final.away_entrant_id).toBeNull();
   });
 
-  // ── The blocker, inverted ────────────────────────────────────────────────
-  // This case used to assert the DEFECT as the shipped behaviour, under a
-  // title that said so, because it was the one thing standing between both
-  // swiss composites and a finished tournament. The budget is now persisted
-  // at the first generation, so the same rig — the SHIPPED drafts, nothing
-  // declared — runs all the way through. Kept rather than deleted so the
-  // regression has a witness at the exact seam it used to fail at.
-  it("DEFECT FIXED: a swiss stage with no declared rounds persists the field's budget, completes, and seeds the finals half", async () => {
-    const { auth } = await seedOrg();
-    const rig = await seedSwissKnockout(auth, 4); // the SHIPPED drafts
-    await startDivision(auth, rig.divisionId);
-    await playSwissOut(auth, rig);
+});
 
-    // Unchanged from the defect case: the generator stops at the field's own
-    // budget and every fixture it issued is settled.
+describe.runIf(HAS_DB)("swiss knockout — shell mint (Task 2)", () => {
+  it("first Generate mints all configured rounds as empty shells", async () => {
+    const { auth } = await seedOrg();
+    const rig = await seedSwissKnockout(auth, 4);
+    await startDivision(auth, rig.divisionId);
+
     const swiss = await fixturesOf(rig.swissStageId);
     expect(roundsOf(swiss)).toEqual([1, 2, 3]);
-    expect(swiss.filter((f) => f.status !== "decided")).toEqual([]);
+    expect(swiss).toHaveLength(SWISS_ROUNDS * 2); // 2 boards × 3 rounds (4 entrants)
+    expect(swiss.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(
+      true,
+    );
+    expect(swiss.every((f) => f.status === "scheduled")).toBe(true);
 
-    // What changed: the budget the generator used is now written down, so the
-    // completion predicate can see it. Read off the stage ROW, not the draft.
     const [row] = await sql<{ config: { rounds?: number } }[]>`
       select config from stages where id = ${rig.swissStageId}`;
     expect(row!.config.rounds).toBe(SWISS_ROUNDS);
-
-    // …and therefore:
-    const done = await completeStage(auth, rig.swissStageId);
-    expect(done.completed, "the swiss must now complete on the shipped draft").toBe(true);
-    expect(done.seed_proposal, "and propose a seeding for the knockout").toBeTruthy();
-
-    // The bracket is no longer a wall of TBD: confirming the proposal seats
-    // the qualifiers. Asserted through the real confirm path, because a
-    // proposal nobody can confirm would still satisfy the two lines above.
-    await confirmSeedProposal(auth, rig.koStageId, { proposalId: done.seed_proposal!.id });
-    const bracket = await fixturesOf(rig.koStageId);
-    expect(bracket.length).toBeGreaterThan(0);
-    const semis = bracket.filter((f) => f.round_no === roundsOf(bracket)[0]);
-    expect(semis.map((f) => pairOf(f, rig.nameOf)).sort()).toEqual(["E1 v E4", "E3 v E2"]);
-
-    // …and this was never a Swiss Knockout defect, so the fix is not a Swiss
-    // Knockout fix. swiss_playoff emits a byte-identical swiss draft — same
-    // omitted `rounds`, same derived budget, same repair. Asserted here
-    // rather than paid for with a second DB run: the draft IS the whole cause.
-    const mine = buildTemplateStages("swiss_knockout", { ...KNOBS, qualified: 4 })[0]!;
-    const sibling = buildTemplateStages("swiss_playoff", { ...KNOBS, qualified: 4 })[0]!;
-    expect(sibling.config).toEqual(mine.config);
-    expect(mine.config).not.toHaveProperty("rounds");
   });
 });

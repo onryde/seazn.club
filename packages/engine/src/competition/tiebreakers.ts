@@ -17,7 +17,7 @@
 // comparators call.
 import { EngineError } from "../core/errors.ts";
 import { shuffle } from "../core/rng.ts";
-import type { EntrantId, MetricSpec } from "../core/types.ts";
+import type { EntrantId, MetricSpec, StandingsDelta } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
 import {
   foldResults,
@@ -702,11 +702,15 @@ export function validateCascade(
 // Assemble a SwissTable from decided fixture results for the buchholz/sberger/
 // direct comparators (spec 05 §4.1, PROMPT-07 note). Each entrant's card is
 // built from the fixtures it played; `scored` is read straight off the
-// module's delta points (half-points for the boardgame module). Colour/byes
-// aren't recoverable from deltas — pass richer cards directly when needed.
+// module's delta points (half-points for the boardgame module). Colour isn't
+// recoverable from deltas — pass richer cards directly when needed.
+//
+// `awards` are one-sided sit-out deltas (Swiss/KO byes): opponent null +
+// unplayed, so Buchholz/SB use the FIDE virtual opponent (Handbook C.07).
 export function buildSwissTable(
   entrants: readonly EntrantId[],
   results: readonly FixtureResult[],
+  awards: readonly StandingsDelta[] = [],
 ): SwissTable {
   const cards = new Map<EntrantId, SwissGame[]>();
   const scoreOf = new Map<EntrantId, number>();
@@ -714,9 +718,9 @@ export function buildSwissTable(
     cards.set(id, []);
     scoreOf.set(id, 0);
   }
-  const resultOf = (delta: FixtureResult[number]): GameResult =>
+  const resultOf = (delta: StandingsDelta): GameResult =>
     delta.won > 0 ? "win" : delta.drawn > 0 ? "draw" : "loss";
-  const push = (self: FixtureResult[number], opp: FixtureResult[number]): void => {
+  const push = (self: StandingsDelta, opp: StandingsDelta): void => {
     const card = cards.get(self.entrantId);
     if (card === undefined) {
       throw new Error(`Swiss ledger built for entrant "${self.entrantId}" outside the entrant set`);
@@ -727,6 +731,19 @@ export function buildSwissTable(
   for (const [home, away] of results) {
     push(home, away);
     push(away, home);
+  }
+  for (const award of awards) {
+    const card = cards.get(award.entrantId);
+    if (card === undefined) {
+      throw new Error(`Swiss ledger built for entrant "${award.entrantId}" outside the entrant set`);
+    }
+    card.push({
+      opponent: null,
+      result: resultOf(award),
+      scored: award.points,
+      unplayed: true,
+    });
+    scoreOf.set(award.entrantId, (scoreOf.get(award.entrantId) ?? 0) + award.points);
   }
   return entrants.map((entrant) => ({
     entrant,

@@ -1,8 +1,13 @@
 import "server-only";
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
+// ONE bye predicate, client-safe so `lib/swiss-shell.ts` can share it. This
+// used to be a private copy here; the 2026-09-20 review found the Swiss copy
+// had drifted into calling any award outcome a bye, which let Unpair destroy
+// real two-sided forfeits. See that module's header.
+import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { log } from "@/server/logger";
-import { EngineError, StageKind, type MatchOutcome, type StageCtx } from "@seazn/engine/core";
+import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
   PointsRule,
   applyPointsRule,
@@ -14,6 +19,7 @@ import {
   type BracketFixture,
   type BracketStage,
   type DivisionEvent,
+  type FixtureResult,
   type FixtureStatus,
   type StandingsRow,
   type TableFixture,
@@ -79,6 +85,48 @@ function toEngineStatus(dbStatus: string): FixtureStatus {
     default:
       return "scheduled";
   }
+}
+
+/** Phantom seat for `SportModule.init` when synthesising a one-sided award
+ *  bye delta — never written to the DB, never appears in the folded table
+ *  (only the winner's half of the pair is kept as `awardDelta`). */
+const BYE_PHANTOM = "__bye__";
+
+/**
+ * One-sided award bye → a single win delta via the sport module's own
+ * `standingsDelta` (clean-sweep / points.w), not a hand-typed constant. A
+ * phantom opponent lets `init` build a legal state; only the winner's half
+ * is returned for the fold.
+ */
+function awardByeDelta(
+  sportModule: AnySportModule,
+  outcome: MatchOutcome,
+  rawCfg: unknown,
+  ctx: StageCtx,
+  pointsRule: ReturnType<typeof PointsRule.parse> | null,
+  homeId: string | null,
+  awayId: string | null,
+): StandingsDelta {
+  const winnerId = (outcome as Extract<MatchOutcome, { kind: "award" }>).winner;
+  const cfg = sportModule.configSchema.parse(rawCfg);
+  const seatedHome = homeId === winnerId;
+  const state = sportModule.init(cfg, {
+    home: { entrantId: seatedHome ? winnerId : BYE_PHANTOM, slots: [] },
+    away: { entrantId: seatedHome ? BYE_PHANTOM : winnerId, slots: [] },
+  });
+  // `standingsDelta` returns a mutable pair, `applyPointsRule` a readonly
+  // `FixtureResult` — so this is a new local, not a reassignment (TS4104).
+  const rawPair = sportModule.standingsDelta(outcome, cfg, ctx, state);
+  const pair: FixtureResult = pointsRule ? applyPointsRule(outcome, rawPair, pointsRule) : rawPair;
+  const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
+  if (winner.entrantId !== winnerId) {
+    throw new EngineError("CONFIG_INVALID", "award bye standings delta missing winner", {
+      winnerId,
+      home: pair[0].entrantId,
+      away: pair[1].entrantId,
+    });
+  }
+  return winner;
 }
 
 // L3/#414 pass 2 — `ext_key` is the ONE place a bracket fixture's lane
@@ -251,6 +299,19 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // (`usecases/stages.ts` FORMAT_LOCKED) except for `qualified`,
   // `carry_deltas`, `rank_overrides` and `ladder_order` — `points` is not on
   // that list. Relax that lock and this line becomes the same defect again.
+  //
+  // Per-stage match rules (design 2026-09-17 §T1) widened what the resolved
+  // cfg can contain: `stageScopedCfg` now also overlays `stage.config.rules`
+  // per key, so it is no longer "division config plus shootout/extraTime".
+  // Two things keep the paragraph above true. This line reads the TOP-LEVEL
+  // `stage.config.points`, which the overlay still never touches; and a
+  // `rules.points` — which the overlay WOULD copy through — is barred at the
+  // only write path by the per-sport allowlist and the sets-sports-only gate
+  // (design D2/D2a), with `createStages`/`replaceStages` refusing a `rules`
+  // key outright. `rules` is also a fifth key editable after fixtures exist,
+  // under its own per-stage lock (D1), so "locked the moment fixtures exist"
+  // now describes the format keys rather than the whole column. Let `points`
+  // into `rules`, or drop D1's lock, and this line is the same defect again.
   const pointsRule = stage.config?.points ? PointsRule.parse(stage.config.points) : null;
 
   const tableFixtures: TableFixture[] = fixtures.map((f) => {
@@ -288,6 +349,25 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
       base.result = pointsRule
         ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule)
         : pair;
+    } else if (isOneSidedAwardBye(f)) {
+      // Swiss odd-field sit-out (and KO seeded bye): forfeited award with one
+      // seat null and no match_state. The two-sided gate above never fires, so
+      // without this branch the bye winner stayed P0/pts=0 on the table while
+      // swissGen still counted +1 for pairing — Gus on the demo Swiss 7.
+      const ctx: StageCtx = { ...ctxBase, roundNo: f.round_no, ...(f.pool_id ? { poolId: f.pool_id } : {}) };
+      base.awardDelta = awardByeDelta(
+        sportModule,
+        f.outcome as MatchOutcome,
+        resolveFixtureCfg(
+          f.config_snapshot,
+          division.config,
+          stage.config as Record<string, unknown> | null,
+        ),
+        ctx,
+        pointsRule,
+        f.home_entrant_id,
+        f.away_entrant_id,
+      );
     }
     return base;
   });

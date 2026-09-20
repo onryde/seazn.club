@@ -16,7 +16,7 @@ import { moveFixture, courtNamesById } from "./schedule";
 import { subjectToScorerCapabilityGates } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
 import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./discipline";
-import { resolveModule } from "@/server/engine-db";
+import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type LineupIssue } from "@seazn/engine/sport";
 import type { Lineup } from "@seazn/engine/core";
@@ -63,6 +63,54 @@ export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut>
       ...row,
       court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
     };
+  });
+}
+
+/**
+ * The config a fixture's SCORING SURFACES must render against (design
+ * 2026-09-17 §T4) — the fixture console page and the device-link pad.
+ *
+ * Both of them used to hand the pad raw `division.config`, which is wrong in
+ * two directions. A scored fixture folds against the cfg frozen onto
+ * `fixtures.config_snapshot`, so a division edited afterwards made the pad
+ * render a format the fold had never used. And a stage's overlay — the
+ * `shootout`/`extraTime` deciders, and now a per-stage `rules` fragment — never
+ * reached the pad at all, which would have left a per-stage override invisible
+ * on the very screen the organiser scores from.
+ *
+ * This is a LOADER, deliberately separate from `getFixture`: that function's
+ * result IS the published `GET /fixtures/{id}` wire, unmapped (see FixtureOut
+ * above) and declared as `S.Fixture`, so widening its select would have put two
+ * undeclared fields — one of them a whole frozen config — into the public API
+ * response. The pages need the cfg, not a wider fixture row.
+ *
+ * `f.config_snapshot` is selected HERE and nowhere else on this path, and that
+ * is the column the whole thing turns on: `hasFrozenCfg` reads `undefined` as
+ * absence exactly like `null` (fixture-cfg.ts:53-64), so a caller that joined
+ * the stage but dropped the snapshot would serve live config for every scored
+ * fixture and raise nothing. One select, one place to get it wrong.
+ *
+ * No `rejectDeviceLink` guard: this has no route of its own, and the
+ * device-link pad is one of the two surfaces that legitimately needs it.
+ */
+export async function loadFixturePadCfg(auth: AuthCtx, fixtureId: string): Promise<unknown> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<
+      {
+        config_snapshot: unknown;
+        division_config: unknown;
+        stage_config: Record<string, unknown> | null;
+      }[]
+    >`
+      select f.config_snapshot, d.config as division_config, s.config as stage_config
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        left join stages s on s.id = f.stage_id
+       where f.id = ${fixtureId}`;
+    // `withTenant` scopes the read to this org, so another tenant's fixture is
+    // indistinguishable from a missing one — 404, never 403.
+    if (!row) throw new HttpError(404, "fixture not found");
+    return resolveFixtureCfg(row.config_snapshot, row.division_config, row.stage_config);
   });
 }
 

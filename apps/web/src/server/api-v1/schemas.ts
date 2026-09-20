@@ -1031,6 +1031,15 @@ export const StageConfig = z
     placements: z.unknown().optional(),
     shootout: z.unknown().optional(),
     extraTime: z.unknown().optional(),
+    /** Per-stage match-format override (design 2026-09-17 §T3). Deliberately
+     *  LOOSE here: this file is executed by `scripts/openapi-gen.ts` under bare
+     *  `node --experimental-strip-types`, which parses neither `@/` imports nor
+     *  JSX, so it cannot see the per-sport rules table. The real per-sport
+     *  allowlist and the merged-config validation live in
+     *  `usecases/stage-rules.ts`, which can import it. Nothing may WRITE this
+     *  key through a stage-config body — `createStages`/`replaceStages` refuse
+     *  it (D2a); `PUT /stages/{id}/rules` is the only writer. */
+    rules: z.record(z.string(), z.unknown()).nullish(),
   })
   .default({});
 
@@ -1103,6 +1112,22 @@ export const StageCourtTags = z.object({
    *  picker source, never a constraint on what may be written (a stage whose
    *  fixtures are not generated yet occupies none). */
   available_round_roles: z.array(z.string()),
+});
+
+/** Per-stage match-format override (design 2026-09-17 §T3). A WHOLE-FRAGMENT
+ *  replace: what you send is what the stage carries, and `rules: null` clears
+ *  it back to the division's format. Values are unconstrained HERE for the
+ *  openapi-gen reason on `StageConfig.rules` above; `usecases/stage-rules.ts`
+ *  enforces the per-sport allowlist (400 UNKNOWN_RULE_KEY), the sets-based
+ *  sport gate (400 SPORT_NOT_SUPPORTED), the merged-config parse (422
+ *  CONFIG_INVALID) and the per-stage lock (409 STAGE_FORMAT_LOCKED). */
+export const PutStageRules = z.object({
+  rules: z.record(z.string(), z.unknown()).nullable(),
+});
+export type PutStageRules = z.infer<typeof PutStageRules>;
+
+export const StageRules = z.object({
+  rules: z.record(z.string(), z.unknown()).nullable(),
 });
 
 export const AddFixture = z
@@ -1555,6 +1580,12 @@ export const GenerateResult = z.object({
  *  how many stale fixtures were deleted before regenerating. */
 export const RebuildResult = GenerateResult.extend({
   removed: z.number().int(),
+});
+
+/** POST /stages/{id}/unpair — clears the latest seated Swiss round onto kept shells. */
+export const UnpairResult = z.object({
+  cleared: z.number().int(),
+  round: z.number().int(),
 });
 
 export const CompleteResult = z.object({

@@ -51,6 +51,7 @@ import {
 } from "./competitions";
 import { fireDivisionCreated } from "./divisions";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
+import { assertConfigCarriesNoRules } from "./stages";
 import { validateStageProgression } from "./stage-seeding";
 import { getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
@@ -63,13 +64,22 @@ export const TEMPLATE_INSTANTIATION_FAILED_CODE = "TEMPLATE_INSTANTIATION_FAILED
  *  (a `group` stage's `config.pools.count`), then the declared PointsRule,
  *  then the kind-specific `config` escape hatch spread LAST so it can
  *  override either sugar field if a catalog author ever needs to. */
-function effectiveStageConfig(stage: TemplateStage): Record<string, unknown> {
+export function effectiveStageConfig(stage: TemplateStage): Record<string, unknown> {
   const cfg: Record<string, unknown> = {};
   if (stage.kind === "group" && stage.groups !== undefined) {
     cfg.pools = { count: stage.groups };
   }
   if (stage.points !== undefined) cfg.points = stage.points;
   Object.assign(cfg, stage.config ?? {});
+  // The THIRD door onto `stages.config` (D2a, review 2026-09-18). `TemplateStage.config`
+  // is `z.record(z.string(), z.unknown())`, so any `rules` key a template declared would
+  // be inserted verbatim below: no sport gate, no allowlist, no merged parse, for any
+  // sport — the exact bypass D2a closed on `createStages`. Not reachable today, because
+  // templates resolve against an in-code catalog and `catalog.test.ts` now asserts no
+  // stage in it carries `rules`. That test is the fast feedback; this is the guard, and
+  // D2a's whole argument is that a door is shut by a guard rather than by an assumption
+  // about who walks through it.
+  assertConfigCarriesNoRules(cfg);
   return cfg;
 }
 

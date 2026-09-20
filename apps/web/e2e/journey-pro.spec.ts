@@ -120,8 +120,50 @@ test.describe.serial("pro lifecycle", () => {
   });
 
   test("start the tournament from the division console", async ({ page, request }) => {
+    // Publish the competition BEFORE starting, because `draft` is the one
+    // status under which the promotion this test exists to cover cannot fire.
+    // `createCompetition` never inserts `status` (usecases/competitions.ts),
+    // so every competition this suite makes falls to the column default
+    // 'draft', and `startDivision`'s `update competitions set status = 'live'
+    // ... and status = 'published'` therefore matches no row. Without this
+    // PATCH the `start-confirm-competition` assertion below is a test of an
+    // absent line and the `live` poll at the end can never pass.
+    // PATCH is the ONLY path that can set status: `CreateCompetition` declares
+    // no `status` and zod STRIPS it, so a create sent one returns 201 draft
+    // with no error (e2e/settings-support.ts's seedCompetition, note 2).
+    const published = await apiJson<{ status: string }>(
+      request,
+      `/api/v1/competitions/${competitionId}`,
+      "PATCH",
+      { status: "published" },
+    );
+    expect(
+      published.status,
+      `publishing the competition failed: ${JSON.stringify(published.error)}`,
+    ).toBe(200);
+    // The PATCH's own row, not a re-read: a 200 that silently kept 'draft'
+    // would leave every assertion below testing the wrong precondition.
+    expect(published.data?.status, "the competition must actually be published").toBe("published");
+
     await page.goto(await divisionPath(page.request, divisionId));
     await page.getByRole("button", { name: "Start tournament" }).click();
+    // Start now confirms first (design 2026-09-20) — the button opens a dialog
+    // and POSTs nothing. The consequences the organiser is shown are asserted
+    // here, not just the presence of a sheet: a dialog that renders an empty
+    // body would still let this journey through.
+    const confirm = page.getByTestId("start-confirm");
+    await expect(confirm).toBeVisible({ timeout: 20_000 });
+    await expect(confirm).toContainText("The timetable goes live to players now.");
+    await expect(confirm.getByTestId("start-confirm-entrants")).toBeVisible();
+    // The competition is published, so the promotion really happens and the
+    // dialog owes the organiser that sentence. Its TEXT, not just its
+    // presence: the line's whole job is naming which move is about to be made,
+    // and `start-confirm-dialog.tsx` renders a consequence only when it is
+    // true for this division.
+    await expect(confirm.getByTestId("start-confirm-competition")).toHaveText(
+      "The competition moves from published to live.",
+    );
+    await page.getByTestId("start-confirm-confirm").click();
     // Fixtures were pre-generated, so quick-start generates 0 and only
     // refreshes (no redirect). The button label flips to "Starting…" while the
     // POST is in flight, so poll the API for the real status change.
@@ -138,6 +180,28 @@ test.describe.serial("pro lifecycle", () => {
         { timeout: 20_000 },
       )
       .toBe("active");
+    // And the consequence the dialog promised, in the data: the parent
+    // competition really moved published -> live. The promotion rides in
+    // startDivision's own status transaction, so this is settled by the time
+    // the division reads `active` — polled anyway, on the same terms as the
+    // division read above, so a transient API hiccup is a retry not a red.
+    await expect
+      .poll(
+        async () => {
+          try {
+            return (
+              await apiJson<{ status: string }>(
+                request,
+                `/api/v1/competitions/${competitionId}`,
+              )
+            ).data?.status;
+          } catch {
+            return undefined;
+          }
+        },
+        { timeout: 20_000 },
+      )
+      .toBe("live");
     await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
     await expect(page.getByRole("link", { name: /^Score/ }).first()).toBeVisible({
       timeout: 20_000,

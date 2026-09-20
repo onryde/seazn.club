@@ -191,6 +191,29 @@ describe("a voided row says WHY it is struck through", () => {
   });
 });
 
+// Swiss / KO award bye: isBye short-circuits before the voided sub-line, so a
+// forfeited+award sit-out used to print only "{name} has a bye" and hide the
+// walkover. Pin both halves — bye label AND won (w/o) — derived from the same
+// helpers the row uses.
+describe("an awarded bye names the sit-out AND the walkover", () => {
+  it("shows schedule.bye and schedule.outcome.wonWo for a one-sided award", () => {
+    const outcome = { kind: "award" as const, winner: "e1" };
+    const html = rowHtml(
+      fx({
+        status: "forfeited",
+        outcome,
+        home_entrant_id: "e1",
+        away_entrant_id: null,
+        scheduled_at: null,
+      }),
+    );
+    expect(html).toContain(msg("schedule.bye", { name: "Alpha" }));
+    expect(html).toContain(outcomeText(msg, outcome, ENTRANTS)!);
+    expect(html).toContain('data-testid="run-sheet-bye"');
+    expect(rowAction(html)).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // FINDING 8 at its CALL SITE. `hasAssignedScorer`'s own table lives in
 // `lib/__tests__/fixture-row-action.test.ts`; this pins that the ROW asks it,
