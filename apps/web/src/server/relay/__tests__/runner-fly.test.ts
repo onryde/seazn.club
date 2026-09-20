@@ -19,7 +19,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "../fly-client";
 import { ENDING_TIMEOUT_SECONDS, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
-import { CREATE_OUTCOME_UNKNOWN, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, createFailedFrom, fromFlyState, isUnestablishedCreate } from "../runner-fly";
+import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, createFailedFrom, fromFlyState, isUnestablishedCreate } from "../runner-fly";
 import { OBSERVED_STATES, machineNameFor, stepRunner } from "../domain/runner";
 import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
 import { log } from "@/server/logger";
@@ -459,8 +459,46 @@ describe("FlyRunner", () => {
     //    Machine nobody is watching.
     expect(createFailedFrom(new Error("something else entirely"))).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
     expect(createFailedFrom(undefined)).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
-    // …and the fact is read off the FIELDS, so it agrees with the predicate that has always computed it.
+    // 5. N1 (money). A 409 the adapter could NOT adopt. This is the ONE status that PROVES a Machine is holding this
+    //    name: `adoptNamed` rethrows it as a non-retryable http 409 whose own message ends "do NOT create another
+    //    under this name". Nothing may read that sentence as "the create made nothing".
+    const collided = await throwOf((_url, init) =>
+      init.method === "POST" ? { status: 409, body: { error: "already_exists: unique machine name violation" } } : { status: 200, body: [] });
+    expect(collided).toBeInstanceOf(FlyApiError);
+    expect((collided as FlyApiError).status).toBe(409);
+    expect((collided as FlyApiError).message).toContain("do NOT create another under this name");
+    const collision = createFailedFrom(collided);
+    expect(collision).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
+    const heldByName = stepRunner(creating, collision, at);
+    expect(heldByName.next.state).toBe("lost");
+    expect(heldByName.effects).toEqual([{ type: "force_destroy" }]);  // by NAME — the only call that can free it
+    expect(heldByName.signal).toBeNull();
+
+    // 6. N1 (money). A plain 500 on the POST. `isRetryable` admits only 429/502/503/504, so `withRetry` exits at its
+    //    `if (!err.retryable)` line BEFORE `onAmbiguous` ever runs: no lookup happened, nothing established absence,
+    //    and a 500 is exactly the case where Fly may have made a Machine and then failed to tell us about it.
+    const server500 = await throwOf(() => ({ status: 500, body: { error: "internal" } }));
+    expect((server500 as FlyApiError).status).toBe(500);
+    expect((server500 as FlyApiError).retryable).toBe(false);
+    const unclear = createFailedFrom(server500);
+    expect(unclear).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
+    expect(stepRunner(creating, unclear, at)).toMatchObject({ next: { state: "lost" }, effects: [{ type: "force_destroy" }], signal: null });
+
+    // The refusal set is an ALLOWLIST, and the two statuses this finding is about must never join it.
+    expect(CREATE_REFUSED_STATUSES).not.toContain(409);
+    expect(CREATE_REFUSED_STATUSES).not.toContain(500);
+    // …and every status that IS in it reports "made nothing", which row 2 spot-checks through the real adapter.
+    for (const status of CREATE_REFUSED_STATUSES) {
+      expect(createFailedFrom(new FlyApiError(`fly POST /machines: HTTP ${status}`, "http", status, false, null, 1)).outcomeUnknown).toBe(false);
+    }
+
+    // …and the fact is still read off the FIELDS. `isUnestablishedCreate` stays the TELEMETRY predicate (the client's
+    // downgrade signature) and the domain's `outcomeUnknown` is now strictly WIDER than it: a 409 and a 500 are
+    // unknown WITHOUT being "unestablished", so `markUnestablished` writes no CREATE_OUTCOME_UNKNOWN row for either.
+    // Pinned as a divergence rather than left as a surprise; carried to Task 10 (ops sees the client's own attempt row).
     expect(isUnestablishedCreate(unsettled)).toBe(true);
+    expect([collided, server500].map((e) => isUnestablishedCreate(e))).toEqual([false, false]);
+    expect([collision, unclear].map((t) => t.outcomeUnknown)).toEqual([true, true]);
   });
 
   it("destroy resolves on 200 and on 404 (idempotent, C7) and rejects on a 5xx after the client's retries", async () => {

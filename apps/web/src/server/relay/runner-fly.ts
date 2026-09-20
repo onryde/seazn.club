@@ -97,10 +97,47 @@ export function isUnestablishedCreate(e: unknown): e is FlyApiError {
  *  Read off the FIELDS, never the message (T5-g). An error that is not a `FlyApiError` at all is the safe-direction
  *  default — unknown, not assumed-clean: the cost of being wrong that way is one extra force_destroy by name, which
  *  the provider answers as success when nothing is there; the cost of the other way is up to MAX_DURATION_MINUTES of
- *  a Machine nobody is watching. A 409 never reaches here — `create` adopts it (T5-c). */
+ *  a Machine nobody is watching.
+ *
+ *  Re-review N1 (money). The first draft delegated the fact to `isUnestablishedCreate` and DEFAULTED TO KNOWN-CLEAN,
+ *  which left this finding's own class open at its two highest-evidence points:
+ *
+ *    - **a 409 that could not be adopted.** The line that stood here — "A 409 never reaches here, `create` adopts it
+ *      (T5-c)" — was a hypothesis written as a fact, and it is false: `adoptNamed` rethrows a non-retryable http 409
+ *      when neither handle can produce the Machine, and THAT error's own message ends "do NOT create another under
+ *      this name". It was being reported as "the create made nothing", for the one status that proves one exists.
+ *    - **a plain 500.** `isRetryable` admits only 429/502/503/504, so `withRetry` throws at its `if (!err.retryable)`
+ *      line BEFORE `onAmbiguous` runs — no lookup, no absence established. A 5xx is exactly where Fly may have built
+ *      the Machine and then failed to tell us.
+ *
+ *  So the default is INVERTED: unknown unless something positively proves nothing was created. There are exactly two
+ *  such proofs, and the second is not a status at all.
+ */
+export const CREATE_REFUSED_STATUSES: readonly number[] = [400, 401, 402, 403, 404, 405, 422];
+
+/** Proof 1. Fly refused the REQUEST, so it never became a Machine.
+ *
+ *  An ALLOWLIST, deliberately not "every 4xx except 409": 408 and 425 are 4xx that prove nothing either, and a status
+ *  this file does not recognise — or no status at all — has to fall through to UNKNOWN, which is the safe direction.
+ *  Adding a status here is a claim that Fly CANNOT have created anything under it; check before adding one. */
+function refusedOutright(e: FlyApiError): boolean {
+  return e.status !== null && CREATE_REFUSED_STATUSES.includes(e.status);
+}
+
+/** Did this create failure PROVE that Fly holds nothing under the requested name?
+ *
+ *  Proof 2 is `retryable: true`, and it does not mean "worth retrying". `withRetry` lets a CREATE's retryable escape
+ *  only on `absenceConfirmed` — a settled list that looked for this exact name and did not find it (T5-b / N-C1: it
+ *  is the domain's licence to post attempt + 1 under a DIFFERENT name, so only a confirmed absence may earn it). It
+ *  is therefore a stronger proof than any status. This is a CROSS-MODULE coupling and is invisible from this file:
+ *  weaken that invariant in `fly-client.ts` and this line goes with it. */
+export function createMadeNothing(e: FlyApiError): boolean {
+  return e.retryable || refusedOutright(e);
+}
+
 export function createFailedFrom(e: unknown): Extract<RunnerTrigger, { type: "create_failed" }> {
   if (!(e instanceof FlyApiError)) return { type: "create_failed", retryable: false, outcomeUnknown: true };
-  return { type: "create_failed", retryable: e.retryable, outcomeUnknown: isUnestablishedCreate(e) };
+  return { type: "create_failed", retryable: e.retryable, outcomeUnknown: !createMadeNothing(e) };
 }
 
 /** The port's three-value summary of a Machine the provider still holds.

@@ -123,7 +123,12 @@ export class CloudflareIngest implements IngestProvider {
       });
     } catch (e) {
       record(null, null, "network", meta.subjectId ?? null);
-      throw e;
+      // Re-review N2. The ONE throw in this adapter that bypassed the floor below — and the one whose message we did
+      // not write: undici rejects with `TypeError: fetch failed`, and a url-shaped failure quotes the url back. The
+      // sibling driver's twin (`fly-client.ts`'s `transportFailure`) does not rethrow either; it builds its own
+      // sentence, which is what makes the floor absolute rather than best-effort. The original is deliberately NOT
+      // attached as `cause`: Node prints a cause beneath the message, so attaching it puts back what this redacts.
+      throw new Error(this.red(`cloudflare ${meta.operation}: request failed before a response (${String((e as Error)?.message ?? e)})`));
     }
     const json = (await res.json().catch(() => ({ success: false }))) as CfEnvelope<T>;
     // The `code != null` test, not a bare `errors?.[0]` (lane-A minors, Task 4

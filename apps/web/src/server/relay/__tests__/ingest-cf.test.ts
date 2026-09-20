@@ -394,6 +394,26 @@ describe("CloudflareIngest", () => {
   // organiser's real destination stream key — the credential this lane otherwise keeps sealed end to end. Whether
   // Cloudflare echoes a rejected value back is UNMEASURED and deliberately not measured live; the finding is the
   // missing floor, so these rows script a provider that DOES echo and assert the floor holds.
+  it("N2: the TRANSPORT failure is redacted too — the one throw in this adapter whose message Cloudflare did not write", async () => {
+    const TOK = "cf-transport-token-SECRET";
+    // undici's real shape is `TypeError: fetch failed`; the worst case a runtime can add is the request itself, and
+    // this adapter's urls are built from ids while its one credential travels in a header. The floor is for that.
+    const dead = new CloudflareIngest({
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError(`fetch failed: https://api.cloudflare.com/client/v4/accounts/acc1/stream (authorization: Bearer ${TOK})`);
+      }) as unknown as typeof fetch,
+      accountId: "acc1", token: TOK,
+    });
+    const err = await dead.storageUsage().then(() => null, (e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).not.toContain(TOK);
+    expect(err!.message).toContain("[redacted]");                                        // positive twin: it ran
+    expect(err!.message).toContain("cloudflare storageUsage: request failed before a response");  // …kept the diagnosis
+    expect(err!.message).toContain("fetch failed");                                      // …and the runtime's own words
+    // And it does not ride along underneath: Node prints `cause` below the message, which would undo all of the above.
+    expect(JSON.stringify((err as Error & { cause?: unknown }).cause ?? null)).not.toContain(TOK);
+  });
+
   it("I4: a Cloudflare refusal that quotes the destination stream key back does not put it in the thrown message — nor the account token, on any call; the positive twin is that something WAS redacted and the rest of the sentence survives", async () => {
     const KEY = "yt-live-key-SECRET";
     const TOK = "cf-account-token-SECRET";
