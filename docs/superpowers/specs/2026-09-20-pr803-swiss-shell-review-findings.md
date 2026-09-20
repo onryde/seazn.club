@@ -15,6 +15,35 @@ ran. Do not cite that run as evidence either way.
 
 ---
 
+## OWNER RULINGS (2026-09-20)
+
+1. **No boardgame knockout data exists in prod**, so C2 is LATENT, not an
+   incident. Still owed — it regresses an existing feature the moment such a
+   division is created.
+2. **The Actions billing block is fixed**, so CI runs again. #803's all-red
+   run remains meaningless (0 steps); re-run rather than cite it.
+3. **"Unpair only if no matches started or scored for that round."**
+
+Ruling 3 replaces the PR's per-row bye classification in the GUARD with a
+whole-round rule, and it is stricter than what shipped. One refinement, flagged
+to the owner: taken literally it would make every odd-field round
+un-unpairable, because a bye IS a result row. So the guard refuses when ANY row
+in the round shows evidence of play, exempting only a genuine system-generated
+bye — exactly one seat null, `outcome.kind === "award"`, and the seated side is
+the winner. A TWO-SIDED award (forfeit / retirement) is a played match and
+blocks Unpair. That is the distinction `competition.ts:89` already makes
+correctly and `swiss-shell.ts:55` gets wrong.
+
+Consequences for the fix:
+- The evidence check runs over ALL rows in the round, never `nonByeIds`.
+- Evidence is monotonic — `config_snapshot is not null OR exists(score_events)`
+  — because `fixtures.status` moves BACKWARDS when a `core.start` is voided
+  (`append-event.ts:119-129`). Status may be used only to ADD refusals
+  (`in_play`, `abandoned`, `decided`, `forfeited`), never as the sole test.
+- Align with the repo's canonical destructive guard at `stages.ts:2092-2104`,
+  which also consults `match_states`, `match_reports`, `official_marks` and
+  `suspensions`. A subset guard on a destructive path is how C1 happened.
+
 ## C1 — Unpair silently destroys a real result (VERIFIED)
 
 `apps/web/src/lib/swiss-shell.ts:55-56`
