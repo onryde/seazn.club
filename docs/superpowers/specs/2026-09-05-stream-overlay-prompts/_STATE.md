@@ -28,7 +28,7 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** Task 4 REVIEW — implementer done, committed `32c3c8b82` (ingest-cf.ts + test; relay tree 295/270/0/25 pending, exit 0; 15/15 mutants); reviewer writes `task-4-review.md` (range ec8aaba00..32c3c8b82). Fix round, if any, RESUMES the Task 4 implementer. Task 3 complete `4a11c1b4a`.
+**In flight at time of writing:** Task 4 RE-REVIEW 1 — fix round 1 committed `09f3aeea6` (relay 296/271/0/25 exit 0, 15/15 mutants). The review's CRITICAL was real: retention was sent NESTED inside `recording`, the shape measured as silently dropped (specs/2026-09-11-cloudflare-stream-measured.md:26,92) — now top-level WITH a read-back that throws on mismatch. PLAN OWED at the lane-A plan pass (before Task 12): plan:4686,4730,4797 still carry the nested shape. Task 3 complete `4a11c1b4a`; Task 4 base `32c3c8b82`.
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
