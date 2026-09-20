@@ -2403,6 +2403,7 @@
   "launch.confirm.entrants": "Entrant list closes. Withdrawals still work; no one new can be added.",
   "launch.confirm.competition": "The competition moves from published to live.",
   "launch.confirm.format": "The format is already locked — fixtures exist.",
+  "launch.confirm.formatLocksNow": "Fixtures are generated now, and the format locks with them.",
   "launch.confirm.rules": "Match rules stay editable for stages that have not begun. Once a stage's first match is scored, its format locks too.",
   "launch.schedule": "Schedule",
   "danger.deleteFailed": "Delete failed",

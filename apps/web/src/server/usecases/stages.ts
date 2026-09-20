@@ -59,6 +59,7 @@ import {
   latestSeatedSwissRound,
   nextUnseatedSwissRound,
   planSwissShells,
+  swissBoardsForField,
   swissRoundHasPlayedResult,
   SWISS_ROUNDS_REQUIRED_CODE,
   SWISS_ROUNDS_REQUIRED_MESSAGE,
@@ -835,6 +836,7 @@ type SwissGenResult = { gen: GenFixture[]; seatedCount: number };
 async function swissGen(
   tx: Tx,
   stageId: string,
+  divisionId: string,
   cfg: Record<string, unknown>,
   entrants: ActiveEntrant[],
   existing: SwissExistingFixture[],
@@ -953,9 +955,17 @@ async function swissGen(
     { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
   );
 
-  const roundShells = existing
-    .filter((f) => f.round_no === target)
-    .sort((a, b) => a.seq_in_round - b.seq_in_round);
+  // The shells were minted for the field as it was; a withdrawal since then has
+  // resized it. Bring THIS round (and only this round) into line before anyone
+  // is seated onto it — see reconcileSwissRoundShells.
+  const roundShells = await reconcileSwissRoundShells(
+    tx,
+    stageId,
+    divisionId,
+    target,
+    existing,
+    entrants.length,
+  );
   const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
   const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
 
@@ -994,6 +1004,156 @@ async function swissGen(
   }
 
   return { gen: [], seatedCount };
+}
+
+/**
+ * Bring round `target`'s shells into line with the CURRENT active field, and
+ * return the round as it now stands (2026-09-20 hardening, Task 1.0).
+ *
+ * WHY this exists. After Start the only roster change left is a withdrawal
+ * (`enrollEntrants` refuses additions on an `active` division), and a
+ * withdrawal is a status flip, not a delete — the row survives as `withdrawn`
+ * and drops straight out of this path's `status in ('registered','confirmed')`
+ * field. The shells, however, were minted once for the field as it was at the
+ * first Generate and were never revisited, so the seating loop below walked
+ * pre-minted shells against a newly-sized `round.pairings` and threw
+ * `"swiss shell count mismatch for pairing"` / `"swiss bye shell missing for
+ * pairing"`. A parity change is the NORMAL consequence of a withdrawal, so a
+ * player not showing for round 3 ended the tournament.
+ *
+ * RECONCILE, never delete-and-recreate (owner ruling 2026-09-20, option (a),
+ * refined). Scheduling a shell AHEAD of Pair is a shipped, tested feature —
+ * `apps/web/e2e/swiss-shell.spec.ts` pins a TBD shell's `scheduled_at` and
+ * asserts it survives Pair and re-Pair. Recreating the round would change
+ * fixture ids and discard `scheduled_at` / `court_id`, silently losing an
+ * organiser's advance layout. So only the DELTA moves: surplus boards go from
+ * the highest `seq_in_round` down, only the shortfall is minted, and the bye
+ * shell is added or removed exactly as parity requires. Surviving rows keep
+ * their ids and their slots. `swissBoardsForField` is the one authority for
+ * the shape — shared with `planSwissShells`, so the mint and the reconcile can
+ * never drift onto different arithmetic.
+ *
+ * LAZY scope: only the round being paired. Rounds beyond it are also
+ * wrong-sized after a withdrawal and stay that way until their own Pair
+ * reaches them. That is the narrower write on a destructive path, and a later
+ * round has no results to lose by being reshaped late; reconciling every
+ * unseated round here would widen the blast radius for a cosmetic fixture
+ * count. Deliberate, and pinned by a test.
+ *
+ * GUARDS. The advisory lock is already held — `generateStageFixturesWrite`
+ * takes `pg_advisory_xact_lock` before it reads either the entrant list or
+ * `existing` — so everything below is read UNDER the lock, which is this
+ * file's stated convention. Three arms, none covering for another: the round
+ * must be wholly unseated, must show no played status or award, and must carry
+ * no recorded match data under the CANONICAL `fixtureEvidenceSql` (not a
+ * subset — a subset guard on a destructive path is how C1 happened). The
+ * evidence test is monotonic on purpose: `fixtures.status` moves BACKWARDS
+ * when a `core.start` is voided, so status may only ADD refusals.
+ *
+ * Refusals reuse `STAGE_NOT_READY`, the code this function's siblings already
+ * raise, so no new organiser-facing string is introduced here.
+ */
+async function reconcileSwissRoundShells(
+  tx: Tx,
+  stageId: string,
+  divisionId: string,
+  target: number,
+  existing: readonly SwissExistingFixture[],
+  fieldSize: number,
+): Promise<SwissExistingFixture[]> {
+  const bySeq = (a: SwissExistingFixture, b: SwissExistingFixture) =>
+    a.seq_in_round - b.seq_in_round;
+  const isByeShell = (f: SwissExistingFixture) => f.ext_key?.endsWith("-bye") === true;
+
+  const round = existing.filter((f) => f.round_no === target).sort(bySeq);
+  const boardRows = round.filter((f) => !isByeShell(f));
+  const byeRow = round.find(isByeShell);
+
+  const { boards, bye } = swissBoardsForField(fieldSize);
+  // The overwhelmingly common case: the field has not moved, so nothing is
+  // written and every row keeps its id, its schedule and its court.
+  if (boardRows.length === boards && (byeRow !== undefined) === bye) return round;
+
+  if (round.some((f) => isSwissBoardSeated(f))) {
+    throw new EngineError("STAGE_NOT_READY", "swiss round is already partly seated — reconcile refused", {
+      stageId,
+      round: target,
+    });
+  }
+  if (swissRoundHasPlayedResult(round, target)) {
+    throw new EngineError("STAGE_NOT_READY", "swiss round has played results — reconcile refused", {
+      stageId,
+      round: target,
+    });
+  }
+  const ids = round.map((f) => f.id);
+  if (ids.length > 0) {
+    const [blocked] = await tx<{ id: string }[]>`
+      select f.id from fixtures f
+      where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
+      limit 1`;
+    if (blocked) {
+      throw new EngineError("STAGE_NOT_READY", "swiss round has recorded match data — reconcile refused", {
+        stageId,
+        round: target,
+        fixtureId: blocked.id,
+      });
+    }
+  }
+
+  // Deletes first: `boardRows` is seq-ascending, so the tail IS the highest
+  // `seq_in_round` down, and dropping it frees the seats the mint below wants.
+  const survivors = boardRows.slice(0, boards);
+  const doomed = [...boardRows.slice(boards), ...(byeRow && !bye ? [byeRow] : [])];
+  if (doomed.length > 0) {
+    await tx`delete from fixtures where id in ${tx(doomed.map((f) => f.id))}`;
+  }
+
+  const kept: SwissExistingFixture[] = [...survivors];
+  if (bye && byeRow) {
+    // A surviving bye belongs at `boards + 1`. That seat is free either way:
+    // the delete above vacated it when the field shrank, and it sits beyond
+    // every existing row when the field grew.
+    if (byeRow.seq_in_round !== boards + 1) {
+      await tx`update fixtures set seq_in_round = ${boards + 1} where id = ${byeRow.id}`;
+    }
+    kept.push({ ...byeRow, seq_in_round: boards + 1 });
+  }
+
+  // `org_id` and `fixture_no` are assigned by BEFORE INSERT triggers, exactly
+  // as they are for the shell mint in generateStageFixturesWrite.
+  const shell = (extKey: string, seqInRound: number) => ({
+    id: randomUUID(),
+    stage_id: stageId,
+    division_id: divisionId,
+    round_no: target,
+    seq_in_round: seqInRound,
+    home_entrant_id: null,
+    away_entrant_id: null,
+    ext_key: extKey,
+    status: "scheduled",
+    outcome: null,
+  });
+  const minted = [] as ReturnType<typeof shell>[];
+  for (let b = survivors.length + 1; b <= boards; b++) {
+    minted.push(shell(`sw-r${target}-b${b}`, b));
+  }
+  if (bye && !byeRow) minted.push(shell(`sw-r${target}-bye`, boards + 1));
+  if (minted.length > 0) await tx`insert into fixtures ${tx(minted)}`;
+
+  for (const row of minted) {
+    kept.push({
+      id: row.id,
+      ext_key: row.ext_key,
+      round_no: row.round_no,
+      seq_in_round: row.seq_in_round,
+      status: row.status,
+      home_entrant_id: null,
+      away_entrant_id: null,
+      outcome: null,
+    });
+  }
+  return kept.sort(bySeq);
 }
 
 // Distribute seed-ordered entrants into `count` pools by seeded snake
@@ -1654,7 +1814,7 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
     let swissSeatedCount = 0;
     let gen: GenFixture[];
     if (stage.kind === "swiss") {
-      const swiss = await swissGen(tx, stageId, stage.config, entrants, existing);
+      const swiss = await swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing);
       gen = swiss.gen;
       swissSeatedCount = swiss.seatedCount;
     } else if (stage.kind === "americano") {

@@ -2536,6 +2536,7 @@ export type DictionaryKey =
   | "launch.confirm.competition"
   | "launch.confirm.entrants"
   | "launch.confirm.format"
+  | "launch.confirm.formatLocksNow"
   | "launch.confirm.lead"
   | "launch.confirm.rules"
   | "launch.confirm.title"

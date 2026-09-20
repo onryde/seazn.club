@@ -17,6 +17,7 @@ import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startClosesEntrantList } from "@/lib/open-entry-stages";
 import { startPromotesCompetition } from "@/lib/start-promotes-competition";
+import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
 
 interface Props {
@@ -156,6 +157,9 @@ export function LaunchActions({
         open={confirming}
         entrantsLock={startClosesEntrantList(stageKinds)}
         competitionPromotes={startPromotesCompetition(competitionStatus)}
+        // The page already holds this division's fixtures for the gate sheet, so
+        // the predicate costs no extra read — see `fixtures` above.
+        formatLocked={formatAlreadyLocked(fixtures.length)}
         busy={busy}
         onConfirm={() => {
           setConfirming(false);

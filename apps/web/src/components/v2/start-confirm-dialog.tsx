@@ -18,9 +18,10 @@
 // The consequences are the verified lock table from the design, not a guess:
 // start closes the entrant list (withdrawals excepted, and open formats
 // exempt); it moves the PARENT competition published → live, but only from
-// `published`; it does NOT lock the format, which locked at Generate the
-// moment fixtures existed; and it does NOT lock match rules, which lock per
-// stage as each stage's first match is scored.
+// `published`; it does NOT itself lock the format, which locks at Generate the
+// moment fixtures exist — ON THE QUICK-START PATH THAT IS THIS VERY PRESS, so
+// the line has two forms and neither is omitted; and it does NOT lock match
+// rules, which lock per stage as each stage's first match is scored.
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -38,6 +39,14 @@ export function StartConfirmDialog({
    *  Omitted, never softened, for the same reason as the entrants line: for a
    *  draft or an already-live competition it is simply untrue. */
   competitionPromotes,
+  /** Is the format ALREADY locked — i.e. do fixtures exist yet?
+   *  `lib/format-already-locked.ts` mirrors `replaceStages`'s own guard. This
+   *  one is NOT omitted when false, it is REPLACED: on the quick-start path
+   *  `/start` is what generates the fixtures, so the format locks a moment
+   *  later rather than not at all, and the organiser is owed that either way.
+   *  Saying "already locked — fixtures exist" over a page reading "No fixtures
+   *  yet" was a live defect found by driving the product on 2026-09-20. */
+  formatLocked,
   busy = false,
   onConfirm,
   onCancel,
@@ -45,6 +54,7 @@ export function StartConfirmDialog({
   open: boolean;
   entrantsLock: boolean;
   competitionPromotes: boolean;
+  formatLocked: boolean;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -80,7 +90,9 @@ export function StartConfirmDialog({
         {competitionPromotes && (
           <li data-testid="start-confirm-competition">{msg("launch.confirm.competition")}</li>
         )}
-        <li>{msg("launch.confirm.format")}</li>
+        <li data-testid={formatLocked ? "start-confirm-format-locked" : "start-confirm-format-locks"}>
+          {msg(formatLocked ? "launch.confirm.format" : "launch.confirm.formatLocksNow")}
+        </li>
         <li>{msg("launch.confirm.rules")}</li>
       </ul>
     </ConfirmDialog>

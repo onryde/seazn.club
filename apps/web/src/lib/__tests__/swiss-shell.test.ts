@@ -100,6 +100,54 @@ describe("seating / readiness helpers", () => {
       ),
     ).toBe(false);
   });
+
+  // Task 0.2 (2026-09-20 hardening programme). The finding this pair closes
+  // said the two bye guards covered for each other, because every test bye row
+  // was BOTH `-bye`-keyed AND award-outcomed — the shape of the row in the test
+  // directly above. C1 has since deleted the `ext_key` arm outright
+  // (`isSwissByeRow`, `f.ext_key?.endsWith("-bye") === true || isAwardOutcome`,
+  // is gone; `isOneSidedAwardBye` reads seats and outcome only). These two rows
+  // are the witnesses that it really is gone, one for each direction: naming a
+  // row `-bye` must not buy it an exemption, and a genuine bye must not lose
+  // one for being named like a board.
+  it("a row NAMED like a bye but PLAYED as a match still blocks Unpair", () => {
+    expect(
+      swissRoundHasPlayedResult(
+        [
+          {
+            round_no: 1,
+            status: "decided",
+            outcome: { kind: "win", winner: "a", loser: "b" },
+            ext_key: "sw-r1-bye",
+            home_entrant_id: "a",
+            away_entrant_id: "b",
+          },
+        ],
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("a genuine bye is exempt even when its ext_key names a BOARD", () => {
+    // `addFixture` and a hand-edited key can both produce this; the exemption
+    // is earned by the seats, never by the name.
+    expect(
+      swissRoundHasPlayedResult(
+        [
+          {
+            round_no: 1,
+            status: "forfeited",
+            outcome: { kind: "award", winner: "e1" },
+            ext_key: "sw-r1-b2",
+            home_entrant_id: "e1",
+            away_entrant_id: null,
+          },
+        ],
+        1,
+      ),
+    ).toBe(false);
+  });
+
   it("decided non-bye blocks Unpair", () => {
     expect(
       swissRoundHasPlayedResult(
