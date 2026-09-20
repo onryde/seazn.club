@@ -690,14 +690,17 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
       l: number,
       pts: number,
       won: boolean,
+      // The state the metrics are read from. Defaults to the folded state;
+      // the `award` case below passes an unplayed one (see there).
+      from: BoardgameState = state,
     ): StandingsDelta => ({
-      entrantId: state.entrants[side],
+      entrantId: from.entrants[side],
       played: 1,
       won: w,
       drawn: d,
       lost: l,
       points: pts, // half-points — integer (spec 04 §9.4)
-      metrics: sideMetrics(state, side, won),
+      metrics: sideMetrics(from, side, won),
     });
 
     switch (outcome.kind) {
@@ -705,6 +708,35 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         const winnerSide = sideOf(state, outcome.winner);
         const winner = build(winnerSide, 1, 0, 0, cfg.scoring.win, true);
         const loser = build(opponent(winnerSide), 0, 0, 1, cfg.scoring.loss, false);
+        return winnerSide === "home" ? [winner, loser] : [loser, winner];
+      }
+      case "award": {
+        // A bye or a walkover — a fixture nobody played. THIS KERNEL NEVER
+        // EMITS IT: boardgame's own `core.forfeit` decides a `win` with
+        // method "forfeit" (decideResult above), which is why this case was
+        // missing until 2026-09-20 and why chess/draughts/go threw
+        // INVALID_EVENT the moment a competition-layer bye reached the table
+        // (Swiss odd-field sit-out, knockout seeded bye — apps/web
+        // engine-db/competition.ts `awardByeDelta`). The other seven modules
+        // all handle it because their kernels DO fold a forfeit to an award.
+        //
+        // The advancing side scores what a win scores, from cfg — FIDE's
+        // full-point bye, and the same pair total (`win + loss`) that
+        // `declaredPointsSets` already declares, so the conformance kit
+        // holds. `cfg.byeScore` is deliberately NOT read here: a half-point
+        // bye would take the pair outside declaredPointsSets, and this
+        // function cannot tell a bye from a two-sided walkover anyway — by
+        // the time it is called the empty seat has been filled with a
+        // phantom. Scoring a bye below a win is a competition-layer
+        // decision, which is what byeScore's own comment says.
+        //
+        // Metrics come from an UNPLAYED state so `colorOf` excludes it from
+        // colour history, exactly as it already excludes a forfeit — nobody
+        // sat at a board, so "Games as White" must not move.
+        const unplayed: BoardgameState = { ...state, forfeited: true };
+        const winnerSide = sideOf(state, outcome.winner);
+        const winner = build(winnerSide, 1, 0, 0, cfg.scoring.win, true, unplayed);
+        const loser = build(opponent(winnerSide), 0, 0, 1, cfg.scoring.loss, false, unplayed);
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "draw":

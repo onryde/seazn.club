@@ -88,6 +88,73 @@ describe("boardgame golden: forfeit + double forfeit", () => {
   });
 });
 
+// C2 (2026-09-20 review). `boardgame` was the ONLY one of the eight modules
+// with no `case "award"` in `standingsDelta`, so an award fell to
+// `default: invalid(...)` and threw INVALID_EVENT.
+//
+// The award does NOT come from this kernel — boardgame's own `core.forfeit`
+// folds to `{kind:"win", method:"forfeit"}` (see the forfeit golden above),
+// which is exactly why the case was never needed and never noticed missing.
+// It is synthesised by the COMPETITION layer for a fixture nobody played: a
+// Swiss odd-field sit-out, or a knockout seeded bye with one seat null
+// (apps/web `engine-db/competition.ts` awardByeDelta). Two live consequences
+// before this case existed: chess Swiss "Pair next" committed the bye write
+// and then 500'd on the unguarded recomputeStandings, and ANY existing
+// boardgame knockout with a seeded bye broke recomputeStandings,
+// rankedStageStandings and completeStageIfReady for its division.
+describe("boardgame: a competition-layer award (bye / walkover)", () => {
+  // `init` with no events, exactly as awardByeDelta builds it.
+  const fresh = boardgame.init(cfg, lineups);
+
+  it("ranks the advancing side exactly as a win, at cfg's own win score", () => {
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H" }, cfg, league, fresh);
+    expect(home).toMatchObject({
+      entrantId: "H",
+      played: 1,
+      won: 1,
+      drawn: 0,
+      lost: 0,
+      points: cfg.scoring.win,
+    });
+    expect(away).toMatchObject({ entrantId: "A", won: 0, lost: 1, points: cfg.scoring.loss });
+  });
+
+  it("keeps [home, away] lineup order when the AWAY seat is the one advancing", () => {
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "A" }, cfg, league, fresh);
+    expect(home.entrantId).toBe("H");
+    expect(away.entrantId).toBe("A");
+    expect(away.points).toBe(cfg.scoring.win);
+    expect(home.points).toBe(cfg.scoring.loss);
+  });
+
+  it("stays inside declaredPointsSets, so the conformance kit still holds", () => {
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H" }, cfg, league, fresh);
+    expect(boardgame.declaredPointsSets(cfg)).toContain(home.points + away.points);
+  });
+
+  it("takes its score from cfg, not a constant", () => {
+    // The default win score is 2, so a test that only ever asserted `2` could
+    // not tell a cfg read from a hard-coded half-point pair. This scheme
+    // differs from the default on purpose.
+    const custom = boardgame.configSchema.parse({ scoring: { win: 3, draw: 1, loss: 0 } });
+    expect(custom.scoring.win).not.toBe(cfg.scoring.win);
+    const state = boardgame.init(custom, lineups);
+    const [home] = boardgame.standingsDelta({ kind: "award", winner: "H" }, custom, league, state);
+    expect(home.points).toBe(custom.scoring.win);
+  });
+
+  it("is excluded from colour history, exactly as a forfeit is", () => {
+    // Nobody sat at a board, so crediting the bye recipient a game as White
+    // would put a game they never played into the `white`/`black` ledger.
+    // `colorOf` already excludes a forfeit for that reason; an award is the
+    // same class of non-game.
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H" }, cfg, league, fresh);
+    expect(fresh.colorOfHome).toBe("W"); // colours ARE on — the exclusion is deliberate, not vacuous
+    expect(home.metrics).toMatchObject({ wins: 1, white: 0, black: 0 });
+    expect(away.metrics).toMatchObject({ wins: 0, white: 0, black: 0 });
+  });
+});
+
 describe("boardgame contract declarations", () => {
   it("always allows draws, even in knockout (KO ties resolve via mini-matches)", () => {
     for (const stage of ["league", "group", "swiss", "knockout", "double_elim"] as const) {
