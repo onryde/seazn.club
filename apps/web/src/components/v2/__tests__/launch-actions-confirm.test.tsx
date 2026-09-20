@@ -192,6 +192,7 @@ describe("Start tournament confirms first", () => {
         'data-testid="start-confirm-entrants"',
       );
       // The other two consequences still stand — the carve-out is one line.
+      // `baseProps` carries one fixture, so the format line is the LOCKED form.
       expect(html).toContain(esc(enDict["launch.confirm.format"] as string));
       expect(html).toContain(esc(enDict["launch.confirm.rules"] as string));
     }
@@ -222,6 +223,7 @@ describe("Start tournament confirms first", () => {
       // The rest of the dialog is untouched by the carve-out — one line.
       expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.entrants"] as string));
       expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.format"] as string));
+      expect(html, competitionStatus).toContain('data-testid="start-confirm-format-locked"');
       expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.rules"] as string));
     }
   });
@@ -266,6 +268,65 @@ describe("Start tournament confirms first", () => {
       expect(html, locale).toContain('data-testid="start-confirm-competition"');
       // The three non-English locales must not be shipping the English
       // sentence — the failure mode a parity check cannot see.
+      if (locale !== "en") expect(line, locale).not.toBe(english);
+    }
+  });
+
+  it("does not claim the format is already locked when no fixtures exist", async () => {
+    // THE regression, found by driving the product on 2026-09-20: this dialog
+    // said "The format is already locked — fixtures exist" on a division whose
+    // own page, directly behind it, read "No fixtures yet — generate them when
+    // entrants are registered" and offered a Generate fixtures button. On the
+    // quick-start path `/start` is what GENERATES the fixtures, so at the
+    // moment the dialog renders there are none and nothing is locked.
+    //
+    // Unlike the entrants and competition lines, this one is REPLACED rather
+    // than omitted: the format does lock, a moment later, and the organiser is
+    // owed that fact in both states.
+    const empty = renderIsland(LaunchActions, baseProps({ fixtures: [] }));
+    await pressStart(empty);
+    const emptyProps = confirmProps(empty.tree());
+    expect(emptyProps.formatLocked).toBe(false);
+    const emptyHtml = renderDialog(emptyProps);
+    expect(emptyHtml, "the false claim must be gone").not.toContain(
+      esc(enDict["launch.confirm.format"] as string),
+    );
+    expect(emptyHtml).not.toContain('data-testid="start-confirm-format-locked"');
+    expect(emptyHtml, "and the truthful one must be there — not silence").toContain(
+      esc(enDict["launch.confirm.formatLocksNow"] as string),
+    );
+    expect(emptyHtml).toContain('data-testid="start-confirm-format-locks"');
+
+    // The positive pair: one fixture is all it takes, because the server's
+    // guard has no status or stage filter.
+    const one = renderIsland(LaunchActions, baseProps({ fixtures: FIXTURES }));
+    await pressStart(one);
+    const oneProps = confirmProps(one.tree());
+    expect(oneProps.formatLocked).toBe(true);
+    const oneHtml = renderDialog(oneProps);
+    expect(oneHtml).toContain(esc(enDict["launch.confirm.format"] as string));
+    expect(oneHtml).toContain('data-testid="start-confirm-format-locked"');
+    expect(oneHtml).not.toContain(esc(enDict["launch.confirm.formatLocksNow"] as string));
+
+    // Exactly one format line either way — never both, never none.
+    for (const html of [emptyHtml, oneHtml]) {
+      expect((html.match(/start-confirm-format-/g) ?? []).length).toBe(1);
+    }
+  });
+
+  it("ships the not-yet-locked line in all four locales", async () => {
+    // Same bar the other conditional lines are held to: a key present only in
+    // English renders English to a Spanish organiser, and no unit test that
+    // reads only `en` can see it.
+    const island = renderIsland(LaunchActions, baseProps({ fixtures: [] }));
+    await pressStart(island);
+    const props = confirmProps(island.tree());
+    const english = enDict["launch.confirm.formatLocksNow"] as string;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const line = DICTS[locale]!["launch.confirm.formatLocksNow"] as string | undefined;
+      expect(line, `${locale} is missing the key`).toBeTruthy();
+      const html = renderDialog(props, locale);
+      expect(html, locale).toContain(esc(line!));
       if (locale !== "en") expect(line, locale).not.toBe(english);
     }
   });
