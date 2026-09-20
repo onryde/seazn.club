@@ -110,9 +110,34 @@ orchestrator commits (implementers never commit).
   exists to police, so it would have reported CLEAN over 37 pinned refs); the NESTED retention shape synced to the
   measured top-level one at all four sites; and Task 12's N-1 acceptance criteria added as a new Step 3b.
 
-**In flight at time of writing:** lane A's BUILD work is COMPLETE and committed; nothing is dispatched. The next
-action is the lane-A whole-branch review (`lane-a-review-carries.md` is written), then the orchestrator's full gate
-against floor 17856, then ask the owner -> push -> PR -> `gh workflow run e2e.yml -f pr=<N>`.
+- **Lane-A whole-branch review -> Needs Fixes (0 Critical, 6 Important, 3 Minor, 2 gaps), then TWO fix rounds,
+  then a scoped re-review that judged the lane MERGEABLE.** `bcebfe657` closed I1-I6 + g1 + g2 + m1;
+  `1a0be8a8d` closed N1 + N2, found by the re-review. Every Important was a SEAM BETWEEN TASKS — nothing
+  shipped was wrong on its own, which is why eleven per-task reviews could not see them. Detail in
+  `lane-a-review.md`, `lane-a-fixes-report.md`, `lane-a-rereview.md`; rulings in the ledger.
+  The two that decide behaviour: the Machine's hard stop was anchored on `createdAt` while the session's
+  wall clock is anchored on `startedAt`, so the Machine always died FIRST and burned the session's one
+  retry (worst branch: a match that aired loses its replay link) — the slack now sits on the runner
+  deadline, not the wall clock. And a create that FAILS is now unknown-outcome unless something PROVES
+  otherwise: a 409 that could not be adopted, and any non-retryable 5xx, were both being reported as
+  "made nothing", the first being the one status that proves a Machine holds that name.
+  V410 gained three exit columns and the `<= 300` ceiling in the same amend, while it is still unmerged.
+
+- **FULL GATE at `1a0be8a8d`: `apps/web` 19389 total / 19303 passed / 0 FAILED / 86 pending, 1404 files,
+  EXIT 0** (floor 17856), plus the repo-root `scripts` suite **1926 / 1926 / 0 failed, EXIT 0**.
+  **Two environmental faults were diagnosed, not accepted:** the four `schedule-build-honours-locks` reds
+  pinned since Task 6 are a MISSING `PLACEMENT_SERVICE_HOST`/`SECRET` in the invocation (the service was
+  running the whole time) — 12/12 with them, and the pinned red is closed with its mechanism named; and
+  `smoke-db-shard-partition.test.ts` reds under full parallelism while passing 3/3 alone and 1926/1926 at
+  `--maxWorkers=3`, which is LOAD on a shelled-out child, a second cause of an error string this repo
+  already records for a nested worktree.
+
+**In flight at time of writing:** NOTHING is dispatched. Lane A is built, reviewed, fixed, re-reviewed and
+fully gated at `1a0be8a8d`. The next action is the OWNER's: ask -> push -> open the lane-A PR -> take its number
+-> `gh workflow run e2e.yml -f pr=<N>` -> wait -> only then mergeable. `e2e.yml` re-read 2026-09-20: it triggers on
+`push: branches: [main]` plus `workflow_dispatch` with a `pr` input, three jobs, seven widths across e2e-mobile's
+3+2+2 matrix — a feature branch gets NO automatic e2e signal, so the dispatch is the only pre-merge run.
+`apps/web/e2e/.auth/` has been EMPTIED (both cookies predated the session-audience pin).
 
 **NEW outward-facing resource, owner flagged:** the Fly app `seazn-relay` did not exist; the Task 5A implementer
 CREATED it (org seazn-club, id `p7vx1jevmyrw9k3z`). Empty apps bill nothing and Task 5 needs it. Ruling: KEEP.
@@ -153,7 +178,7 @@ the account held zero videos, so TRUNCATION ITSELF remains unobserved and this c
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
-2. Lane A: Tasks 3, 4, 5A, 5, 6 DONE → Task 7 Step 0c (the V410 amend) DONE → rebase DONE → minors sweep DONE → plan pass DONE. **REMAINING: lane-A reviewer → orchestrator full gate (JSON vs floor 17856) → delete `e2e/.auth/` → ask owner, push + PR lane A → `gh workflow run e2e.yml -f pr=<N>` → update this block → owner opens a new session for lane B.**
+2. Lane A: Tasks 3, 4, 5A, 5, 6 DONE → Task 7 Step 0c (the V410 amend) DONE → rebase DONE → minors sweep DONE → plan pass DONE. lane-A reviewer DONE → two fix rounds + re-review DONE → full gate DONE (19389/19303/0, scripts 1926/1926/0) → `e2e/.auth/` emptied. **REMAINING: ask owner, push + PR lane A → `gh workflow run e2e.yml -f pr=<N>` → update this block → owner opens a new session for lane B.**
 3. Lane B: Task 7 (Step 0c already landed in lane A as V410) → 7A → 8 (lane-B review, 49 killers).
 4. Lanes C/D/E per plan. Wave close: V410 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
 
