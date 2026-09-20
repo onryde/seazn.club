@@ -18,6 +18,23 @@ import { slugify, uniqueSlug } from "@/server/usecases/slugs";
 const COOKIE_NAME = "seazn_session";
 const ORG_COOKIE = "seazn_org";
 const SESSION_DAYS = 30;
+/** The `aud` this cookie is minted with and verified against (review I2).
+ *  Several things in this repo sign with AUTH_SECRET — relay job/page tokens
+ *  (`server/relay/tokens.ts`) and check-in QR tokens
+ *  (`server/usecases/checkin-token.ts`) — and until this pin existed,
+ *  `getCurrentUser` verified with NO options, so any of them was accepted as a
+ *  session. An anonymous viewer's relay page token got no further only because
+ *  it carries no `uid`; one added claim was all it needed.
+ *
+ *  Owner-ruled 2026-09-20, consequence accepted: pinning an audience
+ *  INVALIDATES every cookie issued before this deploy, because none of them
+ *  carries an `aud`. Everyone signed in is logged out once, and that is the
+ *  intended cost, not a regression. */
+const SESSION_AUDIENCE = "seazn-session";
+/** Pinned so the verifier accepts ONE algorithm. Without a list, jose takes the
+ *  header's word for it and a token signed HS384/HS512 with this same secret
+ *  verifies too. */
+const SESSION_ALGORITHM = "HS256";
 
 // Auth data is read on nearly every request but changes rarely, so it caches
 // well (cache-aside, fail-open via lib/cache). Explicit busts run on the few
@@ -62,9 +79,10 @@ export async function verifyPassword(
 /** Issue a signed session cookie for the given user id. */
 export async function createSession(userId: string): Promise<void> {
   const token = await new SignJWT({ uid: userId })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: SESSION_ALGORITHM })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DAYS}d`)
+    .setAudience(SESSION_AUDIENCE)
     .sign(secretKey());
 
   const jar = await cookies();
@@ -91,8 +109,17 @@ export async function getCurrentUser(): Promise<User | null> {
 
   let uid: string;
   try {
-    const { payload } = await jwtVerify(token, secretKey());
-    uid = String(payload.uid);
+    const { payload } = await jwtVerify(token, secretKey(), {
+      audience: SESSION_AUDIENCE,
+      algorithms: [SESSION_ALGORITHM],
+    });
+    // Never String() an unknown claim into a lookup key: `uid: {}` would become
+    // the user id "[object Object]", and `uid: null` the id "null". Today those
+    // only MISS — which is the same reasoning that made accepting a relay token
+    // look harmless right up until a claim was added. Require the claim to be
+    // what it says it is, exactly as server/relay/tokens.ts does with its own.
+    if (typeof payload.uid !== "string" || payload.uid === "") return null;
+    uid = payload.uid;
   } catch {
     return null;
   }

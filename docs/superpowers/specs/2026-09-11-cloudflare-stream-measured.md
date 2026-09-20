@@ -168,3 +168,148 @@ input **and its recordings** in a `finally` block.
 
 Anything that creates a live input must delete it, and must delete the videos it
 recorded (U1-S9), or it leaves the account paying for the spike.
+
+---
+
+## Measured 2026-09-20 — R1 N-3 probe (live create + delete)
+
+**Why.** `server/relay/ingest-cf.ts` (Task 4) reads its own create back and
+**throws** if the echo does not equal what it sent. Those expected values were
+inferred from this page and from docs, never measured against the create body
+the adapter actually sends. If the inference were wrong in any detail, every
+session create in production would throw. Owner authorised one live
+create + delete on 2026-09-20 to settle it.
+
+**Method.** One live input, `meta.name: r1-n3-probe-1789901523`, created with
+the adapter's exact body (`recording: { mode: "automatic", timeoutSeconds: 180 }`
+plus top-level `deleteRecordingAfterDays: 30`), read back, its outputs listed,
+the video list probed at four `limit` values, then deleted and the uid re-read.
+No broadcast, no encoder, no outputs. Every secret below is `<redacted>`;
+the account id is `{acct}`.
+
+**Verdict: the read-back comparison HOLDS.** Both fields the adapter compares
+came back equal to what it sent, at the level it reads them.
+
+### The create echo — `POST /accounts/{acct}/stream/live_inputs` → 200
+
+```json
+{
+  "result": {
+    "uid": "<redacted>",
+    "rtmps": { "url": "rtmps://live.cloudflare.com:443/live/", "streamKey": "<redacted>" },
+    "rtmpsPlayback": { "url": "rtmps://live.cloudflare.com:443/live/", "streamKey": "<redacted>" },
+    "srt": { "url": "srt://live.cloudflare.com:778", "streamId": "<redacted>", "passphrase": "<redacted>" },
+    "srtPlayback": { "url": "srt://live.cloudflare.com:778", "streamId": "<redacted>", "passphrase": "<redacted>" },
+    "webRTC": "<redacted>",
+    "webRTCPlayback": "<redacted>",
+    "playback": "<redacted>",
+    "created": "2026-09-20T10:52:04.856545Z",
+    "modified": "2026-09-20T10:52:04.856545Z",
+    "enabled": true,
+    "meta": { "name": "r1-n3-probe-1789901523" },
+    "status": null,
+    "recording": {
+      "mode": "automatic",
+      "timeoutSeconds": 180,
+      "requireSignedURLs": false,
+      "allowedOrigins": null,
+      "hideLiveViewerCount": false
+    },
+    "deleteRecordingAfterDays": 30
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}
+```
+
+`recording.timeoutSeconds` **is** echoed, as the JSON number `180` — not a
+string, not null. `deleteRecordingAfterDays` is echoed at the **top level** as
+the number `30`, is absent from the `recording` block entirely (whose keys are
+exactly `mode`, `timeoutSeconds`, `requireSignedURLs`, `allowedOrigins`,
+`hideLiveViewerCount`), and the top-level key is genuinely present rather than
+merely reading `undefined`. U1-S1 is confirmed from the other side: sent
+top-level, the value **sticks**.
+
+`status` is present and explicitly **`null`** on a never-connected input — not
+an absent key, and not an object with an absent `current`. `inputStatus`'s
+`result.status?.current` reads `null` correctly as "disconnected", but a guard
+written as "the key is absent" would be wrong.
+
+### The read-back — `GET /accounts/{acct}/stream/live_inputs/{uid}` → 200
+
+Byte-for-byte the same body as the create response, `modified` timestamp
+included. Nothing the adapter compares differs between the two; the per-input
+GET carries `recording` and `deleteRecordingAfterDays` exactly as the create did.
+
+### The SRT shape
+
+The standing ruling is **confirmed**: `srt.url` is the bare
+`srt://live.cloudflare.com:778` with no query string at all, and `streamId` and
+`passphrase` are separate sibling fields (`srt` keys are exactly `url`,
+`streamId`, `passphrase`). `rtmps` is the same shape — bare
+`rtmps://live.cloudflare.com:443/live/` plus a separate `streamKey`. Sealing
+the two SRT secrets as columns rather than parsing a URL is what the API
+actually hands you. `srtPlayback` and `rtmpsPlayback` are the same shape again,
+with their own distinct secrets.
+
+### DELETE and its 404
+
+`DELETE /accounts/{acct}/stream/live_inputs/{uid}` answers **HTTP 200** with a
+parseable JSON body whose `result` is the empty string:
+
+```json
+{"result":"","success":true,"errors":[],"messages":[]}
+```
+
+So on this account the delete is neither a 204 nor an unbodied 200 —
+`success: true` alone would satisfy `deleteInput`, and the `2xx` clause beside
+it is belt-and-braces rather than the live path. Re-reading the uid then gives
+**404**:
+
+```json
+{"result":null,"success":false,"errors":[{"code":10003,"message":"Not Found: The requested resource or operation was not found."}],"messages":null}
+```
+
+`errors[0].code` is `10003`, and `messages` is `null` rather than `[]` on this
+shape — anything iterating `messages` without a null guard breaks here.
+
+### The video listing — is `limit` the parameter name?
+
+`limit` **is** accepted and validated. `GET /accounts/{acct}/stream?limit=1` and
+`?limit=1000` both answer 200; `?limit=1001` answers **400 / code 10005** with
+the message *"results are limited to 1000 entries per request"*, which pins the
+ceiling at exactly 1000 — `LIST_VIDEOS_PAGE_LIMIT` sits **on** it, and any
+increase would be a hard 400. The adapter's full query shape
+(`?end=<iso>&limit=1000`) answers 200 as well. Caveat: the account held **zero**
+videos at probe time, so `limit` was proven accepted and bounds-checked, but not
+observed truncating a page. The 400 is the evidence, not a row count.
+
+A non-numeric `?limit=abc` answers **HTTP 500 with an empty body** — not a 400.
+`call()` turns an unparseable body into `{ success: false }` and `fail()` then
+reports `HTTP 500` with no code, which is survivable; nothing sends a
+non-numeric limit.
+
+A successful empty listing is `{"result":[],"success":true,"errors":[],"messages":[]}`
+— no `range`, no `total` field of any kind, so there is no server-side "more
+pages" hint to lean on; the full-page heuristic is all there is.
+
+### Outputs, empty case
+
+`GET /accounts/{acct}/stream/live_inputs/{uid}/outputs` on an input with no
+outputs returns **200** with
+`{"result":[],"success":true,"errors":[],"messages":[]}` — an empty array, not
+`null` and not a 404. `outputState` maps that to `"unknown"` by the
+`states.length === 0` rule, which is the intended answer. Whether a *present*
+output can carry no `status` was **not** measured: creating an output needs a
+third-party destination, which this authorisation excluded. That branch remains
+inferred.
+
+### Create/delete ledger
+
+One live input created (`meta.name: r1-n3-probe-1789901523`), deleted in the
+same run (200), confirmed gone by a 404 re-read. Post-run sweep:
+`GET /live_inputs` returns **0** inputs and **0** probe-named inputs, and
+`storage-usage` reads `videoCount: 0`, `totalStorageMinutes: 0` of a 1000-minute
+limit. Nothing leaked — no recording was produced because nothing ever
+connected (U1-S9's leak needs a recording to leak).

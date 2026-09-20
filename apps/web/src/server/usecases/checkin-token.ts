@@ -10,6 +10,12 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { endOfLocalDay } from "./device-links";
 
 const TYP = "seazn-checkin";
+/** The ONE algorithm this seam mints and accepts (whole-branch review m1). jose already refuses `alg: none` and an
+ *  asymmetric alg against a symmetric key, and nobody without AUTH_SECRET can sign anything — but without this list a
+ *  token signed HS384 or HS512 with the SAME secret verifies here, and this was the only one of the three verify sites
+ *  in the tree left unpinned (`relay/tokens.ts` and `lib/auth.ts` were both pinned this lane). Spelled once and used
+ *  by both the mint and the verify, so the two can never drift apart. */
+const ALGORITHMS = ["HS256"] as const;
 
 function secretKey(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
@@ -25,7 +31,7 @@ function secretKey(): Uint8Array {
  *  the fixture's local day — reuse endOfLocalDay from device-links). */
 export async function mintCheckinToken(fixtureId: string, expiresAt: Date): Promise<string> {
   return new SignJWT({ fid: fixtureId })
-    .setProtectedHeader({ alg: "HS256", typ: TYP })
+    .setProtectedHeader({ alg: ALGORITHMS[0], typ: TYP })
     .setIssuedAt()
     .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
     .sign(secretKey());
@@ -71,6 +77,7 @@ export async function verifyCheckinToken(token: string): Promise<string> {
   try {
     const { payload, protectedHeader } = await jwtVerify(token, secretKey(), {
       typ: TYP,
+      algorithms: [...ALGORITHMS],
     });
     if (protectedHeader.typ !== TYP || typeof payload.fid !== "string") {
       throw new Error("wrong token type");

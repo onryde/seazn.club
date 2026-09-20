@@ -1,5 +1,255 @@
 # Stream overlay — resume state
 
+## R1 EXECUTION STATE — CURRENT (updated 2026-09-20, session r1-w1). READ THIS BLOCK FIRST; it supersedes every older "where things stand" block.
+
+**Owner standing order (2026-09-16):** context is compacted without warning, so every state change and every
+decision is written HERE (committed, `_STATE.md`) and in the ledger
+(`.superpowers/sdd/2026-09-13-streaming-r1/progress.md`, git-ignored, machine-local) AT THE TIME IT HAPPENS —
+never only in conversation. After a compaction, trust these two files and `git log`, not recollection.
+
+**Where:** worktree `.claude/worktrees/relay`, branch `feat/stream-relay`, env label `rly`
+(Postgres :54484 dbs `seazn_rly` + `seazn_rly_t1`, data_directory `/tmp/seazn-env/rly/pg`; placement :50257).
+Commits are LOCAL — nothing pushed this session. Process: superpowers:subagent-driven-development, `model: opus`
+on every dispatch, reviewer after every task + every lane, orchestrator re-runs the gate at lane boundaries,
+orchestrator commits (implementers never commit).
+
+**Floor:** 17856 total / 0 real failures @ `b4091834d` (JSON at
+`.superpowers/sdd/2026-09-13-streaming-r1/authorities/baseline-2026-09-16/`). Old 17064/17141 is SUPERSEDED.
+
+**Done (task → commits → review):**
+- Baseline → `ea60d147a`.
+- Task 1 migration, 8 tables (written as V408, RENAMED to **V410** at the 2026-09-20 rebase after main landed V409), RLS forced zero policies, SUPERUSER_ONLY exemption) → `62e988a6f`, `f590dc114` — clean.
+- Task 2 config / AES-256-GCM envelope / `*_enc` boundary / sanitiser / telemetry → `27c0681b8`, `56159fc41` — clean.
+- Task 2A session aggregate → `5851d2956`, `e3c937736` — clean.
+- Task 2B expiry / credits / retention → `4c1e66288`, `a2f6d5bb4` — clean.
+- Plan amendment Tasks 7 / 7A (staff Match credits panel) → `36a9132e6` (plan file only).
+- Task 2C runner table → `a49e3f4ff` + fix rounds `a21913582` (1), `292ac278b` (2+3), `56b29d971` (4),
+  `30560cf9a` (5, FINAL). Domain 212/212/0, relay-with-DB 262/262/0, tsc/eslint 0.
+  **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
+  comment precision session.ts:182–184/:212, C6 does not pin desiredState).
+
+- Task 3 ports + fakes → `4a11c1b4a` — clean (15 tests, 53/53 mutants). 9 minors deferred to the lane-A sweep.
+- Task 4 Cloudflare Stream ingest adapter → `32c3c8b82` + fix rounds `09f3aeea6` (1), `8b5072457` (2). **COMPLETE** —
+  re-review 2 Approved (task-4-rereview-2.md). Round 1 fixed the CRITICAL: retention was sent NESTED inside
+  `recording` (the shape measured as silently dropped, specs/2026-09-11-cloudflare-stream-measured.md:26,92) — now a
+  top-level `deleteRecordingAfterDays` with a read-back that best-effort deletes the new input and THROWS on mismatch.
+  Relay 297 total / 272 passed / 0 failed / 25 pending, exit 0; ingest-cf 16/16; tsc 0; eslint 0; 13 mutants killed.
+  2 Minor parked (I-3's 2xx tolerance could mask an orphan; the refusal message is untranslated English — Task 10 must
+  map it to a dictionary code and never render `err.message`).
+
+- **N-3 CLOSED by live measurement** → `5b40fdf0c` (doc only). Owner authorised live create+delete 2026-09-20
+  ("yes, you can create and delete"). The probe created ONE live input (`r1-n3-probe-1789901523`), deleted it in the
+  same run and confirmed the delete with a 404/10003 re-read; post-sweep 0 inputs, videoCount 0 — NO LEAK, no secret
+  printed. Verdict: `ingest-cf.ts`'s read-back HOLDS — the API echoes `recording.timeoutSeconds` 180 and
+  `deleteRecordingAfterDays` 30 at the TOP LEVEL, exactly where :160–161 read them; the :178 throw is unreachable.
+  `RELAY_DRIVERS=live` is no longer blocked by an inferred echo. Full measurements appended to
+  specs/2026-09-11-cloudflare-stream-measured.md; verdict in `.superpowers/sdd/.../n3-probe-report.md`.
+
+- Task 5A Fly Machines API client → `bcd459094` (BASE a6f5d9f32). fly-client.ts + fly-client.test.ts +
+  fly-client.live.test.ts (new), config.ts (doc comments only). Orchestrator re-ran the gate independently: relay
+  321/293/0/28 exit 0, worktree paths confirmed, the 3 live tests correctly PENDING without `RELAY_LIVE_FLY`; tsc 0;
+  eslint 0. Implementer: unit 21/21, 15/15 mutants killed, live leg 3/3. **Live run: 14 Machines created across 4 runs,
+  all 14 confirmed destroyed — orchestrator INDEPENDENTLY confirmed app `seazn-relay` holds 0 machines. No leak.**
+  Three inferred premises were wrong and shipped broken until the live run (`/wait` returns `WaitMachineResponse`, not a
+  Machine; `request: null` on launch/destroy events; events arrive NEWEST-FIRST, so the brief's `reverse().find()` read
+  the OLDEST exit). All three fixed with a mutant each.
+
+  **Task 5A COMPLETE** — `bcd459094` → fix round 1 `9ee011646` → fix round 2 `b42acb34c`; re-review 2 / confirm pass
+  Approved, CLOSEABLE (task-5A-rereview-2.md). Round 1 closed 2 Critical + 6 Important; round 2 closed a NEW Critical
+  (the `deadline` exit reported `retryable: true` on an absence from one unsettled list — the domain's retry posts a
+  DIFFERENT name `relay-<sid>-r2`, so Fly would not refuse the duplicate). Now: `retryable: true` may leave a create
+  ONLY on a CONFIRMED absence, proven by a 70-cell parity sweep with both outcomes witnessed. Gate at close:
+  relay 331/302/0/29 exit 0, tsc 0, eslint 0, `seazn-relay` 0 machines — no leak across 19 live Machines this task.
+
+- Task 5 Fly runner adapter + driver selection → `056347c56` → fix rounds `316fd4b2e` (1), `31a04f191` (2).
+  **COMPLETE** — spec compliance APPROVED, 0 Critical; re-review 1 closed all six Importants and the small round-2
+  `lazyRunner` Important was verified by the orchestrator directly (mutant on `observe` → exit 1, 30/1, red line
+  names the method; restored `cmp`-identical). `PROVISION_TIMEOUT_SECONDS` 120 → **180**, DERIVED (createWorst 109.5
+  + waitWorst 55 = 164.5, +1× requestTimeoutMs = 174.5 floor) and the gate extended to the COMPOSED path — it went
+  red at `expected 164500 to be less than 120000` before the constant moved. Real defect found and fixed: `listingOf`
+  read RAW Fly state while `observe` used `FLY_STATE_MAP`, so a `suspended` Machine answered `"other"` from `list()`
+  and `"stopped"` from `observe()`; both now derive from one function, pinned by a 17-state two-PATH differential.
+  Blast radius measured: exactly one cell moves and `RunnerListing.state` is read nowhere yet. Gate at close:
+  relay 362/357/0/5 exit 0, 69 suites, tsc 0, eslint 0, one live Machine confirmed destroyed, `seazn-relay` empty.
+  9 Minors deferred (incl. a real `fromFlyState("constructor")` prototype-key leak).
+
+- Task 6 job + page tokens (`tokens.ts`, `AUTH_SECRET` via `jose`) -> `584e9e8f0` + fix round `f3cb1f8a0`. Review I2 was
+  a REAL cross-surface defect: the SESSION verifier accepted a relay PAGE token. Closed by pinning `audience` AND
+  `algorithms` on the session verify plus a `uid` type guard -> `b4d094253` (`lib/auth.ts` + `auth-session-audience.test.ts`).
+  **Owner ruled option 3 ("3 as no users in prod today"): pin the audience on the session cookie and accept that every
+  EXISTING session cookie stops verifying** — everyone is logged out once at deploy. Relay token lifetime is 5h30m and
+  there is NO revocation; the session cookie is 30 days, not sliding, and logout only deletes the cookie. A
+  `token_version` claim is RECOMMENDED as its own work AFTER R1 — the owner has not ruled on it.
+- Task 7 **Step 0c** (the migration amend, pulled forward into lane A) -> `cdd66e9ed`. `max_duration_minutes > 0`;
+  `beat_window_at timestamptz null` at ordinal 14; `'revoke'` in the reason CHECK; `idempotency_key text null` +
+  `org_stream_credits_idempotency_key` unique partial, TABLE-WIDE (ruling: table-wide STAYS — the stored row's org must
+  be comparable, so a key reused with a different org answers 409 `idempotency_key_reused`).
+  **MERGE BLOCKER found and closed here: `main` had merged `V409__player_stat_folds.sql`, so our V408 sorted BELOW a
+  merged migration and this repo does not enable Flyway `outOfOrder`.** Renamed `git mv` to
+  **`V410__stream_sessions.sql`**, and the ordering PROVEN with its defeating half: against a DB carrying main's V409 a
+  V408-numbered probe fails `Detected resolved migration not applied to database: 408` (exit 1) while V411 applies clean
+  (exit 0). A fresh DB built from our branch alone applies 408 then 409 happily — which is exactly why every local green
+  before the fetch could not see it.
+  A SURVIVOR the whole suite missed: dropping the index's partial predicate SURVIVED, because **Postgres unique indexes
+  are NULLS DISTINCT by default** so the NULL rows prove nothing, and nothing asserted the index NAME (lane B needs it to
+  map 23505 -> 409). Closed with an `indexdef` pin.
+- **REBASED onto `origin/main` (`ee80dcd66`) — 57 commits, clean, zero conflicts.** Re-verified from scratch rather than
+  trusting the clean rebase: env torn down and up, DB recreated, `db:apply` (245 migrations, at v410), `sync:sports`, and
+  the applied-version tail read back live -> `245|410, 244|409, 243|404`. Post-rebase gate 3475/3435/0/40, 954 suites,
+  exit 0; tsc 0.
+- **Lane-A minors sweep -> `79177018d`** (17 files under `server/relay/`). 70 minors from 16 reviews: 43 fixed, 9 already
+  closed by a later round (re-verified), 2 not-a-defect, 16 routed to the owning task. Real find: a prototype-key leak —
+  `fromFlyState("constructor")` returned the `Object` function. Two more found in the sweep's OWN instrumentation: a
+  `toContain('import "server-only"')` assertion survived commenting the import out (it matches the string inside a
+  comment), and `runner-fly.live.test.ts` read its Fly token at module scope ungated — the defect T5A m8 named in the
+  sibling file. 23 mutants, 23 killed. Gate re-run by the orchestrator: **3486 / 3446 / 0 failed / 40 pending, 955
+  suites, 274 files, exit 0**, zero paths outside the worktree; tsc 0; eslint 0 over **39 files actually linted**.
+- **Lane-A plan pass -> `c454dc147`** (plan file only): V408 -> V410 across all 37 references (Task 10's preflight greps
+  that path LITERALLY on a gate marked "STOP, this is money" — the empty grep would have read as a FALSE ABSENCE); the
+  placeholder scan's own regex widened from `V40[3-9]__` to `V4[0-9][0-9]__` (it could no longer match the number it
+  exists to police, so it would have reported CLEAN over 37 pinned refs); the NESTED retention shape synced to the
+  measured top-level one at all four sites; and Task 12's N-1 acceptance criteria added as a new Step 3b.
+
+- **Lane-A whole-branch review -> Needs Fixes (0 Critical, 6 Important, 3 Minor, 2 gaps), then TWO fix rounds,
+  then a scoped re-review that judged the lane MERGEABLE.** `bcebfe657` closed I1-I6 + g1 + g2 + m1;
+  `1a0be8a8d` closed N1 + N2, found by the re-review. Every Important was a SEAM BETWEEN TASKS — nothing
+  shipped was wrong on its own, which is why eleven per-task reviews could not see them. Detail in
+  `lane-a-review.md`, `lane-a-fixes-report.md`, `lane-a-rereview.md`; rulings in the ledger.
+  The two that decide behaviour: the Machine's hard stop was anchored on `createdAt` while the session's
+  wall clock is anchored on `startedAt`, so the Machine always died FIRST and burned the session's one
+  retry (worst branch: a match that aired loses its replay link) — the slack now sits on the runner
+  deadline, not the wall clock. And a create that FAILS is now unknown-outcome unless something PROVES
+  otherwise: a 409 that could not be adopted, and any non-retryable 5xx, were both being reported as
+  "made nothing", the first being the one status that proves a Machine holds that name.
+  V410 gained three exit columns and the `<= 300` ceiling in the same amend, while it is still unmerged.
+
+- **FULL GATE at `1a0be8a8d`: `apps/web` 19389 total / 19303 passed / 0 FAILED / 86 pending, 1404 files,
+  EXIT 0** (floor 17856), plus the repo-root `scripts` suite **1926 / 1926 / 0 failed, EXIT 0**.
+  **Two environmental faults were diagnosed, not accepted:** the four `schedule-build-honours-locks` reds
+  pinned since Task 6 are a MISSING `PLACEMENT_SERVICE_HOST`/`SECRET` in the invocation (the service was
+  running the whole time) — 12/12 with them, and the pinned red is closed with its mechanism named; and
+  `smoke-db-shard-partition.test.ts` reds under full parallelism while passing 3/3 alone and 1926/1926 at
+  `--maxWorkers=3`, which is LOAD on a shelled-out child, a second cause of an error string this repo
+  already records for a nested worktree.
+
+**In flight at time of writing:** NOTHING is dispatched. Lane A is built, reviewed, fixed, re-reviewed and
+fully gated at `1a0be8a8d`. The next action is the OWNER's: ask -> push -> open the lane-A PR -> take its number
+-> `gh workflow run e2e.yml -f pr=<N>` -> wait -> only then mergeable. `e2e.yml` re-read 2026-09-20: it triggers on
+`push: branches: [main]` plus `workflow_dispatch` with a `pr` input, three jobs, seven widths across e2e-mobile's
+3+2+2 matrix — a feature branch gets NO automatic e2e signal, so the dispatch is the only pre-merge run.
+`apps/web/e2e/.auth/` has been EMPTIED (both cookies predated the session-audience pin).
+
+**NEW outward-facing resource, owner flagged:** the Fly app `seazn-relay` did not exist; the Task 5A implementer
+CREATED it (org seazn-club, id `p7vx1jevmyrw9k3z`). Empty apps bill nothing and Task 5 needs it. Ruling: KEEP.
+`DELETE /v1/apps/seazn-relay` undoes it. The org's other apps (seazn-club-stg, placement, placement-stg) are
+pre-existing and untouched.
+
+**Verification trap found this session — put it in every lane brief:** eslint run from the WORKTREE ROOT with
+`apps/web/src/...` paths answers "File ignored because of a matching ignore pattern" and EXITS 0 having linted
+nothing. It must be `cd apps/web && npx eslint src/...`.
+
+**Carries opened by Task 5A (detail in the ledger):** T5-c Task 5 must ADOPT on HTTP 409 `already_exists` rather than
+fail (409 is non-retryable and its body NAMES the existing Machine id, so T5-b is not violated — but 409 skips
+`onAmbiguous`); T5-d `waitMachine` is a long poll, default requestTimeoutMs 10s < default 60s wait and Fly caps
+`timeout` at 60s (90 → HTTP 400) — Task 5 owes the sizing; T5-e `PROVISION_TIMEOUT_SECONDS` 120 holds (live
+create→started 2.8–4.2s, worst case 98.5s) but the 21.5s headroom is the CREATE's alone — a `waitMachine(started)` in
+the same window can exceed it; T5-f measured lifecycle facts — on an `auto_destroy` Machine `state: "stopped"` is often
+NEVER observable (the wait 404s), a destroyed Machine GETs **200 `destroyed`** not 404, and after `wait destroyed` the
+next GET can still read `destroying`.
+
+**N-5 CLOSED on the ENV side — the code is correct, the minors-sweep rename is CANCELLED.** The owner re-keyed both
+`.env.local` files to `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_STREAM_TOKEN`, the pair `ingest-cf.ts:79–82` reads; the old
+`CF_ACCOUNT_ID` / `CF_API_TOKEN` names are gone. Do NOT rename anything in the code. One residual typo was found on
+re-read and fixed: the key was spelled `CLOUDFLARE_STREAM_TOKEN.=` (trailing dot inside the KEY name) at root:48 and
+apps/web:52, so `process.env.CLOUDFLARE_STREAM_TOKEN` would still have been undefined; renamed the key in place through
+the resolved path, both worktree symlinks verified intact afterwards, no value read/printed/copied, backups deleted in
+the same call. Verified live read-only: `GET /accounts/{acct}/stream/live_inputs` → HTTP 200, `success: true`, 0 inputs
+(which also re-confirms the N-3 probe left no leak). Live credentials now work under the names the adapter expects.
+
+**PLAN OWED — CLOSED 2026-09-20 by the lane-A plan pass (`c454dc147`); kept as the record of what was owed:** plan:4686 (comment), plan:4552–4557 (the create-body assertion) and
+plan:4797 (the create body) still carry the retention field NESTED inside `recording` — sync all three to the MEASURED
+top-level shape. plan:4730 / plan:4189 are the `capabilities` object, not a request body: correct as written, leave them.
+The Task 12 brief owes the N-1 acceptance criteria: `length === LIST_VIDEOS_PAGE_LIMIT` means an INCOMPLETE listing
+(import the constant); on truncation re-list by `createdBefore` = the oldest `created` seen, or record a
+`listing_truncated` event — never silently under-delete; the fixture must hold exactly LIMIT videos because
+`FakeIngest.listVideos` ignores `limit`; and any orphan-reclaim test must drive the REAL adapter (`FakeIngest` cannot
+reach the orphan path). The probe confirmed `limit` IS the param name and 1000 a HARD ceiling (1001 → 400/10005), but
+the account held zero videos, so TRUNCATION ITSELF remains unobserved and this carry stands.
+
+**Next, in order:**
+1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
+2. Lane A: Tasks 3, 4, 5A, 5, 6 DONE → Task 7 Step 0c (the V410 amend) DONE → rebase DONE → minors sweep DONE → plan pass DONE. lane-A reviewer DONE → two fix rounds + re-review DONE → full gate DONE (19389/19303/0, scripts 1926/1926/0) → `e2e/.auth/` emptied. **REMAINING: ask owner, push + PR lane A → `gh workflow run e2e.yml -f pr=<N>` → update this block → owner opens a new session for lane B.**
+3. Lane B: Task 7 (Step 0c already landed in lane A as V410) → 7A → 8 (lane-B review, 49 killers).
+4. Lanes C/D/E per plan. Wave close: V410 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
+
+**FLY_API_TOKEN:** present (non-empty) in BOTH root `.env.local` and `apps/web/.env.local` (key-name check 2026-09-16; the worktree symlinks apps/web/.env.local to main). Nothing owed by the owner for Task 5A. Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
+
+**Owner decisions 2026-09-20 (owner's words: "1 Ok , 2 yes e2e dispatch with pr number  3 Ok 4 Ok"):**
+- **Retention:** no 3-day number in customer-facing copy until Task 12's sweep AND its schedule in the
+  `seazn.club.workflow` repo are both live. State nothing, or state 30 days and tighten later.
+- **Lane-A e2e:** run `workflow_dispatch` on `e2e.yml` with the `pr` input once the lane-A PR exists — this
+  OVERRIDES my "skip it, lane A is server-only" recommendation. Sequence: ask owner → push → open PR → take its
+  number → `gh workflow run e2e.yml -f pr=<N>` → wait → only then mergeable. A feature branch gets NO other
+  pre-merge e2e signal (e2e.yml triggers on push to `main` only — re-read it, the trigger has changed three times).
+- **Minors sweep:** fix ALL ~20 in lane A, one dispatch grouped by file.
+- **Task 7A:** bring ≥2 UI options for the staff credits panel at the START of lane B, before any implementer runs.
+- Earlier: "keep the fly app" — `seazn-relay` (org seazn-club, `p7vx1jevmyrw9k3z`) STAYS; "yes, you can create and
+  delete" — live create+delete authorised against Fly and Cloudflare, under confirm-the-destroy conditions.
+
+**Owner decisions this session (owner's words):**
+- "No fine" (2026-09-16) — keep lane order: lane A (3→4→5A→5→6) before lane B.
+- "Can we create the PR for each Lane, after each lane finish, we can start a new session and start a new lane?" —
+  YES. At each lane close: lane reviewer + orchestrator full gate (JSON vs floor 17856) → PR for that lane (ask
+  owner before push / gh pr create) → update this block → owner starts a NEW session for the next lane, which
+  reads this block first. Lane A PR must include Task 7 Step 0c's migration amend pulled forward (it must be
+  complete before it can merge; after merge an amend is a forward migration). DONE — it landed as **V410**.
+- "FLY_API_TOKEN -Ok" — the env var is named `FLY_API_TOKEN` (not FLY_IO_TOKEN).
+- "yes" to "Are we planning to build a new page in /admin?" follow-up — the staff Match credits panel goes on the
+  EXISTING `/admin/orgs/[id]` page (plan owner ruling 15, Task 7A); no new admin page.
+
+**Token policy (owner request 2026-09-16, adopted):** non-safety minors are ledgered "minor (deferred)" and fixed in
+ONE minors-sweep dispatch at lane close (grouped by file); fix rounds and small re-reviews RESUME the same
+implementer/reviewer; comment/title-only fixes are verified by orchestrator grep + JSON run; plan-text syncs are batched
+once per lane. Exception: money, safety (no second Machine), data loss, a 500 on read -> fix in the task loop at once.
+
+**Orchestrator rulings this session (full text + cost-if-wrong in the ledger):**
+- V410 (written V408): fixture delete sets `fixture_stream_sessions.fixture_id` null (money/history survive); producer-less
+  `vcpu_seconds`/`duplicated_frames` dropped; four org_id stream tables in `SUPERUSER_ONLY`; unmerged migration
+  is AMENDED, never forward-fixed.
+- SRT `{passphrase, streamId}` sealed as JSON in `ingest_srt_key_enc`; stored URLs stripped of query/fragment.
+- Composed `credit_refused` tears the Machine down like `warming_timeout`; `fill_replay` only when `startedAt` set.
+- A live composed session whose runner is not beating goes `stale_beat`; EVERY runner state answers it:
+  none → fail; creating → lost + force_destroy; booting/playing → lost; stopping/exited stay; destroyed → retry
+  while attempt < 2 else fail; lost → re-issue force_destroy once per window, no retry.
+- `heartbeatAt` = last beat RECEIVED only (organiser panel); new `beatWindowAt` anchors the stale window
+  (written by the stale arm and the retry arm); `evaluate` uses the later of the two.
+- `runnerRetries` follows `runner.attempt` (idempotent).
+- Invariant 1 (no retry create before the prior Machine's destroy is CONFIRMED) is proven by a full-depth walk
+  of RUNNER_TABLE: lost leaves only on destroy_ok / observed destroyed (plus F17 completion cells); a late
+  create_ok into destroyed → lost + force_destroy; marked-creating cells keep destroyed (no retry reachable).
+- An ending session completes (own endReason + fill rule) on a runner `failed` signal; a stop on a provisioning
+  session with a lost runner completes stopped.
+- Model (owner, 2026-09-16, asked about Sonnet then "Ok Opus."): every subagent stays opus.
+- Task 7A: donor parity (idempotency key + staff audit row in the same tx), revoke action, session-linked refund
+  cap, 1–50 cap, English-only staff copy, 422 validation, per-org advisory lock on lower-cased org id, reused key
+  with different values → 409 `idempotency_key_reused` (incl. 23505 race), route passes stored `org.id`.
+- F-A: stopping/exited × grace_expired signal completed (organiser stop ends at grace+slack, not the 300 s backstop). F-B: stale destroy_ok gated at the application layer (Task 10), domain keeps throwing.
+- Fix-loop rounds 4–5 resumed the SAME opus implementer (owner mandate pins opus; context continuity).
+
+**Carries to later tasks (details in ledger):** T5-a `create_ok {machineId, attempt}` (late cross-attempt adopt;
+M5 machineId overwrite); T5-b retryable create_failed ⇒ Fly holds no Machine; 5A retunes PROVISION_TIMEOUT;
+T10-a beating lost Machine answered desiredState live; T10-b pin heartbeat route booting||playing guard;
+T10-c lastExit provenance; T10-d / G2 drop `heartbeat_at` from apply's persist (beat route single writer);
+T10 M1 retry_runner skip when runner no longer destroyed (lost × create_started throws); M2 plan
+`machine_seconds` double count on re-entry to destroyed; G3 sweep `retried++` counts re-signals; T12-a
+`orphan_listed` only terminal/absent; T-any composed `target_rejected` teardown; Tasks 3/4/13 fake driver on
+observed CF SRT shape; G1-CI no workflow sets RELAY_KEK; Task 7 `consumeForSession(fixtureId: string | null)`;
+Task 10 cost estimate (Fly preset incl. 2GB/CPU, lhr ×1.134615385), poll decrypt, `egress_bytes` null,
+`created_by = userId ?? orgId`, fill_replay no-op when fixtureId null; flyway no outOfOrder (R1 before
+`feat/chess-lichess-external-play` ⇒ that branch renumbers V405–V407).
+
+<!-- /R1 EXECUTION STATE -->
+
 **Read this first.** It says what exists, what is decided, and the next
 action in order.
 
@@ -61,13 +311,20 @@ capture repo.
 - `show data_directory` → `/tmp/seazn-env/rly/pg` (contains `rly`; the script also printed "data_directory verified").
 - Deltas tail on this branch at Task 0: `V403__realtime_fixture_broadcast_policy.sql`; all-refs `V4*`
   tail: the same `V403`. Task 0 therefore reserved V404 — **superseded 2026-09-16, see FT0-1**:
-  main landed V404 and an unmerged branch claims V405–V407, so **R1's migration is V408**,
+  main landed V404 and an unmerged branch claims V405–V407, so **R1's migration was V408** — SUPERSEDED, it is **V410** since the 2026-09-20 rebase,
   recorded AS LANDED in `_INDEX.md`.
-- Baseline (`apps/web`, full, fresh DB, placement up): **passed 17064 / total 17141 / failed 0 /
-  pending 77** — 1266 files, 0 failed suites, `outside-worktree 0`, runner `EXIT=0`. JSON at
-  `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/3a628426-b486-4e22-bbd6-008e2676b7d0/scratchpad/r1/baseline-web.json`.
-  No red files (with placement up, `schedule-build-honours-locks.test.ts` is green, unlike the `ovl`
-  baseline).
+- **Baseline — CURRENT FLOOR (re-taken 2026-09-16 @ `b4091834d`, after rebasing onto the spectator hub
+  merge; `rly` recreated from scratch — `/tmp/seazn-env/rly` had been wiped):** fresh DB, placement up
+  (:50257), `apps/web` full run: **passed 17778 / total 17856 / failed 1 / pending 77** — 1312 files,
+  `outside-worktree 0`, runner `EXIT=1`. The one red is ENVIRONMENTAL, proven by re-run:
+  `lib/__tests__/credits-bootstrap-grant.test.ts` › "the daily cron run in the same calendar month is a
+  no-op…" hit `duration 30005` (the skill's wallet-volume/load timeout signature) at load avg ~130;
+  re-run alone on the same DB → `2 0 0`, that test 2.6 s at load 210. **Effective floor: 17856 total,
+  0 real failures.** JSON (durable, gitignored):
+  `.superpowers/sdd/2026-09-13-streaming-r1/authorities/baseline-2026-09-16/baseline-web.json` + `rerun-credits-bootstrap.json`.
+  Compare gates by total and by red-file roster, never by a bare `failed` integer.
+- (SUPERSEDED) Baseline at `453d95cd6`, 2026-09-14: passed 17064 / total 17141 / failed 0 / pending 77,
+  1266 files. Stale since #787 (retire scorer role) and the spectator hub merge.
 - Lint `✖ 143 problems (0 errors, 143 warnings)`, `LINT_EXIT=0` (via `rtk proxy`); tsc `EXIT=0`;
   `openapi:gen` + `i18n:gen-keys` porcelain: no generated diff (only the two Task 0 docs).
 - `stream-overlay.spec.ts` preflight against `http://localhost:3372`: **25 expected / 0 unexpected /
@@ -139,7 +396,7 @@ reshaped `server/usecases/scorers.ts`, `stages.ts`, `api-v1/schemas.ts` and the 
 route but touched no pinned symbol; `api-v1/**`, the panel, `run-sheet-row.tsx` and the division
 gate are byte-stable at their pinned lines. Three counted facts, all confirming the FT rows:
 `ui.stream.*` = **31** keys (`en/ui.json:5084-5114`; locales are `en`/`es`/`fr`/`nl`, no `de`);
-the migration tails disagree as FT0-1 says (tree V404, all-refs V407) so **R1 takes V408**;
+the migration tails disagree as FT0-1 says (tree V404, all-refs V407) so R1 took V408 — **now V410** (2026-09-20 rebase, main landed V409);
 `SUPABASE_JWT_SECRET` in production code = **5 hits, all in `lib/realtime.ts`** (117, 136 doc
 comments; 194, 197, 207), so FT0-2's rewritten probe is clean.
 
@@ -150,7 +407,7 @@ the panel, `run-sheet-row.tsx`, `e2e/helpers.ts`, `e2e/visual/manifest.ts`, `bil
 - **FT0-1 — the migration tail is `V403__realtime_fixture_broadcast_policy.sql`, not V402.** It
   was ADDED by #782 itself, so the plan's "unchanged at `9a7393cf4`" is false. At Task 0 the
   all-refs scan showed nothing past V403, so Task 0 reserved V404.
-  **Re-checked 2026-09-16 and CHANGED: R1's migration is `V408`.** `origin/main` is now
+  **Re-checked 2026-09-16: R1's migration was `V408`. SUPERSEDED 2026-09-20 — it is `V410`.** `origin/main` is now
   `ea5b7027a`, four commits ahead of this branch, and landed `V404__retire_scorer_role.sql`
   (#787). `V405__lichess_external_play.sql`, `V406__lichess_challenge_identity.sql` and
   `V407__lichess_lobby_ready.sql` are CLAIMED on the unmerged
@@ -185,7 +442,7 @@ the panel, `run-sheet-row.tsx`, `e2e/helpers.ts`, `e2e/visual/manifest.ts`, `bil
   authority (6 references), but it existed only in the plan session's `/tmp` scratchpad. It is now
   committed beside this file.
 
-**Owner data rulings at Task 0 (2026-09-14), folded into Task 1's migration (V408 — see FT0-1):**
+**Owner data rulings at Task 0 (2026-09-14), folded into Task 1's migration (V408, now V410 — see FT0-1):**
 - **Telemetry retention — "2 is ok":** `fixture_stream_events` and `stream_provider_calls` kept
   indefinitely; raw `fixture_stream_samples` deleted after 90 days by the daily sweep
   (`SAMPLE_RETENTION_DAYS = 90`); the per-session `sample_summary` kept regardless.

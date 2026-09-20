@@ -34,4 +34,16 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "impersonation_sessions",
   // Growth/activation telemetry, /admin only.
   "activation_events",
+  // Streaming relay (V410): the four org_id tables are reached only through the
+  // superuser `sql` client and are RLS FORCEd with ZERO client policies (deny by
+  // default, stricter than a tenant policy); relay/__tests__/migration-shape.test.ts
+  // asserts enabled + forced + zero policies on all eight V410 tables.
+  // Stream destinations (the encrypted RTMP url + key); superuser client only, zero policies.
+  "org_stream_targets",
+  // Relay sessions; organisers get a projection, never the row; superuser client only, zero policies.
+  "fixture_stream_sessions",
+  // Stream credit ledger (money); superuser client only, zero policies.
+  "org_stream_credits",
+  // Append-only relay history (capture); superuser client only, zero policies.
+  "fixture_stream_events",
 ]);
