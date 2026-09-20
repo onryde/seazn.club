@@ -5,12 +5,12 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { EngineError } from "@seazn/engine/core";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { appendEvent } from "@/server/engine-db";
+import { appendEvent, recomputeStandings } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
+import { createStages, generateStageFixtures, getStandings, unpairSwissRound } from "../stages";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -183,6 +183,61 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Pair next seating", () => {
 
     const rows = await fixturesOf(stageId);
     expect(rows.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
+  });
+
+  it("odd-field bye awards win points on the standings table (not just pairing score)", async () => {
+    // Regression for Gus on Swiss 7: pairing counted the bye (+1 Swiss score)
+    // while rankedStageStandings left played=0/points=0 because loadStageInputs
+    // required both seats + a match_state before calling standingsDelta.
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 2 }, 3);
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const bye = (await fixturesOf(stageId)).find(
+      (f) => f.ext_key?.endsWith("-bye") && f.outcome !== null,
+    );
+    expect(bye?.home_entrant_id).toBeTruthy();
+    const byeWinner = bye!.home_entrant_id!;
+
+    await playRoundHomeWins(auth.orgId, stageId, 1);
+    const rows = await recomputeStandings(auth.orgId, stageId);
+    const byeRow = rows.find((r) => r.entrantId === byeWinner);
+    expect(byeRow).toMatchObject({ played: 1, won: 1, points: 2 });
+  });
+
+  it("Unpair clears bye points from the standings snapshot", async () => {
+    // getStandings returns standings_snapshots when present; Unpair used to
+    // clear the bye fixture but leave the snapshot, so Dan kept the R3 bye
+    // points until the next scored match.
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 2 }, 3);
+    await startDivision(auth, divisionId);
+    await generateStageFixtures(auth, stageId);
+
+    const bye = (await fixturesOf(stageId)).find(
+      (f) => f.ext_key?.endsWith("-bye") && f.outcome !== null,
+    );
+    const byeWinner = bye!.home_entrant_id!;
+    // Pair next recomputes; pin the snapshot carries the bye win via getStandings.
+    const seated = await getStandings(auth, stageId);
+    const seatedRows = seated.rows as { entrantId: string; played: number; won: number; points: number }[];
+    expect(seatedRows.find((r) => r.entrantId === byeWinner)).toMatchObject({
+      played: 1,
+      won: 1,
+      points: 2,
+    });
+
+    await unpairSwissRound(auth, stageId);
+    const after = await getStandings(auth, stageId);
+    const afterRows = after.rows as { entrantId: string; played: number; won: number; points: number }[];
+    // Unpair cleared every seat (only R1 was seated), so the fold's entrant
+    // set is empty and the bye winner may be absent entirely — what must not
+    // happen is the old snapshot still crediting the award.
+    const afterBye = afterRows.find((r) => r.entrantId === byeWinner);
+    expect(afterBye?.points ?? 0).toBe(0);
+    expect(afterBye?.played ?? 0).toBe(0);
+    expect(afterBye?.won ?? 0).toBe(0);
   });
 });
 
