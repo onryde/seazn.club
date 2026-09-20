@@ -122,6 +122,22 @@ async function expectFail(label: string, fn: () => Promise<unknown>) {
 }
 
 /**
+ * Width/height straight off a PNG's own `IHDR` chunk (spec §W3-poster
+ * acceptance: "decode the poster.png and check dimensions"). No image
+ * library needed for two big-endian uint32s: the 8-byte PNG signature is
+ * followed by a 4-byte chunk length, the 4-byte ASCII type "IHDR", then
+ * IHDR's own first two fields are width then height — offsets 16 and 20.
+ * Throws on anything that is not a PNG at all, which is itself a useful
+ * failure mode here (a 404 or an HTML error page never has these bytes).
+ */
+function pngSize(buf: Uint8Array): { width: number; height: number } {
+  const sig = Buffer.from(buf.subarray(0, 8));
+  if (sig.toString("hex") !== "89504e470d0a1a0a") throw new Error("not a PNG");
+  const view = Buffer.from(buf.subarray(0, 24));
+  return { width: view.readUInt32BE(16), height: view.readUInt32BE(20) };
+}
+
+/**
  * Passwordless sign-in: request a magic link, then consume the dev-exposed
  * token (dev returns `login_url` so the flow is testable without email). An
  * unknown email creates the account. Returns the consume payload and leaves the
@@ -5931,6 +5947,41 @@ async function matchCentreSmoke(): Promise<void> {
   check(
     "match centre smoke: GET /api/v1/public/fixtures/{id} carries match_centre.tabs.length >= 2",
     Array.isArray(tabs) && tabs.length >= 2,
+  );
+
+  // W3 poster (spec §Acceptance "Smoke: poster.png 200, image/png,
+  // non-trivial size, for one fixture") — decoded, not just status-checked,
+  // per the same section's "decode the poster.png and check dimensions".
+  const posterRes = await fetch(`${BASE}${path}/poster.png`, {
+    headers: cookieHeader(anon) ? { cookie: cookieHeader(anon) } : {},
+  });
+  const posterBuf = new Uint8Array(await posterRes.arrayBuffer());
+  check(
+    "match centre smoke: GET .../poster.png is 200 image/png, ANONYMOUSLY",
+    posterRes.status === 200 && (posterRes.headers.get("content-type") ?? "").includes("image/png"),
+  );
+  check("match centre smoke: poster.png is a non-trivial size", posterBuf.byteLength > 5_000);
+  const posterDims = pngSize(posterBuf);
+  check(
+    "match centre smoke: poster.png decodes to 1080×1350 (POSTER_SIZE)",
+    posterDims.width === 1080 && posterDims.height === 1350,
+  );
+
+  // The OG re-render (ruling 16) shares the same model at a third aspect —
+  // pinned separately per the spec's regression list: "the route still
+  // answers 200 image/png at exactly 1200×630".
+  const ogUrl = /<meta property="og:image" content="([^"]+)"/.exec(page.body)?.[1];
+  const ogPath = ogUrl?.replace(/^https?:\/\/[^/]+/, "");
+  const ogRes = ogPath ? await fetch(`${BASE}${ogPath}`) : null;
+  const ogBuf = ogRes ? new Uint8Array(await ogRes.arrayBuffer()) : new Uint8Array();
+  check(
+    "match centre smoke: fixture OG card is 200 image/png",
+    !!ogRes && ogRes.status === 200 && (ogRes.headers.get("content-type") ?? "").includes("image/png"),
+  );
+  const ogDims = ogBuf.byteLength > 0 ? pngSize(ogBuf) : { width: 0, height: 0 };
+  check(
+    "match centre smoke: fixture OG card decodes to 1200×630 (OG_SIZE)",
+    ogDims.width === 1200 && ogDims.height === 630,
   );
 }
 
