@@ -215,6 +215,18 @@ the account held zero videos, so TRUNCATION ITSELF remains unobserved and this c
 
 **FLY_API_TOKEN:** present (non-empty) in BOTH root `.env.local` and `apps/web/.env.local` (key-name check 2026-09-16; the worktree symlinks apps/web/.env.local to main). Nothing owed by the owner for Task 5A. Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
 
+**Owner decisions 2026-09-20 (owner's words: "1 Ok , 2 yes e2e dispatch with pr number  3 Ok 4 Ok"):**
+- **Retention:** no 3-day number in customer-facing copy until Task 12's sweep AND its schedule in the
+  `seazn.club.workflow` repo are both live. State nothing, or state 30 days and tighten later.
+- **Lane-A e2e:** run `workflow_dispatch` on `e2e.yml` with the `pr` input once the lane-A PR exists — this
+  OVERRIDES my "skip it, lane A is server-only" recommendation. Sequence: ask owner → push → open PR → take its
+  number → `gh workflow run e2e.yml -f pr=<N>` → wait → only then mergeable. A feature branch gets NO other
+  pre-merge e2e signal (e2e.yml triggers on push to `main` only — re-read it, the trigger has changed three times).
+- **Minors sweep:** fix ALL ~20 in lane A, one dispatch grouped by file.
+- **Task 7A:** bring ≥2 UI options for the staff credits panel at the START of lane B, before any implementer runs.
+- Earlier: "keep the fly app" — `seazn-relay` (org seazn-club, `p7vx1jevmyrw9k3z`) STAYS; "yes, you can create and
+  delete" — live create+delete authorised against Fly and Cloudflare, under confirm-the-destroy conditions.
+
 **Owner decisions this session (owner's words):**
 - "No fine" (2026-09-16) — keep lane order: lane A (3→4→5A→5→6) before lane B.
 - "Can we create the PR for each Lane, after each lane finish, we can start a new session and start a new lane?" —
