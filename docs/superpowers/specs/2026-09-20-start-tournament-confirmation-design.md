@@ -60,30 +60,28 @@ yields zero conflicts, which is how most divisions start.
 
 ### Flow
 
-Tap Start → dialog opens → it fetches `POST /api/v1/divisions/{id}/schedule/validate`
-(read-only, `requireResourceAuth(..., "read")`, same conflict source as the
-publish gate) → renders consequences, plus a conflicts section when the preview
-returns any → Confirm → the existing `start()` runs unchanged.
+Tap Start → dialog shows the consequences list → Confirm → the existing
+`start()` runs unchanged.
 
-The reactive `schedule-gate-dialog` **stays**. The preview is advisory, not
-authoritative: `startDivision` runs its own gate AFTER writing rolling times
-inside its transaction, "so it judges the board this call is actually about to
-open scoring on", and a concurrent organiser can move a card between preview and
-commit. So the backstop keeps its job; this dialog only stops the refusal being
-the first time anyone hears about a clash.
+That is the whole flow. **Owner amendment, 2026-09-20 (supersedes the first
+draft of this section):** the dialog does NOT preview schedule conflicts. It
+does not call `/api/v1/divisions/{id}/schedule/validate`, renders no conflicts
+section and has no loading state.
+
+Schedule conflicts are not this dialog's concern. The reactive
+`board/schedule-gate-dialog.tsx` already handles them when the server refuses
+with `PUBLISH_BLOCKED` / `PUBLISH_UNACKNOWLEDGED`, and it stays exactly as it
+is. A preview here would have been a second, advisory source of truth for
+something the server already decides authoritatively — `startDivision` runs its
+gate AFTER writing rolling times inside its own transaction, so a preview can
+disagree with the commit anyway.
 
 ### Copy rules
 
-- When the preview finds **no** conflicts, say **nothing** about conflicts.
-  Never assert "no conflicts found" — that claim can be false by the time the
-  Confirm lands, and a dialog that lies once is not read again.
-- When the preview **fails** (network, 5xx), show the consequences and omit the
-  conflicts section. A failed preview must never block Start — the server gate
-  is the real one.
-- Blocking conflicts are shown as blocking; the Confirm button still submits
-  (the server refuses and the existing dialog opens). Do NOT client-side-disable
-  Confirm on a preview result — the preview is advisory, and a stale blocking
-  preview would strand the organiser with no route out.
+- The dialog states consequences only. It makes no claim about the schedule,
+  in either direction — no "no conflicts found", no clash list.
+- Nothing in the dialog is conditional on a network result, so there is no
+  failure mode in which it can wrongly block Start.
 
 ### Content
 
@@ -113,9 +111,8 @@ The button is additionally gated on `canEdit` and on
 - Screenshot at **1280, 768 and 320**, no horizontal page scroll at any.
   Mobile-first; the dialog must be usable at 320.
 - A test that fails without the change, for each of: the dialog blocks the POST
-  until confirmed; Cancel fires no request; the conflicts section renders from
-  the preview; the ladder/americano carve-out omits the entrants line; a failed
-  preview still allows Start.
+  until confirmed; Cancel fires no request; the ladder/americano carve-out
+  omits the entrants line.
 - `apps/web` vitest is `environment: "node"` — a unit test cannot see the
   dialog's wiring or focus behaviour. The e2e that covers Start must be
   re-run, not just the unit suite.
