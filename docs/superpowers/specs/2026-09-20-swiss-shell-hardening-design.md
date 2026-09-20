@@ -19,6 +19,12 @@ three of them put **wrong numbers in front of organisers and players**, and two
 Alongside them sit nine tests that do not constrain the code — which is why
 none of these were caught by a suite that was green throughout.
 
+A tenth gap was found later the same day, outside the predecessor's list and
+one layer up: **three of those wrong-number findings land in the standings
+table, and no e2e or walkthrough in the repo asserts a standings POINT** — the
+two specs whose titles promise it assert only that rows are visible. Tasks 0.6
+and 0.7 close that before Wave 1 touches the numbers.
+
 **Correction, 2026-09-20 (owner challenge).** An earlier draft of this document
 said these had "no recovery short of `rebuild`". That is FALSE, and the owner
 caught it. `deleteStage` refuses on only three things — a schedule lock, not
@@ -81,8 +87,10 @@ as premises are re-pinned.
 Two hard dependencies:
 
 - **Wave 0 precedes everything.** Nine tests in this area do not constrain the
-  code. Fixing behaviour behind them means the suite cannot witness a
-  regression in the very thing being fixed.
+  code, and above them no e2e asserts a standings point at all. Fixing
+  behaviour behind that means the suite cannot witness a regression in the very
+  thing being fixed. Tasks 0.6/0.7 are the ones Wave 1 actually depends on:
+  1.1, 1.2 and 1.3 all change what the standings table says.
 - **Wave 3's freeze change is unsafe without Wave 3's no-op fix.** Moving the
   round-count freeze to Start while `existing.length === 0` still gates minting
   would let a 3→5 change report success and mint nothing.
@@ -122,6 +130,42 @@ award-outcomed but NOT `-bye`-keyed. Mutate each guard singly.
 proves genuinely unreachable, DELETE it and say so — a guard that cannot fire is
 not a safety net, it is a reader trap.
 
+**DONE 2026-09-20 (`b7cd4ae49`), and the premise was FALSE.** There is no pair
+of guards left to cover for each other: C1 (`95c6cfa88`, which landed on #804)
+deleted `isSwissByeRow` — `ext_key?.endsWith("-bye") === true || isAwardOutcome`
+— outright. Verified independently: the symbol appears nowhere in production
+code, only in two comments in `swiss-shell.test.ts` (`:108`, `:377`) recording
+what it used to be. The task's "second guard is dead code" reading described a
+predicate that had already been removed.
+
+What `swissRoundHasPlayedResult` actually has is THREE arms, and each already
+kills a distinct named test when mutated singly — the bye-exemption arm, the
+award arm (killed by a row whose status is `scheduled`, which the status arm
+therefore cannot cover) and the status arm (killed by a forfeited row whose
+outcome is a WIN, which the award arm cannot cover). Nothing was deleted: the
+`ext_key` values still present in the row fixtures are load-bearing test INPUT
+proving the name is ignored, so removing them would weaken 26 literals rather
+than tidy them.
+
+Two witnesses were added regardless — a `-bye`-keyed row carrying a real played
+match must still block, and a genuine bye named like a board must still be
+exempt. Reinstating the old ext_key arm reds the first; exempting by name reds
+both. 29 tests, was 27.
+
+**Carried forward as a finding, NOT closed here.** `reconcileSwissRoundShells`
+(Task 1.0) reintroduces name-based bye classification —
+`isByeShell = ext_key?.endsWith("-bye")` — the very predicate C1 deleted. It is
+defensible in that one place and nowhere else: it classifies an UNSEATED SHELL,
+which has no entrants and therefore no award outcome, so `isOneSidedAwardBye`
+cannot classify it and the ext_key is the row's only identity. The destructive
+guards (unseated, `swissRoundHasPlayedResult`, canonical `fixtureEvidenceSql`)
+all run before any delete, so a misnamed real row refuses rather than being
+eaten. The residual exposure is the inverse: a genuine bye shell that is NOT
+`-bye`-suffixed would be invisible to the reconcile and a second bye minted
+beside it. Nothing mints such a row today — both mint sites use
+`sw-r${n}-bye` — so this is a constraint to keep, not a live defect. Any third
+mint site owes the same suffix or this breaks silently.
+
 ### Task 0.3 — tests whose titles contradict their bodies
 
 - `swiss-shell-fixtures.test.ts` "Pair R1 requires an explicit second Generate"
@@ -157,8 +201,92 @@ and three `ui.json` keys now ship with English-only render coverage.
 **Acceptance:** replace one locale's value with English; the test reds. Delete a
 key from one locale; the test reds.
 
+### Task 0.6 — no e2e anywhere asserts a standings POINT
+
+Found 2026-09-20 by sweeping assertions, not titles. Wave 1's Tasks 1.1, 1.2
+and 1.3 are all standings-points defects, and the layer that would catch them
+in a browser does not exist.
+
+What the sweep actually found:
+
+| Layer | Plays through | Asserts points? |
+| --- | --- | --- |
+| DB-integration vitest | `scoreEvent` / `appendEvent` → real engine fold | **Yes, well** — `custom-points.test.ts:176` (forfeit 3 / −1), `engine-db/integration.test.ts:215` (3/0 **and rank 1/2**), `config-snapshot.test.ts:312` (3/1), `swiss-shell-fixtures.test.ts:248` (bye `{played:1,won:1,points:2}`, then 0/0/0 after Unpair), `add-fixture.test.ts:153` |
+| e2e | API-driven scoring | **Once, in the whole suite** — `v6-sports.spec.ts:698` hockey FIH draw → `points === 1`, `drawn === 1` |
+| e2e "standings" journeys | fully-scored stage | **No** — see below |
+| walkthrough | tap-by-tap pad | **No** — none navigates to standings at all |
+
+`journey-pro.spec.ts:266` is titled *"complete the stage and verify the
+standings table"*. Its whole body is a `getByRole("row", …)).toBeVisible()`
+loop over `PLAYERS`. Rows present; no point, no rank, no order.
+`journey-community.spec.ts:101` is the same shape plus `expect(pub.status)
+.toBe(200)`. **Garble every points value in the table and both stay green** —
+failure class 4, and the reason this task is in Wave 0 rather than Wave 1.
+`spectator-hub.spec.ts` opens `?tab=standings` three times (`:803`, `:1020`)
+and every assertion there is layout or a11y — sideways scroll, `.sr-only`
+anchoring, tap-target height — never a value.
+
+**Build:** an assertion on the real table in `journey-pro.spec.ts:266`, on the
+stage that test has already scored. The rig costs nothing extra: the division
+is created at `:47-56` with `config: { points: { w: 3, d: 1, l: 0 } }`, and
+every fixture is a HOME win — `scoreRemainingFixtures` (`e2e/helpers.ts:2056`)
+posts `generic.result { p1Score: 2, p2Score: 1 }` unconditionally, and the one
+fixture scored through the pad at `:211` is filled `3` then `1`, also a home
+win. So each entrant's points are `w × (times they were home)` and nothing
+else.
+
+- Hoist the points block to a `const POINTS` used BOTH in the division-create
+  body and in the expectation, so the two cannot drift apart. Do **not** type
+  `3` into the assertion.
+- Derive the expected map by reading `home_entrant_id` off the 15 fixtures —
+  never a table of numbers typed into the test (failure class 19).
+- Assert the full map, then that `rank` is monotone non-increasing in points.
+  Six entrants on a circle-method round robin WILL produce home-count ties, so
+  a strict order assertion here is a latent red; Task 0.7 owns strictness.
+
+**Acceptance (the distinguishing one):** mutate `w: 3 → w: 2` in the division
+config alone and this test must red with a points mismatch. A test that only
+checks "every entrant has SOME points" survives that and is not the deliverable.
+Also confirm the assertion sits after `/complete` and after
+`scoreRemainingFixtures`, or it asserts a half-folded table.
+
+### Task 0.7 — the one e2e that builds a strictly-ordered table asserts nothing about it
+
+`competition-desk-actions.spec.ts:76` `scoreInSeedOrder` exists specifically to
+make the standings **strictly ordered** — its own docblock says a uniform 2-1
+would leave teams level on points and disable the confirm control. It scores
+`leagueOfFour` (4 entrants, 6 fixtures, explicit `points: { w: 3, d: 1, l: 0 }`
+at `:108`) so the earlier seed always wins, guards that every fixture was
+scored — and then never reads the table it went to that trouble to produce. The
+rows downstream assert the seed PROPOSAL, not the standings.
+
+The expected table is total and tie-free: `entrantIds[0] = 9, [1] = 6, [2] = 3,
+[3] = 0`, ranks 1-4. This would be the repo's **first e2e standings ORDERING
+check**.
+
+**Build:** give `scoreInSeedOrder` the `stageId` (all call sites are in this
+one file; `leagueOfFour` already returns `leagueId`) and have it read
+`GET /api/v1/stages/{id}/standings` after its existing scored-count guard,
+asserting points and rank per seed. Every row that scores in seed order then
+gets the check for free, beside the count guard that already exists for the
+same reason.
+
+Derive `9/6/3/0` from the same `points` object the division was created with
+and each seed's win count — `(3 - i) × w` — not as four literals.
+
+No `/complete` call is owed: `recomputeStandings` runs on every decided write
+(`engine-db/integration.test.ts:204-224` pins exactly this), which is also why
+`v6-sports.spec.ts` can read points mid-match.
+
+**Acceptance:** reverse the comparison in `scoreInSeedOrder` (`h! < a!` →
+`h! > a!`) so the LATER seed always wins. The table inverts, every downstream
+row still passes, and only this assertion reds. A points-only assertion that
+ignores rank does not witness that — it must fail on order.
+
 **Wave 0 gate:** every mutant listed above kills a NAMED test, test totals
-unmoved, and the killer names are recorded.
+unmoved, and the killer names are recorded. Tasks 0.6 and 0.7 are e2e, so their
+mutants are verified by running the spec FILE (never a `-g` slice, failure
+class 21) against a prod build with `E2E_PROD_TARGET`.
 
 ---
 
@@ -172,6 +300,15 @@ described as a setup-time mistake. It is not — see below. It now leads the
 programme, ahead of the standings fixes: wrong Buchholz misorders a table,
 whereas this stops the event being run at all, on the most ordinary
 interruption a Swiss tournament has.
+
+**Where 1.1–1.3's tests go.** The unit harness already exists and is good —
+extend `usecases/__tests__/custom-points.test.ts` (it drives `scoreEvent` then
+`getStandings` and asserts real point values) for 1.2, and
+`usecases/__tests__/swiss-shell-fixtures.test.ts:248` (already asserts a bye
+winner at `{played:1, won:1, points:2}`) for 1.1 and 1.3. No new rig is owed at
+that layer. The e2e layer has no points harness at all until Tasks 0.6/0.7
+build one — which is why those two are a hard dependency of this wave and not
+a nice-to-have.
 
 ### Task 1.0 — a mid-tournament withdrawal bricks Pair next
 
@@ -240,6 +377,49 @@ Full reasoning in Open question 1.
   recreate; without it both implementations pass.
 - Re-run `swiss-shell.spec.ts` itself. It covers schedule-ahead directly and is
   the existing guard against this regression.
+
+**DONE 2026-09-20** — `7cbbb8b44` (fix, `stages.ts` +168 and a new
+`swiss-withdrawal-reconcile.test.ts`), `00ee59a70` (e2e). Unpushed, no PR.
+
+`reconcileSwissRoundShells` (`stages.ts:1056`) sits between `pairRound` and the
+seating loop, reuses `swissBoardsForField`, deletes surplus from the highest
+`seq_in_round` down, mints only the shortfall, and moves — never recreates — a
+surviving bye. It returns early and writes NOTHING when the field has not
+moved, so the common Pair is untouched. All three destructive guards run under
+the advisory lock `generateStageFixturesWrite` already holds, and every refusal
+reuses `STAGE_NOT_READY`, so no new user-facing string and no dictionary work.
+
+**Verified in this session, not taken on report:**
+
+- Unit, re-run with the JSON reporter against `sw1`: 71 passed / 0 failed
+  across the three suites, 11 of them the new file. Paths confirmed in
+  `.testResults[].name`.
+- **The distinguishing criterion was mutated by hand.** Turning the reconcile
+  into a faithful delete-all/mint-all recreate (`survivors = []`, every board
+  and the bye doomed, the bye re-minted) reds exactly two named tests — "a
+  shell scheduled ahead keeps its id, slot and court across the reconcile" and
+  "a field that grows before Start mints only the shortfall and keeps the
+  boards it has" — with the total unmoved at 71. A recreate does not pass this
+  suite, which is what the acceptance criterion above demanded and the one
+  thing a report cannot establish.
+- `swiss-shell.spec.ts` run as a WHOLE FILE against the rebuilt `sw1` prod
+  bundle: 4 passed, including the new `:134` withdrawal test. (`seazn-env env`
+  exports `SMOKE_BASE`, not `PLAYWRIGHT_BASE`; without the latter the preflight
+  silently probes `:3000` and aborts. Environment, not defect.)
+
+**Scope is LAZY — only the round being paired.** A later round has no results
+to lose by being reshaped late, and reconciling every unseated round widens a
+destructive write for a cosmetic fixture count. Two tests assert that rounds 2
+and 3 keep their old size, so switching to all-rounds must move a test rather
+than slip through.
+
+**Deliberate survivor.** The early return gates only the RESHAPE: a
+correct-shaped round still Pairs even when it carries evidence, because
+refusing it would regress a Pair that works today. Pinned by a named test, and
+it is the one mutant that survives by design in the force-false direction.
+
+**Still owed on this task:** no walkthrough spec (the programme's bar is one
+per task group) and the branch is unpushed with no PR.
 
 ### Task 1.1 — a bye never freezes `config_snapshot`
 
@@ -327,6 +507,16 @@ and clears.
 round", or refuse when the latest round contains one.
 **Acceptance:** add an ad-hoc fixture to a swiss stage, Unpair, and show the
 ad-hoc row survives.
+
+**Note added 2026-09-20 — this task is NOT closed by Task 1.0, and a report
+from that task nearly read as if it were.** Task 1.0's reconcile cannot eat an
+ad-hoc fixture: `AddFixture` (`api-v1/schemas.ts:1133`) requires both entrant
+ids as UUIDs under `.strict()`, so every ad-hoc row is SEATED, and the
+reconcile's unseated guard refuses rather than deleting. Verified at the schema,
+not inferred from the TypeScript input type. That settles the hazard for
+`reconcileSwissRoundShells` and for nothing else — `unpairSwissRound` is a
+different function with a different guard, and this task still owns it. Its
+acceptance criterion is unchanged.
 
 ### Task 2.4 — guard read before the advisory lock
 
