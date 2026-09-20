@@ -67,12 +67,51 @@ orchestrator commits (implementers never commit).
   `RELAY_DRIVERS=live` is no longer blocked by an inferred echo. Full measurements appended to
   specs/2026-09-11-cloudflare-stream-measured.md; verdict in `.superpowers/sdd/.../n3-probe-report.md`.
 
-**In flight at time of writing:** Task 5A (Fly Machines API client, `apps/web/src/server/relay/fly-client.ts`) —
-dispatched on opus at BASE `a6f5d9f32` with `task-5A-carries.md`. Its Step 5 live leg IS authorised and IS to be run
-(real Machines, real money): every Machine destroyed in the same run with the destroy CONFIRMED by re-read, everything
-tagged `seazn_session`, an end-of-file sweep (a timed-out test never runs `finally`), and any unconfirmed Machine
-reported on the first line. An untracked `__tests__/fly-client.test.ts` in this worktree is THAT implementer, not a
-foreign session.
+- Task 3 ports + fakes → `4a11c1b4a` — clean (15 tests, 53/53 mutants). 9 minors deferred to the lane-A sweep.
+- Task 4 Cloudflare Stream ingest adapter → `32c3c8b82` + fix rounds `09f3aeea6` (1), `8b5072457` (2). **COMPLETE** —
+  re-review 2 Approved (task-4-rereview-2.md). Round 1 fixed the CRITICAL: retention was sent NESTED inside
+  `recording` (the shape measured as silently dropped) — now a top-level `deleteRecordingAfterDays` with a read-back
+  that best-effort deletes the new input and THROWS on mismatch. Relay 297/272/0/25 exit 0; ingest-cf 16/16; tsc 0;
+  eslint 0; 13 mutants killed. 2 Minor parked (I-3's 2xx tolerance could mask an orphan; the refusal message is
+  untranslated English — Task 10 must map it to a dictionary code and never render `err.message`).
+- **N-3 CLOSED by live measurement** → `5b40fdf0c` (doc only). Owner authorised live create+delete 2026-09-20
+  ("yes, you can create and delete"). The probe created ONE live input (`r1-n3-probe-1789901523`), deleted it in the
+  same run and confirmed the delete with a 404/10003 re-read; post-sweep 0 inputs, videoCount 0 — NO LEAK, no secret
+  printed. Verdict: `ingest-cf.ts`'s read-back HOLDS — the API echoes `recording.timeoutSeconds` 180 and
+  `deleteRecordingAfterDays` 30 at the TOP LEVEL, exactly where :160–161 read them; the :178 throw is unreachable.
+  `RELAY_DRIVERS=live` is no longer blocked by an inferred echo. Full measurements appended to
+  specs/2026-09-11-cloudflare-stream-measured.md; verdict in `.superpowers/sdd/.../n3-probe-report.md`.
+
+- Task 5A Fly Machines API client → `bcd459094` (BASE a6f5d9f32). fly-client.ts + fly-client.test.ts +
+  fly-client.live.test.ts (new), config.ts (doc comments only). Orchestrator re-ran the gate independently: relay
+  321/293/0/28 exit 0, worktree paths confirmed, the 3 live tests correctly PENDING without `RELAY_LIVE_FLY`; tsc 0;
+  eslint 0. Implementer: unit 21/21, 15/15 mutants killed, live leg 3/3. **Live run: 14 Machines created across 4 runs,
+  all 14 confirmed destroyed — orchestrator INDEPENDENTLY confirmed app `seazn-relay` holds 0 machines. No leak.**
+  Three inferred premises were wrong and shipped broken until the live run (`/wait` returns `WaitMachineResponse`, not a
+  Machine; `request: null` on launch/destroy events; events arrive NEWEST-FIRST, so the brief's `reverse().find()` read
+  the OLDEST exit). All three fixed with a mutant each.
+
+**In flight at time of writing:** the Task 5A REVIEW (opus), dispatched against
+`review-a6f5d9f32..bcd459094.diff`, aimed at the 409/retryability safety split, the live test's cleanup surviving its
+own timeout, secret redaction being mutation-proven, and value-pinning over reachability.
+
+**NEW outward-facing resource, owner flagged:** the Fly app `seazn-relay` did not exist; the Task 5A implementer
+CREATED it (org seazn-club, id `p7vx1jevmyrw9k3z`). Empty apps bill nothing and Task 5 needs it. Ruling: KEEP.
+`DELETE /v1/apps/seazn-relay` undoes it. The org's other apps (seazn-club-stg, placement, placement-stg) are
+pre-existing and untouched.
+
+**Verification trap found this session — put it in every lane brief:** eslint run from the WORKTREE ROOT with
+`apps/web/src/...` paths answers "File ignored because of a matching ignore pattern" and EXITS 0 having linted
+nothing. It must be `cd apps/web && npx eslint src/...`.
+
+**Carries opened by Task 5A (detail in the ledger):** T5-c Task 5 must ADOPT on HTTP 409 `already_exists` rather than
+fail (409 is non-retryable and its body NAMES the existing Machine id, so T5-b is not violated — but 409 skips
+`onAmbiguous`); T5-d `waitMachine` is a long poll, default requestTimeoutMs 10s < default 60s wait and Fly caps
+`timeout` at 60s (90 → HTTP 400) — Task 5 owes the sizing; T5-e `PROVISION_TIMEOUT_SECONDS` 120 holds (live
+create→started 2.8–4.2s, worst case 98.5s) but the 21.5s headroom is the CREATE's alone — a `waitMachine(started)` in
+the same window can exceed it; T5-f measured lifecycle facts — on an `auto_destroy` Machine `state: "stopped"` is often
+NEVER observable (the wait 404s), a destroyed Machine GETs **200 `destroyed`** not 404, and after `wait destroyed` the
+next GET can still read `destroying`.
 
 **N-5 CLOSED on the ENV side — the code is correct, the minors-sweep rename is CANCELLED.** The owner re-keyed both
 `.env.local` files to `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_STREAM_TOKEN`, the pair `ingest-cf.ts:79–82` reads; the old
