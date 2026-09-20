@@ -15,7 +15,6 @@ import {
 } from "@/lib/billing";
 import { invalidateEntitlementsForOrgGroup, isPassLocked } from "@/lib/entitlements";
 import { isPassKey, type PassKey } from "@/lib/currency";
-import type { PurchasablePlanKey } from "@/lib/types";
 import { subscriptionIdForOrg } from "@/lib/billing-group";
 import { planItem } from "@/lib/subscription-items";
 import { logStaffAction } from "@/lib/admin";
@@ -599,7 +598,7 @@ export async function staffRemovePaymentMethod(
 }
 
 // ---------------------------------------------------------------------------
-// Interval switch (monthly ↔ annual) + plan switch (Pro ↔ Pro Plus)
+// Interval switch (monthly ↔ annual)
 // ---------------------------------------------------------------------------
 
 interface IntervalContext {
@@ -609,31 +608,35 @@ interface IntervalContext {
   priceId: string;
   trialing: boolean;
   currency: string;
-  /** The plan key being switched TO — same as the current plan for a plain
-   *  interval switch, the target plan for a Pro ↔ Pro Plus change. Drives the
-   *  renewalAmountMinor price-point lookup below. */
+  /** The plan key being switched TO. The Pro ↔ Pro Plus switch that could make
+   *  this differ from the current plan is retired (entitlements v18, V393), so
+   *  today it is always the group's own plan — kept because the price lookup
+   *  below is keyed by (planKey, interval) and reads it. */
   planKey: string;
   trialEnd: string | null;
 }
 
 /**
- * Shared resolver behind both the interval switch and the Pro ↔ Pro Plus plan
- * switch: looks up the target plan+interval's Stripe price id, retrieves the
- * live subscription's single item, and refuses when that item is already on
- * the requested price. `resolveIntervalChange` below is a thin wrapper that
- * keeps the same plan key (existing endpoints stay untouched).
+ * Resolver behind the interval switch: looks up the target plan+interval's
+ * Stripe price id, retrieves the live subscription's PLAN item, and refuses
+ * when that item is already on the requested price. `resolveIntervalChange`
+ * below is the only caller — it reads the group's current plan key and hands
+ * the caller-facing refusal wording in.
+ *
+ * Kept separate from that wrapper (rather than folded into it) because the
+ * plan key and the refusal message are the two things a second caller would
+ * vary, and splitting on them is what keeps the price lookup honest: the price
+ * comes from the `plans` row read under the REQUESTED interval, never from
+ * whatever the subscription happens to be on now.
  */
 async function resolvePriceChange(
   orgId: string,
   planKey: string,
   interval: BillingInterval,
-  // Interval-only switches keep their existing "already billed X" wording;
-  // a genuine plan change (this planKey may differ from the caller's own
-  // current plan) says "Already on this plan" instead. Both routes can hit
-  // this same refusal (item.price.id === priceId) so the caller picks the
-  // message rather than us guessing from planKey === sub.plan_key (which is
-  // also true for a plain interval switch, by construction).
-  alreadyMessage = "Already on this plan",
+  // The caller picks the wording rather than us guessing from
+  // planKey === sub.plan_key — which is true for every interval switch, by
+  // construction, and so cannot distinguish anything.
+  alreadyMessage: string,
 ): Promise<IntervalContext> {
   const { sub, customerId } = await requireCustomer(orgId);
   if (!sub.stripe_subscription_id)
@@ -816,111 +819,13 @@ export async function applyIntervalChange(
   return { requires_action: false };
 }
 
-// ---------------------------------------------------------------------------
-// Plan switch (interval change on the one purchasable plan — entitlements
-// v18 retired the Pro ↔ Pro Plus switch this used to name; a local
-// `PlanKey = "pro" | "pro_plus"` here was its own unnamed mirror of
-// `checkoutSchema.plan_key`, so this now imports the shared purchasable-set
-// type instead of restating it. `enterprise` never reaches this path — it
-// is never self-serve.)
-// ---------------------------------------------------------------------------
-
-export async function previewPlanChange(
-  orgId: string,
-  planKey: PurchasablePlanKey,
-  interval: BillingInterval,
-): Promise<IntervalPreview> {
-  const ctx = await resolvePriceChange(orgId, planKey, interval);
-  const prorationDate = Math.floor(Date.now() / 1000);
-  // Stripe's own arithmetic — see renewalAmountMinorFor. The flat
-  // proPrice/proPlusPrice lookup this replaced could not see the graduated
-  // per-org tiers and under-quoted every multi-org group.
-  const renewalAmountMinor = await renewalAmountMinorFor(ctx);
-
-  // Trialing: nothing has been paid, nothing is due today — the first charge
-  // is the plain new price at trial end. No PRORATION call needed.
-  if (ctx.trialing) {
-    return {
-      interval,
-      trialing: true,
-      dueTodayMinor: 0,
-      creditMinor: 0,
-      newPeriodMinor: 0,
-      unusedCreditMinor: 0,
-      subtotalMinor: 0,
-      taxMinor: 0,
-      currency: ctx.currency,
-      newPeriodEnd: ctx.trialEnd,
-      renewalAmountMinor,
-      prorationDate,
-    };
-  }
-
-  const invoice = await getStripe().invoices.createPreview(
-    buildIntervalPreviewParams({ ...ctx, prorationDate }),
-  );
-  const s = summarizeIntervalPreview(invoice);
-  return {
-    interval,
-    trialing: false,
-    dueTodayMinor: s.dueTodayMinor,
-    creditMinor: s.creditMinor,
-    newPeriodMinor: s.newPeriodMinor,
-    unusedCreditMinor: s.unusedCreditMinor,
-    subtotalMinor: s.subtotalMinor,
-    taxMinor: s.taxMinor,
-    currency: s.currency,
-    newPeriodEnd: s.newPeriodEnd,
-    renewalAmountMinor,
-    prorationDate,
-  };
-}
-
-export async function applyPlanChange(
-  orgId: string,
-  planKey: PurchasablePlanKey,
-  interval: BillingInterval,
-  prorationDate: number,
-): Promise<IntervalChangeResult> {
-  const ctx = await resolvePriceChange(orgId, planKey, interval);
-  const stripe = getStripe();
-
-  let updated: Stripe.Subscription;
-  try {
-    updated = await stripe.subscriptions.update(
-      ctx.subscriptionId,
-      buildIntervalChangeParams({ ...ctx, prorationDate }),
-    );
-  } catch (err) {
-    // A pinned proration_date outside the current period means a renewal (or
-    // another change) raced the preview — the numbers we showed are stale.
-    if ((err as Stripe.errors.StripeError)?.type === "StripeInvalidRequestError")
-      throw new HttpError(400, "The preview expired — please review the change again.");
-    throw err;
-  }
-
-  await syncSubscription(orgId, updated);
-  // Unlike a plain interval switch, plan_key itself changes here — cached
-  // entitlements (limits, feature gates) go stale and must be invalidated.
-  await invalidateEntitlementsForOrgGroup(orgId);
-  await captureServer({
-    event: EVENTS.BILLING_PLAN_CHANGED,
-    distinctId: await ownerDistinctId(orgId),
-    orgId,
-    properties: { plan_key: planKey, interval },
-  });
-
-  const invoice = updated.latest_invoice;
-  if (
-    invoice &&
-    typeof invoice !== "string" &&
-    invoice.status === "open" &&
-    invoice.confirmation_secret?.client_secret
-  ) {
-    return { requires_action: true, client_secret: invoice.confirmation_secret.client_secret };
-  }
-  return { requires_action: false };
-}
+// `previewPlanChange` / `applyPlanChange` — the plan-to-plan pair that lived
+// here and backed POST /api/billing/plan + its `preview` sibling — are DELETED.
+// Entitlements v18 (V393) retired pro_plus and left "pro" as the only key
+// `PurchasablePlanKey` admits, so both endpoints could only ever be asked for
+// the plan the caller was already on, i.e. refused. Their mechanism was never
+// their own: `resolvePriceChange` above is shared, is live behind the interval
+// endpoints, and is pinned by billing-manage-interval.test.ts.
 
 // ---------------------------------------------------------------------------
 // Cancel / resume + dunning retry

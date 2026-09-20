@@ -449,11 +449,15 @@ export function PlanIntervalSwitcher({ current }: { current: "monthly" | "annual
 // The Pro <-> Pro Plus PLAN SWITCHER that lived here is DELETED (entitlements
 // v18, V393). It targeted `plan_key=pro_plus` — a plan the migration removed
 // from `plans` — so for a Pro subscriber it rendered "Upgrade to Pro Plus" and
-// POSTed a key /api/billing/plan can no longer honour. The billing page had
-// already stopped rendering it (settings/billing/page.tsx), which left the
-// component orphaned rather than harmless: its `billing.planChange.toPlus`
-// string was still shipped in four dictionaries. Pro is the ceiling of
-// self-serve; above-Pro is the Contact-us conversation, owned by W3.
+// POSTed a key no endpoint could honour. The billing page had already stopped
+// rendering it (settings/billing/page.tsx), which left the component orphaned
+// rather than harmless: its `billing.planChange.toPlus` string was still
+// shipped in four dictionaries. Pro is the ceiling of self-serve; above-Pro is
+// the Contact-us conversation, owned by W3.
+//
+// The endpoint it POSTed to, `/api/billing/plan` + its `preview` sibling, has
+// since been deleted too. The interval switcher above is the only live price
+// change on this page.
 
 // ---------------------------------------------------------------------------
 // Cancel / resume + dunning retry
