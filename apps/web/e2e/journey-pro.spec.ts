@@ -122,6 +122,15 @@ test.describe.serial("pro lifecycle", () => {
   test("start the tournament from the division console", async ({ page, request }) => {
     await page.goto(await divisionPath(page.request, divisionId));
     await page.getByRole("button", { name: "Start tournament" }).click();
+    // Start now confirms first (design 2026-09-20) — the button opens a dialog
+    // and POSTs nothing. The consequences the organiser is shown are asserted
+    // here, not just the presence of a sheet: a dialog that renders an empty
+    // body would still let this journey through.
+    const confirm = page.getByTestId("start-confirm");
+    await expect(confirm).toBeVisible({ timeout: 20_000 });
+    await expect(confirm).toContainText("The timetable goes live to players now.");
+    await expect(confirm.getByTestId("start-confirm-entrants")).toBeVisible();
+    await page.getByTestId("start-confirm-confirm").click();
     // Fixtures were pre-generated, so quick-start generates 0 and only
     // refreshes (no redirect). The button label flips to "Starting…" while the
     // POST is in flight, so poll the API for the real status change.
