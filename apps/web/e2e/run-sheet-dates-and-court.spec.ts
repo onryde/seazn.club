@@ -204,7 +204,30 @@ test.describe("the run sheet's day header is in the app's locale, not the browse
 // OPEN untimed bracket fixture is filed in the division-wide "Not yet
 // scheduled" block instead (max-effort review finding 9), so it never reaches
 // a round section at all and cannot exercise this.
+//
+// THE TIMED ROUND'S DAY IS DERIVED FROM `now`, NEVER PINNED. A fixture
+// scheduled on TODAY makes the division `match_day` (division-phase.ts rule 3,
+// "some fixture is in_play, or scheduled and dated today"), and the fixtures
+// tab then MOUNTS on the "today" filter rather than "all"
+// (stages-panel.tsx: `phase === "match_day" ? "today" : "all"`). That filter
+// keeps only a fixture that is both timed AND dated today, so it drops the
+// untimed final this test exists to assert — leaving ONE round section where
+// the test expects two. The old literal `2026-09-20T10:00Z` therefore passed
+// every day until 2026-09-20 and failed on exactly that day, on main and on
+// every open branch at once. Same expiring-literal defect that
+// competition-desk.spec.ts's H3/J1 fix already removed from this suite once
+// (see its header, which records a sibling literal expiring "for exactly one
+// day on 2026-09-20"); fixed the same way, by deriving from the clock.
 // ---------------------------------------------------------------------------
+
+/** A UTC instant `daysAhead` whole days after today, at `hourUtc:00`. Far
+ *  enough ahead that the seeded round can never be today's in any zone this
+ *  suite uses, and never a date that ages into one. */
+function futureUtcDayAt(daysAhead: number, hourUtc: number): number {
+  const d = new Date(Date.now() + daysAhead * 24 * 60 * 60_000);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hourUtc, 0, 0);
+}
+
 test.describe("bracket round sections carry the round's calendar date", () => {
   test("a timed round states its date (and its range); a settled untimed round states none", async ({
     page,
@@ -236,10 +259,13 @@ test.describe("bracket round sections carry the round's calendar date", () => {
       "POST",
       { seq: 1, kind: "knockout", name: "Cup" },
     );
+    // One derivation feeds both the settings' `startAt` and the fixtures'
+    // own times below, so the two can never drift apart.
+    const dayOne = futureUtcDayAt(30, 10);
     const { courts } = await seedVenueWithCourts(request, [`KO Court ${suffix}`]);
     await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
       config: {
-        startAt: "2026-09-20T10:00:00.000Z",
+        startAt: new Date(dayOne).toISOString(),
         matchMinutes: 30,
         gapMinutes: 0,
         courts: [courts[0]!.id],
@@ -259,7 +285,6 @@ test.describe("bracket round sections carry the round's calendar date", () => {
     expect(semis.length, "a 4-entrant knockout is 2 semis + 1 final").toBe(2);
 
     // Both semis on ONE day first — the headline shape the ruling describes.
-    const dayOne = Date.UTC(2026, 8, 20, 10, 0, 0);
     await apiJson(request, `/api/v1/fixtures/${semis[0]!.id}`, "PATCH", {
       scheduled_at: new Date(dayOne).toISOString(),
       court_id: courts[0]!.id,
@@ -273,6 +298,14 @@ test.describe("bracket round sections carry the round's calendar date", () => {
     const org = await activeOrg(page);
     const url = `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`;
     await page.goto(url);
+
+    // THE PREMISE, STATED. Everything below reads the UNFILTERED sheet. If the
+    // seeded day ever lands on today the tab mounts on "today" instead, the
+    // untimed final is filtered out, and the round assertions below fail as a
+    // count that is short by one — a data-shaped symptom for a clock-shaped
+    // cause. Asserting the chip makes that failure say what it is.
+    const filterChips = page.getByTestId("run-sheet-filter");
+    await expect(filterChips.locator('[data-filter="all"]')).toHaveAttribute("aria-pressed", "true");
 
     const bracket = page.locator('[data-run-sheet-block="bracket"]');
     await expect(bracket).toBeVisible();
