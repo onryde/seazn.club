@@ -10,7 +10,7 @@ vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => 
 const stage = (o: Partial<{ id: string; seq: number; kind: string; name: string; status: string }> = {}) => ({
   id: "s1", seq: 1, kind: "league", name: "League", config: {}, progression: null, status: "active", ...o,
 });
-const fixture = (stageId: string, o: Partial<{ id: string; status: string; fixture_no: number }> = {}) => ({
+const fixture = (stageId: string, o: Partial<{ id: string; status: string; fixture_no: number; scheduled_at: string | null }> = {}) => ({
   id: `f-${stageId}`, stage_id: stageId, pool_id: null, round_no: 1, seq_in_round: 1, fixture_no: 1,
   home_entrant_id: "e1", away_entrant_id: "e2", scheduled_at: null, venue: null, court_label: null,
   court_id: null, court_name: null, status: "scheduled", outcome: null, ...o,
@@ -79,6 +79,57 @@ describe("StagesPanel phase gating", () => {
       />,
     );
     expect(html).not.toContain(TIP);
+  });
+
+  /**
+   * The run sheet's MOUNTING filter, which nothing pinned until an e2e went
+   * red on 2026-09-20. `run-sheet-dates-and-court.spec.ts` seeded a knockout's
+   * semis on a pinned `2026-09-20`; when that date arrived the division became
+   * `match_day`, the tab mounted on "today" instead of "all", and the "today"
+   * predicate — timed AND dated today — dropped the UNTIMED final, so the
+   * bracket rendered one round section where the test expected two. The
+   * product was right and the test's date had rotted, but nothing here said
+   * so: the only symptom was a count short by one.
+   *
+   * The phase is BUILT from `resolvePhase`, not typed in as a word (this
+   * file's own L1 precedent, and _RULES.md's "derive the expected value from
+   * the engine's own declarations"). The `expect(phase)` line is the premise:
+   * if rule 3 ever stops calling a fixture-dated-today division `match_day`,
+   * this says so rather than passing for the wrong reason.
+   */
+  const pressedFilter = (html: string): string | null =>
+    /<button[^>]*data-filter="([a-z_]+)"[^>]*aria-pressed="true"/.exec(html)?.[1] ?? null;
+
+  it("mounts the run sheet on 'today' only on match day, and on 'all' otherwise", () => {
+    const matchDayInput: PhaseInput = {
+      divisionStatus: "active",
+      stages: [
+        { id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const },
+      ],
+      fixtures: [
+        { id: "f1", status: "scheduled", scheduledAt: "2026-03-01T15:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s1", awaitsSeedDraw: false },
+      ],
+      now: "2026-03-01T12:00:00Z",
+      tz: "UTC",
+      awaitingRegistrations: 0,
+    };
+    const phase = resolvePhase(matchDayInput);
+    expect(phase, "a division with a fixture dated today is match_day (rule 3)").toBe("match_day");
+
+    // ...and the SAME division one day earlier is not, so the two sides below
+    // differ by the clock alone rather than by a hand-picked pair of words.
+    const dayBefore = resolvePhase({ ...matchDayInput, now: "2026-02-28T12:00:00Z" });
+    expect(dayBefore).not.toBe("match_day");
+
+    const timed = { scheduled_at: "2026-03-01T15:00:00Z" };
+    const onMatchDay = renderToStaticMarkup(
+      <StagesPanel {...baseProps} phase={phase} fixtures={[fixture("s1", timed)]} />,
+    );
+    const otherwise = renderToStaticMarkup(
+      <StagesPanel {...baseProps} phase={dayBefore} fixtures={[fixture("s1", timed)]} />,
+    );
+    expect(pressedFilter(onMatchDay)).toBe("today");
+    expect(pressedFilter(otherwise)).toBe("all");
   });
 
   it("renders stages by seq: a complete stage 1 stays above a pending stage 2", () => {
