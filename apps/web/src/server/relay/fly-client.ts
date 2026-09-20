@@ -77,18 +77,54 @@ export interface MachineCreateInput {
   name: string; region: string;
   config: {
     image: string; guest: { cpus: number; memory_mb: number; cpu_kind: "shared" | "performance" };
-    auto_destroy: true; restart: { policy: "no" }; env: Record<string, string>; metadata: Record<string, string>;
+    auto_destroy: true; restart: { policy: "no" }; env: Record<string, string>;
+    /** The session key is REQUIRED, not merely conventional: it is the only thing
+     *  `createMachine`'s ambiguity lookup can find the Machine by, and a create
+     *  that cannot be looked up cannot report a trustworthy `retryable` (C1).
+     *  The type makes it hard; `createMachine` refuses at runtime as well,
+     *  because a cast can walk past a type. */
+    metadata: Record<string, string> & { [SESSION_METADATA_KEY]: string };
   };
 }
+
+/** The timing defaults, EXPORTED so the budget they imply can be ASSERTED rather
+ *  than described. `config.ts`'s PROVISION_TIMEOUT_SECONDS and
+ *  ENDING_TIMEOUT_SECONDS derivations are written against these names, and the
+ *  test "the provisioning budget config.ts derives HOLDS against this client's
+ *  declared defaults" recomputes that arithmetic from THIS object — so raising
+ *  one of these numbers reds a gate instead of silently invalidating a comment
+ *  (review I5; AGENTS.md failure class 20, a flat budget beside a derived cost).
+ *  They were inline literals in the constructor before, observed by nothing. */
+export const FLY_CLIENT_DEFAULTS = {
+  requestTimeoutMs: 10_000,
+  deadlineMs: 45_000,
+  maxAttempts: 4,
+  baseBackoffMs: 500,
+  maxBackoffMs: 8_000,
+  /** How long the create-ambiguity lookup waits before its ONE confirming
+   *  re-list (review I6). List-after-failed-POST consistency is not documented
+   *  by Fly, so an empty list is not taken as proof of absence on its own. */
+  lookupSettleMs: 1_000,
+} as const;
 
 export interface FlyClientOptions {
   token: string; app: string; fetchImpl?: typeof fetch;
   clock?: () => number; sleep?: (ms: number) => Promise<void>; random?: () => number;
   requestTimeoutMs?: number; deadlineMs?: number; maxAttempts?: number; baseBackoffMs?: number; maxBackoffMs?: number;
+  /** See FLY_CLIENT_DEFAULTS.lookupSettleMs. */
+  lookupSettleMs?: number;
   secrets?: readonly string[];
   /** Ruling 13: one stream_provider_calls row per ATTEMPT (telemetry.ts behind it in prod; FakeRecorder in tests). */
   recorder?: ProviderCallRecorder;
 }
+
+/** What the create-ambiguity lookup can conclude. The third case is the one the
+ *  first draft could not express: it returned `null` for BOTH "looked, found
+ *  nothing" and "nobody looked", and the domain reads the resulting
+ *  `retryable: true` as PROOF that Fly holds no Machine (carry T5-b). A lookup
+ *  that was never attempted, or that could not answer, is not evidence of
+ *  absence — it is the one state that must never grant attempt + 1. */
+type LookupOutcome<T> = { kind: "found"; value: T } | { kind: "absent" } | { kind: "unknown"; why: string };
 
 /** What `once` needs to record an attempt: the method's name, the machine it is about, the ids in the path. */
 interface CallMeta { operation: string; subjectId?: string | null; sessionId?: string | null; ids: readonly string[] }
@@ -112,7 +148,7 @@ export class FlyClient {
   constructor(opts: FlyClientOptions) {
     this.o = {
       fetchImpl: fetch, clock: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)), random: Math.random,
-      requestTimeoutMs: 10_000, deadlineMs: 45_000, maxAttempts: 4, baseBackoffMs: 500, maxBackoffMs: 8_000, secrets: [],
+      ...FLY_CLIENT_DEFAULTS, secrets: [],
       // Ruling 13: the recorder is bound HERE, which is what makes
       // `this.o.recorder` satisfy the `Required<…>` above. `record()` keeps its
       // `?? NOOP_RECORDER` all the same — the `...opts` spread below overwrites
@@ -150,51 +186,76 @@ export class FlyClient {
       .catch(() => undefined);
   }
 
+  /** A request that never produced a body: classified for the retry loop and
+   *  recorded as an attempt. An AbortError is OUR `requestTimeoutMs` firing. */
+  private transportFailure(e: unknown, meta: CallMeta, method: string, path: string, url: string, started: number, attempts: number): FlyApiError {
+    const isAbort = (e as { name?: string })?.name === "AbortError";
+    const code = isAbort ? "timeout" : "network";
+    this.record(meta, method, url, { status: null, latencyMs: this.o.clock() - started, attempt: attempts, requestId: null, retryAfterSeconds: null, errorCode: code, retryable: true });
+    return new FlyApiError(`fly ${method} ${path}: ${isAbort ? "timeout" : "network error"}`, code, null, true, null, attempts);
+  }
+
   /** ONE attempt. Returns the parsed body or throws a FlyApiError classified for the retry loop. */
   private async once<T>(method: string, path: string, body: unknown, schema: z.ZodType<T> | null, attempts: number, meta: CallMeta): Promise<{ status: number; data: T | null; requestId: string | null }> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), this.o.requestTimeoutMs);
     const url = `${FLY_MACHINES_BASE}/apps/${encodeURIComponent(this.o.app)}${path}`;
     const started = this.o.clock();
-    let res: Response;
+    // C2: ONE `finally` for the WHOLE attempt. The first draft cleared the timer
+    // in a `finally` attached to the fetch alone, so the AbortSignal was already
+    // disarmed by `res.text()` and a stalled body hung forever — measured
+    // unsettled after 3 s at requestTimeoutMs 50, which returns NO outcome at all
+    // to a create and falsifies every line of config.ts's budget derivation.
     try {
-      res = await this.o.fetchImpl(url, {
-        method, signal: ac.signal,
-        headers: { authorization: `Bearer ${this.o.token}`, "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    } catch (e) {
-      const isAbort = (e as { name?: string })?.name === "AbortError";
-      const code = isAbort ? "timeout" : "network";
-      this.record(meta, method, url, { status: null, latencyMs: this.o.clock() - started, attempt: attempts, requestId: null, retryAfterSeconds: null, errorCode: code, retryable: true });
-      throw new FlyApiError(`fly ${method} ${path}: ${isAbort ? "timeout" : "network error"}`, code, null, true, null, attempts);
+      let res: Response;
+      try {
+        res = await this.o.fetchImpl(url, {
+          method, signal: ac.signal,
+          headers: { authorization: `Bearer ${this.o.token}`, "content-type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } catch (e) {
+        throw this.transportFailure(e, meta, method, path, url, started, attempts);
+      }
+      const requestId = res.headers.get("fly-request-id");
+      const retryAfterHeader = res.headers.get("retry-after");
+      // The anchors are load-bearing: `Retry-After` is legally an HTTP-date, and a
+      // loose /\d+/ would make `Number(...)` NaN, the deadline comparison false and
+      // `sleep(NaN)` a hot loop against a rate limiter. A non-numeric header falls
+      // back to the jittered ladder.
+      const retryAfterSeconds = retryAfterHeader !== null && /^\d+$/.test(retryAfterHeader) ? Number(retryAfterHeader) : null;
+      let text: string;
+      try {
+        // `abortable` is belt and braces beside the still-armed signal: a body that
+        // ignores the AbortSignal (a stalled stream, a proxy that never closes) would
+        // otherwise outlast every budget this client declares.
+        text = await abortable(res.text(), ac.signal);
+      } catch (e) {
+        throw this.transportFailure(e, meta, method, path, url, started, attempts);
+      }
+      const latencyMs = this.o.clock() - started;
+      if (!res.ok) {
+        const parsed = text ? ErrorBody.safeParse(safeJson(text)) : null;
+        const detail = parsed?.success ? (parsed.data.error ?? "") : text.slice(0, 200);
+        const retryable = isRetryable(res.status, "http");
+        this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds, errorCode: `http_${res.status}`, retryable });
+        throw new FlyApiError(`fly ${method} ${path}: HTTP ${res.status} ${this.redFor(body, detail)}`, "http", res.status, retryable, requestId, attempts, retryAfterSeconds);
+      }
+      this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds: null, errorCode: null, retryable: false });
+      if (!schema) return { status: res.status, data: null, requestId };
+      const parsed = schema.safeParse(safeJson(text));
+      if (!parsed.success) throw new FlyApiError(`fly ${method} ${path}: malformed response (${this.redFor(body, parsed.error.issues[0]?.message ?? "unparseable")})`, "malformed", res.status, false, requestId, attempts);
+      return { status: res.status, data: parsed.data, requestId };
     } finally {
       clearTimeout(timer);
     }
-    const requestId = res.headers.get("fly-request-id");
-    const retryAfterHeader = res.headers.get("retry-after");
-    const retryAfterSeconds = retryAfterHeader !== null && /^\d+$/.test(retryAfterHeader) ? Number(retryAfterHeader) : null;
-    const text = await res.text();
-    const latencyMs = this.o.clock() - started;
-    if (!res.ok) {
-      const parsed = text ? ErrorBody.safeParse(safeJson(text)) : null;
-      const detail = parsed?.success ? (parsed.data.error ?? "") : text.slice(0, 200);
-      const retryable = isRetryable(res.status, "http");
-      this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds, errorCode: `http_${res.status}`, retryable });
-      throw new FlyApiError(`fly ${method} ${path}: HTTP ${res.status} ${this.redFor(body, detail)}`, "http", res.status, retryable, requestId, attempts, retryAfterSeconds);
-    }
-    this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds: null, errorCode: null, retryable: false });
-    if (!schema) return { status: res.status, data: null, requestId };
-    const parsed = schema.safeParse(safeJson(text));
-    if (!parsed.success) throw new FlyApiError(`fly ${method} ${path}: malformed response (${this.redFor(body, parsed.error.issues[0]?.message ?? "unparseable")})`, "malformed", res.status, false, requestId, attempts);
-    return { status: res.status, data: parsed.data, requestId };
   }
 
   /** The retry loop: full jitter, Retry-After, maxAttempts, the deadline.
    *  `op` receives the ATTEMPT NUMBER and hands it to `once`, so each
    *  stream_provider_calls row and each error says which attempt it was —
    *  passing a literal 0 there (the first draft) made every row read "0". */
-  private async withRetry<T>(op: (attempt: number) => Promise<T>, onAmbiguous?: () => Promise<T | null>): Promise<T> {
+  private async withRetry<T>(op: (attempt: number) => Promise<T>, onAmbiguous?: (lastAttempt: boolean) => Promise<LookupOutcome<T>>): Promise<T> {
     const started = this.o.clock();
     for (let attempt = 1; ; attempt++) {
       try {
@@ -207,14 +268,18 @@ export class FlyClient {
           // lets the runner table schedule attempt + 1 (invariant 1) — so it must MEAN "Fly holds no Machine under this name".
           // Every ambiguous failure is looked up, the LAST attempt's included (the first draft threw at maxAttempts before
           // looking, and a create that timed out on its final try reported retryable with its Machine booting); a deadline
-          // below is reached only after this lookup found nothing. A lookup that cannot answer makes the failure NOT retryable.
-          let found: T | null;
+          // below is reached only after this lookup found nothing. Only an `absent` verdict lets the retryable error out:
+          // a lookup that could not answer — or could not even be attempted (C1) — is `unknown` and is downgraded here.
+          let outcome: LookupOutcome<T>;
           try {
-            found = await onAmbiguous();
+            outcome = await onAmbiguous(attempt >= this.o.maxAttempts);
           } catch (lookupErr) {
-            throw new FlyApiError(`fly: create outcome unknown — the lookup after "${err.message}" failed (${this.red(String((lookupErr as Error)?.message ?? lookupErr))})`, err.code, err.status, false, err.requestId, attempt);
+            outcome = { kind: "unknown", why: this.red(String((lookupErr as Error)?.message ?? lookupErr)) };
           }
-          if (found !== null) return found;
+          if (outcome.kind === "found") return outcome.value;
+          if (outcome.kind === "unknown") {
+            throw new FlyApiError(`fly: create outcome unknown — the lookup after "${err.message}" could not answer (${outcome.why})`, err.code, err.status, false, err.requestId, attempt);
+          }
         }
         if (attempt >= this.o.maxAttempts) throw withAttempts(err, attempt);
         const retryAfter = err.status === 429 && err.retryAfterSeconds !== null ? err.retryAfterSeconds * 1000 : null;
@@ -232,12 +297,29 @@ export class FlyClient {
     const meta: CallMeta = { operation: "createMachine", ids: [], sessionId: sessionKey ?? null };
     return this.withRetry(
       async (attempt) => (await this.once("POST", "/machines", input, MachineSchema, attempt, meta)).data!,
-      async () => {
-        if (!sessionKey) return null;
+      async (lastAttempt): Promise<LookupOutcome<Machine>> => {
+        // C1: with no session key there is nothing to look the Machine up BY, so no lookup is
+        // possible. That is `unknown`, never `absent` — returning "nothing there" here reported
+        // `retryable: true` after ZERO GETs, and the domain would have read that as proof Fly
+        // holds nothing while a Machine booted under a name no row carries.
+        if (!sessionKey) return { kind: "unknown", why: `the create carries no ${SESSION_METADATA_KEY} metadata, so there is nothing to look it up by` };
         // T5-a: by NAME — the session's metadata also lists an EARLIER attempt's Machine, and `found[0]` handed that one back
-        // as this create's. T5-b: no `.catch(() => [])` — a lookup that failed must never read as "nothing there".
-        const found = await this.listMachines({ metadata: { [SESSION_METADATA_KEY]: sessionKey } });
-        return found.find((m) => m.name === input.name) ?? null;
+        // as this create's. T5-b: no `.catch(() => [])` — a lookup that failed must never read as "nothing there"; it throws,
+        // and `withRetry` turns the throw into `unknown`.
+        const mine = (ms: readonly Machine[]): Machine | undefined => ms.find((m) => m.name === input.name);
+        const found = mine(await this.listMachines({ metadata: { [SESSION_METADATA_KEY]: sessionKey } }));
+        if (found) return { kind: "found", value: found };
+        // I6: an empty answer only has to be RIGHT on the last attempt. Before that it merely
+        // permits another POST, and a POST under a name Fly already holds is refused 409 rather
+        // than duplicated (measured 2026-09-20) — so an unsettled list cannot make a second
+        // Machine there. On the LAST attempt the same empty answer becomes `retryable: true`,
+        // which the domain reads as proof of absence, so it is confirmed once after a settle.
+        // The confirm is a SINGLE attempt: a confirm that cannot answer throws, and `unknown`
+        // is the right verdict for "we still do not know".
+        if (!lastAttempt) return { kind: "absent" };
+        await this.o.sleep(this.o.lookupSettleMs);
+        const confirmed = mine((await this.once("GET", this.listPath({ metadata: { [SESSION_METADATA_KEY]: sessionKey } }), undefined, z.array(MachineSchema), 1, { operation: "listMachines", ids: [] })).data!);
+        return confirmed ? { kind: "found", value: confirmed } : { kind: "absent" };
       },
     );
   }
@@ -254,13 +336,19 @@ export class FlyClient {
     });
   }
 
-  async listMachines(opts: { metadata?: Record<string, string>; includeDeleted?: boolean } = {}): Promise<Machine[]> {
+  /** One spelling of the list path, so `listMachines` and the I6 confirm cannot drift apart. */
+  private listPath(opts: { metadata?: Record<string, string>; includeDeleted?: boolean }): string {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(opts.metadata ?? {})) q.set(`metadata.${k}`, v);
     if (opts.includeDeleted) q.set("include_deleted", "true");
     const qs = q.toString();
+    return `/machines${qs ? `?${qs}` : ""}`;
+  }
+
+  async listMachines(opts: { metadata?: Record<string, string>; includeDeleted?: boolean } = {}): Promise<Machine[]> {
+    const path = this.listPath(opts);
     const meta: CallMeta = { operation: "listMachines", ids: [] };
-    return this.withRetry(async (attempt) => (await this.once("GET", `/machines${qs ? `?${qs}` : ""}`, undefined, z.array(MachineSchema), attempt, meta)).data!);
+    return this.withRetry(async (attempt) => (await this.once("GET", path, undefined, z.array(MachineSchema), attempt, meta)).data!);
   }
 
   async destroyMachine(id: string, opts: { force?: boolean } = {}): Promise<void> {
@@ -379,6 +467,23 @@ export function exitInfoFrom(events: readonly MachineEvent[]): { exitCode: numbe
 
 function safeJson(text: string): unknown {
   try { return JSON.parse(text); } catch { return undefined; }
+}
+
+/** Resolve with `p`, or reject the moment `signal` aborts. The AbortSignal is
+ *  already wired into `fetch`, but nothing obliges a RESPONSE BODY to honour it,
+ *  and an unbounded `res.text()` is exactly the hang C2 was: no outcome at all
+ *  for the caller, past every budget this client declares. */
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    void p.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+function abortError(): Error {
+  return Object.assign(new Error("aborted"), { name: "AbortError" });
 }
 
 function withAttempts(err: FlyApiError, attempts: number): FlyApiError {

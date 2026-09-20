@@ -6,10 +6,15 @@
 // exactly Retry-After"; drop the pre-retry lookup → "timeout then lookup";
 // drop the redaction → "redaction"; treat destroy 404 as an error → "destroy".
 import { describe, expect, it, vi } from "vitest";
-import { FLY_MACHINES_BASE, FlyApiError, FlyClient, exitInfoFrom, isRetryable, redact } from "../fly-client";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, exitInfoFrom, isRetryable, redact } from "../fly-client";
+import type { MachineCreateInput } from "../fly-client";
+import { ENDING_TIMEOUT_SECONDS, PROVISION_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
 import { FakeRecorder } from "../fakes";
 
-type Scripted = { status: number; body?: unknown; headers?: Record<string, string>; delayMs?: number; networkError?: boolean };
+/** `stallBody` is C2's shape: headers arrive, the body never does, and the stream
+ *  does NOT honour the AbortSignal — so it proves the timeout bounds the read
+ *  itself rather than relying on the mock to co-operate. */
+type Scripted = { status: number; body?: unknown; headers?: Record<string, string>; delayMs?: number; networkError?: boolean; stallBody?: boolean };
 
 function rig(script: Scripted[], opts: Partial<ConstructorParameters<typeof FlyClient>[0]> = {}) {
   let now = 1_000_000;
@@ -27,6 +32,13 @@ function rig(script: Scripted[], opts: Partial<ConstructorParameters<typeof FlyC
         now += step.delayMs!;
       });
     }
+    if (step.stallBody) {
+      // A body that never arrives AND never reacts to the abort. `new ReadableStream`
+      // with an empty start() leaves `res.text()` pending for ever.
+      return new Response(new ReadableStream({ start() {} }), {
+        status: step.status, headers: { "content-type": "application/json", ...(step.headers ?? {}) },
+      });
+    }
     return new Response(step.body === undefined ? null : typeof step.body === "string" ? step.body : JSON.stringify(step.body), {
       status: step.status, headers: { "content-type": "application/json", ...(step.headers ?? {}) },
     });
@@ -35,6 +47,7 @@ function rig(script: Scripted[], opts: Partial<ConstructorParameters<typeof FlyC
     token: "fly-token-SECRET", app: "seazn-relay", fetchImpl,
     clock: () => now, sleep: async (ms) => { sleeps.push(ms); now += ms; }, random: () => 0.5,
     requestTimeoutMs: 1000, deadlineMs: 10_000, maxAttempts: 4, baseBackoffMs: 500, maxBackoffMs: 8000,
+    lookupSettleMs: 50,
     secrets: ["stream-key-SECRET", "fly-token-SECRET"],
     ...opts,
   });
@@ -136,12 +149,122 @@ describe("FlyClient — retries, timeouts, deadline", () => {
     const found = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [MACHINE] }], { maxAttempts: 1 });
     expect((await found.client.createMachine(CREATE)).id).toBe("m_1");
     expect(found.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);
-    const none = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [] }], { maxAttempts: 1 });
+    // I6: on the LAST attempt an empty list is about to become `retryable: true`, so it is
+    // confirmed once after a settle — hence the second GET and the settle in `sleeps`.
+    const none = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [] }, { status: 200, body: [] }], { maxAttempts: 1 });
     await expect(none.client.createMachine(CREATE)).rejects.toMatchObject({ status: 503, retryable: true, attempts: 1 });
-    expect(none.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);
+    expect(none.calls.map((c) => c.init.method)).toEqual(["POST", "GET", "GET"]);
+    expect(none.sleeps).toEqual([50]);
     // The domain reads `retryable` as permission to create attempt + 1; a lookup that could not answer must not grant it.
     const blind = rig([{ status: 503, body: { error: "unavailable" } }, { status: 500, body: { error: "list down" } }], { maxAttempts: 1 });
     await expect(blind.client.createMachine(CREATE)).rejects.toMatchObject({ status: 503, retryable: false });
+  });
+
+  it("a lookup that fails BEFORE the last attempt is not absence either — the retry is REFUSED, not granted", async () => {
+    // The I6 confirm runs on the LAST attempt only, so it cannot cover for the first
+    // lookup. Found by the fix-round sweep: mutant M10 (`listMachines().catch(() => [])`)
+    // survived every other case here, because every one of them was a last attempt and
+    // the confirm caught the swallowed failure. Mid-ladder, a list that could not answer
+    // must be `unknown` too — otherwise the client posts a second create it cannot justify.
+    const r = rig([{ status: 503, body: { error: "unavailable" } }, { status: 500, body: { error: "list down" } }], { maxAttempts: 4 });
+    await expect(r.client.createMachine(CREATE)).rejects.toMatchObject({
+      status: 503, retryable: false, attempts: 1, message: expect.stringContaining("create outcome unknown"),
+    });
+    expect(r.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);   // there is no attempt 2
+    expect(r.sleeps).toEqual([]);                                         // and no backoff was waited
+  });
+
+  it("C1: a create whose metadata carries no seazn_session is NOT retryable — no lookup is possible, and 'nobody looked' is never 'nothing there'", async () => {
+    // The type now demands the key; a cast walks past a type, so the runtime refusal is what is
+    // pinned here. Before the fix this threw { retryable: true } after ZERO GETs (methods
+    // ["POST","POST"]) and the domain would have taken that as proof Fly holds no Machine.
+    const keyless = { ...CREATE, config: { ...CREATE.config, metadata: { some_other_key: "v" } } } as unknown as MachineCreateInput;
+    const r = rig([{ status: 503, body: { error: "unavailable" } }, { status: 503, body: { error: "unavailable" } }]);
+    await expect(r.client.createMachine(keyless)).rejects.toMatchObject({ status: 503, retryable: false, attempts: 1 });
+    expect(r.calls.map((c) => c.init.method)).toEqual(["POST"]);      // it never even tried a lookup
+    const empty = { ...CREATE, config: { ...CREATE.config, metadata: {} } } as unknown as MachineCreateInput;
+    const r2 = rig([{ status: 502, body: { error: "bad gateway" } }]);
+    await expect(r2.client.createMachine(empty)).rejects.toMatchObject({ status: 502, retryable: false });
+  });
+
+  it("I6: the last attempt's empty lookup is CONFIRMED after a settle — a Machine that only appears on the second look is returned, and a confirm that cannot answer is not retryable", async () => {
+    // Unsettled list, then the Machine shows up: adopted, no retryable error.
+    const late = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [] }, { status: 200, body: [MACHINE] }], { maxAttempts: 1 });
+    expect((await late.client.createMachine(CREATE)).id).toBe("m_1");
+    expect(late.calls.map((c) => c.init.method)).toEqual(["POST", "GET", "GET"]);
+    expect(late.sleeps).toEqual([50]);
+    // The confirm itself cannot answer → "we still do not know" → NOT retryable.
+    const blindConfirm = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [] }, { status: 500, body: { error: "list down" } }], { maxAttempts: 1 });
+    await expect(blindConfirm.client.createMachine(CREATE)).rejects.toMatchObject({ status: 503, retryable: false });
+    // BEFORE the last attempt there is no confirm: an empty list just permits another POST,
+    // which Fly refuses 409 rather than duplicating.
+    const early = rig([{ status: 503, body: { error: "x" } }, { status: 200, body: [] }, { status: 200, body: MACHINE }], { maxAttempts: 4 });
+    expect((await early.client.createMachine(CREATE)).id).toBe("m_1");
+    expect(early.calls.map((c) => c.init.method)).toEqual(["POST", "GET", "POST"]);
+    expect(early.sleeps).toEqual([250]);      // the jittered backoff alone — no settle
+  });
+
+  it("I3: the backoff ladder is capped by maxBackoffMs and floored to whole ms — the full ladder at maxAttempts 7", async () => {
+    // random 0.4999 so every product is fractional: Math.floor has to bind too. The cap binds
+    // from attempt 5 (baseBackoffMs × 2^4 = 8000 = maxBackoffMs) and REFUSES 16000 at attempt 6.
+    const r = rig(Array.from({ length: 9 }, () => ({ status: 503, body: { error: "down" } })), {
+      deadlineMs: 1_000_000, maxAttempts: 7, random: () => 0.4999,
+    });
+    await expect(r.client.listMachines()).rejects.toMatchObject({ status: 503, attempts: 7 });
+    expect(r.sleeps).toEqual([249, 499, 999, 1999, 3999, 3999]);
+    for (const s of r.sleeps) expect(Number.isInteger(s), String(s)).toBe(true);
+  });
+
+  it("I4: a Retry-After that is an HTTP-date is REFUSED, and the jittered backoff is used instead", async () => {
+    // Retry-After is legally an HTTP-date. A loose /\d+/ would make Number(...) NaN, the deadline
+    // comparison false, and sleep(NaN) a hot loop against the rate limiter that sent it.
+    const r = rig([{ status: 429, body: { error: "rate" }, headers: { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" } }, { status: 200, body: [MACHINE] }]);
+    await r.client.listMachines();
+    expect(r.sleeps).toEqual([250]);
+    const rec = new FakeRecorder();
+    const r2 = rig([{ status: 429, body: { error: "rate" }, headers: { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" } }, { status: 200, body: [MACHINE] }], { recorder: rec });
+    await r2.client.listMachines();
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls[0]!.retryAfterSeconds).toBeNull();
+  });
+});
+
+describe("FlyClient — the per-request timeout covers the BODY (C2)", () => {
+  it("a response whose body never arrives times out at requestTimeoutMs instead of hanging for ever", async () => {
+    // The stalled stream does not honour the AbortSignal, so this fails unless the client bounds
+    // the read itself. Before the fix the abort timer was cleared the instant headers arrived and
+    // the promise had not settled after 3 s — a create that returns no outcome AT ALL.
+    const r = rig([{ status: 200, stallBody: true }], { requestTimeoutMs: 50, maxAttempts: 1 });
+    const settled = await Promise.race([
+      r.client.getMachine("m_1").then(() => "resolved").catch((e: unknown) => `rejected:${(e as FlyApiError).code}`),
+      new Promise((res) => setTimeout(() => res("HUNG"), 2000)),
+    ]);
+    expect(settled).toBe("rejected:timeout");
+  });
+
+  it("a stalled body on a create is still an AMBIGUOUS failure: it is looked up, not reported as absent", async () => {
+    const r = rig([{ status: 200, stallBody: true }, { status: 200, body: [MACHINE] }], { requestTimeoutMs: 50 });
+    const m = await r.client.createMachine(CREATE);
+    expect(m.id).toBe("m_1");
+    expect(r.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);
+  });
+});
+
+describe("FlyClient — the budget config.ts derives (I5)", () => {
+  it("the provisioning budget HOLDS against this client's DECLARED defaults, and moving one moves this gate", () => {
+    const d = FLY_CLIENT_DEFAULTS;
+    let ladder = 0;
+    for (let n = 1; n < d.maxAttempts; n++) ladder += Math.min(d.maxBackoffMs, d.baseBackoffMs * 2 ** (n - 1));
+    const allAttempts = d.maxAttempts * d.requestTimeoutMs + ladder;          // listMachines' own worst case
+    // `deadlineMs` gates only the decision to SLEEP, so an operation overruns it by whatever is
+    // still in flight — and createMachine pays a NESTED lookup after every ambiguous attempt,
+    // plus, on the last one, the I6 settle and its single-attempt confirm.
+    const createWorstMs = d.deadlineMs + d.requestTimeoutMs + allAttempts + d.lookupSettleMs + d.requestTimeoutMs;
+    expect(createWorstMs).toBeLessThan(PROVISION_TIMEOUT_SECONDS * 1000);
+    // Teardown: neither stop nor destroy performs the nested lookup.
+    const stopOrDestroyWorstMs = d.deadlineMs + d.requestTimeoutMs;
+    const teardownWorstMs = (RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS) * 1000 + 2 * stopOrDestroyWorstMs;
+    expect(teardownWorstMs).toBeLessThan(ENDING_TIMEOUT_SECONDS * 1000);
   });
 });
 

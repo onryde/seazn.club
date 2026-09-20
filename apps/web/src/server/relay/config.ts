@@ -37,15 +37,23 @@ export const WARMING_TIMEOUT_MINUTES = 10;
  *  timeout + jittered retries), so a slow-but-working create is never failed, and far below the warming
  *  timeout it hands over to.
  *
- *  CHECKED against the real create budget, Task 5A, 2026-09-20 — 120 HOLDS, unchanged. The arithmetic,
- *  by `fly-client.ts`'s own option names at their defaults (redo it when one of them moves):
+ *  CHECKED against the real create budget, Task 5A, 2026-09-20 — 120 HOLDS, unchanged. The arithmetic is
+ *  not only written here: the unit test "the provisioning budget HOLDS against this client's DECLARED
+ *  defaults" recomputes it from `FLY_CLIENT_DEFAULTS` and asserts it against THIS constant, so raising one
+ *  of those numbers reds a gate instead of leaving a stale comment behind (review I5). By
+ *  `fly-client.ts`'s own option names at their defaults:
  *    one attempt              = `requestTimeoutMs`                     = 10 s
  *    the jittered ladder      = Σ min(`maxBackoffMs`, `baseBackoffMs` × 2^(n−1)), n = 1…`maxAttempts`−1
  *                             ≤ 0.5 + 1 + 2                            = 3.5 s
  *    all attempts             = `maxAttempts` × `requestTimeoutMs` + ladder = 43.5 s   ← also `listMachines`
  *    `deadlineMs` gates only the decision to SLEEP, so an operation overruns it by whatever is still in
- *    flight, and `createMachine` pays a NESTED `listMachines` (the T5-a/T5-b lookup) after every ambiguous
- *    attempt: worst case = `deadlineMs` + `requestTimeoutMs` + 43.5 s   = 98.5 s < 120 s.
+ *    flight; `createMachine` pays a NESTED `listMachines` (the T5-a/T5-b lookup) after every ambiguous
+ *    attempt, and on the LAST attempt an empty lookup costs `lookupSettleMs` plus ONE single-attempt
+ *    confirming re-list (review I6): worst case
+ *      = `deadlineMs` + `requestTimeoutMs` + 43.5 s + `lookupSettleMs` + `requestTimeoutMs`
+ *      = 45 + 10 + 43.5 + 1 + 10                                       = 109.5 s < 120 s.
+ *    (Headroom is 10.5 s, down from 21.5 s before the I6 confirm — the next addition to the create path
+ *    needs this number raised, and the gate above will say so.)
  *  The 429 `Retry-After` path cannot extend that: the wait is honoured verbatim, but the same pre-sleep gate
  *  refuses any wait ending past `deadlineMs` and raises `code: "deadline"` instead of sleeping.
  *  MEASURED live the same day, against the real Fly API in lhr on a shared-cpu-1x: create returned in
