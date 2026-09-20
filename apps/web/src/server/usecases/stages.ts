@@ -60,6 +60,8 @@ import {
   nextUnseatedSwissRound,
   planSwissShells,
   swissRoundHasPlayedResult,
+  SWISS_ROUNDS_REQUIRED_CODE,
+  SWISS_ROUNDS_REQUIRED_MESSAGE,
 } from "@/lib/swiss-shell";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { personalPointsLeaderboard } from "./americano";
@@ -266,6 +268,38 @@ function assertNoRulesKey(inputs: readonly StageInput[]): void {
   for (const s of inputs) assertConfigCarriesNoRules(s.config);
 }
 
+/**
+ * A swiss stage declares its round budget at create time, or it is not created
+ * (owner ruling 2026-09-20).
+ *
+ * `swissGen` (this file, the `CONFIG_INVALID` throw) refuses the same shapes,
+ * and correctly so — a Swiss round count is a format decision fixed before
+ * play, never something the system guesses mid-tournament. But it fires at
+ * GENERATE, so before this guard an invalid stage was creatable over the API
+ * and the organiser met a 500 later, on a screen that had nothing to do with
+ * the mistake. This is the same refusal at the door; the engine throw stays as
+ * the last line of defence for a row written around the usecase.
+ *
+ * `swiss` is the only `StageKind` involved. `swiss_playoff` / `swiss_knockout`
+ * are TEMPLATE keys (components/v2/format-templates.ts) that each BUILD a
+ * `swiss` stage plus a bracket stage — checking them here would test a value
+ * `kind` can never hold.
+ *
+ * The predicate is spelled out rather than shared with `swissGen`'s: that one
+ * is an engine-layer `EngineError` on a persisted config, this one an
+ * `HttpError` on request input, and a test in swiss-shell-fixtures.test.ts
+ * enumerates every refused shape against both so they cannot drift.
+ */
+function assertSwissRoundsDeclared(inputs: readonly StageInput[]): void {
+  for (const s of inputs) {
+    if (s.kind !== "swiss") continue;
+    const rounds = (s.config as { rounds?: unknown } | null | undefined)?.rounds;
+    if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
+      throw new HttpError(422, SWISS_ROUNDS_REQUIRED_MESSAGE, SWISS_ROUNDS_REQUIRED_CODE);
+    }
+  }
+}
+
 export async function createStages(
   auth: AuthCtx,
   divisionId: string,
@@ -273,6 +307,7 @@ export async function createStages(
 ): Promise<StageRow[]> {
   const inputs: StageInput[] = Array.isArray(input) ? input : [input];
   assertNoRulesKey(inputs);
+  assertSwissRoundsDeclared(inputs);
   // Format gates honour an Event Pass on this division's competition
   // (v3/07 §3), so resolve the competition before gating.
   const [divComp] = await sql<{ competition_id: string }[]>`
@@ -401,8 +436,11 @@ export async function replaceStages(
   // BEFORE the delete below, not merely inside the `createStages` this
   // delegates to: that call runs in its own transaction, so a refusal there
   // would land after this function had already dropped every stage in the
-  // division.
+  // division. The swiss round-count guard rides along for the same reason —
+  // this is the PUT the Format tab's Apply calls, so a bad round count would
+  // otherwise cost the organiser their whole stage graph.
   assertNoRulesKey(Array.isArray(input) ? input : [input]);
+  assertSwissRoundsDeclared(Array.isArray(input) ? input : [input]);
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it

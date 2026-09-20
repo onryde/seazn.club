@@ -9,6 +9,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
+import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
 import {
   STAGE_TEMPLATES,
@@ -472,6 +473,13 @@ export function DivisionSettings({
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
+      } else if (err instanceof ApiV1Error && err.code === SWISS_ROUNDS_REQUIRED_CODE) {
+        // Reachable from the Rounds box right on this screen: it is a
+        // `type="number"` bound through `Number(e.target.value)`, and an
+        // emptied box is `Number("") === 0` — below the server's floor of 1.
+        // The server's message is English-only (no server-side i18n in this
+        // repo), so the CODE is what gets localised here rather than shown raw.
+        setError(msg("stage.err.swissRoundsRequired"));
       } else {
         setError(err instanceof Error ? err.message : msg("divset.failed"));
       }

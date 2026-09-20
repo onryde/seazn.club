@@ -6,6 +6,22 @@
 
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 
+/** `HttpError.code` when a swiss stage is created (or a stage graph replaced)
+ *  without a usable `config.rounds`. Lives HERE rather than in
+ *  `server/usecases/stages.ts` because that module opens with
+ *  `import "server-only"` — the organiser-facing panels that branch on this
+ *  code are client components and could not import it from there. Same reason
+ *  `lib/schedule-lock.ts` exists; see its header. */
+export const SWISS_ROUNDS_REQUIRED_CODE = "STAGE_SWISS_ROUNDS_REQUIRED";
+
+/** The English wire sentence. There is no server-side i18n in this repo
+ *  (nothing under `src/server` reads Accept-Language, and the /api/v1 envelope
+ *  carries no locale), so the server emits English for non-browser clients and
+ *  the CODE above is what a panel translates — `stage.err.swissRoundsRequired`
+ *  in the four ui.json dictionaries. */
+export const SWISS_ROUNDS_REQUIRED_MESSAGE =
+  "a swiss stage needs config.rounds — how many rounds it plays, a whole number of 1 or more";
+
 export type SwissShellFixtureRef = {
   extKey: string;
   roundNo: number;

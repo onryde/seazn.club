@@ -18,6 +18,7 @@ import {
 } from "./format-templates";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
+import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { doubleElimFormatReason } from "@/lib/feature-copy";
@@ -482,6 +483,13 @@ export function DivisionBuilder({
         // message is English-only, so the refusal is localised here rather
         // than shown raw — this is the only surface that creates a division.
         setError(msg("division.create.competitionEnded"));
+      } else if (err instanceof ApiV1Error && err.code === SWISS_ROUNDS_REQUIRED_CODE) {
+        // Same English-only-server reasoning as COMPETITION_ENDED above. The
+        // wizard's Rounds box is `Number(e.target.value)` too, so an emptied
+        // box posts 0 and the stages POST 422s — after the division itself has
+        // already been created, which is why the organiser needs a sentence
+        // naming Rounds rather than a raw wire message.
+        setError(msg("stage.err.swissRoundsRequired"));
       } else {
         setError(err instanceof Error ? err.message : msg("wizard.failed"));
       }

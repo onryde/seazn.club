@@ -1986,6 +1986,7 @@
   "bracket.reset": "Reset",
   "bracket.qualifiers": "Qualifiers",
   "bracket.tbd": "TBD",
+  "stage.err.swissRoundsRequired": "A Swiss stage needs a number of rounds before it can be saved. Set Rounds to 1 or more and apply again.",
   "stage.addMatch.button": "Add match",
   "stage.addMatch.home": "Home",
   "stage.addMatch.away": "Away",

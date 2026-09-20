@@ -5726,6 +5726,7 @@ export type DictionaryKey =
   | "stage.addMatch.hint"
   | "stage.addMatch.home"
   | "stage.addMatch.when"
+  | "stage.err.swissRoundsRequired"
   | "stagetags.any"
   | "stagetags.desc"
   | "stagetags.loadFailed"

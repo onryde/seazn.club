@@ -10,7 +10,14 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures, getStandings, unpairSwissRound } from "../stages";
+import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
+import {
+  createStages,
+  generateStageFixtures,
+  getStandings,
+  replaceStages,
+  unpairSwissRound,
+} from "../stages";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -42,11 +49,9 @@ async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
     order by round_no, seq_in_round`;
 }
 
-async function seedSwissStage(
-  auth: AuthCtx,
-  config: Record<string, unknown>,
-  entrantCount = 4,
-): Promise<{ divisionId: string; stageId: string }> {
+/** Competition + division + entrants, no stages — the create-time guard block
+ *  below needs a division `createStages` has never run against. */
+async function seedSwissDivision(auth: AuthCtx, entrantCount = 4): Promise<string> {
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
     name: "Swiss shells " + randomUUID().slice(0, 6),
@@ -70,6 +75,16 @@ async function seedSwissStage(
       members: [],
     })),
   );
+  return division.id;
+}
+
+async function seedSwissStage(
+  auth: AuthCtx,
+  config: Record<string, unknown>,
+  entrantCount = 4,
+): Promise<{ divisionId: string; stageId: string }> {
+  const divisionId = await seedSwissDivision(auth, entrantCount);
+  const division = { id: divisionId };
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
     kind: "swiss",
@@ -112,9 +127,16 @@ describe.runIf(HAS_DB)("swiss shell fixtures — mint all rounds on first Genera
     expect(rows.every((f) => f.outcome === null)).toBe(true);
   });
 
+  // The LAST line of defence, not the product's refusal. `createStages` /
+  // `replaceStages` now reject an undeclared round count at 422 (see the
+  // "swiss rounds are declared at create time" block below), so a stage can
+  // only reach `swissGen` in this state if the row was written around the
+  // usecase — which is exactly what the UPDATE here reproduces. Seeding it
+  // through `createStages(config: {})` would no longer even build the row.
   it("Generate without config.rounds returns CONFIG_INVALID", async () => {
     const { auth } = await seedOrg();
-    const { stageId } = await seedSwissStage(auth, {});
+    const { stageId } = await seedSwissStage(auth, { rounds: 3 });
+    await sql`update stages set config = '{}'::jsonb where id = ${stageId}`;
 
     await expect(generateStageFixtures(auth, stageId)).rejects.toSatisfy((err: unknown) =>
       EngineError.is(err, "CONFIG_INVALID"),
@@ -507,5 +529,101 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Unpair", () => {
     await generateStageFixtures(auth, ko!.id);
 
     await expect(unpairSwissRound(auth, ko!.id)).rejects.toMatchObject({ status: 422 });
+  });
+});
+
+// A Swiss round count is a format decision fixed before play (owner ruling
+// 2026-09-20), so `swissGen`'s CONFIG_INVALID is correct — but it fires at
+// Generate, long after the organiser pressed Save on the format. These pin the
+// refusal at the door instead: an undeclared or nonsensical `config.rounds`
+// never becomes a stage row, so the 500-at-Generate is unreachable from the
+// product and `stages.ts`'s engine throw is left as the last line of defence.
+//
+// `swiss` is the ONLY stage kind this covers. `swiss_playoff` /
+// `swiss_knockout` are TEMPLATE keys (components/v2/format-templates.ts), not
+// `StageKind` members — both build a `swiss` stage plus a bracket stage, and it
+// is the `swiss` half these reach.
+describe.runIf(HAS_DB)("swiss rounds are declared at create time", () => {
+  // Every shape `swissGen` itself refuses, so the door and the last line of
+  // defence cannot drift apart into a gap a stage can be created through.
+  const REFUSED: [string, Record<string, unknown>][] = [
+    ["absent", {}],
+    ["zero", { rounds: 0 }],
+    ["negative", { rounds: -3 }],
+    ["fractional", { rounds: 2.5 }],
+    ["a numeric string", { rounds: "3" }],
+    ["null", { rounds: null }],
+  ];
+
+  for (const [label, config] of REFUSED) {
+    it(`createStages refuses a swiss stage whose rounds is ${label}`, async () => {
+      const { auth } = await seedOrg();
+      const divisionId = await seedSwissDivision(auth);
+
+      await expect(
+        createStages(auth, divisionId, { seq: 1, kind: "swiss", name: "Swiss", config, progression: null }),
+      ).rejects.toMatchObject({ status: 422, code: SWISS_ROUNDS_REQUIRED_CODE });
+
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from stages where division_id = ${divisionId}`;
+      expect(n).toBe(0);
+    });
+  }
+
+  it("createStages accepts rounds >= 1 and stores it verbatim", async () => {
+    const { auth } = await seedOrg();
+    const divisionId = await seedSwissDivision(auth);
+
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 1 }, progression: null,
+    });
+    expect((stage!.config as { rounds?: unknown }).rounds).toBe(1);
+  });
+
+  it("a NON-swiss stage with no rounds is untouched by the guard", async () => {
+    const { auth } = await seedOrg();
+    const divisionId = await seedSwissDivision(auth);
+
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    expect(stage!.kind).toBe("league");
+  });
+
+  // The batch is all-or-nothing at the door: a good stage sitting beside a bad
+  // one must not be inserted, or an organiser's "Apply" leaves half a format.
+  it("refuses the whole batch when only the swiss member is undeclared", async () => {
+    const { auth } = await seedOrg();
+    const divisionId = await seedSwissDivision(auth);
+
+    await expect(
+      createStages(auth, divisionId, [
+        { seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null },
+        { seq: 2, kind: "knockout", name: "KO", config: {}, progression: null },
+      ]),
+    ).rejects.toMatchObject({ status: 422, code: SWISS_ROUNDS_REQUIRED_CODE });
+
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from stages where division_id = ${divisionId}`;
+    expect(n).toBe(0);
+  });
+
+  // `replaceStages` is what the Format tab's Apply calls (division-settings.tsx
+  // PUTs /stages). It deletes the whole graph and then delegates to
+  // `createStages`, so a refusal raised only inside that delegate would land
+  // AFTER the delete and leave the division stage-less — the same reason
+  // `assertNoRulesKey` is called twice. Pin that the stages survive.
+  it("replaceStages refuses BEFORE deleting the existing graph", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+
+    await expect(
+      replaceStages(auth, divisionId, { seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null }),
+    ).rejects.toMatchObject({ status: 422, code: SWISS_ROUNDS_REQUIRED_CODE });
+
+    const rows = await sql<{ id: string; config: { rounds?: unknown } }[]>`
+      select id, config from stages where division_id = ${divisionId}`;
+    expect(rows.map((r) => r.id)).toEqual([stageId]);
+    expect(rows[0]!.config.rounds).toBe(3);
   });
 });

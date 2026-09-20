@@ -1986,6 +1986,7 @@
   "bracket.reset": "Beslisser",
   "bracket.qualifiers": "Kwalificaties",
   "bracket.tbd": "N.t.b.",
+  "stage.err.swissRoundsRequired": "Een Zwitserse fase heeft een aantal rondes nodig voordat die kan worden opgeslagen. Zet Rondes op 1 of meer en pas het opnieuw toe.",
   "stage.addMatch.button": "Wedstrijd toevoegen",
   "stage.addMatch.home": "Thuis",
   "stage.addMatch.away": "Uit",
