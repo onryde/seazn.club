@@ -28,9 +28,14 @@ export const EVENTS = {
   SUBSCRIPTION_CANCELED: "subscription_canceled",
   PAYMENT_FAILED: "payment_failed",
   // In-app billing management (v3/11) — the portal-replacement surface.
+  // `BILLING_PLAN_CHANGED` lived here and was never emitted: the plan-change
+  // surface it belonged to was retired in #805, and the constant outlived it.
+  // Dropped 2026-09-20 on the owner's ruling — there is no production traffic
+  // and no PostHog history yet, so nothing is keyed on `billing_plan_changed`
+  // and keeping it only preserves a name for an event the product does not
+  // send. Re-add it with its emitter, not ahead of one.
   BILLING_CARD_ADDED: "billing_card_added",
   BILLING_INTERVAL_CHANGED: "billing_interval_changed",
-  BILLING_PLAN_CHANGED: "billing_plan_changed",
   SUBSCRIPTION_CANCEL_SCHEDULED: "subscription_cancel_scheduled",
   SUBSCRIPTION_RESUMED: "subscription_resumed",
   // PLG growth loops (2026-07-17 plan) — distribution + referral.
