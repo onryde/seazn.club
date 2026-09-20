@@ -3254,6 +3254,13 @@ export const ConnectStatus = z.object({
    *  across it, so card registration is unavailable until the account settles
    *  in an allowlisted currency. Surfaced at connect time; RS004 renders it. */
   unsupported_currency: z.string().nullable(),
+  /** V411 — payout health: why the club's money is not reaching its bank when
+   *  `payouts_enabled` still reads true. Set by `payout.failed` and the two
+   *  `account.external_account.*` events, cleared by `payout.paid`. The value
+   *  SELECTS the banner's copy, so the wire carries no English; the operator
+   *  detail behind it (Stripe's failure code, the account identifier) stays
+   *  server-side and is deliberately not exposed here. */
+  payout_alert: z.enum(["payout_failed", "bank_removed", "bank_changed"]).nullable(),
 });
 
 export const CreateConnectOnboarding = z.object({

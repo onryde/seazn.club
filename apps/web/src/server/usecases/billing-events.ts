@@ -57,6 +57,8 @@ import {
   sendSizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
   sendPassUnknownCompetitionAlertEmail,
+  sendConnectBankAlertEmail,
+  sendTrialEndingEmail,
 } from "@/lib/email";
 import type { StaffDisputeAlertArgs } from "@/lib/email-templates";
 import {
@@ -65,7 +67,13 @@ import {
   handleRegistrationDispute,
   syncRegistrationRefund,
 } from "@/server/usecases/registrations";
-import { syncConnectAccount } from "@/server/usecases/stripe-connect";
+import {
+  recordConnectPayout,
+  recordExternalAccountChange,
+  syncConnectAccount,
+} from "@/server/usecases/stripe-connect";
+import { planLabel } from "@/lib/plan-label";
+import { toLocale } from "@/lib/i18n-constants";
 import {
   handleSponsorChargeRefunded,
   handleSponsorDispute,
@@ -104,6 +112,56 @@ export const HANDLED_EVENT_TYPES = [
   "payment_method.attached",
   "payment_method.detached",
   "customer.updated",
+  // Payout health (V411), all CONNECT-scoped — they describe the club's own
+  // Stripe account and arrive on the connected-accounts destination, so the
+  // account id is on `event.account` and never on the object.
+  //
+  // `payouts_enabled` answers whether Stripe is WILLING to pay out. None of
+  // these three do, and that is the gap: an account reporting
+  // `payouts_enabled: true` throughout is exactly the state a club sits in
+  // while its payouts bounce off a closed bank account.
+  "payout.paid", // the positive direction — money landed, so CLEAR the alert
+  "payout.failed", // a real transfer bounced; account.updated says nothing
+  "account.external_account.updated", // the destination bank changed under us
+  "account.external_account.deleted", // ...or is gone entirely
+  // Trial ending (V411): the ONLY warning a trialing org gets before the first
+  // charge. Without it a no-card trial silently cancels (missing_payment_method:
+  // "cancel") and a card-on-file trial charges unannounced — neither is an event
+  // anything else in this table emits, because Stripe sends it three days AHEAD
+  // of any subscription state change.
+  "customer.subscription.trial_will_end",
+] as const;
+
+/**
+ * Which of `HANDLED_EVENT_TYPES` are delivered on the CONNECTED-ACCOUNTS
+ * destination rather than the platform's own.
+ *
+ * This is not documentation — it is the one fact about this file that cannot
+ * be discovered by reading it. Stripe splits "Your account" and "Connected
+ * accounts" into two destinations with two signing secrets, and subscribing an
+ * event on the WRONG one does not error: Stripe simply never delivers it, and
+ * the handler below sits there looking correct for ever. `account.updated`
+ * already cost this repo that discovery once (see the webhook route's comment).
+ *
+ * Two consequences for anything added here:
+ *   - Its object does NOT carry the connected account id. `event.account`
+ *     does, and it is the only place it appears — a handler that reads
+ *     `object.id` (as `account.updated` legitimately does, because THAT
+ *     object IS the account) mirrors onto nothing for every other type.
+ *   - The live endpoint has to be updated too. The code and the destination
+ *     are one change, not two, and nothing in CI can see the second half.
+ *
+ * Live endpoints as of 2026-09-20 — connected accounts:
+ * `we_1UHrDBAy22H0xqqxTTsYxYz9` (prod), `we_1UHkJNAy22H0xqqxtn4AK7L4` (stg);
+ * your account: `we_1UHrCsAy22H0xqqxMn5vwx1S` (prod),
+ * `we_1UHkJMAy22H0xqqxqjGcjPKL` (stg).
+ */
+export const CONNECT_SCOPED_EVENT_TYPES = [
+  "account.updated",
+  "payout.paid",
+  "payout.failed",
+  "account.external_account.updated",
+  "account.external_account.deleted",
 ] as const;
 
 /** Best-effort person id for org-scoped revenue events: the org owner, falling
@@ -2110,6 +2168,178 @@ async function handlePlatformDispute(
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Payout health + trial warning (V411)
+// ---------------------------------------------------------------------------
+
+/**
+ * `payout.paid` / `payout.failed` on a CONNECTED account.
+ *
+ * The connected account id is on `event.account`, NOT on the payout — a
+ * `Stripe.Payout` has no account field at all, so the `account.updated` trick
+ * of reading `object.id` does not transfer and a handler written that way
+ * would silently mirror onto nothing. An event without it is not ours to act
+ * on (it would be the PLATFORM's own payout, which this endpoint is not
+ * subscribed to) and is ACKed unchanged.
+ */
+async function handleConnectPayout(event: Stripe.Event): Promise<void> {
+  const accountId = event.account;
+  const payout = event.data.object as Stripe.Payout;
+  if (!accountId) {
+    log.warn({ event_id: event.id, payout_id: payout.id }, "connect: payout event without account");
+    return;
+  }
+  const alert = await recordConnectPayout(accountId, payout);
+  if (alert === undefined) {
+    log.warn({ event_id: event.id, account_id: accountId }, "connect: payout for unknown account");
+  }
+}
+
+/**
+ * `account.external_account.updated` / `.deleted` on a CONNECTED account: the
+ * club's destination bank account changed, or is gone.
+ *
+ * Two outputs, deliberately. The org-facing half is the stored alert (the
+ * billing banner); the staff-facing half is an English ops email, because a
+ * removed bank account on an org with live entry fees is money piling up that
+ * a human may have to chase. The email follows the existing ops-alert
+ * convention in this file — `STAFF_ALERT_EMAIL`, English-only, never throws —
+ * so it owes no dictionary work, and a failure to alert must not fail the
+ * webhook and strand the DB write behind a retry loop.
+ */
+async function handleExternalAccountChanged(event: Stripe.Event): Promise<void> {
+  const accountId = event.account;
+  const external = event.data.object as { id?: string; last4?: string; object?: string };
+  if (!accountId) {
+    log.warn({ event_id: event.id }, "connect: external_account event without account");
+    return;
+  }
+  const deleted = event.type === "account.external_account.deleted";
+  const detail = `${external.object ?? "external_account"} ${external.id ?? "?"}${
+    external.last4 ? ` ••••${external.last4}` : ""
+  }`;
+  const org = await recordExternalAccountChange(
+    accountId,
+    deleted ? "bank_removed" : "bank_changed",
+    detail,
+  );
+  if (!org) {
+    log.warn(
+      { event_id: event.id, account_id: accountId },
+      "connect: external_account change for unknown account",
+    );
+    return;
+  }
+  // Only the DESTRUCTIVE half pages staff. `.updated` fires for benign edits
+  // (a default_for_currency flip, a metadata change), and an ops inbox that
+  // receives those stops being read — which would cost us the `.deleted`
+  // alert that actually matters. The org still gets its banner either way.
+  if (!deleted) return;
+  const to = process.env.STAFF_ALERT_EMAIL;
+  if (!to) return;
+  try {
+    await sendConnectBankAlertEmail({
+      to,
+      orgId: org.id,
+      orgName: org.name,
+      accountId,
+      detail,
+    });
+  } catch (err) {
+    log.error({ org_id: org.id, err }, "connect: bank-removed staff alert failed");
+  }
+}
+
+/**
+ * `customer.subscription.trial_will_end` — Stripe's three-day warning, and the
+ * only notice a trialing group gets before the trial resolves itself.
+ *
+ * The email is the WHOLE point: a DB write here would be an inert seam, since
+ * `trial_end` is already mirrored by `customer.subscription.updated` and no
+ * screen is waiting on anything this event carries. So the one thing this must
+ * do is reach a person.
+ *
+ * Which sentence they get turns on `has_payment_method`, read from OUR mirror
+ * rather than from the event: a no-card trial CANCELS at trial end
+ * (`missing_payment_method: "cancel"`, lib/billing-manage.ts) and needs a card
+ * to survive, while a card-on-file trial simply charges — telling the second
+ * group to "add a card" would be wrong copy on a money screen. The mirror is
+ * the right source because a trialing subscription's own webhook payload does
+ * not carry its default payment method (see `syncSubscriptionForGroup`'s
+ * `hasPm` note), so the event cannot answer this question about itself.
+ *
+ * Best-effort throughout: an unresolvable group, a group with no reachable
+ * owner, or a send failure all ACK. A throw here would park the event in the
+ * ledger and have the sweeper re-send the same warning up to three more times.
+ */
+async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void> {
+  const resolved = await resolveGroupForStripeSub(stripeSub);
+  if (!resolved) {
+    log.warn(
+      { stripeSubscriptionId: stripeSub.id },
+      "billing: trial_will_end for an unresolvable group",
+    );
+    return;
+  }
+  const [row] = await sql<
+    {
+      plan_key: string | null;
+      has_payment_method: boolean | null;
+      owner_email: string | null;
+      owner_locale: string | null;
+      org_slug: string | null;
+    }[]
+  >`
+    select s.plan_key, s.has_payment_method, u.email as owner_email, u.locale as owner_locale,
+           -- The billing page is per-ORG, but a group can span several. Prefer
+           -- the one the payer actually owns — that is the org whose settings
+           -- they can reach — and fall back to the group's oldest org so a
+           -- payer who owns none still lands somewhere they can act.
+           coalesce(
+             (select o.slug from organizations o
+               where o.subscription_id = s.id and o.created_by = s.owner_user_id
+               order by o.created_at limit 1),
+             (select o.slug from organizations o
+               where o.subscription_id = s.id
+               order by o.created_at limit 1)
+           ) as org_slug
+    from subscriptions s
+    left join users u on u.id = s.owner_user_id and u.deleted_at is null
+    where s.id = ${resolved.subscriptionId}`;
+  if (!row?.owner_email) {
+    log.warn(
+      { subscriptionId: resolved.subscriptionId },
+      "billing: trial_will_end — group has no reachable owner",
+    );
+    return;
+  }
+  // Stripe's own trial_end on THIS event, not our mirror: the event is the
+  // fresher of the two (it is sent ahead of the `updated` that moves the
+  // mirror), and it is the date the reader is being warned about.
+  const trialEnd = stripeSub.trial_end
+    ? new Date(stripeSub.trial_end * 1000).toISOString()
+    : null;
+  if (!trialEnd) {
+    log.warn(
+      { subscriptionId: resolved.subscriptionId, stripeSubscriptionId: stripeSub.id },
+      "billing: trial_will_end carried no trial_end",
+    );
+    return;
+  }
+  try {
+    await sendTrialEndingEmail({
+      to: row.owner_email,
+      locale: toLocale(row.owner_locale),
+      planName: planLabel(row.plan_key),
+      trialEnd,
+      hasPaymentMethod: row.has_payment_method === true,
+      orgSlug: row.org_slug,
+    });
+  } catch (err) {
+    log.error({ subscriptionId: resolved.subscriptionId, err }, "billing: trial-ending email failed");
+  }
+}
+
 /** The dispatch table (formerly inline in the webhook route). Unhandled
  *  types are a silent no-op — the caller still stamps processed_at. */
 export async function processStripeEvent(event: Stripe.Event): Promise<void> {
@@ -2217,6 +2447,24 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
       break;
     case "payment_intent.payment_failed":
       await handleSponsorPaymentFailed(event.data.object as Stripe.PaymentIntent);
+      break;
+    case "payout.paid":
+    case "payout.failed":
+      // Connect payout health (V411): `paid` clears the alert, `failed` raises
+      // it. Both directions on purpose — an alert nothing can take down is a
+      // banner that outlives the problem it reports.
+      await handleConnectPayout(event);
+      break;
+    case "account.external_account.updated":
+    case "account.external_account.deleted":
+      // The club's destination bank changed or vanished. `account.updated`
+      // does NOT cover this: payouts_enabled stays true across both.
+      await handleExternalAccountChanged(event);
+      break;
+    case "customer.subscription.trial_will_end":
+      // Stripe's 3-day warning — the only notice before a no-card trial
+      // cancels or a card-on-file trial charges.
+      await handleTrialWillEnd(event.data.object as Stripe.Subscription);
       break;
     // Unhandled events are silently ACKed
   }

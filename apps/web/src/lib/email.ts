@@ -42,6 +42,7 @@ import {
   sponsorReceiptTemplate,
   type SponsorReceiptArgs,
   sponsorRefundTemplate,
+  trialEndingTemplate,
   type SponsorRefundArgs,
   sponsorDisputeAlertTemplate,
   type SponsorDisputeAlertArgs,
@@ -1322,6 +1323,82 @@ export async function sendRegistrationRefundFailedAlertEmail(
   const text =
     `${bodyText}\n\nregistration: ${opts.registrationId} · org: ${opts.orgId} · competition: ${opts.competitionId} · ` +
     `amount: ${amount} · payment intent: ${opts.paymentIntentId ?? "(none)"} · reason: ${opts.reason}`;
+  return send({ to: opts.to, transactional: true, subject, html, text });
+}
+
+export interface TrialEndingEmail {
+  to: string;
+  locale?: Locale;
+  planName: string;
+  trialEnd: string;
+  hasPaymentMethod: boolean;
+  /** Slug of an org in the billing group, for the deep link. Null when the
+   *  group owns none (a group mid-detach) — the reader is then sent to the
+   *  app root rather than to a 404 on a money email. */
+  orgSlug: string | null;
+}
+
+/**
+ * Stripe's 3-day trial warning (V411, `customer.subscription.trial_will_end`).
+ *
+ * Transactional: it is the only notice before a no-card trial CANCELS or a
+ * card-on-file trial CHARGES, so a group that unsubscribed from product mail
+ * still gets to hear that their money is about to move.
+ */
+export async function sendTrialEndingEmail(opts: TrialEndingEmail): Promise<boolean> {
+  const { to, locale = "en", orgSlug, ...args } = opts;
+  const base = (
+    process.env.OAUTH_BASE_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    "http://localhost:3000"
+  ).replace(/\/$/, "");
+  const dict = await getDictionary(locale, "emails");
+  const body = trialEndingTemplate(
+    { ...args, locale, billingUrl: orgSlug ? `${base}/o/${orgSlug}/settings/billing` : base },
+    dict,
+  );
+  return send({ to, transactional: true, ...body });
+}
+
+export interface ConnectBankAlertEmail {
+  to: string;
+  orgId: string;
+  orgName: string;
+  /** The connected account (acct_…) the bank account was removed from. */
+  accountId: string;
+  /** Which external account — object type, id, and last4 when Stripe sent one. */
+  detail: string;
+}
+
+/** Internal staff alert (V411): a connected org's destination bank account was
+ *  DELETED, so entry-fee payouts have nowhere to land while its charges keep
+ *  settling. The org sees its own banner; this is the ops half, because money
+ *  piling up on a club's connected balance is something a human may have to
+ *  chase. Platform-locale (en) and built inline — ops-only, no user-facing
+ *  i18n, same convention as `sendStuckEventsAlertEmail`. Only `.deleted` sends
+ *  here; `.updated` is too chatty to page anyone with. */
+export async function sendConnectBankAlertEmail(opts: ConnectBankAlertEmail): Promise<boolean> {
+  const subject = `Connect bank account removed: ${opts.orgName}`;
+  const bodyText =
+    `The destination bank account on ${opts.orgName}'s connected Stripe account was deleted. ` +
+    `Payouts have nowhere to land until the club adds a new one — charges continue to settle ` +
+    `onto its connected balance in the meantime.`;
+  const html = renderEmail({
+    subject,
+    preheader: `${opts.orgName} — payouts have no destination`,
+    eyebrow: "Connect · Payouts",
+    title: "Connect bank account removed",
+    contentHtml:
+      paragraph(escapeHtml(bodyText)) +
+      panel(
+        "Account",
+        `org: ${opts.orgName} (${opts.orgId})\nstripe account: ${opts.accountId}\nremoved: ${opts.detail}`,
+      ),
+    footerNote: "Automated staff alert — Connect payout health (V411).",
+  });
+  const text =
+    `${bodyText}\n\norg: ${opts.orgName} (${opts.orgId}) · stripe account: ${opts.accountId} · ` +
+    `removed: ${opts.detail}`;
   return send({ to: opts.to, transactional: true, subject, html, text });
 }
 

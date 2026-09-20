@@ -147,6 +147,11 @@ interface ConnectStatus {
   payouts_enabled: boolean;
   disabled_reason: string | null;
   requirements_due: number;
+  /** V411 — payout health. `payouts_enabled` answers whether Stripe is WILLING
+   *  to pay out; this answers whether the money actually reached the bank, and
+   *  the two disagree exactly when it matters (an enabled account whose payouts
+   *  are bouncing). Null when money is flowing. The value selects the copy. */
+  payout_alert: "payout_failed" | "bank_removed" | "bank_changed" | null;
 }
 
 export function OrgPaymentInstructions({
@@ -309,6 +314,26 @@ export function OrgPaymentInstructions({
                 <p className="mt-1 text-xs text-amber-700">{msg("connect.attention.body")}</p>
               </div>
             )}
+          {/* Payout health (V411), a SEPARATE banner from the one above and
+              deliberately red rather than amber. The amber one means "Stripe
+              wants more information"; this one means money the club has
+              already earned is not arriving, which is the more urgent of the
+              two and can be true while every flag above reads healthy. Cleared
+              by the next successful payout, so it cannot outlive the problem. */}
+          {connect?.connected && connect.payout_alert && (
+            <div
+              data-testid="connect-payout-alert"
+              data-alert={connect.payout_alert}
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-4"
+            >
+              <p className="text-sm font-semibold text-rose-800">
+                {msg("connect.payoutAlert.title")}
+              </p>
+              <p className="mt-1 text-xs text-rose-700">
+                {msg(`connect.payoutAlert.${connect.payout_alert}`)}
+              </p>
+            </div>
+          )}
           {/* What connecting involves — the three stops on the way to taking
               card entry fees, with the current one highlighted. */}
           <ol className="mt-3 space-y-2">

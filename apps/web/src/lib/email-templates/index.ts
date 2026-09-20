@@ -29,6 +29,7 @@ export { claimInviteTemplate, type ClaimInviteArgs } from "./claim-invite";
 export { sponsorInvoiceTemplate, type SponsorInvoiceArgs } from "./sponsor-invoice";
 export { sponsorReceiptTemplate, type SponsorReceiptArgs } from "./sponsor-receipt";
 export { sponsorRefundTemplate, type SponsorRefundArgs } from "./sponsor-refund";
+export { trialEndingTemplate, type TrialEndingArgs } from "./trial-ending";
 export {
   sponsorDisputeAlertTemplate,
   type SponsorDisputeAlertArgs,

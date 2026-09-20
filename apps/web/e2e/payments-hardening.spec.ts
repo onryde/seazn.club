@@ -1239,3 +1239,195 @@ test.describe("T13 · first connect — the ToS gate and a create that fails cle
 // there is no 402-at-the-21st-run behavior left to assert here. A wallet-
 // empty 402 e2e test is deferred until Task 6 (grants wiring) lands — until
 // then e2e orgs have no reliable way to drain a wallet.
+
+// ===========================================================================
+// T16 — Connect payout health (V411): payout.* and account.external_account.*
+// ===========================================================================
+//
+// The strongest form this seam can be proven in, and the reason it is here
+// rather than only in vitest: a SIGNED synthetic event goes to the REAL
+// /api/webhooks/stripe route, through real signature verification, the real
+// dispatch table and the real DB write, and the assertion is what an OWNER
+// SEES on their own settings page. A unit test can prove each link; only this
+// proves they are joined up.
+//
+// `event.account` is set on every one of these — that is where the connected
+// account id lives on a Connect event, and an event without it is exactly the
+// no-op the vitest suite pins. So a synthetic event that omitted it would pass
+// while proving nothing, which is why these build it explicitly.
+
+/** The three payout-alert sentences, read from the shipped EN dictionary
+ *  rather than retyped here: the copy is the product, and a test holding its
+ *  own private copy of it stops failing the moment the two drift. */
+const UI_EN = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)),
+    "utf8",
+  ),
+) as Record<string, string>;
+
+test.describe("T16 · Connect payout health banner", () => {
+  test("a failed payout raises the banner, a paid one takes it down", async ({ page }) => {
+    const org = await seedOrg({
+      plan: "pro",
+      connected: true,
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      requirementsDue: 0,
+    });
+    const accountId = await withDb(async (sql) => {
+      const [row] = await sql<{ stripe_account_id: string }[]>`
+        select stripe_account_id from organizations where id = ${org.orgId}`;
+      return row!.stripe_account_id;
+    });
+    await loginAsOwner(page, org.ownerEmail);
+
+    // Healthy first. This is the positive pair for every "banner is gone"
+    // assertion below — without it, a banner that never rendered at all would
+    // satisfy them.
+    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await page.waitForResponse(
+      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
+    );
+    await expect(page.getByTestId("connect-payout-alert")).toHaveCount(0);
+    // ...and the OTHER banner is absent too, so a later appearance is
+    // attributable to this change and not to the P1-8 health mirror.
+    await expect(page.getByTestId("connect-attention")).toHaveCount(0);
+
+    // A real payout bounces. Note `payouts_enabled` is left TRUE throughout —
+    // that is the whole point of this wave: the flag the old banner reads
+    // stays healthy while the money is not arriving.
+    const failed = await postSignedEvent(page.request, {
+      ...stripeEvent("payout.failed", {
+        id: uid("po"),
+        object: "payout",
+        status: "failed",
+        failure_code: "account_closed",
+        created: Math.floor(Date.now() / 1000),
+        arrival_date: Math.floor(Date.now() / 1000),
+      }),
+      account: accountId,
+    });
+    expect(failed.status()).toBe(200);
+
+    await page.reload();
+    await page.waitForResponse(
+      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
+    );
+    const banner = page.getByTestId("connect-payout-alert");
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await expect(banner).toHaveAttribute("data-alert", "payout_failed");
+    // The reader gets the payout-failure sentence, not one of its siblings.
+    await expect(banner).toContainText(UI_EN["connect.payoutAlert.payout_failed"]!);
+    await expect(banner).not.toContainText(UI_EN["connect.payoutAlert.bank_removed"]!);
+    // Stripe's own failure code is operator detail and must never reach a
+    // money screen; it lives in the DB column and the logs.
+    await expect(page.locator("body")).not.toContainText("account_closed");
+    // The owner's payouts are still ENABLED — proving the new banner is not
+    // just the old one under a new name.
+    await expect(page.getByTestId("connect-attention")).toHaveCount(0);
+
+    // Width bar: 320, 768 and desktop.
+    //
+    // Scoped to THIS banner rather than the whole page, and that is a
+    // measurement decision with evidence behind it. `/settings/connect`
+    // already overflows by 9px at 768 — offender `button.flex.shrink-0` in the
+    // settings nav row, whose width tracks the org NAME. Measured 2026-09-20
+    // with the alert column null and set, same org, same seeding: byte-for-byte
+    // the same 9px both ways, so it predates this wave and belongs to the app
+    // shell, not here. A page-wide assertion in this test would therefore be
+    // red for someone else's reason and would have to be deleted by the next
+    // person, which is how a real gate gets lost.
+    //
+    // The banner's own box is still held to the bar: it must sit inside the
+    // viewport at every width, which is the thing this wave can break.
+    for (const width of [320, 768, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/o/${org.orgSlug}/settings/connect`);
+      await expect(banner).toBeVisible({ timeout: 20_000 });
+      const box = await banner.boundingBox();
+      expect(box, `the banner has a box at ${width}px`).not.toBeNull();
+      expect(
+        Math.ceil(box!.x + box!.width),
+        `the payout banner stays inside the ${width}px viewport`,
+      ).toBeLessThanOrEqual(width);
+      await page.screenshot({
+        path: `e2e/__screens__/connect-payout-alert-${width}.png`,
+        fullPage: false,
+      });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+
+    // The next successful payout is proof the money is flowing again, so the
+    // banner comes DOWN. A banner nothing can take down outlives its fault.
+    const paid = await postSignedEvent(page.request, {
+      ...stripeEvent("payout.paid", {
+        id: uid("po"),
+        object: "payout",
+        status: "paid",
+        created: Math.floor(Date.now() / 1000),
+        arrival_date: Math.floor(Date.now() / 1000),
+      }),
+      account: accountId,
+    });
+    expect(paid.status()).toBe(200);
+
+    await page.reload();
+    await page.waitForResponse(
+      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
+    );
+    await expect(page.getByTestId("connect-payout-alert")).toHaveCount(0);
+  });
+
+  test("a removed bank account raises its own sentence, not the payout one", async ({ page }) => {
+    // Paired with the test above on purpose: one alert value rendering is
+    // satisfied by a banner hardcoded to that value. Two different values
+    // reaching two different sentences is what proves the copy is selected.
+    const org = await seedOrg({
+      plan: "pro",
+      connected: true,
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      requirementsDue: 0,
+    });
+    const accountId = await withDb(async (sql) => {
+      const [row] = await sql<{ stripe_account_id: string }[]>`
+        select stripe_account_id from organizations where id = ${org.orgId}`;
+      return row!.stripe_account_id;
+    });
+    await loginAsOwner(page, org.ownerEmail);
+
+    const deleted = await postSignedEvent(page.request, {
+      ...stripeEvent("account.external_account.deleted", {
+        id: uid("ba"),
+        object: "bank_account",
+        last4: "6789",
+      }),
+      account: accountId,
+    });
+    expect(deleted.status()).toBe(200);
+
+    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await page.waitForResponse(
+      (r) => r.url().includes(`/orgs/${org.orgId}/connect`) && r.status() === 200,
+    );
+    const banner = page.getByTestId("connect-payout-alert");
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await expect(banner).toHaveAttribute("data-alert", "bank_removed");
+    await expect(banner).toContainText(UI_EN["connect.payoutAlert.bank_removed"]!);
+    await expect(banner).not.toContainText(UI_EN["connect.payoutAlert.payout_failed"]!);
+    // The bank account's last4 is a detail Stripe sent us, not copy for this
+    // screen — it goes to the staff alert and the DB, never here.
+    await expect(page.locator("body")).not.toContainText("6789");
+
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.goto(`/o/${org.orgSlug}/settings/connect`);
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    const box = await banner.boundingBox(); // see the width-bar note in the test above
+    expect(box, "the banner has a box at 320px").not.toBeNull();
+    expect(Math.ceil(box!.x + box!.width)).toBeLessThanOrEqual(320);
+    await page.screenshot({ path: "e2e/__screens__/connect-bank-removed-320.png" });
+  });
+});
