@@ -1,4 +1,6 @@
 import "server-only";
+import fs from "node:fs/promises";
+import path from "node:path";
 // The match poster (Spectator Surface Boards §poster, "Option A — owner pick"):
 // crest tiles in TEAM COLOURS on the competition's court colour, real badges
 // dropping into the tiles when uploaded. One satori layout feeds both the
@@ -46,6 +48,81 @@ const LIME = "#a3e635";
 
 export const POSTER_SIZE = { width: 1080, height: 1350 };
 export { OG_SIZE };
+
+// ─── fonts ──────────────────────────────────────────────────────────────────
+//
+// Every existing `ImageResponse` call site on this branch passed NO `fonts:`
+// option, which meant satori fell back to its single built-in face — so a
+// declared `fontWeight: 800` never actually rendered bold. The static TTFs
+// pinned at `apps/web/assets/fonts` (same directory `doc-theme.ts` reads for
+// `poster.pdf`, `DOC_FONT_DIR`-overridable there) are this card's real
+// display and body faces: Barlow Condensed for headings/figures, Geist for
+// the small print. Satori takes no woff2 and no variable font, only static
+// TTF/OTF bytes handed through the `fonts:` array on `ImageResponse` — this
+// module only loads and exposes them; the two route call sites (`poster.png`
+// and the fixture `opengraph-image.tsx`) pass the result through.
+export const POSTER_FONT_HEADING = "Barlow Condensed";
+export const POSTER_FONT_BODY = "Geist";
+
+export interface PosterFont {
+  name: string;
+  data: Buffer;
+  weight: 400 | 600 | 700;
+  style: "normal";
+}
+
+const FONT_FILES: ReadonlyArray<{ name: string; file: string; weight: 400 | 600 | 700 }> = [
+  { name: POSTER_FONT_HEADING, file: "BarlowCondensed-Bold.ttf", weight: 700 },
+  { name: POSTER_FONT_HEADING, file: "BarlowCondensed-SemiBold.ttf", weight: 600 },
+  { name: POSTER_FONT_BODY, file: "Geist-Bold.ttf", weight: 700 },
+  { name: POSTER_FONT_BODY, file: "Geist-Regular.ttf", weight: 400 },
+];
+
+function fontDir(): string {
+  // Same override knob as `doc-theme.ts`'s `registerFonts`, so a test or a
+  // packaging step can point both readers at one fixture directory without
+  // this module inventing a second env var for the same fact.
+  return process.env.DOC_FONT_DIR ?? path.join(process.cwd(), "apps/web/assets/fonts");
+}
+
+let cached: Promise<PosterFont[]> | null = null;
+
+/** The `fonts:` array for an `ImageResponse`'s options (its `fonts` key). Read once per
+ *  server lifetime — module-level `Promise` cache, not a value cache, so
+ *  concurrent first callers share one disk read instead of racing several.
+ *
+ *  A font that fails to read is DROPPED, not thrown — same principle as
+ *  `doc-theme.ts`'s `registerFonts` aliasing a missing TTF to a built-in
+ *  face: a wrong `DOC_FONT_DIR`/cwd should degrade the card's typography,
+ *  never turn a public image route into a 500. */
+export function posterFonts(): Promise<PosterFont[]> {
+  if (cached === null) {
+    const dir = fontDir();
+    cached = Promise.all(
+      FONT_FILES.map((f) =>
+        fs.readFile(path.join(dir, f.file)).then(
+          (data): PosterFont | null => ({ name: f.name, data, weight: f.weight, style: "normal" }),
+          () => null,
+        ),
+      ),
+    ).then((list) => list.filter((f): f is PosterFont => f !== null));
+  }
+  return cached;
+}
+
+/** Build the second argument for an `ImageResponse` call: `ImageResponse(tree, await posterImageInit(size))`. The `fonts:` key is
+ *  left OFF entirely when nothing loaded, rather than sent as `fonts: []`:
+ *  `next/og` treats an explicit empty array as "no font is available" and
+ *  throws ("At least one font is required to calculate the layout."),
+ *  which is a worse failure than the satori default this app rendered with
+ *  before this module existed. Dropping the key restores exactly that
+ *  fallback instead of turning a font-loading failure into a 500. */
+export async function posterImageInit<T extends { width: number; height: number }>(
+  size: T,
+): Promise<T & { fonts?: PosterFont[] }> {
+  const fonts = await posterFonts();
+  return fonts.length > 0 ? { ...size, fonts } : { ...size };
+}
 
 export type MatchPosterVariant = "upcoming" | "live" | "result";
 
@@ -258,15 +335,23 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
   // of sharing a fixture that has not happened yet.
   const performers =
     variant === "result" && input.topPerformers !== null
-      ? input.topPerformers.slice(0, 2).map((p) => ({
-          role: p.role === "batter" ? copy.topBatter : copy.topBowler,
-          // Already masked by the match-centre loader (youth divisions and
-          // `player_name_display` both resolve there) — this renders what the
-          // page renders, it does not decide masking a second time.
-          name: p.person.name,
-          line: p.line,
-          detail: p.detail,
-        }))
+      ? input.topPerformers
+          // A masked minor is DROPPED here, never printed masked (design
+          // ramp rule 8 — "a poster is permanent"). The match-centre TAB
+          // renders `person.masked`'s placeholder label because that page is
+          // the org's own working record; a downloadable, shareable poster
+          // has no such licence, and until this filter existed the model
+          // took `p.person.name` unconditionally, which meant a masked
+          // performer's placeholder ("?" or similar) reached the picture
+          // instead of being left off it.
+          .filter((p) => !p.person.masked)
+          .slice(0, 2)
+          .map((p) => ({
+            role: p.role === "batter" ? copy.topBatter : copy.topBowler,
+            name: p.person.name,
+            line: p.line,
+            detail: p.detail,
+          }))
       : [];
   // Computed independently of `performers` now, because the two SHAPES want
   // different things: the portrait poster has room for the board's two
@@ -428,7 +513,7 @@ export function MatchPoster({ model, size }: { model: MatchPosterModel; size: "o
         position: "relative",
         background: theme.court,
         color: theme.ink,
-        fontFamily: "sans-serif",
+        fontFamily: POSTER_FONT_HEADING,
         padding: `${s.pad}px ${s.pad}px ${s.pad + s.brandWordFs}px`,
       }}
     >
@@ -657,6 +742,7 @@ export function MatchPoster({ model, size }: { model: MatchPosterModel; size: "o
             padding: s.pillPad,
             fontSize: s.footFs,
             fontWeight: 500,
+            fontFamily: POSTER_FONT_BODY,
             color: theme.ink,
           }}
         >
@@ -675,6 +761,7 @@ export function MatchPoster({ model, size }: { model: MatchPosterModel; size: "o
           alignItems: "center",
           justifyContent: "center",
           fontSize: s.brandFs,
+          fontFamily: POSTER_FONT_BODY,
           color: theme.muted,
         }}
       >

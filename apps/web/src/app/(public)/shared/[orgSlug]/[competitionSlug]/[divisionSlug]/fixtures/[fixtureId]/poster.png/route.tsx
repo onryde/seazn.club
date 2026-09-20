@@ -8,7 +8,7 @@
 // route module and `ImageResponse` sets `content-type: image/png` itself.
 // Same rail as `news/[postSlug]/story.png`.
 import { ImageResponse } from "next/og";
-import { MatchPoster, POSTER_SIZE } from "@/server/og/match-poster";
+import { MatchPoster, POSTER_SIZE, posterImageInit } from "@/server/og/match-poster";
 import { loadMatchPosterModel } from "@/server/og/match-poster-data";
 import { posterFileName } from "@/lib/poster-file-name";
 
@@ -30,7 +30,7 @@ export async function GET(_req: Request, { params }: Ctx) {
   // rather than hand back a picture of nothing.
   if (!model) return new Response("not found", { status: 404 });
 
-  const image = new ImageResponse(<MatchPoster model={model} size="poster" />, POSTER_SIZE);
+  const image = new ImageResponse(<MatchPoster model={model} size="poster" />, await posterImageInit(POSTER_SIZE));
   // `ImageResponse` is a Response whose headers already carry the content type
   // and the cache policy; re-emit its body with the disposition added rather
   // than replacing a header set we do not own.

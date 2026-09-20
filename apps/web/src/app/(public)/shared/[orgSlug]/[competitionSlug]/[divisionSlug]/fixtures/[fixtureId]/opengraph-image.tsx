@@ -3,7 +3,7 @@
 // `Poster` button downloads. Upcoming, live and result are three fills of one
 // layout; see `server/og/match-poster.tsx` for the slot table.
 import { ImageResponse } from "next/og";
-import { MatchPoster, OG_SIZE } from "@/server/og/match-poster";
+import { MatchPoster, OG_SIZE, posterImageInit } from "@/server/og/match-poster";
 import { loadMatchPosterModel } from "@/server/og/match-poster-data";
 
 export const size = OG_SIZE;
@@ -48,5 +48,5 @@ export default async function Image({ params }: Props) {
       size,
     );
   }
-  return new ImageResponse(<MatchPoster model={model} size="og" />, size);
+  return new ImageResponse(<MatchPoster model={model} size="og" />, await posterImageInit(size));
 }

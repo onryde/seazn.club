@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { MatchPoster, matchPosterModel, type MatchPosterInput } from "@/server/og/match-poster";
+import path from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  MatchPoster,
+  matchPosterModel,
+  posterFonts,
+  POSTER_FONT_HEADING,
+  POSTER_FONT_BODY,
+  type MatchPosterInput,
+} from "@/server/og/match-poster";
 import { monogramInk, autoColour } from "@/components/ui/entity-logo";
 import type { MatchCentreDocT, SideT } from "@/server/public-site/match-centre-schema";
 
@@ -388,6 +396,42 @@ describe("matchPosterModel — nothing renders a stray separator", () => {
 });
 
 
+describe("matchPosterModel — a masked performer is DROPPED, never printed masked", () => {
+  it("a masked top performer never reaches the model — the other one still does", () => {
+    // Positive/negative pair (rule 5, "negative assertion needs its positive
+    // pair"): an empty-topPerformers result would satisfy "the masked one is
+    // gone" vacuously, so this also asserts the unmasked performer survives.
+    const withMasked: NonNullable<MatchCentreDocT["cricket"]>["topPerformers"] = [
+      { ...performers[0]!, person: { personId: "p9", name: "?", masked: true } },
+      performers[1]!,
+    ];
+    const m = matchPosterModel(
+      input({
+        header: header({ statusLine: { key: "x" } }),
+        topPerformers: withMasked,
+        copy: { ...copy, statusLine: "Blue Blazers won by 12 runs" },
+      }),
+    );
+    expect(m.performers.map((p) => p.name)).toEqual(["Farhan Qureshi"]);
+    expect(m.performers.some((p) => p.name === "?")).toBe(false);
+  });
+
+  it("two masked performers leave the foot with neither box — an empty list, not a padded one", () => {
+    const bothMasked: NonNullable<MatchCentreDocT["cricket"]>["topPerformers"] = [
+      { ...performers[0]!, person: { personId: "p9", name: "?", masked: true } },
+      { ...performers[1]!, person: { personId: "p8", name: "?", masked: true } },
+    ];
+    const m = matchPosterModel(
+      input({
+        header: header({ statusLine: { key: "x" } }),
+        topPerformers: bothMasked,
+        copy: { ...copy, statusLine: "Blue Blazers won by 12 runs" },
+      }),
+    );
+    expect(m.performers).toEqual([]);
+  });
+});
+
 describe("matchPosterModel — which side is DOING something", () => {
   it("a live tennis match holds back the returner, not nobody", () => {
     // The bug this closes: the model asked `header.battingIndex`, which is
@@ -411,5 +455,57 @@ describe("matchPosterModel — which side is DOING something", () => {
   it("the active side is irrelevant once the match is decided — the SCORE decides", () => {
     const m = matchPosterModel(input({ header: header({ scoreLines: ["1", "3"] }), activeIndex: 0 }));
     expect([m.sides[0].dim, m.sides[1].dim]).toEqual([true, false]);
+  });
+});
+
+describe("posterFonts — the real static TTFs, wired into satori's `fonts:` option", () => {
+  // `fontDir()` shares `doc-theme.ts`'s `DOC_FONT_DIR` knob, resolved by
+  // default against `process.cwd()` — correct when Next runs from the repo
+  // root (how `poster.pdf` reaches the same files today) but NOT when this
+  // suite itself runs with `apps/web` as cwd. Pointed at the real directory
+  // explicitly rather than asserting against whatever the runner's cwd
+  // happens to be.
+  beforeAll(() => {
+    process.env.DOC_FONT_DIR = path.join(process.cwd(), "assets/fonts");
+  });
+
+  // Gap closed here: every existing `ImageResponse` call site on this branch
+  // passed no `fonts:` option at all, so `fontFamily: "sans-serif"` on the
+  // root fell back to satori's single built-in face and a declared
+  // `fontWeight: 800` never actually rendered bold. `posterFonts()` is what
+  // both route call sites (`poster.png`, the fixture `opengraph-image.tsx`)
+  // now pass through.
+  it("loads four distinct, non-empty font buffers — two weights each of the two families", () => {
+    return posterFonts().then((fonts) => {
+      expect(fonts).toHaveLength(4);
+      for (const f of fonts) {
+        expect(f.data.byteLength).toBeGreaterThan(1000);
+        expect(f.style).toBe("normal");
+      }
+      const heading = fonts.filter((f) => f.name === POSTER_FONT_HEADING);
+      const body = fonts.filter((f) => f.name === POSTER_FONT_BODY);
+      expect(heading.map((f) => f.weight).sort()).toEqual([600, 700]);
+      expect(body.map((f) => f.weight).sort()).toEqual([400, 700]);
+      // Two calls must not each re-read the disk into two different buffers —
+      // the module caches one Promise, not just a value, so a render mid-load
+      // shares the first caller's read.
+      const bytes = new Set(fonts.map((f) => f.data.toString("base64")));
+      expect(bytes.size).toBe(4);
+    });
+  });
+
+  it("the same call returns the SAME cached promise/result on a second read", async () => {
+    const [a, b] = await Promise.all([posterFonts(), posterFonts()]);
+    expect(a).toBe(b);
+  });
+
+  it("the card's root no longer declares the bare satori default", () => {
+    // Regression for the literal line the spec's premise pointed at
+    // (match-poster.tsx ~431, `fontFamily: "sans-serif"`): the root must now
+    // name one of the two loaded families.
+    const model = matchPosterModel(input());
+    const tree = MatchPoster({ model, size: "poster" }) as { props: { style: Record<string, unknown> } };
+    expect(tree.props.style.fontFamily).toBe(POSTER_FONT_HEADING);
+    expect(tree.props.style.fontFamily).not.toBe("sans-serif");
   });
 });
