@@ -234,8 +234,14 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
 /** C27: the runner triggers that only TEAR DOWN — the stop confirmed, the Machine
  *  observed, destroyed, or forced by the grace window, or (P1-F-a) the create call
  *  returning after a stop was marked mid-create (a warming timeout can fail the
- *  session first). A terminal session still owns its Machine until one of these lands. */
-export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["create_ok", "create_failed", "callback_stopped", "observed", "destroy_ok", "grace_expired"];
+ *  session first). A terminal session still owns its Machine until one of these lands.
+ *
+ *  Whole-branch review I3: `orphan_listed` is the one trigger whose DEFINITION is "the daily sweep found this Machine
+ *  listed with a terminal or absent session" (plan L226), and it was the one missing from this set — so the exact call
+ *  the trigger exists for, `decide(completedSession, orphan_listed)`, threw InvalidTransition. It is a pure teardown:
+ *  the runner table answers it only from `lost` (re-issue force_destroy, stay lost) and `destroyed` (stay), and every
+ *  other runner state still refuses it, so adding it here widens what a terminal session can BECOME by nothing at all. */
+export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["create_ok", "create_failed", "callback_stopped", "observed", "destroy_ok", "grace_expired", "orphan_listed"];
 
 export function decide(s: Session, c: Command, now: Date): Decision {
   const illegal = () => new InvalidTransition(s.state, c.type);

@@ -31,6 +31,32 @@ describe("check-in tokens (PROMPT-53)", () => {
     });
   });
 
+  // Whole-branch review m1: the verify pinned `typ` but no `algorithms` list, so a token signed HS384/HS512 with the
+  // same AUTH_SECRET verified. Not exploitable (nobody without the secret can sign) — raised because this was the last
+  // of the three verify sites in the tree without the pin. The negative case with its positive pair, because a pin
+  // that refused everything would pass the negative row on its own.
+  it("m1: a token signed with a DIFFERENT HMAC algorithm on the same secret is refused, though its typ and claims are correct; the HS256 twin still verifies", async () => {
+    // The module's OWN key rule (AUTH_SECRET, or the dev fallback when it is unset). Hard-coding the fallback would
+    // make every row below pass on a bad signature whenever the environment has a real AUTH_SECRET — which is how the
+    // positive twin first failed here, and is exactly the vacuous shape this test exists to avoid.
+    const key = new TextEncoder().encode(process.env.AUTH_SECRET ?? "dev-insecure-secret-change-me");
+    const claims = { fid: FIXTURE };
+    for (const alg of ["HS384", "HS512"] as const) {
+      const wrongAlg = await new SignJWT(claims)
+        .setProtectedHeader({ alg, typ: "seazn-checkin" })
+        .setExpirationTime("1h")
+        .sign(key);
+      await expect(verifyCheckinToken(wrongAlg), alg).rejects.toMatchObject({ status: 401, code: "CHECKIN_INVALID" });
+    }
+    // The positive pair, minted by hand rather than through mintCheckinToken so it differs from the row above in the
+    // ALGORITHM alone — same key, same typ, same claims.
+    const right = await new SignJWT(claims)
+      .setProtectedHeader({ alg: "HS256", typ: "seazn-checkin" })
+      .setExpirationTime("1h")
+      .sign(key);
+    await expect(verifyCheckinToken(right)).resolves.toBe(FIXTURE);
+  });
+
   it("a session-shaped JWT (no typ) is rejected", async () => {
     const key = new TextEncoder().encode("dev-insecure-secret-change-me");
     const sessionish = await new SignJWT({ uid: "someone", fid: FIXTURE })

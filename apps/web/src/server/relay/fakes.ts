@@ -243,9 +243,22 @@ export class FakeRunner implements RunnerProvider {
       this.nextCreateFailure = null;
       throw Object.assign(new Error(`fake create failed (${f.retryable ? "retryable" : "not retryable"})`), { retryable: f.retryable });
     }
+    // Whole-branch review I6: `create` is IDEMPOTENT PER (sessionId, attempt) — ports.ts says so and
+    // runner-fly.test.ts pins that the real adapter honours it (Fly answers 409 already_exists and the adapter ADOPTS
+    // the named Machine). This fake used to mint a fresh id on every call and leave TWO live entries carrying one
+    // `machineNameFor(sessionId, attempt)`, which is a state the provider cannot produce — so Tasks 10 and 12 would
+    // have tested retry and orphan matching against a double that DUPLICATES where production adopts: a double-create
+    // bug would pass, a correct implementation would look as if it created two, and T5-a's "match by session AND
+    // name" would get two listings with one name. The attempt is in the name, so a genuine retry (attempt + 1) still
+    // gets its own Machine. The POST above is still recorded either way: the real adapter really does call and get
+    // refused.
+    const name = machineNameFor(spec.sessionId, spec.attempt);
+    for (const [runnerId, m] of this.alive) {
+      if (m.sessionId === spec.sessionId && m.name === name) return { runnerId };
+    }
     this.n += 1;
     const runnerId = `fake-machine-${this.n}-${randomBytes(3).toString("hex")}`;
-    this.alive.set(runnerId, { sessionId: spec.sessionId, name: machineNameFor(spec.sessionId, spec.attempt) });
+    this.alive.set(runnerId, { sessionId: spec.sessionId, name });
     this.observed.set(runnerId, { state: "running", exit: null });
     return { runnerId };
   }

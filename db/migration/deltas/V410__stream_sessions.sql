@@ -139,7 +139,15 @@ create table fixture_stream_sessions (
   egress_bytes         bigint not null default 0,
   -- > 0: domain/expiry.ts deadlineOf reads `maxDurationMinutes || MAX_DURATION_MINUTES`,
   -- so a stored 0 would silently become the 300-minute default. Refused here instead.
-  max_duration_minutes integer not null default 300 check (max_duration_minutes > 0),
+  --
+  -- <= 300: the whole-branch review's gap g2. The upper bound was missing and 100000 was accepted, and THREE
+  -- consumers derive from this number, not one: `relayTokenExpiry` (a ~69-day relay token), `MACHINE_MINUTES_BOUND`,
+  -- and `RunnerSpec.deadlineAt` — i.e. a Fly Machine whose own hard stop is 69 days out. 300 is MAX_DURATION_MINUTES
+  -- (config.ts, design §6.1 + ruling E: no booked session exceeds five hours). It belongs in the DDL and not only in
+  -- a usecase, because a constraint is the only guard that survives a second writer. SQL needs the literal;
+  -- migration-shape.test.ts asserts that this ceiling EQUALS config.ts's MAX_DURATION_MINUTES, so moving the constant
+  -- reds that test rather than leaving the CHECK asserting yesterday's number.
+  max_duration_minutes integer not null default 300 check (max_duration_minutes > 0 and max_duration_minutes <= 300),
   runner_retries       smallint not null default 0 check (runner_retries >= 0),
   -- The Fly machine lifecycle (plan §"Fly machine lifecycle"; domain/runner.ts).
   -- runner_state is the runner SUB-STATE of the aggregate; runner_name is the
@@ -149,6 +157,20 @@ create table fixture_stream_sessions (
   runner_state         text not null default 'none' check (runner_state in ('none','creating','booting','playing','stopping','exited','destroyed','lost')),
   runner_name          text null,
   runner_stop_requested_at timestamptz null,
+  -- The Machine's LAST EXIT (domain/runner.ts `ExitInfo`), the whole-branch review's gap g1. `failReasonFromExit` is
+  -- the only thing that tells machine_oom from machine_exit_nonzero from machine_crash, and its sole input is these
+  -- three facts — which had no column at all. Three columns of their own, NOT a key inside `last_heartbeat`: carry
+  -- T10-d makes the beat route the single writer of heartbeat data and a jsonb write REPLACES the document, so a beat
+  -- landing between `observed(stopped, exit 137/oom)` and the later destroy would drop the exit and the session would
+  -- report machine_crash instead of machine_oom. Two facts, one column, two writers.
+  --
+  -- Nullable with NO default, deliberately: absent means NOT OBSERVED, and an absent fact must fall through to the
+  -- engine's own default (`failReasonFromExit(null)` = machine_crash) rather than override it. `false` here would be
+  -- a measurement nobody made — an oom_killed default of false would silently turn every unobserved OOM into
+  -- machine_exit_nonzero or machine_crash and bill the customer for a crash we caused.
+  runner_exit_code     integer null,
+  runner_oom_killed    boolean null,
+  runner_requested_stop boolean null,
   -- How a COMPLETED session ended (a failed one carries fail_reason instead).
   end_reason           text null check (end_reason in ('stopped','max_duration')),
   -- Session FACTS (ruling 13, item 4). Set once by the usecase that learns them;

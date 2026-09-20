@@ -3,7 +3,7 @@
 // usecases, and once a day by the sweep's backstop. Order matters and is
 // tested: wall clock outranks a stale beat, so an over-long session ENDS and is
 // never retried into overtime.
-import { ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES } from "../config";
+import { ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES } from "../config";
 import type { Session } from "./session";
 
 // EVERY non-terminal state owns a kind here, and the sweep in expiry.test.ts walks ACTIVE_STATES to prove it.
@@ -22,10 +22,34 @@ export const DEFAULT_LIMITS: ExpiryLimits = {
   endingTimeoutSeconds: ENDING_TIMEOUT_SECONDS,
 };
 
-/** The Machine-side hard stop and the wall-clock rule share this instant. */
+/** The SESSION's own wall clock: the instant `evaluate` calls `wall_clock` below.
+ *  Whole-branch review I1: this is NOT the Machine-side hard stop — see `runnerDeadlineOf`. */
 export function deadlineOf(s: Pick<Session, "createdAt" | "startedAt" | "maxDurationMinutes">): Date {
   const from = s.startedAt ?? s.createdAt;
   return new Date(from.getTime() + (s.maxDurationMinutes || MAX_DURATION_MINUTES) * 60_000);
+}
+
+/** The MACHINE-side hard stop (`RunnerSpec.deadlineAt` → the guest's `RELAY_DEADLINE_AT`), which is a BACKSTOP and
+ *  must never be the first of the two to fire.
+ *
+ *  Whole-branch review I1 (money + product). `deadlineOf` anchors on `startedAt ?? createdAt`, but the runner spec is
+ *  built at CREATE time, when `startedAt` is still null — so the Machine's hard stop was computed from `createdAt`
+ *  while the session's own wall clock would later be read from `startedAt`, up to `MAX_ANCHOR_DRIFT_SECONDS` later.
+ *  The supervisor therefore exited FIRST on every composed session that went live: the next lazy read saw
+ *  `playing × observed destroyed`, spent the session's ONE retry booting a replacement for the last minutes of a
+ *  broadcast that was running perfectly — or, with the retry already gone, failed it `machine_crash`, and `fail()`
+ *  emits no `fill_replay`, so a match that DID air lost its replay link.
+ *
+ *  The slack goes HERE and never on the wall clock: re-anchoring `deadlineOf` on `createdAt` would shorten every
+ *  paid session by its own warm-up, which is worse for the customer and for us. `tokens.ts`'s `relayTokenExpiry`
+ *  reasoned this identical anchor drift for `TOKEN_GRACE_MINUTES`; this is the same margin for the same reason.
+ *  ORDER is the property — the session's wall clock first, the Machine second — not the arithmetic.
+ *
+ *  What it costs: a Machine may outlive by up to `MAX_ANCHOR_DRIFT_SECONDS` a session that somehow never has its
+ *  expiry evaluated. That is bounded, it is the state the daily orphan sweep exists for, and it is reversible; the
+ *  defect it replaces fired on every composed broadcast. */
+export function runnerDeadlineOf(s: Pick<Session, "createdAt" | "startedAt" | "maxDurationMinutes">): Date {
+  return new Date(deadlineOf(s).getTime() + MAX_ANCHOR_DRIFT_SECONDS * 1000);
 }
 
 /** The later of two optional instants; null only when both are. */

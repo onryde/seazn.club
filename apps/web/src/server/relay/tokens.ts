@@ -27,12 +27,7 @@
 import "server-only";
 import { SignJWT, jwtVerify } from "jose";
 import { HttpError } from "@/lib/errors";
-import {
-  PROVISION_TIMEOUT_SECONDS,
-  REQUESTED_TIMEOUT_SECONDS,
-  TOKEN_GRACE_MINUTES,
-  WARMING_TIMEOUT_MINUTES,
-} from "./config";
+import { TOKEN_GRACE_MINUTES } from "./config";
 import { deadlineOf } from "./domain/expiry";
 import type { Session } from "./domain/session";
 
@@ -164,11 +159,16 @@ export function relayTokenExpiry(session: Pick<Session, "createdAt" | "startedAt
  *  config constant. A job token is minted BEFORE the Machine exists, when
  *  `startedAt` is still null, so its expiry anchors on `created_at` while the
  *  session's final deadline will anchor on `started_at` — up to this much
- *  later. Derived, never typed: raising any of the three moves this with it.
+ *  later.
  *
  *  TOKEN_GRACE_MINUTES must stay at or above this, or a token minted at
  *  `requested` dies before the session it was minted for — the margin the loose
  *  signature used to lean on unstated (failure class 20: a flat number beside a
- *  derived cost). tokens.test.ts asserts both the derivation and the margin. */
-export const MAX_ANCHOR_DRIFT_SECONDS =
-  REQUESTED_TIMEOUT_SECONDS + PROVISION_TIMEOUT_SECONDS + WARMING_TIMEOUT_MINUTES * 60;
+ *  derived cost). tokens.test.ts asserts both the derivation and the margin.
+ *
+ *  Whole-branch review I1: the DEFINITION moved to `config.ts`, because
+ *  `RunnerSpec.deadlineAt` has exactly the same moving anchor and its derivation
+ *  (`runnerDeadlineOf`) lives in the pure domain, which may import `../config`
+ *  and nothing else. Re-exported here so this module and its tests keep one
+ *  importable name — one authority, two readers. */
+export { MAX_ANCHOR_DRIFT_SECONDS } from "./config";

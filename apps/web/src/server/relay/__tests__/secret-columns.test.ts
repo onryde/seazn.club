@@ -43,7 +43,7 @@ async function rig() {
      where f.id = ${fixtureId}
     returning id`;
   const [input] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot) values (${s!.id}, 0) returning id`;
-  return { sessionId: s!.id, inputId: input!.id, targetId: t!.id };
+  return { orgId: auth.orgId, sessionId: s!.id, inputId: input!.id, targetId: t!.id };
 }
 
 /** Cloudflare's observed `liveInputs.create()` ingest legs: bare urls, credentials as separate fields, streamId = uid. */
@@ -87,7 +87,31 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     const r = await rig();
     const target = destination();
     await sql.begin((tx) => storeTargetSecret(tx, r.targetId, target));
-    expect(await sql.begin((tx) => readTargetSecret(tx, r.targetId))).toEqual(target);
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(target);
+  });
+
+  // Whole-branch review I5 (auth). `org_stream_targets` is under FORCE RLS with ZERO policies and is reached only by
+  // the superuser client, so RLS constrains nothing here by design — the org scope in the query is the WHOLE tenancy
+  // check on a live destination credential. BOTH directions, because a scope that refuses everything would pass the
+  // negative row alone, and a scope that is absent would pass the positive one alone.
+  it("I5: the destination credential is scoped to its ORG — the owning org reads it; another org gets nothing, on the very same target id, and learns nothing about it beyond 'not found'", async () => {
+    const mine = await rig();
+    const theirs = await rig();
+    expect(theirs.orgId).not.toBe(mine.orgId);                      // two real orgs, or the refusal below is vacuous
+    const target = destination();
+    await sql.begin((tx) => storeTargetSecret(tx, mine.targetId, target));
+    // The row exists and holds an openable envelope: the ONLY thing that can refuse the next line is the org scope.
+    expect(await sql.begin((tx) => readTargetSecret(tx, mine.orgId, mine.targetId))).toEqual(target);
+    const err = await sql.begin((tx) => readTargetSecret(tx, theirs.orgId, mine.targetId)).then(() => null, (e: unknown) => e as Error);
+    expect(err, "a cross-org read of a destination credential must not resolve").toBeInstanceOf(Error);
+    expect(err!.message).toMatch(/not found/);
+    expect(err!.message).not.toContain(target.streamKey);           // and the refusal is not an oracle
+    expect(err!.message).not.toContain(theirs.orgId);
+    // …and the owning org's own target is unaffected by the neighbour existing at all.
+    const theirTarget = destination();
+    await sql.begin((tx) => storeTargetSecret(tx, theirs.targetId, theirTarget));
+    expect(await sql.begin((tx) => readTargetSecret(tx, theirs.orgId, theirs.targetId))).toEqual(theirTarget);
+    await expect(sql.begin((tx) => readTargetSecret(tx, mine.orgId, theirs.targetId))).rejects.toThrow(/not found/);
   });
 
   it("the RAW row: no *_enc bytes hold the passphrase, streamId or a stream key; the url columns hold the bare urls", async () => {
@@ -150,10 +174,10 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     // The accepted twin: slot 0 exists and, before any credentials are stored, reads its row with both legs null.
     expect(await sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0)))
       .toEqual({ id: r.inputId, slot: 0, ingestInputId: null, srt: null, rtmps: null });
-    await expect(sql.begin((tx) => readTargetSecret(tx, randomUUID()))).rejects.toThrow(/not found/);
+    await expect(sql.begin((tx) => readTargetSecret(tx, r.orgId, randomUUID()))).rejects.toThrow(/not found/);
     const target = destination();
     await sql.begin((tx) => storeTargetSecret(tx, r.targetId, target));
-    expect(await sql.begin((tx) => readTargetSecret(tx, r.targetId))).toEqual(target);
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(target);
   });
 
   it("one flipped byte in a stored envelope makes the read throw, echoing none of the plaintext; the untouched read opens", async () => {
@@ -166,7 +190,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     });
     const read = () => sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0));
     expect(await read()).toEqual({ id: r.inputId, slot: 0, ingestInputId: uid, srt: creds.srt, rtmps: creds.rtmps });
-    expect(await sql.begin((tx) => readTargetSecret(tx, r.targetId))).toEqual(target);
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(target);
 
     // The flip lands at length - 3: inside the ciphertext body of a real envelope, and inside a STRING VALUE of any
     // envelope that is really plaintext. Flipping the LAST byte instead was passed by an identity seal/open mutant —
@@ -196,7 +220,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
       update org_stream_targets
          set rtmp_enc = set_byte(rtmp_enc, length(rtmp_enc) - 3, get_byte(rtmp_enc, length(rtmp_enc) - 3) # 1)
        where id = ${r.targetId}`;
-    const targetMessage = await messageOf(sql.begin((tx) => readTargetSecret(tx, r.targetId)));
+    const targetMessage = await messageOf(sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId)));
     expect(targetMessage).not.toContain(target.streamKey.slice(0, 8));
   });
 

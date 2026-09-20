@@ -35,6 +35,7 @@ import { z } from "zod";
 // plain import; the two names beside it are types and are erased.
 import { NOOP_RECORDER } from "./ports";
 import type { ProviderCallRecord, ProviderCallRecorder } from "./ports";
+import { redact } from "./sanitise";
 
 export const FLY_MACHINES_BASE = "https://api.machines.dev/v1";
 export type FlyErrorCode = "http" | "network" | "timeout" | "deadline" | "malformed";
@@ -146,11 +147,10 @@ type LookupOutcome<T> = { kind: "found"; value: T } | { kind: "absent"; confirme
 /** What `once` needs to record an attempt: the method's name, the machine it is about, the ids in the path. */
 interface CallMeta { operation: string; subjectId?: string | null; sessionId?: string | null; ids: readonly string[] }
 
-export function redact(text: string, secrets: readonly string[]): string {
-  let out = text;
-  for (const s of secrets) if (s.length > 0) out = out.split(s).join("[redacted]");
-  return out;
-}
+/** Review I4: the implementation moved to `sanitise.ts` — this file's SIBLING adapter owes the same
+ *  floor, and one function with two homes is two functions. Re-exported so every consumer and test of
+ *  this module keeps importing it from here. */
+export { redact };
 
 export function isRetryable(status: number | null, code: FlyErrorCode): boolean {
   if (code === "network" || code === "timeout") return true;

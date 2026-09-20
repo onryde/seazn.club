@@ -389,6 +389,44 @@ describe("CloudflareIngest", () => {
     expect(port2.calls[0]!.errorCode).toBe("10005");
   });
 
+  // Whole-branch review I4 (secret handling). Before this the word "redact" did not appear in ingest-cf.ts at all:
+  // `fail` interpolated Cloudflare's own `errors[0].message` VERBATIM into the thrown Error, and `addOutput` POSTs the
+  // organiser's real destination stream key — the credential this lane otherwise keeps sealed end to end. Whether
+  // Cloudflare echoes a rejected value back is UNMEASURED and deliberately not measured live; the finding is the
+  // missing floor, so these rows script a provider that DOES echo and assert the floor holds.
+  it("I4: a Cloudflare refusal that quotes the destination stream key back does not put it in the thrown message — nor the account token, on any call; the positive twin is that something WAS redacted and the rest of the sentence survives", async () => {
+    const KEY = "yt-live-key-SECRET";
+    const TOK = "cf-account-token-SECRET";
+    // The provider quotes both our body value and (the worst case) our own credential back at us.
+    const echoing = recorder(() => ({ status: 400, body: { success: false, errors: [{ code: 10004, message: `bad output streamKey=${KEY} for token ${TOK}` }] } }));
+    const cf = new CloudflareIngest({ fetchImpl: echoing.fetchImpl, accountId: "acc1", token: TOK });
+    const err = await cf.addOutput("in_abc", { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: KEY }).then(() => null, (e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).not.toContain(KEY);
+    expect(err!.message).not.toContain(TOK);
+    expect(err!.message).toContain("[redacted]");                 // positive twin: the redaction ran
+    expect(err!.message).toContain("cloudflare add output: HTTP 400 code 10004");  // …and did not eat the diagnosis
+    // Every OTHER call still gets the token floor even with no per-request secret to add.
+    const other = new CloudflareIngest({
+      fetchImpl: recorder(() => ({ status: 500, body: { success: false, errors: [{ code: 10001, message: `upstream said ${TOK}` }] } })).fetchImpl,
+      accountId: "acc1", token: TOK,
+    });
+    await expect(other.inputStatus("in_abc")).rejects.toThrow(/\[redacted\]/);
+    await expect(other.inputStatus("in_abc")).rejects.not.toThrow(new RegExp(TOK));
+    // …and the create's own "settings were not applied" throw, which carries a NESTED provider error plus the
+    // credentials Cloudflare just handed us, is redacted too.
+    const settings = new CloudflareIngest({
+      fetchImpl: recorder((c) => (c.init.method === "POST"
+        ? { status: 200, body: { success: true, result: CREATE_RESULT_DROPPED } }
+        : { status: 500, body: { success: false, errors: [{ code: 10002, message: `cleanup refused for ${TOK}` }] } })).fetchImpl,
+      accountId: "acc1", token: TOK,
+    });
+    const createErr = await settings.createLiveInput({ sessionId: "s1", slot: 0 }).then(() => null, (e: unknown) => e as Error);
+    expect(createErr!.message).toContain("settings were not applied");
+    expect(createErr!.message).not.toContain(TOK);
+    expect(createErr!.message).toContain("[redacted]");
+  });
+
   // Lane-A minors, Task 4 round-0 minor 2: `storageUsage` destructured three
   // numbers straight out of a CAST envelope. `{ success: true, result: {} }` handed
   // back `{ undefined, undefined, undefined }` TYPED as StorageUsage, and Task 10's

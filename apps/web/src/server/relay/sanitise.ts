@@ -79,3 +79,19 @@ export function pathTemplate(url: string, ids: readonly string[]): string {
   }
   return path.replace(UUID, "{uuid}").replace(LONG_HEX_SEGMENT, "/{id}");
 }
+
+/** Replace every occurrence of every secret with `[redacted]`. Substring, not token —
+ *  a provider that quotes our value inside a sentence of its own is exactly the case
+ *  this exists for. An empty secret is skipped: `"".split("")` would shred the string.
+ *
+ *  It lives HERE, and no longer only in `fly-client.ts`, because the whole-branch review's I4 gave the SECOND
+ *  adapter the same obligation: `ingest-cf.ts` interpolated Cloudflare's error message verbatim into a thrown
+ *  Error while `addOutput` POSTs the organiser's real destination stream key. Two adapters needing the same
+ *  three lines is not a reason for two copies, and the Cloudflare adapter importing the Fly one would couple
+ *  two drivers that the ports/adapters split exists to keep independent. `fly-client.ts` re-exports it, so its
+ *  consumers and tests keep one importable name. */
+export function redact(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const s of secrets) if (s.length > 0) out = out.split(s).join("[redacted]");
+  return out;
+}

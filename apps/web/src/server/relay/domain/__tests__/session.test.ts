@@ -329,11 +329,37 @@ describe("decide — a composed session's Machine events go through the runner t
     const late = decide(midCreate, { type: "runner", trigger: { type: "create_ok", machineId: "m9" } }, T0);
     expect(late.next).toMatchObject({ state: "failed", runner: { state: "destroyed", machineId: "m9" } });
     expect(late.effects).toEqual([FORCE]);   // no fill_replay: the completed signal is ignored
-    expect(decide(midCreate, { type: "runner", trigger: { type: "create_failed", retryable: true } }, T0).next).toMatchObject({ state: "failed", runnerRetries: 0, runner: { state: "destroyed" } });
+    expect(decide(midCreate, { type: "runner", trigger: { type: "create_failed", retryable: true, outcomeUnknown: false } }, T0).next).toMatchObject({ state: "failed", runnerRetries: 0, runner: { state: "destroyed" } });
     // The negative pair: a non-cleanup trigger, a session command, and an expiry other than grace_expired still throw on a terminal session.
     expect(() => decide(failed, { type: "runner", trigger: { type: "session_stop" } }, T0)).toThrow(InvalidTransition);
     expect(() => decide(failed, { type: "stop" }, T0)).toThrow(InvalidTransition);
     expect(() => decide(failed, { type: "expire", expiry: { kind: "none" } }, T0)).toThrow(InvalidTransition);
+  });
+
+  // Whole-branch review I3. `orphan_listed` is DEFINED as "the daily sweep found this Machine listed with a terminal or
+  // absent session", and it was the one cleanup trigger missing from RUNNER_CLEANUP_TRIGGERS — so the only call it
+  // exists for threw. Every test before this one drove it on a LIVE or ENDING session, which is the complement of its
+  // meaning. Both terminal states, both runner states the table answers it from.
+  it("I3: the sweep's orphan_listed lands on a TERMINAL session — a lost runner RE-ISSUES the force_destroy and stays lost (destroyed means confirmed gone), a destroyed one is a no-op; the session never moves, and the triggers that are not teardowns still throw", () => {
+    const failed = decide(C(), { type: "expire", expiry: { kind: "warming_timeout" } }, T0).next;
+    expect(failed.state).toBe("failed");                                   // the seed is terminal, or the rows below prove nothing
+    const completed = decide(C({ state: "ending", desiredState: "ending", endReason: "stopped", startedAt: T0, runner: { ...BOOTING, state: "exited", stopRequestedAt: T0 } }), { type: "runner", trigger: { type: "destroy_ok" } }, T0).next;
+    expect(completed.state).toBe("completed");
+    for (const [label, terminal] of [["failed", failed], ["completed", completed]] as const) {
+      const lost = decide({ ...terminal, runner: { ...terminal.runner, state: "lost" } }, { type: "runner", trigger: { type: "orphan_listed" } }, T0);
+      expect(lost.next.state, label).toBe(terminal.state);
+      expect(lost.next.runner.state, label).toBe("lost");                  // NOT destroyed: the sweep listing it is not a confirmation
+      expect(lost.effects, label).toEqual([FORCE]);
+      expect(lost.events, label).toEqual([{ type: "RunnerChanged", from: "lost", to: "lost", trigger: "orphan_listed" }]);
+      // and the idempotent half: already destroyed, nothing left to ask for.
+      const done = decide({ ...terminal, runner: { ...terminal.runner, state: "destroyed" } }, { type: "runner", trigger: { type: "orphan_listed" } }, T0);
+      expect(done.next.state, label).toBe(terminal.state);
+      expect(done.effects, label).toEqual([]);
+    }
+    // The negative pair, unchanged: a terminal session still refuses every runner trigger that is not a teardown, and
+    // `orphan_listed` is still refused by the RUNNER TABLE for a runner the session owns outright.
+    expect(() => decide(failed, { type: "runner", trigger: { type: "session_stop" } }, T0)).toThrow(InvalidTransition);
+    expect(() => decide({ ...failed, runner: { ...failed.runner, state: "playing" } }, { type: "runner", trigger: { type: "orphan_listed" } }, T0)).toThrow(InvalidRunnerTransition);
   });
 
   it("P1-F-a: a composed stop while the runner is CREATING → ending(stopped) with the stop marked and no effect; the create's return then tears down at once → completed(stopped), never booting, retried or failed", () => {
@@ -350,15 +376,22 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(ok.next).toMatchObject({ state: "completed", endReason: "stopped", failReason: null, endedAt: T1, runner: { state: "destroyed", machineId: "m9" } });
     expect(ok.effects).toEqual([FORCE]);
     // create_failed, even retryable on attempt 1: no retry, no machine_create_failed — nothing was created
-    const refused = decide(stopped.next, { type: "runner", trigger: { type: "create_failed", retryable: true } }, T1);
+    const refused = decide(stopped.next, { type: "runner", trigger: { type: "create_failed", retryable: true, outcomeUnknown: false } }, T1);
     expect(refused.next).toMatchObject({ state: "completed", endReason: "stopped", failReason: null, runnerRetries: 0, runner: { state: "destroyed" } });
     expect(refused.effects).toEqual([]);
     // …and a NON-retryable refusal is not machine_create_failed either: the organiser's stop, not the create, ended this
     // session. (The retryable row above cannot tell the mark check from its absence — the retry arm refuses a retry on
     // an ending session and completes it anyway — so this is the row that witnesses the check.)
-    const refusedHard = decide(stopped.next, { type: "runner", trigger: { type: "create_failed", retryable: false } }, T1);
+    const refusedHard = decide(stopped.next, { type: "runner", trigger: { type: "create_failed", retryable: false, outcomeUnknown: false } }, T1);
     expect(refusedHard.next).toMatchObject({ state: "completed", endReason: "stopped", failReason: null, runner: { state: "destroyed" } });
     expect(refusedHard.effects).toEqual([]);
+    // Review I2 (money), the reviewer's constructible scenario driven through `decide`: the SAME organiser stop, but the
+    // create's own deadline blew with absence UNCONFIRMED. The session still completes stopped — and the teardown is now
+    // emitted, where before this row produced the identical `completed` with NO effect and left a compositor running to
+    // RELAY_DEADLINE_AT, billing and pushing to the organiser's destination, until the daily orphan sweep.
+    const unsettled = decide(stopped.next, { type: "runner", trigger: { type: "create_failed", retryable: false, outcomeUnknown: true } }, T1);
+    expect(unsettled.next).toMatchObject({ state: "completed", endReason: "stopped", failReason: null, runner: { state: "destroyed" } });
+    expect(unsettled.effects).toEqual([FORCE]);
     // the crash-safe reconcile finds the Machine by name after the stop: destroy it, never boot it
     const found = decide(stopped.next, { type: "runner", trigger: { type: "observed", state: "running" } }, T1);
     expect(found.next).toMatchObject({ state: "completed", endReason: "stopped", runner: { state: "destroyed" } });
@@ -406,7 +439,7 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(confirmed.next).toMatchObject({ state: "completed", endReason: "stopped", runner: { state: "destroyed", machineId: "m9" } });
     expect(confirmed.effects).toEqual([]);
     expect(confirmed.events.map((e) => e.type)).toEqual(["RunnerChanged"]);
-    expect(() => decide(done.next, { type: "runner", trigger: { type: "create_failed", retryable: true } }, late)).not.toThrow();
+    expect(() => decide(done.next, { type: "runner", trigger: { type: "create_failed", retryable: true, outcomeUnknown: false } }, late)).not.toThrow();
   });
 
   it("F16: a heartbeat landing BEFORE provisioned is ignored, never thrown (its carrier is a route the Machine retries); the next beat takes the session live with exactly one consume", () => {
@@ -450,7 +483,7 @@ describe("decide — a composed session's Machine events go through the runner t
     const sample = (t: RunnerTrigger["type"]): RunnerTrigger =>
       t === "create_started" ? { type: "create_started", name: "relay-s1-r2", attempt: 2 }
       : t === "create_ok" ? { type: "create_ok", machineId: "m9" }
-      : t === "create_failed" ? { type: "create_failed", retryable: true }
+      : t === "create_failed" ? { type: "create_failed", retryable: true, outcomeUnknown: false }
       : t === "observed" ? { type: "observed", state: "destroyed" }
       : ({ type: t } as RunnerTrigger);
     let swept = 0, retryablePositions = 0;
@@ -731,7 +764,13 @@ describe("decide — a composed session's Machine events go through the runner t
   // and the walk node key. Shared by the full-depth decide walks below (R4, F-A).
   const triggers = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
     t === "observed" ? OBSERVED_STATES.map((state) => ({ type: "observed" as const, state }))
-    : t === "create_failed" ? [{ type: "create_failed", retryable: true }, { type: "create_failed", retryable: false }]
+    // Review I2: all THREE create_failed flavours — the third (outcome unknown) is a different CELL, not a different
+    // payload of the same one, so a walk that omits it cannot see what `decide` does with a teardown it now issues.
+    : t === "create_failed" ? [
+        { type: "create_failed", retryable: true, outcomeUnknown: false },
+        { type: "create_failed", retryable: false, outcomeUnknown: false },
+        { type: "create_failed", retryable: false, outcomeUnknown: true },
+      ]
     : t === "create_started" ? [{ type: "create_started", name: `relay-s1-r${r.attempt + 1}`, attempt: r.attempt + 1 }]
     : t === "create_ok" ? [{ type: "create_ok", machineId: "m9" }]
     : [{ type: t } as RunnerTrigger]);
@@ -1071,7 +1110,7 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     }
     const retries: [Runner, RunnerTrigger][] = [
       [{ ...R1, state: "lost" }, { type: "destroy_ok" }],
-      [{ ...R1, state: "creating", machineId: null }, { type: "create_failed", retryable: true }],
+      [{ ...R1, state: "creating", machineId: null }, { type: "create_failed", retryable: true, outcomeUnknown: false }],
     ];
     for (const [runner, trigger] of retries) {
       const s = live(runner);

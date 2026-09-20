@@ -30,7 +30,7 @@ const sampleFor = (s: RunnerState, t: RunnerTrigger["type"]): RunnerTrigger =>
   t === "create_started" ? { type: "create_started", name: `relay-s1-r${inState(s).attempt + 1}`, attempt: inState(s).attempt + 1 } : SAMPLE[t];
 const SAMPLE: Record<Exclude<RunnerTrigger["type"], "create_started">, RunnerTrigger> = {
   create_ok: { type: "create_ok", machineId: "m1" },
-  create_failed: { type: "create_failed", retryable: false },
+  create_failed: { type: "create_failed", retryable: false, outcomeUnknown: false },
   callback_playing: { type: "callback_playing" },
   callback_stopped: { type: "callback_stopped" },
   observed: { type: "observed", state: "running" },
@@ -41,11 +41,16 @@ const SAMPLE: Record<Exclude<RunnerTrigger["type"], "create_started">, RunnerTri
   destroy_ok: { type: "destroy_ok" },
   orphan_listed: { type: "orphan_listed" },
 };
-/** EVERY trigger the table can be fed from a runner: each observed state, both create_failed flavours, the derived
+/** EVERY trigger the table can be fed from a runner: each observed state, ALL THREE create_failed flavours (review I2 —
+ *  the third is the one the client cannot settle, and it is the one the walks below exist to catch), the derived
  *  create_started. The derived invariants walk this, never the one-sample-per-type sweep above. */
 const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
   t === "observed" ? OBSERVED_STATES.map((state) => ({ type: "observed" as const, state }))
-  : t === "create_failed" ? [{ type: "create_failed", retryable: true }, { type: "create_failed", retryable: false }]
+  : t === "create_failed" ? [
+      { type: "create_failed", retryable: true, outcomeUnknown: false },
+      { type: "create_failed", retryable: false, outcomeUnknown: false },
+      { type: "create_failed", retryable: false, outcomeUnknown: true },
+    ]
   : t === "create_started" ? [{ type: "create_started", name: machineNameFor("s1", r.attempt + 1), attempt: r.attempt + 1 }]
   : [SAMPLE[t]]);
 /** A walk's NODE: every payload field a cell BRANCHES on — the state, the attempt (retryLeft, createStarted) and whether a
@@ -129,7 +134,7 @@ describe("the stale_beat column (C1 — every runner state answers it; a lazy re
     // A hung create that finally returns lands on `lost`: destroy the id it made, stay lost (destroy_ok then decides retry vs fail).
     const late = stepRunner(lost.next, { type: "create_ok", machineId: "m9" }, T0);
     expect(late).toEqual({ next: { ...lost.next, machineId: "m9" }, effects: [{ type: "force_destroy" }], signal: null });
-    expect(stepRunner(lost.next, { type: "create_failed", retryable: true }, T0)).toEqual({ next: lost.next, effects: [], signal: null });
+    expect(stepRunner(lost.next, { type: "create_failed", retryable: true, outcomeUnknown: false }, T0)).toEqual({ next: lost.next, effects: [], signal: null });
   });
 });
 
@@ -247,13 +252,32 @@ describe("the crash path", () => {
     expect(stepRunner(inState("booting"), { type: "observed", state: "running" }, T0).signal).toBeNull(); // running ≠ playing: only the callback goes live
   });
   it("create_failed: retryable on attempt 1 → destroyed with signal retry; not retryable → failed(machine_create_failed)", () => {
-    const retry = stepRunner(inState("creating"), { type: "create_failed", retryable: true }, T0);
+    const retry = stepRunner(inState("creating"), { type: "create_failed", retryable: true, outcomeUnknown: false }, T0);
     expect(retry.next.state).toBe("destroyed");
     expect(retry.signal).toEqual({ type: "retry" });
-    const fail = stepRunner(inState("creating"), { type: "create_failed", retryable: false }, T0);
+    const fail = stepRunner(inState("creating"), { type: "create_failed", retryable: false, outcomeUnknown: false }, T0);
     expect(fail.signal).toEqual({ type: "failed", reason: "machine_create_failed" });
-    const exhausted = stepRunner(R({ state: "creating", attempt: RUNNER_MAX_ATTEMPTS, name: "relay-s1-r2" }), { type: "create_failed", retryable: true }, T0);
+    const exhausted = stepRunner(R({ state: "creating", attempt: RUNNER_MAX_ATTEMPTS, name: "relay-s1-r2" }), { type: "create_failed", retryable: true, outcomeUnknown: false }, T0);
     expect(exhausted.signal).toEqual({ type: "failed", reason: "machine_create_failed" });
+  });
+  // Review I2 (money). The three flavours side by side, so the difference between them is the assertion and not a
+  // reader's inference. The KNOWN rows are the two above; this is the one the client cannot settle.
+  it("create_failed with the outcome UNKNOWN never lands on `destroyed` without a teardown: unmarked it goes LOST with force_destroy and NO retry signal; marked (the organiser stopped mid-create) it completes the session AND forces the destroy — the same answer grace_expired already gives", () => {
+    // UNMARKED: a Machine may exist under our name. `destroyed` would mean confirmed gone, and the session would spend
+    // its ONE retry (or fail) beside a compositor still pushing to the organiser's destination until RELAY_DEADLINE_AT.
+    const unknown: RunnerTrigger = { type: "create_failed", retryable: false, outcomeUnknown: true };
+    const unmarked = stepRunner(inState("creating"), unknown, T0);
+    expect(unmarked).toEqual({ next: { ...inState("creating"), state: "lost" }, effects: [{ type: "force_destroy" }], signal: null });
+    // …and the retry is still owed, but only once the destroy is CONFIRMED (invariant 1).
+    expect(stepRunner(unmarked.next, { type: "destroy_ok" }, T0)).toMatchObject({ next: { state: "destroyed" }, signal: { type: "retry" } });
+    // MARKED: the organiser's stop ended this session, so it completes — but the teardown is owed all the same.
+    const marked = R({ state: "creating", attempt: 1, name: "relay-s1-r1", stopRequestedAt: T0 });
+    const markedStep = stepRunner(marked, unknown, T0);
+    expect(markedStep).toEqual({ next: { ...marked, state: "destroyed" }, effects: [{ type: "force_destroy" }], signal: { type: "completed" } });
+    // The named contrast: the SAME marked runner whose create failure IS settled emits no teardown (nothing was made).
+    expect(stepRunner(marked, { type: "create_failed", retryable: false, outcomeUnknown: false }, T0).effects).toEqual([]);
+    // and the neighbour this borrows its shape from, unchanged.
+    expect(stepRunner(marked, { type: "grace_expired" }, T0)).toEqual(markedStep);
   });
 });
 
@@ -291,7 +315,10 @@ describe("invariants", () => {
         let step: ReturnType<typeof stepRunner>;
         try { step = stepRunner(r, t, T0); } catch (e) { expect(e).toBeInstanceOf(InvalidRunnerTransition); continue; }
         const label = `${r.state} (attempt ${r.attempt}, ${r.stopRequestedAt ? "marked" : "unmarked"}) × ${JSON.stringify(t)}`;
-        const madeNothing = t.type === "create_failed" && r.state === "creating";
+        // Review I2: "the create made nothing" is exactly "its outcome is KNOWN". The predicate used to be
+        // unconditional on the payload, which let `creating × create_failed` enter `destroyed` — the state whose
+        // meaning is CONFIRMED gone — with no teardown, for a create whose absence nobody had established.
+        const madeNothing = t.type === "create_failed" && r.state === "creating" && !t.outcomeUnknown;
         if (r.state !== "destroyed" && step.next.state === "destroyed") {
           entries++;
           expect(confirmed(t) || madeNothing || step.effects.some((e) => e.type === "force_destroy"), label).toBe(true);
@@ -338,7 +365,7 @@ describe("invariants", () => {
         let step: ReturnType<typeof stepRunner>;
         try { step = stepRunner(r, t, T0); } catch (e) { expect(e).toBeInstanceOf(InvalidRunnerTransition); continue; }
         const here = [...path, `${r.state} × ${t.type === "observed" ? `observed ${t.state}` : t.type}`];
-        const madeNothing = r.state === "creating" && t.type === "create_failed";
+        const madeNothing = r.state === "creating" && t.type === "create_failed" && !t.outcomeUnknown;   // review I2, as above
         // Fix round 4: a create_ok is a Machine that now EXISTS — a late one included — so it clears the confirmation just
         // like a new attempt does. Without this reset a late create_ok into an already-confirmed destroyed runner walked on
         // as `cleared`, and the stale beat after it re-signalled the retry while that Machine's destroy was unconfirmed.

@@ -99,8 +99,22 @@ export async function storeTargetSecret(tx: Tx, targetRowId: string, rtmp: { url
   await tx`update org_stream_targets set rtmp_enc = ${seal(JSON.stringify(rtmp))} where id = ${targetRowId}`;
 }
 
-export async function readTargetSecret(tx: Tx, targetId: string): Promise<{ url: string; streamKey: string }> {
-  const [row] = await tx<{ rtmp_enc: Uint8Array }[]>`select rtmp_enc from org_stream_targets where id = ${targetId}`;
+/** Open an org's destination credential. The `orgId` is NOT decoration and it is not the caller's convenience — it is
+ *  the tenancy check itself (whole-branch review I5, auth).
+ *
+ *  V410 puts `org_stream_targets` under FORCE RLS with ZERO policies, and `telemetry.ts` records the consequence: these
+ *  rows are reachable only through the superuser `sql` client, never `withTenant`/`app_user`. So RLS supplies no
+ *  tenancy here BY DESIGN, and before this the only thing standing between one org and another org's live RTMP key was
+ *  a boolean the CALLER had computed, at a different time, in a different transaction (`admit`'s `targetBelongsToOrg`).
+ *  The obligation sat entirely outside the module that holds the secret; now the query carries it.
+ *
+ *  The two errors are not symmetric and the asymmetry is the argument: a false REJECT is a 404 on a stream target,
+ *  which an organiser retries; a false ACCEPT hands one org another org's destination credential, which is
+ *  unrecoverable the moment it is used. A wrong `orgId` therefore reads exactly like a missing row — no oracle, one
+ *  sentence, and the id is not a secret so it stays in the message. */
+export async function readTargetSecret(tx: Tx, orgId: string, targetId: string): Promise<{ url: string; streamKey: string }> {
+  const [row] = await tx<{ rtmp_enc: Uint8Array }[]>`
+    select rtmp_enc from org_stream_targets where id = ${targetId} and org_id = ${orgId}`;
   if (!row) throw new Error(`stream target ${targetId} not found`);
   const { url, streamKey } = openFields(row.rtmp_enc, TARGET_SEALED);
   return { url, streamKey };

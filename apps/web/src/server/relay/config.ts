@@ -105,6 +105,20 @@ export const PROVISION_TIMEOUT_SECONDS = 180;
  *  RE-CHECKED 2026-09-20 (Task 5) when the composed create + wait budget raised PROVISION_TIMEOUT_SECONDS:
  *  that path is entirely downstream of admission, so nothing moved here. Unchanged at 60. */
 export const REQUESTED_TIMEOUT_SECONDS = 60;
+/** The worst legal gap between a session's `created_at` and its `started_at`: the whole
+ *  admission → provisioning → warming ladder, every leg of it a constant above. Derived, never typed:
+ *  raising any of the three moves this with it.
+ *
+ *  It lives HERE rather than in `tokens.ts` (where it was defined until the whole-branch review's I1) because
+ *  it is now read by TWO derivations that anchor on different instants, and the second of them is in the pure
+ *  domain, which may import `../config` and nothing else:
+ *    * `relayTokenExpiry` (tokens.ts) — `TOKEN_GRACE_MINUTES` must stay at or above this, or a token minted
+ *      at `requested` (when `startedAt` is null) dies before the session it was minted for;
+ *    * `runnerDeadlineOf` (domain/expiry.ts) — the Machine's own hard stop, computed at CREATE time for the
+ *      same reason, must stay at or above this, or it fires BEFORE the session's own wall clock.
+ *  `tokens.ts` re-exports it so there is still exactly one spelling and one importable name. */
+export const MAX_ANCHOR_DRIFT_SECONDS =
+  REQUESTED_TIMEOUT_SECONDS + PROVISION_TIMEOUT_SECONDS + WARMING_TIMEOUT_MINUTES * 60;
 /** F19: an `ending` session whose completion was lost — a passthrough whose `complete_now` effect never ran,
  *  or a composed one whose runner carries no stop mark (the stop grace only times a MARKED runner). Measured
  *  from `ending_at` (F22 — the instant ending BEGAN), falling back to `deadlineOf` when that write was lost,

@@ -25,7 +25,7 @@
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
 import { FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, type Machine } from "./fly-client";
-import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
+import { machineNameFor, type ObservedRunnerState, type RunnerTrigger } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
 import { NOOP_RECORDER } from "./ports";
 
@@ -82,6 +82,25 @@ export function fromFlyState(state: string | null | undefined): ObservedRunnerSt
 export function isUnestablishedCreate(e: unknown): e is FlyApiError {
   if (!(e instanceof FlyApiError) || e.retryable) return false;
   return e.code === "deadline" || e.code === "malformed" || isRetryable(e.status, e.code);
+}
+
+/** Whole-branch review I2 (money). The domain's `create_failed` trigger BUILT from the error a create threw — this
+ *  adapter is the only place that knows whether Fly may still hold a Machine, and before this the fact was computed
+ *  (`isUnestablishedCreate`), written to one telemetry row, and thrown away. The domain then landed BOTH arms of
+ *  `creating × create_failed` on `destroyed` — the state that means CONFIRMED gone — with no teardown, so an
+ *  unestablished create left a Machine running to RELAY_DEADLINE_AT, billing and pushing to the organiser's
+ *  destination, until the daily orphan sweep.
+ *
+ *  Lane A owes the CONTRACT and this helper; Task 10's create call site is not ours to write. It catches the throw
+ *  from `create` and feeds the result straight to `stepRunner` / `decide`.
+ *
+ *  Read off the FIELDS, never the message (T5-g). An error that is not a `FlyApiError` at all is the safe-direction
+ *  default — unknown, not assumed-clean: the cost of being wrong that way is one extra force_destroy by name, which
+ *  the provider answers as success when nothing is there; the cost of the other way is up to MAX_DURATION_MINUTES of
+ *  a Machine nobody is watching. A 409 never reaches here — `create` adopts it (T5-c). */
+export function createFailedFrom(e: unknown): Extract<RunnerTrigger, { type: "create_failed" }> {
+  if (!(e instanceof FlyApiError)) return { type: "create_failed", retryable: false, outcomeUnknown: true };
+  return { type: "create_failed", retryable: e.retryable, outcomeUnknown: isUnestablishedCreate(e) };
 }
 
 /** The port's three-value summary of a Machine the provider still holds.

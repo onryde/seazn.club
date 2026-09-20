@@ -39,7 +39,14 @@ export const RUNNER_TRIGGER_TYPES = [
 ] as const;
 export type RunnerTrigger =
   | { type: "create_started"; name: string; attempt: number } | { type: "create_ok"; machineId: string }
-  | { type: "create_failed"; retryable: boolean } | { type: "callback_playing" } | { type: "callback_stopped" }
+  // `outcomeUnknown` (whole-branch review I2, money): the create call failed and we do NOT know whether Fly holds a
+  // Machine under our name. It is REQUIRED, not optional, on purpose — absent would default to "nothing was made",
+  // which is the unsafe half, and tsc is the only guard that survives a second producer. `runner-fly.ts`'s
+  // `createFailedFrom` is the producer: it reads the fact off the error's FIELDS (isUnestablishedCreate), and an error
+  // shape it does not recognise is unknown rather than assumed-clean. false and `retryable: true` are consistent by
+  // construction — T5-b downgrades a create it could not settle to `retryable: false`, so an ambiguous outcome can
+  // never arrive with the domain's licence to create attempt + 1 under a different name.
+  | { type: "create_failed"; retryable: boolean; outcomeUnknown: boolean } | { type: "callback_playing" } | { type: "callback_stopped" }
   | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null } | { type: "stale_beat" } | { type: "deadline" }
   | { type: "session_stop" } | { type: "grace_expired" } | { type: "destroy_ok" } | { type: "orphan_listed" };
 
@@ -185,6 +192,13 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     },
     create_failed: (r, t) => {
       if (t.type !== "create_failed") return stay(r);
+      // Review I2 (money): the call failed with its outcome UNKNOWN — Fly may hold a Machine under our name, which will
+      // run to RELAY_DEADLINE_AT (up to MAX_DURATION_MINUTES), billing and pushing to the organiser's destination, until
+      // the daily orphan sweep. This is the same uncertainty the two cells below already model (grace_expired ":may still
+      // have made", stale_beat "it may still make one"), so it gets the same answer: tear down BY NAME now. Marked, the
+      // organiser's stop still completes the session (grace_expired's exact shape); unmarked it is `lost`, whose entry
+      // issues the force_destroy and whose exit to the ONE retry waits for a CONFIRMED destroy (invariant 1).
+      if (t.outcomeUnknown) return r.stopRequestedAt ? stoppedDuringCreate(r, null, true) : toLost(r, t);
       if (r.stopRequestedAt) return stoppedDuringCreate(r, null, false);             // P1-F-a: nothing was created, nothing to retry
       const canRetry = t.retryable && retryLeft(r);
       return { next: { ...r, state: "destroyed" }, effects: [], signal: canRetry ? { type: "retry" } : { type: "failed", reason: "machine_create_failed" } };

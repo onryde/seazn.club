@@ -4,9 +4,9 @@
 // → that rule's boundary row red; ADD a retries check (`runnerRetries < 1`) →
 // the "regardless of attempt" row red (the retry cap is the runner table's, Task 2C).
 import { describe, expect, it } from "vitest";
-import { ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES } from "../../config";
+import { ENDING_TIMEOUT_SECONDS, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES } from "../../config";
 import { ACTIVE_STATES } from "../session";
-import { DEFAULT_LIMITS, deadlineOf, evaluate, type Expiry } from "../expiry";
+import { DEFAULT_LIMITS, deadlineOf, evaluate, runnerDeadlineOf, type Expiry } from "../expiry";
 import { RUNNER_NONE, RUNNER_STATES, type Runner, type RunnerState } from "../runner";
 import { decide, type Session } from "../session";
 
@@ -237,6 +237,35 @@ describe("evaluate", () => {
     expect(evaluate(booked90, at(89 * 60))).toEqual({ kind: "none" });
     expect(evaluate(booked90, at(90 * 60 - 1))).toEqual({ kind: "none" });
     expect(evaluate(booked90, at(90 * 60))).toEqual({ kind: "wall_clock" });
+  });
+  // Whole-branch review I1 (money + product). `RunnerSpec.deadlineAt` is built at CREATE time, when `startedAt` is
+  // still null, and it becomes the guest's RELAY_DEADLINE_AT hard stop; the session's own `wall_clock` is read LATER,
+  // by which time `startedAt` is set. Two anchors, one booking — and the Machine's used to be the EARLIER of the two
+  // on every composed session that went live. The property is ORDER, not arithmetic: the session's wall clock first,
+  // the Machine's hard stop as a backstop. Every number below comes from config.ts, so moving a constant moves the
+  // test instead of leaving it asserting yesterday's margin.
+  it("I1: runnerDeadlineOf is STRICTLY later than deadlineOf, and RELAY_DEADLINE_AT (fixed at create, startedAt null) still outlives the session's own wall clock for every legal start drift — the Machine never dies first", () => {
+    // The two are not the same function: an alias is the defect this exists for.
+    for (const s of [S(), S({ startedAt: at(30) }), S({ maxDurationMinutes: 90 })]) {
+      expect(runnerDeadlineOf(s).getTime(), `${String(s.startedAt)}/${s.maxDurationMinutes}`).toBeGreaterThan(deadlineOf(s).getTime());
+    }
+    // What Task 10 ships to Fly: computed while the session is still `requested`/`provisioning`.
+    const atCreate = S({ state: "provisioning", startedAt: null });
+    const relayDeadlineAt = runnerDeadlineOf(atCreate);
+    // Every legal drift between created_at and started_at, including the worst one the ladder allows.
+    for (const drift of [0, 1, Math.floor(MAX_ANCHOR_DRIFT_SECONDS / 2), MAX_ANCHOR_DRIFT_SECONDS]) {
+      const live = S({ state: "live", startedAt: at(drift) });
+      // The session is ALREADY expired by the time the guest's hard stop fires — so the lazy read answers wall_clock
+      // (which outranks stale_beat) and the session ends on its own terms, rather than reading the supervisor's exit
+      // as a crash. Before the fix, drift > 0 left this reading `none` at that instant.
+      expect(evaluate(live, relayDeadlineAt).kind, `drift ${drift}`).toBe("wall_clock");
+      expect(relayDeadlineAt.getTime(), `drift ${drift}`).toBeGreaterThanOrEqual(deadlineOf(live).getTime());
+    }
+    // …and not vacuously: one second before its own wall clock, a session at the worst drift is still live.
+    const worst = S({ state: "live", startedAt: at(MAX_ANCHOR_DRIFT_SECONDS) });
+    expect(evaluate(worst, new Date(deadlineOf(worst).getTime() - 1000))).toEqual({ kind: "none" });
+    // The margin is the ONE that tokens.ts already derived for the identical anchor drift, not a second spelling.
+    expect(runnerDeadlineOf(atCreate).getTime() - deadlineOf(atCreate).getTime()).toBe(MAX_ANCHOR_DRIFT_SECONDS * 1000);
   });
   it("feeds decide: a passthrough wall clock ends with end_reason max_duration and completes now; none → identity (the composed routes are Task 2C's tests)", () => {
     const p = S({ state: "live", startedAt: T0 });

@@ -72,7 +72,15 @@ export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)
   guest: { cpus: number; memoryMb: number; cpuClass: "shared" | "dedicated" };
   region: string;
-  /** Recommendation B: the Machine exits on its own at this instant (env RELAY_DEADLINE_AT); auto_destroy removes it. */
+  /** Recommendation B: the Machine exits on its own at this instant (env RELAY_DEADLINE_AT); auto_destroy removes it.
+   *
+   *  It MUST come from `domain/expiry.ts`'s `runnerDeadlineOf(session)` and never from `deadlineOf` (whole-branch
+   *  review I1). The two anchor on different instants: `deadlineOf` reads `startedAt ?? createdAt`, and this spec is
+   *  built while `startedAt` is still null, so `deadlineOf` here computes the hard stop from `createdAt` and the
+   *  session's own `wall_clock` is later read from `startedAt` — up to MAX_ANCHOR_DRIFT_SECONDS later. The Machine
+   *  would then die FIRST on every composed session that went live, and the session would read that as a crash: one
+   *  wasted retry, or a `machine_crash` failure (and no `fill_replay`) on a broadcast that ran its full booked
+   *  length. This deadline is a BACKSTOP; the session's wall clock is the authority. */
   deadlineAt: Date;
 };
 export type RunnerHandle = { runnerId: string };

@@ -33,6 +33,9 @@ import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS
 // erased. The record payload is built inline at the call site, so the
 // `ProviderCallRecord` type itself is never named in this file.
 import { NOOP_RECORDER } from "./ports";
+// Review I4: the redaction floor, shared with fly-client.ts and defined in the one pure text module — not a
+// second copy, and not an import of the sibling DRIVER (two adapters must stay independent of each other).
+import { redact } from "./sanitise";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
   IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallRecorder, StorageUsage,
@@ -133,9 +136,27 @@ export class CloudflareIngest implements IngestProvider {
     return { status: res.status, json };
   }
 
-  private static fail(what: string, r: { status: number; json: CfEnvelope<unknown> }): never {
+  /** Whole-branch review I4 (secret handling). Every message this adapter throws goes through here first.
+   *
+   *  Two secrets can reach a thrown string. The ACCOUNT token is in scope on every call. And the request BODY can
+   *  carry the organiser's real destination credential — `addOutput` sends the stream key this lane otherwise keeps
+   *  sealed end to end, and Cloudflare's refusal is interpolated VERBATIM below, so a provider that quotes the
+   *  offending value back puts it in the message a caller then logs. Whether Cloudflare actually echoes it is
+   *  UNMEASURED and not something to find out in production; the finding is that this adapter had no floor at all
+   *  while `fly-client.ts` beside it adds every request's env VALUES to its redaction list for exactly this reason.
+   *
+   *  `per` is those per-request values. It is a parameter rather than constructor state because the secret is
+   *  different on every call and belongs to the caller, not to the adapter.
+   *
+   *  No column name appears in this comment or in any string here: `enc-boundary.test.ts` claims 1–3 do NOT strip
+   *  comments, so naming the sealed column would itself be the leak. */
+  private red(text: string, per: readonly string[] = []): string {
+    return redact(text, [this.token, ...per]);
+  }
+
+  private fail(what: string, r: { status: number; json: CfEnvelope<unknown> }, per: readonly string[] = []): never {
     const e = r.json.errors?.[0];
-    throw new Error(`cloudflare ${what}: HTTP ${r.status}${e ? ` code ${e.code} ${e.message}` : ""}`);
+    throw new Error(this.red(`cloudflare ${what}: HTTP ${r.status}${e ? ` code ${e.code} ${e.message}` : ""}`, per));
   }
 
   async createLiveInput(spec: IngestCreateSpec): Promise<IngestCredentials> {
@@ -161,7 +182,7 @@ export class CloudflareIngest implements IngestProvider {
       recording: { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS },
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId, subjectOf: (result) => result?.uid ?? null });
-    if (!r.json.success || !r.json.result) CloudflareIngest.fail("create live input", r);
+    if (!r.json.success || !r.json.result) this.fail("create live input", r);
     const { uid, rtmps, srt } = r.json.result;
     // The rule U1-S1, U1-S4 and U1-S8 imply: EVERY setting we send is read back
     // and compared, because all three silent-acceptance traps answer 200. A
@@ -186,7 +207,13 @@ export class CloudflareIngest implements IngestProvider {
       const cleanupFailure = await this.deleteInput(uid, { sessionId: spec.sessionId }).then(() => null, (e: unknown) => String(e));
       const orphan = cleanupFailure === null ? ""
         : `; ORPHAN input ${uid} was NOT deleted (${cleanupFailure}) — its failed deleteInput call is recorded under subject ${uid}`;
-      throw new Error(`cloudflare create live input: settings were not applied — ${notApplied.join("; ")}${orphan}`);
+      // Review I4: this message carries a NESTED provider error (`cleanupFailure`), so it gets the token floor too.
+      // Deliberately NOT redacted against the credentials Cloudflare just returned: nothing on this path SENDS them
+      // (the create body carries no secret and the cleanup DELETE carries none), and `redact` is a substring
+      // replace — a short provider value would silently eat innocent words out of our own diagnosis, which is how
+      // this line first read `settings were not a[redacted]lied` against a 2-character test passphrase. The one
+      // call that sends a secret is `addOutput`, and it names it there.
+      throw new Error(this.red(`cloudflare create live input: settings were not applied — ${notApplied.join("; ")}${orphan}`));
     }
     return {
       inputId: uid,
@@ -201,7 +228,7 @@ export class CloudflareIngest implements IngestProvider {
     }>("GET", `/live_inputs/${encodeURIComponent(inputId)}`, undefined,
       { operation: "inputStatus", ids: [inputId], subjectId: inputId });
     if (r.status === 404) return { state: "unknown", protocol: null, enteredAt: null, lastSeenAt: null, reason: null };
-    if (!r.json.success || !r.json.result) CloudflareIngest.fail("input status", r);
+    if (!r.json.success || !r.json.result) this.fail("input status", r);
     const cur = r.json.result.status?.current;
     // An input that has never connected has no `status.current` at all
     // (absent-as-false) — so there is no reason to report either.
@@ -220,7 +247,9 @@ export class CloudflareIngest implements IngestProvider {
     const r = await this.call<{ uid: string }>("POST", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, {
       url: target.url, streamKey: target.streamKey, enabled: true,
     }, { operation: "addOutput", ids: [inputId], subjectId: inputId });
-    if (!r.json.success || !r.json.result) CloudflareIngest.fail("add output", r);
+    // Review I4: the body carried the organiser's real destination stream key, so the refusal is redacted against
+    // THAT value as well as the account token. This is the one call in the adapter that sends a secret.
+    if (!r.json.success || !r.json.result) this.fail("add output", r, [target.streamKey]);
     return r.json.result.uid;
   }
 
@@ -266,13 +295,13 @@ export class CloudflareIngest implements IngestProvider {
     // what closes it; until then, do not tighten this without that measurement, and
     // do not widen it either.
     if (r.status === 404 || r.json.success || (r.status >= 200 && r.status < 300)) return;
-    CloudflareIngest.fail("delete input", r);
+    this.fail("delete input", r);
   }
 
   async storageUsage(): Promise<StorageUsage> {
     const r = await this.call<StorageUsage>("GET", "/storage-usage", undefined,
       { operation: "storageUsage", ids: [] });
-    if (!r.json.success || !r.json.result) CloudflareIngest.fail("storage usage", r);
+    if (!r.json.success || !r.json.result) this.fail("storage usage", r);
     const { totalStorageMinutes, totalStorageMinutesLimit, videoCount } = r.json.result;
     // The three numbers are CHECKED, not just destructured out of a cast envelope
     // (lane-A minors, Task 4 round-0 minor 2). `{ success: true, result: {} }` used
@@ -282,7 +311,7 @@ export class CloudflareIngest implements IngestProvider {
     // bad way to learn that Cloudflare renamed a field. `typeof` rather than a
     // truthiness test: a legitimate 0 must pass.
     if (typeof totalStorageMinutes !== "number" || typeof totalStorageMinutesLimit !== "number" || typeof videoCount !== "number") {
-      CloudflareIngest.fail("storage usage: the 2xx result is missing totalStorageMinutes / totalStorageMinutesLimit / videoCount", r);
+      this.fail("storage usage: the 2xx result is missing totalStorageMinutes / totalStorageMinutesLimit / videoCount", r);
     }
     return { totalStorageMinutes, totalStorageMinutesLimit, videoCount };
   }
@@ -296,7 +325,7 @@ export class CloudflareIngest implements IngestProvider {
       "GET", `?end=${encodeURIComponent(opts.createdBefore.toISOString())}&limit=${LIST_VIDEOS_PAGE_LIMIT}`, undefined,
       { operation: "listVideos", ids: [] },
     );
-    if (!r.json.success || !r.json.result) CloudflareIngest.fail("list videos", r);
+    if (!r.json.success || !r.json.result) this.fail("list videos", r);
     return r.json.result.map((v) => ({
       videoId: v.uid,
       inputId: v.liveInput ?? null,
@@ -318,6 +347,6 @@ export class CloudflareIngest implements IngestProvider {
     if (r.status === 404) return "absent";
     if (r.status === 409 && r.json.errors?.some((e) => e.code === 10046)) return "in_progress";
     if (r.json.success || (r.status >= 200 && r.status < 300)) return "deleted";
-    CloudflareIngest.fail("delete video", r);
+    this.fail("delete video", r);
   }
 }

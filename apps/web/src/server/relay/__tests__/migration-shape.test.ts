@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
+import { MAX_DURATION_MINUTES } from "../config";
 import { STREAM_TABLES } from "./_stream-migration";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -341,6 +342,84 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(await minutes()).toBe(300);
     await sql`update fixture_stream_sessions set max_duration_minutes = 1 where id = ${sid}`;
     expect(await minutes()).toBe(1);
+  });
+
+  // Whole-branch review gap g2. The upper bound was missing entirely: 100000 was accepted, and THREE consumers derive
+  // from this number — `relayTokenExpiry` (a ~69-day relay token), `MACHINE_MINUTES_BOUND`, and `RunnerSpec.deadlineAt`
+  // (a Fly Machine whose hard stop is 69 days out). The ceiling lives in the DDL rather than only in a usecase because
+  // a constraint is the only guard that survives a second writer.
+  it("max_duration_minutes: the CEILING is real — 301 refused and 300 accepted, with 1 still accepted and 0 / -1 still refused; and the DDL's ceiling EQUALS config.ts's MAX_DURATION_MINUTES, so moving the constant reds this instead of leaving the CHECK on yesterday's number (gap g2)", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const minutes = async () =>
+      (await sql<{ max_duration_minutes: number }[]>`
+        select max_duration_minutes from fixture_stream_sessions where id = ${sid}`)[0]!.max_duration_minutes;
+    // Refused, both ends. 301 is the row the old CHECK could not see at all.
+    for (const bad of [301, 100000, 0, -1]) {
+      await expect(
+        sql`update fixture_stream_sessions set max_duration_minutes = ${bad} where id = ${sid}`, String(bad),
+      ).rejects.toMatchObject({ code: "23514" });
+    }
+    // Accepted, both ends — the boundary itself and the floor, or a CHECK of `< 300` would pass the rows above.
+    for (const ok of [1, MAX_DURATION_MINUTES - 1, MAX_DURATION_MINUTES]) {
+      await sql`update fixture_stream_sessions set max_duration_minutes = ${ok} where id = ${sid}`;
+      expect(await minutes(), String(ok)).toBe(ok);
+    }
+    // SQL needs a literal, so the literal is checked against the source of truth rather than re-typed as an
+    // expectation here (rule 19: derive from the engine's own declarations). Read from the LIVE catalogue — the DDL
+    // Postgres actually holds, not the text of the file.
+    const [ceiling] = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(c.oid) as def
+        from pg_constraint c
+        join pg_class t on t.oid = c.conrelid
+        join pg_namespace n on n.oid = t.relnamespace
+       where n.nspname = current_schema() and t.relname = 'fixture_stream_sessions' and c.contype = 'c'
+         and pg_get_constraintdef(c.oid) like '%max_duration_minutes%'`;
+    expect(ceiling?.def, "no CHECK constraint on fixture_stream_sessions.max_duration_minutes").toBeDefined();
+    const bound = /max_duration_minutes\s*<=\s*(\d+)/.exec(ceiling!.def);
+    expect(bound, `the CHECK states no upper bound: ${ceiling!.def}`).not.toBeNull();
+    expect(Number(bound![1])).toBe(MAX_DURATION_MINUTES);
+  });
+
+  // Whole-branch review gap g1. `failReasonFromExit` (domain/runner.ts) is the only thing that separates machine_oom
+  // from machine_exit_nonzero from machine_crash, and its sole input is the Machine's exit — which had NO column.
+  // Three columns of their own rather than a key inside `last_heartbeat`: that jsonb is the beat route's to write and
+  // a jsonb write REPLACES the document, so a beat between the observation and the destroy would drop the exit and the
+  // session would report machine_crash for an OOM.
+  it("the runner exit facts have columns of their own: three NULLABLE columns with NO default (absent means NOT OBSERVED, which must fall through to the engine's default rather than override it), and each round-trips its own type (gap g1)", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const shape = await sql<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select column_name, data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions'
+         and column_name in ('runner_exit_code', 'runner_oom_killed', 'runner_requested_stop')
+       order by column_name`;
+    expect(shape).toEqual([
+      { column_name: "runner_exit_code", data_type: "integer", is_nullable: "YES", column_default: null },
+      { column_name: "runner_oom_killed", data_type: "boolean", is_nullable: "YES", column_default: null },
+      { column_name: "runner_requested_stop", data_type: "boolean", is_nullable: "YES", column_default: null },
+    ]);
+    // A new row has observed nothing — the three read null, which is `ExitInfo`'s "we never saw an exit".
+    const read = async () =>
+      (await sql<{ runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null }[]>`
+        select runner_exit_code, runner_oom_killed, runner_requested_stop from fixture_stream_sessions where id = ${sid}`)[0]!;
+    expect(await read()).toEqual({ runner_exit_code: null, runner_oom_killed: null, runner_requested_stop: null });
+    // The accepted twin, with the values that actually distinguish the three fail reasons: an OOM kill is exit 137.
+    await sql`
+      update fixture_stream_sessions
+         set runner_exit_code = 137, runner_oom_killed = true, runner_requested_stop = false
+       where id = ${sid}`;
+    expect(await read()).toEqual({ runner_exit_code: 137, runner_oom_killed: true, runner_requested_stop: false });
+    // …and `false` is distinguishable from `null`, which is the whole reason there is no default: a clean exit 0 that
+    // WAS observed must not read like an exit nobody looked at.
+    await sql`
+      update fixture_stream_sessions
+         set runner_exit_code = 0, runner_oom_killed = false, runner_requested_stop = true
+       where id = ${sid}`;
+    expect(await read()).toEqual({ runner_exit_code: 0, runner_oom_killed: false, runner_requested_stop: true });
+    // The exit facts are NOT inside last_heartbeat: a beat REPLACING that document leaves them untouched.
+    await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json({ fps: 30 })} where id = ${sid}`;
+    expect(await read()).toEqual({ runner_exit_code: 0, runner_oom_killed: false, runner_requested_stop: true });
   });
 
   it("beat_window_at: a NULLABLE timestamptz with NO default, separate from heartbeat_at — a new session reads null in both, and writing the window anchor leaves the last beat received untouched (Task 2C review I4, ruling A; the Task 7 amend)", async () => {

@@ -19,8 +19,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "../fly-client";
 import { ENDING_TIMEOUT_SECONDS, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
-import { CREATE_OUTCOME_UNKNOWN, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, fromFlyState, isUnestablishedCreate } from "../runner-fly";
-import { OBSERVED_STATES, machineNameFor } from "../domain/runner";
+import { CREATE_OUTCOME_UNKNOWN, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, createFailedFrom, fromFlyState, isUnestablishedCreate } from "../runner-fly";
+import { OBSERVED_STATES, machineNameFor, stepRunner } from "../domain/runner";
 import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
 import { log } from "@/server/logger";
 import { FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
@@ -417,6 +417,50 @@ describe("FlyRunner", () => {
     expect(isUnestablishedCreate(err)).toBe(false);
     await Promise.resolve();
     expect(rec.calls.filter((c) => c.errorCode === CREATE_OUTCOME_UNKNOWN)).toHaveLength(0);
+  });
+
+  // Whole-branch review I2 (money; failure class 1 — the inert seam). `isUnestablishedCreate` was computed here,
+  // written to ONE telemetry row, and thrown away: nothing in the tree read it, and the domain's `create_failed`
+  // trigger had no field to carry it, so `creating × create_failed` landed on `destroyed` — CONFIRMED gone — with no
+  // teardown for a Machine nobody had established the absence of. A fixture on both ends would prove the fixture, so
+  // every row below drives the REAL adapter's own throw through the REAL producer and the REAL runner table.
+  it("I2: the create's outcome crosses into the domain — FlyRunner's own throw, through createFailedFrom, through stepRunner: an unestablished create reaches `lost` WITH force_destroy; a knowable refusal and a confirmed-absent retryable one still reach `destroyed` with none", async () => {
+    const creating = { state: "creating" as const, attempt: 1, name: NAME, machineId: null, stopRequestedAt: null, lastExit: null };
+    const at = new Date("2026-09-14T10:00:00Z");
+    const throwOf = async (reply: Parameters<typeof scripted>[0]) => {
+      const runner = new FlyRunner({ client: scripted(reply).client, image: "img" });
+      return runner.create(SPEC).then(() => null, (e: unknown) => e);
+    };
+
+    // 1. UNESTABLISHED: the POST could not be settled by the lookup. Fly may hold `NAME`.
+    const unsettled = await throwOf((_url, init) => (init.method === "POST" ? { status: 503, body: { error: "unavailable" } } : { status: 500, body: { error: "list down" } }));
+    const unsettledTrigger = createFailedFrom(unsettled);
+    expect(unsettledTrigger).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
+    const lost = stepRunner(creating, unsettledTrigger, at);
+    expect(lost.next.state).toBe("lost");
+    expect(lost.effects).toEqual([{ type: "force_destroy" }]);      // the teardown that did not exist before
+    expect(lost.signal).toBeNull();                                  // and NO retry until the destroy is confirmed
+
+    // 2. A KNOWABLE refusal (400 invalid guest): Fly made nothing, and the session fails as it always did.
+    const refused = createFailedFrom(await throwOf(() => ({ status: 400, body: { error: "invalid guest" } })));
+    expect(refused).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: false });
+    const failed = stepRunner(creating, refused, at);
+    expect(failed.next.state).toBe("destroyed");
+    expect(failed.effects).toEqual([]);
+    expect(failed.signal).toEqual({ type: "failed", reason: "machine_create_failed" });
+
+    // 3. A retryable failure after a CONFIRMED absence (T5-b): the domain's licence to retry, untouched.
+    const absent = createFailedFrom(await throwOf((_url, init) => (init.method === "POST" ? { status: 503, body: { error: "unavailable" } } : { status: 200, body: [] })));
+    expect(absent).toEqual({ type: "create_failed", retryable: true, outcomeUnknown: false });
+    expect(stepRunner(creating, absent, at)).toMatchObject({ next: { state: "destroyed" }, effects: [], signal: { type: "retry" } });
+
+    // 4. An error this adapter does not recognise at all is UNKNOWN, not assumed-clean — the safe direction, because
+    //    a needless force_destroy by name costs one idempotent call and the other way costs up to five hours of a
+    //    Machine nobody is watching.
+    expect(createFailedFrom(new Error("something else entirely"))).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
+    expect(createFailedFrom(undefined)).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
+    // …and the fact is read off the FIELDS, so it agrees with the predicate that has always computed it.
+    expect(isUnestablishedCreate(unsettled)).toBe(true);
   });
 
   it("destroy resolves on 200 and on 404 (idempotent, C7) and rejects on a 5xx after the client's retries", async () => {

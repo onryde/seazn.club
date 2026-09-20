@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
 import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS } from "../config";
 import { pathTemplate } from "../sanitise";
+import { machineNameFor } from "../domain/runner";
 
 describe("FakeIngest", () => {
   it("createLiveInput returns both credential shapes and no webRTC (C1/R-A, C10)", async () => {
@@ -194,6 +195,38 @@ describe("FakeRunner", () => {
     await runner.destroy(h.runnerId);
     await runner.destroy("never-existed");
     expect(runner.destroyed).toEqual([h.runnerId, h.runnerId, "never-existed"]);
+  });
+
+  // Whole-branch review I6. PARITY with the real adapter: runner-fly.test.ts's "create is idempotent per session
+  // through the client" and "T5-c (SAFETY): a 409 already_exists ADOPTS the Machine the refusal names" both assert
+  // that a repeated create for one (sessionId, attempt) yields the SAME Machine. The fake is what Tasks 10 and 12
+  // test their retry and orphan matching against, so it owes the same contract.
+  it("I6: create is idempotent per (sessionId, attempt) — a repeat returns the SAME runnerId and leaves ONE live Machine under that name; a real retry (attempt + 1) still gets its own, and a different session's never collides", async () => {
+    const runner = new FakeRunner();
+    const spec = {
+      sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app",
+      guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0),
+    };
+    const first = await runner.create(spec);
+    const again = await runner.create({ ...spec });
+    expect(again.runnerId).toBe(first.runnerId);
+    // The attempt really was made twice — the fake records both calls, exactly as the real adapter POSTs and is 409'd.
+    expect(runner.created).toHaveLength(2);
+    // ONE live Machine under `relay-s1-r1`: `list()` is the sweep's source and T5-a matches on session AND name, so
+    // two entries sharing one name is the defect this row exists for.
+    const listed = await runner.list();
+    expect(listed.filter((m) => m.name === machineNameFor("s1", 1))).toHaveLength(1);
+    // The negative pairs: the ONE retry is a DIFFERENT Machine, and so is another session's first attempt.
+    const retry = await runner.create({ ...spec, attempt: 2 });
+    const other = await runner.create({ ...spec, sessionId: "s2" });
+    expect(retry.runnerId).not.toBe(first.runnerId);
+    expect(other.runnerId).not.toBe(first.runnerId);
+    expect(new Set((await runner.list()).map((m) => m.runnerId)).size).toBe(3);
+    // …and a name freed by a destroy is creatable again (Fly ALLOWS a destroyed Machine's name to be reused), so the
+    // guard is keyed on what is ALIVE and does not turn into a permanent lock.
+    await runner.destroy(first.runnerId);
+    const replacement = await runner.create({ ...spec });
+    expect(replacement.runnerId).not.toBe(first.runnerId);
   });
 
   it("the stop sequence on the fake: stop records SIGINT + grace, observe reads stopped with exit 0 / requestedStop, then auto-destroyed; a lost Machine reads its exit", async () => {
