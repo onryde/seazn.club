@@ -923,6 +923,79 @@ export async function sendPassRungMismatchAlertEmail(
   return send({ to: opts.to, transactional: true, subject, html, text });
 }
 
+export interface PassUnknownCompetitionAlertEmail {
+  to: string;
+  /** The checkout session that paid. Names the price, the customer and the
+   *  payment intent — the whole investigation starts here. */
+  sessionId: string;
+  orgId: string;
+  /** The competition id the payment named, which has no row in this database.
+   *  Whether it ever did is the first question a responder has to answer. */
+  competitionId: string;
+  passKey: PassKey;
+  paymentIntent: string | null;
+  /** Which path hit it. The webhook is Stripe's own delivery; the reconcile is
+   *  the buyer sitting on the return page. Both can arrive, and which one came
+   *  first changes nothing about the diagnosis — but a responder reading two
+   *  alerts for one payment should be able to see that is what happened. */
+  source: "webhook" | "reconcile";
+}
+
+/** Internal staff alert: a PAID Event Pass named a competition that does not
+ *  exist in this database, so the pass row could not be written. Two ways to
+ *  get here and they need opposite responses, which is why this is a human's
+ *  decision rather than a silent drop:
+ *
+ *  1. The competition was deleted between checkout and fulfilment. A real
+ *     buyer has been charged and holds nothing — refund them.
+ *  2. The event belongs to ANOTHER environment that shares this Stripe
+ *     account. Noise; close it.
+ *
+ *  Nothing inside the handler can tell those apart — the FK is identical — so
+ *  the check is "does this org/competition exist anywhere in our records", and
+ *  a responder makes it. The event is ACKed either way: no retry can conjure
+ *  the missing row, and leaving it unacked buys a three-day retry storm
+ *  instead of an answer. Ops-only, no user-facing i18n (mirrors
+ *  sendCreditPackGrantFailedAlertEmail). */
+export async function sendPassUnknownCompetitionAlertEmail(
+  opts: PassUnknownCompetitionAlertEmail,
+): Promise<boolean> {
+  const subject = `Event Pass NOT granted — unknown competition: ${opts.competitionId}`;
+  const bodyText =
+    `A paid Event Pass (session ${opts.sessionId}, org ${opts.orgId}) named competition ` +
+    `${opts.competitionId}, which has no row in this database. The pass could not be ` +
+    `recorded and no retry will change that, so the event was acknowledged rather than ` +
+    `left to retry for three days.`;
+  const decide =
+    `Decide which of two this is. If the competition was DELETED after the buyer paid, a real ` +
+    `customer was charged and holds nothing — refund the payment intent and tell them. If this ` +
+    `payment was made against a DIFFERENT environment that shares this Stripe account (local ` +
+    `development or CI), it is noise and there is nothing to do; confirm by checking whether ` +
+    `org ${opts.orgId} exists here at all. Start with the payment intent: its Stripe metadata ` +
+    `carries the checkout URL the buyer actually used, which names the environment.`;
+  const html = renderEmail({
+    subject,
+    preheader: `Paid Event Pass ungranted — competition ${opts.competitionId} not found`,
+    eyebrow: "Billing · Event Pass",
+    title: "Event Pass names an unknown competition",
+    contentHtml:
+      paragraph(escapeHtml(bodyText)) +
+      paragraph(escapeHtml(decide)) +
+      panel(
+        "Session",
+        `${opts.sessionId}\norg: ${opts.orgId}\ncompetition: ${opts.competitionId}\n` +
+          `pass_key: ${opts.passKey}\nsource: ${opts.source}\n` +
+          `payment intent: ${opts.paymentIntent ?? "(none)"}`,
+      ),
+    footerNote: "Automated staff alert — Event Pass unknown-competition guard.",
+  });
+  const text =
+    `${bodyText}\n\n${decide}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · ` +
+    `competition ${opts.competitionId} · rung ${opts.passKey} · source ${opts.source} · ` +
+    `payment intent ${opts.paymentIntent ?? "(none)"}`;
+  return send({ to: opts.to, transactional: true, subject, html, text });
+}
+
 export interface AiRunCostAlertEmail {
   to: string;
   orgId: string;

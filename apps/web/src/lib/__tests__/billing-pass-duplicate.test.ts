@@ -116,21 +116,25 @@ describe.skipIf(!HAS_DB)("recordPassPurchase duplicates", () => {
       passKey: "event_pass",
       paymentIntent: "pi_a",
     });
-    expect(a).toEqual({ recorded: true, duplicateIntent: null });
+    expect(a).toEqual({ recorded: true, duplicateIntent: null, unknownCompetition: false });
     const b = await recordPassPurchase({
       orgId,
       competitionId: compId,
       passKey: "event_pass",
       paymentIntent: "pi_b",
     });
-    expect(b).toEqual({ recorded: false, duplicateIntent: "pi_b" });
+    expect(b).toEqual({ recorded: false, duplicateIntent: "pi_b", unknownCompetition: false });
     const same = await recordPassPurchase({
       orgId,
       competitionId: compId,
       passKey: "event_pass",
       paymentIntent: "pi_a",
     });
-    expect(same).toEqual({ recorded: false, duplicateIntent: null }); // replay, not duplicate
+    expect(same).toEqual({
+      recorded: false,
+      duplicateIntent: null,
+      unknownCompetition: false,
+    }); // replay, not duplicate
   });
 
   it("a null-intent second purchase reports no refundable duplicate", async () => {
@@ -149,7 +153,7 @@ describe.skipIf(!HAS_DB)("recordPassPurchase duplicates", () => {
       passKey: "event_pass",
       paymentIntent: null,
     });
-    expect(res).toEqual({ recorded: false, duplicateIntent: null });
+    expect(res).toEqual({ recorded: false, duplicateIntent: null, unknownCompetition: false });
   });
 
   it("two concurrent purchases: exactly one records, the other is a refundable duplicate", async () => {

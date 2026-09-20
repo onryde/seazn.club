@@ -16,7 +16,10 @@ import stripePlans from "@/config/stripe-plans.json";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { planItem } from "@/lib/subscription-items";
 import { creditPassTowardSubscription } from "@/server/usecases/pass-credit";
-import { sendPassRungMismatchAlertEmail } from "@/lib/email";
+import {
+  sendPassRungMismatchAlertEmail,
+  sendPassUnknownCompetitionAlertEmail,
+} from "@/lib/email";
 
 /**
  * Checkout branding (verified against API 2026-06-24.dahlia). Kept in code
@@ -852,6 +855,40 @@ export async function syncSubscriptionForGroup(
   });
 }
 
+/** What `recordPassPurchase` did. `unknownCompetition` is its own axis rather
+ *  than a flavour of `recorded: false`, because the two demand opposite
+ *  responses: a duplicate is refunded automatically, while an unknown
+ *  competition needs a human — and a caller that cannot tell them apart will
+ *  pick one of those for both. */
+export type PassPurchaseOutcome = {
+  recorded: boolean;
+  duplicateIntent: string | null;
+  /** The named competition is not a row in THIS database, so the pass cannot
+   *  be recorded here — ever, on any retry. Two ways to arrive: the
+   *  competition was deleted after the buyer paid, or the event was minted
+   *  against a DIFFERENT environment sharing this Stripe account (one test
+   *  account served local dev, CI and staging until 2026-09-20, and staging
+   *  took a steady stream of foreign events because it is the only one with a
+   *  public webhook URL). The first is a real customer owed a real answer; the
+   *  second is noise. They are indistinguishable from inside the handler,
+   *  which is exactly why this is alerted rather than swallowed. */
+  unknownCompetition: boolean;
+};
+
+/** A foreign key violation on `competition_passes.competition_id`, and nothing
+ *  else. Both halves are load-bearing: `23503` alone would also swallow the
+ *  `org_id` FK — an unknown ORG is a different bug with a different answer —
+ *  and the constraint name alone is not a promise of the error class. The
+ *  shape is read off a real failure (staging, 2026-09-20), not guessed:
+ *  `postgres` puts SQLSTATE on `code` and the constraint on `constraint_name`. */
+function isUnknownCompetitionFk(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; constraint_name?: unknown };
+  return (
+    e.code === "23503" && e.constraint_name === "competition_passes_competition_id_fkey"
+  );
+}
+
 /**
  * Record an Event Pass purchase (v3/07 §3). Idempotent — shared by the webhook
  * and the reconcile-on-return path; invalidates the org's cached entitlements
@@ -899,22 +936,32 @@ export async function recordPassPurchase(args: {
    *  (V271) is now doing nothing for this path; it remains only as a schema-level
    *  backstop for rows this function did not write. */
   passKey: PassKey;
-}): Promise<{ recorded: boolean; duplicateIntent: string | null }> {
+}): Promise<PassPurchaseOutcome> {
   const { passKey } = args;
   const grantPassCredits = () =>
     walletIdFor(args.orgId).then((walletId) =>
       recordPassGrant(walletId, PASS_CREDIT_GRANT[passKey], args.competitionId, args.paymentIntent),
     );
 
-  const [inserted] = await sql<{ competition_id: string }[]>`
-    insert into competition_passes (competition_id, org_id, stripe_payment_intent, pass_key)
-    values (${args.competitionId}, ${args.orgId}, ${args.paymentIntent ?? null}, ${passKey})
-    on conflict (competition_id) do nothing
-    returning competition_id`;
+  let inserted: { competition_id: string } | undefined;
+  try {
+    [inserted] = await sql<{ competition_id: string }[]>`
+      insert into competition_passes (competition_id, org_id, stripe_payment_intent, pass_key)
+      values (${args.competitionId}, ${args.orgId}, ${args.paymentIntent ?? null}, ${passKey})
+      on conflict (competition_id) do nothing
+      returning competition_id`;
+  } catch (err) {
+    // The competition this payment names is not in THIS database, so the row
+    // can never be written and no number of retries will change that. Caught
+    // NARROWLY — one SQLSTATE and one constraint name — so every other foreign
+    // key failure still throws and still returns 5xx.
+    if (!isUnknownCompetitionFk(err)) throw err;
+    return { recorded: false, duplicateIntent: null, unknownCompetition: true };
+  }
   if (inserted) {
     await grantPassCredits();
     await invalidateOrgEntitlements(args.orgId);
-    return { recorded: true, duplicateIntent: null };
+    return { recorded: true, duplicateIntent: null, unknownCompetition: false };
   }
   const [existing] = await sql<{ stripe_payment_intent: string | null }[]>`
     select stripe_payment_intent from competition_passes
@@ -936,7 +983,7 @@ export async function recordPassPurchase(args: {
   // own errors), so running it on the duplicate-charge branch too costs a Redis
   // DEL of a prefix that is usually already empty and can never fail the ACK.
   await invalidateOrgEntitlements(args.orgId);
-  return { recorded: false, duplicateIntent: dup };
+  return { recorded: false, duplicateIntent: dup, unknownCompetition: false };
 }
 
 /**
@@ -1409,6 +1456,34 @@ export async function reconcilePassCheckout(
       passKey,
       paymentIntent: typeof session.payment_intent === "string" ? session.payment_intent : null,
     });
+    // The competition named by this payment is not in this database. Report
+    // `false` — this function's contract already means that as "nothing to
+    // reconcile", and it is the literal truth: the buyer's page renders no
+    // pass, because there is no pass and no competition to hang one on. The
+    // alert is what makes it recoverable, exactly like the rung guard above.
+    if (res.unknownCompetition) {
+      // console.error, not the `log` singleton: this module is a lib import and
+      // deliberately does not pull in @/server/logger. Same channel as
+      // logReconcileFailure right below it.
+      console.error(
+        `reconcilePassCheckout: competition ${competitionId} does not exist in this ` +
+          `database — org ${orgId} session ${sessionId} rung ${passKey}; pass NOT recorded`,
+      );
+      const alertTo = process.env.STAFF_ALERT_EMAIL;
+      if (alertTo) {
+        void sendPassUnknownCompetitionAlertEmail({
+          to: alertTo,
+          sessionId,
+          orgId,
+          competitionId,
+          passKey,
+          paymentIntent:
+            typeof session.payment_intent === "string" ? session.payment_intent : null,
+          source: "reconcile",
+        }).catch(() => {});
+      }
+      return false;
+    }
     // Reconcile-on-return can land a second owner's payment; refund it (the
     // pass is already active from the first). The helper swallows its own
     // errors, so a refund hiccup never flips this reconcile to a failure.
