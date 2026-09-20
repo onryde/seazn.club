@@ -63,12 +63,16 @@ const CREATE_RESULT_TIMEOUT_NULL = {
   ...CREATE_RESULT,
   recording: { allowedOrigins: null, hideLiveViewerCount: false, mode: "automatic", requireSignedURLs: false, timeoutSeconds: null },
 };
+/** N-4: a bad echo whose input then REFUSES to be deleted — the one path that
+ *  leaves a live input nothing will ever reclaim. */
+const CREATE_RESULT_ORPHAN = { ...CREATE_RESULT_DROPPED, uid: "in_undeletable" };
 
 function cfReply(c: Call): Reply {
   if (c.init.method === "POST" && c.url.endsWith("/live_inputs")) {
     // Keyed on the session id the adapter puts in `meta.name`, so one fixture
     // can answer three different creates.
     const name = String((JSON.parse(String(c.init.body)) as { meta?: { name?: string } }).meta?.name ?? "");
+    if (name.includes("s_orphan")) return { status: 200, body: { success: true, result: CREATE_RESULT_ORPHAN } };
     if (name.includes("s_dropped")) return { status: 200, body: { success: true, result: CREATE_RESULT_DROPPED } };
     if (name.includes("s_notimeout")) return { status: 200, body: { success: true, result: CREATE_RESULT_TIMEOUT_NULL } };
     return { status: 200, body: { success: true, result: CREATE_RESULT } };
@@ -87,6 +91,13 @@ function cfReply(c: Call): Reply {
   // key at all — the common case for the whole of `warming`.
   if (c.init.method === "GET" && /\/live_inputs\/in_pending\/outputs$/.test(c.url))
     return { status: 200, body: { success: true, result: [{ uid: "out_3", enabled: true }] } };
+  // N-2: the two remaining guards, each with its own case. A success envelope
+  // with NO result array is not an empty list, and a FAILED envelope's body is
+  // not authoritative however healthy it looks.
+  if (c.init.method === "GET" && /\/live_inputs\/in_noresult\/outputs$/.test(c.url))
+    return { status: 200, body: { success: true } };
+  if (c.init.method === "GET" && /\/live_inputs\/in_failed\/outputs$/.test(c.url))
+    return { status: 200, body: { success: false, errors: [{ code: 10001 }], result: [{ uid: "out_4", status: { current: { state: "connected" } } }] } };
   if (c.init.method === "GET" && /\/live_inputs\/in_gone$/.test(c.url))
     return { status: 404, body: { success: false, errors: [{ code: 10003, message: "not found" }] } };
   if (c.init.method === "POST" && /\/outputs$/.test(c.url)) return { status: 200, body: { success: true, result: { uid: "out_1" } } };
@@ -111,6 +122,9 @@ function cfReply(c: Call): Reply {
   // I-3: a 2xx with NO parseable body, on both delete paths. `call()` reads an
   // unbodied answer as { success: false }, which the two used to treat oppositely.
   if (c.init.method === "DELETE" && /\/live_inputs\/in_nobody$/.test(c.url)) return { status: 204, body: undefined };
+  // N-4: the cleanup delete itself fails, so the misconfigured input survives.
+  if (c.init.method === "DELETE" && /\/live_inputs\/in_undeletable$/.test(c.url))
+    return { status: 500, body: { success: false, errors: [{ code: 10001, message: "internal error" }] } };
   if (c.init.method === "DELETE" && /\/stream\/v_nobody$/.test(c.url)) return { status: 200, body: undefined };
   return { status: 500, body: { success: false, errors: [{ message: `unexpected ${String(c.init.method)} ${c.url}` }] } };
 }
@@ -154,6 +168,22 @@ describe("CloudflareIngest", () => {
     await expect(ingest.createLiveInput({ sessionId: "s_notimeout", slot: 0 })).rejects.toThrow(/timeoutSeconds/);
     // Positive twin: the echo Cloudflare sends when the settings DID apply.
     await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0 })).resolves.toMatchObject({ inputId: "in_abc" });
+  });
+
+  it("when the cleanup DELETE also fails, the create still refuses, the message NAMES the orphan uid, and the failed cleanup is recorded under that uid with its session id (N-4)", async () => {
+    const port = new FakeRecorder();
+    const cf = new CloudflareIngest({ fetchImpl: recorder(cfReply).fetchImpl, accountId: "acct", token: "tok", recorder: port });
+    await expect(cf.createLiveInput({ sessionId: "s_orphan", slot: 0 })).rejects.toThrow(/ORPHAN input in_undeletable was NOT deleted/);
+    await new Promise((r) => setImmediate(r));
+    // Task 12's orphan pass is driven from provider-call rows, so the row for
+    // the failed cleanup must name the input — a null subject would lose it.
+    const cleanup = port.calls.find((c) => c.operation === "deleteInput");
+    expect(cleanup).toMatchObject({ subjectId: "in_undeletable", sessionId: "s_orphan", status: 500, method: "DELETE" });
+    expect(cleanup!.url).toContain("in_undeletable");
+    // …and an ordinary deleteInput still records no session (nothing to join).
+    await cf.deleteInput("in_abc");
+    await new Promise((r) => setImmediate(r));
+    expect(port.calls.filter((c) => c.operation === "deleteInput").at(-1)).toMatchObject({ subjectId: "in_abc", sessionId: null });
   });
 
   it("create: returns both credential shapes, a BARE srt URL (C1), and drops webRTC / webRTCPlayback (C10)", async () => {
@@ -208,6 +238,9 @@ describe("CloudflareIngest", () => {
     expect(await ingest.outputState("in_okout")).toBe("ok");
     expect(await ingest.outputState("in_noout")).toBe("unknown");
     expect(await ingest.outputState("in_pending")).toBe("unknown");
+    // N-2: and the two envelope guards, so no branch is covered only by another.
+    expect(await ingest.outputState("in_noresult")).toBe("unknown");
+    expect(await ingest.outputState("in_failed")).toBe("unknown");
   });
 
   it("storageUsage returns the three fields raw — no headroom arithmetic in the adapter (C3)", async () => {
@@ -216,11 +249,14 @@ describe("CloudflareIngest", () => {
 
   it("listVideos filters by created-before, flags live-inprogress, and maps the recording facts — every -1/0 placeholder to null, on the VALUE not the state (Dd); deleteVideo maps 200/409-10046/404 (C2)", async () => {
     const vids = await ingest.listVideos({ createdBefore: new Date("2026-09-10T00:00:00Z") });
-    // I-4: the list endpoint is paged. The bound is EXPLICIT and ours, never the
-    // platform's silent default, and it is pinned by the exported constant so a
-    // change to it moves this assertion instead of leaving it on yesterday's number.
-    expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream?end=2026-09-10T00%3A00%3A00.000Z&limit=${LIST_VIDEOS_PAGE_LIMIT}`);
-    expect(Number.isInteger(LIST_VIDEOS_PAGE_LIMIT) && LIST_VIDEOS_PAGE_LIMIT > 0).toBe(true);
+    // I-4 / N-1: the list endpoint is paged. The bound is EXPLICIT and ours,
+    // never the platform's silent default — and it is pinned as a LITERAL on
+    // both sides. Deriving the expected URL from LIST_VIDEOS_PAGE_LIMIT made
+    // the assertion a tautology: the reviewer set the constant to 1 and the
+    // suite stayed green, while a bound of 1 would cap the daily retention
+    // sweep at one video per run and leak the prepaid storage block.
+    expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream?end=2026-09-10T00%3A00%3A00.000Z&limit=1000`);
+    expect(LIST_VIDEOS_PAGE_LIMIT).toBe(1000);
     expect(vids).toEqual([
       { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
       { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null },

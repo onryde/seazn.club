@@ -44,9 +44,15 @@ export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/acco
  *  The list endpoint is paged, and sending no `limit` takes whatever silent
  *  default the platform applies today; an explicit bound makes the page size
  *  OURS. UNMEASURED (R0 never listed more than a handful): Task 17 verifies
- *  the real ceiling on the live account. Until then a full page
- *  (`result.length === LIST_VIDEOS_PAGE_LIMIT`) means "there may be more", and
- *  the sweep that consumes this owes a second pass — see task-4-report.md. */
+ *  the real ceiling on the live account, and whether `limit` is even the
+ *  accepted parameter name. Until then a full page
+ *  (`result.length === LIST_VIDEOS_PAGE_LIMIT`) means "there may be more" —
+ *  the sweep that consumes this owes the second pass, and that is an
+ *  ACCEPTANCE CRITERION in the Task 12 brief, not a promise this comment can
+ *  keep. The VALUE is pinned by a literal in the test, never derived from this
+ *  constant: a bound that supplies both sides of its own assertion is a
+ *  tautology, and a limit of 1 would cap the daily retention sweep at one
+ *  video per run and leak the prepaid block. */
 export const LIST_VIDEOS_PAGE_LIMIT = 1000;
 
 interface CfEnvelope<T> { success: boolean; result?: T; errors?: { code?: number; message?: string }[] }
@@ -160,8 +166,16 @@ export class CloudflareIngest implements IngestProvider {
       // The input exists and is misconfigured. Nothing has connected yet, so it
       // holds no recording for `deleteInput` to leak (C2) — dropping it here is
       // what keeps a refused create from leaving an orphan input behind.
-      await this.deleteInput(uid).catch(() => undefined);
-      throw new Error(`cloudflare create live input: settings were not applied — ${notApplied.join("; ")}`);
+      // The cleanup carries the SESSION id so its stream_provider_calls row
+      // joins to the session whose provisioning made the input; its subject is
+      // the uid either way, which is the handle Task 12's orphan pass needs.
+      // If the cleanup itself fails the input is unreclaimable, so the refusal
+      // SAYS SO rather than swallowing it — `.catch(() => undefined)` alone
+      // left a leak nobody could see.
+      const cleanupFailure = await this.deleteInput(uid, { sessionId: spec.sessionId }).then(() => null, (e: unknown) => String(e));
+      const orphan = cleanupFailure === null ? ""
+        : `; ORPHAN input ${uid} was NOT deleted (${cleanupFailure}) — its failed deleteInput call is recorded under subject ${uid}`;
+      throw new Error(`cloudflare create live input: settings were not applied — ${notApplied.join("; ")}${orphan}`);
     }
     return {
       inputId: uid,
@@ -204,7 +218,12 @@ export class CloudflareIngest implements IngestProvider {
       "GET", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, undefined,
       { operation: "outputState", ids: [inputId], subjectId: inputId },
     );
-    if (!r.json.success || !r.json.result || r.json.result.length === 0) return "unknown";
+    // A failed envelope's body is not authoritative, and a missing array is not
+    // an empty one. An EMPTY array needs no clause of its own: it yields no
+    // states, and the states rule below already answers that with "unknown" —
+    // a separate `length === 0` check was two guards covering for each other,
+    // so neither could be killed on its own.
+    if (!r.json.success || !r.json.result) return "unknown";
     const states = r.json.result.map((o) => o.status?.current?.state).filter((s): s is string => typeof s === "string");
     if (states.includes("error")) return "rejected";
     // An output Cloudflare has not tried to push to yet carries NO status at
@@ -215,9 +234,13 @@ export class CloudflareIngest implements IngestProvider {
     return states.length === 0 ? "unknown" : "ok";
   }
 
-  async deleteInput(inputId: string): Promise<void> {
+  /** `meta.sessionId` is an ADDITION to the port's signature (an optional
+   *  second argument, so `IngestProvider` is still satisfied): it exists so the
+   *  create's own cleanup delete records a row that joins to its session. Every
+   *  ordinary caller omits it. */
+  async deleteInput(inputId: string, meta: { sessionId?: string | null } = {}): Promise<void> {
     const r = await this.call("DELETE", `/live_inputs/${encodeURIComponent(inputId)}`, undefined,
-      { operation: "deleteInput", ids: [inputId], subjectId: inputId });
+      { operation: "deleteInput", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     // A 2xx carrying an empty or unparseable body is SUCCESS, on this path and
     // on deleteVideo's alike — `call()` reports an unbodied 200/204 as
     // { success: false }, and the two DELETEs used to read that oppositely.
