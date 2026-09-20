@@ -207,13 +207,21 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
       { kind: "individual", display_name: "D", seed: 4, members: [] },
       { kind: "individual", display_name: "E", seed: 5, members: [] },
     ]);
+    // rounds: 1 — a Swiss round budget is declared at create time (owner
+    // ruling 2026-09-20) and `createStages` 422s without it. ONE round,
+    // because the card stats asserted below count every fixture in the
+    // division: one round of five entrants is exactly the 2 pairings + 1 bye
+    // this case is about, where N rounds would be 3N with nothing added.
     const [stage] = await createStages(auth, division.id, {
       seq: 1,
       kind: "swiss",
       name: "Swiss",
-      config: {},
+      config: { rounds: 1 },
       progression: null,
     });
+    // First Generate mints the round's empty shells, the second seats them
+    // and awards the bye (PR #803's shell mint / "Pair next" split).
+    await generateStageFixtures(auth, stage!.id);
     const { fixtures } = await generateStageFixtures(auth, stage!.id);
     expect(fixtures.length).toBe(3);
     expect(fixtures.filter((f) => f.status === "forfeited")).toHaveLength(1);

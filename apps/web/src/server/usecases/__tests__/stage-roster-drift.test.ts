@@ -260,12 +260,21 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
   it("an odd-swiss round-1 sit-out is a bye fixture, not unplaced roster drift", async () => {
     const { auth } = await seedOrg();
     const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D", "E"]); // 5 — ODD
+    // rounds: 2 — the shape this test builds needs both a round-1 sit-out AND
+    // a round 2 for that sit-out to be paired into. A Swiss round budget is
+    // declared at create time (owner ruling 2026-09-20); `createStages` 422s
+    // without it.
     const [stage] = await createStages(auth, divisionId, {
-      seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
+      seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 }, progression: null,
     });
-    const round1 = await generateStageFixtures(auth, stage!.id);
-    expect(round1.fixtures.length).toBe(3); // 2 pairings + 1 bye row
-    const bye = round1.fixtures.find((f) => f.away_entrant_id === null && f.status === "forfeited");
+    // Two Generates: the first mints empty shells for every declared round,
+    // the second ("Pair next") seats the lowest unseated one — PR #803. And
+    // `.fixtures` is the stage's WHOLE fixture list, every round of it, so
+    // each round is filtered out of it by `round_no` rather than read whole.
+    await generateStageFixtures(auth, stage!.id);
+    const round1 = (await generateStageFixtures(auth, stage!.id)).fixtures.filter((f) => f.round_no === 1);
+    expect(round1.length).toBe(3); // 2 pairings + 1 bye row
+    const bye = round1.find((f) => f.away_entrant_id === null && f.status === "forfeited");
     expect(bye).toBeDefined();
     expect(bye!.home_entrant_id).toBeTruthy();
     expect((bye!.outcome as { kind?: string; winner?: string } | null)?.kind).toBe("award");
@@ -279,14 +288,15 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
 
     await startDivision(auth, divisionId); // stage already has fixtures — does not regenerate
     // Decide only the real pairings — the bye is already forfeited/awarded.
-    for (const f of round1.fixtures) {
+    for (const f of round1) {
       if (f.status === "forfeited") continue;
       await decideFixture(auth, f.id);
     }
-    const round2 = await generateStageFixtures(auth, stage!.id);
-    expect(round2.fixtures.some((f) => f.home_entrant_id === sitOutId || f.away_entrant_id === sitOutId)).toBe(
-      true,
-    );
+    // Scoped to round 2 on purpose: the sit-out's OWN round-1 bye row carries
+    // it as `home_entrant_id`, so an unscoped `some()` over the whole stage
+    // answers true whether or not round 2 ever paired them.
+    const round2 = (await generateStageFixtures(auth, stage!.id)).fixtures.filter((f) => f.round_no === 2);
+    expect(round2.some((f) => f.home_entrant_id === sitOutId || f.away_entrant_id === sitOutId)).toBe(true);
 
     const afterRound2 = await getStageRosterDrift(auth, stage!.id);
     expect(afterRound2.unplaced).toEqual([]);
@@ -307,12 +317,18 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
   it("a swiss stage reports a genuine reinstated-late-registration entrant, not the legitimate sit-out", async () => {
     const { auth } = await seedOrg();
     const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D", "E", "F"]);
+    // rounds: 1 — this case never looks past round 1, and its fixture query
+    // below is not round-scoped, so one round keeps the stage's whole fixture
+    // set exactly the three rows (2 pairings + bye) the assertions read.
     const [stage] = await createStages(auth, divisionId, {
-      seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
+      seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 1 }, progression: null,
     });
 
     await patchEntrant(auth, entrantByName.get("F")!, { status: "withdrawn" });
-    await startDivision(auth, divisionId); // auto-generates round 1 over A-E only (5 — ODD)
+    await startDivision(auth, divisionId); // mints round-1 shells over A-E only (5 — ODD)
+    // Seats them (PR #803's "Pair next"). BEFORE F is reinstated, so F is not
+    // in the pairing pool — that is the whole point of the case.
+    await generateStageFixtures(auth, stage!.id);
     await patchEntrant(auth, entrantByName.get("F")!, { status: "registered" }); // reinstated, no regenerate
 
     const round1Rows = await sql<{
@@ -337,14 +353,20 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
   it("finding 1 regression: withdraw before round 1, reinstate after round 2 — must still flag", async () => {
     const { auth } = await seedOrg();
     const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D", "E"]);
+    // rounds: 2 — the repro is "reinstate AFTER round 2 exists", so the stage
+    // must have a round 2 to reach.
     const [stage] = await createStages(auth, divisionId, {
-      seq: 1, kind: "swiss", name: "Swiss", config: {}, progression: null,
+      seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 }, progression: null,
     });
 
     await patchEntrant(auth, entrantByName.get("E")!, { status: "withdrawn" });
-    await startDivision(auth, divisionId); // round 1 auto-generated over A-D only (4 — EVEN, no bye)
+    await startDivision(auth, divisionId); // mints shells for both rounds over A-D only (4 — EVEN, no bye)
+    await generateStageFixtures(auth, stage!.id); // seats round 1
 
-    const round1 = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id}`;
+    // Round-scoped: the stage now also holds round 2's unseated shells, so an
+    // unscoped count would be 4 and would not say anything about round 1.
+    const round1 = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stage!.id} and round_no = 1`;
     expect(round1.length).toBe(2); // A-B, C-D — no bye, E excluded entirely
     for (const f of round1) await decideFixture(auth, f.id);
 
