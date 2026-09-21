@@ -3188,25 +3188,92 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-/** A feeder that can NEVER hand a winner onward. The discriminator is not the
- *  status alone — `forfeited` is also a "void status" on the desk
- *  (VOID_STATUSES, stages-panel.tsx) and yet it carries a real winner, which
- *  is exactly how a bye advances. What makes a seat permanently dead is
- *  "settled, and produced nobody": `abandoned` or `cancelled` with no
- *  `outcome.winner`.
+/** A feeder that can NEVER hand a winner onward.
  *
- *  `abandoned` is where the engine's `{status: "void"}` verdict lands (there
- *  is no `void` fixture status; append-event.ts maps `core.abandon` here), so
- *  this covers both the generation-time void (re-review C2) and a match an
- *  organiser abandoned on the day. A cricket no-result abandons WITH an
- *  outcome that has no `winner`, which is why this reads the winner rather
- *  than `outcome is null`. */
-function feederIsDead(
-  f: { status: string; outcome: { winner?: string } | null } | undefined,
-): boolean {
-  if (!f) return false;
-  if (f.status !== "abandoned" && f.status !== "cancelled") return false;
-  return !f.outcome?.winner;
+ *  OWNER RULING 2026-09-21 (review round 5, N2/N6) — **AN ABANDONED MATCH THAT
+ *  CARRIES AN OUTCOME IS NOT DEAD.** Dead means `cancelled`, or `abandoned`
+ *  with NO outcome at all, which is exactly the shape the generator and this
+ *  cascade write for their own voids.
+ *
+ *  A withdrawal is someone LEAVING THE COMPETITION; an abandonment is a match
+ *  that WAS PLAYED and produced no result. Different events, different
+ *  answers. The predicate used to read `!outcome?.winner`, so a quarter-final
+ *  abandoned for rain silently stamped the semi-final seat as a bye and walked
+ *  the other semi-finalist into the final — no organiser decision, no replay,
+ *  no trace on screen. That is the system ruling on a sporting question it has
+ *  no business deciding. A rained-off match now stays STUCK AND VISIBLE, which
+ *  is a legitimate waiting state for a human to rule on, not a defect: the
+ *  stage answers `{completed: false}` and the line keeps its `abandoned` row
+ *  on the run sheet.
+ *
+ *  `forfeited` is deliberately NOT here. It is a "void status" on the desk
+ *  (VOID_STATUSES, stages-panel.tsx) and yet it carries a real winner — that
+ *  is how a bye advances.
+ *
+ *  `cancelled` is DEFENSIVE. Nothing in `apps/web/src` or
+ *  `packages/engine/src` writes `fixtures.status = 'cancelled'`; every
+ *  production reference reads it. It is a valid value in the v1 output schema,
+ *  so it may arrive on an import path, and the clause is pinned by a test that
+ *  inserts the row through raw SQL and says so. Do not assume coverage from a
+ *  product path — there is none. */
+function feederIsDead(f: { status: string; outcome: { winner?: string } | null }): boolean {
+  if (f.status === "cancelled") return true;
+  return f.status === "abandoned" && f.outcome === null;
+}
+
+/** A feeder that can never hand a LOSER onward (review round 5, N1). There are
+ *  TWO disjoint reasons and keeping them apart is the whole point — conflating
+ *  "produced no loser" with "died" is how this bug class keeps coming back:
+ *
+ *  (a) THE MATCH NEVER PRODUCED A RESULT AT ALL. Identical to the winner case,
+ *      so this delegates to `feederIsDead` rather than restating it — the two
+ *      predicates must not drift, and a future change to what "settled and
+ *      produced nobody" means then flows through both by construction.
+ *
+ *  (b) THE MATCH SETTLED AND PRODUCED A WINNER BUT NO LOSER — precisely an
+ *      `award`, i.e. a walkover. `onDecided` takes `loser` only from
+ *      `kind: "win"` (scoring.ts), while `winner` comes from `"win"` OR
+ *      `"award"`. So a bye line is ALIVE as a winner feeder and DEAD as a
+ *      loser feeder: the one row on which the two predicates deliberately
+ *      disagree.
+ *
+ *  `draw`, `tie` and `no_result` produce no loser either, and are deliberately
+ *  NOT dead here. Under the 2026-09-21 ruling a match that was played and
+ *  produced no result waits for a human either way it feeds — a rained-off
+ *  semi-final must not hand the third-place line a walkover any more than it
+ *  hands the final one. The test for that is "an abandoned feeder that carries
+ *  an outcome leaves BOTH of its seats alone".
+ *
+ *  A feeder still on its way (`scheduled`/`in_play`, outcome null) is NOT dead
+ *  either; that is the "cascade late" rule, and treating it as dead would
+ *  pre-stamp the whole losers bracket at generation. */
+function loserFeederIsDead(f: {
+  status: string;
+  outcome: { kind?: string; winner?: string } | null;
+}): boolean {
+  if (feederIsDead(f)) return true;
+  return f.outcome?.kind === "award";
+}
+
+/** Which of the two predicates applies depends on WHICH EDGE seated the feeder,
+ *  not on the row — the same walkover is a live winner feeder and a dead loser
+ *  feeder. A destination seat has exactly one incoming edge, so the tag is
+ *  carried on the map entry rather than re-derived.
+ *
+ *  This is also the ONE owner of "no feeder I can see", which is the
+ *  load-bearing direction: an absent entry means a CROSS-STAGE source or a
+ *  seat a seeded draw fills directly, and reading it as "dead" would hand out
+ *  free walkovers across the whole bracket. Neither predicate below repeats
+ *  the guard — a duplicate would be unreachable, and an unreachable guard
+ *  cannot be mutation-tested. */
+interface FeederEdge {
+  row: SeatRow;
+  via: "winner" | "loser";
+}
+
+function seatFeederIsDead(e: FeederEdge | undefined): boolean {
+  if (!e) return false;
+  return e.via === "winner" ? feederIsDead(e.row) : loserFeederIsDead(e.row);
 }
 
 interface SeatRow {
@@ -3219,6 +3286,8 @@ interface SeatRow {
   outcome: { kind?: string; winner?: string } | null;
   winner_to_fixture: string | null;
   winner_to_slot: number | null;
+  loser_to_fixture: string | null;
+  loser_to_slot: number | null;
 }
 
 /** Push the winners of the lines `awardSeededByes` just settled into the seats
@@ -3291,18 +3360,33 @@ const MAX_CASCADE_PASSES = 32;
  * (`<> 'bracket.slot.bye'`, `status = 'scheduled'`) and reports through
  * `returning id`, so a second call writes nothing and the loop terminates.
  *
- * THE REVERSE WALK. A seat's feeder is found by inverting
- * `winner_to_fixture` — a forward-only edge. Rather than query it per seat
- * (`where winner_to_fixture = $1`, which V275__advisor_indexes.sql does index,
- * partial on `winner_to_fixture is not null`) or thread a second column at
- * generation, this reads the stage's fixtures ONCE per pass — `fixtures_stage_idx`
- * (stage_id, round_no, seq_in_round) — and inverts the edge in memory. The
- * fixpoint loop needs every row anyway to find the seats that became
- * actionable, a bracket stage is tens of rows, and no new column or migration
- * is owed. The one thing it deliberately cannot see is a CROSS-STAGE feeder
- * (wireCrossFeeds): an out-of-stage source is simply not in the map, reads as
- * "no feeder", and is never stamped — which leaves today's behaviour for that
- * shape exactly as it was rather than guessing at it.
+ * THE REVERSE WALK. A seat's feeder is found by inverting the forward-only
+ * feed edges. BOTH of them: `winner_to_fixture` and `loser_to_fixture`.
+ * Inverting the winner edge alone was review round 5's N1 — the loser edge is
+ * intra-stage in four shipped shapes (the double-elimination losers bracket,
+ * the grand-final reset, a knockout's third-place playoff, and page_playoff's
+ * pp-q2, all from packages/engine/src/scheduling/bracket.ts), so a
+ * `double_elim` with ONE ordinary withdrawal left three lines "Awaiting draw"
+ * forever and `completeStage` answering `{completed: false}`.
+ *
+ * Rather than query per seat (`where winner_to_fixture = $1`, which
+ * V275__advisor_indexes.sql indexes partially — and it indexes
+ * `loser_to_fixture` the same way, so either edge would have been backed) or
+ * thread extra columns at generation, this reads the stage's fixtures ONCE per
+ * pass — `fixtures_stage_idx` (stage_id, round_no, seq_in_round) — and inverts
+ * both edges in memory. The fixpoint loop needs every row anyway to find the
+ * seats that became actionable, a bracket stage is tens of rows, and no new
+ * column or migration is owed.
+ *
+ * Each map entry carries WHICH edge seated it, because the two predicates
+ * disagree on a walkover: it is a live winner feeder and a dead loser feeder
+ * (see `loserFeederIsDead`). The one thing the walk deliberately cannot see is
+ * a CROSS-STAGE feeder (wireCrossFeeds): an out-of-stage source is simply not
+ * in the map, reads as "no feeder", and is never stamped — which leaves
+ * today's behaviour for that shape exactly as it was rather than guessing at
+ * it. `dead-feeder-cascade.test.ts`'s "a feeder in ANOTHER stage is invisible
+ * to the cascade" pins that in both directions, so the `!f` fallback cannot
+ * quietly flip into handing out free walkovers.
  *
  * Returns every fixture id it changed, so the caller can publish them.
  */
@@ -3311,13 +3395,17 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
   for (let pass = 0; pass < MAX_CASCADE_PASSES; pass++) {
     const rows = await tx<SeatRow[]>`
       select id, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-             status, outcome, winner_to_fixture, winner_to_slot
+             status, outcome, winner_to_fixture, winner_to_slot,
+             loser_to_fixture, loser_to_slot
       from fixtures where stage_id = ${stageId}`;
-    const feederOf = new Map<string, SeatRow>();
+    const feederOf = new Map<string, FeederEdge>();
     for (const r of rows) {
-      if (r.winner_to_fixture === null) continue;
-      if (r.winner_to_slot !== 1 && r.winner_to_slot !== 2) continue;
-      feederOf.set(`${r.winner_to_fixture}:${r.winner_to_slot}`, r);
+      if (r.winner_to_fixture !== null && (r.winner_to_slot === 1 || r.winner_to_slot === 2)) {
+        feederOf.set(`${r.winner_to_fixture}:${r.winner_to_slot}`, { row: r, via: "winner" });
+      }
+      if (r.loser_to_fixture !== null && (r.loser_to_slot === 1 || r.loser_to_slot === 2)) {
+        feederOf.set(`${r.loser_to_fixture}:${r.loser_to_slot}`, { row: r, via: "loser" });
+      }
     }
     let wrote = 0;
     for (const f of rows) {
@@ -3325,8 +3413,8 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
       const openHome = f.home_entrant_id === null;
       const openAway = f.away_entrant_id === null;
       if (!openHome && !openAway) continue;
-      const deadHome = openHome && feederIsDead(feederOf.get(`${f.id}:1`));
-      const deadAway = openAway && feederIsDead(feederOf.get(`${f.id}:2`));
+      const deadHome = openHome && seatFeederIsDead(feederOf.get(`${f.id}:1`));
+      const deadAway = openAway && seatFeederIsDead(feederOf.get(`${f.id}:2`));
       if (openHome && openAway) {
         // Nobody is here and nobody is coming: the line is void, and it becomes
         // a dead feeder itself on the next pass. A single dead feeder is NOT

@@ -546,7 +546,12 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
     // null, no winner) that just BECAME the dead feeder for a seat whose
     // neighbour was already occupied. A league or group fixture feeds nothing,
     // so the hot path pays nothing.
-    if (fixture.winner_to_fixture !== null) {
+    //
+    // The LOSER edge has to open this gate too (review round 5, N1). A
+    // double_elim line that only feeds a losers-bracket seat has no
+    // `winner_to_fixture`; gating on the winner edge alone meant deciding it
+    // never ran the cascade, and the losers bracket stayed dead.
+    if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) {
       for (const id of await resolveBracketSeats(tx, fixture.stage_id)) {
         if (!advanced.includes(id)) advanced.push(id);
       }

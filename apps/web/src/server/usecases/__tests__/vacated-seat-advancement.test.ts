@@ -320,7 +320,17 @@ describe.skipIf(!HAS_DB)("a vacated seat's walkover advances its winner (re-revi
     }
     const final = rows.find((r) => r.round_no === 3)!;
     expect(final.outcome?.winner).toBeTruthy();
-    await expect(completeStage(rig.auth, rig.koStageId)).resolves.toBeDefined();
+    // UPDATED 2026-09-21 (review round 5, N5). This read
+    // `resolves.toBeDefined()`, which `completeStage` satisfies by RESOLVING
+    // `{completed: false}` — it does not throw when the stage is not ready. So
+    // the assertion was satisfied by the exact failure it exists to catch, on
+    // the single fact this whole cascade delivers. Pin the value, and the
+    // stage row it writes, the way this file's sibling at line 248 already
+    // does.
+    const out = await completeStage(rig.auth, rig.koStageId);
+    expect(out.completed, "the bracket reached a champion and the stage can close").toBe(true);
+    const [st] = await sql<{ status: string }[]>`select status from stages where id = ${rig.koStageId}`;
+    expect(st!.status).toBe("complete");
   });
 });
 

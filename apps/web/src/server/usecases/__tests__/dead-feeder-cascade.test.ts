@@ -58,16 +58,18 @@ interface Row {
   home_slot_label: { key?: string } | null;
   away_slot_label: { key?: string } | null;
   status: string;
-  outcome: { kind?: string; winner?: string } | null;
+  outcome: { kind?: string; winner?: string; loser?: string } | null;
   winner_to_fixture: string | null;
   winner_to_slot: number | null;
+  loser_to_fixture: string | null;
+  loser_to_slot: number | null;
 }
 
 async function rowsOf(stageId: string): Promise<Row[]> {
   return sql<Row[]>`
     select id, ext_key, round_no, seq_in_round, home_entrant_id, away_entrant_id,
            home_slot_label, away_slot_label, status, outcome,
-           winner_to_fixture, winner_to_slot
+           winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot
     from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
 }
 
@@ -81,7 +83,11 @@ interface Rig {
 /** A knockout stage whose `config.qualified` is a published draw of `field`
  *  entrants — the shape a `timing: "on_complete"` progression leaves behind,
  *  and the shape that was driven by hand into the stuck state above. */
-async function seedQualifiedStage(field: number): Promise<Rig> {
+async function seedQualifiedStage(
+  field: number,
+  kind: "knockout" | "double_elim" = "knockout",
+  extraConfig: Record<string, unknown> = {},
+): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -107,10 +113,10 @@ async function seedQualifiedStage(field: number): Promise<Rig> {
     })),
   );
   const [stage] = await createStages(auth, division.id, [
-    { seq: 1, kind: "knockout", name: "Finals", config: {} },
+    { seq: 1, kind, name: "Finals", config: {} },
   ]);
   const qualified = entrants.map((e) => e.id);
-  await sql`update stages set config = ${sql.json({ qualified } as never)} where id = ${stage!.id}`;
+  await sql`update stages set config = ${sql.json({ ...extraConfig, qualified } as never)} where id = ${stage!.id}`;
   await sql`update divisions set status = 'active' where id = ${division.id}`;
   return { auth, divisionId: division.id, stageId: stage!.id, qualified };
 }
@@ -402,5 +408,302 @@ describe.skipIf(!HAS_DB)("Rebuild fixtures on a board the generator itself voide
     await expect(rebuildStageFixtures(rig.auth, rig.stageId)).rejects.toMatchObject({
       code: "STAGE_HAS_RESULTS",
     });
+  });
+});
+
+/** Abandon `fixtureId` the way an organiser does on the day — `core.abandon`
+ *  needs a non-empty `reason` (CoreAbandon is a strictObject), so a bare `{}`
+ *  is rejected at runtime. */
+async function abandon(auth: AuthCtx, fixtureId: string): Promise<void> {
+  await scoreEvent(auth, fixtureId, {
+    expected_seq: (await getFixtureState(auth, fixtureId)).last_seq,
+    type: "core.start",
+    payload: {},
+  });
+  await scoreEvent(auth, fixtureId, {
+    expected_seq: (await getFixtureState(auth, fixtureId)).last_seq,
+    type: "core.abandon",
+    payload: { reason: "waterlogged" },
+  });
+}
+
+// Review round 5, N1 — the cascade originally inverted `winner_to_fixture`
+// ONLY, so a seat fed by `loser_to_fixture` was invisible to it. That edge is
+// intra-stage in four shipped shapes (losers bracket, grand-final reset,
+// third-place playoff, page_playoff), and on a `double_elim` ONE ordinary
+// withdrawal left three lines "Awaiting draw" forever with `completeStage`
+// answering `{completed: false}` — the exact sentence this programme exists to
+// delete, one bracket over.
+//
+// The two predicates genuinely DISAGREE on one row and that is the whole
+// point: a walkover is ALIVE as a winner feeder (it advances its winner) and
+// DEAD as a loser feeder (`scoring.ts` takes a loser only from `kind: "win"`,
+// so an `award` drops nobody). Conflating "produced no loser" with "died" is
+// how this bug class keeps coming back, so each test below names which of the
+// two it is exercising.
+describe.skipIf(!HAS_DB)("a seat fed by a LOSER edge is cascaded too (N1)", () => {
+  it("double_elim, one ordinary withdrawal: the losers bracket fills and the stage completes", async () => {
+    const rig = await seedQualifiedStage(4, "double_elim");
+    await withdrawEntrantCascade(rig.auth, rig.qualified[3]!);
+    await generateStageFixtures(rig.auth, rig.stageId);
+
+    const atGen = await rowsOf(rig.stageId);
+    expect(
+      atGen.some((r) => r.loser_to_fixture !== null),
+      "premise: a double_elim really does carry intra-stage loser edges",
+    ).toBe(true);
+    // Every line that drops a loser somewhere also sends a winner somewhere
+    // (bracket.ts: the LB feeds, the GF reset and the third-place playoff are
+    // all wired on lines that already carry a winner edge). That implication
+    // is WHY `onDecided`'s cascade gate could survive with the loser edge
+    // removed from it — the gate is defensive, not currently load-bearing. If
+    // the engine ever wires a loser-only line, this reddens and the gate
+    // becomes the thing that keeps it working.
+    expect(
+      atGen.filter((r) => r.loser_to_fixture !== null && r.winner_to_fixture === null).map((r) => r.ext_key),
+      "no line feeds a loser seat without also feeding a winner seat",
+    ).toEqual([]);
+
+    await playOut(rig.auth, rig.stageId);
+    const after = await rowsOf(rig.stageId);
+
+    // Nothing is left that an organiser could never put on a court. This is
+    // the assertion that was false before the loser edge was inverted: three
+    // lines sat here `scheduled` with one seat permanently TBD.
+    expect(
+      after.filter((r) => r.status === "scheduled").map((r) => r.ext_key),
+      "every line is either played or settled",
+    ).toEqual([]);
+
+    // The walkover in the winners bracket is alive one way and dead the other.
+    const wbBye = after.find((r) => r.outcome?.kind === "award" && r.loser_to_fixture !== null)!;
+    expect(wbBye, "the withdrawal manufactured a walkover that feeds a loser seat").toBeTruthy();
+    expect(
+      after.find((r) => r.id === wbBye.winner_to_fixture)?.outcome?.winner,
+      "ALIVE as a winner feeder: its winner really did advance",
+    ).toBeTruthy();
+
+    // ...and the seat it can never drop anybody into OPENS AT the loser of the
+    // sibling line, derived from that row's own outcome rather than typed.
+    const lb = after.find((r) => r.id === wbBye.loser_to_fixture)!;
+    const sibling = after.find((r) => r.outcome?.kind === "win" && r.loser_to_fixture === lb.id)!;
+    expect(sibling?.outcome?.loser, "the sibling line produced a loser").toBeTruthy();
+    expect(lb.status).toBe("forfeited");
+    expect(lb.outcome).toMatchObject({ kind: "award", winner: sibling.outcome!.loser });
+
+    const out = await completeStage(rig.auth, rig.stageId);
+    expect(out.completed, "the double_elim can be completed").toBe(true);
+    const [st] = await sql<{ status: string }[]>`select status from stages where id = ${rig.stageId}`;
+    expect(st!.status).toBe("complete");
+  });
+
+  it("a knockout's third-place line is settled when a WALKOVER feeds it (N4)", async () => {
+    // A walkover drops nobody: `onDecided` takes a loser only from
+    // `kind: "win"`. So the third-place seat fed by the bye semi's LOSER can
+    // never be filled, and before the loser edge was inverted it sat naming
+    // one real player against a TBD that would never arrive — on a stage the
+    // product had already called complete.
+    const rig = await seedQualifiedStage(4, "knockout", { thirdPlace: true });
+    await withdrawEntrantCascade(rig.auth, rig.qualified[3]!);
+    await generateStageFixtures(rig.auth, rig.stageId);
+
+    const atGen = await rowsOf(rig.stageId);
+    const semis = atGen.filter((r) => r.loser_to_fixture !== null);
+    expect(semis.length, "premise: both semi-finals feed the third-place line").toBe(2);
+    const thirdId = semis[0]!.loser_to_fixture;
+    expect(semis[1]!.loser_to_fixture, "both semis feed the SAME third-place line").toBe(thirdId);
+
+    await playOut(rig.auth, rig.stageId);
+    const after = await rowsOf(rig.stageId);
+    const bye = after.find((r) => r.outcome?.kind === "award" && r.loser_to_fixture === thirdId)!;
+    expect(bye, "the withdrawal made one semi a walkover").toBeTruthy();
+    const playedSemi = after.find((r) => r.outcome?.kind === "win" && r.loser_to_fixture === thirdId)!;
+    const third = after.find((r) => r.id === thirdId)!;
+    expect(third.status, "the third-place line is no longer waiting on a TBD").toBe("forfeited");
+    expect(third.outcome).toMatchObject({ kind: "award", winner: playedSemi.outcome!.loser });
+    expect(
+      after.filter((r) => r.status === "scheduled").map((r) => r.ext_key),
+      "no line is left unplayable",
+    ).toEqual([]);
+  });
+
+  // OWNER RULING 2026-09-21 — an abandoned match that CARRIES AN OUTCOME is not
+  // dead. A withdrawal is someone leaving the competition; an abandonment is a
+  // match that was played and produced no result, and a human must rule on it.
+  // Before this, `feederIsDead` read `!outcome?.winner`, so a rained-off
+  // semi-final silently stamped the final's seat as a bye and walked the other
+  // semi-finalist through. These two tests are the ruling; the third is the
+  // regression guard for the narrowing, because the generator's OWN void is an
+  // `abandoned` row too and must keep cascading.
+  it("an abandoned feeder that carries an outcome leaves BOTH of its seats alone", async () => {
+    const rig = await seedQualifiedStage(4, "knockout", { thirdPlace: true });
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const atGen = await rowsOf(rig.stageId);
+    const semis = atGen.filter((r) => r.loser_to_fixture !== null);
+    const thirdId = semis[0]!.loser_to_fixture!;
+    const finalId = semis[0]!.winner_to_fixture!;
+
+    await play(rig.auth, semis[0]!.id);
+    await abandon(rig.auth, semis[1]!.id);
+
+    // The shape is read back off the row `core.abandon` actually wrote, not
+    // typed here, so a change to the engine's own declarations moves this test
+    // rather than leaving it asserting yesterday's fold.
+    const rained = (await rowsOf(rig.stageId)).find((r) => r.id === semis[1]!.id)!;
+    expect(rained.status).toBe("abandoned");
+    expect(rained.outcome, "core.abandon folds to an outcome, not to null").not.toBeNull();
+    expect(rained.outcome!.winner, "and that outcome names nobody").toBeFalsy();
+
+    const after = await rowsOf(rig.stageId);
+    const final = after.find((r) => r.id === finalId)!;
+    const third = after.find((r) => r.id === thirdId)!;
+    expect(labelled(final), "the final's empty seat is NOT stamped as a bye").toEqual([]);
+    expect(labelled(third), "the third-place line's empty seat is NOT stamped either").toEqual([]);
+    expect(final.status, "the final is still waiting, not walked over").toBe("scheduled");
+    expect(third.status).toBe("scheduled");
+    expect([final.home_entrant_id, final.away_entrant_id]).toContain(null);
+
+    // Stuck AND VISIBLE is the correct state, and the surrounding code has to
+    // treat it as a legitimate wait rather than crash on it.
+    const out = await completeStage(rig.auth, rig.stageId);
+    expect(out.completed, "a human has to rule on the abandoned match first").toBe(false);
+    const [st] = await sql<{ status: string }[]>`select status from stages where id = ${rig.stageId}`;
+    expect(st!.status, "and the stage stays open rather than closing behind them").not.toBe("complete");
+  });
+
+  it("an abandoned feeder with NO outcome — the generator's own void — still cascades", async () => {
+    // The regression guard for the narrowing above. The void the generator and
+    // this cascade write is an `abandoned` row with a NULL outcome, which is
+    // precisely what still counts as dead.
+    const rig = await seedQualifiedStage(8);
+    for (const id of pairingOfSeeds(rig.qualified, 4, 5)) {
+      await withdrawEntrantCascade(rig.auth, id);
+    }
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const atGen = await rowsOf(rig.stageId);
+    const voided = atGen.find((r) => r.status === "abandoned")!;
+    expect(voided.outcome, "premise: the generator's void carries NO outcome at all").toBeNull();
+
+    await playOut(rig.auth, rig.stageId);
+    const after = await rowsOf(rig.stageId);
+    const target = after.find((r) => r.id === voided.winner_to_fixture)!;
+    expect(target.status, "the void's target is still settled as a walkover").toBe("forfeited");
+    const out = await completeStage(rig.auth, rig.stageId);
+    expect(out.completed).toBe(true);
+  });
+
+  it("a 'cancelled' feeder is dead — defensive, and product-unreachable today", async () => {
+    // NOTHING in apps/web/src or packages/engine/src writes
+    // `fixtures.status = 'cancelled'`; every production reference reads it. It
+    // is a valid value in the v1 output schema, so it may arrive on an import
+    // path, and the disjunct stays. That makes raw SQL the ONLY way to reach
+    // this branch — writing the row by hand is the point of the test, not a
+    // shortcut around a use case.
+    const rig = await seedQualifiedStage(8);
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const atGen = await rowsOf(rig.stageId);
+    const first = atGen.find((r) => r.winner_to_fixture !== null)!;
+    const sibling = atGen.find(
+      (r) => r.winner_to_fixture === first.winner_to_fixture && r.id !== first.id,
+    )!;
+    await sql`update fixtures set status = 'cancelled', outcome = null,
+                home_entrant_id = null, away_entrant_id = null
+              where id = ${first.id}`;
+
+    await play(rig.auth, sibling.id);
+    const target = (await rowsOf(rig.stageId)).find((r) => r.id === first.winner_to_fixture)!;
+    expect(labelled(target), "the cancelled line's target seat is stamped").toHaveLength(1);
+    expect(target.status, "and settled as a walkover for the entrant still standing").toBe("forfeited");
+  });
+
+  it("a walkover is a LIVE winner feeder even when its sibling feeder is void", async () => {
+    // The shape that tells the two predicates apart. One first-round pairing
+    // loses BOTH entrants (void), and the pairing beside it loses ONE (a
+    // walkover). Their shared semi-final therefore has one dead feeder and one
+    // feeder that is `forfeited` with `{kind: "award"}`.
+    //
+    // A walkover is dead as a LOSER feeder and alive as a WINNER feeder, and
+    // this seat is fed by its winner. Judge it with the wrong predicate and
+    // BOTH feeders read dead, the semi is voided, and the one entrant still
+    // standing in that half of the draw is deleted from the competition.
+    const rig = await seedQualifiedStage(8);
+    const four = bothFeedersOfOneParent(rig.qualified);
+    await withdrawEntrantCascade(rig.auth, four[0]!);
+    await withdrawEntrantCascade(rig.auth, four[1]!);
+    await withdrawEntrantCascade(rig.auth, four[2]!);
+    const survivor = four[3]!;
+    await generateStageFixtures(rig.auth, rig.stageId);
+
+    const atGen = await rowsOf(rig.stageId);
+    const voided = atGen.filter(isDead);
+    expect(voided.length, "one pairing lost both entrants").toBe(1);
+    const walkover = atGen.find(
+      (r) => r.outcome?.kind === "award" && r.winner_to_fixture === voided[0]!.winner_to_fixture,
+    )!;
+    expect(walkover, "the pairing beside it is a walkover").toBeTruthy();
+    expect(walkover.outcome!.winner, "and its winner is the entrant still standing").toBe(survivor);
+
+    const semi = atGen.find((r) => r.id === voided[0]!.winner_to_fixture)!;
+    expect(isDead(semi), "the semi is NOT void: a walkover still sends a winner here").toBe(false);
+    expect(
+      [semi.home_entrant_id, semi.away_entrant_id],
+      "the walkover's winner really took her seat",
+    ).toContain(survivor);
+
+    await playOut(rig.auth, rig.stageId);
+    const after = await rowsOf(rig.stageId);
+    const settledSemi = after.find((r) => r.id === semi.id)!;
+    expect(settledSemi.status).toBe("forfeited");
+    expect(settledSemi.outcome).toMatchObject({ kind: "award", winner: survivor });
+    const out = await completeStage(rig.auth, rig.stageId);
+    expect(out.completed).toBe(true);
+  });
+
+  it("a feeder in ANOTHER stage is invisible to the cascade, while an in-stage one is stamped (N3)", async () => {
+    // POSITIVE PAIR first, so the negative below cannot pass vacuously: the
+    // identical shape with the dead feeder IN the stage really is stamped.
+    const live = await seedQualifiedStage(8);
+    for (const id of pairingOfSeeds(live.qualified, 4, 5)) {
+      await withdrawEntrantCascade(live.auth, id);
+    }
+    await generateStageFixtures(live.auth, live.stageId);
+    const liveGen = await rowsOf(live.stageId);
+    const liveVoid = liveGen.find(isDead)!;
+    const liveSibling = liveGen.find(
+      (r) => r.winner_to_fixture === liveVoid.winner_to_fixture && r.id !== liveVoid.id,
+    )!;
+    await play(live.auth, liveSibling.id);
+    const liveTarget = (await rowsOf(live.stageId)).find((r) => r.id === liveVoid.winner_to_fixture)!;
+    expect(labelled(liveTarget), "in-stage dead feeder: the seat IS stamped").toHaveLength(1);
+
+    // NEGATIVE. Same board, but the dead feeder is moved into a second stage —
+    // which is exactly the shape `wireCrossFeeds` builds, an out-of-stage
+    // source that one `where stage_id = $1` read can never see. The cascade
+    // must leave that seat alone rather than treat "no feeder I can see" as
+    // "feeder is dead" and hand out a free walkover.
+    const far = await seedQualifiedStage(8);
+    for (const id of pairingOfSeeds(far.qualified, 4, 5)) {
+      await withdrawEntrantCascade(far.auth, id);
+    }
+    await generateStageFixtures(far.auth, far.stageId);
+    const [other] = await createStages(far.auth, far.divisionId, [
+      { seq: 2, kind: "knockout", name: "Elsewhere", config: {} },
+    ]);
+    const farGen = await rowsOf(far.stageId);
+    const farVoid = farGen.find(isDead)!;
+    const farTargetId = farVoid.winner_to_fixture!;
+    const farSibling = farGen.find(
+      (r) => r.winner_to_fixture === farTargetId && r.id !== farVoid.id,
+    )!;
+    await sql`update fixtures set stage_id = ${other!.id} where id = ${farVoid.id}`;
+
+    // Playing the sibling is what makes the seat "actionable"; the cascade runs
+    // (onDecided) and finds no feeder for the open seat, because its feeder is
+    // now another stage's row.
+    await play(far.auth, farSibling.id);
+    const farTarget = (await rowsOf(far.stageId)).find((r) => r.id === farTargetId)!;
+    expect(labelled(farTarget), "cross-stage feeder: the seat is NOT stamped").toEqual([]);
+    expect(farTarget.status, "and it is NOT settled as a walkover").toBe("scheduled");
+    expect(farTarget.outcome).toBeNull();
   });
 });
