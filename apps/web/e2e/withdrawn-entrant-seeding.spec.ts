@@ -268,3 +268,142 @@ test("a withdrawn entrant cannot be filled into the bracket over HTTP, by any ro
   expect(ko.length).toBeGreaterThan(0);
   expect(ko.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
 });
+
+
+test("F1: when EVERY qualifier has gone, the card says so and offers Recompute", async ({
+  page,
+  request,
+}, testInfo) => {
+  // The dead end this fix exists for, driven the way the organiser met it.
+  // Before: the ordinary draft branch rendered its four column headers, ZERO
+  // rows and one control, Confirm. Pressing it succeeded with `filled: 0` and
+  // burned the stage into the terminal `confirmed` status — Recompute 409s
+  // SEEDING_ALREADY_CONFIRMED forever after that, including once everybody is
+  // un-withdrawn. No unit test can see this: `apps/web` vitest is
+  // `environment: "node"`, so which BRANCH of the panel a person is shown,
+  // and whether the card carries any control but Confirm, is only observable
+  // here.
+  const rig = await seedToProposal(request, `${TAG}-empty`);
+  const all = await proposalQualifierIds(request, rig.koStageId);
+  expect(all).toHaveLength(8);
+  for (const id of all) {
+    const out = await apiJson(request, `/api/v1/entrants/${id}/withdraw`, "POST");
+    expect(out.status, JSON.stringify(out.error)).toBeLessThan(300);
+  }
+
+  const url = await divisionPath(request, rig.divisionId, "?tab=fixtures");
+  await page.goto(url);
+  const empty = page.locator('[data-progression-state="draft-empty"]');
+  await expect(empty).toBeVisible();
+  // The ordinary draft card is NOT what is being shown — structurally, not
+  // just "Confirm is disabled".
+  await expect(page.locator('[data-progression-state="draft"]')).toHaveCount(0);
+  await expect(empty.locator("table")).toHaveCount(0);
+  await expect(empty.getByRole("button", { name: /confirm/i })).toHaveCount(0);
+  // …and the one control it DOES carry is the way back.
+  await expect(empty.getByRole("button", { name: /recompute/i })).toBeVisible();
+
+  // The copy is the dictionary's, not a hardcoded English string: assert a
+  // phrase that only exists in `progression.noQualifiersLeft`.
+  await expect(empty).toContainText("Nobody has qualified for this stage");
+
+  // Pressing Recompute is not a dead end either — the stage is still
+  // recomputable, which is the whole point of refusing rather than
+  // confirming an empty draw.
+  await empty.getByRole("button", { name: /recompute/i }).click();
+  await expect(empty).toBeVisible();
+
+  await screenshotAtWidths(page, testInfo, "proposal-empty-slate", [1280, 768, 320]);
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
+});
+
+test("F2: confirming a short draw leaves a settled walkover, not a match awaiting a draw", async ({
+  page,
+  request,
+}, testInfo) => {
+  // The other Critical: a vacated seat used to keep its `slot.winner_group`
+  // label and a null outcome, so the final rendered "Winner of Group A vs
+  // <name> — Awaiting draw" forever and sat in "1 to schedule". Driven over
+  // HTTP here because what matters is the PERSISTED row the run sheet and
+  // bracket panel both read.
+  const rig = await seedToProposal(request, `${TAG}-walkover`);
+  const before = await proposalQualifierIds(request, rig.koStageId);
+  expect(before).toHaveLength(8);
+  const departing = before[0]!;
+
+  const withdrawn = await apiJson(request, `/api/v1/entrants/${departing}/withdraw`, "POST");
+  expect(withdrawn.status, JSON.stringify(withdrawn.error)).toBeLessThan(300);
+
+  const fresh = await apiJson<{ id: string; computed: { qualifiers: { entrantId: string }[] } }>(
+    request,
+    `/api/v1/stages/${rig.koStageId}/seed-proposal`,
+    "POST",
+  );
+  expect(fresh.status, JSON.stringify(fresh.error)).toBe(201);
+  expect(fresh.data!.computed.qualifiers).toHaveLength(7);
+
+  const confirmed = await apiJson(
+    request,
+    `/api/v1/stages/${rig.koStageId}/seed-proposal/confirm`,
+    "POST",
+    { proposalId: fresh.data!.id },
+  );
+  expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+
+  const fixtures = await apiJson<
+    {
+      stage_id: string;
+      round_no: number;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      home_slot_label: { key?: string } | null;
+      away_slot_label: { key?: string } | null;
+      status: string;
+      outcome: { kind?: string; winner?: string } | null;
+    }[]
+  >(request, `/api/v1/divisions/${rig.divisionId}/fixtures`);
+  expect(fixtures.status, JSON.stringify(fixtures.error)).toBe(200);
+  const firstRound = fixtures
+    .data!.filter((f) => f.stage_id === rig.koStageId)
+    .filter((f) => f.round_no === 1);
+  expect(firstRound.length).toBe(4);
+
+  const vacated = firstRound.filter((f) => f.home_entrant_id === null || f.away_entrant_id === null);
+  expect(vacated, "exactly one seat should have been vacated").toHaveLength(1);
+  const line = vacated[0]!;
+  const emptyLabel = line.home_entrant_id === null ? line.home_slot_label : line.away_slot_label;
+  const survivor = line.home_entrant_id ?? line.away_entrant_id;
+  expect(emptyLabel?.key, "the vacated seat still advertises a qualifier").toBe("bracket.slot.bye");
+  expect(line.status).toBe("forfeited");
+  expect(line.outcome?.kind).toBe("award");
+  expect(line.outcome?.winner).toBe(survivor);
+
+  // The control: the other three lines are ordinary two-sided matches, so
+  // this is a walkover for ONE seat, not a stage-wide settle.
+  for (const f of firstRound.filter((f) => f !== line)) {
+    expect(f.home_entrant_id).not.toBeNull();
+    expect(f.away_entrant_id).not.toBeNull();
+    expect(f.status).toBe("scheduled");
+    expect(f.outcome).toBeNull();
+  }
+
+  // And the half no API read can settle: what the organiser is SHOWN. The
+  // stage has 7 fixtures (4 + 2 + 1) and the run sheet counted every one of
+  // them as owed while the vacated line looked like an ordinary match
+  // awaiting a draw. `isBye` takes a settled bye out of that count
+  // (stages-panel.tsx), so the number itself is the witness — and 6 is not
+  // the constant the broken build showed.
+  const url = await divisionPath(request, rig.divisionId, "?tab=fixtures");
+  await page.goto(url);
+  await expect(page.getByText("6 to schedule").first()).toBeVisible();
+  await expect(page.getByText("7 to schedule")).toHaveCount(0);
+
+  await screenshotAtWidths(page, testInfo, "walkover-after-confirm", [1280, 768, 320]);
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
+});
