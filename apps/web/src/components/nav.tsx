@@ -120,12 +120,48 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
           <img src="/logo-wide-night.png" alt="Seazn Club" className="h-7 w-auto" />
         </Link>
         {user && activeOrg && (
+          // `min-w-0 shrink` rather than `shrink-0`: this chip's width WAS the
+          // org name's width, so a club with an ordinary full name ("North-
+          // amptonshire Badminton Association", 38 chars) pushed the entire
+          // right-hand group off the viewport — 126px of horizontal page
+          // scroll at 768, 247px at 61 chars, on every signed-in surface.
+          // Nothing caught it because every fixture org here is named in 2-17
+          // characters, and at 17 the overflow is exactly 0.
+          //
+          // This is the same `min-w-0` rule the right-hand group already
+          // documents at #349 below, applied to the one child on this side
+          // that opted out of it: a flex item's automatic minimum size is its
+          // CONTENT width, so `shrink` alone does nothing without `min-w-0`,
+          // and `truncate` on the text needs an ancestor chain that can
+          // actually reach zero. The lime status dot keeps `shrink-0` — it is
+          // 6px and squashing it would cost the one thing the chip signals at
+          // a glance.
+          //
+          // The name TRUNCATES rather than the chip dropping: which org you
+          // are in is the whole point of the chip, and the full string stays
+          // in the DOM for the product tour and screen readers.
+          //
+          // `shrink-[999]`, not a plain `shrink`, and the number is doing real
+          // work. Flex distributes a deficit in proportion to each item's
+          // BASE size, so an ordinary `shrink` had this chip surrender only
+          // ~30% of it and handed the other ~70% to the right-hand group —
+          // which cannot comply, because #349 below deliberately makes its nav
+          // links `shrink-0`. The group was shrunk on paper to 386px while its
+          // contents still needed 477px, and the Sign out button simply
+          // rendered 75px outside the viewport. Measured, not reasoned: the
+          // fix took the overflow from 126px to 58px and no further until the
+          // ratio changed. A large factor makes this chip absorb essentially
+          // the whole deficit before anything on the right gives up a pixel,
+          // which is the correct priority — a clipped club name costs nothing,
+          // a clipped "Sign out" costs the session. The right group keeps its
+          // own `min-w-0` so `display_name` can still shrink INSIDE it once
+          // this chip has run out, exactly as #349 intends.
           <span
             data-tour="org-chip"
-            className="hidden shrink-0 items-center gap-1.5 rounded-full border border-cream/15 bg-cream/[0.07] px-3 py-1 text-xs font-medium text-cream/85 sm:flex"
+            className="hidden min-w-0 shrink-[999] items-center gap-1.5 rounded-full border border-cream/15 bg-cream/[0.07] px-3 py-1 text-xs font-medium text-cream/85 sm:flex"
           >
-            <span className="h-1.5 w-1.5 rounded-full bg-lime-400" />
-            {activeOrg.name}
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-lime-400" />
+            <span className="truncate">{activeOrg.name}</span>
           </span>
         )}
 
@@ -239,7 +275,22 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 locale whose labels aren't single unbreakable words (fr:
                 "Tableau de bord"), just never exercised by this
                 English-only e2e matrix. */}
-            <span className="mx-1 hidden min-w-0 truncate text-sm font-medium text-cream/85 sm:block">
+            {/* `lg:block`, not `sm:block` (2026-09-21): at 768-1023 this span
+                and the org chip are the only two flexible things in the
+                gantry, and there is not enough room for both — at 768 the
+                inner row is 736px against 80 (logo) + 48 (gaps) + 553
+                (this group) + the chip, which left the chip 55px: a lime
+                dot and a single letter. Measured, not reasoned.
+                Which CLUB you are administering is the thing that changes
+                between sessions and the thing a misclick gets wrong, and
+                the chip is the only tenant indicator in the chrome; your
+                OWN name is not news to you and was itself truncated to
+                "Chip Own..." in this band anyway. So the 76px this span
+                costs goes to the chip, which takes it from 55px to 143px —
+                enough for the club name to actually be read. The avatar
+                beside it keeps the account affordance at every width, and
+                at 1024+ nothing changes: both render in full. */}
+            <span className="mx-1 hidden min-w-0 truncate text-sm font-medium text-cream/85 lg:block">
               {user.display_name}
             </span>
             <LogoutButton label={t(dict, "nav.signOut")} />
