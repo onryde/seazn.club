@@ -462,7 +462,13 @@ export async function publicEntrants(
       }[]
     >`
       select id, kind, display_name, seed, status, members
-      from public_entrants_v where division_id = ${division.id}
+      from public_entrants_v
+      where division_id = ${division.id}
+        -- The public entrant LIST is the field, not the history: V412 lets the
+        -- view publish withdrawn and disqualified entrants so their names can
+        -- be resolved on results surfaces, and this endpoint would otherwise
+        -- start handing them to every API consumer as current entrants.
+        and status in ('registered','confirmed')
       order by seed nulls last, display_name`;
     const [priv] = await sql<{ youth: boolean; player_name_display: string | null }[]>`
       select youth, player_name_display from divisions where id = ${division.id}`;

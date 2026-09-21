@@ -165,6 +165,19 @@ export function StageRail({
   // beyond `useMsg`.
   const sheetId = `stage-rail-sheet-${stage.id}`;
 
+  // WHICH action gets the filled primary. Found by driving the product
+  // (2026-09-20): on a Swiss stage that had paired nothing, "Complete stage"
+  // rendered as the primary while "Pair next round" was an outline secondary
+  // beside it — the destructive action dressed as the one to press next.
+  // Completing a stage that has never been paired ends it with nothing played.
+  //
+  // The rule is "whatever still has work to do": a stage with no fixtures, or
+  // a Swiss stage with rounds still unseated, wants generate/pair. Once the
+  // board is fully seated there IS nothing left to pair, and completing is
+  // genuinely the next step — so the primary moves to it rather than
+  // disappearing. Exactly one filled button either way.
+  const pairingIsNext = fixtureCount === 0 || (stage.kind === "swiss" && swissHasUnseated);
+
   // Review finding M4. Below `md` this sheet BEHAVES modally — a
   // `fixed inset-0` backdrop swallows every tap on the page behind it — but it
   // declared none of a modal's contract: no Escape, no focus move, no trap, no
@@ -440,7 +453,9 @@ export function StageRail({
                   onAct(stage.id, "generate");
                 }}
                 data-testid="stage-generate"
-                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                className={`btn min-h-11 px-3 py-1.5 text-xs ${
+                  pairingIsNext ? "btn-primary" : "btn-ghost"
+                }`}
               >
                 {busy === stage.id
                   ? msg("schedule.working")
@@ -469,7 +484,9 @@ export function StageRail({
                   disabled={busy !== null}
                   onClick={() => onAct(stage.id, "complete")}
                   data-testid="stage-complete"
-                  className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
+                  className={`btn min-h-11 px-3 py-1.5 text-xs ${
+                    pairingIsNext ? "btn-ghost" : "btn-primary"
+                  }`}
                 >
                   {msg("schedule.complete")}
                 </button>

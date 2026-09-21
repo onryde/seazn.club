@@ -8,8 +8,8 @@ People drop out. **Withdraw** (on the entrant) removes them without wrecking the
 
 ## What happens
 
-- **League tables, early** — if the entrant played under half their matches, their results are expunged and remaining fixtures removed, as if they were never in.
-- **League tables, late** — past halfway, played results stand and remaining opponents get walkovers, so nobody is punished for having already beaten them.
+- **League tables, usually** — played results stand and remaining opponents get walkovers, so nobody is punished for having already beaten them.
+- **League tables, very early** — if more of their fixtures are still to play than they have played, counting only what is scheduled so far, those played results are expunged too and the remaining ones removed. Swiss pairs a round at a time, so a Swiss entrant rarely has more fixtures waiting than played, and this seldom applies there.
 - **Brackets** — the next opponent gets a walkover; earlier rounds stand.
 - **Open formats** (ladders, americano) — their remaining fixtures are voided.
 

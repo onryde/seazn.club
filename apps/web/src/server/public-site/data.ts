@@ -587,8 +587,14 @@ export async function getPublicCompetition(
         select d.id, d.competition_id, d.name, d.slug, d.description,
                d.sport_key, d.variant_key,
                d.status, d.module_version, d.tiebreakers, s.name as sport_name,
+               -- V412 widened public_entrants_v to publish departed entrants
+               -- too (so a withdrawn player keeps her NAME on the board), so
+               -- the "who is competing" half of the question is asked here.
+               -- Without this clause a competition's headline entrant count
+               -- grows every time someone withdraws.
                (select count(*)::int from public_entrants_v e
-                 where e.division_id = d.id) as entrant_count,
+                 where e.division_id = d.id
+                   and e.status in ('registered','confirmed')) as entrant_count,
                -- RS008 review fix #5: public_divisions_v does not expose
                -- these (see PublicDivision's own doc comment) — a cheap
                -- primary-key join to the base table rather than widening
@@ -1389,7 +1395,11 @@ export async function getPublicPlayer(
         join divisions dv on dv.id = d.id
         cross join lateral jsonb_array_elements(e.members) m
         where d.competition_id = ${shell.competition.id}
-          and m->>'person_id' = ${personId}`;
+          and m->>'person_id' = ${personId}
+          -- The player card lists the divisions this person IS playing in.
+          -- V412 lets the view publish departed entrants, so the filter the
+          -- view used to apply is applied here instead.
+          and e.status in ('registered','confirmed')`;
       // A non-team entrant's display name IS a person's name — an individual
       // entrant's is this player's own — so it goes through the same entrant
       // mask the division page uses, never straight off the view. Under the

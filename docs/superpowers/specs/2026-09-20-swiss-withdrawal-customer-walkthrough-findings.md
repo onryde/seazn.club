@@ -129,10 +129,23 @@ open question, not decided here.
 the existing explanatory line in its place — that line already renders on the
 page.
 
-### F5 — LOW: six empty rows in the standings table body
+### F5 — RETRACTED 2026-09-21, this finding was WRONG
 
-`tbody` holds twelve `<tr>`: the six real rows followed by six empty ones. Dead
-vertical space, worst on a phone.
+~~Six empty rows in the standings table body.~~ **Withdrawn.** The standings
+table has exactly six rows and none of them is empty.
+
+The claim came from a whole-page `table tbody tr` sweep that counted a SECOND
+table: the head-to-head **Results grid**, which sits inside a collapsed
+`<details>`. `innerText` returns `""` for content inside a closed `<details>`,
+so its six real rows read as blank. Forcing `details.open = true` gives six rows,
+zero empty, with real content (`"CU Curie — · 0 — 0 · · ·"`). There is no padding
+loop in the code either — `standings-table.tsx`'s `<tbody>` contains only
+`ranked.map`.
+
+This is the repo's own rule biting the person who wrote it down: a query showed
+what exists and I asserted a property of it — here, that its rows were empty —
+without opening the thing I was measuring. Left in place rather than deleted so
+the next reader sees the retraction, not a gap.
 
 ### F6 — LOW: the destructive action is the primary button
 
@@ -164,3 +177,177 @@ organiser toward a destructive recovery on a live event, and it is reachable
 from the most ordinary interruption a tournament has.
 
 None of F1–F8 is caused by this PR. F3 is caused by the PR merged earlier today.
+
+## F9 — MEDIUM: an open tie-break tooltip is painted over by the rows below it
+
+Added 2026-09-21 from a screenshot of the live standings table: with a
+tie-break popover open, the NEXT row's rank chip punches through its left edge
+and the row after that covers its bottom-left corner, over the first words of
+the explanation.
+
+Measured with `elementFromPoint` on rows 1, 3 and 4 before and after: the
+left edge returned the next row's rank `SPAN`, the bottom-left its `TD`, while
+the centre was clear. Every sticky rank cell is `z-10` and the popover is also
+`z-10` INSIDE one of them, so the comparison happens between the two cells'
+stacking contexts and the later row wins on DOM order. Raising the cell that
+holds an open `<details>` is the fix; raising the tooltip cannot work.
+
+## F10 — HIGH, new: the PUBLIC standings print a raw UUID where a withdrawn entrant's name belongs
+
+Found 2026-09-21 while verifying the F2 chip on the live page (`/shared/
+my-organization-9/swiss-verify-cup/open-swiss`, prod bundle). Row 4 of the
+public table reads:
+
+> 4 * ?f8001cf4-f592-4b5e-a77c-c94520efed0f 1 1 0 0 0 2
+
+`public_entrants_v` filters `status in ('registered','confirmed')`, so a
+withdrawn entrant never reaches the public page's `entrants` at all. The
+STANDINGS SNAPSHOT still carries her row — it is keyed by entrant id and is
+built from results, not from the roster — so `entrantNames` has no entry, and
+the table falls back to printing the id.
+
+Two consequences, one cause:
+
+1. A spectator sees an internal UUID in a results table.
+2. F2's chip cannot reach the public page or the embed. Wiring it there was
+   tried and REMOVED in the same session rather than shipped inert — the prop
+   would have been passed an always-empty array.
+
+**Recommendation (mine, as product owner — not an owner ruling).** Widen
+`public_entrants_v` to carry withdrawn entrants, keeping every masking rule it
+already applies, and make the consumers that mean "the current field" — the
+entrants tab, the kiosk, the ICS and poster exports — filter status themselves.
+That is one migration plus a consumer audit, and it closes the UUID and the
+missing chip together. It is deliberately NOT in this branch: a public data
+view with five consumers is not a line to slip into a polish PR.
+
+## F11 — MEDIUM, new: the LAST row's tie-break popover is clipped away entirely
+
+Also found 2026-09-21, after F9's fix was in, by opening every row's popover in
+turn and hit-testing it. Rows 1–5 were clean; row 6's tooltip returned the
+section BELOW the table at five of six probe points.
+
+Not the same cause as F9. The table sits in `relative overflow-x-auto`, and a
+box with `overflow-x: auto` computes `overflow-y: auto` as well, so the final
+row's popover is CLIPPED by the container rather than painted over: measured
+tooltip bottom 704 against a container bottom of 679, at 1280. Clipping happens
+before stacking, so no z-index can reach it.
+
+**Fixed here:** the last row opens its popover upward (`[tr:last-child_&]`),
+inside the same box, where F9's raise then wins.
+
+## Disposition (2026-09-21, branch `fix/swiss-desk-polish`)
+
+| | verdict |
+| --- | --- |
+| F1 | FIXED — `getStageRosterDrift` now reads a second, status-narrowed fixture set for `ghosts`; `unplaced` keeps the unfiltered one |
+| F2 | FIXED both halves — the row is carried and MARKED ("Withdrawn" chip) on the console, public and embed tables, and the copy that promised a void was rewritten (4 locales + the help article). The ranking question below stays open |
+| F3 | FIXED in #813 (merged) |
+| F4 | FIXED — the Add-entrant form is replaced by the explanatory line once the list is locked |
+| F5 | RETRACTED — the finding was wrong (see above) |
+| F6 | FIXED — the primary follows "whatever still has work to do" |
+| F7 | FIXED — the empty-state text now names the button it points at |
+| F8 | FIXED — one glyph map (`lib/sport-emoji.ts`) replaces two drifted copies; carrom/hockey/icehockey/tennis gained glyphs. Driven: 11 tiles, 11 distinct glyphs, only `generic` wears the medal |
+| F9 | FIXED — the sticky rank cell is raised while its `<details>` is open |
+| F10 | FIXED — V412 widens `public_entrants_v`; the "current field" question moved into six consumers. Driven: row 4 reads `4 · AD Ada · Withdrawn`, entrants tab lists the five still competing, the schedule still NAMES her |
+| F11 | FIXED — the last row's popover opens upward |
+
+### Still owed, deliberately not done here
+
+- **Whether a withdrawn entrant should be EXCLUDED from the ranking** rather
+  than ranked and marked. This is the owner's call, not a defect fix: it
+  changes what every other entrant's rank means. The chip does not decide it.
+- **`StandingsTableView`** (the competition hub's own table,
+  `matches-hub/{table,overview}-tab.tsx`) is NOT marked. It renders from a
+  server-built `TableViewT` rather than raw rows, so marking a withdrawal there
+  means extending that view type and its builder — a spectator-surface change.
+
+---
+
+## F12–F14 — the withdrawal path beyond the public board (2026-09-21)
+
+Raised by the product owner while reviewing F10: *"will exclude withdrew
+entrants when next round or taking decision of knockout?"*, then sharpened —
+*"like in swiss, next pair round choose by top and bottom ranking"*.
+
+The question matters because the standings deliberately CARRY a withdrawn
+entrant (that is F2's whole design, and `engine-db/competition.ts:374-380`
+derives `entrantSet` from fixture ids with no status filter). So any path that
+takes its membership from the STANDINGS inherits her; any path that takes it
+from the field query does not.
+
+**Swiss pairing is SAFE, and the reconciliation is one line.** `stages.ts:1767`
+loads `status in ('registered','confirmed')`; `:947` maps over THAT array and
+uses `rankedStageStandings` only to supply a rank per id, so `cascadeRank.get`
+never fires for a withdrawn id. She cannot be paired and cannot take the bye
+(`:990` draws from the same array). The historical
+`"swiss shell count mismatch for pairing"` throw was stale SHELLS against a
+shrunken field, fixed by the reconcile at `:963` — not a membership
+disagreement.
+
+- **F12 — HIGH. A withdrawn entrant can be SEEDED into a bracket.**
+  `timing:"on_complete"` is safe by intersection (`stages.ts:1779`).
+  `timing:"setup"` is not: `computeSeedProposal` (`:3810+`) can OFFER a
+  departed qualifier, and `confirmSeedProposal` (`:4080`) validates division
+  membership ONLY — `select id from entrants where id in ${ids} and
+  division_id = ...`, no status predicate — so she reaches `fillSlot`
+  (`:4129`). `seedNextStage` (`:3578`) also PERSISTS withdrawn ids into
+  `config.qualified`.
+- **F13 — MEDIUM. `ladder_order` is never pruned.** Filtered once on first use
+  (`stages.ts:4334`), then the challenge guard is only `ci < 0 || oi < 0` —
+  presence, not status. A challenge can be issued BY or TO a withdrawn entrant.
+- **F14 — OPEN, owner decision. A departed qualifier RESEEDS the whole draw.**
+  `stages.ts:1779` filters, then `.map((id, i) => ({ id, seed: i + 1 }))`
+  renumbers positionally. With 8 qualifiers and seed 3 withdrawing, old seed 6
+  meets old 5 instead of advancing, old 8 meets old 2 instead of old 1 — a
+  withdrawal changes who five uninvolved players face. The window is narrow:
+  this runs at GENERATE time only, and a withdrawal AFTER the bracket exists is
+  handled correctly by `withdrawEntrantCascade` (opponents advance by
+  walkover). So the product gives two different answers either side of the
+  Generate button.
+
+  **OWNER RULING 2026-09-21: WALKOVER.** A departed qualifier's slot becomes a
+  walkover for their opponent; the draw is preserved and nobody is promoted.
+  The reasoning that was put to the owner and accepted: this is already the
+  product's answer once the bracket EXISTS (`withdrawEntrantCascade` advances
+  the opponent), so the walkover removes the seam at the Generate button rather
+  than introducing a reserve-list concept to justify promotion.
+
+  The ruling is narrower than "walkover, always", and the narrowing is part of
+  it. Walkover is the DEFAULT and is this fix. Promotion from a reserve list
+  stays available as a later FEATURE — organiser-chosen, declared up front,
+  never automatic — because the honest case for it is real: a withdrawal before
+  any bracket match is played leaves an opponent with a free pass instead of a
+  game, and a large draw with a standing reserve list normally fills it. What
+  promotion must never be is the silent default, because it hands a place to
+  someone who failed to qualify and it cannot be cleanly reversed when the
+  withdrawal itself is undone (the cascade rides the scoring ledger, so
+  withdrawals ARE undone here; a promotion would leave nine players for eight
+  slots and a player who was told they were in).
+
+  What this means for the code: the positional reseed at `stages.ts:1779`
+  (`.map((id, i) => ({ id, seed: i + 1 }))`) is the thing to remove. The
+  departed qualifier keeps her slot and it resolves as a walkover; every other
+  qualifier keeps the seed they earned. Expect a test that pins an 8-qualifier
+  draw with seed 3 departed and asserts old seeds 5/6/8 keep their original
+  opponents — the renumber is invisible to any test that only counts entrants.
+
+F12 and F13 are being fixed on branch `fix/withdrawn-entrant-seeding`, off
+`main`, deliberately NOT in the polish PR. F14 is now RULED (walkover) and is
+owed on that same branch — it touches `stages.ts:1779`, which is adjacent to
+F12's `on_complete` intersection, so it follows F12 rather than running beside
+it.
+
+## Known limitation carried by V412
+
+`public_players_v` is a SEPARATE view and was NOT widened. It still filters
+`e.status in ('registered','confirmed')`, so a person whose ONLY entrant row is
+withdrawn has no public player card at all — `publicPlayerGate` 404s before any
+membership read. V412 restored a departed entrant's NAME on results surfaces,
+not her card.
+
+Driven on the public standings 2026-09-21: the name cell is plain text there
+(no anchor), so this is not a dead click on that surface. Not verified on a
+division whose entrants are person-linked — if the name renders as a link
+there, a spectator clicking a withdrawn entrant would 404, and that would be a
+defect rather than a limitation.

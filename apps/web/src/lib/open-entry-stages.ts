@@ -23,3 +23,24 @@ export const OPEN_ENTRY_STAGE_KINDS: readonly string[] = ["ladder", "americano"]
 export function startClosesEntrantList(stageKinds: readonly string[]): boolean {
   return !stageKinds.some((kind) => OPEN_ENTRY_STAGE_KINDS.includes(kind));
 }
+
+/** The division statuses in which `createEntrants` refuses a new entrant. */
+export const ENTRANT_LIST_LOCKED_STATUSES: readonly string[] = ["active", "completed"];
+
+/**
+ * Is this division's entrant list closed RIGHT NOW?
+ *
+ * Mirrors `entrants.ts`'s guard, both halves: the status test AND the
+ * open-format exemption. The console used to render the whole Add-entrant form
+ * — Kind, Name, Seed, player search, an enabled button and Import CSV — on a
+ * started tournament, seconds after the Start dialog promised "no one new can
+ * be added". Filling it in produced a 422 and nothing else. Found by driving
+ * the product, 2026-09-20.
+ *
+ * Note this is the INVERSE question to `startClosesEntrantList`, which asks
+ * what starting WILL do. They share the open-format list and nothing else.
+ */
+export function entrantListLocked(divisionStatus: string, stageKinds: readonly string[]): boolean {
+  if (!ENTRANT_LIST_LOCKED_STATUSES.includes(divisionStatus)) return false;
+  return !stageKinds.some((kind) => OPEN_ENTRY_STAGE_KINDS.includes(kind));
+}

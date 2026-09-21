@@ -61,6 +61,43 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 }
 
 /**
+ * Every sport key this file has put into the catalog, so the hook below can
+ * take them away again.
+ *
+ * `sports` is not a test scratch table: `/onboarding` lists every row in it, so
+ * a key left behind becomes a tile on a real account's welcome screen for as
+ * long as that database lives. The keys minted here are `rs012-pool-<random>` —
+ * a FRESH one per run — so a literal cleanup could not work even if someone
+ * wrote one, and the leak is invisible to every assertion in this file. Same
+ * registry shape as `src/server/usecases/__tests__/registration-submit.test.ts`,
+ * for the same reason: the next site that mints is cleaned up by construction
+ * rather than by remembering.
+ */
+const MINTED_SPORT_KEYS = new Set<string>();
+
+/** Record a sport key this file inserted, so `afterAll` can remove it. */
+function mintedSport(key: string): string {
+  MINTED_SPORT_KEYS.add(key);
+  return key;
+}
+
+test.afterAll(async () => {
+  if (MINTED_SPORT_KEYS.size === 0) return;
+  const keys = [...MINTED_SPORT_KEYS];
+  await withDb(async (sql) => {
+    // Order is part of the fix. All three children of `sports` are NO ACTION
+    // (`divisions`, `player_profiles`, `sport_variants`), so the catalog row
+    // cannot go while any of them still points at it. Everything hanging off a
+    // division — entrants, registrations, settings, stages — cascades with it.
+    await sql`delete from divisions where sport_key in ${sql(keys)}`;
+    await sql`delete from player_profiles where sport_key in ${sql(keys)}`;
+    await sql`delete from sport_variants where sport_key in ${sql(keys)}`;
+    await sql`delete from sports where key in ${sql(keys)}`;
+  });
+  MINTED_SPORT_KEYS.clear();
+});
+
+/**
  * A TEAM division backed by a fresh, test-only sport whose roster shape
  * (lineup size + bench) is small and KNOWN — the shared `generic` sport's
  * roster_cap of 1 is too tight to hold a captain+mate team at all, and this
@@ -87,7 +124,7 @@ async function seedCustomTeamDivision(
   },
 ): Promise<{ id: string; name: string }> {
   const suffix = randomBytes(4).toString("hex");
-  const sportKey = `rs012-pool-${suffix}`;
+  const sportKey = mintedSport(`rs012-pool-${suffix}`);
   const name = `RS012 Pool Division ${suffix}`;
   const divisionId = await withDb(async (sql) => {
     await sql`

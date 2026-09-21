@@ -24,6 +24,7 @@ import {
   isRosterDriftEligible,
   rebuildStageFixtures,
 } from "../stages"; // isRosterDriftEligible is re-exported from lib/roster-drift-eligibility
+import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -130,7 +131,15 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     expect(allNames).not.toContain("C");
   });
 
-  it("a withdrawn entrant referenced by a fixture that ALREADY HAS A RESULT is still reported as a ghost", async () => {
+  // INVERTED 2026-09-20. This case shipped asserting the opposite — "a
+  // withdrawn entrant referenced by a fixture that ALREADY HAS A RESULT is
+  // still reported as a ghost" — and that expectation WAS the defect: the
+  // banner fired mid-event on a correct post-withdrawal state and offered a
+  // destructive rebuild of a board whose only fixture was already played. A
+  // ghost is someone still expected to play; a played fixture expects nobody.
+  // The full status table and the real withdraw path are swept in the last
+  // describe block of this file.
+  it("a withdrawn entrant referenced ONLY by a fixture that already has a result is NOT a ghost", async () => {
     const { auth } = await seedOrg();
     const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B"]);
     const [stage] = await createStages(auth, divisionId, {
@@ -146,7 +155,11 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5a) — getStageRosterDrift", () => {
     await patchEntrant(auth, entrantByName.get("A")!, { status: "withdrawn" });
 
     const drift = await getStageRosterDrift(auth, stage!.id);
-    expect(drift.ghosts.map((e) => e.id)).toEqual([entrantByName.get("A")]);
+    expect(drift.ghosts).toEqual([]);
+    // …and A is not quietly moved to the other list either: the result stands,
+    // so A is placed, and nothing about this stage needs an organiser's
+    // attention. A banner on either side here is a false alarm.
+    expect(drift.unplaced).toEqual([]);
   });
 
   // F3 ultrareview finding 6 — drift is defined against a BOARD. A stage
@@ -406,19 +419,29 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
     expect(after).toBe(before);
   });
 
-  it("a withdrawn entrant on an already-decided fixture is a ghost AND blocks the rebuild (hard constraint 1)", async () => {
+  // Re-seeded 2026-09-20 (was two entrants and one decided fixture). Hard
+  // constraint 1 is "a real ghost cannot be rebuilt away once the board
+  // carries a result", and a withdrawn entrant whose ONLY fixture is decided
+  // stopped being a ghost when the false-banner fix landed — that shape now
+  // asserts nothing about the refusal it exists to prove. Three entrants
+  // instead: A keeps a decided fixture AND a scheduled one, so A is genuinely
+  // still on the board and the recorded result still blocks the rebuild.
+  it("a withdrawn entrant still on a scheduled fixture is a ghost AND a recorded result blocks the rebuild (hard constraint 1)", async () => {
     const { auth } = await seedOrg();
-    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B"]);
+    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C"]);
     const [stage] = await createStages(auth, divisionId, {
       seq: 1, kind: "league", name: "L", config: {}, progression: null,
     });
-    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    const { fixtures } = await generateStageFixtures(auth, stage!.id); // AB, AC, BC
     await startDivision(auth, divisionId);
-    await decideFixture(auth, fixtures[0]!.id);
-    await patchEntrant(auth, entrantByName.get("A")!, { status: "withdrawn" });
+    const aId = entrantByName.get("A")!;
+    const aFixtures = fixtures.filter((f) => f.home_entrant_id === aId || f.away_entrant_id === aId);
+    expect(aFixtures).toHaveLength(2);
+    await decideFixture(auth, aFixtures[0]!.id); // the other stays scheduled
+    await patchEntrant(auth, aId, { status: "withdrawn" });
 
     const drift = await getStageRosterDrift(auth, stage!.id);
-    expect(drift.ghosts.map((e) => e.id)).toContain(entrantByName.get("A"));
+    expect(drift.ghosts.map((e) => e.id)).toContain(aId);
 
     await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({
       status: 409,
@@ -569,5 +592,161 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
 
     const after = await getStageRosterDrift(auth, stage!.id);
     expect(after).toEqual({ ghosts: [], unplaced: [], attachments: NO_ATTACH });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The banner that fired on a CORRECT post-withdrawal state (found 2026-09-20
+// by driving a six-player Swiss division). Round 1 played out, the organiser
+// withdraws Ada through the normal withdraw path, Pair next works — and the
+// stage card immediately said "Fixtures don't match the roster / No longer
+// active, still on a fixture: Ada" and offered a destructive rebuild. Ada's
+// ONLY fixture was her round-1 match, status `forfeited`: decided, played,
+// and its result is supposed to stand.
+//
+// A GHOST is an entrant who is no longer active AND IS STILL EXPECTED TO
+// PLAY, so only a fixture in a pending status can make one. The five history
+// statuses cannot: `decided`/`finalized`/`forfeited`/`abandoned` are played,
+// `cancelled` never will be.
+//
+// The `unplaced` side deliberately keeps the UNFILTERED referenced set. An
+// entrant holding only a played fixture IS placed, so narrowing that side too
+// would swap this false banner for the opposite one. The test below pins that
+// asymmetry, because it is the whole reason the two sides read different sets.
+//
+// Not a suppression heuristic: the two that were reviewed out in 2026-09-06 (a
+// `created_at` predicate, a round-membership rule) hid entrants who really
+// were owed a fixture. This one only excuses an entrant whose every fixture is
+// finished, which is exactly the population that can never be owed one.
+
+/** Every value `fixtures.status` can hold, and whether a fixture in that
+ *  status still expects its two entrants to turn up. Written out here rather
+ *  than derived from the production set on purpose — a table that reads its
+ *  answer off the code under test cannot witness a change to it. Its
+ *  COMPLETENESS against the live check constraint is asserted below, so a
+ *  status added to the vocabulary reds this file instead of silently
+ *  defaulting to one side. */
+const GHOST_BY_FIXTURE_STATUS = [
+  ["scheduled", true],
+  ["in_play", true],
+  ["decided", false],
+  ["finalized", false],
+  ["abandoned", false],
+  ["forfeited", false],
+  ["cancelled", false],
+] as const satisfies ReadonlyArray<readonly [string, boolean]>;
+
+describe.skipIf(!HAS_DB)("getStageRosterDrift — a finished fixture is history, not an obligation", () => {
+  it("the status table covers the WHOLE live fixtures.status vocabulary — no status gets a side by default", async () => {
+    const [row] = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(c.oid) as def
+      from pg_constraint c
+      join pg_class t on t.oid = c.conrelid
+      where t.relname = 'fixtures' and c.contype = 'c'
+        and pg_get_constraintdef(c.oid) like '%status = ANY%'`;
+    expect(row?.def).toBeTruthy();
+    const vocabulary = [...row!.def.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
+    expect(vocabulary.length).toBeGreaterThan(1); // a one-element parse is a broken regex, not a vocabulary
+    expect([...vocabulary].sort()).toEqual(GHOST_BY_FIXTURE_STATUS.map(([s]) => s).toSorted());
+  });
+
+  it.each(GHOST_BY_FIXTURE_STATUS)(
+    "a withdrawn entrant whose ONLY fixture is '%s' is a ghost: %s",
+    async (status, stillExpectedToPlay) => {
+      const { auth } = await seedOrg();
+      const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B"]);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "L", config: {}, progression: null,
+      });
+      const { fixtures } = await generateStageFixtures(auth, stage!.id);
+      expect(fixtures).toHaveLength(1); // A v B — one fixture, so it really is A's ONLY one
+
+      // Written straight onto the row: several of these seven statuses have no
+      // product path that reaches them from a two-entrant league, and the
+      // query under test reads nothing but `status` and the two seat columns,
+      // so this is the whole input space. The real withdraw path is driven
+      // end to end in the last case of this block.
+      await sql`update fixtures set status = ${status} where id = ${fixtures[0]!.id}`;
+      const [seeded] = await sql<{ status: string }[]>`
+        select status from fixtures where id = ${fixtures[0]!.id}`;
+      expect(seeded!.status).toBe(status); // a case whose seed did not take proves nothing
+
+      await patchEntrant(auth, entrantByName.get("A")!, { status: "withdrawn" });
+
+      const drift = await getStageRosterDrift(auth, stage!.id);
+      expect(drift.ghosts.map((e) => e.display_name)).toEqual(stillExpectedToPlay ? ["A"] : []);
+      // B is active and sits on that same fixture whatever its status, so B is
+      // placed in every row of this table — the side the fix must not move.
+      expect(drift.unplaced).toEqual([]);
+    },
+  );
+
+  it("a withdrawn entrant on a played fixture AND a scheduled one is STILL a ghost — the mixed case", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id); // AB, AC, BC
+    const aId = entrantByName.get("A")!;
+    const aFixtures = fixtures.filter((f) => f.home_entrant_id === aId || f.away_entrant_id === aId);
+    expect(aFixtures).toHaveLength(2); // one to bury, one left owed
+    await sql`update fixtures set status = 'decided' where id = ${aFixtures[0]!.id}`;
+
+    await patchEntrant(auth, aId, { status: "withdrawn" });
+
+    // A's OTHER fixture is still scheduled, so A is genuinely still on the
+    // board and the banner is right. A rule that looked at one fixture of
+    // theirs — or at the newest — would get this wrong.
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.ghosts.map((e) => e.display_name)).toEqual(["A"]);
+  });
+
+  it("an ACTIVE entrant whose only fixture is already played is PLACED, not unplaced — the other false banner", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await sql`update fixtures set status = 'decided' where id = ${fixtures[0]!.id}`;
+
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.unplaced).toEqual([]);
+    expect(drift.ghosts).toEqual([]);
+  });
+
+  it("the reported defect, through the REAL withdraw path: a mid-league withdrawal leaves no banner at all", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrantByName } = await seedDivision(auth, ["A", "B", "C", "D"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id); // 6 — a 4-way round robin
+    await startDivision(auth, divisionId);
+    const aId = entrantByName.get("A")!;
+    const aFixtures = fixtures.filter((f) => f.home_entrant_id === aId || f.away_entrant_id === aId);
+    expect(aFixtures).toHaveLength(3);
+    // TWO of A's three played before the withdrawal, so withdrawal.ts's 50%
+    // rule picks `walkover` and leaves the played results standing. Under 50%
+    // it would EXPUNGE them instead (void + abandon), which is a different
+    // fixture shape and would not test what this case is for.
+    await decideFixture(auth, aFixtures[0]!.id);
+    await decideFixture(auth, aFixtures[1]!.id);
+
+    const out = await withdrawEntrantCascade(auth, aId);
+    expect(out.policy).toBe("walkover");
+
+    const aStatuses = (
+      await sql<{ status: string }[]>`
+        select status from fixtures
+        where stage_id = ${stage!.id} and (home_entrant_id = ${aId} or away_entrant_id = ${aId})
+        order by status`
+    ).map((r) => r.status);
+    expect(aStatuses).toEqual(["decided", "decided", "forfeited"]); // every one of them history
+
+    const drift = await getStageRosterDrift(auth, stage!.id);
+    expect(drift.ghosts).toEqual([]);
+    expect(drift.unplaced).toEqual([]);
   });
 });

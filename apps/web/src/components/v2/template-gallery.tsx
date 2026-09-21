@@ -548,6 +548,28 @@ export function TemplateGallery({
     <div className="space-y-5" data-testid="template-gallery">
       <p className="text-sm text-slate-500">{msg("templates.gallery.subtitle")}</p>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {/* FIRST in the grid, ahead of the catalog: "build your own" is the
+            path an organiser whose event is not one of the nine named formats
+            needs, and it was previously last — below nine cards, reachable
+            only after reading all of them. It carries the brand lime rather
+            than the slate dashed outline so it reads as the deliberate
+            alternative rather than the leftover.
+
+            `--mk-lime`, NOT Tailwind's `lime-400`: globals.css's own note
+            (:52-59) records that the two are different colours since v4
+            (#a3e635 vs #9ae600), and this is the token the header rule and the
+            nav CTA already use. */}
+        <button
+          type="button"
+          onClick={() => setMode("blank")}
+          data-testid="template-start-blank"
+          className="card card-blank-start flex flex-col items-start gap-2 p-5 text-left transition"
+        >
+          <span className="text-base font-semibold text-slate-700">
+            {msg("templates.gallery.startBlank.title")}
+          </span>
+          <span className="text-sm text-slate-500">{msg("templates.gallery.startBlank.desc")}</span>
+        </button>
         {templates.map((template) => (
           <TemplateCard
             key={template.key}
@@ -556,17 +578,6 @@ export function TemplateGallery({
             onSelect={() => setDetailKey(template.key)}
           />
         ))}
-        <button
-          type="button"
-          onClick={() => setMode("blank")}
-          data-testid="template-start-blank"
-          className="card flex flex-col items-start gap-2 border-dashed border-slate-300 p-5 text-left transition hover:border-purple-300 hover:bg-purple-50/40"
-        >
-          <span className="text-base font-semibold text-slate-700">
-            {msg("templates.gallery.startBlank.title")}
-          </span>
-          <span className="text-sm text-slate-500">{msg("templates.gallery.startBlank.desc")}</span>
-        </button>
       </div>
       {selected && (
         <TemplateDetailSheet

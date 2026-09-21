@@ -311,6 +311,8 @@
   "table.col.pointRatio": "Pts ratio",
   "table.pool": "Pool",
   "table.tieBreak": "Tied with {with} — split on {rule}",
+  "table.withdrawn": "Withdrawn",
+  "table.disqualified": "Disqualified",
   "table.tieBreak.points": "points",
   "table.tieBreak.wins": "wins",
   "table.tieBreak.diff": "goal/run difference",

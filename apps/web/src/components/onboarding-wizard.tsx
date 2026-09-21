@@ -3,21 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
+import { sportEmoji } from "@/lib/sport-emoji";
 
 interface SportOption {
   key: string;
   name: string;
 }
-
-const SPORT_EMOJI: Record<string, string> = {
-  football: "⚽",
-  cricket: "🏏",
-  volleyball: "🏐",
-  badminton: "🏸",
-  tabletennis: "🏓",
-  boardgame: "♟️",
-  generic: "🏅",
-};
 
 export function OnboardingWizard({ sports, orgSlug }: { sports: SportOption[]; orgSlug: string }) {
   const router = useRouter();
@@ -40,7 +31,7 @@ export function OnboardingWizard({ sports, orgSlug }: { sports: SportOption[]; o
       <div className="grid gap-3 sm:grid-cols-2">
         {sports.map((s) => (
           <div key={s.key} className="card flex items-center gap-3 p-4">
-            <span className="text-2xl">{SPORT_EMOJI[s.key] ?? "🏅"}</span>
+            <span className="text-2xl">{sportEmoji(s.key)}</span>
             <div>
               <p className="font-semibold text-slate-800">{s.name}</p>
               <p className="mt-0.5 text-xs text-slate-500">

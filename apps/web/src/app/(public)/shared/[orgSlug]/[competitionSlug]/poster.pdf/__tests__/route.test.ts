@@ -174,7 +174,7 @@ const E = (over: Partial<PublicEntrant>): PublicEntrant => ({
   kind: "individual",
   display_name: "Entrant",
   seed: 1,
-  status: "active",
+  status: "confirmed",
   members: [],
   team_display: null,
   badge_url: null,

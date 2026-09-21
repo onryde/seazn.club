@@ -38,6 +38,7 @@ const SCRIPT = "scripts/check-vitest-collection.ts";
 const C_GLOBBED = [
   "src/server/public-site/__tests__/champion.test.ts",
   "src/server/public-site/__tests__/competition-hub-db.test.ts",
+  "src/server/public-site/__tests__/competition-hub-field-filter.test.ts",
   "src/server/public-site/__tests__/competition-hub-schema.test.ts",
   "src/server/public-site/__tests__/competition-hub.test.ts",
   "src/server/public-site/__tests__/consent.test.ts",
@@ -103,6 +104,13 @@ const REST = [
   "src/server/public-site/__tests__/public-player-matches.test.ts",
   "src/server/public-site/__tests__/variant-label.test.ts",
   "src/server/public-site/__tests__/youth-name-policy-db.test.ts",
+  // Swiss withdrawal walkthrough (V412 — the public view now publishes a
+  // departed entrant so the standings can still NAME her). Two files landed:
+  // `competition-hub-field-filter` begins with "c" and is in C_GLOBBED above,
+  // this one does not and belongs here. Sixth wave running, and the gate
+  // reddened in CI the moment they landed — note it reds only HERE, in the
+  // repo-root scripts suite, which a green `cd apps/web && vitest` cannot see.
+  "src/server/public-site/__tests__/public-entrants-departed.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
