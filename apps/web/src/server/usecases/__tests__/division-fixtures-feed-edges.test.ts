@@ -25,7 +25,7 @@ import { sql } from "@/lib/db";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
-import { listDivisionFixtures } from "@/server/usecases/fixtures";
+import { listDivisionFixtures, listDivisionFixturesForBoard } from "@/server/usecases/fixtures";
 import { seedOrg, GENERIC_CONFIG } from "@/server/usecases/__tests__/_seed";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -165,5 +165,31 @@ describe.skipIf(!HAS_DB)("listDivisionFixtures — bracket feed edges reach the 
         "schedule.tbd",
       ),
     );
+  });
+
+  // The other half of `board-fixture-projection.test.ts`'s invariant, for the
+  // four columns this change added. The BOARD read is a narrower projection on
+  // payload-budget grounds (board-v3.spec.ts's "gap 15": five unread columns
+  // cost ~88 escaped bytes/fixture and put a 5-division board ~29KB over), and
+  // the board renders an empty seat from `home_slot_label` + its own
+  // `feedLabels()` over its OWN `tx<FeedRow[]>` read — it has no use for these
+  // on the row. Without this, the next person to "keep the two selects in
+  // sync" widens the board and nothing complains until CI's byte budget does.
+  it("does NOT add the feed columns to the board projection", async () => {
+    const { auth, divisionId } = await seedSetupKnockout();
+
+    const full = await listDivisionFixtures(auth, divisionId);
+    const board = await listDivisionFixturesForBoard(auth, divisionId);
+    expect(board.length).toBe(full.length);
+    expect(board.length).toBeGreaterThan(0); // the positive pair
+
+    for (const row of board as unknown as Record<string, unknown>[]) {
+      for (const col of ["winner_to_fixture", "winner_to_slot", "loser_to_fixture", "loser_to_slot"]) {
+        expect(row, `${col} reached the board projection`).not.toHaveProperty(col);
+      }
+    }
+    // …and the full read really does carry them, so the negative above is not
+    // passing because the seed produced no edges at all.
+    expect(full.some((f) => f.winner_to_fixture !== null)).toBe(true);
   });
 });
