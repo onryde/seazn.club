@@ -11,6 +11,7 @@
   "seeding.SEEDING_TIE_UNRESOLVED": "Resuelve todos los empates antes de confirmar: elige qué participante ocupa cada posición.",
   "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "El mismo participante está asignado a más de una posición. Corrige tus ediciones e inténtalo de nuevo.",
   "seeding.SEEDING_ENTRANT_FOREIGN": "Uno de los participantes clasificados ya no pertenece a esta división.",
+  "seeding.SEEDING_ENTRANT_WITHDRAWN": "Uno de los participantes clasificados se ha retirado. Vuelve a calcular la propuesta para ver quién queda: su lugar en el cuadro se queda vacío.",
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Una de las posiciones de destino pertenece a otra fase. Vuelve a calcular la propuesta e inténtalo de nuevo.",
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Una de las posiciones de destino ya está cubierta. Vuelve a calcular la propuesta para ver qué queda.",
   "seeding.SEEDING_CARRY_SOURCE_INVALID": "El arrastre de puntos necesita una fase de origen con una tabla de puntos: una liga, un grupo o un sistema suizo. Una eliminatoria, una escalera o un americano transmiten a la fase siguiente un orden de clasificación final, no puntos, así que no hay nada que arrastrar. Desactiva el arrastre en esta fase o toma el origen de una liga, un grupo o un sistema suizo.",

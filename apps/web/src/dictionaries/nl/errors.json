@@ -11,6 +11,7 @@
   "seeding.SEEDING_TIE_UNRESOLVED": "Los elke gelijke stand op voordat je bevestigt — kies welke deelnemer elke positie invult.",
   "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "Dezelfde deelnemer is aan meer dan één positie toegewezen. Corrigeer je wijzigingen en probeer het opnieuw.",
   "seeding.SEEDING_ENTRANT_FOREIGN": "Een van de geplaatste deelnemers hoort niet meer bij deze divisie.",
+  "seeding.SEEDING_ENTRANT_WITHDRAWN": "Een van de geplaatste deelnemers heeft zich teruggetrokken. Bereken het voorstel opnieuw om te zien wie er over is — haar plek in het schema blijft leeg.",
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Een van de doelposities hoort bij een andere fase. Bereken het voorstel opnieuw en probeer het nogmaals.",
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Een van de doelposities is al ingevuld. Bereken het voorstel opnieuw om te zien wat er nog over is.",
   "seeding.SEEDING_CARRY_SOURCE_INVALID": "Puntenoverdracht heeft een bronfase met een puntentabel nodig: een competitie, groep of Zwitsers systeem. Een knock-out, ladder of americano geeft de volgende fase een eindklassering door in plaats van punten, dus er is niets om over te dragen. Zet de overdracht voor deze fase uit, of neem als bron een competitie, groep of Zwitsers systeem.",

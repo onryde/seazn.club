@@ -3790,6 +3790,27 @@ function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
   return `${sourceIndex}:${base}`;
 }
 
+/** The entrants of `divisionId` who have LEFT the field — the complement of
+ *  the house "field" predicate `status in ('registered','confirmed')` that
+ *  generateStageFixturesWrite's `active` read and issueChallenge's
+ *  ladder_order initialisation both use. Same spelling as the two sites that
+ *  already ask this question directly (usecases/officials.ts's `withdrawn`
+ *  read, usecases/schedule-ai.ts's `entrantRows`), not a third one.
+ *
+ *  Why this question needs asking at all: a withdrawal is a STATUS FLIP, not
+ *  a delete. The row survives, and the standings SNAPSHOT deliberately keeps
+ *  her — engine-db/competition.ts derives its entrant set from fixture
+ *  home/away ids with no status filter, so the row she earned stays on the
+ *  public board. Every membership taken from the STANDINGS therefore
+ *  inherits withdrawn entrants and must intersect back against the field;
+ *  membership taken from the field query already has. */
+async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Set<string>> {
+  const rows = await tx<{ id: string }[]>`
+    select id from entrants
+    where division_id = ${divisionId} and status in ('withdrawn','disqualified')`;
+  return new Set(rows.map((r) => r.id));
+}
+
 /**
  * Compute (or recompute) a DRAFT seed proposal for a `timing: "setup"`
  * stage (design's API contract: POST /stages/{id}/seed-proposal). Never
@@ -3896,7 +3917,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // them apart. See its own doc comment.
     const seedOfKey = new Map(qualifiers.map((q) => [seedProposalKey(q.sourceIndex, q.descriptor), q.seed] as const));
 
-    const computedQualifiers = qualifiers.map((q) => ({
+    const resolvedQualifiers = qualifiers.map((q) => ({
       rank: q.seed,
       source: {
         stageId: resolved[q.sourceIndex]!.id,
@@ -3911,7 +3932,12 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       // keyed off this same `rank`; see confirmSeedProposal.
       destinationSlot: slotBySeed.get(q.seed)?.[0] ?? "",
     }));
-    if (computedQualifiers.some((q) => q.destinationSlot === "")) {
+    // Integrity check over the FULL resolved slate, BEFORE the departed
+    // filter below: it asks whether the generated TBD fixtures still match
+    // the seeding rules, and filtering first would let a departed
+    // qualifier's missing slot pass unnoticed (and, if every qualifier had
+    // departed, would hand `some()` an empty array to answer `false` to).
+    if (resolvedQualifiers.some((q) => q.destinationSlot === "")) {
       throw new HttpError(
         422,
         "this stage's generated TBD fixtures don't match its current seeding rules — regenerate them first",
@@ -3919,18 +3945,50 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
         { stageId },
       );
     }
-    const computedTies = ties.map((t) => ({
-      slots: t.descriptors.map((sourced) => {
-        // seedProposalKey on the read side too (Task 2) — must match the
-        // build side above exactly, or a best_nth tie resolves to whichever
-        // OTHER same-position/different-nth qualifier happened to be
-        // inserted last.
-        const seed = seedOfKey.get(seedProposalKey(sourced.sourceIndex, sourced.descriptor));
-        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(sourced.descriptor);
-      }),
-      entrantIds: t.entrantIds,
-      reason: t.reason,
-    }));
+    // A qualifier who has left the field is never OFFERED. Progression
+    // resolves over the standings tables, which deliberately still carry her
+    // (see departedEntrantIds) — so without this an organiser is shown, and
+    // pre-ticked into, a bracket seat for someone who has withdrawn.
+    //
+    // Her SEAT is left empty rather than closed up: nobody is promoted into
+    // the vacancy (owner decision pending), so every surviving qualifier
+    // keeps the seed and destination slot the engine gave her and the
+    // bracket simply gets smaller. This is the offer only — the binding
+    // refusal is confirmSeedProposal's, which also covers the `edits[]` and
+    // `tiePicks[]` routes this filter cannot see, and a draft computed
+    // BEFORE a withdrawal (a withdrawal does not change the frozen standings
+    // snapshot, so it does not stale the draft).
+    const departed = await departedEntrantIds(tx, stage.division_id);
+    const computedQualifiers = resolvedQualifiers.filter((q) => !departed.has(q.entrantId));
+    const survivingSlots = new Set(computedQualifiers.map((q) => q.destinationSlot));
+    const computedTies = ties
+      .map((t) => ({
+        slots: t.descriptors
+          .map((sourced) => {
+            // seedProposalKey on the read side too (Task 2) — must match the
+            // build side above exactly, or a best_nth tie resolves to whichever
+            // OTHER same-position/different-nth qualifier happened to be
+            // inserted last.
+            const seed = seedOfKey.get(seedProposalKey(sourced.sourceIndex, sourced.descriptor));
+            return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(sourced.descriptor);
+          })
+          // A tied slot whose qualifier has departed is no longer offered
+          // above, so leaving it in the tie would demand an edit for a seat
+          // that has no candidate left — and any candidate the organiser
+          // picked would then be double-assigned (she already holds her own
+          // slot), which is a dead end, not a refusal. `seedOfKey` is still
+          // built from the FULL slate, so the SURVIVING slots in a tie still
+          // resolve to their real slot ids rather than the descriptorKey
+          // fallback.
+          .filter((slot) => survivingSlots.has(slot)),
+        entrantIds: t.entrantIds.filter((id) => !departed.has(id)),
+        reason: t.reason,
+      }))
+      // Fewer than two candidates left is no longer an ambiguity to resolve,
+      // so dropping it is not the "silently ordered tie" the design forbids
+      // — there is nothing left to order. A tie with no surviving slots is
+      // likewise nothing to ask about.
+      .filter((t) => t.slots.length > 0 && t.entrantIds.length > 1);
 
     const computed = {
       qualifiers: computedQualifiers,
@@ -4081,6 +4139,31 @@ export async function confirmSeedProposal(
       select id from entrants where id in ${tx(entrantIds)} and division_id = ${stage.division_id}`;
     if (known.length !== new Set(entrantIds).size) {
       throw new HttpError(422, "a qualifier does not belong to this division", "SEEDING_ENTRANT_FOREIGN");
+    }
+    // ...and belongs to the FIELD, not merely to the division. A withdrawal
+    // is a status flip, so a departed entrant is still `known` above — and
+    // progression resolves over standings tables that deliberately still
+    // carry her (see departedEntrantIds). This is the binding refusal: it
+    // sits on the id set that is about to be FILLED, so it covers the
+    // computed slate, an `edits[]` override and a `tiePicks[]` order alike,
+    // and it catches a draft computed before the withdrawal (which the
+    // freshness check above cannot see — a withdrawal leaves the frozen
+    // standings snapshot, and therefore standingsHash, untouched).
+    //
+    // A refusal, not a silent drop: the organiser is told who has gone so
+    // they can recompute, rather than discovering a short bracket later.
+    // Deliberately NOT paired with a prune of the proposal row — an entrant
+    // can be un-withdrawn (patchEntrant), and a recompute then offers her
+    // again.
+    const departed = await departedEntrantIds(tx, stage.division_id);
+    const departedQualifiers = [...new Set(entrantIds)].filter((id) => departed.has(id));
+    if (departedQualifiers.length > 0) {
+      throw new HttpError(
+        422,
+        "a qualifier has withdrawn from this division — recompute the proposal",
+        "SEEDING_ENTRANT_WITHDRAWN",
+        { entrantIds: departedQualifiers },
+      );
     }
     // #554 — a bye seed owns TWO destination slots (its own bye fixture's
     // slot AND the winner-feed target's slot), but the wire-level
@@ -4286,6 +4369,55 @@ export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStage
   }
 }
 
+/** A change to WHO IS IN THE FIELD invalidates any `timing: "setup"` draft
+ *  proposal in the division — mark it stale and recompute it against the
+ *  current field, exactly as markDependentSeedProposalsStale does for a
+ *  standings change. Division-scoped rather than source-scoped because a
+ *  withdrawal names no stage: it changes every dependent proposal at once,
+ *  whichever source each one draws from.
+ *
+ *  Why this is not optional. A withdrawal does NOT move the frozen standings
+ *  snapshot, so it does not move `standingsHash` either — the draft the
+ *  organiser is looking at stays 'draft' and keeps naming her. And the draft
+ *  panel's ONLY button is Confirm (progression-panel.tsx renders Recompute on
+ *  its null and stale branches, never on a draft), so without this the
+ *  organiser meets confirmSeedProposal's refusal with no control on the
+ *  screen that can clear it. Staling the row is what puts the existing
+ *  Recompute button in front of them — and the recompute that follows here
+ *  usually means they never see the refusal at all.
+ *
+ *  Called on BOTH directions of the flip (patchEntrant, the single status
+ *  funnel — withdrawEntrantCascade ends by calling it): an entrant who is
+ *  un-withdrawn must be OFFERED again, and a proposal computed while she was
+ *  out would otherwise keep her out until something else happened to stale it.
+ *
+ *  Best-effort throughout, like its sibling: a recompute that now trips (rules
+ *  unsatisfiable, already confirmed) leaves the stale row for the organiser to
+ *  act on rather than failing the withdrawal that already committed. */
+export async function markFieldChangeSeedProposalsStale(auth: AuthCtx, divisionId: string): Promise<void> {
+  const affected = await withTenant(auth.orgId, async (tx) => {
+    const rows = await tx<{ stage_id: string }[]>`
+      select p.stage_id from stage_seed_proposals p
+      join stages s on s.id = p.stage_id
+      where s.division_id = ${divisionId}
+        and p.status = 'draft'
+        and s.progression is not null
+        and s.progression ->> 'timing' = 'setup'`;
+    const ids = rows.map((r) => r.stage_id);
+    if (ids.length > 0) {
+      await tx`update stage_seed_proposals set status = 'stale' where stage_id in ${tx(ids)} and status = 'draft'`;
+    }
+    return ids;
+  });
+  for (const stageId of affected) {
+    try {
+      await computeSeedProposal(auth, stageId);
+    } catch {
+      // best-effort, see docstring
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Ladder challenges (Jul3/08 §6): no pre-generated fixtures — players issue
 // challenges within range; the result reorders the ladder (scoring hook).
@@ -4343,6 +4475,28 @@ export async function issueChallenge(
     const ci = order.indexOf(input.challenger_id);
     const oi = order.indexOf(input.opponent_id);
     if (ci < 0 || oi < 0) throw new HttpError(422, "both players must be on the ladder");
+    // Presence on the ladder is not eligibility. `ladder_order` is written
+    // ONCE, from the live field, and never pruned afterwards; a withdrawal
+    // is a status flip that leaves her row and her rung in place, so the
+    // check above waves a departed player through in EITHER role.
+    //
+    // Filtered here, at read time, rather than pruned from `config` when she
+    // withdraws: a pruned array cannot be un-pruned, and an entrant CAN be
+    // un-withdrawn (patchEntrant) — `ladder_order` only initialises while it
+    // is empty, so she would never be re-seated and would silently lose the
+    // rung she earned. Read-time filtering also cannot leave stale config
+    // behind, and needs no matching hook on the un-withdraw path.
+    //
+    // BOTH sides, checked together: she can be the challenger or the
+    // opponent, and a guard that looks at one is half a fix.
+    const departed = await departedEntrantIds(tx, stage.division_id);
+    if (departed.has(input.challenger_id) || departed.has(input.opponent_id)) {
+      throw new HttpError(
+        422,
+        "a player who has withdrawn from this division can neither issue nor receive a challenge",
+        "LADDER_ENTRANT_WITHDRAWN",
+      );
+    }
     if (oi >= ci) throw new HttpError(422, "you can only challenge upward");
     const range = typeof stage.config.challengeRange === "number" ? stage.config.challengeRange : 3;
     if (ci - oi > range) {

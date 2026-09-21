@@ -11,6 +11,7 @@
   "seeding.SEEDING_TIE_UNRESOLVED": "Resolve every tied slot before confirming — pick which entrant fills each one.",
   "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "The same entrant is assigned to more than one slot. Fix your edits and try again.",
   "seeding.SEEDING_ENTRANT_FOREIGN": "One of the qualifying entrants no longer belongs to this division.",
+  "seeding.SEEDING_ENTRANT_WITHDRAWN": "One of the qualifying entrants has withdrawn. Recompute the proposal to see who is left — their place in the draw stays empty.",
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "One of the destination slots belongs to a different stage. Recompute the proposal and try again.",
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "One of the destination slots is already filled. Recompute the proposal to see what's left.",
   "seeding.SEEDING_CARRY_SOURCE_INVALID": "Carry-over needs a source stage with a points table — a league, group or Swiss stage. A knockout, ladder or Americano stage hands the next stage a finishing order rather than points, so there is nothing to carry over. Turn carry-over off for this stage, or source it from a league, group or Swiss stage.",

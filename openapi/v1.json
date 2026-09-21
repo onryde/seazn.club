@@ -24869,7 +24869,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal/confirm": {
       "post": {
-        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_TIE_UNRESOLVED",
+        "summary": "Confirm a draft proposal: fills the stage's TBD fixtures via the same slot-fill pathway as intra-bracket advancement, never regenerates. 409 SEEDING_PROPOSAL_STALE/SEEDING_ALREADY_CONFIRMED/SEEDING_FIXTURES_ALREADY_FILLED, 422 SEEDING_EDIT_UNKNOWN_SLOT/SEEDING_SLOT_DOUBLE_ASSIGNED/SEEDING_SLOT_FOREIGN_FIXTURE/SEEDING_ENTRANT_FOREIGN/SEEDING_ENTRANT_WITHDRAWN (an entrant about to be filled has withdrawn or been disqualified — recompute the proposal; her seat is left empty, nobody is promoted into it)/SEEDING_TIE_UNRESOLVED",
         "tags": [
           "stages"
         ],
@@ -94333,7 +94333,7 @@
     },
     "/api/v1/stages/{id}/challenges": {
       "post": {
-        "summary": "Ladder challenge: creates the fixture on demand; result reorders the ladder (Pro `formats.advanced`)",
+        "summary": "Ladder challenge: creates the fixture on demand; result reorders the ladder (Pro `formats.advanced`). 422 LADDER_ENTRANT_WITHDRAWN when either side has withdrawn or been disqualified — `config.ladder_order` keeps her rung (a withdrawal is a status flip, and she can be un-withdrawn), so presence in that array is not eligibility",
         "tags": [
           "stages"
         ],

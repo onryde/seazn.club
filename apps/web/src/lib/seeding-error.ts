@@ -51,6 +51,17 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  validateStageProgression's save-time check — so it has a real call site
  *  today, independent of any rules-editor UI.
  *
+ *  SEEDING_ENTRANT_WITHDRAWN is the 16th. confirmSeedProposal throws it when
+ *  an entrant about to be FILLED into the bracket has left the field
+ *  (`status in ('withdrawn','disqualified')`) — reachable from the computed
+ *  slate, an `edits[]` override or a `tiePicks[]` order alike, and most
+ *  commonly from a draft computed BEFORE the withdrawal (a withdrawal leaves
+ *  the frozen standings snapshot untouched, so it does not stale the draft).
+ *  It needed a code of its own rather than SEEDING_ENTRANT_FOREIGN's: she
+ *  does still belong to the division — that copy would send an organiser
+ *  looking for a roster mistake that isn't there — and the action that fixes
+ *  it is a recompute, not a correction.
+ *
  *  SEEDING_CARRY_SOURCE_INVALID is the 15th, added by F6 (#625) under the
  *  design of record's own authorisation to "reuse or add beside seeding-error
  *  helpers" (docs/superpowers/specs/2026-09-15-standings-carry-over-f6-design.md,
@@ -74,6 +85,7 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_TIE_UNRESOLVED",
   "SEEDING_SLOT_DOUBLE_ASSIGNED",
   "SEEDING_ENTRANT_FOREIGN",
+  "SEEDING_ENTRANT_WITHDRAWN",
   "SEEDING_SLOT_FOREIGN_FIXTURE",
   "SEEDING_FIXTURES_ALREADY_FILLED",
   "SEEDING_CARRY_SOURCE_INVALID",
