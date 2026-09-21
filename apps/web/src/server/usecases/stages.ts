@@ -893,21 +893,25 @@ function walkoverDepartedQualifiers(
       awardTo.set(u.fixtureId, u.walkoverTo);
     }
   }
-  // A structural BYE held by a departed qualifier is the same shape one round
-  // earlier: `buildSingleElim` awards it to her before anybody withdrew, and
-  // baking that award would record a withdrawn entrant as the WINNER of a
-  // fixture. Void it too, and drop the award so nothing downstream (the
-  // status, the outcome, the third pass's winner feed) treats it as settled.
-  for (const g of gen) {
-    if (g.award !== undefined && departed.has(g.award)) voided.add(g.extKey);
-  }
   if (awardTo.size === 0 && voided.size === 0) return { gen, voided };
   // The two sets are disjoint by construction: a line is awarded only when
   // its opponent is live, and voided only when it is not.
+  //
+  // Stripping the award is what covers a structural BYE whose holder departed
+  // — `buildSingleElim` awarded it to her before anybody withdrew, and the
+  // insert below reads `g.award` for BOTH the status and the outcome, so a
+  // voided line that kept its award would still be written `forfeited` with a
+  // withdrawn entrant recorded as the WINNER. The line itself is already in
+  // `voided`: her bye fixture seats her in `home`, so the engine reports it
+  // like any other and the recipient-less branch above catches it. A second,
+  // explicit `g.award && departed.has(g.award)` pass was written here first
+  // and removed — mutation-tested as a true equivalent (nothing could kill
+  // it), which is the evidence that this strip is the real guard.
   return {
     gen: gen.map((g) => {
       if (voided.has(g.extKey)) {
-        const { award: _awardedToNobody, ...rest } = g;
+        const { award: awardedToNobody, ...rest } = g;
+        void awardedToNobody;
         return rest;
       }
       const winner = awardTo.get(g.extKey);
@@ -4446,6 +4450,24 @@ export async function confirmSeedProposal(
     // Keyed on the SLOT, not on "which entrant departed": a slot the fill
     // loop did not touch is vacated whatever the reason. Guarded on the seat
     // still being null so a partial re-confirm cannot relabel a filled side.
+    //
+    // RETRACTION (2026-09-21, re-review). The first round of this work
+    // reported the `!expandedSlots.has(slot)` filter as independently
+    // load-bearing, on the reasoning that it "protects a slot expanded but
+    // silently unfilled". That is FALSE and is withdrawn: the
+    // `SEEDING_FIXTURES_ALREADY_FILLED` check above refuses the whole confirm
+    // if any expanded slot is non-null BEFORE this loop runs, so every one of
+    // them is null going in and filled coming out — the `*_entrant_id is null`
+    // predicate below refuses exactly the rows the filter would. Each guard
+    // alone is an equivalent mutant (verified: neither kills a test on its
+    // own). What makes the filter load-bearing is the doubly-vacated branch
+    // just above, which VOIDS a line — drop the filter and every seeded line
+    // looks doubly vacated and the whole bracket is abandoned. Dropping both
+    // guards together relabels a seated qualifier as a bye, which
+    // "a FULL slate stamps no bye anywhere" in vacated-seat-advancement
+    // catches. Recorded because a wrong reason that survives is worse than an
+    // uncovered line: the next reader would trust this filter to be doing
+    // something it is not.
     //
     // NOT symmetrical with the `on_complete` path's own answer
     // (`walkoverDepartedQualifiers`), which seats the departed qualifier and

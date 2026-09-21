@@ -21,6 +21,10 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { LadderPanel } from "@/components/v2/ladder-panel";
+// Outside a DictProvider `useMsg` falls back to the English catalog, so the
+// chip's expected words come from the dictionary rather than being typed here
+// — a copy change moves the test with it.
+import { messages } from "@/lib/messages";
 
 const ENTRANTS = { a: "Ana", b: "Bo", c: "Cai", d: "Dee" };
 const ORDER = ["a", "b", "c", "d"];
@@ -71,6 +75,22 @@ describe("LadderPanel — a withdrawn player is not selectable", () => {
 
   it("marks nobody when nobody has left", () => {
     expect(render([])).not.toContain("data-ladder-withdrawn");
+  });
+
+  it("the mark SAYS she has withdrawn — an unlabelled chip is a grey dot", () => {
+    // Re-review M5/N29: every assertion here was on the `data-*` hook, so
+    // blanking the chip's text left the suite green. The hook is for tests;
+    // the words are the only thing an organiser reads, and the whole reason
+    // the row is kept rather than filtered is to SAY what happened to it.
+    const label = (messages as Record<string, string>)["ladder.withdrawn"];
+    expect(label, "ladder.withdrawn is missing from the English catalog").toBeTruthy();
+    const html = render(["c"]);
+    expect(html).toMatch(
+      new RegExp(`data-ladder-withdrawn="c"[^>]*>\\s*${label}\\s*<`),
+    );
+    // ...and the label is absent entirely when nobody has left, so it is the
+    // chip carrying it and not some fixed caption elsewhere on the panel.
+    expect(render([])).not.toContain(label);
   });
 
   it("a departure does not renumber the rungs above or below her", () => {

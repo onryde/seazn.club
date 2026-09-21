@@ -248,6 +248,43 @@ describe.skipIf(!HAS_DB)("a vacated seat's walkover advances its winner (re-revi
     expect(stage!.status).toBe("complete");
   });
 
+  it("a line BOTH of whose published seats vacated is void, not a match with two byes", async () => {
+    // Five of eight leave. The survivors re-rank to seeds 1, 2 and 3, so the
+    // vacancies are the bottom of the draw — and seeds 4 and 5 are each
+    // other's first-round opponent, which leaves one published line with
+    // nobody on either side. Stamping two byes there would produce a
+    // `scheduled` fixture `awardSeededByes` cannot settle (it needs one real
+    // seat), sitting on the run sheet as a playable match forever. Same owner
+    // ruling as generation: no live recipient, so the line is void.
+    const rig = await setup(8);
+    const rows = await confirmAfterDepartures(rig, 5);
+
+    const dead = rows.filter((r) => r.status === "abandoned");
+    expect(dead).toHaveLength(1);
+    expect(dead[0]!.home_entrant_id).toBeNull();
+    expect(dead[0]!.away_entrant_id).toBeNull();
+    expect(dead[0]!.outcome).toBeNull();
+    // It is not dressed as a bye: a void is neither a forfeit nor a sit-out,
+    // and `bracket.slot.bye` is the marker the run sheet's bye branch reads.
+    expect(dead[0]!.home_slot_label?.key).not.toBe("bracket.slot.bye");
+    expect(dead[0]!.away_slot_label?.key).not.toBe("bracket.slot.bye");
+    // Nothing anywhere in the stage is a playable line with an empty seat.
+    expect(
+      rows.filter(
+        (r) => r.status === "scheduled" && r.round_no === 1 && r.home_entrant_id === null,
+      ),
+    ).toEqual([]);
+
+    // The three survivors each got their walkover and each advanced...
+    expect(rows.filter((r) => r.status === "forfeited")).toHaveLength(3);
+    const semis = rows.filter((r) => r.round_no === 2);
+    const seated = semis.map(
+      (r) => Number(r.home_entrant_id !== null) + Number(r.away_entrant_id !== null),
+    );
+    // ...so one semi has both players and the other, fed by the void, has one.
+    expect(seated.sort()).toEqual([1, 2]);
+  });
+
   it("plays through to a champion: 8 qualifiers, one withdraws (three rounds)", async () => {
     const rig = await setup(8);
     let rows = await confirmAfterDepartures(rig, 1);

@@ -132,7 +132,13 @@ describe("ProgressionPanel — a draft with NOBODY in it (review finding F1)", (
     const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal: emptyDraft })} />);
     expect(html).toContain('data-progression-state="draft-empty"');
     expect(html).toContain("Nobody has qualified for this stage");
-    expect(html).toContain("Recompute");
+    // Anchored on the BUTTON, not on the word: `progression.noQualifiersLeft`
+    // ends "...Recompute once the field is settled", so a bare
+    // `toContain("Recompute")` is satisfied by the paragraph alone and stayed
+    // green with the button deleted (re-review M1/N17b). A card that explains
+    // the dead end without offering the way out of it is the defect F1 exists
+    // to close.
+    expect(html).toMatch(/<button[^>]*>\s*Recompute\s*<\/button>/);
     expect(html).not.toContain("Confirm proposal");
     expect(html).not.toContain("<table");
   });

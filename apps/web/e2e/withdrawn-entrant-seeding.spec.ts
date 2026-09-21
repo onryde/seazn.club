@@ -407,3 +407,228 @@ test("F2: confirming a short draw leaves a settled walkover, not a match awaitin
     await expectNoHorizontalScroll(page);
   }
 });
+
+// I3 (re-review) — the page's own `departedEntrantIds` (division page,
+// `entrants.filter(status === "withdrawn" || status === "disqualified")`) is
+// what narrows BOTH panels' pickers, and only its `withdrawn` half had ever
+// been driven. A disqualification is the same status flip by another route
+// (patchEntrant, not the withdraw endpoint) and reaches the same <select>.
+test("the seeding proposal screen does not offer a DISQUALIFIED qualifier either", async ({
+  page,
+  request,
+}, testInfo) => {
+  const rig = await seedToProposal(request, `${TAG}-dq`);
+  const byId = new Map(rig.entrants.map((e) => [e.id, e.display_name]));
+
+  const before = await proposalQualifierIds(request, rig.koStageId);
+  expect(before).toHaveLength(8);
+  const removed = before[2]!;
+  const removedName = byId.get(removed)!;
+
+  const url = await divisionPath(request, rig.divisionId, "?tab=fixtures");
+  await page.goto(url);
+  const panel = page.locator('[data-progression-state="draft"]');
+  await expect(panel).toBeVisible();
+  const offeredBefore = (await panel.locator("tbody tr select option").allTextContents()).map((t) =>
+    t.trim(),
+  );
+  expect(offeredBefore, "she has qualified — she must be offered BEFORE the DQ").toContain(
+    removedName,
+  );
+
+  // Disqualified, not withdrawn: a PATCH on the entrant, which is the OTHER
+  // writer of `entrants.status` in this codebase.
+  const dq = await apiJson(request, `/api/v1/entrants/${removed}`, "PATCH", {
+    status: "disqualified",
+  });
+  expect(dq.status, JSON.stringify(dq.error)).toBeLessThan(300);
+
+  await page.goto(url);
+  await expect(panel).toBeVisible();
+  const offeredAfter = (await panel.locator("tbody tr select option").allTextContents()).map((t) =>
+    t.trim(),
+  );
+  expect(offeredAfter.length, "no options to inspect — the panel rendered no pickers").toBeGreaterThan(0);
+  expect(offeredAfter).not.toContain(removedName);
+  // The positive pair: nobody ELSE lost their place in the menu, so this is a
+  // filter on her status and not an emptied list.
+  for (const name of new Set(offeredBefore.filter((n) => n !== removedName))) {
+    expect(offeredAfter, `${name} vanished from the pickers too`).toContain(name);
+  }
+
+  await screenshotAtWidths(page, testInfo, "proposal-after-disqualification", [1280, 768, 320]);
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
+});
+
+interface KoFixture {
+  id: string;
+  stage_id: string;
+  round_no: number;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  home_slot_label: { key?: string } | null;
+  away_slot_label: { key?: string } | null;
+  status: string;
+  outcome: { kind?: string; winner?: string } | null;
+}
+
+async function koFixtures(
+  request: APIRequestContext,
+  divisionId: string,
+  koStageId: string,
+): Promise<KoFixture[]> {
+  const res = await apiJson<KoFixture[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  expect(res.status, JSON.stringify(res.error)).toBe(200);
+  return res.data!.filter((f) => f.stage_id === koStageId);
+}
+
+async function playOut(request: APIRequestContext, fixtureId: string): Promise<void> {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  const scored = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data!.last_seq,
+    type: "generic.result",
+    payload: { p1Score: 2, p2Score: 0 },
+  });
+  expect(scored.status, JSON.stringify(scored.error)).toBe(201);
+}
+
+// C1 (re-review) — the half a green usecase suite still cannot settle: an
+// organiser with a withdrawn qualifier has to be able to RUN THE COMPETITION
+// TO A WINNER. The vacated seat's walkover was settling its own fixture and
+// feeding nobody, so every bracket deeper than one round died at round two
+// with a final that said "awaiting a draw" forever.
+test("C1: a bracket with a vacated seat plays through to a champion", async ({
+  page,
+  request,
+}, testInfo) => {
+  const rig = await seedToProposal(request, `${TAG}-champ`);
+  const before = await proposalQualifierIds(request, rig.koStageId);
+  expect(before).toHaveLength(8);
+
+  const withdrawn = await apiJson(request, `/api/v1/entrants/${before[0]!}/withdraw`, "POST");
+  expect(withdrawn.status, JSON.stringify(withdrawn.error)).toBeLessThan(300);
+  const fresh = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/stages/${rig.koStageId}/seed-proposal`,
+    "POST",
+  );
+  expect(fresh.status, JSON.stringify(fresh.error)).toBe(201);
+  const confirmed = await apiJson(
+    request,
+    `/api/v1/stages/${rig.koStageId}/seed-proposal/confirm`,
+    "POST",
+    { proposalId: fresh.data!.id },
+  );
+  expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+
+  // The walkover's winner is ALREADY standing in her semifinal — the assertion
+  // that fails on the shipped build, before a single quarterfinal is played.
+  let fixtures = await koFixtures(request, rig.divisionId, rig.koStageId);
+  const bye = fixtures.find((f) => f.outcome?.kind === "award")!;
+  expect(bye, "no walkover was recorded for the vacated seat").toBeTruthy();
+  const survivor = bye.outcome!.winner!;
+  const semiSeats = fixtures
+    .filter((f) => f.round_no === 2)
+    .flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
+  expect(semiSeats, "the walkover's winner never reached round two").toContain(survivor);
+
+  // Now run the whole thing off. Every round must be startable when reached.
+  for (const round of [1, 2, 3]) {
+    fixtures = await koFixtures(request, rig.divisionId, rig.koStageId);
+    const open = fixtures.filter((f) => f.round_no === round && f.status === "scheduled");
+    for (const f of open) {
+      expect(
+        f.home_entrant_id && f.away_entrant_id,
+        `round ${round} fixture ${f.id} has an empty seat — nothing will ever fill it`,
+      ).toBeTruthy();
+      await playOut(request, f.id);
+    }
+  }
+  fixtures = await koFixtures(request, rig.divisionId, rig.koStageId);
+  const final = fixtures.find((f) => f.round_no === 3)!;
+  expect(final.outcome?.winner, "the final never produced a winner").toBeTruthy();
+
+  const done = await apiJson(request, `/api/v1/stages/${rig.koStageId}/complete`, "POST");
+  expect(done.status, JSON.stringify(done.error)).toBe(200);
+
+  // And the screen says so rather than still asking for a draw.
+  const url = await divisionPath(request, rig.divisionId, "?tab=fixtures");
+  await page.goto(url);
+  await expect(page.getByText("to schedule")).toHaveCount(0);
+  await screenshotAtWidths(page, testInfo, "vacated-seat-champion", [1280, 768, 320]);
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
+});
+
+// C2 (owner ruling 2026-09-21) — a walkover needs a live recipient. Where a
+// published line lost BOTH its seats there is nobody to walk over to, so the
+// line is void. This drives what the ORGANISER SEES of that: a void is
+// neither a forfeit nor a bye, and it must not sit in the "to schedule" count
+// as a match somebody could put on a court.
+test("C2: a line with nobody left on either side renders as void, not as a match to play", async ({
+  page,
+  request,
+}, testInfo) => {
+  const rig = await seedToProposal(request, `${TAG}-void`);
+  const before = await proposalQualifierIds(request, rig.koStageId);
+  expect(before).toHaveLength(8);
+
+  // Five of eight leave: the survivors re-rank to the top three seeds, and
+  // seeds 4 and 5 — each other's first-round opponent — are both vacant.
+  for (const id of before.slice(-5)) {
+    const out = await apiJson(request, `/api/v1/entrants/${id}/withdraw`, "POST");
+    expect(out.status, JSON.stringify(out.error)).toBeLessThan(300);
+  }
+  const fresh = await apiJson<{ id: string; computed: { qualifiers: unknown[] } }>(
+    request,
+    `/api/v1/stages/${rig.koStageId}/seed-proposal`,
+    "POST",
+  );
+  expect(fresh.status, JSON.stringify(fresh.error)).toBe(201);
+  expect(fresh.data!.computed.qualifiers).toHaveLength(3);
+  const confirmed = await apiJson(
+    request,
+    `/api/v1/stages/${rig.koStageId}/seed-proposal/confirm`,
+    "POST",
+    { proposalId: fresh.data!.id },
+  );
+  expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+
+  const fixtures = await koFixtures(request, rig.divisionId, rig.koStageId);
+  const dead = fixtures.filter((f) => f.status === "abandoned");
+  expect(dead, "the doubly-vacated line was not voided").toHaveLength(1);
+  expect(dead[0]!.outcome, "a void line must not record a winner").toBeNull();
+  expect(dead[0]!.home_entrant_id).toBeNull();
+  expect(dead[0]!.away_entrant_id).toBeNull();
+  // Not dressed as a bye: `bracket.slot.bye` is the marker the run sheet's
+  // bye branch reads, and a void is not a sit-out.
+  expect(dead[0]!.home_slot_label?.key).not.toBe("bracket.slot.bye");
+  expect(dead[0]!.away_slot_label?.key).not.toBe("bracket.slot.bye");
+  // No first-round line is still offered as playable with an empty seat.
+  expect(
+    fixtures.filter(
+      (f) => f.round_no === 1 && f.status === "scheduled" && f.home_entrant_id === null,
+    ),
+  ).toEqual([]);
+
+  const url = await divisionPath(request, rig.divisionId, "?tab=fixtures");
+  await page.goto(url);
+  // Seven fixtures in the stage; three walkovers and one void are settled, so
+  // three remain owed: two semifinals' worth of... no — the two semis and the
+  // final are the three, and NONE of the four decided round-one lines counts.
+  await expect(page.getByText("3 to schedule").first()).toBeVisible();
+  await expect(page.getByText("4 to schedule")).toHaveCount(0);
+  // The void says what it is, in the organiser's own dictionary copy.
+  await expect(page.getByText("abandoned").first()).toBeVisible();
+
+  await screenshotAtWidths(page, testInfo, "doubly-vacated-void", [1280, 768, 320]);
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
+});
