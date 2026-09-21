@@ -38,6 +38,7 @@ import {
   progressionSize,
   resolveProgression,
   validatePointsRule,
+  withdrawBracketEntrant,
   type BracketFixture,
   type FixtureStatus,
   type PoolTable,
@@ -801,6 +802,91 @@ function bracketToGen(bracket: GeneratedBracket, laneDepth: number): GenFixture[
       ...(f.thirdPlace ? { thirdPlace: true } : {}),
       ...(f.conditional ? { conditional: true } : {}),
     };
+  });
+}
+
+/** Spec 05 §5's own stage-kind split FOR THE WITHDRAWAL POLICY: these are the
+ *  kinds that walk a departure over to the opponent. League/group/swiss
+ *  expunge it; everything else (including `page_playoff`) voids the remaining
+ *  games as an open format.
+ *
+ *  Deliberately NOT this file's other `BRACKET_KINDS` (further down, and in
+ *  engine-db/competition.ts and public-site/champion.ts): that set means
+ *  "this stage is bracket-SHAPED" and contains `page_playoff`. This one is
+ *  the narrower list the engine's `withdrawBracketEntrant` accepts, and the
+ *  exact list `withdrawEntrantCascade` dispatches on — the two are not
+ *  interchangeable, and widening this one would silently start walking over
+ *  page-playoff fixtures that the cascade voids.
+ *
+ *  Exported so withdrawal.ts and the generation path below read ONE list: the
+ *  whole point of F14 is that "withdraw then generate" and "generate then
+ *  withdraw" agree, and two private copies of this set is the obvious way for
+ *  them to stop agreeing. */
+export const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set([
+  "knockout",
+  "double_elim",
+  "stepladder",
+]);
+
+const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
+
+/** F14 — owner ruling 2026-09-21. A qualifier who departed BEFORE the bracket
+ *  was generated keeps their drawn seat, and their pairing becomes a walkover
+ *  for the surviving side. The draw is preserved; nobody is promoted.
+ *
+ *  The POLICY is the cascade's own: `withdrawBracketEntrant` is the same pure
+ *  engine function `withdrawEntrantCascade` calls once the bracket exists, so
+ *  the two orderings of "withdraw" and "generate" cannot drift onto different
+ *  rules. Only the APPLICATION differs, and it has to — at generation time the
+ *  fixture has no row and no id, so there is nothing to post a `core.forfeit`
+ *  scoring event against. The same OUTCOME is baked into the insert instead:
+ *  both seats filled, `status: 'forfeited'`, `{kind: 'award', winner}`, which
+ *  is precisely the shape every sport kernel emits for a two-sided walkover
+ *  (and which `isOneSidedAwardBye` keeps separate from a real bye).
+ *
+ *  Every line is fed in as `scheduled`, byes included. Marking an
+ *  already-awarded bye SETTLED (which is what the post-generation cascade
+ *  sees, and what this code did first) changes NOTHING and was removed as
+ *  decoration: a mutation sweep proved the branch inert, because the engine
+ *  only ever emits a ONE-SIDED bye, so `withdrawBracketEntrant` finds no
+ *  opponent to hand the walkover to and the update is discarded below either
+ *  way. The bye is left alone by the `walkoverTo === undefined` arm, which
+ *  IS covered. */
+function walkoverDepartedQualifiers(
+  stageId: string,
+  kind: string,
+  gen: GenFixture[],
+  departed: ReadonlySet<string>,
+): GenFixture[] {
+  const fixtures: BracketFixture[] = gen.map((g) => ({
+    id: g.extKey,
+    round: g.roundNo,
+    status: "scheduled" as const,
+    ...(g.home === null ? {} : { home: g.home }),
+    ...(g.away === null ? {} : { away: g.away }),
+  }));
+  const awardTo = new Map<string, string>();
+  for (const entrantId of departed) {
+    const { updates } = withdrawBracketEntrant(
+      { id: stageId, kind: kind as "knockout" | "double_elim" | "stepladder" },
+      entrantId,
+      fixtures,
+    );
+    for (const u of updates) {
+      if (u.status !== "walkover") continue;
+      // The cascade's own rule for a walkover with nobody to receive it (see
+      // `withdrawEntrantCascade`'s "A TBD opponent can't receive a walkover"
+      // step): void it, never award it. Here that means leaving the line
+      // alone — a pairing BOTH of whose qualifiers departed advances nobody,
+      // rather than handing the round on to someone who is also gone.
+      if (u.walkoverTo === undefined || departed.has(u.walkoverTo)) continue;
+      awardTo.set(u.fixtureId, u.walkoverTo);
+    }
+  }
+  if (awardTo.size === 0) return gen;
+  return gen.map((g) => {
+    const winner = awardTo.get(g.extKey);
+    return winner === undefined ? g : { ...g, award: winner };
   });
 }
 
@@ -1775,11 +1861,28 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       ? (stage.config.qualified as string[])
       : null;
     let entrants: ActiveEntrant[];
+    // F14 (owner ruling 2026-09-21): the qualifiers who have since departed.
+    // Empty for every path but a BRACKET drawing from `config.qualified`.
+    let departedQualifiers: ReadonlySet<string> = EMPTY_ID_SET;
     if (qualified) {
       const activeIds = new Set(active.map((e) => e.id));
-      entrants = qualified
-        .filter((id) => activeIds.has(id))
-        .map((id, i) => ({ id, seed: i + 1 }));
+      if (BRACKET_WALKOVER_KINDS.has(stage.kind)) {
+        // A bracket's qualification order IS the draw, so a departure must not
+        // move anybody: re-seeding the SURVIVORS 1..n (what this did until
+        // F14) slides every later qualifier up a seat, into a different half
+        // of the draw and against a different opponent — a silent promotion,
+        // and one that also robs the departed qualifier's opponent of the
+        // walkover they are owed. Keep the published positions; the pairings
+        // that hold a departed qualifier become walkovers below.
+        entrants = qualified.map((id, i) => ({ id, seed: i + 1 }));
+        const gone = qualified.filter((id) => !activeIds.has(id));
+        if (gone.length > 0) departedQualifiers = new Set(gone);
+      } else {
+        // A table stage has no draw to preserve and no opponent to walk over
+        // to: nothing has been played, so spec 05 §5's policy for these kinds
+        // is EXPUNGE — the departed entrant simply is not in the field.
+        entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1 }));
+      }
     } else {
       entrants = active;
     }
@@ -1823,6 +1926,14 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
     } else {
       gen = generate(stage.kind, stage.config, entrants, poolIds);
+    }
+
+    // F14: the draw above was built over the FULL qualification list, so every
+    // survivor sits where the published draw put them. Settle the lines that
+    // hold a departed qualifier as walkovers, off the same engine policy the
+    // post-generation cascade uses.
+    if (departedQualifiers.size > 0) {
+      gen = walkoverDepartedQualifiers(stageId, stage.kind, gen, departedQualifiers);
     }
 
     // Guard against the misleading "nothing new — up to date" success shape
@@ -2018,7 +2129,16 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
 
     // Third pass: propagate bye awards into their winner feeds (one lookup
     // for all byes, then one fill per slot side).
-    const awarded = gen.filter((g) => g.award !== undefined && byKey.has(g.extKey));
+    // F14: a departed qualifier can still HOLD a structural bye — the draw is
+    // preserved, so a top qualifier who withdrew keeps the bye line the
+    // bracket gave them (the cascade leaves an already-settled bye alone for
+    // the same reason). What must not happen is that bye carrying them into
+    // the next round: propagating it would seat a withdrawn entrant in round
+    // two, which is the very defect this change exists to close. The slot is
+    // left open for the organiser instead.
+    const awarded = gen.filter(
+      (g) => g.award !== undefined && byKey.has(g.extKey) && !departedQualifiers.has(g.award),
+    );
     if (awarded.length > 0) {
       const sources = await tx<
         { id: string; winner_to_fixture: string | null; winner_to_slot: number | null }[]

@@ -23,12 +23,11 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getEntrant, patchEntrant } from "./entrants";
 import { getDivision } from "./divisions";
-import { listStages } from "./stages";
+import { BRACKET_WALKOVER_KINDS, listStages } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState } from "./fixtures";
 import { scoreEvent } from "./scoring";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
-const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder"]);
 const SETTLED = new Set(["decided", "finalized", "forfeited"]);
 const PENDING = new Set(["scheduled", "in_play"]);
 const REASON = "entrant withdrew";
@@ -194,7 +193,7 @@ export async function withdrawEntrantCascade(
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
         }
-      } else if (BRACKET_KINDS.has(stage.kind)) {
+      } else if (BRACKET_WALKOVER_KINDS.has(stage.kind)) {
         const bracketFixtures: BracketFixture[] = mine.map((f) => ({
           id: f.id,
           round: f.round_no,
