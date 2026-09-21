@@ -111,7 +111,12 @@ describe.skipIf(!HAS_DB)("a withdrawn entrant is not challengeable (ladder)", ()
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(422);
-    expect((err as HttpError).message).toMatch(/withdraw|no longer in this division/i);
+    // The CODE, not the prose (review finding F8, 2026-09-21): the regex's
+    // second alternative matched nothing the product ever throws, and a
+    // message match cannot tell this refusal apart from the three other
+    // ladder 422s now that each carries its own code and its own dictionary
+    // sentence in four locales.
+    expect((err as HttpError).code).toBe("LADDER_ENTRANT_WITHDRAWN");
   });
 
   it("refuses a challenge ISSUED TO a withdrawn entrant — the other direction", async () => {
@@ -125,7 +130,12 @@ describe.skipIf(!HAS_DB)("a withdrawn entrant is not challengeable (ladder)", ()
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(422);
-    expect((err as HttpError).message).toMatch(/withdraw|no longer in this division/i);
+    // The CODE, not the prose (review finding F8, 2026-09-21): the regex's
+    // second alternative matched nothing the product ever throws, and a
+    // message match cannot tell this refusal apart from the three other
+    // ladder 422s now that each carries its own code and its own dictionary
+    // sentence in four locales.
+    expect((err as HttpError).code).toBe("LADDER_ENTRANT_WITHDRAWN");
   });
 
   it("refuses a DISQUALIFIED entrant too — the guard covers both departed statuses", async () => {
@@ -139,6 +149,7 @@ describe.skipIf(!HAS_DB)("a withdrawn entrant is not challengeable (ladder)", ()
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(422);
+    expect((err as HttpError).code).toBe("LADDER_ENTRANT_WITHDRAWN");
   });
 
   it("still ALLOWS a challenge between two active entrants, and creates its fixture — the guard refuses the departed, not the field", async () => {

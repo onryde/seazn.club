@@ -312,6 +312,7 @@
   "progression.recompute": "Volver a calcular",
   "progression.recomputing": "Calculando…",
   "progression.noProposalYet": "Todavía no hay una propuesta para esta fase.",
+  "progression.noQualifiersLeft": "Nadie se ha clasificado para esta fase: todos los que lo habrían hecho han abandonado. Vuelve a calcular cuando el cuadro esté definido.",
   "progression.computeCta": "Calcular propuesta",
   "progression.alreadyConfirmed": "Las posiciones de esta fase se cubrieron a partir de una propuesta confirmada.",
   "progression.sourceRank": "{stage} — puesto {rank}",

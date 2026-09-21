@@ -71,7 +71,17 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  every kind outside REAL_TABLE_KINDS (usecases/stages.ts), whose comment
  *  carries the per-kind detail. It needed a code of its own rather than
  *  SEEDING_RULES_MISSING's: that copy tells the organiser to add rules or
- *  regenerate fixtures, and neither would fix this. */
+ *  regenerate fixtures, and neither would fix this.
+ *
+ *  SEEDING_NOTHING_TO_FILL is the 17th (review finding F1, 2026-09-21).
+ *  confirmSeedProposal throws it when the proposal has no slot left to fill
+ *  at all — every qualifier has left the field. Before the departed-qualifier
+ *  filter that could not happen; now it can, and confirming an empty draw
+ *  used to SUCCEED with `filled: 0` and burn the terminal `confirmed` status,
+ *  after which nothing in the product could recompute the stage. Its own code
+ *  rather than SEEDING_SOURCE_INCOMPLETE's: the source stage IS complete, and
+ *  the remedy is to wait for the field to settle and recompute, not to go
+ *  finish something. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -89,6 +99,7 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_SLOT_FOREIGN_FIXTURE",
   "SEEDING_FIXTURES_ALREADY_FILLED",
   "SEEDING_CARRY_SOURCE_INVALID",
+  "SEEDING_NOTHING_TO_FILL",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 

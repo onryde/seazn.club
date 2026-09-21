@@ -15,6 +15,7 @@
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Une des positions de destination appartient à une autre phase. Recalculez la proposition et réessayez.",
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Une des positions de destination est déjà occupée. Recalculez la proposition pour voir ce qu'il reste.",
   "seeding.SEEDING_CARRY_SOURCE_INVALID": "Le report des points exige une phase source dotée d'un tableau de points : un championnat, une poule ou un tournoi suisse. Un tableau à élimination, une échelle ou un américain transmettent à la phase suivante un ordre d'arrivée et non des points : il n'y a donc rien à reporter. Désactivez le report pour cette phase, ou faites-la partir d'un championnat, d'une poule ou d'un tournoi suisse.",
+  "seeding.SEEDING_NOTHING_TO_FILL": "Il ne reste personne à placer dans cette phase : tous les qualifiés se sont retirés. Recalculez la proposition une fois les participants stabilisés.",
   "ladder.LADDER_ENTRANT_FOREIGN": "Les deux joueurs doivent figurer sur cette échelle. Actualisez la page : l'échelle a pu changer depuis son ouverture.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Ce joueur s'est retiré de cette division : il ne peut ni lancer ni recevoir de défi.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Vous ne pouvez défier qu'un joueur classé au-dessus de vous.",

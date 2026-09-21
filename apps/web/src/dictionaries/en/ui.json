@@ -312,6 +312,7 @@
   "progression.recompute": "Recompute",
   "progression.recomputing": "Recomputing…",
   "progression.noProposalYet": "No proposal yet for this stage.",
+  "progression.noQualifiersLeft": "Nobody has qualified for this stage — every entrant who would have has left the field. Recompute once the field is settled.",
   "progression.computeCta": "Compute proposal",
   "progression.alreadyConfirmed": "This stage's slots were filled from a confirmed proposal.",
   "progression.sourceRank": "{stage} — rank {rank}",

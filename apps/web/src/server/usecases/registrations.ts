@@ -52,6 +52,10 @@ import { resolveLogoUrl } from "@/server/public-site/data";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
 import { createSystemClaimInvite } from "./person-claims";
+// The entrant status flip inside `withdrawCore` is raw SQL, so `patchEntrant`'s
+// own hook cannot fire — this is what refreshes a seeding draft that still
+// names the registrant (review finding F3).
+import { markFieldChangeSeedProposalsStale } from "./stages";
 import {
   FIRST_PAID_EARN,
   recordEarnGrant,
@@ -4735,6 +4739,27 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     { registrationId: reg.id, orgId: ctx.org_id, by: actorId ? "organiser" : "registrant" },
     "registration: withdrawn",
   );
+
+  // A registrant who cancels their own entry is a FIELD CHANGE, exactly like
+  // an organiser's `PATCH /entrants/{id} {status:"withdrawn"}` — but the
+  // entrant row above is flipped in raw SQL here, so `patchEntrant`'s own
+  // hook never fires and nothing else would refresh a seeding draft that
+  // still names them. Without this, the public self-cancel (the
+  // highest-volume withdrawal there is) leaves the organiser looking at a
+  // draft whose Confirm 422s and whose card has no Recompute — review
+  // finding F3, 2026-09-21. patchEntrant is NOT the single status funnel.
+  //
+  // Only when an entrant was actually materialised: a pending/waitlisted
+  // entry has no entrant row and cannot be in anybody's draft. Best-effort
+  // and after the commit, same contract as patchEntrant's.
+  if (outcome.locked.entrant_id) {
+    try {
+      await markFieldChangeSeedProposalsStale(ctx.org_id, reg.division_id);
+    } catch {
+      // best-effort: the withdrawal itself has committed, and
+      // confirmSeedProposal refuses a departed qualifier regardless.
+    }
+  }
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
   if (outcome.promoted) {

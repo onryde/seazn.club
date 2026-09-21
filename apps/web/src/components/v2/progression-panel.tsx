@@ -376,6 +376,39 @@ export function ProgressionPanel({
     );
   }
 
+  // A draft with NOBODY in it (review finding F1, 2026-09-21). Reachable
+  // since departed qualifiers stopped being offered: withdraw every qualifier
+  // of a small bracket and the slate is empty. The draft branch below renders
+  // the table headers, zero rows and a single Confirm button — the only
+  // control on the card — and pressing it used to succeed with `filled: 0`
+  // and burn the stage's proposal into the terminal `confirmed` state, with
+  // no way back through the product. The server refuses that now
+  // (SEEDING_NOTHING_TO_FILL), but a Confirm button whose only outcome is a
+  // 422, on a card with nothing else to press, is the same dead end one step
+  // later. This branch is what the organiser actually needs: what happened,
+  // and the Recompute the draft branch has never carried.
+  if (proposal.computed.qualifiers.length === 0) {
+    return (
+      <section className="card mb-6 p-4" data-progression-state="draft-empty">
+        <h3 className="text-sm font-semibold text-slate-800">{stageName}</h3>
+        <p className="mt-2 text-sm text-slate-500">{msg("progression.noQualifiersLeft")}</p>
+        {error && (
+          <p className="mt-2 text-sm text-red-600" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void recompute()}
+          className="btn btn-primary mt-3 min-h-11 px-3 py-1.5 text-xs"
+        >
+          {busy === "recompute" ? msg("progression.recomputing") : msg("progression.recompute")}
+        </button>
+      </section>
+    );
+  }
+
   const ready = allTiesResolved(proposal.computed.ties, editsBySlot);
 
   return (

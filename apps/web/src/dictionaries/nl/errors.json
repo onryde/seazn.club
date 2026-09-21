@@ -15,6 +15,7 @@
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Een van de doelposities hoort bij een andere fase. Bereken het voorstel opnieuw en probeer het nogmaals.",
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Een van de doelposities is al ingevuld. Bereken het voorstel opnieuw om te zien wat er nog over is.",
   "seeding.SEEDING_CARRY_SOURCE_INVALID": "Puntenoverdracht heeft een bronfase met een puntentabel nodig: een competitie, groep of Zwitsers systeem. Een knock-out, ladder of americano geeft de volgende fase een eindklassering door in plaats van punten, dus er is niets om over te dragen. Zet de overdracht voor deze fase uit, of neem als bron een competitie, groep of Zwitsers systeem.",
+  "seeding.SEEDING_NOTHING_TO_FILL": "Er is niemand meer om in deze fase te plaatsen — alle gekwalificeerden hebben zich teruggetrokken. Bereken het voorstel opnieuw zodra het deelnemersveld vaststaat.",
   "ladder.LADDER_ENTRANT_FOREIGN": "Beide spelers moeten op deze ladder staan. Ververs de pagina — de ladder kan zijn gewijzigd sinds je hem opende.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Die speler heeft zich teruggetrokken uit deze divisie en kan dus geen uitdaging versturen of ontvangen.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Je kunt alleen iemand uitdagen die hoger staat dan jij.",

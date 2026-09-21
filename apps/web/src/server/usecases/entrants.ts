@@ -525,7 +525,19 @@ export async function patchEntrant(
   // and takes the division advisory lock, which would deadlock against the
   // one above. Best-effort — a proposal that cannot be recomputed is left
   // stale, which is still what puts Recompute in front of the organiser.
-  if (fieldChanged) await markFieldChangeSeedProposalsStale(auth, divisionId);
+  if (fieldChanged) {
+    // In its OWN try/catch (review finding, 2026-09-21): the entrant patch has
+    // already COMMITTED by the time we get here, and `confirmSeedProposal`
+    // refuses a departed qualifier regardless, so a failure in this refresh
+    // must not turn a withdrawal that succeeded into a 500 for the caller.
+    // The cost of swallowing it is an un-staled draft — the behaviour before
+    // this hook existed, not a new hazard.
+    try {
+      await markFieldChangeSeedProposalsStale(auth.orgId, divisionId);
+    } catch {
+      // see above
+    }
+  }
   return out;
 }
 

@@ -4308,6 +4308,26 @@ export async function confirmSeedProposal(
     }
     const expandedEntries = [...expandedSlots.entries()];
 
+    // F1 (review finding, 2026-09-21) — a proposal with NOTHING left to fill
+    // must not be confirmable. Before the departed-qualifier filter,
+    // `computed.qualifiers` was never empty for a resolvable progression; it
+    // can be now (withdraw every qualifier of a small bracket), and the draft
+    // panel's only control is Confirm. Pressing it used to succeed with
+    // `filled: 0` and flip the proposal to the TERMINAL `confirmed` state —
+    // after which Recompute 409s SEEDING_ALREADY_CONFIRMED forever, including
+    // after un-withdrawing everybody, leaving a knockout final at
+    // `{home: null, away: null, scheduled}` with no way back through the
+    // product. Refusing here leaves the row `draft`, so a recompute still
+    // works: that is the whole point, and a refusal that also confirmed would
+    // be the same trap with extra steps.
+    if (expandedEntries.length === 0) {
+      throw new HttpError(
+        422,
+        "nobody is left to seed into this stage — recompute the proposal once the field is settled",
+        "SEEDING_NOTHING_TO_FILL",
+      );
+    }
+
     const fixtureIds = [...new Set(expandedEntries.map(([slot]) => slot.split(":")[0] as string))];
     const fixtureRows = await tx<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
       select id, home_entrant_id, away_entrant_id from fixtures
@@ -4332,6 +4352,48 @@ export async function confirmSeedProposal(
       const filledId = await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
       if (filledId !== null) filledFixtureIds.add(filledId);
     }
+    // F2 (review finding, 2026-09-21) — the seeds this bracket PUBLISHED that
+    // no qualifier is going to fill. The entrant who would have taken one has
+    // left the field, and nobody is promoted into a vacancy (owner ruling
+    // 2026-09-21), so the slot stays empty — but it kept its
+    // `slot.winner_group` label, and a line with one real entrant, one
+    // labelled-TBD side and a null outcome is EXACTLY an ordinary match
+    // awaiting a draw. Driven on a real division it rendered
+    // "Winner of Group A vs Driver 2 — Awaiting draw", counted in
+    // "1 to schedule", forever: `isBye` (lib/run-sheet-groups) needs
+    // `outcome.kind === "award"`, which nothing was ever going to write.
+    //
+    // Stamping the vacated side as a BYE hands it to `awardSeededByes` just
+    // below — already in this transaction, and written for this exact shape —
+    // which awards the walkover to whoever IS in the line. That delivers the
+    // owner's ruling (the opponent advances; nobody is promoted) through the
+    // path that already exists, rather than a second one.
+    //
+    // Keyed on the SLOT, not on "which entrant departed": a slot the fill
+    // loop did not touch is vacated whatever the reason. Guarded on the seat
+    // still being null so a partial re-confirm cannot relabel a filled side.
+    //
+    // NOT symmetrical with the `on_complete` path's own answer
+    // (`walkoverDepartedQualifiers`), which seats the departed qualifier and
+    // records a TWO-SIDED forfeit. There the published draw — `config.qualified`,
+    // frozen at the previous stage's completion — NAMES her, so her line is a
+    // match that was drawn and then conceded. Here the draw is published AT
+    // confirm time and does not name her at all, so the line is a bye: the
+    // bracket is simply short a player. The difference shows up in the
+    // standings (a forfeit is a played match, a bye is a sit-out); if the
+    // owner wants one shape for both, this is the place to change.
+    const vacatedSlots = [...freshSlotsBySeed.values()].flat().filter((slot) => !expandedSlots.has(slot));
+    for (const slot of vacatedSlots) {
+      const [fixtureId, side] = slot.split(":");
+      if (side === "home") {
+        await tx`update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+                 where id = ${fixtureId} and stage_id = ${stageId} and home_entrant_id is null`;
+      } else {
+        await tx`update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+                 where id = ${fixtureId} and stage_id = ${stageId} and away_entrant_id is null`;
+      }
+    }
+
     // A bye seat just became a real entrant's, so the walkover the plain path
     // bakes at generation time can finally be recorded — see awardSeededByes.
     // AFTER the fills, in the SAME transaction: it reads the entrant ids they
@@ -4514,8 +4576,8 @@ export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStage
  *  Best-effort throughout, like its sibling: a recompute that now trips (rules
  *  unsatisfiable, already confirmed) leaves the stale row for the organiser to
  *  act on rather than failing the withdrawal that already committed. */
-export async function markFieldChangeSeedProposalsStale(auth: AuthCtx, divisionId: string): Promise<void> {
-  const affected = await withTenant(auth.orgId, async (tx) => {
+export async function markFieldChangeSeedProposalsStale(orgId: string, divisionId: string): Promise<void> {
+  const affected = await withTenant(orgId, async (tx) => {
     const rows = await tx<{ stage_id: string }[]>`
       select p.stage_id from stage_seed_proposals p
       join stages s on s.id = p.stage_id
@@ -4529,9 +4591,19 @@ export async function markFieldChangeSeedProposalsStale(auth: AuthCtx, divisionI
     }
     return ids;
   });
+  // An orgId, not an AuthCtx (review finding F3, 2026-09-21): the entrant
+  // status flip that triggers this does NOT always come from a route with one
+  // — `withdrawCore` (registrations.ts) reaches it from the PUBLIC
+  // self-cancel, which has a token and an org, no session. Safe because
+  // `computeSeedProposal` reads exactly one field off its `auth`, `orgId`
+  // (verified by reading its body: `withTenant(auth.orgId, …)` and the
+  // proposal INSERT's `org_id`), and every caller here has already authorised
+  // the write that changed the field. This is a system refresh of the org's
+  // OWN derived data, not a user action.
+  const systemCtx: AuthCtx = { orgId, via: "api_key", userId: null, role: null, keyId: null };
   for (const stageId of affected) {
     try {
-      await computeSeedProposal(auth, stageId);
+      await computeSeedProposal(systemCtx, stageId);
     } catch {
       // best-effort, see docstring
     }
@@ -4628,6 +4700,22 @@ export async function issueChallenge(
       throw new HttpError(422, "you can only challenge upward", "LADDER_CHALLENGE_NOT_UPWARD");
     }
     const range = typeof stage.config.challengeRange === "number" ? stage.config.challengeRange : 3;
+    // KNOWN, and left alone deliberately (review finding F7, 2026-09-21):
+    // `ci`/`oi` are positions in `ladder_order`, which still CONTAINS the
+    // departed — that is the whole point of filtering at read time rather
+    // than pruning the stored order (see the block above). So a withdrawn
+    // player sitting between two actives consumes one of the challenger's
+    // places: with range 3 and one departure in between, the reach is
+    // effectively 2 live rungs.
+    //
+    // Not changed here because it is a LADDER RULE, not a defect in this
+    // fix: "three places" could legitimately mean three rungs of the
+    // published ladder (which is what an organiser reads off the screen) or
+    // three opponents you could actually play. The second is the better
+    // product answer and is what I would recommend, but it needs an owner
+    // ruling — it changes who may challenge whom in a live competition, and
+    // silently widening the reach mid-season is not a repair. Raised in the
+    // branch report.
     if (ci - oi > range) {
       // `range` rides in `extra`, not only in the English prose: the copy in
       // every locale names the number, and a client cannot parse it back out

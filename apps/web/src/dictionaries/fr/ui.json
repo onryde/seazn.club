@@ -312,6 +312,7 @@
   "progression.recompute": "Recalculer",
   "progression.recomputing": "Calcul en cours…",
   "progression.noProposalYet": "Aucune proposition pour cette phase pour l'instant.",
+  "progression.noQualifiersLeft": "Personne n'est qualifié pour cette phase : tous ceux qui l'auraient été se sont retirés. Recalculez une fois les participants stabilisés.",
   "progression.computeCta": "Calculer la proposition",
   "progression.alreadyConfirmed": "Les positions de cette phase ont été pourvues à partir d'une proposition confirmée.",
   "progression.sourceRank": "{stage} — rang {rank}",
