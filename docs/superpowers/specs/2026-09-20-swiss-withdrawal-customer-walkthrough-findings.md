@@ -351,3 +351,52 @@ Driven on the public standings 2026-09-21: the name cell is plain text there
 division whose entrants are person-linked — if the name renders as a link
 there, a spectator clicking a withdrawn entrant would 404, and that would be a
 defect rather than a limitation.
+
+## Dead feeders in a bracket — OWNER RULING 2026-09-21
+
+A bracket seat waits on a *feeder* fixture. If that feeder can never produce a
+result, the seat waits forever and the stage never completes. The cascade
+(`resolveBracketSeats`, `stages.ts`) therefore has to decide which feeders are
+permanently DEAD, and turn their seats into byes.
+
+**OWNER RULING, part 1 — what is dead.** A feeder is dead when it is
+`cancelled`, or `abandoned` **with no outcome recorded** — the generator's own
+void, and the cascade's own. An `abandoned` fixture that DOES carry an outcome
+is NOT dead: a rained-off match stays stuck and visible, the stage answers
+`{completed: false}` cleanly, and an organiser deals with it. Deciding it
+automatically would rule on a match a human has not finished ruling on.
+
+**OWNER RULING, part 2 — the loser edge, confirmed 2026-09-21.** Part 1 governs
+the WINNER seat. Every bracket fixture also feeds a LOSER seat (the losers'
+bracket in `double_elim`, and the third-place line). Part 1 applies there too,
+plus one extra rule the winner edge does not need:
+
+> A walkover is ALIVE as a winner feeder and DEAD as a loser feeder.
+
+The asymmetry is an engine fact, not a preference. `scoring.ts:533` reads
+
+```ts
+const loser = o.kind === "win" ? o.loser : undefined;
+```
+
+so a fixture settled as `kind: "award"` (a walkover) records a winner and names
+**no loser at all**. Nobody can ever arrive at the losers'-bracket seat it
+feeds. Left un-dead, a `double_elim` containing a single no-show strands that
+seat and never reaches a champion — this is defect N1, found by driving the
+bracket rather than by any unit test.
+
+The mirror half matters as much: `draw`, `tie` and `no_result` are NOT dead on
+the loser edge, only `award` is. A rained-off semi must not hand the
+third-place line a walkover any more than it hands the final one.
+
+**NOT decided by this ruling, and deliberately left open.** Today a no-show is
+simply ELIMINATED — the engine never drops them into the losers' bracket.
+Whether a no-show should instead get their losers'-bracket life is a change to
+`onDecided`, not to the cascade, and is a separate piece of work that has not
+been scoped or put to the owner. Do not infer it from the ruling above.
+
+**Why the two predicates must not be merged.** `feederIsDead` (the winner edge)
+and `loserFeederIsDead` disagree on exactly one row — the walkover — so the
+loser predicate delegates its "never produced a result" half to `feederIsDead`
+rather than restating it. Collapsing them re-introduces N1; restating the
+shared half lets the two drift. Mutants L1/L3/L4 cover this.
