@@ -4561,7 +4561,17 @@ test("boardgame v3 pad: the pairing card (pre) and the halves + Draw tile (live)
 test("2048 (mobile swipe bug): touch-action is disabled at rest, and a swipe moves a tile", async ({
   page,
 }) => {
+  // Default 60s is tight for this test specifically: hydration wait, then up
+  // to 4 directions each doing a down/move/up plus a 1000ms settle-poll --
+  // fine on a quiet machine, but the CI mobile matrix runs many width shards
+  // concurrently, and under that load this hit "Test timeout of 60000ms
+  // exceeded" with no assertion diff at all (same as its own retry, on
+  // mobile-320 one run and mobile-360 another) -- a blown wall-clock budget,
+  // not a per-width DOM race. Matches the 120s this file already gives its
+  // other multi-interaction pad tests.
+  test.setTimeout(120_000);
   await page.goto("/games/2048", { waitUntil: "load" });
+  await dismissCookieBanner(page);
   const area = page.getByTestId("2048-swipe-area");
   await expect(area).toBeVisible();
   // "load" resolves before React hydrates -- a swipe fired before hydration
