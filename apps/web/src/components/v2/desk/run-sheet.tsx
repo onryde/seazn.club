@@ -18,6 +18,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
 import { isBye, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import type { FeedLabelPair } from "@/lib/schedule-board";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
@@ -54,6 +55,7 @@ export function RunSheet({
   boardSlotOptions,
   onRescheduled,
   stream,
+  feedLabels,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -105,6 +107,17 @@ export function RunSheet({
    *  panel, exactly as `venues` and `orgTz` above are. This component never
    *  reads it. */
   stream?: StreamPanelContext;
+  /** Feeder labels for unfilled bracket seats, keyed by fixture id —
+   *  `feedLabels()`'s output (lib/schedule-board.ts). Threaded straight
+   *  through to every `RunSheetRow` below and never read here, exactly as
+   *  `venues`/`orgTz`/`stream` are.
+   *
+   *  Built by the PANEL, not here, and deliberately: the map must be derived
+   *  from the division's WHOLE fixture list, and `blocks` is already a
+   *  filtered, grouped view of it (ruling R7(c) drops an untimed plain-league
+   *  bye from the sheet entirely). Deriving it from `blocks` would make a
+   *  seat's label depend on whether its feeder happened to survive grouping. */
+  feedLabels?: Record<string, FeedLabelPair>;
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -310,6 +323,7 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 stream={stream}
+                feedLabels={feedLabels}
               />
             ))}
             {nowIndex === rows.length && <NowRule msg={msg} />}
@@ -392,6 +406,7 @@ export function RunSheet({
                     boardSlotOptions={boardSlotOptions}
                     onRescheduled={onRescheduled}
                     stream={stream}
+                    feedLabels={feedLabels}
                   />
                 ))}
               </ul>
@@ -428,6 +443,7 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 stream={stream}
+                feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
               />
             ))}
@@ -467,6 +483,7 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 stream={stream}
+                feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
               />
             ))}
@@ -698,6 +715,9 @@ function RowWithNow({
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
   stream?: StreamPanelContext;
+  /** Declared here only so it survives `...rest` into `RunSheetRow` — this
+   *  wrapper reads nothing off it (same posture as `stream`/`venues`). */
+  feedLabels?: Record<string, FeedLabelPair>;
 }) {
   return (
     <>

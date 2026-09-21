@@ -18,6 +18,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { DateTimeField } from "../shared/datetime-field";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import type { FeedLabelPair } from "@/lib/schedule-board";
 import { courtDisplayName } from "@/components/v2/board/types";
 import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
@@ -106,6 +107,7 @@ export function RunSheetRow({
   onRescheduled,
   stageName,
   stream,
+  feedLabels,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -153,6 +155,24 @@ export function RunSheetRow({
    *  read as NOT entitled, so an un-threaded caller shows no panel rather than
    *  a broken one. */
   stream?: StreamPanelContext;
+  /** Feeder labels for seats no result has filled yet, keyed by fixture id —
+   *  `feedLabels()`'s output (lib/schedule-board.ts), the SAME builder and the
+   *  SAME `{key, params}` vocabulary the schedule board reads.
+   *
+   *  Why the row needs this at all: `home_slot_label`/`away_slot_label` are
+   *  the persisted authority, but the SETUP progression path deliberately
+   *  leaves a sibling-fed seat NULL (`generateProgressionSetupFixtures`
+   *  stamps a label only for a synthetic seed ref and for `bracket.slot.bye`
+   *  — `stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒ sibling-fed" for
+   *  `timing: "setup"` stages, so stamping one there would break the draw
+   *  ledger). The result was a draw list whose semi-finals and final read
+   *  "TBD vs TBD" while the schedule board, which derives the same seats from
+   *  the feed EDGES, read "Winner of R1·1 vs Winner of R1·2".
+   *
+   *  Optional, so a caller that never carried it keeps today's TBD fallback.
+   *  Never a substitute for the stored label — see the precedence at `home`
+   *  below. */
+  feedLabels?: Record<string, FeedLabelPair>;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -237,12 +257,30 @@ export function RunSheetRow({
   });
 
   // C3: copied verbatim from FixtureLine's own derivation — never reinvented.
+  //
+  // THREE steps, in this order, and the order is the whole rule:
+  //   1. a filled seat is the entrant's NAME — nothing else may answer;
+  //   2. the STORED `*_slot_label` — the persisted authority. It outranks the
+  //      feed because it is the only thing that can say `bracket.slot.bye`
+  //      (the marker `awardSeededByes` itself keys off) or name a qualifier
+  //      slot ("Rank 1"); a feed edge pointing at the same seat must never
+  //      overwrite either, or a phantom bye seat starts telling the organiser
+  //      to wait for an opponent who is not coming;
+  //   3. the FEED edge — `feedLabels()`'s `{key, params}` for this fixture's
+  //      seat, the same value the schedule board renders. This is the step
+  //      the draw list was missing: the setup progression path leaves a
+  //      sibling-fed seat's stored label NULL on purpose, so step 2 has no
+  //      answer and every semi-final and final read "TBD vs TBD" while the
+  //      schedule showed "Winner of R1·1 vs Winner of R1·2".
+  // A seat with no feeder at all reaches none of 2 or 3 and keeps the
+  // localized "schedule.tbd" fallback, exactly as before.
+  const feed = feedLabels?.[fixture.id];
   const home = fixture.home_entrant_id
     ? (entrantNames[fixture.home_entrant_id] ?? "?")
-    : resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd");
+    : resolveSlotLabel(fixture.home_slot_label ?? feed?.home ?? null, msg, "schedule.tbd");
   const away = fixture.away_entrant_id
     ? (entrantNames[fixture.away_entrant_id] ?? "?")
-    : resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd");
+    : resolveSlotLabel(fixture.away_slot_label ?? feed?.away ?? null, msg, "schedule.tbd");
   const decided = outcomeText(msg, fixture.outcome, entrantNames);
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,

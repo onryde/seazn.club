@@ -10,12 +10,30 @@ type Ctx = { params: Promise<{ id: string }> };
  *  but isn't a documented list endpoint. Response shape matches GET
  *  /fixtures/{id} (S.Fixture) — no `venue`/`court_label` frozen text
  *  columns, `court_id`/`venue_id` + derived names instead — not the older
- *  FixtureRow shape `listDivisionFixtures` returns for RSC callers. */
+ *  FixtureRow shape `listDivisionFixtures` returns for RSC callers.
+ *
+ *  The four bracket FEED columns are stripped here for the same reason: the
+ *  usecase selects them so the division page's draw sheet can name an
+ *  unfilled seat by its feeder, but they are internal bracket wiring and are
+ *  NOT declared on `S.Fixture`. Serving an undeclared field is the silent
+ *  "published spec vs real payload" gap `fixture_no` and `lane`'s own schema
+ *  comments were written about — this route projects them out rather than
+ *  widening the published contract as a side effect of a rendering fix. */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "division", id, "read");
     const rows = await listDivisionFixtures(auth, id);
-    return rows.map(({ venue: _venue, court_label: _court_label, ...fixture }) => fixture);
+    return rows.map(
+      ({
+        venue: _venue,
+        court_label: _court_label,
+        winner_to_fixture: _wtf,
+        winner_to_slot: _wts,
+        loser_to_fixture: _ltf,
+        loser_to_slot: _lts,
+        ...fixture
+      }) => fixture,
+    );
   });
 }

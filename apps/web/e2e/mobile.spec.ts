@@ -3101,6 +3101,129 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
 });
 
 // ---------------------------------------------------------------------------
+// The DRAW LIST names an unfilled knockout seat by its FEEDER (2026-09-21).
+//
+// The owner's report, off the live product: a division page's `?tab=fixtures`
+// draw list showed a knockout whose quarter-finals read "Rank 1 vs Rank 8"
+// but whose semi-final and final rows all read "TBD vs TBD — Awaiting draw",
+// while the SCHEDULE showed the very same fixtures as "Winner of R1·1 vs
+// Winner of R1·2". A defect in the gap between two individually-correct
+// screens, which is exactly the class no single-surface test can see.
+//
+// The shape that reproduces it is a SETUP-timed progression bracket, and only
+// that: `generateStageFixtures` (the plain path) stamps
+// `slot.winner_match` into `*_slot_label`, so a plain knockout was never
+// affected. `generateProgressionSetupFixtures` labels a synthetic seed ref
+// and `bracket.slot.bye` and nothing else — deliberately, because
+// `stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒ sibling-fed" for
+// `timing: "setup"` stages — so a sibling-fed seat's stored label is NULL and
+// the FEED EDGES are the only thing that knows. A league of 4 feeding a
+// 4-qualifier knockout is the smallest bracket with a sibling-fed seat: two
+// semis seeded from the league, then a final fed by both.
+//
+// Lives here rather than in a new spec file for the same reason the P6 block
+// above does: a new file would run desktop-only and never see
+// 320/360/375/390/430/768/834.
+// ---------------------------------------------------------------------------
+
+let dlDivisionId = "";
+const DL_EMAIL = () => `delivered+drawfeed-${TAG}-${projectTag()}@resend.dev`;
+
+test("draw list setup: a league feeding a 2-round knockout at timing:setup (sibling-fed final, no stored label)", async ({
+  page,
+}) => {
+  await loginUi(page, DL_EMAIL());
+
+  const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Draw List ${TAG}`,
+    visibility: "unlisted",
+  });
+  expect(comp.status).toBeLessThan(300);
+
+  const div = await apiJson<{ id: string; slug: string }>(
+    page.request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  expect(div.status).toBeLessThan(300);
+  const divisionId = div.data!.id;
+
+  await addEntrantsViaApi(page.request, divisionId, ["Seed A", "Seed B", "Seed C", "Seed D"]);
+
+  const stages = await apiJson<{ id: string; kind: string }[]>(
+    page.request,
+    `/api/v1/divisions/${divisionId}/stages`,
+    "POST",
+    [
+      { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+      {
+        seq: 2, kind: "knockout", name: "Cup", config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      },
+    ],
+  );
+  expect(stages.status).toBeLessThan(300);
+  const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+
+  const gen = await apiJson<{ created: number; fixtures: { round_no: number; home_entrant_id: string | null }[] }>(
+    page.request,
+    `/api/v1/stages/${koId}/generate`,
+    "POST",
+  );
+  expect(gen.status).toBeLessThan(300);
+  // Two semis + a final, every seat empty: the bracket is drawn but unplayed.
+  expect(gen.data!.created).toBe(3);
+  expect(gen.data!.fixtures.filter((f) => f.round_no === 2).length).toBe(1);
+  expect(gen.data!.fixtures.every((f) => f.home_entrant_id === null)).toBe(true);
+
+  dlDivisionId = divisionId;
+});
+
+test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2', not TBD", async ({ page }) => {
+  test.skip(dlDivisionId === "", "draw list setup test did not run/complete");
+  await loginUi(page, DL_EMAIL());
+  await page.goto(await divisionPath(page.request, dlDivisionId, "?tab=fixtures"));
+
+  const sheet = page.getByTestId("run-sheet");
+  await expect(sheet).toBeVisible({ timeout: 20_000 });
+  // The POSITIVE pair for every negative below: the seeded semis DID render
+  // their own (stored) labels, so the sheet is populated and any absent
+  // "Winner of" is a real absence rather than a blank page.
+  await expect(sheet.getByText("Rank 1", { exact: false }).first()).toBeVisible();
+  await expect(sheet.getByText("Rank 4", { exact: false }).first()).toBeVisible();
+
+  // The fix: BOTH of the final's seats named by their feeder.
+  await expect(sheet.getByText("Winner of R1·1", { exact: false }).first()).toBeVisible();
+  await expect(sheet.getByText("Winner of R1·2", { exact: false }).first()).toBeVisible();
+  // …and no seat left saying TBD, which is what four of these rows said.
+  await expect(sheet.getByText(/^TBD$/)).toHaveCount(0);
+  await expect(sheet).not.toContainText("slot.winner_match");
+  await expectNoHorizontalScroll(page);
+
+  // A LOOKUP, not a coincidentally-English literal — and the ORGANISER
+  // vocabulary ("Ganador de R1·1"), never the public `knockout.feederWinner`
+  // form. `slot.match_ref` is identical in every locale by design, so the
+  // ref survives the switch while the sentence around it does not.
+  const origin = new URL(page.url()).origin;
+  await page.context().addCookies([{ name: "seazn_locale", value: "es", url: origin }]);
+  await page.reload({ waitUntil: "load" });
+  await expect(sheet.getByText("Ganador de R1·1", { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(sheet).not.toContainText("Winner of R1·");
+  await expectNoHorizontalScroll(page);
+});
+
+// ---------------------------------------------------------------------------
 // P6 (D4b task B) — the organiser-facing proposal panel: full browser flow
 // (decided league -> panel -> resolve a tie -> confirm -> bracket shows real
 // entrants, schedule unchanged on screen), plus the destructive-dialog path.
