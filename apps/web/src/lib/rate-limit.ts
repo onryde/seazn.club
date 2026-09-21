@@ -33,11 +33,24 @@ const TOO_MANY = "Too many requests — slow down and try again.";
  * self-expiring keys). When Redis is momentarily unreachable `incrWindow`
  * returns null and we apply the `failClosed` policy.
  */
+type CounterFn = (key: string, windowSeconds: number) => Promise<number | null>;
+
+/** Test-only seam. Production always uses `incrWindow`; the suite injects a
+ *  deterministic counter so limiter BEHAVIOUR is executed rather than skipped.
+ *  Without this the limiter is inert wherever Redis is unconfigured, which is
+ *  local dev and the entire e2e suite. */
+let counterOverride: CounterFn | null = null;
+export function __setRateLimitCounterForTests(fn: CounterFn | null): void {
+  counterOverride = fn;
+}
+
 export async function rateLimit(
   key: string,
   { max, windowSeconds, failClosed = false }: RateLimitConfig,
 ): Promise<void> {
-  const count = await incrWindow(`rl:${key}`, windowSeconds);
+  const count = counterOverride
+    ? await counterOverride(`rl:${key}`, windowSeconds)
+    : await incrWindow(`rl:${key}`, windowSeconds);
 
   if (count === null) {
     // No count from Redis. Two distinct cases:
