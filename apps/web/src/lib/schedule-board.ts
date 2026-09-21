@@ -107,6 +107,46 @@ export function feedLabels(rows: readonly FeedRow[]): Record<string, FeedLabelPa
   return labels;
 }
 
+/**
+ * One empty seat's label, for every organiser surface that renders one:
+ *
+ *     entrant name → STORED `*_slot_label` → FEED label → that surface's TBD
+ *
+ * The caller has already handled the entrant name and supplies its own
+ * fallback key to `resolveSlotLabel` (`schedule.tbd` on the run sheet,
+ * `bracket.tbd` in the tree — they were localized separately before this
+ * helper existed). This picks between the middle two and returns `null` for
+ * the fallback.
+ *
+ * ONE composition point on purpose. The two seats used to spell this out
+ * twice per surface, and a duplicated expression needs a test per copy: a
+ * mutant inverting only the HOME seat's precedence survived a 59-test gate
+ * while its AWAY mirror died, because the only case exercising the collision
+ * happened to sit on the away side.
+ *
+ * STORED WINS OVER FEED, deliberately, and this is the mainline bye shape
+ * rather than a theoretical one. `generateProgressionSetupFixtures`' third
+ * pass (`usecases/stages.ts` ~2812) stamps a bye's award label onto the
+ * WINNER-FEED TARGET's seat, so that seat carries a stored "Rank 1" AND an
+ * inbound edge from the bye line at the same time. Stored is right: the bye
+ * means seed 1 is already through, and "Winner of R1·1" would tell the
+ * organiser to wait on a match whose result changes nothing.
+ * `awardsSeededByes`/`destinationSlotsBySeed` read that same stored label,
+ * which is why it has to stay the authority.
+ *
+ * The feed is consulted at all because that same generator leaves a
+ * sibling-fed seat's stored label NULL on purpose — `stageOwesDraw`/
+ * `fixtureAwaitsSeedDraw` read "no label ⇒ sibling-fed" for `timing:"setup"`
+ * stages, so stamping one there would pin a permanent "Needs draw" row.
+ */
+export function seatLabel(
+  stored: SlotLabel | null | undefined,
+  feed: FeedLabelPair | undefined,
+  seat: "home" | "away",
+): SlotLabel | null {
+  return stored ?? feed?.[seat] ?? null;
+}
+
 /** Day key (YYYY-MM-DD, local) for grouping assignments into board days. */
 export function dayKey(isoOrDate: string | Date): string {
   const d = new Date(isoOrDate);

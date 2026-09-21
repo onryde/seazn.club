@@ -1,4 +1,6 @@
 import { test, expect, type Page, type Locator, type APIRequestContext } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -3129,6 +3131,25 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
 let dlDivisionId = "";
 const DL_EMAIL = () => `delivered+drawfeed-${TAG}-${projectTag()}@resend.dev`;
 
+/** The SHIPPED copy for both legs of the draw-list test below, so a
+ *  dictionary edit moves the assertions with it instead of freezing today's
+ *  sentence (the idiom `progression-bye.spec.ts` and four other specs use).
+ *  Asserting a hand-typed "Winner of R1·1" is how an EN leg ends up able to
+ *  pass on the wrong copy — and how the es leg stops proving it is a lookup
+ *  at all. `slot.match_ref` is identical in every locale by design, so only
+ *  the sentence around it changes. */
+const dlDict = (locale: "en" | "es"): Record<string, string> =>
+  JSON.parse(
+    readFileSync(fileURLToPath(new URL(`../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8"),
+  ) as Record<string, string>;
+const dlFeeder = (locale: "en" | "es", round: number, seq: number): string => {
+  const d = dlDict(locale);
+  return d["slot.winner_match"]!.replace(
+    "{ext}",
+    d["slot.match_ref"]!.replace("{round}", String(round)).replace("{seq}", String(seq)),
+  );
+};
+
 test("draw list setup: a league feeding a 2-round knockout at timing:setup (sibling-fed final, no stored label)", async ({
   page,
 }) => {
@@ -3203,9 +3224,17 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   await expect(sheet.getByText("Rank 1", { exact: false }).first()).toBeVisible();
   await expect(sheet.getByText("Rank 4", { exact: false }).first()).toBeVisible();
 
-  // The fix: BOTH of the final's seats named by their feeder.
-  await expect(sheet.getByText("Winner of R1·1", { exact: false }).first()).toBeVisible();
-  await expect(sheet.getByText("Winner of R1·2", { exact: false }).first()).toBeVisible();
+  // The fix: BOTH of the final's seats named by their feeder. Copy from the
+  // dictionary, never typed here — see `dlFeeder`.
+  const EN_R1_1 = dlFeeder("en", 1, 1);
+  const EN_R1_2 = dlFeeder("en", 1, 2);
+  const ES_R1_1 = dlFeeder("es", 1, 1);
+  // The derivations are only worth asserting if they differ: an es leg that
+  // silently equalled the en one would make the locale switch below vacuous.
+  expect(ES_R1_1, "the es feeder sentence is identical to the en one").not.toBe(EN_R1_1);
+  expect(EN_R1_2).not.toBe(EN_R1_1);
+  await expect(sheet.getByText(EN_R1_1, { exact: false }).first()).toBeVisible();
+  await expect(sheet.getByText(EN_R1_2, { exact: false }).first()).toBeVisible();
   // …and no seat left saying TBD, which is what four of these rows said.
   await expect(sheet.getByText(/^TBD$/)).toHaveCount(0);
   await expect(sheet).not.toContainText("slot.winner_match");
@@ -3220,8 +3249,8 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   // agree about the SAME match.
   const tree = page.getByTestId("bracket-panel");
   await expect(tree).toBeVisible({ timeout: 20_000 });
-  await expect(tree.getByText("Winner of R1·1", { exact: false }).first()).toBeVisible();
-  await expect(tree.getByText("Winner of R1·2", { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(EN_R1_1, { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(EN_R1_2, { exact: false }).first()).toBeVisible();
   await expect(tree.getByText(/^TBD$/)).toHaveCount(0);
   // The tree's own positive pair: the seeded semis still read their stored
   // labels, so an absent "Winner of" above would be a real absence.
@@ -3234,12 +3263,12 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   const origin = new URL(page.url()).origin;
   await page.context().addCookies([{ name: "seazn_locale", value: "es", url: origin }]);
   await page.reload({ waitUntil: "load" });
-  await expect(sheet.getByText("Ganador de R1·1", { exact: false }).first()).toBeVisible({ timeout: 20_000 });
-  await expect(sheet).not.toContainText("Winner of R1·");
+  await expect(sheet.getByText(ES_R1_1, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(sheet).not.toContainText(EN_R1_1);
   // The tree localizes with it — both surfaces read the dictionary, neither
   // carries its own copy of the sentence.
-  await expect(tree.getByText("Ganador de R1·1", { exact: false }).first()).toBeVisible();
-  await expect(tree).not.toContainText("Winner of R1·");
+  await expect(tree.getByText(ES_R1_1, { exact: false }).first()).toBeVisible();
+  await expect(tree).not.toContainText(EN_R1_1);
   await expectNoHorizontalScroll(page);
 });
 

@@ -20,7 +20,10 @@ import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveSlotLabel } from "@/lib/slot-label";
-import { feedLabels, type FeedLabelPair, type FeedRow } from "@/lib/schedule-board";
+// `seatLabel` is SHARED with the draw list's `RunSheetRow`: both panels sit on
+// ?tab=fixtures and must answer the same way about the same seat, so the
+// precedence lives in one place rather than once per surface.
+import { feedLabels, seatLabel, type FeedLabelPair, type FeedRow } from "@/lib/schedule-board";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { roundRoleLabel } from "@/lib/round-role-label";
 import { roundRole, type RoundRole } from "@seazn/engine/competition";
@@ -76,39 +79,26 @@ function toFeedRow(f: FixtureLike): FeedRow {
   };
 }
 
-/**
- * One seat's label, in the SAME precedence `RunSheetRow` uses on the draw
- * list directly below this tree:
- *
- *     entrant name → STORED `*_slot_label` → FEED label → `bracket.tbd`
- *
- * The caller has already handled the entrant name; this picks between the
- * last three, returning `null` for the resolver's fallback.
- *
- * STORED WINS OVER FEED, deliberately. The stored label is the only thing
- * that can say `bracket.slot.bye`, and a phantom bye seat that instead
- * advertised "Winner of R1·3" would promise an opponent who is never coming.
- * Inverting these two is a mutant that ONLY a bye case kills.
- *
- * The feed is consulted at all because `generateProgressionSetupFixtures`
- * leaves a sibling-fed seat's stored label NULL on purpose — `stageOwesDraw`/
- * `awaitsSeedDraw` read "no label ⇒ sibling-fed" for `timing: "setup"` stages.
- * So the stored label CANNOT answer for those seats, and before this the tree
- * printed "TBD" above a list that already read "Winner of R1·1".
- */
-function seatLabel(
-  stored: SlotLabel | null | undefined,
-  feed: FeedLabelPair | undefined,
-  seat: "home" | "away",
-): SlotLabel | null {
-  return stored ?? feed?.[seat] ?? null;
-}
-
 interface Props {
   /** Stage kind — stepladder gets the rung list; bracket shapes are detected
    *  structurally from the fixtures. */
   kind?: string;
+  /** This stage's rows — the tree's GEOMETRY is per stage. */
   fixtures: FixtureLike[];
+  /** The WHOLE division's rows, used only to build the feed-label map.
+   *
+   *  Required, not optional, and deliberately separate from `fixtures`.
+   *  `feedLabels()` needs both ends of an edge in one row list
+   *  (`!byId.has(target)`), and `wireCrossFeeds` (usecases/stages.ts:2514)
+   *  writes edges whose SOURCE and DEST sit in different stages, from a
+   *  stage's `cross_feeds` config. Built from a per-stage slice this tree
+   *  would silently drop those, label a seat "TBD", and disagree with the
+   *  draw list directly below it — which is the exact symptom this whole
+   *  change exists to remove. The draw list (`stages-panel.tsx`) and the
+   *  schedule board both scope whole-division; this makes three of three.
+   *  Required so tsc, not a reviewer, catches a caller that reverts to the
+   *  narrow scope. */
+  divisionFixtures: FixtureLike[];
   entrantNames: Record<string, string>;
   /** entrant_id → resolved badge URL (PROMPT-60 resolver); null/absent = none. */
   entrantBadges?: Record<string, string | null>;
@@ -135,6 +125,7 @@ function colX(node: Pick<BracketNode, "side" | "col">, colsPerSide: number): num
 export function BracketPanel({
   kind,
   fixtures,
+  divisionFixtures,
   entrantNames,
   entrantBadges,
   headlines,
@@ -143,17 +134,14 @@ export function BracketPanel({
   divSlug,
 }: Props) {
   const msg = useMsg();
-  // Built HERE, once, from the rows this panel already holds — the division
-  // page hands `listDivisionFixtures`' rows straight through
-  // (`fixtures.filter(f => f.stage_id === st.id)`), so no second query and no
-  // edit to that page. `feeds` is a REQUIRED prop on all three sub-panels
-  // below so tsc, not a reviewer, catches a mount that forgot to pass it.
-  //
-  // The slice is per STAGE, which is what the tree draws: `feedLabels()`
-  // needs both ends of an edge in the same row list, so a CROSS-stage feed is
-  // dropped — correctly, since those seats carry a stored seed-ref label
-  // ("Rank 1") from `descriptorLabel` and never reach the feed branch.
-  const feeds = feedLabels(fixtures.map(toFeedRow));
+  // Built HERE, once, from the WHOLE DIVISION's rows — the same scope the
+  // draw list (`stages-panel.tsx`) and the schedule board use, so the three
+  // surfaces cannot diverge by construction rather than by agreement. See
+  // `divisionFixtures`' own note for why a per-stage slice is wrong.
+  // No second query: the page already holds these rows for the list.
+  // `feeds` is a REQUIRED prop on all three sub-panels below, so tsc catches
+  // a mount that forgot to pass it.
+  const feeds = feedLabels(divisionFixtures.map(toFeedRow));
   if (kind === "page_playoff") {
     const pp = pagePlayoffBracket(fixtures);
     if (!pp.ok) return null;

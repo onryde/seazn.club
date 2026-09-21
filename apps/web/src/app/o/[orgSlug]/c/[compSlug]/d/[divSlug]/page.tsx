@@ -673,6 +673,7 @@ export default async function DivisionPage({
                   <BracketPanel
                     kind={st.kind}
                     fixtures={fixtures.filter((f) => f.stage_id === st.id)}
+                    divisionFixtures={fixtures}
                     entrantNames={entrantNames}
                     entrantBadges={entrantLogos}
                     headlines={headlines}

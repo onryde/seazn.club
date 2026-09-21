@@ -240,10 +240,15 @@ test("a progression-seeded bye reads as a bye on the run sheet and in the bracke
   const byeLabel = UI_EN["bracket.slot.bye"]!;
   expect(bracketText.split(byeLabel).length - 1, `bracket panel read: ${bracketText}`).toBe(1);
   // The POSITIVE half: the seat that used to carry that one TBD now names the
-  // match it is waiting on, rather than having gone blank.
-  expect(bracketText, `bracket panel read: ${bracketText}`).toMatch(
-    /Winner of R\d+·\d+|Ganador de R\d+·\d+/,
+  // match it is waiting on, rather than having gone blank. Built from the
+  // SHIPPED dictionary like every other copy assertion in this file — a
+  // hand-typed "Winner of R1·2" freezes today's sentence, and an
+  // `|Ganador de` alternative would let the EN leg pass on Spanish copy.
+  const feederSentence = UI_EN["slot.winner_match"]!.replace(
+    "{ext}",
+    UI_EN["slot.match_ref"]!.replace("{round}", "1").replace("{seq}", "2"),
   );
+  expect(bracketText, `bracket panel read: ${bracketText}`).toContain(feederSentence);
 
   // ── Desktop, tablet and phone ────────────────────────────────────────────
   // AGENTS.md's bar is 1280 / 768 / 320; 375 is added because that is the

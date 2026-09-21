@@ -63,17 +63,23 @@ const TBD = resolveSlotLabel(null, msg, "schedule.tbd");
 const WINNER_R1_1 = resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 1 } }, msg, "schedule.tbd");
 const WINNER_R1_3 = resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 3 } }, msg, "schedule.tbd");
 const LOSER_R1_2 = resolveSlotLabel({ key: "slot.loser_match", params: { round: 1, seq: 2 } }, msg, "schedule.tbd");
+const WINNER_R1_2 = resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 2 } }, msg, "schedule.tbd");
 const BYE = resolveSlotLabel({ key: "bracket.slot.bye", params: {} }, msg, "schedule.tbd");
+/** The seed descriptor `generateProgressionSetupFixtures` stores for a
+ *  rankRange take — and the label its third pass stamps onto a bye's
+ *  winner-feed target. */
+const RANK_1 = resolveSlotLabel({ key: "slot.rank_range", params: { rank: 1 } }, msg, "schedule.tbd");
 
 // The derivations are only worth asserting against if they are DISTINCT and
 // none of them collapsed to the fallback — otherwise every expectation below
 // would pass on a component that still renders "TBD".
 it("sanity: the derived labels are distinct, and none is the TBD fallback", () => {
-  for (const [name, value] of Object.entries({ WINNER_R1_1, WINNER_R1_3, LOSER_R1_2, BYE })) {
+  const derived = { WINNER_R1_1, WINNER_R1_2, WINNER_R1_3, LOSER_R1_2, BYE, RANK_1 };
+  for (const [name, value] of Object.entries(derived)) {
     expect(value, `${name} collapsed to the TBD fallback`).not.toBe(TBD);
     expect(value, `${name} is empty`).not.toBe("");
   }
-  expect(new Set([WINNER_R1_1, WINNER_R1_3, LOSER_R1_2, BYE]).size).toBe(4);
+  expect(new Set(Object.values(derived)).size).toBe(6);
   expect(WINNER_R1_3).toContain(matchRef(1, 3, msg));
 });
 
@@ -183,6 +189,45 @@ describe("RunSheetRow — an unfilled seat is named by its feeder", () => {
     expect(html).not.toContain(WINNER_R1_1);
   });
 
+  it("the HOME seat's stored label outranks its feed too — the live bye-award shape", () => {
+    // The mirror of the case above, and NOT a symmetry exercise: this is the
+    // shape `generateProgressionSetupFixtures`' third pass (usecases/stages.ts
+    // ~2812) actually writes. When a bye line's `winner_to_slot` is 1 it
+    // stamps the bye's award label onto the TARGET's HOME seat, so that seat
+    // carries a stored "Rank 1" AND an inbound feed edge at the same time.
+    // Stored must win: the bye means seed 1 is already through, and "Winner of
+    // R1·1" would tell the organiser to wait on a match whose result changes
+    // nothing.
+    //
+    // Until this test existed, inverting the precedence on the HOME line
+    // survived the whole gate while the identical inversion on the AWAY line
+    // died — the two seats spelled the rule out twice and only one copy was
+    // covered. Both now share `seatLabel()`, and this pins the home side.
+    const rows: FeedRow[] = [
+      { id: "bye-r1", round_no: 1, seq_in_round: 1, winner_to_fixture: "sf1", winner_to_slot: 1, loser_to_fixture: null, loser_to_slot: null },
+      { id: "sf1", round_no: 2, seq_in_round: 1, winner_to_fixture: null, winner_to_slot: null, loser_to_fixture: null, loser_to_slot: null },
+    ];
+    const html = rowHtml(
+      fx({ id: "sf1", home_slot_label: { key: "slot.rank_range", params: { rank: 1 } } }),
+      feedMapFor(rows),
+    );
+    expect(html).toContain(RANK_1);
+    expect(html).not.toContain(WINNER_R1_1);
+    // The POSITIVE pair: the AWAY seat of that same fixture has no stored
+    // label, so it still takes its feed label where one exists — this is
+    // precedence, not a blanket opt-out of the feed on this row.
+    const bothFed: FeedRow[] = [
+      ...rows,
+      { id: "bye-r1b", round_no: 1, seq_in_round: 2, winner_to_fixture: "sf1", winner_to_slot: 2, loser_to_fixture: null, loser_to_slot: null },
+    ];
+    const html2 = rowHtml(
+      fx({ id: "sf1", home_slot_label: { key: "slot.rank_range", params: { rank: 1 } } }),
+      feedMapFor(bothFed),
+    );
+    expect(html2).toContain(RANK_1);
+    expect(html2).toContain(WINNER_R1_2);
+  });
+
   it("a FILLED seat renders the entrant's name, unchanged", () => {
     const html = rowHtml(fx({ id: "final", home_entrant_id: "e1", away_entrant_id: "e2" }), feedMapFor(FEED));
     expect(html).toContain("Alpha");
@@ -191,11 +236,38 @@ describe("RunSheetRow — an unfilled seat is named by its feeder", () => {
   });
 
   it("a seat whose feeder is a settled WALKOVER is named like any other", () => {
-    // The feeder is `forfeited` with an award outcome; the fed seat is still
-    // empty (nothing has called `fillSlot` yet). `feedLabels` reads the edge,
-    // never the status, so the label must be identical to the ordinary case.
-    const html = rowHtml(fx({ id: "final" }), feedMapFor(FEED));
-    expect(html).toContain(WINNER_R1_1);
+    // Both rows are rendered here, because the claim is about the RELATIONSHIP
+    // between them: the feeder really is settled by forfeit, and the fed seat
+    // is still empty (nothing has called `fillSlot` yet). `feedLabels` reads
+    // the EDGE and never the status, so the label must be identical to the
+    // ordinary case — but a test that renders only the target and asserts the
+    // ordinary label is just the first test in this block wearing a different
+    // name, which is what this one used to be.
+    const feederHtml = rowHtml(
+      fx({
+        id: "r1s1",
+        status: "forfeited",
+        home_entrant_id: "e1",
+        away_entrant_id: "e2",
+        outcome: { kind: "award", winner: "e1" },
+      }),
+      feedMapFor(FEED),
+    );
+    // The feeder is genuinely settled-by-forfeit, not merely scheduled: this
+    // is the positive half without which "named like any other" is vacuous.
+    const wonWo = msg("schedule.outcome.wonWo", { name: "Alpha" });
+    // Asserted as a distinct string rather than `not.toContain(won)`: the
+    // plain "won" copy is a SUBSTRING of the walkover copy in English, so the
+    // negative form would be unsound.
+    expect(wonWo, "the w/o copy is indistinguishable from a plain win").not.toBe(
+      msg("schedule.outcome.won", { name: "Alpha" }),
+    );
+    expect(feederHtml).toContain(wonWo);
+
+    const fedHtml = rowHtml(fx({ id: "final" }), feedMapFor(FEED));
+    expect(fedHtml).toContain(WINNER_R1_1);
+    expect(fedHtml).toContain(WINNER_R1_2);
+    expect(fedHtml).not.toContain(`>${TBD}<`);
   });
 });
 

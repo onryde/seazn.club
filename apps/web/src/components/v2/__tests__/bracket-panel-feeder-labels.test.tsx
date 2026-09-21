@@ -107,11 +107,12 @@ function FIX(
   away: string | null,
   feed: Feed = {},
   labels: { home?: SlotLabel | null; away?: SlotLabel | null } = {},
+  stage = "s1",
 ): Fix {
   no += 1;
   return {
     id,
-    stage_id: "s1",
+    stage_id: stage,
     round_no: round,
     seq_in_round: seq,
     fixture_no: no,
@@ -128,11 +129,15 @@ function FIX(
   };
 }
 
-function tree(fixtures: Fix[], kind?: string): string {
+/** `division` defaults to `fixtures` — every variant case below is a single
+ *  stage. The cross-stage case at the bottom passes them separately, which is
+ *  the whole point of the two props being distinct. */
+function tree(fixtures: Fix[], kind?: string, division?: Fix[]): string {
   const html = renderToStaticMarkup(
     <BracketPanel
       {...(kind === undefined ? {} : { kind })}
       fixtures={fixtures}
+      divisionFixtures={division ?? fixtures}
       entrantNames={ENTRANTS}
       orgSlug="org"
       compSlug="cup"
@@ -338,6 +343,50 @@ describe("BracketPanel — page playoff", () => {
     );
     expect(html).toContain(TBD);
     expect(html).not.toContain(loser(1, 1));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCOPE — the tree's feed map is built from the WHOLE DIVISION, like the draw
+// list's and the schedule board's, not from the stage slice it draws.
+//
+// `wireCrossFeeds` (usecases/stages.ts:2514) writes edges whose SOURCE and
+// DEST sit in DIFFERENT stages, from a stage's `cross_feeds` config (a real,
+// Pro-gated API setting). `feedLabels()` needs both ends in one row list, so a
+// per-stage map drops those silently — the tree would say TBD where the list
+// says "Winner of R1·1", which is the adjacent-panels-disagree symptom this
+// whole change exists to remove.
+//
+// The unit below witnesses the RENDER consequence directly, by passing the
+// two scopes to the same tree. It does not claim to have stood up a live
+// `cross_feeds` division: that is an API-level shape, and what is asserted
+// here is exactly what was changed — which row list the map is built from.
+// ---------------------------------------------------------------------------
+describe("BracketPanel — the feed map is division-scoped, not stage-scoped", () => {
+  // A qualifier in stage "q" whose WINNER feeds the knockout's opening seat in
+  // stage "s1". The tree draws s1 only; the edge's source is in q.
+  const QUALIFIER = FIX("q1", 1, 1, "e1", "e2", { winner_to_fixture: "k1", winner_to_slot: 1 }, {}, "q");
+  const KO: Fix[] = [
+    FIX("k1", 1, 1, null, "e3"),
+    FIX("k2", 1, 2, "e2", "e4", { winner_to_fixture: "k3", winner_to_slot: 2 }),
+    FIX("k3", 2, 1, "e1", null),
+  ];
+
+  it("names a CROSS-STAGE fed seat, which the stage slice alone cannot see", () => {
+    const html = tree(KO, undefined, [QUALIFIER, ...KO]);
+    expect(html).toContain(winner(1, 1)); // k1's home seat ← q1's winner
+  });
+
+  it("…and that label is ABSENT when the map is built from the stage slice alone", () => {
+    // The differential, so the test above cannot pass for an unrelated reason:
+    // the same tree, the same seat, the narrower scope, and the seat falls
+    // back to TBD. This is the exact before/after of the scoping change.
+    const html = tree(KO, undefined, KO);
+    expect(html).toContain(TBD);
+    expect(html).not.toContain(winner(1, 1));
+    // A same-stage edge in the SAME tree still resolves under both scopes, so
+    // the narrow map is not simply empty — only the cross-stage edge is lost.
+    expect(html).toContain(winner(1, 2));
   });
 });
 
