@@ -1,5 +1,11 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { apiJson, TAG, divisionPath } from "./helpers";
+import {
+  apiJson,
+  TAG,
+  divisionPath,
+  expectNoHorizontalScroll,
+  screenshotAtWidths,
+} from "./helpers";
 
 // A withdrawn entrant must not reach a knockout bracket through the
 // `timing: "setup"` propose -> confirm -> fill path, and — the half no
@@ -125,7 +131,10 @@ async function proposalQualifierIds(request: APIRequestContext, koStageId: strin
   return proposal.data!.computed.qualifiers.map((q) => q.entrantId);
 }
 
-test("the seeding proposal screen does not offer a withdrawn qualifier", async ({ page, request }) => {
+test("the seeding proposal screen does not offer a withdrawn qualifier", async ({
+  page,
+  request,
+}, testInfo) => {
   const rig = await seedToProposal(request, `${TAG}-ui`);
   const byId = new Map(rig.entrants.map((e) => [e.id, e.display_name]));
 
@@ -164,6 +173,28 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
   expect(namesAfter).not.toContain(departingName);
   // The other seven are untouched — this is a removal, not a reshuffle.
   expect(namesAfter).toEqual(namesBefore.filter((n) => n !== departingName));
+
+  // …and she is not OFFERED either. The row that named her is gone, but every
+  // remaining row's <select> lists candidates for its own slot, and that list
+  // was built from every entrant name the page holds — which still includes
+  // her, because a withdrawal is a status flip and not a delete. Picking her
+  // there is a 422 SEEDING_ENTRANT_WITHDRAWN and nothing else, so the option
+  // must not be there to pick. Read off the OPTIONS, not the selected value:
+  // the assertion above only sees what each row is showing.
+  const offered = await panel.locator("tbody tr select option").allTextContents();
+  expect(offered.length, "no options to inspect — the panel rendered no pickers").toBeGreaterThan(0);
+  expect(offered.map((t) => t.trim())).not.toContain(departingName);
+  // The positive pair: the seven who remain ARE still offered, so this is a
+  // filter rather than an empty menu.
+  for (const name of namesAfter) {
+    expect(offered.map((t) => t.trim()), `${name} vanished from the pickers too`).toContain(name);
+  }
+
+  await screenshotAtWidths(page, testInfo, "proposal-after-withdrawal", [1280, 768, 320]);
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
 });
 
 test("a withdrawn entrant cannot be filled into the bracket over HTTP, by any route", async ({

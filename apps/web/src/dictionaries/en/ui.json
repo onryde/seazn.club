@@ -2620,6 +2620,7 @@
   "ladder.failed": "Failed",
   "ladder.rank": "Rank",
   "ladder.player": "Player",
+  "ladder.withdrawn": "Withdrawn",
   "ladder.challenger": "Challenger",
   "ladder.challenges": "Challenges (must be above)",
   "ladder.issue": "Issue challenge",

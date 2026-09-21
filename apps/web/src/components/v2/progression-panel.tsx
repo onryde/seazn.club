@@ -152,6 +152,15 @@ export function optionsForSlot(
   ties: readonly TieOut[],
   editsBySlot: ReadonlyMap<string, string>,
   allEntrantIds: readonly string[],
+  /** Entrants who have left the field (`withdrawn` / `disqualified`).
+   *  `confirmSeedProposal` refuses any of them with a 422
+   *  SEEDING_ENTRANT_WITHDRAWN, so offering one here is a menu entry whose
+   *  only outcome is a refusal — a dead end wearing a menu. The refusal stays
+   *  (a draft can be confirmed by a client that never rendered this list);
+   *  this is what stops an organiser walking into it. Required, not
+   *  defaulted: a caller that forgets it should fail to compile, not silently
+   *  go back to offering everybody. */
+  departedEntrantIds: readonly string[],
 ): string[] {
   const tiedSlots = new Set(ties.flatMap((t) => t.slots));
   const effective = new Map(
@@ -165,7 +174,15 @@ export function optionsForSlot(
   );
   const tie = ties.find((t) => t.slots.includes(destinationSlot));
   const pool = tie ? tie.entrantIds : allEntrantIds;
-  return pool.filter((id) => !usedElsewhere.has(id));
+  const departed = new Set(departedEntrantIds);
+  // …except whoever this row is ALREADY showing. `computeSeedProposal` drops
+  // departed entrants from the slate it computes, but a draft computed BEFORE
+  // the withdrawal can still name one, and a select whose `value` is not among
+  // its own options renders as if nothing were picked — which would read as
+  // "this slot is empty" for a slot that is not. Keep it visible so the
+  // organiser can see what has to change.
+  const current = effective.get(destinationSlot);
+  return pool.filter((id) => !usedElsewhere.has(id) && (!departed.has(id) || id === current));
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +206,10 @@ export interface ProgressionPanelProps {
   fixtures: FixtureLabelRow[];
   entrantNames: Record<string, string>;
   stageNames: Record<string, string>;
+  /** Entrants no longer in the field (`withdrawn` / `disqualified`), from the
+   *  division page's own roster read. Supplied rather than derived here: this
+   *  panel only ever receives id -> NAME, which cannot tell the two apart. */
+  departedEntrantIds: string[];
   locale: Locale;
   canEdit: boolean;
 }
@@ -201,6 +222,7 @@ export function ProgressionPanel({
   fixtures,
   entrantNames,
   stageNames,
+  departedEntrantIds,
   locale,
   canEdit,
 }: ProgressionPanelProps) {
@@ -382,6 +404,7 @@ export function ProgressionPanel({
                 proposal.computed.ties,
                 editsBySlot,
                 allEntrantIds,
+                departedEntrantIds,
               );
               const value = tied ? (editsBySlot.get(q.destinationSlot) ?? "") : (editsBySlot.get(q.destinationSlot) ?? q.entrantId);
               return (

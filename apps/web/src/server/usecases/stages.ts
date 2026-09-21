@@ -4594,7 +4594,14 @@ export async function issueChallenge(
     }
     const ci = order.indexOf(input.challenger_id);
     const oi = order.indexOf(input.opponent_id);
-    if (ci < 0 || oi < 0) throw new HttpError(422, "both players must be on the ladder");
+    // Every refusal below carries a LADDER_* wire code. The console renders
+    // `err.message` — the server's own English — unless it recognises the
+    // code, and there is no server-side i18n in this repo, so a refusal
+    // without a code is an English sentence in all four locales. The codes
+    // and their copy live in lib/ladder-error.ts + dictionaries/*/errors.json.
+    if (ci < 0 || oi < 0) {
+      throw new HttpError(422, "both players must be on the ladder", "LADDER_ENTRANT_FOREIGN");
+    }
     // Presence on the ladder is not eligibility. `ladder_order` is written
     // ONCE, from the live field, and never pruned afterwards; a withdrawal
     // is a status flip that leaves her row and her rung in place, so the
@@ -4617,10 +4624,20 @@ export async function issueChallenge(
         "LADDER_ENTRANT_WITHDRAWN",
       );
     }
-    if (oi >= ci) throw new HttpError(422, "you can only challenge upward");
+    if (oi >= ci) {
+      throw new HttpError(422, "you can only challenge upward", "LADDER_CHALLENGE_NOT_UPWARD");
+    }
     const range = typeof stage.config.challengeRange === "number" ? stage.config.challengeRange : 3;
     if (ci - oi > range) {
-      throw new HttpError(422, `challenges reach at most ${range} places up the ladder`);
+      // `range` rides in `extra`, not only in the English prose: the copy in
+      // every locale names the number, and a client cannot parse it back out
+      // of a sentence it does not speak.
+      throw new HttpError(
+        422,
+        `challenges reach at most ${range} places up the ladder`,
+        "LADDER_CHALLENGE_OUT_OF_RANGE",
+        { range },
+      );
     }
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from fixtures where stage_id = ${stageId}`;

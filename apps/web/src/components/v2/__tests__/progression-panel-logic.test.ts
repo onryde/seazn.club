@@ -135,20 +135,59 @@ describe("optionsForSlot — candidate entrants offered per row", () => {
 
   it("a TIED slot offers exactly the tie's own candidates — not the whole division", () => {
     const ties: TieOut[] = [{ slots: ["f1:home"], entrantIds: ["e1", "e3"], reason: "seed" }];
-    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e1", "e3"]);
+    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds, [])).toEqual(["e1", "e3"]);
+  });
+
+  it("a departed entrant is not offered on a non-tied slot — the 422 is the backstop, not the menu", () => {
+    // `confirmSeedProposal` refuses a withdrawn/disqualified entrant with a
+    // 422 SEEDING_ENTRANT_WITHDRAWN, so offering e3 here is a menu entry whose
+    // only outcome is a refusal. e4 (still in the field) must stay, or the
+    // filter would be indistinguishable from one that empties the list.
+    expect(optionsForSlot("f1:home", qualifiers, [], new Map(), allEntrantIds, ["e3"])).toEqual([
+      "e1",
+      "e4",
+    ]);
+  });
+
+  it("a departed entrant is not offered on a TIED slot either", () => {
+    const ties: TieOut[] = [{ slots: ["f1:home"], entrantIds: ["e1", "e3"], reason: "seed" }];
+    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds, ["e3"])).toEqual([
+      "e1",
+    ]);
+  });
+
+  it("the row's OWN current occupant stays offered even after departing", () => {
+    // A draft computed BEFORE the withdrawal still names her. Dropping her
+    // would leave the <select> holding a `value` it does not offer, which
+    // renders as if the slot were empty — a slot that is not empty, and one
+    // the organiser has to see in order to change it.
+    expect(optionsForSlot("f1:home", qualifiers, [], new Map(), allEntrantIds, ["e1"])).toEqual([
+      "e1",
+      "e3",
+      "e4",
+    ]);
+    // …and only for HER OWN row: e1 is f1:home's occupant, so f1:away must
+    // still drop her. (f1:away's own occupant e2 is exempt there by the same
+    // rule; e1 is excluded here by `usedElsewhere` AND by the departure, so
+    // this also pins that the exemption is per-slot, not global.)
+    expect(optionsForSlot("f1:away", qualifiers, [], new Map(), allEntrantIds, ["e1"])).toEqual([
+      "e2",
+      "e3",
+      "e4",
+    ]);
   });
 
   it("a non-tied slot offers every division entrant NOT currently placed in a different slot", () => {
     // e2 currently occupies f1:away, so it's excluded from f1:home's options;
     // e1 (f1:home's OWN current occupant) and the untouched e3/e4 remain.
-    expect(optionsForSlot("f1:home", qualifiers, [], new Map(), allEntrantIds)).toEqual(["e1", "e3", "e4"]);
+    expect(optionsForSlot("f1:home", qualifiers, [], new Map(), allEntrantIds, [])).toEqual(["e1", "e3", "e4"]);
   });
 
   it("an edit elsewhere changes who's 'used' — the edited-IN entrant is excluded from other rows, the edited-OUT one is freed", () => {
     // f1:away edited from e2 -> e4: now e4 is used-elsewhere (excluded from
     // f1:home's options) and e2 is free again.
     const edits = new Map([["f1:away", "e4"]]);
-    expect(optionsForSlot("f1:home", qualifiers, [], edits, allEntrantIds)).toEqual(["e1", "e2", "e3"]);
+    expect(optionsForSlot("f1:home", qualifiers, [], edits, allEntrantIds, [])).toEqual(["e1", "e2", "e3"]);
   });
 
   it("REVIEW FINDING 1 (fix round 1): a TIED slot's options exclude an entrant already picked for a SIBLING tied slot drawing from the SAME pool", () => {
@@ -164,20 +203,20 @@ describe("optionsForSlot — candidate entrants offered per row", () => {
     // by the other — fix round 3, Critical 2 (see optionsForSlot's own doc
     // comment): a tied slot's default is excluded from `effective` until
     // `editsBySlot` names it explicitly, so both rows offer the full pool.
-    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e1", "e2", "e3", "e4"]);
-    expect(optionsForSlot("f1:away", qualifiers, ties, new Map(), allEntrantIds)).toEqual(["e1", "e2", "e3", "e4"]);
+    expect(optionsForSlot("f1:home", qualifiers, ties, new Map(), allEntrantIds, [])).toEqual(["e1", "e2", "e3", "e4"]);
+    expect(optionsForSlot("f1:away", qualifiers, ties, new Map(), allEntrantIds, [])).toEqual(["e1", "e2", "e3", "e4"]);
 
     // An explicit edit on f1:home to e3 must remove e3 from f1:away's
     // options — the exact duplicate-pick path the review flagged.
     const edits = new Map([["f1:home", "e3"]]);
-    const awayOptions = optionsForSlot("f1:away", qualifiers, ties, edits, allEntrantIds);
+    const awayOptions = optionsForSlot("f1:away", qualifiers, ties, edits, allEntrantIds, []);
     expect(awayOptions).not.toContain("e3");
     expect(awayOptions).toEqual(["e1", "e2", "e4"]);
 
     // f1:home's OWN list still offers e3 — it's that row's own current
     // pick, never excluded from itself (same rule the non-tied branch has
     // always followed).
-    expect(optionsForSlot("f1:home", qualifiers, ties, edits, allEntrantIds)).toContain("e3");
+    expect(optionsForSlot("f1:home", qualifiers, ties, edits, allEntrantIds, [])).toContain("e3");
   });
 
   it("REVIEW FINDING (fix round 3, Critical 2): a 2-entrant tie across 2 slots — the commonest real shape (two teams level in a group; stage-seeding.ts's resolveQualifiers builds ties this shape at stage-seeding.ts:355) — offers BOTH candidates in EACH row before any edit, never silently collapsing to one", () => {
@@ -197,16 +236,16 @@ describe("optionsForSlot — candidate entrants offered per row", () => {
 
     // Before any edit: BOTH rows offer BOTH candidates — a real choice, not
     // a single pre-narrowed option.
-    expect(optionsForSlot("f1:home", tiedQualifiers, ties, new Map(), ["e1", "e2"])).toEqual(["e1", "e2"]);
-    expect(optionsForSlot("f1:away", tiedQualifiers, ties, new Map(), ["e1", "e2"])).toEqual(["e1", "e2"]);
+    expect(optionsForSlot("f1:home", tiedQualifiers, ties, new Map(), ["e1", "e2"], [])).toEqual(["e1", "e2"]);
+    expect(optionsForSlot("f1:away", tiedQualifiers, ties, new Map(), ["e1", "e2"], [])).toEqual(["e1", "e2"]);
 
     // The first EXPLICIT pick immediately narrows the sibling — double-
     // assignment stays closed, verified rather than assumed.
     const edits = new Map([["f1:home", "e2"]]);
-    expect(optionsForSlot("f1:away", tiedQualifiers, ties, edits, ["e1", "e2"])).toEqual(["e1"]);
+    expect(optionsForSlot("f1:away", tiedQualifiers, ties, edits, ["e1", "e2"], [])).toEqual(["e1"]);
     // f1:home's own list still offers both — its own current pick is never
     // excluded from itself.
-    expect(optionsForSlot("f1:home", tiedQualifiers, ties, edits, ["e1", "e2"])).toEqual(["e1", "e2"]);
+    expect(optionsForSlot("f1:home", tiedQualifiers, ties, edits, ["e1", "e2"], [])).toEqual(["e1", "e2"]);
   });
 });
 

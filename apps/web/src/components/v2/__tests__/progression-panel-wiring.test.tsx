@@ -52,6 +52,7 @@ function baseProps(overrides: Partial<ProgressionPanelProps> = {}): ProgressionP
     fixtures: FIXTURES,
     entrantNames: ENTRANT_NAMES,
     stageNames: STAGE_NAMES,
+    departedEntrantIds: [],
     locale: "en",
     canEdit: true,
     ...overrides,

@@ -2575,6 +2575,7 @@
   "ladder.failed": "Error",
   "ladder.rank": "Posición",
   "ladder.player": "Jugador",
+  "ladder.withdrawn": "Retirado",
   "ladder.challenger": "Retador",
   "ladder.challenges": "Retos (debe estar por encima)",
   "ladder.issue": "Lanzar reto",
