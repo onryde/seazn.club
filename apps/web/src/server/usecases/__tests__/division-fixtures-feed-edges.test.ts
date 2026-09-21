@@ -193,3 +193,152 @@ describe.skipIf(!HAS_DB)("listDivisionFixtures — bracket feed edges reach the 
     expect(full.some((f) => f.winner_to_fixture !== null)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CROSS-STAGE feeds — why the tree's feed map is built from the WHOLE
+// DIVISION and not from the stage slice it draws.
+//
+// `feedLabels()` needs BOTH ends of an edge in one row list
+// (`schedule-board.ts`'s `!byId.has(target)` guard). `wireCrossFeeds`
+// (usecases/stages.ts, reached from the tail of `generateStageFixtures`)
+// writes edges whose source and destination sit in DIFFERENT stages, driven
+// by a stage's `cross_feeds` config. A per-stage map therefore cannot see
+// them, and a seat fed from another stage would go back to TBD.
+//
+// This drives the REAL producer: real stages, real generator, real
+// `wireCrossFeeds`, read back through the real `listDivisionFixtures` and
+// folded through the real `feedLabels`. Nothing is hand-built on both ends —
+// which is the point, because the cross-stage case in
+// `bracket-panel-feeder-labels.test.tsx` hand-builds the row and so can only
+// prove the component, never that the edge exists in production at all.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("listDivisionFixtures — a CROSS-STAGE feed edge", () => {
+  it("is wired by wireCrossFeeds, and only a DIVISION-scoped map can name it", async () => {
+    const { auth, divisionId, stageId: koId } = await seedSetupKnockout();
+
+    const stages = await sql<{ id: string; seq: number; kind: string }[]>`
+      select id, seq, kind from stages where division_id = ${divisionId} order by seq`;
+    const league = stages.find((s) => s.kind === "league")!;
+    const koStage = stages.find((s) => s.kind === "knockout")!;
+
+    // Generate the league so both ends EXIST, and read the real `ext_key`s
+    // back out of the rows rather than guessing at either generator's id
+    // scheme — the point of this test is the edge, not the id format.
+    await generateStageFixtures(auth, league.id);
+    const leagueRows = await sql<{ id: string; ext_key: string | null; round_no: number; seq_in_round: number }[]>`
+      select id, ext_key, round_no, seq_in_round from fixtures
+      where stage_id = ${league.id} order by round_no, seq_in_round`;
+    const koRows = await sql<{ id: string; ext_key: string | null; round_no: number; seq_in_round: number }[]>`
+      select id, ext_key, round_no, seq_in_round from fixtures
+      where stage_id = ${koId} order by round_no, seq_in_round`;
+    expect(leagueRows.length, "the league generated no fixtures to feed FROM").toBeGreaterThan(0);
+    const source = leagueRows[0]!;
+    const koTarget = koRows[0]!;
+    expect(source.ext_key, "no ext_key to feed from").toBeTruthy();
+    expect(koTarget.ext_key, "no ext_key to feed into").toBeTruthy();
+
+    // The config the format gates would have written (`S.Stage.cross_feeds`),
+    // merged with `||` exactly as this file's own config writers do so the
+    // rest of the stage is untouched.
+    await sql`
+      update stages set config = config || ${sql.json({
+        cross_feeds: [
+          {
+            from_ext_key: source.ext_key,
+            side: "winner",
+            to_stage_seq: koStage.seq,
+            to_ext_key: koTarget.ext_key,
+            slot: 2,
+          },
+        ],
+      } as never)}
+      where id = ${league.id}`;
+
+    // `wireCrossFeeds` runs at the TAIL of `generateStageFixtures` and is
+    // explicitly re-entrant — its own comment says an entry is "wired once
+    // both stages generated", i.e. the pass that finds both ends present is
+    // the one that writes the edge. So the second generate is not a test
+    // contrivance; it is the production path for a feed configured before
+    // its source stage existed. (It must be the LEAGUE: the knockout is
+    // `timing: "setup"`, and that short-circuits into
+    // `generateProgressionSetupFixtures` long before this tail.)
+    await generateStageFixtures(auth, league.id);
+
+    const all = await listDivisionFixtures(auth, divisionId);
+    const wired = all.find((f) => f.id === source.id)!;
+    // The edge is REAL, and it genuinely crosses a stage boundary — the
+    // positive pair for the negative assertion below.
+    expect(wired.winner_to_fixture, "wireCrossFeeds wired nothing").toBe(koTarget.id);
+    expect(wired.winner_to_slot).toBe(2);
+    expect(wired.stage_id).toBe(league.id);
+    expect(all.find((f) => f.id === koTarget.id)!.stage_id).toBe(koId);
+    expect(wired.stage_id).not.toBe(koId);
+
+    const toFeedRow = (f: (typeof all)[number]): FeedRow => ({
+      id: f.id,
+      round_no: f.round_no,
+      seq_in_round: f.seq_in_round,
+      winner_to_fixture: f.winner_to_fixture ?? null,
+      winner_to_slot: f.winner_to_slot ?? null,
+      loser_to_fixture: f.loser_to_fixture ?? null,
+      loser_to_slot: f.loser_to_slot ?? null,
+    });
+
+    // THE CLAIM. Division scope names the fed seat; the stage slice the tree
+    // used to draw from cannot, because the source row is not in it.
+    const divisionMap = feedLabels(all.map(toFeedRow));
+    const stageMap = feedLabels(all.filter((f) => f.stage_id === koId).map(toFeedRow));
+
+    expect(divisionMap[koTarget.id]?.away, "the division map lost the cross-stage feed").toEqual({
+      key: "slot.winner_match",
+      params: { round: source.round_no, seq: source.seq_in_round },
+    });
+    expect(stageMap[koTarget.id]?.away, "the stage slice somehow saw an out-of-stage source").toBeUndefined();
+
+    // …and the difference is ONLY the cross-stage edge: the knockout's own
+    // sibling feed resolves identically under both scopes, so the stage map
+    // is not simply empty (which would satisfy the negative assertion above
+    // for the wrong reason).
+    const finalRow = koRows[koRows.length - 1]!;
+    expect(divisionMap[finalRow.id]?.home, "the sibling feed vanished too").toBeDefined();
+    expect(divisionMap[finalRow.id]?.home).toEqual(stageMap[finalRow.id]?.home);
+
+
+    // What a PERSON sees for that seat, resolved through the real resolver
+    // from the real row — established by RUNNING this, not by reading the
+    // generator.
+    const target = all.find((f) => f.id === koTarget.id)!;
+    const seat = (feed: (typeof divisionMap)[string] | undefined, stored = target.away_slot_label) =>
+      resolveSlotLabel(stored ?? feed?.away ?? null, msg, "bracket.tbd" as MessageKey);
+
+    // FINDING, pinned as a value: a `timing: "setup"` progression stamps a
+    // seed label on every round-1 seat, so this cross-fed seat ALREADY has a
+    // stored label and `seatLabel`'s precedence (stored wins — the live
+    // bye-award collision) means the feed never shows here. The customer sees
+    // the same words under either scope. If a future change stops stamping
+    // that label, this fails and whoever made it meets the line below.
+    expect(target.away_slot_label, "a cross-fed setup seat used to carry its seed label").toEqual({
+      key: "slot.rank_range",
+      seed: 4,
+      params: { rank: 4 },
+    });
+    expect(seat(divisionMap[koTarget.id])).toBe(seat(stageMap[koTarget.id]));
+
+    // …so the render differential lives one step down, on a seat with NO
+    // stored label — which is what every sibling-fed seat in a setup bracket
+    // is. Clearing it is the only hand-set value in this test, and it is
+    // isolating precedence, not manufacturing the edge: the edge above was
+    // written by the real `wireCrossFeeds` and is read back from the DB.
+    const unlabelled = seat(divisionMap[koTarget.id], null);
+    const unlabelledStageScoped = seat(stageMap[koTarget.id], null);
+    expect(unlabelled, "the division-scoped map is what keeps this off TBD").toBe(
+      msg("slot.winner_match" as MessageKey, {
+        ext: msg("slot.match_ref" as MessageKey, { round: source.round_no, seq: source.seq_in_round }),
+      }),
+    );
+    expect(unlabelledStageScoped, "the stage slice falls through to the tree's TBD").toBe(
+      msg("bracket.tbd" as MessageKey),
+    );
+    expect(unlabelled).not.toBe(unlabelledStageScoped);
+  });
+});

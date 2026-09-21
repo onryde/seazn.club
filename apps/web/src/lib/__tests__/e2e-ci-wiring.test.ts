@@ -298,6 +298,23 @@ const WALKTHROUGH_SPECS: string[] = [
   // a refusal-only test cannot distinguish from a lock that refuses
   // everything.
   "stage-rules-start-promotion.spec.ts",
+
+  // The draw's own words. One organiser builds a League + Finals draw through
+  // the wizard, reads who feeds each seat of the final on BOTH the bracket
+  // tree and the draw list under it, confirms the seeding, and watches one of
+  // those named seats become a real person as the semi that feeds it is
+  // decided. The three states are the point: a label that is right at setup
+  // and stale after the draw is the same defect one screen later, and no
+  // single-surface slice can see it.
+  "draw-feeder-labels.spec.ts",
+  // The other side of the same tab: an entrant leaves mid-tournament. The
+  // organiser is not offered her in a ladder challenge nor able to seed her
+  // into a bracket, her standings row stays and is MARKED rather than
+  // vanishing, and the draw she was qualified for resolves her line as a
+  // walkover instead of reseeding around her. Four refusals that are only
+  // trustworthy together — each one alone is satisfied by a product that
+  // simply deleted her.
+  "withdrawn-entrant-organiser.spec.ts",
 ];
 
 afterEach(() => {
