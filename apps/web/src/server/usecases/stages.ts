@@ -4615,6 +4615,14 @@ export async function markFieldChangeSeedProposalsStale(orgId: string, divisionI
 // challenges within range; the result reorders the ladder (scoring hook).
 // ---------------------------------------------------------------------------
 
+/** The reach a ladder stage gets when its `config` does not name one. The
+ *  ONE place this default lives: a test that types `3` into its own table
+ *  goes on asserting yesterday's rule after this moves, so tests derive
+ *  their distances from here instead. (The `challengeRange: 3` literals in
+ *  the format templates are those templates' own declared config, not this
+ *  fallback.) */
+export const DEFAULT_LADDER_CHALLENGE_RANGE = 3;
+
 export async function issueChallenge(
   auth: AuthCtx,
   stageId: string,
@@ -4696,33 +4704,61 @@ export async function issueChallenge(
         "LADDER_ENTRANT_WITHDRAWN",
       );
     }
+    // RAW indices, and provably the same answer as live ones would give: a
+    // filter preserves relative order, so for two players who are BOTH on
+    // the live ladder — which the guard immediately above has just
+    // guaranteed — `oi < ci` holds in the filtered array exactly when it
+    // holds in the stored one. Kept raw because it is the array already in
+    // hand, and noted here so the next reader does not "fix" it: computing
+    // it live would also be WRONG if the departed guard ever moved below,
+    // since a departed player is absent from the live array and would index
+    // -1 rather than compare.
     if (oi >= ci) {
       throw new HttpError(422, "you can only challenge upward", "LADDER_CHALLENGE_NOT_UPWARD");
     }
-    const range = typeof stage.config.challengeRange === "number" ? stage.config.challengeRange : 3;
-    // KNOWN, and left alone deliberately (review finding F7, 2026-09-21):
-    // `ci`/`oi` are positions in `ladder_order`, which still CONTAINS the
-    // departed — that is the whole point of filtering at read time rather
-    // than pruning the stored order (see the block above). So a withdrawn
-    // player sitting between two actives consumes one of the challenger's
-    // places: with range 3 and one departure in between, the reach is
-    // effectively 2 live rungs.
+    const range =
+      typeof stage.config.challengeRange === "number"
+        ? stage.config.challengeRange
+        : DEFAULT_LADDER_CHALLENGE_RANGE;
+    // REACH IS MEASURED IN LIVE RUNGS (owner ruling, 2026-09-21, finding F7).
+    // `ladder_order` still CONTAINS the departed — read-time filtering, never
+    // a prune, for every reason the block above gives — so counting its
+    // positions made a withdrawn player between two actives eat one of the
+    // challenger's places. Reach is a COMPETITIVE-DISTANCE rule, and someone
+    // who has left is not competitive distance, she is a hole: counting her
+    // silently SHORTENED everyone's reach whenever somebody above them
+    // withdrew, a rule change nobody announced and nobody could see (the
+    // published ladder still lists her, with a "withdrawn" badge). The live
+    // reading keeps the ladder the same size for the people still climbing.
     //
-    // Not changed here because it is a LADDER RULE, not a defect in this
-    // fix: "three places" could legitimately mean three rungs of the
-    // published ladder (which is what an organiser reads off the screen) or
-    // three opponents you could actually play. The second is the better
-    // product answer and is what I would recommend, but it needs an owner
-    // ruling — it changes who may challenge whom in a live competition, and
-    // silently widening the reach mid-season is not a repair. Raised in the
-    // branch report.
-    if (ci - oi > range) {
+    // The accepted cost runs the other way: a burst of withdrawals lets a
+    // challenger reach further than she could yesterday. That one is visible
+    // and explicable — "three people above you left" — which is why the
+    // owner took it over the invisible failure.
+    //
+    // Only the RANGE check reads the live array. The foreign check above
+    // stays raw (presence on the ladder AT ALL is its question, and a
+    // departed player must fail the guard that owns her reason, with its own
+    // code and its own four-locale sentence, rather than be misreported as
+    // somebody else's player), and the upward check stays raw because
+    // filtering cannot reorder what it keeps.
+    //
+    // Safe to index without a not-found branch: the departed guard above has
+    // already thrown for either player being gone, so both are present here.
+    // If that guard ever moves below this point, these lookups return -1 and
+    // the refusal a customer gets changes — the precedence case in
+    // ladder-reach-counts-live-rungs.test.ts is what stops that silently.
+    const liveOrder = order.filter((id) => !departed.has(id));
+    const liveCi = liveOrder.indexOf(input.challenger_id);
+    const liveOi = liveOrder.indexOf(input.opponent_id);
+    if (liveCi - liveOi > range) {
       // `range` rides in `extra`, not only in the English prose: the copy in
       // every locale names the number, and a client cannot parse it back out
-      // of a sentence it does not speak.
+      // of a sentence it does not speak. What the ruling moved is what
+      // counts as a place, not how many — so `extra` is unchanged.
       throw new HttpError(
         422,
-        `challenges reach at most ${range} places up the ladder`,
+        `challenges reach at most ${range} places up the ladder, counting only players still in the field`,
         "LADDER_CHALLENGE_OUT_OF_RANGE",
         { range },
       );

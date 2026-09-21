@@ -35,7 +35,13 @@ interface Rig {
 /** A 4-rung ladder, seated by a first real challenge so `config.ladder_order`
  *  exists the way a live ladder gets it (the array is written once, from the
  *  live field, and never pruned again — the defect's precondition). */
-async function seedLadder(request: APIRequestContext, tag: string): Promise<Rig> {
+async function seedLadder(
+  request: APIRequestContext,
+  tag: string,
+  opts: { rungs?: number; range?: number } = {},
+): Promise<Rig> {
+  const rungs = opts.rungs ?? 4;
+  const range = opts.range ?? 3;
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `Ladder Withdraw ${tag}`,
@@ -56,7 +62,7 @@ async function seedLadder(request: APIRequestContext, tag: string): Promise<Rig>
     request,
     `/api/v1/divisions/${divisionId}/entrants`,
     "POST",
-    Array.from({ length: 4 }, (_, i) => ({
+    Array.from({ length: rungs }, (_, i) => ({
       kind: "individual",
       display_name: `Rung ${i + 1}`,
       seed: i + 1,
@@ -68,7 +74,7 @@ async function seedLadder(request: APIRequestContext, tag: string): Promise<Rig>
     request,
     `/api/v1/divisions/${divisionId}/stages`,
     "POST",
-    [{ seq: 1, kind: "ladder", name: "Club ladder", config: { challengeRange: 3 } }],
+    [{ seq: 1, kind: "ladder", name: "Club ladder", config: { challengeRange: range } }],
   );
   expect(stages.status, JSON.stringify(stages.error)).toBe(201);
   const stageId = stages.data![0]!.id;
@@ -139,4 +145,77 @@ test("the ladder console does not offer a withdrawn player, and says so in dicti
     await page.setViewportSize({ width, height: 900 });
     await expectNoHorizontalScroll(page);
   }
+});
+
+
+test("a challenge is legal once the rungs between have left, and the refusal says what counts", async ({
+  page,
+  request,
+}, testInfo) => {
+  // The owner's ruling of 2026-09-21, in the browser: reach is measured in
+  // LIVE rungs. Seven rungs, a reach of two, and rungs 2 and 3 withdrawn — so
+  // rung 5's target at the top is FOUR places up the published ladder (which
+  // still lists both departed, badged) and TWO places up the ladder she can
+  // actually play.
+  //
+  // This is the half no unit test can reach: the pickers, the button, and the
+  // sentence the organiser is handed when the reach does run out — which had
+  // to change with the rule, because "at most 2 places up the ladder" counted
+  // off the screen gives the wrong answer as soon as a departed rung is on it.
+  const rig = await seedLadder(request, `${TAG}-reach`, { rungs: 7, range: 2 });
+  const url = await divisionPath(request, rig.divisionId, "?tab=fixtures");
+
+  for (const gone of [rig.order[1]!, rig.order[2]!]) {
+    const out = await apiJson(request, `/api/v1/entrants/${gone}/withdraw`, "POST");
+    expect(out.status, JSON.stringify(out.error)).toBeLessThan(300);
+  }
+
+  await page.goto(url);
+  // Both are still on the ladder, badged — so the rungs between really are
+  // there to be counted, and what follows is not just a shorter ladder.
+  for (const gone of [rig.order[1]!, rig.order[2]!]) {
+    await expect(page.locator(`[data-ladder-withdrawn="${gone}"]`)).toBeVisible();
+  }
+
+  const selects = page.locator("select");
+  const banner = page.locator("p.text-red-600");
+
+  // THREE live places up: still out of reach. Asserted first, because a
+  // challenge that succeeds re-renders the panel underneath us.
+  await selects.nth(0).selectOption(rig.order[5]!);
+  await selects.nth(1).selectOption(rig.order[0]!);
+  await page.getByRole("button", { name: /issue challenge/i }).click();
+  await expect(banner).toHaveText(
+    "Challenges reach at most 2 places up the ladder, counting only players who are still in the field.",
+  );
+  // Dictionary copy, not the server's own prose: the two sentences differ by
+  // more than the number, so seeing this one proves the resolver is wired.
+  expect(await banner.textContent()).not.toContain("counting only players still in the field");
+
+  await screenshotAtWidths(page, testInfo, "ladder-reach-refusal", [1280, 768, 320]);
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expectNoHorizontalScroll(page);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // TWO live places up, four raw: allowed under the ruling, refused before
+  // it. The fixture is the witness — a banner that merely went away would
+  // also be produced by a form that cleared itself.
+  await selects.nth(0).selectOption(rig.order[4]!);
+  await selects.nth(1).selectOption(rig.order[0]!);
+  await page.getByRole("button", { name: /issue challenge/i }).click();
+  await expect(banner).toHaveCount(0);
+
+  const fixtures = await apiJson<{ home_entrant_id: string; away_entrant_id: string }[]>(
+    request,
+    `/api/v1/divisions/${rig.divisionId}/fixtures`,
+  );
+  expect(fixtures.status, JSON.stringify(fixtures.error)).toBe(200);
+  expect(
+    fixtures.data!.some(
+      (f) => f.home_entrant_id === rig.order[4]! && f.away_entrant_id === rig.order[0]!,
+    ),
+    "the live-legal challenge produced no fixture",
+  ).toBe(true);
 });

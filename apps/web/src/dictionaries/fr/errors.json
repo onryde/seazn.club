@@ -19,7 +19,7 @@
   "ladder.LADDER_ENTRANT_FOREIGN": "Les deux joueurs doivent figurer sur cette échelle. Actualisez la page : l'échelle a pu changer depuis son ouverture.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Ce joueur s'est retiré de cette division : il ne peut ni lancer ni recevoir de défi.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Vous ne pouvez défier qu'un joueur classé au-dessus de vous.",
-  "ladder.LADDER_CHALLENGE_OUT_OF_RANGE": "Un défi porte au maximum {range} places plus haut sur l'échelle.",
+  "ladder.LADDER_CHALLENGE_OUT_OF_RANGE": "Un défi porte au maximum {range} places plus haut sur l'échelle, en ne comptant que les joueurs encore en lice.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "Le calendrier de cette division commence avant l'ouverture de la compétition, le {startsOn}. Élargissez les dates de la compétition ou ramenez la division à l'intérieur.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "Le calendrier de cette division se termine après la clôture de la compétition, le {endsOn}. Élargissez les dates de la compétition ou ramenez la division à l'intérieur.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "Le calendrier de cette division commence avant l'ouverture de la compétition, le {startsOn}, et se termine après sa clôture, le {endsOn}. Élargissez les dates de la compétition ou ramenez la division à l'intérieur.",

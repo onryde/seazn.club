@@ -19,7 +19,7 @@
   "ladder.LADDER_ENTRANT_FOREIGN": "Beide spelers moeten op deze ladder staan. Ververs de pagina — de ladder kan zijn gewijzigd sinds je hem opende.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Die speler heeft zich teruggetrokken uit deze divisie en kan dus geen uitdaging versturen of ontvangen.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Je kunt alleen iemand uitdagen die hoger staat dan jij.",
-  "ladder.LADDER_CHALLENGE_OUT_OF_RANGE": "Een uitdaging reikt maximaal {range} plaatsen hoger op de ladder.",
+  "ladder.LADDER_CHALLENGE_OUT_OF_RANGE": "Een uitdaging reikt maximaal {range} plaatsen hoger op de ladder, waarbij alleen spelers meetellen die nog meedoen.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "Het schema van deze divisie begint vóór de competitie opent op {startsOn}. Verruim de competitiedata of breng de divisie erbinnen.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "Het schema van deze divisie eindigt na het sluiten van de competitie op {endsOn}. Verruim de competitiedata of breng de divisie erbinnen.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "Het schema van deze divisie begint vóór de competitie opent op {startsOn} en eindigt na het sluiten op {endsOn}. Verruim de competitiedata of breng de divisie erbinnen.",

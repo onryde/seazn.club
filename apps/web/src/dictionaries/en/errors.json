@@ -19,7 +19,7 @@
   "ladder.LADDER_ENTRANT_FOREIGN": "Both players must be on this ladder. Refresh the page — the ladder may have changed since you opened it.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "That player has withdrawn from this division, so they can neither issue nor receive a challenge.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "You can only challenge someone ranked above you.",
-  "ladder.LADDER_CHALLENGE_OUT_OF_RANGE": "Challenges reach at most {range} places up the ladder.",
+  "ladder.LADDER_CHALLENGE_OUT_OF_RANGE": "Challenges reach at most {range} places up the ladder, counting only players who are still in the field.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "This division's schedule starts before the competition opens on {startsOn}. Widen the competition dates, or bring the division inside them.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "This division's schedule ends after the competition closes on {endsOn}. Widen the competition dates, or bring the division inside them.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "This division's schedule starts before the competition opens on {startsOn} and ends after it closes on {endsOn}. Widen the competition dates, or bring the division inside them.",
