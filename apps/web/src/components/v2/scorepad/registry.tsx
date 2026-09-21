@@ -293,6 +293,7 @@ export function ScorePad(props: ScorePadProps) {
       lineups={lineups}
       identity={props.identity}
       transport={transport}
+      auth={props.auth}
       entitlements={props.entitlements}
       initialEvents={props.initialEvents}
       onEvents={props.onEvents}

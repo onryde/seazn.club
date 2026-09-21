@@ -87,6 +87,75 @@ test("device link opens the pad anonymously and authorises scoring", async ({
   }
 });
 
+// The seam the test above and the realtime test below BOTH miss, because each
+// drives one end directly: `/score/<dl_>` opens the real pad, and the pad's own
+// live-update hook mints its own realtime token from a SEPARATE public endpoint
+// (`useFixtureStream`, not the transport). That request is the only place the
+// `auth` prop matters, and the chain that carries it —
+// device-score-pad -> registry -> PadHostV3 -> usePadPipeline -> useFixtureStream
+// — silently dropped it at the PadHostV3 mount, so every device-link pad asked
+// for the token anonymously, was refused on a private competition, and fell
+// back to the 15s poll with no error. Only a real browser on the real page can
+// see this: the route's own e2e and the hook's own unit test both supply the
+// header themselves.
+test("the device-link pad sends its dl_ token to the realtime-token door", async ({
+  request,
+  browser,
+}) => {
+  const seeded = await seedScoredDivision(request, ["Sierra", "Tango"], { decide: false });
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(
+    request,
+    `/api/v1/stages/${seeded.stageId}/generate`,
+    "POST",
+  );
+  const fixtureId = gen.data!.fixtures[0]!.id;
+
+  const minted = await apiJson<{ secret: string }>(
+    request,
+    `/api/v1/fixtures/${fixtureId}/device-links`,
+    "POST",
+    { label: "Court 7" },
+  );
+  expect(minted.status).toBe(201);
+  const secret = minted.data!.secret;
+
+  // Signed OUT and explicitly empty, for the same reason the test above says:
+  // `browser.newContext()` inherits `use.storageState`, and an organiser cookie
+  // would authorise the token door by itself and make the header irrelevant.
+  const anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  try {
+    const page = await anonCtx.newPage();
+    // Armed BEFORE the navigation: the hook fires this request from its mount
+    // effect, so a listener attached after `goto` resolves is a race.
+    const authHeaders: (string | undefined)[] = [];
+    await page.route("**/api/v1/public/fixtures/*/realtime-token", async (route) => {
+      authHeaders.push(route.request().headers()["authorization"]);
+      await route.continue();
+    });
+
+    await page.goto(`/score/${secret}`);
+    // The pad itself has to be on screen, or a missing token request below
+    // would only mean the pad never mounted.
+    await expect(page.getByText(/Sierra|Tango/).first()).toBeVisible({ timeout: 20_000 });
+
+    await expect
+      .poll(() => authHeaders.length, {
+        timeout: 20_000,
+        message: "the pad never asked for a realtime token",
+      })
+      .toBeGreaterThan(0);
+
+    // Shape AND value. A reachability-only assertion (`is there a header`)
+    // would pass on a session pad's empty string, and `/^Bearer dl_/` alone
+    // would pass on some OTHER fixture's live link — the exact-secret check is
+    // what makes this the pad's own credential for THIS fixture.
+    expect(authHeaders[0]).toMatch(/^Bearer dl_/);
+    expect(authHeaders[0]).toBe(`Bearer ${secret}`);
+  } finally {
+    await anonCtx.close();
+  }
+});
+
 test("device links are Pro-only", async ({ browser }) => {
   // A fresh user auto-provisions their own community org, so this test never
   // competes with journey-community for the SHARED community org's single

@@ -46,7 +46,7 @@ import type { MessageKey } from "@/lib/messages";
 import { type MsgFn } from "@/lib/scoring-vocab";
 import { deepEqual } from "../pipeline";
 import { refusalText } from "../refusal-copy";
-import type { PadTransport } from "../transport";
+import type { PadAuthMode, PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
 import { usePadPipeline } from "../use-pad-pipeline";
 import type { RejectionInfo, UsePadPipelineResult } from "../use-pad-pipeline";
@@ -1497,6 +1497,18 @@ export interface PadHostV3Props {
   skin: SkinDefV3;
   onStateChange?: (state: unknown, summary: unknown) => void;
   onEvents?: (events: readonly EventEnvelope[]) => void;
+  /** Load-bearing for REALTIME specifically, and for nothing else on this
+   *  host. `transport` above is ALREADY built with the right credential by
+   *  registry.tsx (`deviceLinkTransport` vs `sessionTransport`), so reads and
+   *  writes are authorised without this prop. But `useFixtureStream` mints
+   *  its OWN token from a separate public endpoint
+   *  (`/api/v1/public/fixtures/[id]/realtime-token`) and needs the raw mode to
+   *  send `Bearer dl_`. Absent it, `usePadPipeline` falls back to
+   *  `SESSION_AUTH`, that request goes out unauthenticated, the token door
+   *  refuses a fixture in a private competition, and a courtside device-link
+   *  pad silently runs on the 15s poll instead of realtime — with no error
+   *  anywhere. Forwarded from `ScorePadProps.auth`. */
+  auth?: PadAuthMode;
 }
 
 interface HeldTap {
@@ -1534,6 +1546,7 @@ export function PadHostV3(props: PadHostV3Props) {
     lineups: props.lineups,
     identity: props.identity,
     transport: props.transport,
+    auth: props.auth,
     initialEvents: props.initialEvents,
     queueDbName: props.queueDbName,
   });

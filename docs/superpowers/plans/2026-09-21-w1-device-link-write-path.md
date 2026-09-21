@@ -46,11 +46,11 @@ Observed by the owner on staging 2026-09-21: "Void my last entry" updates the ou
 - Consumes: `PadAuthMode` (the type `authHeadersFor` takes, `transport.ts:85`) and `ScorePadProps.auth`, both of which already exist.
 - Produces: `PadHostV3Props.auth?: PadAuthMode`.
 
-- [ ] **Step 1: Confirm the two names before writing code**
+- [x] **Step 1: Confirm the two names before writing code**
 
 Read `use-pad-pipeline.ts:1139-1148` and confirm the pipeline params field is spelled `auth`, and `transport.ts:80-90` for the exact exported name of the auth-mode type. Both were reported as `auth` / `PadAuthMode`; use whatever is actually there. Everything below assumes those two names.
 
-- [ ] **Step 2: Write the failing e2e**
+- [x] **Step 2: Write the failing e2e**
 
 ```ts
 // apps/web/e2e/device-links.spec.ts
@@ -70,7 +70,7 @@ test("a device-link pad authenticates its realtime token", async ({ page }) => {
 
 This drives `device-score-pad.tsx` → `registry.tsx` → `PadHostV3` → `usePadPipeline` → `useFixtureStream` — the actual production chain. A test that calls `useFixtureStream` directly would pass today, against a pad that has no realtime.
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 ```bash
 cd apps/web && rtk proxy npx playwright test e2e/device-links.spec.ts
@@ -78,7 +78,9 @@ cd apps/web && rtk proxy npx playwright test e2e/device-links.spec.ts
 
 Expected: FAIL — the header is `undefined`, because the pipeline resolved `SESSION_AUTH`.
 
-- [ ] **Step 4: Thread the prop**
+Seen 2026-09-21, against a standalone prod build of this worktree with the two prop lines reverted and everything else in place: `TypeError: expect(received).toMatch(expected) … Received has value: undefined` at the `/^Bearer dl_/` assertion. The `expect.poll(() => authHeaders.length).toBeGreaterThan(0)` ahead of it PASSED — so the pad did mount and did ask the token door; it simply asked anonymously. That is the inert seam, red for the right reason rather than a pad that failed to render.
+
+- [x] **Step 4: Thread the prop**
 
 `pad-host.tsx`, in `PadHostV3Props` beside `onEvents`:
 
@@ -103,7 +105,7 @@ Import `PadAuthMode` from `../transport`. Pass it through at the `usePadPipeline
   auth={props.auth}
 ```
 
-- [ ] **Step 5: Run the e2e to verify it passes**
+- [x] **Step 5: Run the e2e to verify it passes**
 
 ```bash
 cd apps/web && rtk proxy npx playwright test e2e/device-links.spec.ts
@@ -111,13 +113,19 @@ cd apps/web && rtk proxy npx playwright test e2e/device-links.spec.ts
 
 Expected: PASS, whole file green. Run the file, never a `-g` slice.
 
-- [ ] **Step 6: Confirm the fix against the reported symptom**
+Done 2026-09-21: whole file, no `-g`, `--project=serial --workers=1` (device-links is in `SERIAL_SPECS`, `playwright.config.ts:31`, so the default project never selects it): **7 passed, 0 failed, exit 0** — 2 auth setup + all 5 tests in the file.
+
+- [ ] **Step 6: Confirm the fix against the reported symptom** — NOT DONE, still owed
+
+The two-browser stopwatch was not run. What IS now pinned is the mechanism either side of it: the real pad sends `Bearer <its own dl_ secret>` to the token door (Step 2's test, through the production chain), and on a PRIVATE fixture that header — and only that header — turns a 403 into a 200 with a token (the existing test at `device-links.spec.ts:309`). What no test here observes is the last leg, the broadcast actually reaching the mounted pad, which is exactly where this plan already suspects `scoring.ts:258`'s floating `void publishFixtureUpdate(...)`. So the owner-facing "about a second, not fifteen" claim is unverified: run it at the walkthrough, and if the pad updates on a tap but never on a broadcast, that is the second defect below, not a regression of this task.
 
 Per `seazn-local-env`, bring up a prod build with two browsers on one fixture — the organiser console and a device-link pad. Void an entry from the device-link chrome and watch the inner pad. It should update in about a second, not fifteen.
 
 If it still takes ~15s, the token is being refused for a different reason — read the token response, do not assume. If it updates on the console but **never** on the pad until you tap, suspect the broadcast itself: `scoring.ts:258` publishes with `void publishFixtureUpdate(fixtureId, "event")`, a floating promise that a serverless handler can drop before it flushes. That would be a second, separate defect — record it, do not absorb it into this task.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
+
+`cd apps/web` is load-bearing in the command below and was a real trip hazard: the repo ROOT has no `tsconfig.json` (only `tsconfig.scripts.json`), so `tsc --noEmit` run from the worktree root prints its help text and exits 1 — a red that is not a type error. From `apps/web` it is clean: **EXIT=0**, run twice (before and after the red/restore cycle). ESLint on the three touched files: 0 errors, 1 pre-existing `react-hooks/set-state-in-effect` warning at `pad-host.tsx:1619` (the band-seeding effect, untouched here).
 
 ```bash
 cd apps/web && NODE_OPTIONS=--max-old-space-size=6144 rtk proxy npx tsc --noEmit; echo "EXIT=$?"
