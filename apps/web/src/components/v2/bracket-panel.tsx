@@ -89,15 +89,28 @@ interface Props {
    *
    *  Required, not optional, and deliberately separate from `fixtures`.
    *  `feedLabels()` needs both ends of an edge in one row list
-   *  (`!byId.has(target)`), and `wireCrossFeeds` (usecases/stages.ts:2514)
-   *  writes edges whose SOURCE and DEST sit in different stages, from a
-   *  stage's `cross_feeds` config. Built from a per-stage slice this tree
-   *  would silently drop those, label a seat "TBD", and disagree with the
-   *  draw list directly below it — which is the exact symptom this whole
-   *  change exists to remove. The draw list (`stages-panel.tsx`) and the
-   *  schedule board both scope whole-division; this makes three of three.
-   *  Required so tsc, not a reviewer, catches a caller that reverts to the
-   *  narrow scope. */
+   *  (`!byId.has(target)`), and `wireCrossFeeds` (usecases/stages.ts) writes
+   *  edges whose SOURCE and DEST sit in different stages, from a stage's
+   *  `cross_feeds` config. A per-stage slice drops those edges, so the map
+   *  this tree draws from would not carry them.
+   *
+   *  SCOPE INSURANCE, and said honestly: no CUSTOMER-VISIBLE divergence has
+   *  been witnessed. `seatLabel`'s precedence is `stored ?? feed`, and every
+   *  seat either generator currently produces is filled or carries a stored
+   *  label where a cross-feed could land — a setup progression stamps
+   *  `slot.rank_range` on its round-1 seats, and the plain path stamps
+   *  `slot.winner_match` on everything a sibling feeds. Both facts are
+   *  ENUMERATED, not assumed, in
+   *  `usecases/__tests__/division-fixtures-feed-edges.test.ts`; read that
+   *  file's own comment before restoring a stronger claim here.
+   *
+   *  So this is not "the fix for a TBD" — it is the scope that keeps a future
+   *  generator, one that leaves a cross-fed seat unlabelled the way
+   *  `generateProgressionSetupFixtures` already leaves sibling-fed seats
+   *  unlabelled, from shipping as TBD. It costs one prop, the draw list
+   *  (`stages-panel.tsx`) and the schedule board already scope whole-division,
+   *  and it is required rather than optional so tsc — not a reviewer — catches
+   *  a caller that reverts to the narrow scope. */
   divisionFixtures: FixtureLike[];
   entrantNames: Record<string, string>;
   /** entrant_id → resolved badge URL (PROMPT-60 resolver); null/absent = none. */

@@ -2645,6 +2645,10 @@ const feederEn = (round: number, seq: number): string =>
     UI_EN["slot.match_ref"]!.replace("{round}", String(round)).replace("{seq}", String(seq)),
   );
 
+/** The shipped sentence for a seat still held by a SEED, from the same
+ *  authority — a retyped "Rank 1" would be this file's one un-sourced string. */
+const seedSeatEn = (rank: number): string => UI_EN["slot.rank_range"]!.replace("{rank}", String(rank));
+
 test("at 1280 the tree and the draw list under it name the same feeder for the same match", async ({
   page,
   request,
@@ -2738,8 +2742,8 @@ test("at 1280 the tree and the draw list under it name the same feeder for the s
   // The POSITIVE pair for the negative below: the seeded semis DID render
   // their own stored labels, so an absent "Winner of" above would be a real
   // absence rather than a blank tab.
-  await expect(sheet.getByText("Rank 1", { exact: false }).first()).toBeVisible();
-  await expect(tree.getByText("Rank 1", { exact: false }).first()).toBeVisible();
+  await expect(sheet.getByText(seedSeatEn(1), { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(seedSeatEn(1), { exact: false }).first()).toBeVisible();
   // …and no seat anywhere on this tab still says TBD, on a bracket where
   // every seat has a known feeder or a known seed.
   await expect(sheet.getByText(/^TBD$/)).toHaveCount(0);

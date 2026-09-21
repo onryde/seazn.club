@@ -59,6 +59,30 @@ const PUBLIC = JSON.parse(
 
 /** The wait every `goto` and every state read in this file is given. */
 const STEP_MS = 20_000;
+/** A reach or a relayout is a fraction of a page load, not a page load. */
+const REACH_MS = STEP_MS / 4;
+
+/** Each test's budget is derived from ITS OWN list of full page loads, never a
+ *  literal beside it (AGENTS.md 20 — a blown budget reports as whichever
+ *  assertion was in flight, i.e. as a data defect). Adding a `goto` without
+ *  adding a line here shrinks the allowance per step, so the lists are
+ *  asserted against the journey at the top of each test. */
+const CUP_NAVIGATIONS = [
+  "?tab=fixtures — the proposal, before she leaves",
+  "?tab=entrants — where the organiser withdraws her",
+  "?tab=fixtures — the proposal, after she leaves",
+  "?tab=fixtures — after the short draw is confirmed",
+  "?tab=standings — her row, marked",
+] as const;
+const LADDER_NAVIGATIONS = [
+  "?tab=fixtures — both pickers offer her",
+  "?tab=entrants — where the organiser withdraws her",
+  "?tab=fixtures — neither picker offers her",
+] as const;
+/** The cup journey scores six league matches over the API. */
+const CUP_API_SCORES = 6;
+/** 1280 / 768 / 320 at the end of each test. */
+const WIDTH_CHECKS = 3;
 
 const GENERIC_CONFIG = {
   resultMode: "score",
@@ -118,6 +142,11 @@ async function newDivision(
 async function withdrawThroughTheScreen(page: Page, name: string): Promise<void> {
   const row = page.locator("tbody tr").filter({ hasText: name });
   await expect(row, `no entrants row for ${name}`).toHaveCount(1);
+  // "Withdraw" is HARDCODED ENGLISH in `entrants-panel.tsx` — it is not in
+  // any dictionary, so unlike every other string this file asserts it cannot
+  // be read from one. Recorded here rather than silently retyped: the control
+  // an organiser presses to remove somebody from a competition renders in
+  // English in all four locales, which is a real gap in a different file.
   await row.getByRole("button", { name: "Withdraw", exact: true }).click();
   // The dialog is not decoration: it is where the policy is stated, so the
   // journey goes through it rather than around it.
@@ -136,6 +165,9 @@ async function withdrawThroughTheScreen(page: Page, name: string): Promise<void>
   // "she is not offered" everywhere below, so this is the assertion that
   // tells the two apart.
   await expect(row, "her entrants row vanished — she was deleted, not withdrawn").toHaveCount(1);
+  // A VALUE, not copy: the status badge prints `entrant.status` verbatim
+  // (`entrants-panel.tsx`), so this asserts the column the server wrote — the
+  // same string `DEPARTED_STATUSES` holds — and not a translated word.
   await expect(row).toContainText("withdrawn", { timeout: STEP_MS });
 }
 
@@ -145,9 +177,13 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
   page,
   request,
 }) => {
-  // Derived from the waits this test spends (AGENTS.md 20), not a flat
-  // literal beside them: five page loads at STEP_MS plus ~10 state waits.
-  test.setTimeout(Math.max(60_000, 5 * STEP_MS + 10 * 2_000));
+  test.setTimeout(
+    Math.max(
+      120_000,
+      CUP_NAVIGATIONS.length * STEP_MS + (CUP_API_SCORES + WIDTH_CHECKS) * REACH_MS,
+    ),
+  );
+  expect(CUP_NAVIGATIONS.length, "the navigation list no longer describes this journey").toBe(5);
 
   const compId = await newCompetition(request, `Withdraw Walkthrough ${TAG}`);
   const divisionId = await newDivision(request, compId, "Open");
@@ -255,7 +291,7 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
   }
 
   // §4 — the organiser confirms the short draw, through the screen.
-  const confirmBtn = draftPanel.getByRole("button", { name: "Confirm proposal" });
+  const confirmBtn = draftPanel.getByRole("button", { name: UI["progression.confirmCta"]!, exact: true });
   await expect(confirmBtn, "the proposal has a tie to resolve — this league was meant to be clean").toBeEnabled();
   await confirmBtn.click();
   await expect(page.locator('[data-progression-state="confirmed"]')).toBeVisible({ timeout: STEP_MS });
@@ -326,8 +362,10 @@ test("the same organiser withdraws a rung from the club ladder, and the challeng
   page,
   request,
 }) => {
-  // Three page loads at STEP_MS plus ~6 state waits.
-  test.setTimeout(Math.max(60_000, 3 * STEP_MS + 6 * 2_000));
+  test.setTimeout(
+    Math.max(120_000, LADDER_NAVIGATIONS.length * STEP_MS + WIDTH_CHECKS * REACH_MS),
+  );
+  expect(LADDER_NAVIGATIONS.length, "the navigation list no longer describes this journey").toBe(3);
 
   // A SECOND division, because a ladder is a different shape from a cup and
   // the first test's division cannot be one. Same organiser, same evening.

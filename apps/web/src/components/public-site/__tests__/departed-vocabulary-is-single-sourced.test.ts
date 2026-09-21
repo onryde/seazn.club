@@ -1,5 +1,5 @@
 // The departed vocabulary — which `entrants.status` values mean "no longer in
-// the field" — is spelled in exactly TWO places, and they must agree:
+// the field" — is spelled in TWO PINNED places, and they must agree:
 //
 //   - `DEPARTED_STATUSES` (server/usecases/entrants.ts) — the PREDICATE half.
 //     Who has left. Used to decide who a ladder <select> must not offer and
@@ -21,17 +21,61 @@
 // Both sides are read from their real modules — never a pair typed into this
 // file. A list here would be a third home for the vocabulary and would go
 // stale in precisely the way the whole arrangement exists to prevent.
+//
+// WHAT THIS FILE DOES NOT PIN, said plainly so the next reader is not misled
+// by the two paragraphs above. "Two places" is the count of homes this file
+// HOLDS TO THE SCHEMA, not the count of places the pair is written down. It is
+// still spelled out literally at least here:
+//
+//   - SQL, as the live complement `status not in ('withdrawn','disqualified')`
+//     — `server/usecases/schedule-ai.ts` and `server/usecases/divisions.ts`;
+//     and as the departed set itself, `status in ('withdrawn','disqualified')`
+//     — `server/usecases/officials.ts`;
+//   - TS — `components/v2/entrants-panel.tsx` (the row's own
+//     `withdrawn || disqualified`), and both schedule pages:
+//     `app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` and its division
+//     sibling `.../d/[divSlug]/schedule/page.tsx`;
+//   - a wire enum listing all four statuses — `server/api-v1/schemas.ts`'s
+//     `EntrantStatus`, which is a CONTRACT and legitimately its own list.
+//
+// So the residual risk is real and is named rather than hidden: add a fifth
+// status to V212 and this file reds, someone adds it to `DEPARTED_STATUSES`
+// and to the chips, and every site above still silently treats it as live.
+// Closing that means repointing four usecases, two pages and a component at
+// `DEPARTED_STATUSES` — production changes across unrelated modules, each
+// owing its own test, which is a different wave from this one. Recorded here
+// so choosing it later is a decision rather than a discovery.
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DEPARTED_STATUS_CHIPS } from "../standings-table";
 import { DEPARTED_STATUSES } from "@/server/usecases/entrants";
 
-const MIGRATIONS = join(process.cwd(), "../../db/migration");
+/** Resolved from THIS FILE, never `process.cwd()`: vitest is normally invoked
+ *  from `apps/web`, but a run from the repo root (or from a worktree script
+ *  that forgot to `cd`) then threw ENOENT here rather than failing an
+ *  assertion. Same idiom as `lib/__tests__/e2e-ci-wiring.test.ts`. */
+const WEB = resolve(import.meta.dirname, "../../../.."); // apps/web
+const MIGRATIONS = resolve(WEB, "../../db/migration");
 /** `entrants.status`'s only definition site — the table's own check constraint. */
 const ENTRANTS_TABLE = join(MIGRATIONS, "v2-engine/tables/V212__entrants.sql");
-/** The house "still in the field" predicate, spelled in SQL across the server. */
-const LIVE_STATUSES = ["registered", "confirmed"];
+/** `entrants.ts` spells the house live predicate in SQL as well as exporting
+ *  `DEPARTED_STATUSES`. The two are complements of each other, so reading the
+ *  QUERY TEXT gives this file a second authority without typing a pair into
+ *  it — which the header above promises and a literal here would break. It
+ *  also cross-checks that module's own two halves: edit the export without
+ *  the query, or the query without the export, and the complement below reds.
+ */
+const ENTRANTS_USECASE = resolve(WEB, "src/server/usecases/entrants.ts");
+function liveStatuses(): string[] {
+  const src = readFileSync(ENTRANTS_USECASE, "utf8");
+  const m = /status\s+in\s*\(([^)]*)\)/i.exec(src);
+  if (!m) throw new Error(`no live-status SQL predicate in ${ENTRANTS_USECASE}`);
+  const found = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+  if (found.length === 0) throw new Error(`the live-status predicate names nobody`);
+  return found;
+}
+const LIVE_STATUSES = liveStatuses();
 
 /** Every `.sql` under db/migration, at any depth. */
 function migrationFiles(dir = MIGRATIONS): string[] {
@@ -118,9 +162,23 @@ describe("the departed set is the schema's own complement, not a chosen pair", (
     // Derived, because the assertion above reads one file: if a later delta
     // ever ALTERs this constraint, that file becomes the source of truth and
     // the test above silently pins yesterday's list.
+    // Per STATEMENT, not per 400 characters of file, and with no schema
+    // qualifier in the anchor: the old scan could see neither
+    // `alter table public.entrants`, nor a later `create table entrants`, nor
+    // a `status` clause further than 400 chars into a long statement — three
+    // ways for a redefinition to slip past the assertion above.
+    const definesStatus = (sql: string): boolean =>
+      sql
+        .split(";")
+        .some(
+          (stmt) =>
+            /\b(alter|create)\s+table\s+(if\s+not\s+exists\s+|only\s+)*(?:"?public"?\.)?"?entrants"?\b/i.test(
+              stmt,
+            ) && /\bstatus\b/i.test(stmt),
+        );
     const altered = migrationFiles()
       .filter((f) => f !== ENTRANTS_TABLE)
-      .filter((f) => /alter\s+table\s+(only\s+)?entrants\b[\s\S]{0,400}?status/i.test(readFileSync(f, "utf8")));
+      .filter((f) => definesStatus(readFileSync(f, "utf8")));
     expect(
       altered.map((f) => f.split("db/migration/")[1]),
       "a migration alters entrants.status — re-point schemaStatuses() at the newest definition",
