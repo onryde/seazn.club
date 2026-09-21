@@ -138,6 +138,10 @@ interface Props {
    *  Empty/absent for non-entitled orgs or non-card sports. */
   suspensions?: Record<string, { personName: string; remaining: number }[]>;
   viewerPlan: ViewerPlan;
+  /** The division's own status column (`divisions.status`) — gates the
+   *  hard-delete action, which the server only allows pre-`setup` exit
+   *  (entrants.ts's `deleteEntrant`). Withdraw remains available always. */
+  divisionStatus: string;
 }
 
 // Load the whole org persons directory once (cursor-paged) — org rosters are
@@ -169,6 +173,7 @@ export function EntrantsPanel({
   suspensions = {},
   rosterLocked = false,
   viewerPlan,
+  divisionStatus,
 }: Props) {
   const msg = useMsg();
   const router = useRouter();
@@ -515,6 +520,7 @@ export function EntrantsPanel({
                 eligibility={eligibility}
                 suspensions={suspensions[e.id]}
                 otherTeamsFor={otherTeamsFor}
+                deletable={divisionStatus === "setup"}
                 onPatch={(patch) =>
                   runGated((override) =>
                     apiV1(`/api/v1/entrants/${e.id}`, {
@@ -538,6 +544,18 @@ export function EntrantsPanel({
                   );
                 }}
                 onBadge={(file) => void run(() => badgeRequest(e.id, file))}
+                onDelete={async () => {
+                  // Only offered pre-setup (deletable prop) — nothing downstream
+                  // to unwind yet, so no fixture-surgery warning like Withdraw's.
+                  const ok = await confirmDialog({
+                    title: msg("confirm.deleteEntrant.title", { name: e.display_name }),
+                    body: msg("confirm.deleteEntrant.body"),
+                    confirmLabel: msg("confirm.deleteEntrant.label"),
+                    tone: "danger",
+                  });
+                  if (!ok) return;
+                  await run(() => apiV1(`/api/v1/entrants/${e.id}`, { method: "DELETE" }));
+                }}
                 onSyncSquad={
                   e.team_id
                     ? async () => {
@@ -1250,10 +1268,12 @@ function EntrantTableRow({
   eligibility,
   suspensions,
   otherTeamsFor,
+  deletable,
   onPatch,
   onWithdraw,
   onBadge,
   onSyncSquad,
+  onDelete,
 }: {
   entrant: EntrantRow;
   logoUrl: string | null;
@@ -1267,6 +1287,10 @@ function EntrantTableRow({
   eligibility: EntrantsPanelEligibility;
   suspensions?: { personName: string; remaining: number }[];
   otherTeamsFor: (personId: string, exceptEntrantId: string) => DivisionRosterRow[];
+  /** Hard-delete offered only pre-setup (server enforces the same gate —
+   *  `deleteEntrant`, entrants.ts). Once the division has started, Withdraw
+   *  is the only removal path. */
+  deletable: boolean;
   onPatch: (patch: Record<string, unknown>) => void;
   /** Withdraw with fixture surgery (spec 05 §5) — confirm handled upstream. */
   onWithdraw: () => void;
@@ -1274,6 +1298,8 @@ function EntrantTableRow({
   /** Replace the roster with the team's current squad (team entrants only —
    *  confirm handled upstream; returns the fresh members on success). */
   onSyncSquad?: () => Promise<{ members: Member[] } | undefined>;
+  /** Hard delete (confirm handled upstream) — see `deletable`. */
+  onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<Member[] | null>(null);
@@ -1347,25 +1373,38 @@ function EntrantTableRow({
         </td>
         {canEdit && (
           <td className="px-4 py-2 text-right">
-            {withdrawn ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onPatch({ status: "registered" })}
-                className="btn btn-ghost px-2 py-1 text-xs"
-              >
-                Reinstate
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onWithdraw}
-                className="btn btn-danger px-2 py-1 text-xs"
-              >
-                Withdraw
-              </button>
-            )}
+            <div className="flex justify-end gap-2">
+              {withdrawn ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onPatch({ status: "registered" })}
+                  className="btn btn-ghost px-2 py-1 text-xs"
+                >
+                  Reinstate
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onWithdraw}
+                  className="btn btn-danger px-2 py-1 text-xs"
+                >
+                  Withdraw
+                </button>
+              )}
+              {deletable && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onDelete}
+                  title="Only available before the division has started"
+                  className="btn btn-danger px-2 py-1 text-xs"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
           </td>
         )}
       </tr>
@@ -1662,19 +1701,27 @@ export function RosterEditor({
                     : undefined
                 }
                 onClick={() => {
-                  setMembers((prev) => [
-                    ...prev,
-                    {
-                      person_id: p.id,
-                      full_name: p.full_name,
-                      dob: p.dob,
-                      gender: p.gender,
-                      squad_number: null,
-                      default_position_key: null,
-                      is_captain: false,
-                      roles: [],
-                    },
-                  ]);
+                  setMembers((prev) => {
+                    // A rapid double-click (or a stale `candidates` list mid-render)
+                    // can fire this before the person drops out of the suggestions —
+                    // without this guard the same person_id lands twice in `members`,
+                    // and the server's unique (entrant_id, person_id) constraint
+                    // turns the save into a raw 500 instead of a clean validation error.
+                    if (prev.some((m) => m.person_id === p.id)) return prev;
+                    return [
+                      ...prev,
+                      {
+                        person_id: p.id,
+                        full_name: p.full_name,
+                        dob: p.dob,
+                        gender: p.gender,
+                        squad_number: null,
+                        default_position_key: null,
+                        is_captain: false,
+                        roles: [],
+                      },
+                    ];
+                  });
                   setDirty(true);
                 }}
                 className={`rounded-full border px-2 py-0.5 text-xs hover:border-purple-300 ${

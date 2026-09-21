@@ -193,6 +193,9 @@ async function insertMembers(
   // adds: not a merge tombstone. The ids come from the client, so a stale picker
   // would otherwise roster a person who has already been absorbed.
   const ids = [...new Set(members.map((m) => m.person_id))];
+  if (ids.length !== members.length) {
+    throw new HttpError(422, "duplicate person(s) in roster", "ENTRANT_ROSTER_DUPLICATE_MEMBER");
+  }
   const visible = await tx<{ id: string }[]>`
     select id from persons where id in ${tx(ids)} and merged_into is null`;
   if (visible.length !== ids.length) {
@@ -436,6 +439,32 @@ export async function getEntrant(auth: AuthCtx, id: string): Promise<EntrantWith
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     if (!row) throw new HttpError(404, "entrant not found");
     return withMembers(tx, row);
+  });
+}
+
+/** Hard delete — only while the division is still `setup` (mirrors the
+ *  division-delete guard, divisions.ts:445): once scheduling has produced
+ *  fixtures there is something to unwind, and `withdrawEntrantCascade`
+ *  (withdrawal.ts) is the reversible tool for that. Pre-setup there is
+ *  nothing downstream yet — cascades on entrant_members/lineups do the rest,
+ *  and fixtures/registrations/suspensions/officials set the FK null rather
+ *  than block, which is only safe because none of those rows can exist yet. */
+export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
+    if (!row) throw new HttpError(404, "entrant not found");
+    const [division] = await tx<{ status: string }[]>`
+      select status from divisions where id = ${row.division_id}`;
+    if (!division) throw new HttpError(404, "division not found");
+    if (division.status !== "setup") {
+      throw new HttpError(
+        409,
+        "This division has started — withdraw the entrant instead of deleting",
+        "ENTRANT_DIVISION_STARTED",
+        { withdraw: true },
+      );
+    }
+    await tx`delete from entrants where id = ${id}`;
   });
 }
 

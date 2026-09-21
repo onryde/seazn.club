@@ -171,6 +171,7 @@ const RULES: RouteRule[] = [
   // entrants
   { method: "GET", path: "/entrants/:id", scope: "read", pin: "entrant" },
   { method: "PATCH", path: "/entrants/:id", scope: "manage", pin: "entrant" },
+  { method: "DELETE", path: "/entrants/:id", scope: "manage", pin: "entrant" },
   { method: "POST", path: "/entrants/:id/withdraw", scope: "manage", pin: "entrant" },
   { method: "POST", path: "/entrants/:id/roster/sync", scope: "manage", pin: "entrant" },
 

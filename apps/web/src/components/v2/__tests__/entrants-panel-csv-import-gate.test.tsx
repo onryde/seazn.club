@@ -89,6 +89,7 @@ function panelProps() {
     eligibility: NO_ELIGIBILITY,
     entrantModel: MODEL,
     viewerPlan: "community" as const,
+    divisionStatus: "setup",
   };
 }
 

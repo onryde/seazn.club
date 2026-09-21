@@ -298,6 +298,7 @@ describe("EntrantsPanel — the eligibility prop actually reaches the badge", ()
       maxTeamMembers: null,
     } satisfies EffectiveEntrantModel,
     viewerPlan: "community" as const,
+    divisionStatus: "setup",
   };
 
   it("renders category + age + note badges from a real eligibility prop", () => {
