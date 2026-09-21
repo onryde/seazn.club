@@ -1681,15 +1681,23 @@ export function RosterEditor({
         </div>
       ))}
 
-      {canEdit && !atCap && (
+      {canEdit && (
+        // `atCap` only hides the ADD affordances (find/candidates) — Save
+        // must stay reachable at exactly cap size (e.g. a pair back at 2/2
+        // after a remove+re-add), or the only way off this screen is to
+        // discard the edit. This footer used to be one block gated on
+        // `!atCap`, which made Save disappear the moment a roster returned
+        // to full.
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2">
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Find player…"
-            className="input min-h-11 w-44 px-2 py-1 text-xs"
-          />
-          {candidates.map((p) => {
+          {!atCap && (
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Find player…"
+              className="input min-h-11 w-44 px-2 py-1 text-xs"
+            />
+          )}
+          {!atCap && candidates.map((p) => {
             const onOther = conflictsFor(p.id);
             return (
               <button

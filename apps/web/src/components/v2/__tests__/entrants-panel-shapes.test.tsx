@@ -127,7 +127,11 @@ describe("RosterEditor — kind/model-aware roster", () => {
     expect(html).toContain("Find player…");
   });
 
-  it("pair picker caps at 2 — a full pair hides the add picker", () => {
+  it("pair picker caps at 2 — a full pair hides the add picker but keeps Save reachable", () => {
+    // Regression: the add-row and Save button used to be ONE block gated on
+    // `!atCap`, so a pair sitting at its 2/2 cap (the ordinary steady state,
+    // not just mid-edit) lost the Save button entirely — there was no way
+    // off the screen except discarding whatever edit got it there.
     const html = renderRoster({
       kind: "pair",
       members: [member("p1", "Alice"), member("p2", "Bob")],
@@ -135,6 +139,18 @@ describe("RosterEditor — kind/model-aware roster", () => {
       allowSquadNumbers: false,
     });
     expect(html).not.toContain("Find player…");
+    expect(html).toContain("Save roster");
+  });
+
+  it("individual at cap (1/1) also keeps Save reachable", () => {
+    const html = renderRoster({
+      kind: "individual",
+      members: [member("p1", "Alice")],
+      allowCaptain: true,
+      allowSquadNumbers: true,
+    });
+    expect(html).not.toContain("Find player…");
+    expect(html).toContain("Save roster");
   });
 });
 
