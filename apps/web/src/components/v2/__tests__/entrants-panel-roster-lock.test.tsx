@@ -56,6 +56,7 @@ function panel(over: Record<string, unknown>) {
     eligibility: NO_ELIGIBILITY,
     entrantModel: MODEL,
     viewerPlan: "community" as const,
+    divisionStatus: "setup",
     ...over,
   });
   const tree = island.tree();

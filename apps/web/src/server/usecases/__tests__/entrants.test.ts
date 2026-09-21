@@ -12,7 +12,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants, patchEntrant } from "../entrants";
+import { createEntrants, deleteEntrant, patchEntrant } from "../entrants";
 import { createPerson } from "../persons";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -165,5 +165,60 @@ describe.skipIf(!HAS_DB)("entrant shapes: write-path validation (G-entrant-shape
       members: [{ person_id: m1.id, is_captain: false, roles: [] }],
     });
     expect(patched.members).toHaveLength(1);
+  });
+
+  it("PATCH members rejects a duplicate person_id instead of a raw 500 on the DB constraint", async () => {
+    const { auth } = await seedOrg();
+    const division = await seedBoardgameDivision(auth);
+    await sql`
+      update divisions set config = config || ${sql.json({ entrants: { kinds: ["individual", "team"] } })}
+      where id = ${division.id}`;
+    const [team] = await createEntrants(auth, division.id, [
+      { kind: "team", display_name: "Dup Roster FC", members: [] },
+    ]);
+    const m1 = await seedPerson(auth, "Dup One");
+
+    await expect(
+      patchEntrant(auth, team!.id, {
+        members: [
+          { person_id: m1.id, is_captain: false, roles: [] },
+          { person_id: m1.id, is_captain: true, roles: [] },
+        ],
+      }),
+    ).rejects.toMatchObject({ status: 422, code: "ENTRANT_ROSTER_DUPLICATE_MEMBER" });
+
+    // The rejected write must not have torn down the existing (empty) roster.
+    const untouched = await patchEntrant(auth, team!.id, { members: [] });
+    expect(untouched.members).toHaveLength(0);
+  });
+
+  it("deleteEntrant hard-deletes while the division is still setup", async () => {
+    const { auth } = await seedOrg();
+    const division = await seedBoardgameDivision(auth);
+    const [solo] = await createEntrants(auth, division.id, [
+      { kind: "individual", display_name: "Gone Soon", members: [] },
+    ]);
+
+    await deleteEntrant(auth, solo!.id);
+
+    const [row] = await sql`select 1 from entrants where id = ${solo!.id}`;
+    expect(row).toBeUndefined();
+  });
+
+  it("deleteEntrant refuses once the division has left setup", async () => {
+    const { auth } = await seedOrg();
+    const division = await seedBoardgameDivision(auth);
+    const [solo] = await createEntrants(auth, division.id, [
+      { kind: "individual", display_name: "Started Already", members: [] },
+    ]);
+    await sql`update divisions set status = 'scheduled' where id = ${division.id}`;
+
+    await expect(deleteEntrant(auth, solo!.id)).rejects.toMatchObject({
+      status: 409,
+      code: "ENTRANT_DIVISION_STARTED",
+    });
+
+    const [row] = await sql`select 1 from entrants where id = ${solo!.id}`;
+    expect(row).toBeTruthy();
   });
 });

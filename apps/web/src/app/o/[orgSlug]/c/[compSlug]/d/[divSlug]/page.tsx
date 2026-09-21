@@ -648,6 +648,7 @@ export default async function DivisionPage({
             suspensions={entrantSuspensions}
             rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
             viewerPlan={viewerPlan}
+            divisionStatus={division.status}
           />
         )}
 
