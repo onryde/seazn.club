@@ -31,6 +31,15 @@ interface Props {
   /** entrant_id → badge URL (v3/03 §5 placement matrix). Omit = no badge
    *  column at all; null values fall back to initials via EntityLogo. */
   entrantLogos?: Record<string, string | null>;
+  /** Entrant ids that are no longer in the field. A withdrawn entrant's played
+   *  results STAND — the withdrawal settles their remaining matches through
+   *  the normal ledger and leaves what they actually played — so the row is
+   *  carried rather than voided. Until 2026-09-21 it was carried with nothing
+   *  to tell it apart: a withdrawn player sat at rank 4 with 2 points, styled
+   *  exactly like the people still competing (found by driving the product).
+   *  `StandingsRow` itself has no status field, so this arrives beside the
+   *  rows rather than on them. Omit and nothing is marked. */
+  withdrawnEntrantIds?: readonly string[];
   caption?: string;
   /** The PUBLIC dictionary, in the language the page is read in: the org's on
    *  the public division page and the embed, the viewer's in the console. */
@@ -43,10 +52,12 @@ export function StandingsTable({
   cascade,
   entrantNames,
   entrantLogos,
+  withdrawnEntrantIds,
   caption,
   dict,
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
+  const withdrawn = new Set(withdrawnEntrantIds ?? []);
   const columns = standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS);
   const ranked = [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   // Podium chips are fixed vocabulary (gold/silver/bronze) — deliberately NOT
@@ -113,9 +124,21 @@ export function StandingsTable({
               }`}
             >
               {/* Rank column frozen inside the scroll container (v3/02 §3.3)
-                  — solid bg so scrolled columns pass underneath, not through. */}
+                  — solid bg so scrolled columns pass underneath, not through.
+
+                  `has-[details[open]]:z-30` is what stops the tie-break
+                  popover being painted over by the rows BELOW it. Every one of
+                  these cells is `z-10`, so an open tooltip (also `z-10`, and
+                  trapped in its own cell's stacking context) tied with the
+                  sticky cell of the next row and lost on DOM order: the next
+                  rank chip punched through the popover's left edge, and the
+                  row after that covered its bottom-left corner. Raising the
+                  CELL — not the tooltip — is the fix, because the comparison
+                  happens between the cells' stacking contexts, not between the
+                  tooltip and its cousins. Measured with `elementFromPoint` on
+                  every row, before and after. */}
               <td
-                className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums ${
+                className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums has-[details[open]]:z-30 ${
                   row.rank === 1 ? "bg-amber-50" : "bg-surface"
                 }`}
               >
@@ -125,9 +148,19 @@ export function StandingsTable({
                       {rankChip(row.rank)}
                       <span className="text-[10px] text-accent">*</span>
                     </summary>
+                    {/* The LAST row opens its explanation UPWARD. The table
+                        sits in a `relative overflow-x-auto` box, and an
+                        `overflow-x: auto` computes `overflow-y: auto` too, so
+                        a popover hanging below the final row is CLIPPED by
+                        that box, not merely overlapped — measured on the live
+                        page at 1280: tooltip bottom 704 against a container
+                        bottom of 679, three of its four lines cut off. Raising
+                        the cell (above) cannot help, because clipping happens
+                        before stacking. Flipping it up keeps it inside the
+                        same box, where the raise then wins. */}
                     <p
                       role="tooltip"
-                      className="absolute left-0 z-10 mt-1 w-56 rounded-lg border border-zinc-200 bg-surface p-2 text-xs text-zinc-700 shadow-lg"
+                      className="absolute left-0 z-10 mt-1 w-56 rounded-lg border border-zinc-200 bg-surface p-2 text-xs text-zinc-700 shadow-lg [tr:last-child_&]:bottom-full [tr:last-child_&]:top-auto [tr:last-child_&]:mb-1 [tr:last-child_&]:mt-0"
                     >
                       {msg("table.tieBreak", {
                         with: row.tieBreak.with.map((id) => entrantNames[id] ?? "—").join(", "),
@@ -149,6 +182,14 @@ export function StandingsTable({
                   />
                 )}
                 {entrantNames[row.entrantId] ?? row.entrantId}
+                {withdrawn.has(row.entrantId) && (
+                  <span
+                    data-testid="standings-withdrawn"
+                    className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 align-middle text-[10px] font-medium text-zinc-600"
+                  >
+                    {msg("table.withdrawn")}
+                  </span>
+                )}
               </th>
               {columns.map((col) => (
                 <td

@@ -179,3 +179,77 @@ describe("StageRail", () => {
     expect(match?.[1]).toBe("7");
   });
 });
+
+// F6, found by driving the product (2026-09-20): on a Swiss stage that had
+// paired nothing, "Complete stage" was the filled PRIMARY and "Pair next round"
+// the outline secondary beside it — the one action that ends the tournament with
+// nothing played, dressed as the obvious next press.
+//
+// Every row below asserts BOTH buttons' variants, not just the one it is about:
+// a rule that gave neither button the primary, or gave it to both, would satisfy
+// a one-sided assertion. Hardcoding `pairingIsNext = true` reds the seated rows;
+// `= false` reds the unpaired rows.
+describe("StageRail — which action holds the filled primary", () => {
+  const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
+  const league = { id: "s2", name: "League", kind: "league", seq: 1, status: "active" } as never;
+
+  /** The variant class on a button, by testid: "primary", "ghost" or absent. */
+  function variants(html: string) {
+    const read = (testid: string) => {
+      const el = new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0]
+        ?? new RegExp(`<button[^>]*class="([^"]*)"[^>]*data-testid="${testid}"`).exec(html)?.[0];
+      if (!el) return null;
+      if (/\bbtn-primary\b/.test(el)) return "primary";
+      if (/\bbtn-ghost\b/.test(el)) return "ghost";
+      return "neither";
+    };
+    return { generate: read("stage-generate"), complete: read("stage-complete") };
+  }
+
+  const rail = (over: Record<string, unknown>) =>
+    renderToStaticMarkup(
+      <StageRail stage={swiss} canEdit busy={null} fixtureCount={6} deletable={false}
+        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} {...over} />,
+    );
+
+  it("premise: both buttons carry a variant class at all, so 'neither' is a real failure", () => {
+    const v = variants(rail({ swissHasUnseated: true }));
+    expect(v.generate).not.toBe("neither");
+    expect(v.complete).not.toBe("neither");
+  });
+
+  it("gives it to Pair next round while a Swiss stage still has rounds unseated", () => {
+    expect(variants(rail({ swissHasUnseated: true }))).toEqual({
+      generate: "primary",
+      complete: "ghost",
+    });
+  });
+
+  it("moves it to Complete stage once the Swiss board is fully seated", () => {
+    // Not "hide the primary" — with nothing left to pair, completing IS the
+    // next step, so exactly one filled button either way.
+    expect(variants(rail({ swissHasUnseated: false }))).toEqual({
+      generate: "ghost",
+      complete: "primary",
+    });
+  });
+
+  it("gives it to Generate on any stage with no fixtures yet", () => {
+    // `stage-complete` is not rendered at all without fixtures, so this row
+    // asserts the generate side and the absence together.
+    for (const stage of [swiss, league]) {
+      const v = variants(rail({ stage, fixtureCount: 0, swissHasUnseated: false }));
+      expect(v, (stage as { kind: string }).kind).toEqual({ generate: "primary", complete: null });
+    }
+  });
+
+  it("gives it to Complete on a non-Swiss stage that has its fixtures", () => {
+    // `swissHasUnseated` is meaningless off Swiss — a rule that read it
+    // unguarded would hand a league's primary to Generate (i.e. regenerate).
+    expect(variants(rail({ stage: league, swissHasUnseated: true }))).toEqual({
+      generate: "ghost",
+      complete: "primary",
+    });
+  });
+});

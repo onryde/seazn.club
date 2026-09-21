@@ -86,6 +86,14 @@ export default async function DivisionHomePage({ params }: Props) {
   }
 
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
+  // NOT marked here, and it is not an oversight — see F10 in
+  // docs/superpowers/specs/2026-09-20-swiss-withdrawal-customer-walkthrough-findings.md.
+  // `public_entrants_v` filters `status in ('registered','confirmed')`, so a
+  // withdrawn entrant never reaches this page's `entrants` at all: the chip
+  // could not render, and `entrantNames` has no entry for her either, which is
+  // why the public table currently prints a RAW UUID in her name cell. Both
+  // are one fix — widening that view — and that is a public-data change with
+  // its own consumers (ics, poster, kiosk, the entrants tab), not a line here.
   // Badge chips (v3/03 §5 + PROMPT-60): the entrant's own badge_url wins,
   // then team → club logo resolved by the view.
   const entrantLogos = Object.fromEntries(

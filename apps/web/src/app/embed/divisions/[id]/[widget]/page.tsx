@@ -68,6 +68,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
     // retired module build — structural columns only
   }
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
+  // No withdrawn marking here for the same reason as the public division page
+  // (F10 in the walkthrough findings doc): this reads the same
+  // `public_entrants_v`, which filters withdrawn entrants out entirely.
   // PROMPT-60: the entrant's own badge_url wins over the team logo.
   const entrantLogos = Object.fromEntries(
     entrants.map((e) => [

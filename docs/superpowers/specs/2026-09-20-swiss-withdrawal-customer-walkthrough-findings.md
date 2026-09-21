@@ -129,10 +129,23 @@ open question, not decided here.
 the existing explanatory line in its place — that line already renders on the
 page.
 
-### F5 — LOW: six empty rows in the standings table body
+### F5 — RETRACTED 2026-09-21, this finding was WRONG
 
-`tbody` holds twelve `<tr>`: the six real rows followed by six empty ones. Dead
-vertical space, worst on a phone.
+~~Six empty rows in the standings table body.~~ **Withdrawn.** The standings
+table has exactly six rows and none of them is empty.
+
+The claim came from a whole-page `table tbody tr` sweep that counted a SECOND
+table: the head-to-head **Results grid**, which sits inside a collapsed
+`<details>`. `innerText` returns `""` for content inside a closed `<details>`,
+so its six real rows read as blank. Forcing `details.open = true` gives six rows,
+zero empty, with real content (`"CU Curie — · 0 — 0 · · ·"`). There is no padding
+loop in the code either — `standings-table.tsx`'s `<tbody>` contains only
+`ranked.map`.
+
+This is the repo's own rule biting the person who wrote it down: a query showed
+what exists and I asserted a property of it — here, that its rows were empty —
+without opening the thing I was measuring. Left in place rather than deleted so
+the next reader sees the retraction, not a gap.
 
 ### F6 — LOW: the destructive action is the primary button
 
@@ -164,3 +177,96 @@ organiser toward a destructive recovery on a live event, and it is reachable
 from the most ordinary interruption a tournament has.
 
 None of F1–F8 is caused by this PR. F3 is caused by the PR merged earlier today.
+
+## F9 — MEDIUM: an open tie-break tooltip is painted over by the rows below it
+
+Added 2026-09-21 from a screenshot of the live standings table: with a
+tie-break popover open, the NEXT row's rank chip punches through its left edge
+and the row after that covers its bottom-left corner, over the first words of
+the explanation.
+
+Measured with `elementFromPoint` on rows 1, 3 and 4 before and after: the
+left edge returned the next row's rank `SPAN`, the bottom-left its `TD`, while
+the centre was clear. Every sticky rank cell is `z-10` and the popover is also
+`z-10` INSIDE one of them, so the comparison happens between the two cells'
+stacking contexts and the later row wins on DOM order. Raising the cell that
+holds an open `<details>` is the fix; raising the tooltip cannot work.
+
+## F10 — HIGH, new: the PUBLIC standings print a raw UUID where a withdrawn entrant's name belongs
+
+Found 2026-09-21 while verifying the F2 chip on the live page (`/shared/
+my-organization-9/swiss-verify-cup/open-swiss`, prod bundle). Row 4 of the
+public table reads:
+
+> 4 * ?f8001cf4-f592-4b5e-a77c-c94520efed0f 1 1 0 0 0 2
+
+`public_entrants_v` filters `status in ('registered','confirmed')`, so a
+withdrawn entrant never reaches the public page's `entrants` at all. The
+STANDINGS SNAPSHOT still carries her row — it is keyed by entrant id and is
+built from results, not from the roster — so `entrantNames` has no entry, and
+the table falls back to printing the id.
+
+Two consequences, one cause:
+
+1. A spectator sees an internal UUID in a results table.
+2. F2's chip cannot reach the public page or the embed. Wiring it there was
+   tried and REMOVED in the same session rather than shipped inert — the prop
+   would have been passed an always-empty array.
+
+**Recommendation (mine, as product owner — not an owner ruling).** Widen
+`public_entrants_v` to carry withdrawn entrants, keeping every masking rule it
+already applies, and make the consumers that mean "the current field" — the
+entrants tab, the kiosk, the ICS and poster exports — filter status themselves.
+That is one migration plus a consumer audit, and it closes the UUID and the
+missing chip together. It is deliberately NOT in this branch: a public data
+view with five consumers is not a line to slip into a polish PR.
+
+## F11 — MEDIUM, new: the LAST row's tie-break popover is clipped away entirely
+
+Also found 2026-09-21, after F9's fix was in, by opening every row's popover in
+turn and hit-testing it. Rows 1–5 were clean; row 6's tooltip returned the
+section BELOW the table at five of six probe points.
+
+Not the same cause as F9. The table sits in `relative overflow-x-auto`, and a
+box with `overflow-x: auto` computes `overflow-y: auto` as well, so the final
+row's popover is CLIPPED by the container rather than painted over: measured
+tooltip bottom 704 against a container bottom of 679, at 1280. Clipping happens
+before stacking, so no z-index can reach it.
+
+**Fixed here:** the last row opens its popover upward (`[tr:last-child_&]`),
+inside the same box, where F9's raise then wins.
+
+## Disposition (2026-09-21, branch `fix/swiss-desk-polish`)
+
+| | verdict |
+| --- | --- |
+| F1 | FIXED — `getStageRosterDrift` now reads a second, status-narrowed fixture set for `ghosts`; `unplaced` keeps the unfiltered one |
+| F2 | PARTLY FIXED — the row is carried and MARKED ("Withdrawn" chip) on the console, public and embed tables. The two open questions below stay open |
+| F3 | FIXED in #813 (merged) |
+| F4 | FIXED — the Add-entrant form is replaced by the explanatory line once the list is locked |
+| F5 | RETRACTED — the finding was wrong (see above) |
+| F6 | FIXED — the primary follows "whatever still has work to do" |
+| F7 | FIXED — the empty-state text now names the button it points at |
+| F8 | OPEN — owner's call, unrelated to this programme |
+| F9 | FIXED — the sticky rank cell is raised while its `<details>` is open |
+| F10 | OPEN — public UUID + unreachable chip; needs the `public_entrants_v` widening above |
+| F11 | FIXED — the last row's popover opens upward |
+
+### Still owed, deliberately not done here
+
+- **Whether a withdrawn entrant should be EXCLUDED from the ranking** rather
+  than ranked and marked. This is the owner's call, not a defect fix: it
+  changes what every other entrant's rank means. The chip does not decide it.
+- **The withdrawal copy still promises a void** ("if they've played less than
+  half their games, everything they played is voided"). In Swiss the
+  denominator is undefined — pairing is lazy, so an entrant on one fixture has
+  played 1 of 1 — and the product's behaviour (results stand) is the defensible
+  one. The copy is what should move, and it moves with the ruling above.
+- **The public and embed tables are NOT marked** — see F10. The prop exists on
+  the component and the console page passes it; the public pages deliberately
+  pass nothing, because the data cannot reach them yet.
+- **`StandingsTableView`** (the competition hub's own table,
+  `matches-hub/{table,overview}-tab.tsx`) is NOT marked. It renders from a
+  server-built `TableViewT` rather than raw rows, so marking a withdrawal there
+  means extending that view type and its builder — a spectator-surface change.
+

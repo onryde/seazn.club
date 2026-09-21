@@ -48,6 +48,7 @@ import type { StageDraft } from "@/components/v2/format-templates";
 import { formatLocked } from "@/lib/format-lock";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
+import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
@@ -270,6 +271,12 @@ export default async function DivisionPage({
   // editor's default-position picker offers this division's groups.
   const lineupCatalog = lineupCatalogFor(sportModule, division.config);
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
+  // Withdrawn entrants keep their row in the table — a withdrawal settles the
+  // matches they had left and leaves the ones they actually played, so the
+  // results stand — but the row has to SAY so. `StandingsRow` carries no
+  // status, so the ids travel beside the rows. `listEntrants` already selects
+  // `status`, so this costs no extra query.
+  const withdrawnEntrantIds = entrants.filter((e) => e.status === "withdrawn").map((e) => e.id);
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
   // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
@@ -633,6 +640,7 @@ export default async function DivisionPage({
             }}
             entrantModel={entrantModel}
             suspensions={entrantSuspensions}
+            rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
             viewerPlan={viewerPlan}
           />
         )}
@@ -758,6 +766,7 @@ export default async function DivisionPage({
                         cascade={cascade}
                         entrantNames={entrantNames}
                         entrantLogos={entrantLogos}
+                        withdrawnEntrantIds={withdrawnEntrantIds}
                         caption={caption}
                         dict={publicDict}
                       />

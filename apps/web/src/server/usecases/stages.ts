@@ -2175,6 +2175,16 @@ export { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible };
 
 const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
 
+/** The two `fixtures.status` values that still expect their entrants to turn
+ *  up. The full vocabulary is seven: the other five — `decided`, `finalized`,
+ *  `abandoned`, `forfeited`, `cancelled` — are history or never-to-be-played,
+ *  so a name on one of them is a RECORD, not an outstanding obligation. Same
+ *  membership as `withdrawal.ts`'s `PENDING` (which decides whether a
+ *  withdrawal walks a fixture over or voids it) and `venues.ts`'s
+ *  `UNPLAYED_FIXTURE_STATUSES`, kept local for the same reason those are:
+ *  each is a judgement about its own question, not one shared table. */
+const PENDING_FIXTURE_STATUSES = ["scheduled", "in_play"];
+
 export interface StageRosterDriftEntrant {
   id: string;
   display_name: string;
@@ -2244,7 +2254,18 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
     // between rounds still appear as unplaced-only; the UI softens that via
     // `swissAwaitingPairing` (no destructive rebuild). Pre-fix stages that
     // never wrote a bye row still score via the absence fallback in swissGen.
-    const [active, referenced] = await Promise.all([
+    //
+    // The two directions read DIFFERENT fixture sets, and that asymmetry is
+    // the fix for a third false banner (found 2026-09-20 by driving a
+    // six-player Swiss division). A ghost is someone no longer active who is
+    // STILL EXPECTED TO PLAY, so only a fixture in `PENDING_FIXTURE_STATUSES`
+    // can make one: an organiser who withdraws an entrant after their round
+    // is played leaves a `forfeited`/`decided` row whose result is supposed to
+    // stand, and the unfiltered set called that drift and offered to rebuild
+    // the board mid-event. `unplaced` keeps the UNFILTERED set on purpose —
+    // an entrant holding only a played fixture IS placed, and narrowing that
+    // side too would swap this banner for the opposite one.
+    const [active, referenced, expectedToPlay] = await Promise.all([
       tx<StageRosterDriftEntrant[]>`
         select id, display_name from entrants
         where division_id = ${stage.division_id} and status in ('registered', 'confirmed')
@@ -2256,6 +2277,19 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
           select home_entrant_id from fixtures where stage_id = ${stageId} and home_entrant_id is not null
           union
           select away_entrant_id from fixtures where stage_id = ${stageId} and away_entrant_id is not null
+        )
+        order by e.display_name`,
+      tx<StageRosterDriftEntrant[]>`
+        select distinct e.id, e.display_name
+        from entrants e
+        where e.id in (
+          select home_entrant_id from fixtures
+            where stage_id = ${stageId} and home_entrant_id is not null
+              and status = any(${PENDING_FIXTURE_STATUSES})
+          union
+          select away_entrant_id from fixtures
+            where stage_id = ${stageId} and away_entrant_id is not null
+              and status = any(${PENDING_FIXTURE_STATUSES})
         )
         order by e.display_name`,
     ]);
@@ -2272,7 +2306,7 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
         (select count(*) from device_links dl
            join fixtures f on f.id = dl.fixture_id where f.stage_id = ${stageId})::int as device_links`;
     return {
-      ghosts: referenced.filter((e) => !activeIds.has(e.id)),
+      ghosts: expectedToPlay.filter((e) => !activeIds.has(e.id)),
       unplaced: active.filter((e) => !referencedIds.has(e.id)),
       attachments: {
         officials: counts?.officials ?? 0,

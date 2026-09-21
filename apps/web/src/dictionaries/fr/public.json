@@ -311,6 +311,7 @@
   "table.col.pointRatio": "Ratio de points",
   "table.pool": "Poule",
   "table.tieBreak": "Ex æquo avec {with} — départagé par {rule}",
+  "table.withdrawn": "Forfait",
   "table.tieBreak.points": "points",
   "table.tieBreak.wins": "victoires",
   "table.tieBreak.diff": "différence de buts/points",

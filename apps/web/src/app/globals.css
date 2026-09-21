@@ -211,6 +211,18 @@ body {
     @apply rounded-2xl border border-purple-100 bg-white/80 shadow-sm backdrop-blur;
   }
 
+  /* The "Start from blank" card in the New-competition gallery — the one card
+     that is not a template. Brand lime (`--mk-lime`), deliberately NOT
+     Tailwind's `lime-400`: see the note at the top of this file, the two have
+     been different colours since v4. `color-mix` keeps the hover wash on the
+     same hue instead of borrowing a neighbouring palette. */
+  .card-blank-start {
+    border-color: var(--mk-lime);
+  }
+  .card-blank-start:hover {
+    background: color-mix(in srgb, var(--mk-lime) 10%, transparent);
+  }
+
   .label {
     /* Full-strength purple-700: the /70 opacity variant failed WCAG AA
        contrast (axe gate, v3/11 gap 11). */

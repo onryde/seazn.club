@@ -311,6 +311,7 @@
   "table.col.pointRatio": "Ratio de puntos",
   "table.pool": "Grupo",
   "table.tieBreak": "Empatado con {with} — desempatado por {rule}",
+  "table.withdrawn": "Retirado",
   "table.tieBreak.points": "puntos",
   "table.tieBreak.wins": "victorias",
   "table.tieBreak.diff": "diferencia de goles/carreras",

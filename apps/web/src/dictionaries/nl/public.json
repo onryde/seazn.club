@@ -311,6 +311,7 @@
   "table.col.pointRatio": "Puntenverhouding",
   "table.pool": "Poule",
   "table.tieBreak": "Gelijk met {with} — gescheiden op {rule}",
+  "table.withdrawn": "Teruggetrokken",
   "table.tieBreak.points": "punten",
   "table.tieBreak.wins": "overwinningen",
   "table.tieBreak.diff": "doelsaldo/run-verschil",

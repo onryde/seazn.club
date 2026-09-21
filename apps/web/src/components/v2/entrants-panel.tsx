@@ -124,6 +124,11 @@ interface Props {
   canEdit: boolean;
   positionGroups: PositionGroup[];
   roles: RoleSpec[];
+  /** Is the entrant list closed? Mirrors `createEntrants`'s own guard via
+   *  `lib/open-entry-stages.ts`. When true the Add-entrant form is not
+   *  rendered at all: it was a dead control on every started tournament, and
+   *  the Start dialog has already promised the organiser it would be gone. */
+  rosterLocked?: boolean;
   eligibility: EntrantsPanelEligibility;
   /** Effective entrant model (sport default merged with any config.entrants
    *  override) — decides which kinds the add form offers and whether the
@@ -162,6 +167,7 @@ export function EntrantsPanel({
   eligibility,
   entrantModel,
   suspensions = {},
+  rosterLocked = false,
   viewerPlan,
 }: Props) {
   const msg = useMsg();
@@ -335,7 +341,12 @@ export function EntrantsPanel({
         </div>
       )}
 
-      {canEdit && (
+      {canEdit && rosterLocked && (
+        <p className="panel p-4 text-sm text-slate-600" data-testid="entrants-roster-locked">
+          {msg("entrants.locked.note")}
+        </p>
+      )}
+      {canEdit && !rosterLocked && (
         <AddEntrantForm
           persons={persons}
           teams={teams}
