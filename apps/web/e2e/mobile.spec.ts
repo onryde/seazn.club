@@ -3211,6 +3211,22 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   await expect(sheet).not.toContainText("slot.winner_match");
   await expectNoHorizontalScroll(page);
 
+  // THE PAIR, on ONE tab. The bracket TREE sits directly above this list and
+  // is fed by the same `listDivisionFixtures` rows. Round 1 of this fix
+  // taught only the list, which left the tree printing "TBD" immediately
+  // above a row reading "Winner of R1·1" — adjacent panels contradicting each
+  // other, which reads as broken rather than merely uninformative. Asserting
+  // each surface on its own is what let them drift, so this asserts they
+  // agree about the SAME match.
+  const tree = page.getByTestId("bracket-panel");
+  await expect(tree).toBeVisible({ timeout: 20_000 });
+  await expect(tree.getByText("Winner of R1·1", { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText("Winner of R1·2", { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(/^TBD$/)).toHaveCount(0);
+  // The tree's own positive pair: the seeded semis still read their stored
+  // labels, so an absent "Winner of" above would be a real absence.
+  await expect(tree.getByText("Rank 1", { exact: false }).first()).toBeVisible();
+
   // A LOOKUP, not a coincidentally-English literal — and the ORGANISER
   // vocabulary ("Ganador de R1·1"), never the public `knockout.feederWinner`
   // form. `slot.match_ref` is identical in every locale by design, so the
@@ -3220,6 +3236,10 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   await page.reload({ waitUntil: "load" });
   await expect(sheet.getByText("Ganador de R1·1", { exact: false }).first()).toBeVisible({ timeout: 20_000 });
   await expect(sheet).not.toContainText("Winner of R1·");
+  // The tree localizes with it — both surfaces read the dictionary, neither
+  // carries its own copy of the sentence.
+  await expect(tree.getByText("Ganador de R1·1", { exact: false }).first()).toBeVisible();
+  await expect(tree).not.toContainText("Winner of R1·");
   await expectNoHorizontalScroll(page);
 });
 

@@ -20,6 +20,7 @@ import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { feedLabels, type FeedLabelPair, type FeedRow } from "@/lib/schedule-board";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { roundRoleLabel } from "@/lib/round-role-label";
 import { roundRole, type RoundRole } from "@seazn/engine/competition";
@@ -49,8 +50,58 @@ interface FixtureLike {
    *  objects by hand without it — absent reads the same as null. */
   home_slot_label?: SlotLabel | null;
   away_slot_label?: SlotLabel | null;
+  /** The bracket FEED edges (V214__fixtures.sql), selected by
+   *  `listDivisionFixtures` and handed straight to this panel by the division
+   *  page. Optional for the same reason the two labels above are: this file's
+   *  suite builds FixtureLike objects by hand. */
+  winner_to_fixture?: string | null;
+  winner_to_slot?: number | null;
+  loser_to_fixture?: string | null;
+  loser_to_slot?: number | null;
   status: string;
   outcome: unknown;
+}
+
+/** A bracket row as `feedLabels()` wants it — the feed columns are optional on
+ *  `FixtureLike` and required on `FeedRow`. */
+function toFeedRow(f: FixtureLike): FeedRow {
+  return {
+    id: f.id,
+    round_no: f.round_no,
+    seq_in_round: f.seq_in_round,
+    winner_to_fixture: f.winner_to_fixture ?? null,
+    winner_to_slot: f.winner_to_slot ?? null,
+    loser_to_fixture: f.loser_to_fixture ?? null,
+    loser_to_slot: f.loser_to_slot ?? null,
+  };
+}
+
+/**
+ * One seat's label, in the SAME precedence `RunSheetRow` uses on the draw
+ * list directly below this tree:
+ *
+ *     entrant name → STORED `*_slot_label` → FEED label → `bracket.tbd`
+ *
+ * The caller has already handled the entrant name; this picks between the
+ * last three, returning `null` for the resolver's fallback.
+ *
+ * STORED WINS OVER FEED, deliberately. The stored label is the only thing
+ * that can say `bracket.slot.bye`, and a phantom bye seat that instead
+ * advertised "Winner of R1·3" would promise an opponent who is never coming.
+ * Inverting these two is a mutant that ONLY a bye case kills.
+ *
+ * The feed is consulted at all because `generateProgressionSetupFixtures`
+ * leaves a sibling-fed seat's stored label NULL on purpose — `stageOwesDraw`/
+ * `awaitsSeedDraw` read "no label ⇒ sibling-fed" for `timing: "setup"` stages.
+ * So the stored label CANNOT answer for those seats, and before this the tree
+ * printed "TBD" above a list that already read "Winner of R1·1".
+ */
+function seatLabel(
+  stored: SlotLabel | null | undefined,
+  feed: FeedLabelPair | undefined,
+  seat: "home" | "away",
+): SlotLabel | null {
+  return stored ?? feed?.[seat] ?? null;
 }
 
 interface Props {
@@ -92,6 +143,17 @@ export function BracketPanel({
   divSlug,
 }: Props) {
   const msg = useMsg();
+  // Built HERE, once, from the rows this panel already holds — the division
+  // page hands `listDivisionFixtures`' rows straight through
+  // (`fixtures.filter(f => f.stage_id === st.id)`), so no second query and no
+  // edit to that page. `feeds` is a REQUIRED prop on all three sub-panels
+  // below so tsc, not a reviewer, catches a mount that forgot to pass it.
+  //
+  // The slice is per STAGE, which is what the tree draws: `feedLabels()`
+  // needs both ends of an edge in the same row list, so a CROSS-stage feed is
+  // dropped — correctly, since those seats carry a stored seed-ref label
+  // ("Rank 1") from `descriptorLabel` and never reach the feed branch.
+  const feeds = feedLabels(fixtures.map(toFeedRow));
   if (kind === "page_playoff") {
     const pp = pagePlayoffBracket(fixtures);
     if (!pp.ok) return null;
@@ -99,6 +161,7 @@ export function BracketPanel({
       <PagePlayoffPanel
         layout={pp.layout}
         fixtures={fixtures}
+        feeds={feeds}
         entrantNames={entrantNames}
         {...(entrantBadges === undefined ? {} : { entrantBadges })}
         {...(headlines === undefined ? {} : { headlines })}
@@ -112,6 +175,7 @@ export function BracketPanel({
     return (
       <StepladderPanel
         fixtures={fixtures}
+        feeds={feeds}
         entrantNames={entrantNames}
         {...(entrantBadges === undefined ? {} : { entrantBadges })}
         {...(headlines === undefined ? {} : { headlines })}
@@ -130,6 +194,7 @@ export function BracketPanel({
         <DoubleElimPanel
           layout={de.layout}
           fixtures={fixtures}
+          feeds={feeds}
           entrantNames={entrantNames}
           {...(entrantBadges === undefined ? {} : { entrantBadges })}
           {...(headlines === undefined ? {} : { headlines })}
@@ -261,8 +326,8 @@ export function BracketPanel({
                 }}
               >
                 <span className="flex h-full flex-col justify-center gap-0.5">
-                  {side(f.home_entrant_id, f.home_slot_label, winner, live)}
-                  {side(f.away_entrant_id, f.away_slot_label, winner, live)}
+                  {side(f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"), winner, live)}
+                  {side(f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"), winner, live)}
                 </span>
                 {headline !== undefined && (
                   <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -284,6 +349,7 @@ export function BracketPanel({
 function DoubleElimPanel({
   layout,
   fixtures,
+  feeds,
   entrantNames,
   entrantBadges,
   headlines,
@@ -293,6 +359,8 @@ function DoubleElimPanel({
 }: {
   layout: DoubleElimLayout;
   fixtures: FixtureLike[];
+  /** fixture_id → the label pair its feed edges imply; see `seatLabel`. */
+  feeds: Record<string, FeedLabelPair>;
   entrantNames: Record<string, string>;
   entrantBadges?: Record<string, string | null>;
   headlines?: Record<string, string>;
@@ -389,8 +457,8 @@ function DoubleElimPanel({
         style={{ left, top, width: NODE_W, height: NODE_H }}
       >
         <span className="flex h-full flex-col justify-center gap-0.5">
-          {sideRow(f.home_entrant_id, f.home_slot_label)}
-          {sideRow(f.away_entrant_id, f.away_slot_label)}
+          {sideRow(f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"))}
+          {sideRow(f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"))}
         </span>
         {headline !== undefined && (
           <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -493,6 +561,7 @@ function DoubleElimPanel({
  *  the bracket nodes; rung labels mirror the public view. */
 function StepladderPanel({
   fixtures,
+  feeds,
   entrantNames,
   entrantBadges,
   headlines,
@@ -501,6 +570,8 @@ function StepladderPanel({
   divSlug,
 }: {
   fixtures: FixtureLike[];
+  /** fixture_id → the label pair its feed edges imply; see `seatLabel`. */
+  feeds: Record<string, FeedLabelPair>;
   entrantNames: Record<string, string>;
   entrantBadges?: Record<string, string | null>;
   headlines?: Record<string, string>;
@@ -560,8 +631,8 @@ function StepladderPanel({
               className="relative block max-w-md rounded-lg border border-[color:var(--app-hairline,#334155)] bg-[color:var(--app-card,#1e293b)] px-2.5 py-1.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow"
             >
               <span className="flex flex-col gap-0.5">
-                {row(f, f.home_entrant_id, f.home_slot_label)}
-                {row(f, f.away_entrant_id, f.away_slot_label)}
+                {row(f, f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"))}
+                {row(f, f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"))}
               </span>
               {headlines?.[f.id] !== undefined && (
                 <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -581,6 +652,7 @@ function StepladderPanel({
 function PagePlayoffPanel({
   layout,
   fixtures,
+  feeds,
   entrantNames,
   entrantBadges,
   headlines,
@@ -590,6 +662,8 @@ function PagePlayoffPanel({
 }: {
   layout: PagePlayoffLayout;
   fixtures: FixtureLike[];
+  /** fixture_id → the label pair its feed edges imply; see `seatLabel`. */
+  feeds: Record<string, FeedLabelPair>;
   entrantNames: Record<string, string>;
   entrantBadges?: Record<string, string | null>;
   headlines?: Record<string, string>;
@@ -675,8 +749,8 @@ function PagePlayoffPanel({
                   style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H }}
                 >
                   <span className={`flex h-full flex-col justify-center gap-0.5 ${headlines?.[f.id] !== undefined ? "pr-12" : ""}`}>
-                    {row(f, f.home_entrant_id, f.home_slot_label)}
-                    {row(f, f.away_entrant_id, f.away_slot_label)}
+                    {row(f, f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"))}
+                    {row(f, f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"))}
                   </span>
                   {headlines?.[f.id] !== undefined && (
                     <span className="absolute right-2 top-1/2 -translate-y-1/2 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">

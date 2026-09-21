@@ -221,15 +221,29 @@ test("a progression-seeded bye reads as a bye on the run sheet and in the bracke
   expect(bracketText, "the bye's empty seat must say Bye, not TBD").toContain(
     UI_EN["bracket.slot.bye"]!,
   );
-  // Its differential: the panel holds exactly ONE "TBD" — the Final's open
-  // side, genuinely waiting on the semi winner. Before the fix there were TWO,
-  // because the bye's phantom seat fell through to the same generic
-  // placeholder. Counted rather than asserted absent, so the case still
-  // witnesses the regression instead of demanding a bracket with no TBD at
-  // all (which this draw legitimately has).
+  // Its differential. This used to be "the panel holds exactly ONE TBD — the
+  // Final's open side, genuinely waiting on the semi winner", against TWO
+  // before the original fix, the second being the bye's phantom seat falling
+  // through to the same generic placeholder.
+  //
+  // That Final seat is no longer nameless: the tree now reads the bracket FEED
+  // edges, so it says "Winner of R1·2" (owner ruling 2026-09-21 — the tree and
+  // the draw list below it must agree). The differential therefore tightens
+  // rather than relaxes: this draw now has NO generic placeholder at all, and
+  // the bye's seat is still the only one saying Bye. A bye that regressed back
+  // to the placeholder would take the count from 0 to 1 and red this line, so
+  // the case still witnesses the regression it exists for — and a Final seat
+  // that lost its feeder would do the same.
   const tbd = UI_EN["bracket.tbd"]!;
   const tbdCount = bracketText.split(tbd).length - 1;
-  expect(tbdCount, `bracket panel read: ${bracketText}`).toBe(1);
+  expect(tbdCount, `bracket panel read: ${bracketText}`).toBe(0);
+  const byeLabel = UI_EN["bracket.slot.bye"]!;
+  expect(bracketText.split(byeLabel).length - 1, `bracket panel read: ${bracketText}`).toBe(1);
+  // The POSITIVE half: the seat that used to carry that one TBD now names the
+  // match it is waiting on, rather than having gone blank.
+  expect(bracketText, `bracket panel read: ${bracketText}`).toMatch(
+    /Winner of R\d+·\d+|Ganador de R\d+·\d+/,
+  );
 
   // ── Desktop, tablet and phone ────────────────────────────────────────────
   // AGENTS.md's bar is 1280 / 768 / 320; 375 is added because that is the
