@@ -276,13 +276,33 @@ describe.skipIf(!HAS_DB)("a vacated seat's walkover advances its winner (re-revi
     ).toEqual([]);
 
     // The three survivors each got their walkover and each advanced...
-    expect(rows.filter((r) => r.status === "forfeited")).toHaveLength(3);
+    expect(rows.filter((r) => r.status === "forfeited" && r.round_no === 1)).toHaveLength(3);
     const semis = rows.filter((r) => r.round_no === 2);
     const seated = semis.map(
       (r) => Number(r.home_entrant_id !== null) + Number(r.away_entrant_id !== null),
     );
     // ...so one semi has both players and the other, fed by the void, has one.
     expect(seated.sort()).toEqual([1, 2]);
+
+    // UPDATED 2026-09-21 for the cascade (owner ruling, resolveBracketSeats).
+    // This used to stop at "one semi has one player", which was the STUCK
+    // state: that seat's feeder is void, so nothing was ever going to arrive,
+    // and the final sat on "Awaiting draw" for the rest of the competition.
+    // A seat whose feeder is permanently dead is a bye seat, so the half-empty
+    // semi now settles on its one live entrant and advances — four walkovers
+    // in the stage, not three. `dead-feeder-cascade.test.ts` owns the rule;
+    // this pins that THIS shape reaches it.
+    expect(rows.filter((r) => r.status === "forfeited")).toHaveLength(4);
+    const voidFed = semis.find((r) => r.status === "forfeited")!;
+    const stillToPlay = semis.find((r) => r.id !== voidFed.id)!;
+    expect(stillToPlay.status, "the fully-seated semi is a real match").toBe("scheduled");
+    expect(voidFed.outcome).toMatchObject({
+      kind: "award",
+      winner: voidFed.home_entrant_id ?? voidFed.away_entrant_id,
+    });
+    // ...and its winner is standing in the final, not waiting on a draw.
+    const final = rows.find((r) => r.round_no === 3)!;
+    expect([final.home_entrant_id, final.away_entrant_id]).toContain(voidFed.outcome!.winner);
   });
 
   it("plays through to a champion: 8 qualifiers, one withdraws (three rounds)", async () => {

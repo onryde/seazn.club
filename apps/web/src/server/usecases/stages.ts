@@ -2259,6 +2259,15 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       }
     }
 
+    // The cascade (owner ruling 2026-09-21). The voids `walkoverDepartedQualifiers`
+    // wrote above are dead feeders from the instant they are inserted, so a
+    // seat they point at can already be actionable HERE — a structural bye
+    // pushed its winner into the round above two blocks up, and if that seat's
+    // other feeder is void the line is a walkover before anyone has played.
+    // Everything not yet actionable is deliberately left alone; `onDecided`
+    // picks it up at the moment the sibling feeder resolves.
+    await resolveBracketSeats(tx, stageId);
+
     if (stage.status === "pending") {
       await tx`update stages set status = 'active' where id = ${stageId}`;
     }
@@ -3157,6 +3166,203 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
       )
     returning id`;
   return rows.map((r) => r.id);
+}
+
+/** A feeder that can NEVER hand a winner onward. The discriminator is not the
+ *  status alone — `forfeited` is also a "void status" on the desk
+ *  (VOID_STATUSES, stages-panel.tsx) and yet it carries a real winner, which
+ *  is exactly how a bye advances. What makes a seat permanently dead is
+ *  "settled, and produced nobody": `abandoned` or `cancelled` with no
+ *  `outcome.winner`.
+ *
+ *  `abandoned` is where the engine's `{status: "void"}` verdict lands (there
+ *  is no `void` fixture status; append-event.ts maps `core.abandon` here), so
+ *  this covers both the generation-time void (re-review C2) and a match an
+ *  organiser abandoned on the day. A cricket no-result abandons WITH an
+ *  outcome that has no `winner`, which is why this reads the winner rather
+ *  than `outcome is null`. */
+function feederIsDead(
+  f: { status: string; outcome: { winner?: string } | null } | undefined,
+): boolean {
+  if (!f) return false;
+  if (f.status !== "abandoned" && f.status !== "cancelled") return false;
+  return !f.outcome?.winner;
+}
+
+interface SeatRow {
+  id: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  home_slot_label: { key?: string } | null;
+  away_slot_label: { key?: string } | null;
+  status: string;
+  outcome: { kind?: string; winner?: string } | null;
+  winner_to_fixture: string | null;
+  winner_to_slot: number | null;
+}
+
+/** Push the winners of the lines `awardSeededByes` just settled into the seats
+ *  they feed — `winner_to_fixture` / `winner_to_slot`, via `fillSlot`, the same
+ *  ONE channel `onDecided` advances a played fixture through (C1, re-review
+ *  2026-09-21). `awardSeededByes` writes status and outcome and nothing else,
+ *  so without this a settled walkover advances nobody. A no-op where the
+ *  destination seat is already taken, which is the genuine-bye case (the
+ *  seed's own expansion filled both of its slots), so both shapes go through
+ *  one path rather than two. */
+async function advanceSettledByes(tx: Tx, settled: string[]): Promise<string[]> {
+  if (settled.length === 0) return [];
+  const out: string[] = [];
+  const feeds = await tx<
+    {
+      id: string;
+      winner_to_fixture: string | null;
+      winner_to_slot: number | null;
+      outcome: { kind?: string; winner?: string } | null;
+    }[]
+  >`select id, winner_to_fixture, winner_to_slot, outcome from fixtures
+    where id in ${tx(settled)}`;
+  for (const feed of feeds) {
+    const winner = feed.outcome?.kind === "award" ? feed.outcome.winner : undefined;
+    if (!winner || !feed.winner_to_fixture) continue;
+    if (feed.winner_to_slot !== 1 && feed.winner_to_slot !== 2) continue;
+    const advanced = await fillSlot(tx, feed.winner_to_fixture, feed.winner_to_slot, winner);
+    if (advanced !== null) out.push(advanced);
+  }
+  return out;
+}
+
+/** One pass per round is the theoretical worst case (a chain of voids can walk
+ *  the cascade from the first round to the final, one round at a time), and a
+ *  bracket has nowhere near 32 rounds. This exists so a future bug turns into
+ *  a loud error rather than a transaction that never returns. */
+const MAX_CASCADE_PASSES = 32;
+
+/**
+ * OWNER RULING 2026-09-21 (the cascade) — **a seat whose feeder is permanently
+ * dead is a BYE seat.**
+ *
+ * Re-review C2 taught the generator to VOID a bracket line with nobody left to
+ * walk over to. That fixed "a withdrawn entrant is standing on a court" and
+ * inherited C1 through the back door: the void's `winner_to_fixture` target
+ * then waits forever on a feeder that can never produce a winner. Driven by
+ * hand, the final read "Awaiting draw" permanently, `completeStage` returned
+ * `{completed: false}`, and the stage could never leave `active`. There was no
+ * route back for the organiser — Rebuild refuses a stage that draws from
+ * `config.qualified`, and there is no seed proposal to recompute.
+ *
+ * The fix stamps `bracket.slot.bye` on the dead feeder's target seat and lets
+ * `awardSeededByes` + `advanceSettledByes` settle it — NO second settle path.
+ * Voids compound into further voids only where BOTH feeders are dead, because
+ * a walkover needs a live recipient (the same ruling C2 enforces one round
+ * earlier).
+ *
+ * ...AND IT STAMPS LATE. A seat is stamped at the moment it becomes
+ * actionable — the sibling feeder has resolved and the seat is genuinely
+ * "live entrant + permanently dead feeder" — never pre-stamped down the
+ * forward chain at generation. A withdrawal is a STATUS FLIP and an entrant
+ * can be reinstated, so every stamp written ahead of need hardens a state a
+ * human could otherwise undo. Same read-time-not-write-time instinct that made
+ * the F7 ladder fix safe (`ladder_order` is never pruned precisely because a
+ * prune cannot be un-pruned). `dead-feeder-cascade.test.ts`'s "no seat is
+ * stamped before its sibling feeder resolves" is what fails if this is ever
+ * made eager.
+ *
+ * Idempotent and re-entrant: every write is guarded on the state it changes
+ * (`<> 'bracket.slot.bye'`, `status = 'scheduled'`) and reports through
+ * `returning id`, so a second call writes nothing and the loop terminates.
+ *
+ * THE REVERSE WALK. A seat's feeder is found by inverting
+ * `winner_to_fixture` — a forward-only edge. Rather than query it per seat
+ * (`where winner_to_fixture = $1`, which V275__advisor_indexes.sql does index,
+ * partial on `winner_to_fixture is not null`) or thread a second column at
+ * generation, this reads the stage's fixtures ONCE per pass — `fixtures_stage_idx`
+ * (stage_id, round_no, seq_in_round) — and inverts the edge in memory. The
+ * fixpoint loop needs every row anyway to find the seats that became
+ * actionable, a bracket stage is tens of rows, and no new column or migration
+ * is owed. The one thing it deliberately cannot see is a CROSS-STAGE feeder
+ * (wireCrossFeeds): an out-of-stage source is simply not in the map, reads as
+ * "no feeder", and is never stamped — which leaves today's behaviour for that
+ * shape exactly as it was rather than guessing at it.
+ *
+ * Returns every fixture id it changed, so the caller can publish them.
+ */
+export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<string[]> {
+  const touched = new Set<string>();
+  for (let pass = 0; pass < MAX_CASCADE_PASSES; pass++) {
+    const rows = await tx<SeatRow[]>`
+      select id, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+             status, outcome, winner_to_fixture, winner_to_slot
+      from fixtures where stage_id = ${stageId}`;
+    const feederOf = new Map<string, SeatRow>();
+    for (const r of rows) {
+      if (r.winner_to_fixture === null) continue;
+      if (r.winner_to_slot !== 1 && r.winner_to_slot !== 2) continue;
+      feederOf.set(`${r.winner_to_fixture}:${r.winner_to_slot}`, r);
+    }
+    let wrote = 0;
+    for (const f of rows) {
+      if (f.status !== "scheduled" || f.outcome !== null) continue;
+      const openHome = f.home_entrant_id === null;
+      const openAway = f.away_entrant_id === null;
+      if (!openHome && !openAway) continue;
+      const deadHome = openHome && feederIsDead(feederOf.get(`${f.id}:1`));
+      const deadAway = openAway && feederIsDead(feederOf.get(`${f.id}:2`));
+      if (openHome && openAway) {
+        // Nobody is here and nobody is coming: the line is void, and it becomes
+        // a dead feeder itself on the next pass. A single dead feeder is NOT
+        // enough — the other side is still on its way, and stamping now would
+        // be exactly the premature hardening the ruling forbids.
+        if (!deadHome || !deadAway) continue;
+        const [voided] = await tx<{ id: string }[]>`
+          update fixtures set status = 'abandoned'
+          where id = ${f.id} and stage_id = ${stageId}
+            and status = 'scheduled' and outcome is null
+            and home_entrant_id is null and away_entrant_id is null
+          returning id`;
+        if (voided) {
+          touched.add(voided.id);
+          wrote++;
+        }
+        continue;
+      }
+      // Exactly one seat is open and the other holds a live entrant (the
+      // both-filled case returned above), so if that open seat's feeder is
+      // dead there IS someone to award the walkover to. Stamp, and let
+      // awardSeededByes below settle it off the label like any other bye.
+      const [stamped] = openHome
+        ? deadHome
+          ? await tx<{ id: string }[]>`
+              update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+              where id = ${f.id} and stage_id = ${stageId}
+                and home_entrant_id is null and status = 'scheduled' and outcome is null
+                and coalesce(home_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}
+              returning id`
+          : []
+        : deadAway
+          ? await tx<{ id: string }[]>`
+              update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+              where id = ${f.id} and stage_id = ${stageId}
+                and away_entrant_id is null and status = 'scheduled' and outcome is null
+                and coalesce(away_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}
+              returning id`
+          : [];
+      if (stamped) {
+        touched.add(stamped.id);
+        wrote++;
+      }
+    }
+    // Settle every bye line whose real seat is occupied — the ones just
+    // stamped, and any the caller's own writes made ready — then advance their
+    // winners. An advance can fill the seat that makes the NEXT round
+    // actionable, which is why this is a loop and not a single pass.
+    const settled = await awardSeededByes(tx, stageId);
+    for (const id of settled) touched.add(id);
+    for (const id of await advanceSettledByes(tx, settled)) touched.add(id);
+    if (wrote === 0 && settled.length === 0) return [...touched];
+  }
+  throw new Error(
+    `resolveBracketSeats: stage ${stageId} did not reach a fixed point in ${MAX_CASCADE_PASSES} passes`,
+  );
 }
 
 // L3/#414 pass 3 — REAL_TABLE_KINDS are the kinds a carry-over may source
@@ -4523,39 +4729,16 @@ export async function confirmSeedProposal(
     // just wrote. The decided lines join `filledFixtureIds` so the post-commit
     // publish below drops and re-pushes them too — their match centre now
     // shows a settled walkover rather than a fixture waiting on a draw.
-    const settledByes = await awardSeededByes(tx, stageId);
-    for (const id of settledByes) filledFixtureIds.add(id);
-    // C1 (re-review, 2026-09-21) — and the winner ADVANCES. `awardSeededByes`
-    // writes `status` and `outcome`, nothing else. A GENUINE bye's winner is
-    // already standing in the next round, but only as a side effect: her seed
-    // owns BOTH slots (generation stamped her seed's label on the feed too),
-    // so the expansion loop above filled them together. A VACATED seat has no
-    // seed to expand — nothing was ever going to feed the next round, and the
-    // bracket stopped dead after round one. Every shipped template
-    // progression is `timing: "setup"`, so that is all of them.
-    //
-    // Same channel `onDecided` advances a PLAYED fixture through:
-    // winner_to_fixture / winner_to_slot, via fillSlot. A no-op where the
-    // destination seat is already taken, which is exactly the genuine-bye
-    // case, so both shapes go through one path rather than two.
-    if (settledByes.length > 0) {
-      const feeds = await tx<
-        {
-          id: string;
-          winner_to_fixture: string | null;
-          winner_to_slot: number | null;
-          outcome: { kind?: string; winner?: string } | null;
-        }[]
-      >`select id, winner_to_fixture, winner_to_slot, outcome from fixtures
-        where id in ${tx(settledByes)}`;
-      for (const feed of feeds) {
-        const winner = feed.outcome?.kind === "award" ? feed.outcome.winner : undefined;
-        if (!winner || !feed.winner_to_fixture) continue;
-        if (feed.winner_to_slot !== 1 && feed.winner_to_slot !== 2) continue;
-        const advanced = await fillSlot(tx, feed.winner_to_fixture, feed.winner_to_slot, winner);
-        if (advanced !== null) filledFixtureIds.add(advanced);
-      }
-    }
+    // A bye seat just became a real entrant's, so the walkover the plain path
+    // bakes at generation time can finally be recorded, its winner advanced,
+    // and any seat whose feeder just turned out to be permanently dead settled
+    // behind it — all of it through `resolveBracketSeats`, the ONE cascade.
+    // AFTER the fills, in the SAME transaction: it reads the entrant ids they
+    // just wrote. The lines it settles join `filledFixtureIds` so the
+    // post-commit publish below drops and re-pushes them too — their match
+    // centre now shows a settled walkover rather than a fixture waiting on a
+    // draw.
+    for (const id of await resolveBracketSeats(tx, stageId)) filledFixtureIds.add(id);
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;

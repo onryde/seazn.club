@@ -29,7 +29,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { subjectToScorerCapabilityGates } from "./scorers";
-import { fillSlot, markDependentSeedProposalsStale } from "./stages";
+import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats } from "./stages";
 import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
@@ -538,6 +538,18 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
     if (loser && fixture.loser_to_fixture && fixture.loser_to_slot) {
       const filled = await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
       if (filled !== null) advanced.push(filled);
+    }
+    // The cascade (owner ruling 2026-09-21, resolveBracketSeats). Gated on this
+    // fixture FEEDING something, which is the only way this decision can have
+    // changed another seat's situation — and it covers both directions: a win
+    // that just seated someone next to a dead feeder, and a VOID (outcome
+    // null, no winner) that just BECAME the dead feeder for a seat whose
+    // neighbour was already occupied. A league or group fixture feeds nothing,
+    // so the hot path pays nothing.
+    if (fixture.winner_to_fixture !== null) {
+      for (const id of await resolveBracketSeats(tx, fixture.stage_id)) {
+        if (!advanced.includes(id)) advanced.push(id);
+      }
     }
     // Placement games (Jul3/08 §4, 3 Jun/17 May): "winner of game X = 15th" —
     // the decided fixture writes rank locks via the Jul3/05 mechanism, never
