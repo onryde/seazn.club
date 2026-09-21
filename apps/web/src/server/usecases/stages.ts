@@ -2622,6 +2622,25 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
     // (fixtures.court_id is RESTRICT but points OUT at courts, so it
     // constrains deleting a COURT, never this delete.)
+    // NARROWED 2026-09-21 (the cascade). `abandoned` used to block on its own.
+    // That was written for a match that was PLAYED and stopped, and it is now
+    // ALSO the value the generator's own void writes (walkoverDepartedQualifiers,
+    // re-review C2) — so from the instant a departed pairing was voided at
+    // generation the stage became permanently un-rebuildable, and the organiser
+    // pressing "Rebuild fixtures" on a board nobody had played was told
+    // "this stage already has recorded results". Driven in a browser; the
+    // sentence on screen was false, which is worse than a control that does
+    // nothing.
+    //
+    // A generation-time void has no outcome, no score events, no match report
+    // and no config snapshot — it is a line the regenerate would draw again
+    // identically. A real abandonment has at least the `core.abandon` event
+    // that produced the status, and a cricket-style no-result carries an
+    // outcome; both still block, the first through `fixtureEvidenceSql` below
+    // and the second through the `outcome is not null` clause. That split is
+    // what `dead-feeder-cascade.test.ts`'s two CONTROL cases pin, one per
+    // side.
+    //
     // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
     // literal, shared with `unpairSwissRound`'s guard, because the
     // 2026-09-20 review found Unpair shipping a SUBSET of this list and
@@ -2634,7 +2653,8 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       select f.id from fixtures f
       where f.stage_id = ${stageId}
         and (
-          f.status in ('in_play', 'decided', 'finalized', 'abandoned')
+          f.status in ('in_play', 'decided', 'finalized')
+          or (f.status = 'abandoned' and f.outcome is not null)
           or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
           or (${fixtureEvidenceSql(tx)})
         )

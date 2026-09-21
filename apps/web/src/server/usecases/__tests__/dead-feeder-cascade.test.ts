@@ -33,7 +33,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
-import { completeStage, createStages, generateStageFixtures } from "../stages";
+import { completeStage, createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -322,5 +322,85 @@ describe.skipIf(!HAS_DB)("a seat whose feeder is permanently dead is a bye seat"
     expect(after.filter(isDead).map((r) => r.ext_key), "a line was voided with nobody missing").toEqual([]);
     const out = await completeStage(rig.auth, rig.stageId);
     expect(out.completed).toBe(true);
+  });
+});
+
+// Driven in a browser on 2026-09-21: on a freshly generated board with a
+// departed pairing — nothing played, not one score entered — pressing
+// "Rebuild fixtures" and confirming produced the amber notice "Can't rebuild
+// — this stage already has recorded results." That sentence is FALSE, and a
+// control that tells the organiser something untrue about their own
+// competition is worse than one that does nothing.
+//
+// The cause is the generator's own artefact. rebuildStageFixtures refuses on
+// `status in ('in_play','decided','finalized','abandoned')`, and `abandoned`
+// is where the C2 void lands — so from the moment a pairing is voided AT
+// GENERATION the stage is permanently un-rebuildable. The guard's reason for
+// naming `abandoned` is a match that was PLAYED and stopped (match-reports
+// accepts a report on exactly that status); a generation-time void has no
+// events, no outcome and no report, and a rebuild simply redraws it.
+describe.skipIf(!HAS_DB)("Rebuild fixtures on a board the generator itself voided", () => {
+  it("a generation-time void is not a recorded result — the rebuild goes through and redraws it", async () => {
+    const rig = await seedQualifiedStage(8);
+    for (const id of pairingOfSeeds(rig.qualified, 4, 5)) {
+      await withdrawEntrantCascade(rig.auth, id);
+    }
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const before = await rowsOf(rig.stageId);
+    expect(before.filter(isDead), "the generator voided the departed pairing").toHaveLength(1);
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+    expect(out.removed, "every fixture was replaced").toBe(before.length);
+
+    // The board comes back the same, void included — a rebuild of an unplayed
+    // stage is a redraw, not a repair, so the SHAPE is what is pinned here.
+    const after = await rowsOf(rig.stageId);
+    expect(after.map((r) => `${r.ext_key}:${r.status}`)).toEqual(
+      before.map((r) => `${r.ext_key}:${r.status}`),
+    );
+    expect(after.map((r) => [r.home_entrant_id, r.away_entrant_id])).toEqual(
+      before.map((r) => [r.home_entrant_id, r.away_entrant_id]),
+    );
+  });
+
+  it("CONTROL — one real result still refuses: the guard was narrowed, not removed", async () => {
+    const rig = await seedQualifiedStage(8);
+    for (const id of pairingOfSeeds(rig.qualified, 4, 5)) {
+      await withdrawEntrantCascade(rig.auth, id);
+    }
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const open = (await rowsOf(rig.stageId)).find(
+      (r) => r.status === "scheduled" && r.home_entrant_id && r.away_entrant_id,
+    )!;
+    await play(rig.auth, open.id);
+    await expect(rebuildStageFixtures(rig.auth, rig.stageId)).rejects.toMatchObject({
+      code: "STAGE_HAS_RESULTS",
+    });
+  });
+
+  it("CONTROL — an ABANDONED match that was actually played still refuses", async () => {
+    const rig = await seedQualifiedStage(8);
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const open = (await rowsOf(rig.stageId)).find(
+      (r) => r.status === "scheduled" && r.home_entrant_id && r.away_entrant_id,
+    )!;
+    // Start it, then abandon it: status 'abandoned' like the void, but with a
+    // real event ledger behind it. This is the case the guard's `abandoned`
+    // clause was written for, and it must survive the narrowing.
+    await scoreEvent(rig.auth, open.id, {
+      expected_seq: (await getFixtureState(rig.auth, open.id)).last_seq,
+      type: "core.start",
+      payload: {},
+    });
+    await scoreEvent(rig.auth, open.id, {
+      expected_seq: (await getFixtureState(rig.auth, open.id)).last_seq,
+      type: "core.abandon",
+      payload: { reason: "waterlogged" },
+    });
+    const row = (await rowsOf(rig.stageId)).find((r) => r.id === open.id)!;
+    expect(row.status, "the fixture really is abandoned").toBe("abandoned");
+    await expect(rebuildStageFixtures(rig.auth, rig.stageId)).rejects.toMatchObject({
+      code: "STAGE_HAS_RESULTS",
+    });
   });
 });
