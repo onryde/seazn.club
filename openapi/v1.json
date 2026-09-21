@@ -64429,6 +64429,21 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "payout_alert": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "payout_failed",
+                                "bank_removed",
+                                "bank_changed"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -64438,7 +64453,8 @@
                         "payouts_enabled",
                         "disabled_reason",
                         "requirements_due",
-                        "unsupported_currency"
+                        "unsupported_currency",
+                        "payout_alert"
                       ],
                       "additionalProperties": false
                     },
@@ -64457,7 +64473,8 @@
                     "payouts_enabled": true,
                     "disabled_reason": "example",
                     "requirements_due": 1,
-                    "unsupported_currency": "example"
+                    "unsupported_currency": "example",
+                    "payout_alert": "payout_failed"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

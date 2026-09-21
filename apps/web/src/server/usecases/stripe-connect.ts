@@ -20,6 +20,27 @@ import { requireFeature } from "@/lib/entitlements";
 import { getStripe } from "@/lib/stripe";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
+/**
+ * Why the club's money is not reaching its bank, when the four `account.updated`
+ * health flags all read fine (V411).
+ *
+ * `payouts_enabled` answers whether Stripe is WILLING to pay out; none of these
+ * three do. A payout can bounce, and a destination bank account can be removed
+ * or swapped, on an account that reports `payouts_enabled: true` throughout.
+ * One value selects one banner's copy — see V411's header for why these share
+ * a column rather than getting one flag each.
+ */
+export type PayoutAlert = "payout_failed" | "bank_removed" | "bank_changed";
+
+const PAYOUT_ALERTS: readonly PayoutAlert[] = ["payout_failed", "bank_removed", "bank_changed"];
+
+/** Narrow a stored value to the closed set. A row written before a value was
+ *  retired (or by hand) reads as "no alert" rather than reaching `msg()` as a
+ *  missing key and rendering its raw token on a money screen. */
+function asPayoutAlert(v: string | null): PayoutAlert | null {
+  return v !== null && (PAYOUT_ALERTS as readonly string[]).includes(v) ? (v as PayoutAlert) : null;
+}
+
 export interface ConnectStatusRow {
   connected: boolean;
   charges_enabled: boolean;
@@ -30,6 +51,11 @@ export interface ConnectStatusRow {
   payouts_enabled: boolean;
   disabled_reason: string | null;
   requirements_due: number;
+  /** V411: the live payout-health alert, or null when money is flowing. Set by
+   *  `payout.failed` / `account.external_account.*`, CLEARED by `payout.paid`.
+   *  The detail behind it (`stripe_payout_alert_detail`) stays server-side —
+   *  it carries Stripe-authored English and an account identifier. */
+  payout_alert: PayoutAlert | null;
   /** RS001b: the account's settlement currency when it is outside
    *  `REGISTRATION_CURRENCIES`, else null. Non-null means card registration is
    *  unavailable for this org — the same-currency rule forbids charging in
@@ -52,13 +78,14 @@ interface OrgConnectCols {
   stripe_disabled_reason: string | null;
   stripe_requirements_due: number;
   stripe_unsupported_currency: string | null;
+  stripe_payout_alert: string | null;
 }
 
 async function orgConnect(orgId: string): Promise<OrgConnectCols> {
   const [row] = await sql<OrgConnectCols[]>`
     select stripe_account_id, stripe_charges_enabled,
            stripe_payouts_enabled, stripe_disabled_reason, stripe_requirements_due,
-           stripe_unsupported_currency
+           stripe_unsupported_currency, stripe_payout_alert
     from organizations where id = ${orgId}`;
   if (!row) throw new HttpError(404, "organization not found");
   return row;
@@ -95,6 +122,7 @@ export async function connectStatus(
     disabled_reason: row.stripe_disabled_reason,
     requirements_due: row.stripe_requirements_due,
     unsupported_currency: row.stripe_unsupported_currency,
+    payout_alert: asPayoutAlert(row.stripe_payout_alert),
   };
 }
 
@@ -442,4 +470,143 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
       "connect.currency_unsupported",
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Payout health (V411)
+//
+// `syncConnectAccount` above mirrors what Stripe is WILLING to do. The three
+// functions below mirror what actually HAPPENED to the money, which the four
+// health flags cannot express: a payout bounces, or the destination bank
+// account is removed or swapped, on an account that reports
+// `payouts_enabled: true` throughout. Every one of these events is CONNECT
+// scoped — the object describes the club's own account, and the connected
+// account id arrives on `event.account`, never on the object — so the callers
+// in billing-events.ts pass the id in rather than reading it off the payload.
+// ---------------------------------------------------------------------------
+
+/** How loud each alert is. A new alert overwrites a stored one only when it is
+ *  at least as serious, so a routine bank edit cannot bury a bounced payout —
+ *  which is the whole reason the owner is being shown a banner at all. */
+const ALERT_SEVERITY: Record<PayoutAlert, number> = {
+  bank_changed: 1,
+  bank_removed: 2,
+  payout_failed: 3,
+};
+
+/** The org that owns a connected account, or null when no org here does (the
+ *  account was disconnected, or belongs to another environment sharing the
+ *  platform key). Every writer below no-ops on null rather than guessing. */
+async function orgForAccount(accountId: string): Promise<{ id: string; name: string } | null> {
+  const [row] = await sql<{ id: string; name: string }[]>`
+    select id, name from organizations where stripe_account_id = ${accountId}`;
+  return row ?? null;
+}
+
+/**
+ * Mirror one `payout.paid` / `payout.failed` for a connected account.
+ *
+ * BOTH directions, deliberately. A `failed` that only ever sets is a banner
+ * nothing can take down — the owner fixes their bank, money starts flowing,
+ * and the product keeps telling them it is broken. `paid` is the one piece of
+ * evidence that settles the question, so it clears the alert and stamps
+ * `stripe_last_payout_at`.
+ *
+ * The clear is GUARDED on time. Stripe can pay out a payout that was created
+ * BEFORE the bank account was removed, so a naive clear would let a stale
+ * success cancel a newer, still-true alert. An alert raised after this payout
+ * was created therefore survives it; `stripe_last_payout_at` is stamped either
+ * way, because the money did land.
+ *
+ * Returns the alert now stored (null when clear), or `undefined` when no org
+ * owns the account — the callers distinguish "nothing to do" from "cleared".
+ */
+export async function recordConnectPayout(
+  accountId: string,
+  payout: Stripe.Payout,
+): Promise<PayoutAlert | null | undefined> {
+  const org = await orgForAccount(accountId);
+  if (!org) return undefined;
+
+  if (payout.status === "paid") {
+    const paidAt = new Date((payout.arrival_date ?? payout.created) * 1000).toISOString();
+    const createdAt = new Date(payout.created * 1000).toISOString();
+    const [row] = await sql<{ stripe_payout_alert: string | null }[]>`
+      update organizations set
+        stripe_last_payout_at = greatest(
+          coalesce(stripe_last_payout_at, ${paidAt}::timestamptz), ${paidAt}::timestamptz),
+        stripe_payout_alert = case
+          when stripe_payout_alert_at is null
+            or stripe_payout_alert_at <= ${createdAt}::timestamptz then null
+          else stripe_payout_alert end,
+        stripe_payout_alert_at = case
+          when stripe_payout_alert_at is null
+            or stripe_payout_alert_at <= ${createdAt}::timestamptz then null
+          else stripe_payout_alert_at end,
+        stripe_payout_alert_detail = case
+          when stripe_payout_alert_at is null
+            or stripe_payout_alert_at <= ${createdAt}::timestamptz then null
+          else stripe_payout_alert_detail end
+      where id = ${org.id}
+      returning stripe_payout_alert`;
+    log.info({ org_id: org.id, account_id: accountId, payout_id: payout.id }, "connect.payout_paid");
+    return asPayoutAlert(row?.stripe_payout_alert ?? null);
+  }
+
+  // Anything that is not `paid` on these two event types is a bounce. The
+  // failure code is Stripe's machine-readable reason (`account_closed`,
+  // `no_account`, `debit_not_authorized`, …) and stays server-side.
+  const detail = payout.failure_code ?? payout.status;
+  await raiseAlert(org.id, "payout_failed", detail);
+  log.warn(
+    { org_id: org.id, account_id: accountId, payout_id: payout.id, failure_code: detail },
+    "connect.payout_failed",
+  );
+  return "payout_failed";
+}
+
+/**
+ * Mirror `account.external_account.deleted` / `.updated` for a connected
+ * account: the club's destination bank account went away, or changed under us.
+ *
+ * `.updated` is the weaker signal ON PURPOSE. Stripe emits it for benign edits
+ * — a `default_for_currency` flip, a metadata change — so raising it at the
+ * same severity as a real bounce would let routine churn replace "your payout
+ * failed" with "your bank details changed", which is a strictly worse sentence
+ * to show someone whose money is stuck. Hence the severity ladder: `.updated`
+ * is `bank_changed` (1), which never overwrites `bank_removed` (2) or
+ * `payout_failed` (3), and the next successful payout clears it by itself.
+ *
+ * Returns the org the change belonged to, or null when no org here owns the
+ * account — the caller uses it to decide whether a staff alert is warranted.
+ */
+export async function recordExternalAccountChange(
+  accountId: string,
+  kind: "bank_removed" | "bank_changed",
+  detail: string,
+): Promise<{ id: string; name: string } | null> {
+  const org = await orgForAccount(accountId);
+  if (!org) return null;
+  await raiseAlert(org.id, kind, detail);
+  log.warn(
+    { org_id: org.id, account_id: accountId, kind, detail },
+    "connect.external_account_changed",
+  );
+  return org;
+}
+
+/** Store an alert unless a LOUDER one is already standing. The comparison is
+ *  done in SQL so two webhook deliveries racing each other cannot read-then-
+ *  write a downgrade between them. */
+async function raiseAlert(orgId: string, alert: PayoutAlert, detail: string): Promise<void> {
+  await sql`
+    update organizations set
+      stripe_payout_alert        = ${alert},
+      stripe_payout_alert_at     = now(),
+      stripe_payout_alert_detail = ${detail}
+    where id = ${orgId}
+      and coalesce(
+            case stripe_payout_alert
+              when 'payout_failed' then 3 when 'bank_removed' then 2
+              when 'bank_changed'  then 1 else 0 end, 0) <= ${ALERT_SEVERITY[alert]}`;
 }
