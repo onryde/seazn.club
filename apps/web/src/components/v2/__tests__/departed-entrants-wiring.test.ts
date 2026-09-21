@@ -45,16 +45,30 @@ describe("the ladder panel localises a challenge refusal (N21)", () => {
 describe("the division page treats a disqualification as a departure (N22)", () => {
   const source = read("app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx");
 
-  it("derives departedEntrantIds from BOTH terminal statuses", () => {
+  it("derives departedEntrantIds from the shared vocabulary, not a status literal", () => {
     const match = source.match(/const departedEntrantIds = [\s\S]{0,300}?\.map\(/);
     expect(match, "departedEntrantIds is no longer derived on this page").not.toBeNull();
     const derivation = match![0];
-    expect(derivation).toContain('"withdrawn"');
-    // The half the mutation campaign dropped with nothing going red: an
-    // organiser's PATCH to `disqualified` is the other writer of
-    // `entrants.status`, and it must narrow the pickers exactly as a
-    // withdrawal does.
-    expect(derivation).toContain('"disqualified"');
+    // This assertion USED to be `toContain('"withdrawn"')` plus the same for
+    // `"disqualified"`, which was right about the intent and wrong about where
+    // to look: `standings-withdrawn-wiring.test.ts` forbids this page spelling
+    // the vocabulary at all, because a page that names one status will miss
+    // the next one added — and the two guards then contradicted each other.
+    //
+    // The intent it was protecting (a DISQUALIFICATION narrows the pickers
+    // exactly as a withdrawal does — the half a mutation dropped with nothing
+    // going red) has not been weakened, it has MOVED to where it can no longer
+    // be satisfied by a page-local literal: `DEPARTED_STATUSES` is pinned to
+    // the schema's own status list in
+    // `public-site/__tests__/departed-vocabulary-is-single-sourced.test.ts`.
+    // Narrowing that set to `withdrawn` alone reds there.
+    expect(derivation).toContain("DEPARTED_STATUSES.has");
+    expect(
+      derivation,
+      "the page restates the departed vocabulary — read it from DEPARTED_STATUSES instead",
+    ).not.toMatch(/"(withdrawn|disqualified)"/);
+    // And it is imported from the one place that owns it, not redeclared here.
+    expect(source).toMatch(/import\s*\{[^}]*DEPARTED_STATUSES[^}]*\}\s*from\s*"@\/server\/usecases\/entrants"/);
   });
 
   it("hands that list to every panel whose pickers must not offer her", () => {

@@ -472,8 +472,16 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
 }
 
 /** `entrants.status` values that mean "no longer in the field" — the
- *  complement of the house `status in ('registered','confirmed')` predicate. */
-const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
+ *  complement of the house `status in ('registered','confirmed')` predicate.
+ *
+ *  Exported because this is the ONE place the departed vocabulary is spelled
+ *  on the server side. Callers that need "who has left" must read it from
+ *  here rather than restating the pair: three pages each spelling it out, and
+ *  each getting half of it, is precisely the C1 defect that left a
+ *  disqualified entrant unmarked in the public standings. The presentation
+ *  half lives in `DEPARTED_STATUS_CHIPS` (standings-table.tsx) and is pinned
+ *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
+export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
 
 export async function patchEntrant(
   auth: AuthCtx,
