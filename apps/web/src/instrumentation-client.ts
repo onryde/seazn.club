@@ -6,9 +6,11 @@ import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
 
 // Sentry treats instrumentation-client as the client instrumentation entry once
-// it exists (it's injected alongside sentry.client.config, which still runs
-// Sentry.init). Re-export its router hook here so SPA navigation tracing keeps
-// working — without this, Sentry logs an ACTION REQUIRED at build.
+// it exists (sentry.client.config still runs Sentry.init on the client). The
+// server/edge counterpart is NOT auto-loaded past @sentry/nextjs v9 — see
+// ../instrumentation.ts, which is what actually runs sentry.server.config /
+// sentry.edge.config now. Re-export the router hook here so SPA navigation
+// tracing keeps working — without this, Sentry logs an ACTION REQUIRED at build.
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
 
 const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
