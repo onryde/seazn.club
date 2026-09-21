@@ -618,10 +618,21 @@ test("C2: a line with nobody left on either side renders as void, not as a match
 
   const url = await divisionPath(request, rig.divisionId, "?tab=fixtures");
   await page.goto(url);
-  // Seven fixtures in the stage; three walkovers and one void are settled, so
-  // three remain owed: two semifinals' worth of... no — the two semis and the
-  // final are the three, and NONE of the four decided round-one lines counts.
-  await expect(page.getByText("3 to schedule").first()).toBeVisible();
+  // UPDATED 2026-09-21 for the cascade. Seven fixtures. Three round-one
+  // walkovers and one void are settled at confirm; the semi FED BY THE VOID
+  // is settled too, because a seat whose feeder is permanently dead is a bye
+  // seat (owner ruling, resolveBracketSeats). That leaves the other semi and
+  // the final — TWO owed, not three. Three was the stuck count: it included a
+  // semi waiting on a line that could never produce a winner.
+  //
+  // Derived from the rows the API just handed back rather than typed, so the
+  // number moves with the product; the two literals below are the values that
+  // would mean the cascade or the C1 advancement had regressed, and they are
+  // pinned as absent.
+  const owed = fixtures.filter((f) => f.status === "scheduled").length;
+  expect(owed, "the run sheet's own arithmetic").toBe(2);
+  await expect(page.getByText(`${owed} to schedule`).first()).toBeVisible();
+  await expect(page.getByText("3 to schedule")).toHaveCount(0);
   await expect(page.getByText("4 to schedule")).toHaveCount(0);
   // The void says what it is, in the organiser's own dictionary copy.
   await expect(page.getByText("abandoned").first()).toBeVisible();
