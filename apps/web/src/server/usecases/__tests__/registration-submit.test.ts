@@ -3,7 +3,7 @@
 // §3/§4/§6. `submitRegistration` (single-entry) was deleted with RS001; this
 // is its group-shaped replacement. Real Postgres required; skipped without
 // DATABASE_URL.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 // A thin, always-installed wrapper around the REAL generateRefCode — most
@@ -71,6 +71,36 @@ import {
   type SubmitGroupInput,
 } from "../registration-submit";
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// `sports` is the PRODUCT's sport catalog, not a test fixture table — the
+// onboarding wizard lists every row in it, so a row this file mints and leaves
+// behind becomes a tile on the welcome screen of a real account. Four of them
+// had: "RS012 Big Roster", "RS012 Fix1 Sport", "RS012 Fix1 E2E Sport" and
+// "RS012 No Lineup", all seen on a local environment 2026-09-21 sitting
+// between Ice Hockey and Table Tennis. Any database this suite has ever
+// touched carries them, the dev DB included.
+//
+// Three of the four mint a RANDOM key per run, so they cannot be cleaned by a
+// literal. Every site that inserts a sport registers its key here instead, and
+// the one hook below removes them all — which also means the NEXT test to mint
+// a sport is cleaned up by construction rather than by remembering.
+const MINTED_SPORT_KEYS = new Set<string>();
+
+/** Record a sport key this file inserted, so `afterAll` can take it away. */
+function mintedSport(key: string): string {
+  MINTED_SPORT_KEYS.add(key);
+  return key;
+}
+
+afterAll(async () => {
+  if (!HAS_DB || MINTED_SPORT_KEYS.size === 0) return;
+  const keys = [...MINTED_SPORT_KEYS];
+  // Divisions first: the FK is NO ACTION, so a sport row cannot go while a
+  // division references it. Everything hanging off a division cascades.
+  await sql`delete from divisions where sport_key in ${sql(keys)}`;
+  await sql`delete from sport_variants where sport_key in ${sql(keys)}`;
+  await sql`delete from sports where key in ${sql(keys)}`;
+});
 
 /**
  * Poll `pg_locks` for genuinely blocked waiters instead of a fixed sleep
@@ -2619,7 +2649,9 @@ describe.skipIf(!HAS_DB)("RS012 — the solo sign-up pool has its own bound, sep
   // inserted directly (registration-materialise.test.ts's own precedent for
   // this exact gap): submitRegistrationGroup never resolves the sport
   // module at all, only `rosterCapExpr`'s raw `position_catalog` read.
-  const BIG_ROSTER_SPORT_KEY = "rs012-big-roster";
+  // …and taken away again by the file-level hook beside `MINTED_SPORT_KEYS`.
+  const BIG_ROSTER_SPORT_KEY = mintedSport("rs012-big-roster");
+
 
   async function bigRosterDivision(
     owner: AuthCtx,
@@ -2828,7 +2860,7 @@ describe.skipIf(!HAS_DB)("RS012 — the solo sign-up pool has its own bound, sep
     it("never reports full for a sport with no `lineup` key, even under a tiny finite hardCap", async () => {
       const { orgId, ownerId } = await seedOrg("pro");
       const owner = asOwner(orgId, ownerId);
-      const noLineupKey = "rs012-no-lineup-" + randomUUID().slice(0, 8);
+      const noLineupKey = mintedSport("rs012-no-lineup-" + randomUUID().slice(0, 8));
       await sql`
         insert into sports (key, name, module_version, position_catalog)
         values (${noLineupKey}, 'RS012 No Lineup', '1.0.0', ${sql.json({ groups: [] })})`;
@@ -2875,7 +2907,7 @@ describe.skipIf(!HAS_DB)("RS012 — the solo sign-up pool has its own bound, sep
       const owner = asOwner(orgId, ownerId);
       const { competition } = await rig(owner);
       const suffix = randomUUID().slice(0, 8);
-      const sportKey = `rs012-fix1-${suffix}`;
+      const sportKey = mintedSport(`rs012-fix1-${suffix}`);
       await sql`
         insert into sports (key, name, module_version, position_catalog)
         values (${sportKey}, 'RS012 Fix1 Sport', '1.0.0',
@@ -2946,7 +2978,7 @@ describe.skipIf(!HAS_DB)("RS012 — the solo sign-up pool has its own bound, sep
       const owner = asOwner(orgId, ownerId);
       const { competition } = await rig(owner);
       const suffix = randomUUID().slice(0, 8);
-      const sportKey = `rs012-fix1e2e-${suffix}`;
+      const sportKey = mintedSport(`rs012-fix1e2e-${suffix}`);
       await sql`
         insert into sports (key, name, module_version, position_catalog)
         values (${sportKey}, 'RS012 Fix1 E2E Sport', '1.0.0',

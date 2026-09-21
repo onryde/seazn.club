@@ -9,7 +9,7 @@
 // reading the SQL, only by running it. Real Postgres required, skipped
 // without DATABASE_URL (repo convention).
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { fetchPoolSummary, parseRegistrantsQuery } from "../data";
 import { seedOrg, asOwner, rig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
@@ -18,6 +18,33 @@ import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// The `sports` table is the product's own catalog, not a test scratch space:
+// `/onboarding` lists every row in it, so a sport this file mints and leaves
+// behind becomes a tile on a real account's welcome screen — and on the dev DB
+// it stays there for good.
+//
+// The key is RANDOM per run, so a literal cleanup cannot work. Every site that
+// inserts a sport registers its key here instead, and the one hook below takes
+// them all away — which means the NEXT sport minted in this file is cleaned up
+// by construction rather than by remembering.
+const MINTED_SPORT_KEYS = new Set<string>();
+
+/** Record a sport key this file inserted, so `afterAll` can take it away. */
+function mintedSport(key: string): string {
+  MINTED_SPORT_KEYS.add(key);
+  return key;
+}
+
+afterAll(async () => {
+  if (!HAS_DB || MINTED_SPORT_KEYS.size === 0) return;
+  const keys = [...MINTED_SPORT_KEYS];
+  // Divisions first: the FK is NO ACTION, so a sport row cannot go while a
+  // division references it. Everything hanging off a division cascades.
+  await sql`delete from divisions where sport_key in ${sql(keys)}`;
+  await sql`delete from sport_variants where sport_key in ${sql(keys)}`;
+  await sql`delete from sports where key in ${sql(keys)}`;
+});
 
 // No DB needed — this is page.tsx's own href-building rule
 // (`${routes.competitionRegistration(org, comp, "registrants", divisionId)}&free_agent=1`)
@@ -59,7 +86,7 @@ async function seedCustomTeamDivision(
   },
 ): Promise<{ id: string; name: string }> {
   const suffix = randomUUID().slice(0, 8);
-  const sportKey = `pool-test-${suffix}`;
+  const sportKey = mintedSport(`pool-test-${suffix}`);
   await sql`
     insert into sports (key, name, module_version, position_catalog)
     values (${sportKey}, 'Pool Test Sport', '1.0.0',

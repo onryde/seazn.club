@@ -5,7 +5,7 @@
 // Postgres required; skipped without DATABASE_URL — same convention as
 // registrations.test.ts, which owns the pre-existing coverage this file
 // does not duplicate.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { OrgRole } from "@/lib/types";
@@ -21,6 +21,39 @@ import { createDivision } from "../divisions";
 import { seedOrg, asOwner, rig, seedRegistration, SETTINGS_BASE } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// The `sports` table is the product's own catalog, not a test scratch space:
+// `/onboarding` lists every row in it, so a sport this file mints and leaves
+// behind becomes a tile on a real account's welcome screen — and on the dev DB
+// it stays there for good.
+//
+// This file's key is a LITERAL, so it leaks exactly once and every run
+// afterwards hides behind `on conflict do nothing` — which is precisely why
+// nobody noticed `rs005_no_lineup` sitting in the catalog. It still goes
+// through the registry rather than a hardcoded delete, so the cleanup cannot
+// drift away from what the file actually inserts.
+//
+// The key is RANDOM per run, so a literal cleanup cannot work. Every site that
+// inserts a sport registers its key here instead, and the one hook below takes
+// them all away — which means the NEXT sport minted in this file is cleaned up
+// by construction rather than by remembering.
+const MINTED_SPORT_KEYS = new Set<string>();
+
+/** Record a sport key this file inserted, so `afterAll` can take it away. */
+function mintedSport(key: string): string {
+  MINTED_SPORT_KEYS.add(key);
+  return key;
+}
+
+afterAll(async () => {
+  if (!HAS_DB || MINTED_SPORT_KEYS.size === 0) return;
+  const keys = [...MINTED_SPORT_KEYS];
+  // Divisions first: the FK is NO ACTION, so a sport row cannot go while a
+  // division references it. Everything hanging off a division cascades.
+  await sql`delete from divisions where sport_key in ${sql(keys)}`;
+  await sql`delete from sport_variants where sport_key in ${sql(keys)}`;
+  await sql`delete from sports where key in ${sql(keys)}`;
+});
 
 /** seedOrg + asOwner + rig + putRegistrationSettings — the combination every
  *  test below needs at minimum. `overrides` layers onto SETTINGS_BASE the
@@ -53,9 +86,9 @@ async function noLineupDivision(owner: ReturnType<typeof asOwner>, competitionId
   });
   await sql`
     insert into sports (key, name, module_version, position_catalog)
-    values ('rs005_no_lineup', 'RS005 No Lineup', '1.0.0', ${sql.json({ groups: [] })})
+    values (${mintedSport('rs005_no_lineup')}, 'RS005 No Lineup', '1.0.0', ${sql.json({ groups: [] })})
     on conflict (key) do nothing`;
-  await sql`update divisions set sport_key = 'rs005_no_lineup' where id = ${division.id}`;
+  await sql`update divisions set sport_key = ${mintedSport('rs005_no_lineup')} where id = ${division.id}`;
   return division;
 }
 

@@ -23,6 +23,35 @@ import { t, type TKey } from "@/lib/i18n-runtime";
 import { columnHeader, tieBreakRule } from "@/server/public-site/standings-view";
 import { EntityLogo } from "@/components/ui/entity-logo";
 
+/**
+ * Every way OUT of a competing field, and the chip each one prints.
+ *
+ * The two are deliberately NOT collapsed into one "Withdrawn" chip. They are
+ * different facts — one entrant left, the other was removed — and the product
+ * already draws that distinction elsewhere: `entrantStatusStyle` in
+ * `components/v2/entrants-panel.tsx` paints a withdrawal grey and a
+ * disqualification red in the roster editor. Labelling a disqualified entrant
+ * "Withdrawn" on the public board would be worse than the gap it replaced,
+ * because it would be wrong rather than merely silent.
+ *
+ * This is the ONE place that decides which statuses count as departed. The
+ * call sites hand over raw statuses and nothing else, so adding a fifth status
+ * to the product is an edit here plus a dictionary key — not three page edits
+ * that can each be half-done. `standings-withdrawn-and-tiebreak-layer` checks
+ * this table against `EntrantStatus` minus `FIELD_ENTRANT_STATUSES`, so a new
+ * departure reds there rather than shipping an unmarked row.
+ *
+ * The test id is per status (`standings-withdrawn`, `standings-disqualified`):
+ * one testid for both would make an e2e count blind to exactly the confusion
+ * this table exists to prevent.
+ */
+export const DEPARTED_STATUS_CHIPS = {
+  withdrawn: { label: "table.withdrawn", className: "bg-zinc-100 text-zinc-600" },
+  disqualified: { label: "table.disqualified", className: "bg-red-100 text-red-600" },
+} as const satisfies Record<string, { label: TKey; className: string }>;
+
+type DepartedStatus = keyof typeof DEPARTED_STATUS_CHIPS;
+
 interface Props {
   rows: StandingsRow[];
   metricSpecs: MetricSpecLike[];
@@ -31,15 +60,24 @@ interface Props {
   /** entrant_id → badge URL (v3/03 §5 placement matrix). Omit = no badge
    *  column at all; null values fall back to initials via EntityLogo. */
   entrantLogos?: Record<string, string | null>;
-  /** Entrant ids that are no longer in the field. A withdrawn entrant's played
-   *  results STAND — the withdrawal settles their remaining matches through
-   *  the normal ledger and leaves what they actually played — so the row is
-   *  carried rather than voided. Until 2026-09-21 it was carried with nothing
-   *  to tell it apart: a withdrawn player sat at rank 4 with 2 points, styled
-   *  exactly like the people still competing (found by driving the product).
-   *  `StandingsRow` itself has no status field, so this arrives beside the
-   *  rows rather than on them. Omit and nothing is marked. */
-  withdrawnEntrantIds?: readonly string[];
+  /** entrant_id → that entrant's own `status`, for EVERY entrant the caller
+   *  holds — not a pre-filtered list of the departed. A departed entrant's
+   *  played results STAND (the withdrawal or disqualification settles their
+   *  remaining matches through the normal ledger and leaves what they actually
+   *  played), so the row is carried rather than voided — and this is what lets
+   *  it SAY so. `StandingsRow` itself has no status field, so this arrives
+   *  beside the rows rather than on them. Omit and nothing is marked.
+   *
+   *  A status map rather than an id list, on purpose. The first version of this
+   *  marking took `withdrawnEntrantIds`, and all three call sites derived it
+   *  with `entrants.filter((e) => e.status === "withdrawn")` — so "which
+   *  statuses mean this entrant has left" was answered three times, in three
+   *  files, and every one of them missed `disqualified`: a disqualified
+   *  entrant sat in the public standings ranked among the competing with
+   *  nothing whatever to tell her apart (C1, 2026-09-21). Handing over the raw
+   *  status moves that judgement here, to `DEPARTED_STATUS_CHIPS`, where it is
+   *  made once and can be checked against the product's whole vocabulary. */
+  entrantStatuses?: Record<string, string>;
   caption?: string;
   /** The PUBLIC dictionary, in the language the page is read in: the org's on
    *  the public division page and the embed, the viewer's in the console. */
@@ -52,12 +90,11 @@ export function StandingsTable({
   cascade,
   entrantNames,
   entrantLogos,
-  withdrawnEntrantIds,
+  entrantStatuses,
   caption,
   dict,
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
-  const withdrawn = new Set(withdrawnEntrantIds ?? []);
   const columns = standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS);
   const ranked = [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   // Podium chips are fixed vocabulary (gold/silver/bronze) — deliberately NOT
@@ -182,14 +219,22 @@ export function StandingsTable({
                   />
                 )}
                 {entrantNames[row.entrantId] ?? row.entrantId}
-                {withdrawn.has(row.entrantId) && (
-                  <span
-                    data-testid="standings-withdrawn"
-                    className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 align-middle text-[10px] font-medium text-zinc-600"
-                  >
-                    {msg("table.withdrawn")}
-                  </span>
-                )}
+                {(() => {
+                  const status = entrantStatuses?.[row.entrantId] ?? "";
+                  const chip = DEPARTED_STATUS_CHIPS[status as DepartedStatus];
+                  // An unknown or competing status is NOT a chip: this prop
+                  // carries the whole field, so marking on mere presence would
+                  // brand every entrant in the table.
+                  if (!chip) return null;
+                  return (
+                    <span
+                      data-testid={`standings-${status}`}
+                      className={`ml-2 rounded-full px-2 py-0.5 align-middle text-[10px] font-medium ${chip.className}`}
+                    >
+                      {msg(chip.label)}
+                    </span>
+                  );
+                })()}
               </th>
               {columns.map((col) => (
                 <td

@@ -7,20 +7,11 @@ import type { DiscoveryEntry, DiscoveryLiveFixture } from "@/server/public-site/
 import { t, type Dict } from "@/lib/i18n";
 import type { Locale } from "@/lib/i18n-constants";
 
-export const SPORT_EMOJI: Record<string, string> = {
-  football: "⚽",
-  cricket: "🏏",
-  volleyball: "🏐",
-  badminton: "🏸",
-  tabletennis: "🏓",
-  boardgame: "♟️",
-  carrom: "🎯",
-  generic: "🏅",
-};
-
-export function sportEmoji(key: string | null | undefined): string {
-  return SPORT_EMOJI[key ?? "generic"] ?? "🏅";
-}
+// Re-exported, not redeclared: this file's own copy of the map had already
+// drifted from the onboarding wizard's (F8). `lib/sport-emoji.ts` is the one
+// source, and its test reds when the sport catalog grows past it.
+import { SPORT_EMOJI, sportEmoji } from "@/lib/sport-emoji";
+export { SPORT_EMOJI, sportEmoji };
 
 function formatDates(startsOn: string | null, endsOn: string | null, lang: Locale): string | null {
   if (!startsOn) return null;

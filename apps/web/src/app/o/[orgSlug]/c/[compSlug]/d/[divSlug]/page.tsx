@@ -271,12 +271,18 @@ export default async function DivisionPage({
   // editor's default-position picker offers this division's groups.
   const lineupCatalog = lineupCatalogFor(sportModule, division.config);
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
-  // Withdrawn entrants keep their row in the table — a withdrawal settles the
-  // matches they had left and leaves the ones they actually played, so the
-  // results stand — but the row has to SAY so. `StandingsRow` carries no
-  // status, so the ids travel beside the rows. `listEntrants` already selects
-  // `status`, so this costs no extra query.
-  const withdrawnEntrantIds = entrants.filter((e) => e.status === "withdrawn").map((e) => e.id);
+  // Departed entrants keep their row in the table — a withdrawal (or a
+  // disqualification) settles the matches they had left and leaves the ones
+  // they actually played, so the results stand — but the row has to SAY so.
+  // `StandingsRow` carries no status, so the statuses travel beside the rows.
+  // Handed over RAW, one status per entrant: which of them counts as departed,
+  // and what word it prints, is the TABLE's single decision
+  // (`DEPARTED_STATUS_CHIPS`). Filtering to one status here is precisely what
+  // left `disqualified` unmarked on all three of these pages at once (C1) —
+  // `patchEntrant` accepts it, so a disqualified entrant reached the standings
+  // ranked among the competing and styled exactly like them.
+  // `listEntrants` already selects `status`, so this costs no extra query.
+  const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
   // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
@@ -766,7 +772,7 @@ export default async function DivisionPage({
                         cascade={cascade}
                         entrantNames={entrantNames}
                         entrantLogos={entrantLogos}
-                        withdrawnEntrantIds={withdrawnEntrantIds}
+                        entrantStatuses={entrantStatuses}
                         caption={caption}
                         dict={publicDict}
                       />

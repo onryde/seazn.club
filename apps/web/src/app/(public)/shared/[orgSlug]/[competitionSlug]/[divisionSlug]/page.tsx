@@ -20,6 +20,7 @@ import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { StandingsTable } from "@/components/public-site/standings-table";
+import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
 import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
@@ -86,14 +87,24 @@ export default async function DivisionHomePage({ params }: Props) {
   }
 
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
-  // NOT marked here, and it is not an oversight — see F10 in
-  // docs/superpowers/specs/2026-09-20-swiss-withdrawal-customer-walkthrough-findings.md.
-  // `public_entrants_v` filters `status in ('registered','confirmed')`, so a
-  // withdrawn entrant never reaches this page's `entrants` at all: the chip
-  // could not render, and `entrantNames` has no entry for her either, which is
-  // why the public table currently prints a RAW UUID in her name cell. Both
-  // are one fix — widening that view — and that is a public-data change with
-  // its own consumers (ics, poster, kiosk, the entrants tab), not a line here.
+  // A departed entrant keeps the row she earned in the standings — the
+  // withdrawal (or the disqualification) settles the matches she had left and
+  // leaves the ones she played — so the table carries her and MARKS her.
+  // `StandingsRow` has no status field, so the statuses travel beside the rows.
+  // Handed over RAW, one status per entrant: which of them counts as departed,
+  // and what word it prints, is the TABLE's single decision
+  // (`DEPARTED_STATUS_CHIPS`). Filtering to one status here is precisely what
+  // left `disqualified` unmarked on all three of these pages at once (C1) —
+  // `patchEntrant` accepts it, so a disqualified entrant reached the standings
+  // ranked among the competing and styled exactly like them.
+  //
+  // This works because V412 widened `public_entrants_v` to publish departed
+  // entrants. Before it, she reached this page not at all, and the standings
+  // table printed her raw UUID because `entrantNames` had no entry (F10, seen
+  // on the live page 2026-09-21). The flip side of that widening is the
+  // `inTheField` filter on the entrants tab below: this page now holds
+  // EVERYONE, and each consumer says which question it is asking.
+  const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
   // Badge chips (v3/03 §5 + PROMPT-60): the entrant's own badge_url wins,
   // then team → club logo resolved by the view.
   const entrantLogos = Object.fromEntries(
@@ -253,6 +264,7 @@ export default async function DivisionHomePage({ params }: Props) {
                     cascade={cascade}
                     entrantNames={entrantNames}
                     entrantLogos={entrantLogos}
+                    entrantStatuses={entrantStatuses}
                     caption={
                       snap.pool_id
                         ? `${stage.name} — ${poolName.get(snap.pool_id) ?? t(dict, "table.pool")}`
@@ -298,9 +310,13 @@ export default async function DivisionHomePage({ params }: Props) {
     </div>
   );
 
+  // The entrants TAB is the field, not the history — the people a spectator can
+  // still expect to see play. `data.entrants` carries the departed too since
+  // V412, so the filter lives here, where the question is asked.
+  const field = entrants.filter(inTheField);
   const entrantsPanel = (
     <ul className="grid gap-3 sm:grid-cols-2">
-      {entrants.map((e) => (
+      {field.map((e) => (
         // `min-w-0` on the `li` is the one doing the work: a grid item's
         // automatic minimum is its content, so a 43-character name grew the
         // card past a 320 phone (+73px, T17 HB9d) and `truncate` never fired.
@@ -352,7 +368,7 @@ export default async function DivisionHomePage({ params }: Props) {
           ) : null}
         </li>
       ))}
-      {entrants.length === 0 ? (
+      {field.length === 0 ? (
         <p className="text-sm text-ink-muted">{t(dict, "division.entrantsEmpty")}</p>
       ) : null}
     </ul>

@@ -80,7 +80,7 @@ const entrant = (id: string, name: string, seed: number): PublicEntrant => ({
   kind: "individual",
   display_name: name,
   seed,
-  status: "active",
+  status: "confirmed",
   members: [],
   team_display: null,
   badge_url: null,

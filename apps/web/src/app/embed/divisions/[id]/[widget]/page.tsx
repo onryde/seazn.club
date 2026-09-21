@@ -68,9 +68,18 @@ export default async function EmbedWidgetPage({ params }: Props) {
     // retired module build — structural columns only
   }
   const entrantNames = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
-  // No withdrawn marking here for the same reason as the public division page
-  // (F10 in the walkthrough findings doc): this reads the same
-  // `public_entrants_v`, which filters withdrawn entrants out entirely.
+  // Same marking as the public division page: an embedded table is a public
+  // standings surface too, and an unmarked departed row here would reproduce
+  // the defect inside every host site that iframes it. Reachable since V412 —
+  // before it, the view kept departed entrants out and this widget printed a
+  // raw UUID in the name cell (F10).
+  // Handed over RAW, one status per entrant: which of them counts as departed,
+  // and what word it prints, is the TABLE's single decision
+  // (`DEPARTED_STATUS_CHIPS`). Filtering to one status here is precisely what
+  // left `disqualified` unmarked on all three of these pages at once (C1) —
+  // `patchEntrant` accepts it, so a disqualified entrant reached the standings
+  // ranked among the competing and styled exactly like them.
+  const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
   // PROMPT-60: the entrant's own badge_url wins over the team logo.
   const entrantLogos = Object.fromEntries(
     entrants.map((e) => [
@@ -171,6 +180,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               cascade={cascade}
               entrantNames={entrantNames}
               entrantLogos={entrantLogos}
+              entrantStatuses={entrantStatuses}
               caption={
                 snap.pool_id
                   ? `${stage.name} — ${poolName.get(snap.pool_id) ?? t(dict, "table.pool")}`

@@ -29,6 +29,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
+import { inTheField } from "@/lib/entrant-field";
 import { hasFeature } from "@/lib/entitlements";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t, type TKey } from "@/lib/i18n";
@@ -632,6 +633,12 @@ export async function loadCompetitionHub(
     if (!detail) continue;
     const bans = bansByDivision.get(d.id) ?? [];
     const { stages, pools, fixtures, standings, entrants, tz } = detail;
+    // `entrants` carries the departed since V412 (so a withdrawn entrant keeps
+    // her NAME wherever a result mentions her — the maps below are exactly
+    // that). The two consumers that mean "who is competing" — the squad lists
+    // and the team cards — take `field` instead, or a withdrawal would silently
+    // add a squad line and a team card to the hub.
+    const field = entrants.filter(inTheField);
     const module_ = resolveModuleOrNull(d.sport_key, d.module_version);
     modules.set(d.id, module_);
 
@@ -651,7 +658,7 @@ export async function loadCompetitionHub(
       colours[e.id] = primaryColour(e.team_display?.colors);
     }
     const divHref = `${base}/${d.slug}`;
-    const squads = await divisionSquads({ division: d, entrants, bans, names, base });
+    const squads = await divisionSquads({ division: d, entrants: field, bans, names, base });
 
     hubDivisions.push({
       id: d.id,
@@ -796,7 +803,7 @@ export async function loadCompetitionHub(
       if (view) knockouts.push(view);
     }
 
-    for (const e of entrants) {
+    for (const e of field) {
       teams.push({
         entrantId: e.id,
         divisionId: d.id,

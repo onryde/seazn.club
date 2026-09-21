@@ -348,7 +348,7 @@
   "visibility.youth.body": "Hacerla visible publica los nombres de los jugadores en la página pública. Confirma que cuentas con el consentimiento del tutor de cada jugador menor de edad antes de continuar.",
   "visibility.youth.confirm": "Cuento con el consentimiento del tutor — continuar",
   "confirm.withdrawEntrant.title": "¿Retirar a {name}?",
-  "confirm.withdrawEntrant.body": "En una fase de liga en curso: si ha jugado menos de la mitad de sus partidos, todo lo que jugó se anula (la clasificación se lee como si nunca hubiera participado); de lo contrario, sus resultados se mantienen y los partidos restantes se otorgan a los oponentes. En un cuadro, los oponentes avanzan. Esto resuelve los partidos a través del registro de puntuación normal, por lo que cada uno se puede deshacer.",
+  "confirm.withdrawEntrant.body": "En una fase de liga en curso sus resultados se mantienen y los partidos restantes se otorgan a los oponentes — salvo que le queden más partidos por jugar de los que ya ha jugado, contando solo lo programado hasta ahora; entonces esos resultados también se anulan. El suizo empareja una ronda cada vez, así que ahí es raro. En un cuadro, los oponentes avanzan; en una escalera o un americano, los partidos restantes se anulan y la clasificación lograda se mantiene. Todo pasa por el registro de puntuación normal, así que cada uno se puede deshacer.",
   "confirm.withdrawEntrant.label": "Retirar participante",
   "confirm.syncSquad.title": "¿Sincronizar {name} desde la plantilla del equipo?",
   "confirm.syncSquad.body": "Esto reemplaza toda la lista de la inscripción con la plantilla actual del equipo. Las posiciones o roles que el deporte no define se eliminan; los cambios hechos solo en esta inscripción se pierden.",

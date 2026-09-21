@@ -6044,6 +6044,7 @@ export type DictionaryKey =
   | "table.col.ties"
   | "table.col.wins"
   | "table.col.won"
+  | "table.disqualified"
   | "table.empty"
   | "table.fewer"
   | "table.fullDivision"

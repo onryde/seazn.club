@@ -78,7 +78,7 @@ const divisionData = (policy: { youth: boolean; player_name_display: string | nu
       kind: "team",
       display_name: "Riverside",
       seed: null,
-      status: "active",
+      status: "confirmed",
       team_display: null,
       badge_url: null,
       // A member carrying an id, whatever the policy: the page must decide.

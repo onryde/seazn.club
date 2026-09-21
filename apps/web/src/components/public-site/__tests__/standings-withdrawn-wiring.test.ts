@@ -1,16 +1,19 @@
-// A prop nothing sends is an inert seam. `withdrawnEntrantIds` is optional —
+// A prop nothing sends is an inert seam. `entrantStatuses` is optional —
 // by design, because most callers have no entrant statuses to hand — which
 // means a page that silently stopped passing it would keep type-checking and
 // keep rendering, with the defect back and no test red anywhere.
 //
-// Exactly ONE of the three `StandingsTable` call sites can carry it today, and
-// this file pins which, because the other two look like oversights and are
-// not. `public_entrants_v` filters `status in ('registered','confirmed')`, so
-// on the public division page and the embed a withdrawn entrant never reaches
-// the page at all: the chip could not render there, and — driven on the live
-// page 2026-09-21 — `entrantNames` has no entry for her either, so the public
-// table prints a RAW UUID in her name cell. That is F10 in the walkthrough
-// findings doc, and its fix is the view, not a line in a page.
+// All THREE `StandingsTable` call sites carry it. (Until 2026-09-21 the prop
+// was `withdrawnEntrantIds`, a pre-filtered id list; it was replaced by the
+// status map so that WHICH statuses count as departed is decided once, in the
+// table, instead of three times at the call sites — see C1 in the layer test.) They did not always: until
+// V412 `public_entrants_v` filtered `status in ('registered','confirmed')`, so
+// on the public division page and the embed a withdrawn entrant never reached
+// the page at all — the chip could not render, and `entrantNames` had no entry
+// for her either, so the public table printed a RAW UUID in her name cell
+// (F10, driven on the live page 2026-09-21). V412 widened the view; these two
+// pages then became ordinary wiring, and the last row below pins the SQL fact
+// they now depend on. Widen-then-forget is the failure this file exists for.
 //
 // Also NOT covered: `StandingsTableView` (the competition hub's own table,
 // `matches-hub/{table,overview}-tab.tsx`). It renders from a server-built
@@ -23,13 +26,10 @@ import { join, relative } from "node:path";
 const MARKED = {
   "organiser console division page":
     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "public division page":
+    "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+  "embed widget": "src/app/embed/divisions/[id]/[widget]/page.tsx",
 } as const;
-
-/** The call sites that CANNOT mark a withdrawal yet, and why. */
-const BLOCKED_BY_THE_PUBLIC_VIEW = [
-  "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
-  "src/app/embed/divisions/[id]/[widget]/page.tsx",
-] as const;
 
 /** Every .tsx under src/ that mounts `<StandingsTable`. */
 function callSites(): string[] {
@@ -56,46 +56,88 @@ function callSites(): string[] {
   return out.sort();
 }
 
+const DELTAS = join(process.cwd(), "../../db/migration/deltas");
+
+/**
+ * The migrations that define `public_entrants_v`, newest last. Derived from
+ * the directory rather than listed, so a future redefinition is read by this
+ * test instead of slipping past a hardcoded filename.
+ */
+function viewDefinitions(): { file: string; sql: string }[] {
+  return readdirSync(DELTAS)
+    .filter((f) => f.endsWith(".sql"))
+    .sort((a, b) => Number(/^V(\d+)/.exec(a)![1]) - Number(/^V(\d+)/.exec(b)![1]))
+    .map((file) => ({ file, sql: readFileSync(join(DELTAS, file), "utf8") }))
+    .filter(({ sql }) => /view public_entrants_v/.test(sql));
+}
+
 describe("the withdrawn marker reaches every standings surface that can carry it", () => {
   it("premise: these are ALL the StandingsTable call sites", () => {
     // Without this row a new page could mount an unmarked table and the rows
     // below would still pass — they only check the pages they already name.
     expect(callSites().map((p) => p.replace(/\\/g, "/")).sort()).toEqual(
-      [...Object.values(MARKED), ...BLOCKED_BY_THE_PUBLIC_VIEW].map((p) => p.replace(/\\/g, "/")).sort(),
+      Object.values(MARKED).map((p) => p.replace(/\\/g, "/")).sort(),
     );
   });
 
   for (const [label, rel] of Object.entries(MARKED)) {
-    it(`${label} derives the withdrawn ids and passes them to the table`, () => {
+    it(`${label} hands the table every entrant status, unfiltered`, () => {
       const src = readFileSync(join(process.cwd(), rel), "utf8");
-      // The derivation: read off the entrant's own status, not a hardcoded list.
-      expect(src, `${label} never derives withdrawnEntrantIds`).toMatch(
-        /withdrawnEntrantIds\s*=\s*entrants[\s\S]{0,160}status === "withdrawn"/,
+      // The derivation: hand the table each entrant's OWN status, per entrant.
+      // What this replaced was `entrants.filter((e) => e.status === "withdrawn")`
+      // — and that literal WAS the C1 defect: three pages each spelled out the
+      // departed vocabulary and each got half of it, so a disqualified entrant
+      // sat in the public standings marked as nothing at all. The vocabulary
+      // now lives once, in the table (DEPARTED_STATUS_CHIPS).
+      expect(src, `${label} never derives entrantStatuses`).toMatch(
+        /entrantStatuses\s*=\s*Object\.fromEntries\([\s\S]{0,160}e\.status/,
       );
+      // And the old shape has not crept back beside the new one: a page that
+      // still filters to one status is a page that will miss the next one.
+      expect(
+        src,
+        `${label} still filters entrants by a status literal — the vocabulary belongs to the table`,
+      ).not.toMatch(/withdrawnEntrantIds|status === "withdrawn"/);
       // And it is actually handed to the table, in the JSX.
-      expect(src, `${label} derives the ids but does not pass them`).toContain(
-        "withdrawnEntrantIds={withdrawnEntrantIds}",
+      expect(src, `${label} derives the statuses but does not pass them`).toContain(
+        "entrantStatuses={entrantStatuses}",
       );
     });
   }
 
-  it("premise for the two that are blocked: the public view really does filter them out", () => {
-    // The reason the public page and the embed pass nothing is a SQL fact, not
-    // a preference. If the view is ever widened, this row reds and the two
-    // pages above become ordinary wiring work — which is exactly the reminder
-    // the next reader needs. The newest definition wins; older migrations
-    // carry the same clause.
-    const migrations = [
-      "../../db/migration/deltas/V350__person_tombstone_views.sql",
-      "../../db/migration/deltas/V306__entitlement_resolver_parity.sql",
-    ].map((rel) => readFileSync(join(process.cwd(), rel), "utf8"));
-    const definesView = migrations.filter((sql) => /view public_entrants_v/.test(sql));
-    expect(definesView.length, "public_entrants_v is no longer defined where this test looks").toBe(2);
-    for (const sql of definesView) {
-      const view = /view public_entrants_v[\s\S]*?;/.exec(sql)![0];
-      expect(view, "public_entrants_v no longer filters entrant status").toMatch(
-        /status in \('registered','confirmed'\)/,
-      );
-    }
+  it("premise: the CURRENT public_entrants_v publishes departed entrants", () => {
+    // The two public surfaces above can only mark a withdrawal because the
+    // view hands them one. If anybody ever restores the status filter, those
+    // two pages go back to printing a UUID and every row above stays green —
+    // this is the row that reds instead.
+    const defs = viewDefinitions();
+    expect(defs.length, "public_entrants_v is no longer defined in db/migration/deltas").toBeGreaterThanOrEqual(2);
+    const newest = defs.at(-1)!;
+    // Anchor on the whole statement, not on `view ...` — the latter drops the
+    // `create or replace` the positive pair below asserts, and this test then
+    // fails on its own extraction rather than on the thing it guards.
+    const view = /create or replace view public_entrants_v[\s\S]*?;\s*$/m.exec(newest.sql)?.[0] ?? newest.sql;
+    expect(view, `${newest.file} filters entrant status again — F10 is back`).not.toMatch(
+      /status in \('registered','confirmed'\)/,
+    );
+    // Positive pair: it is a real definition of the view, not an empty match
+    // that would satisfy the negative above by saying nothing at all.
+    expect(view).toMatch(/create or replace view public_entrants_v/);
+    expect(view).toMatch(/e\.status/);
+    // And the visibility gate is untouched: widening status must not have
+    // widened WHO is published.
+    expect(view, "V412 dropped the visibility gate").toMatch(
+      /c\.visibility in \('public','unlisted'\)/,
+    );
+  });
+
+  it("premise: an older definition really did carry the filter", () => {
+    // Guards the row above from going vacuous. If `viewDefinitions()` ever
+    // stopped matching real definitions it would return whatever it liked and
+    // the negative assertion would pass on an empty string; this pins that the
+    // scan sees the pre-V412 world it is supposed to be describing.
+    const defs = viewDefinitions();
+    const older = defs.filter((d) => /status in \('registered','confirmed'\)/.test(d.sql));
+    expect(older.length, "no migration in the history filtered entrant status").toBeGreaterThanOrEqual(1);
   });
 });
