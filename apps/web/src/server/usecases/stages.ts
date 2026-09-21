@@ -38,6 +38,7 @@ import {
   progressionSize,
   resolveProgression,
   validatePointsRule,
+  withdrawBracketEntrant,
   type BracketFixture,
   type FixtureStatus,
   type PoolTable,
@@ -802,6 +803,122 @@ function bracketToGen(bracket: GeneratedBracket, laneDepth: number): GenFixture[
       ...(f.conditional ? { conditional: true } : {}),
     };
   });
+}
+
+/** Spec 05 §5's own stage-kind split FOR THE WITHDRAWAL POLICY: these are the
+ *  kinds that walk a departure over to the opponent. League/group/swiss
+ *  expunge it; everything else (including `page_playoff`) voids the remaining
+ *  games as an open format.
+ *
+ *  Deliberately NOT this file's other `BRACKET_KINDS` (further down, and in
+ *  engine-db/competition.ts and public-site/champion.ts): that set means
+ *  "this stage is bracket-SHAPED" and contains `page_playoff`. This one is
+ *  the narrower list the engine's `withdrawBracketEntrant` accepts, and the
+ *  exact list `withdrawEntrantCascade` dispatches on — the two are not
+ *  interchangeable, and widening this one would silently start walking over
+ *  page-playoff fixtures that the cascade voids.
+ *
+ *  Exported so withdrawal.ts and the generation path below read ONE list: the
+ *  whole point of F14 is that "withdraw then generate" and "generate then
+ *  withdraw" agree, and two private copies of this set is the obvious way for
+ *  them to stop agreeing. */
+export const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set([
+  "knockout",
+  "double_elim",
+  "stepladder",
+]);
+
+const EMPTY_ID_SET: ReadonlySet<string> = new Set<string>();
+
+/** F14 — owner ruling 2026-09-21. A qualifier who departed BEFORE the bracket
+ *  was generated keeps their drawn seat, and their pairing becomes a walkover
+ *  for the surviving side. The draw is preserved; nobody is promoted.
+ *
+ *  The POLICY is the cascade's own: `withdrawBracketEntrant` is the same pure
+ *  engine function `withdrawEntrantCascade` calls once the bracket exists, so
+ *  the two orderings of "withdraw" and "generate" cannot drift onto different
+ *  rules. Only the APPLICATION differs, and it has to — at generation time the
+ *  fixture has no row and no id, so there is nothing to post a `core.forfeit`
+ *  scoring event against. The same OUTCOME is baked into the insert instead:
+ *  both seats filled, `status: 'forfeited'`, `{kind: 'award', winner}`, which
+ *  is precisely the shape every sport kernel emits for a two-sided walkover
+ *  (and which `isOneSidedAwardBye` keeps separate from a real bye).
+ *
+ *  Every line is fed in as `scheduled`, byes included. Marking an
+ *  already-awarded bye SETTLED (which is what the post-generation cascade
+ *  sees, and what this code did first) changes NOTHING and was removed as
+ *  decoration: a mutation sweep proved the branch inert, because the engine
+ *  only ever emits a ONE-SIDED bye, so `withdrawBracketEntrant` finds no
+ *  opponent to hand the walkover to and the update is discarded below either
+ *  way. The bye is left alone by the `walkoverTo === undefined` arm, which
+ *  IS covered. */
+function walkoverDepartedQualifiers(
+  stageId: string,
+  kind: string,
+  gen: GenFixture[],
+  departed: ReadonlySet<string>,
+): { gen: GenFixture[]; voided: ReadonlySet<string> } {
+  const fixtures: BracketFixture[] = gen.map((g) => ({
+    id: g.extKey,
+    round: g.roundNo,
+    status: "scheduled" as const,
+    ...(g.home === null ? {} : { home: g.home }),
+    ...(g.away === null ? {} : { away: g.away }),
+  }));
+  const awardTo = new Map<string, string>();
+  const voided = new Set<string>();
+  for (const entrantId of departed) {
+    const { updates } = withdrawBracketEntrant(
+      { id: stageId, kind: kind as "knockout" | "double_elim" | "stepladder" },
+      entrantId,
+      fixtures,
+    );
+    for (const u of updates) {
+      if (u.status !== "walkover") continue;
+      // OWNER RULING 2026-09-21 (re-review C2): a walkover REQUIRES A LIVE
+      // RECIPIENT. Where there is none — both sides of the pairing departed,
+      // or the opponent seat is a TBD feed (stepladder, and every later
+      // round) — the line is VOID, and a void line advances nobody.
+      //
+      // This used to `continue`, which left the line untouched and therefore
+      // live: generation then seated two withdrawn entrants in a `scheduled`
+      // fixture an organiser could put on a court. The comment here claimed
+      // it followed the cascade's rule; it did not. The cascade rewrites such
+      // an update to `{status: "void"}` and APPLIES it
+      // (`withdrawal.ts`, "A TBD opponent can't receive a walkover").
+      if (u.walkoverTo === undefined || departed.has(u.walkoverTo)) {
+        voided.add(u.fixtureId);
+        continue;
+      }
+      awardTo.set(u.fixtureId, u.walkoverTo);
+    }
+  }
+  if (awardTo.size === 0 && voided.size === 0) return { gen, voided };
+  // The two sets are disjoint by construction: a line is awarded only when
+  // its opponent is live, and voided only when it is not.
+  //
+  // Stripping the award is what covers a structural BYE whose holder departed
+  // — `buildSingleElim` awarded it to her before anybody withdrew, and the
+  // insert below reads `g.award` for BOTH the status and the outcome, so a
+  // voided line that kept its award would still be written `forfeited` with a
+  // withdrawn entrant recorded as the WINNER. The line itself is already in
+  // `voided`: her bye fixture seats her in `home`, so the engine reports it
+  // like any other and the recipient-less branch above catches it. A second,
+  // explicit `g.award && departed.has(g.award)` pass was written here first
+  // and removed — mutation-tested as a true equivalent (nothing could kill
+  // it), which is the evidence that this strip is the real guard.
+  return {
+    gen: gen.map((g) => {
+      if (voided.has(g.extKey)) {
+        const { award: awardedToNobody, ...rest } = g;
+        void awardedToNobody;
+        return rest;
+      }
+      const winner = awardTo.get(g.extKey);
+      return winner === undefined ? g : { ...g, award: winner };
+    }),
+    voided,
+  };
 }
 
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
@@ -1775,11 +1892,47 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       ? (stage.config.qualified as string[])
       : null;
     let entrants: ActiveEntrant[];
+    // F14 (owner ruling 2026-09-21): the qualifiers who have since departed.
+    // Empty for every path but a BRACKET drawing from `config.qualified`.
+    let departedQualifiers: ReadonlySet<string> = EMPTY_ID_SET;
+    // The ext_keys whose line has no live recipient and is therefore VOID —
+    // written as `abandoned`, see the insert below.
+    let voidedExtKeys: ReadonlySet<string> = EMPTY_ID_SET;
     if (qualified) {
       const activeIds = new Set(active.map((e) => e.id));
-      entrants = qualified
-        .filter((id) => activeIds.has(id))
-        .map((id, i) => ({ id, seed: i + 1 }));
+      if (BRACKET_WALKOVER_KINDS.has(stage.kind)) {
+        // A bracket's qualification order IS the draw, so a departure must not
+        // move anybody: re-seeding the SURVIVORS 1..n (what this did until
+        // F14) slides every later qualifier up a seat, into a different half
+        // of the draw and against a different opponent — a silent promotion,
+        // and one that also robs the departed qualifier's opponent of the
+        // walkover they are owed. Keep the published positions; the pairings
+        // that hold a departed qualifier become walkovers below.
+        entrants = qualified.map((id, i) => ({ id, seed: i + 1 }));
+        const gone = qualified.filter((id) => !activeIds.has(id));
+        // Restored refusal (re-review C2). Keeping the full slate above means
+        // `entrants.length` is now the PUBLISHED draw's size, so the
+        // `entrants.length < 2` check below — which is what refused this
+        // before F14 — can no longer see a field that has emptied out.
+        // Without this, "every qualifier withdrew" generated a complete
+        // bracket of withdrawn entrants, and "only one is left" generated a
+        // bracket whose single survivor has nobody to play. Same threshold as
+        // the pre-F14 behaviour and as `SEEDING_NOTHING_TO_FILL` on the
+        // `setup` path: a stage needs two live entrants to be a competition.
+        if (qualified.length - gone.length < 2) {
+          throw new EngineError(
+            "STAGE_NOT_READY",
+            "the qualifiers for this stage have left the field — recompute or reopen it once the field is settled",
+            { stageId, qualified: qualified.length, live: qualified.length - gone.length },
+          );
+        }
+        if (gone.length > 0) departedQualifiers = new Set(gone);
+      } else {
+        // A table stage has no draw to preserve and no opponent to walk over
+        // to: nothing has been played, so spec 05 §5's policy for these kinds
+        // is EXPUNGE — the departed entrant simply is not in the field.
+        entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1 }));
+      }
     } else {
       entrants = active;
     }
@@ -1823,6 +1976,16 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
     } else {
       gen = generate(stage.kind, stage.config, entrants, poolIds);
+    }
+
+    // F14: the draw above was built over the FULL qualification list, so every
+    // survivor sits where the published draw put them. Settle the lines that
+    // hold a departed qualifier as walkovers, off the same engine policy the
+    // post-generation cascade uses.
+    if (departedQualifiers.size > 0) {
+      const walked = walkoverDepartedQualifiers(stageId, stage.kind, gen, departedQualifiers);
+      gen = walked.gen;
+      voidedExtKeys = walked.voided;
     }
 
     // Guard against the misleading "nothing new — up to date" success shape
@@ -1937,7 +2100,17 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
           home_slot_label: home_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.homeFrom)),
           away_slot_label: away_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.awayFrom)),
           ext_key: g.extKey,
-          status: g.award !== undefined ? "forfeited" : "scheduled",
+          // `abandoned` is what a VOID line is in this column: the cascade
+          // reaches the same state by posting `core.abandon`
+          // (`withdrawal.ts`'s void branch -> append-event.ts:126), and
+          // `abandoned` is in the desk's own VOID_STATUSES. There is no
+          // `void` status in the fixtures table — that word is the ENGINE's
+          // vocabulary for the verdict, not the column's value.
+          status: voidedExtKeys.has(g.extKey)
+            ? "abandoned"
+            : g.award !== undefined
+              ? "forfeited"
+              : "scheduled",
           // Every other outcome writer in this codebase uses tx.json(...), never
           // JSON.stringify — the latter double-encodes a jsonb column (the driver
           // then stores a JSON STRING SCALAR, not an object), so every reader
@@ -2018,7 +2191,16 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
 
     // Third pass: propagate bye awards into their winner feeds (one lookup
     // for all byes, then one fill per slot side).
-    const awarded = gen.filter((g) => g.award !== undefined && byKey.has(g.extKey));
+    // F14: a departed qualifier can still HOLD a structural bye — the draw is
+    // preserved, so a top qualifier who withdrew keeps the bye line the
+    // bracket gave them (the cascade leaves an already-settled bye alone for
+    // the same reason). What must not happen is that bye carrying them into
+    // the next round: propagating it would seat a withdrawn entrant in round
+    // two, which is the very defect this change exists to close. The slot is
+    // left open for the organiser instead.
+    const awarded = gen.filter(
+      (g) => g.award !== undefined && byKey.has(g.extKey) && !departedQualifiers.has(g.award),
+    );
     if (awarded.length > 0) {
       const sources = await tx<
         { id: string; winner_to_fixture: string | null; winner_to_slot: number | null }[]
@@ -2076,6 +2258,15 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
           where f.id = v.fixture_id and f.away_entrant_id is null`;
       }
     }
+
+    // The cascade (owner ruling 2026-09-21). The voids `walkoverDepartedQualifiers`
+    // wrote above are dead feeders from the instant they are inserted, so a
+    // seat they point at can already be actionable HERE — a structural bye
+    // pushed its winner into the round above two blocks up, and if that seat's
+    // other feeder is void the line is a walkover before anyone has played.
+    // Everything not yet actionable is deliberately left alone; `onDecided`
+    // picks it up at the moment the sibling feeder resolves.
+    await resolveBracketSeats(tx, stageId);
 
     if (stage.status === "pending") {
       await tx`update stages set status = 'active' where id = ${stageId}`;
@@ -2431,6 +2622,25 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     //     on c.parent_fixture_id = p.id where c.stage_id <> p.stage_id;
     // (fixtures.court_id is RESTRICT but points OUT at courts, so it
     // constrains deleting a COURT, never this delete.)
+    // NARROWED 2026-09-21 (the cascade). `abandoned` used to block on its own.
+    // That was written for a match that was PLAYED and stopped, and it is now
+    // ALSO the value the generator's own void writes (walkoverDepartedQualifiers,
+    // re-review C2) — so from the instant a departed pairing was voided at
+    // generation the stage became permanently un-rebuildable, and the organiser
+    // pressing "Rebuild fixtures" on a board nobody had played was told
+    // "this stage already has recorded results". Driven in a browser; the
+    // sentence on screen was false, which is worse than a control that does
+    // nothing.
+    //
+    // A generation-time void has no outcome, no score events, no match report
+    // and no config snapshot — it is a line the regenerate would draw again
+    // identically. A real abandonment has at least the `core.abandon` event
+    // that produced the status, and a cricket-style no-result carries an
+    // outcome; both still block, the first through `fixtureEvidenceSql` below
+    // and the second through the `outcome is not null` clause. That split is
+    // what `dead-feeder-cascade.test.ts`'s two CONTROL cases pin, one per
+    // side.
+    //
     // The evidence-table list itself lives in `fixtureEvidenceSql` — ONE
     // literal, shared with `unpairSwissRound`'s guard, because the
     // 2026-09-20 review found Unpair shipping a SUBSET of this list and
@@ -2443,7 +2653,8 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       select f.id from fixtures f
       where f.stage_id = ${stageId}
         and (
-          f.status in ('in_play', 'decided', 'finalized', 'abandoned')
+          f.status in ('in_play', 'decided', 'finalized')
+          or (f.status = 'abandoned' and f.outcome is not null)
           or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
           or (${fixtureEvidenceSql(tx)})
         )
@@ -2752,11 +2963,27 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
     for (const g of gen) {
       const fixtureId = byKey.get(g.extKey);
       if (fixtureId === undefined) continue;
+      // I1 (re-review, 2026-09-21) — `byKey` includes rows that ALREADY
+      // exist, so this pass runs again on every re-Generate, over fixtures
+      // that confirm has since filled and settled. Two guards, and they cover
+      // different things:
+      //   - `*_entrant_id is null`: a seated side carries no label at all
+      //     (fillSlot nulls it), and writing the descriptor's TBD text back
+      //     onto a real entrant's seat re-advertises a draw that has happened.
+      //   - not already the BYE stamp: confirm marks a VACATED seat
+      //     `bracket.slot.bye` and `awardSeededByes` settles the line off that
+      //     marker. Reverting it to `slot.winner_group` un-settles the
+      //     walkover — `isBye` goes false and the line reads as an ordinary
+      //     match awaiting a draw again.
       if (g.homeLabel) {
-        await tx`update fixtures set home_slot_label = ${tx.json(g.homeLabel as never)} where id = ${fixtureId}`;
+        await tx`update fixtures set home_slot_label = ${tx.json(g.homeLabel as never)}
+                 where id = ${fixtureId} and home_entrant_id is null
+                   and coalesce(home_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}`;
       }
       if (g.awayLabel) {
-        await tx`update fixtures set away_slot_label = ${tx.json(g.awayLabel as never)} where id = ${fixtureId}`;
+        await tx`update fixtures set away_slot_label = ${tx.json(g.awayLabel as never)}
+                 where id = ${fixtureId} and away_entrant_id is null
+                   and coalesce(away_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}`;
       }
       // A bye's phantom side resolves to nobody, ever — padding the bracket
       // out to a power of two is the entire reason the seat exists. Without a
@@ -2959,6 +3186,302 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
       )
     returning id`;
   return rows.map((r) => r.id);
+}
+
+/** A feeder that can NEVER hand a winner onward.
+ *
+ *  OWNER RULING 2026-09-21 (review round 5, N2/N6) — **AN ABANDONED MATCH THAT
+ *  CARRIES AN OUTCOME IS NOT DEAD.** Dead means `cancelled`, or `abandoned`
+ *  with NO outcome at all, which is exactly the shape the generator and this
+ *  cascade write for their own voids.
+ *
+ *  A withdrawal is someone LEAVING THE COMPETITION; an abandonment is a match
+ *  that WAS PLAYED and produced no result. Different events, different
+ *  answers. The predicate used to read `!outcome?.winner`, so a quarter-final
+ *  abandoned for rain silently stamped the semi-final seat as a bye and walked
+ *  the other semi-finalist into the final — no organiser decision, no replay,
+ *  no trace on screen. That is the system ruling on a sporting question it has
+ *  no business deciding. A rained-off match now stays STUCK AND VISIBLE, which
+ *  is a legitimate waiting state for a human to rule on, not a defect: the
+ *  stage answers `{completed: false}` and the line keeps its `abandoned` row
+ *  on the run sheet.
+ *
+ *  `forfeited` is deliberately NOT here. It is a "void status" on the desk
+ *  (VOID_STATUSES, stages-panel.tsx) and yet it carries a real winner — that
+ *  is how a bye advances.
+ *
+ *  `cancelled` is DEFENSIVE. Nothing in `apps/web/src` or
+ *  `packages/engine/src` writes `fixtures.status = 'cancelled'`; every
+ *  production reference reads it. It is a valid value in the v1 output schema,
+ *  so it may arrive on an import path, and the clause is pinned by a test that
+ *  inserts the row through raw SQL and says so. Do not assume coverage from a
+ *  product path — there is none. */
+function feederIsDead(f: { status: string; outcome: { winner?: string } | null }): boolean {
+  if (f.status === "cancelled") return true;
+  return f.status === "abandoned" && f.outcome === null;
+}
+
+/** A feeder that can never hand a LOSER onward (review round 5, N1). There are
+ *  TWO disjoint reasons and keeping them apart is the whole point — conflating
+ *  "produced no loser" with "died" is how this bug class keeps coming back:
+ *
+ *  (a) THE MATCH NEVER PRODUCED A RESULT AT ALL. Identical to the winner case,
+ *      so this delegates to `feederIsDead` rather than restating it — the two
+ *      predicates must not drift, and a future change to what "settled and
+ *      produced nobody" means then flows through both by construction.
+ *
+ *  (b) THE MATCH SETTLED AND PRODUCED A WINNER BUT NO LOSER — precisely an
+ *      `award`, i.e. a walkover. `onDecided` takes `loser` only from
+ *      `kind: "win"` (scoring.ts), while `winner` comes from `"win"` OR
+ *      `"award"`. So a bye line is ALIVE as a winner feeder and DEAD as a
+ *      loser feeder: the one row on which the two predicates deliberately
+ *      disagree.
+ *
+ *  `draw`, `tie` and `no_result` produce no loser either, and are deliberately
+ *  NOT dead here. Under the 2026-09-21 ruling a match that was played and
+ *  produced no result waits for a human either way it feeds — a rained-off
+ *  semi-final must not hand the third-place line a walkover any more than it
+ *  hands the final one. The test for that is "an abandoned feeder that carries
+ *  an outcome leaves BOTH of its seats alone".
+ *
+ *  A feeder still on its way (`scheduled`/`in_play`, outcome null) is NOT dead
+ *  either; that is the "cascade late" rule, and treating it as dead would
+ *  pre-stamp the whole losers bracket at generation. */
+function loserFeederIsDead(f: {
+  status: string;
+  outcome: { kind?: string; winner?: string } | null;
+}): boolean {
+  if (feederIsDead(f)) return true;
+  return f.outcome?.kind === "award";
+}
+
+/** Which of the two predicates applies depends on WHICH EDGE seated the feeder,
+ *  not on the row — the same walkover is a live winner feeder and a dead loser
+ *  feeder. A destination seat has exactly one incoming edge, so the tag is
+ *  carried on the map entry rather than re-derived.
+ *
+ *  This is also the ONE owner of "no feeder I can see", which is the
+ *  load-bearing direction: an absent entry means a CROSS-STAGE source or a
+ *  seat a seeded draw fills directly, and reading it as "dead" would hand out
+ *  free walkovers across the whole bracket. Neither predicate below repeats
+ *  the guard — a duplicate would be unreachable, and an unreachable guard
+ *  cannot be mutation-tested. */
+interface FeederEdge {
+  row: SeatRow;
+  via: "winner" | "loser";
+}
+
+function seatFeederIsDead(e: FeederEdge | undefined): boolean {
+  if (!e) return false;
+  return e.via === "winner" ? feederIsDead(e.row) : loserFeederIsDead(e.row);
+}
+
+interface SeatRow {
+  id: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  home_slot_label: { key?: string } | null;
+  away_slot_label: { key?: string } | null;
+  status: string;
+  outcome: { kind?: string; winner?: string } | null;
+  winner_to_fixture: string | null;
+  winner_to_slot: number | null;
+  loser_to_fixture: string | null;
+  loser_to_slot: number | null;
+}
+
+/** Push the winners of the lines `awardSeededByes` just settled into the seats
+ *  they feed — `winner_to_fixture` / `winner_to_slot`, via `fillSlot`, the same
+ *  ONE channel `onDecided` advances a played fixture through (C1, re-review
+ *  2026-09-21). `awardSeededByes` writes status and outcome and nothing else,
+ *  so without this a settled walkover advances nobody. A no-op where the
+ *  destination seat is already taken, which is the genuine-bye case (the
+ *  seed's own expansion filled both of its slots), so both shapes go through
+ *  one path rather than two. */
+async function advanceSettledByes(tx: Tx, settled: string[]): Promise<string[]> {
+  if (settled.length === 0) return [];
+  const out: string[] = [];
+  const feeds = await tx<
+    {
+      id: string;
+      winner_to_fixture: string | null;
+      winner_to_slot: number | null;
+      outcome: { kind?: string; winner?: string } | null;
+    }[]
+  >`select id, winner_to_fixture, winner_to_slot, outcome from fixtures
+    where id in ${tx(settled)}`;
+  for (const feed of feeds) {
+    const winner = feed.outcome?.kind === "award" ? feed.outcome.winner : undefined;
+    if (!winner || !feed.winner_to_fixture) continue;
+    if (feed.winner_to_slot !== 1 && feed.winner_to_slot !== 2) continue;
+    const advanced = await fillSlot(tx, feed.winner_to_fixture, feed.winner_to_slot, winner);
+    if (advanced !== null) out.push(advanced);
+  }
+  return out;
+}
+
+/** One pass per round is the theoretical worst case (a chain of voids can walk
+ *  the cascade from the first round to the final, one round at a time), and a
+ *  bracket has nowhere near 32 rounds. This exists so a future bug turns into
+ *  a loud error rather than a transaction that never returns. */
+const MAX_CASCADE_PASSES = 32;
+
+/**
+ * OWNER RULING 2026-09-21 (the cascade) — **a seat whose feeder is permanently
+ * dead is a BYE seat.**
+ *
+ * Re-review C2 taught the generator to VOID a bracket line with nobody left to
+ * walk over to. That fixed "a withdrawn entrant is standing on a court" and
+ * inherited C1 through the back door: the void's `winner_to_fixture` target
+ * then waits forever on a feeder that can never produce a winner. Driven by
+ * hand, the final read "Awaiting draw" permanently, `completeStage` returned
+ * `{completed: false}`, and the stage could never leave `active`. There was no
+ * route back for the organiser — Rebuild refuses a stage that draws from
+ * `config.qualified`, and there is no seed proposal to recompute.
+ *
+ * The fix stamps `bracket.slot.bye` on the dead feeder's target seat and lets
+ * `awardSeededByes` + `advanceSettledByes` settle it — NO second settle path.
+ * Voids compound into further voids only where BOTH feeders are dead, because
+ * a walkover needs a live recipient (the same ruling C2 enforces one round
+ * earlier).
+ *
+ * ...AND IT STAMPS LATE. A seat is stamped at the moment it becomes
+ * actionable — the sibling feeder has resolved and the seat is genuinely
+ * "live entrant + permanently dead feeder" — never pre-stamped down the
+ * forward chain at generation. A withdrawal is a STATUS FLIP and an entrant
+ * can be reinstated, so every stamp written ahead of need hardens a state a
+ * human could otherwise undo. Same read-time-not-write-time instinct that made
+ * the F7 ladder fix safe (`ladder_order` is never pruned precisely because a
+ * prune cannot be un-pruned). `dead-feeder-cascade.test.ts`'s "no seat is
+ * stamped before its sibling feeder resolves" is what fails if this is ever
+ * made eager.
+ *
+ * Idempotent and re-entrant: every write is guarded on the state it changes
+ * (`<> 'bracket.slot.bye'`, `status = 'scheduled'`) and reports through
+ * `returning id`, so a second call writes nothing and the loop terminates.
+ *
+ * THE REVERSE WALK. A seat's feeder is found by inverting the forward-only
+ * feed edges. BOTH of them: `winner_to_fixture` and `loser_to_fixture`.
+ * Inverting the winner edge alone was review round 5's N1 — the loser edge is
+ * intra-stage in four shipped shapes (the double-elimination losers bracket,
+ * the grand-final reset, a knockout's third-place playoff, and page_playoff's
+ * pp-q2, all from packages/engine/src/scheduling/bracket.ts), so a
+ * `double_elim` with ONE ordinary withdrawal left three lines "Awaiting draw"
+ * forever and `completeStage` answering `{completed: false}`.
+ *
+ * Rather than query per seat (`where winner_to_fixture = $1`, which
+ * V275__advisor_indexes.sql indexes partially — and it indexes
+ * `loser_to_fixture` the same way, so either edge would have been backed) or
+ * thread extra columns at generation, this reads the stage's fixtures ONCE per
+ * pass — `fixtures_stage_idx` (stage_id, round_no, seq_in_round) — and inverts
+ * both edges in memory. The fixpoint loop needs every row anyway to find the
+ * seats that became actionable, a bracket stage is tens of rows, and no new
+ * column or migration is owed.
+ *
+ * Each map entry carries WHICH edge seated it, because the two predicates
+ * disagree on a walkover: it is a live winner feeder and a dead loser feeder
+ * (see `loserFeederIsDead`). The one thing the walk deliberately cannot see is
+ * a CROSS-STAGE feeder (wireCrossFeeds): an out-of-stage source is simply not
+ * in the map, reads as "no feeder", and is never stamped — which leaves
+ * today's behaviour for that shape exactly as it was rather than guessing at
+ * it. `dead-feeder-cascade.test.ts`'s "a feeder in ANOTHER stage is invisible
+ * to the cascade" pins that in both directions, so the `!f` fallback cannot
+ * quietly flip into handing out free walkovers.
+ *
+ * Returns every fixture id it changed, so the caller can publish them.
+ */
+export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<string[]> {
+  const touched = new Set<string>();
+  for (let pass = 0; pass < MAX_CASCADE_PASSES; pass++) {
+    const rows = await tx<SeatRow[]>`
+      select id, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+             status, outcome, winner_to_fixture, winner_to_slot,
+             loser_to_fixture, loser_to_slot
+      from fixtures where stage_id = ${stageId}`;
+    const feederOf = new Map<string, FeederEdge>();
+    for (const r of rows) {
+      if (r.winner_to_fixture !== null && (r.winner_to_slot === 1 || r.winner_to_slot === 2)) {
+        feederOf.set(`${r.winner_to_fixture}:${r.winner_to_slot}`, { row: r, via: "winner" });
+      }
+      if (r.loser_to_fixture !== null && (r.loser_to_slot === 1 || r.loser_to_slot === 2)) {
+        feederOf.set(`${r.loser_to_fixture}:${r.loser_to_slot}`, { row: r, via: "loser" });
+      }
+    }
+    let wrote = 0;
+    for (const f of rows) {
+      if (f.status !== "scheduled" || f.outcome !== null) continue;
+      const openHome = f.home_entrant_id === null;
+      const openAway = f.away_entrant_id === null;
+      if (!openHome && !openAway) continue;
+      const deadHome = openHome && seatFeederIsDead(feederOf.get(`${f.id}:1`));
+      const deadAway = openAway && seatFeederIsDead(feederOf.get(`${f.id}:2`));
+      if (openHome && openAway) {
+        // Nobody is here and nobody is coming: the line is void, and it becomes
+        // a dead feeder itself on the next pass. A single dead feeder is NOT
+        // enough — the other side is still on its way, and stamping now would
+        // be exactly the premature hardening the ruling forbids.
+        if (!deadHome || !deadAway) continue;
+        const [voided] = await tx<{ id: string }[]>`
+          update fixtures set status = 'abandoned'
+          where id = ${f.id} and stage_id = ${stageId}
+            and status = 'scheduled' and outcome is null
+            and home_entrant_id is null and away_entrant_id is null
+          returning id`;
+        if (voided) {
+          touched.add(voided.id);
+          wrote++;
+        }
+        continue;
+      }
+      // Exactly one seat is open and the other holds a live entrant (the
+      // both-filled case returned above), so if that open seat's feeder is
+      // dead there IS someone to award the walkover to. Stamp, and let
+      // awardSeededByes below settle it off the label like any other bye.
+      const [stamped] = openHome
+        ? deadHome
+          ? await tx<{ id: string }[]>`
+              update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+              where id = ${f.id} and stage_id = ${stageId}
+                and home_entrant_id is null and status = 'scheduled' and outcome is null
+                and coalesce(home_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}
+              returning id`
+          : []
+        : deadAway
+          ? await tx<{ id: string }[]>`
+              update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+              where id = ${f.id} and stage_id = ${stageId}
+                and away_entrant_id is null and status = 'scheduled' and outcome is null
+                and coalesce(away_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}
+              returning id`
+          : [];
+      if (stamped) {
+        touched.add(stamped.id);
+        wrote++;
+      }
+    }
+    // Settle every bye line whose real seat is occupied — the ones just
+    // stamped, and any the caller's own writes made ready — then advance their
+    // winners. An advance can fill the seat that makes the NEXT round
+    // actionable, which is why this is a loop and not a single pass.
+    const settled = await awardSeededByes(tx, stageId);
+    for (const id of settled) touched.add(id);
+    for (const id of await advanceSettledByes(tx, settled)) touched.add(id);
+    if (wrote === 0 && settled.length === 0) return [...touched];
+  }
+  // Deliberately not a typed, localised refusal. This is a runaway guard for a
+  // FUTURE bug — reaching it needs a bracket of more than 32 rounds, or a write
+  // in the loop above that stops being idempotent — so there is no organiser
+  // copy to write for a state the product cannot produce. The message says the
+  // score stood because `onDecided` is a POST-COMMIT hook (see scoring.ts's
+  // R10 M3 note): the event has already committed by the time the cascade
+  // runs, so a throw here 500s a score that is in the database. That is the
+  // documented contract for every hook on that path, not something the cascade
+  // introduced, and changing it for this one caller alone would split it.
+  throw new Error(
+    `resolveBracketSeats: stage ${stageId} did not reach a fixed point in ` +
+      `${MAX_CASCADE_PASSES} passes. Any score that triggered this HAS been saved — ` +
+      `this is a post-commit hook.`,
+  );
 }
 
 // L3/#414 pass 3 — REAL_TABLE_KINDS are the kinds a carry-over may source
@@ -3790,6 +4313,27 @@ function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
   return `${sourceIndex}:${base}`;
 }
 
+/** The entrants of `divisionId` who have LEFT the field — the complement of
+ *  the house "field" predicate `status in ('registered','confirmed')` that
+ *  generateStageFixturesWrite's `active` read and issueChallenge's
+ *  ladder_order initialisation both use. Same spelling as the two sites that
+ *  already ask this question directly (usecases/officials.ts's `withdrawn`
+ *  read, usecases/schedule-ai.ts's `entrantRows`), not a third one.
+ *
+ *  Why this question needs asking at all: a withdrawal is a STATUS FLIP, not
+ *  a delete. The row survives, and the standings SNAPSHOT deliberately keeps
+ *  her — engine-db/competition.ts derives its entrant set from fixture
+ *  home/away ids with no status filter, so the row she earned stays on the
+ *  public board. Every membership taken from the STANDINGS therefore
+ *  inherits withdrawn entrants and must intersect back against the field;
+ *  membership taken from the field query already has. */
+async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Set<string>> {
+  const rows = await tx<{ id: string }[]>`
+    select id from entrants
+    where division_id = ${divisionId} and status in ('withdrawn','disqualified')`;
+  return new Set(rows.map((r) => r.id));
+}
+
 /**
  * Compute (or recompute) a DRAFT seed proposal for a `timing: "setup"`
  * stage (design's API contract: POST /stages/{id}/seed-proposal). Never
@@ -3896,7 +4440,7 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // them apart. See its own doc comment.
     const seedOfKey = new Map(qualifiers.map((q) => [seedProposalKey(q.sourceIndex, q.descriptor), q.seed] as const));
 
-    const computedQualifiers = qualifiers.map((q) => ({
+    const resolvedQualifiers = qualifiers.map((q) => ({
       rank: q.seed,
       source: {
         stageId: resolved[q.sourceIndex]!.id,
@@ -3911,7 +4455,12 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       // keyed off this same `rank`; see confirmSeedProposal.
       destinationSlot: slotBySeed.get(q.seed)?.[0] ?? "",
     }));
-    if (computedQualifiers.some((q) => q.destinationSlot === "")) {
+    // Integrity check over the FULL resolved slate, BEFORE the departed
+    // filter below: it asks whether the generated TBD fixtures still match
+    // the seeding rules, and filtering first would let a departed
+    // qualifier's missing slot pass unnoticed (and, if every qualifier had
+    // departed, would hand `some()` an empty array to answer `false` to).
+    if (resolvedQualifiers.some((q) => q.destinationSlot === "")) {
       throw new HttpError(
         422,
         "this stage's generated TBD fixtures don't match its current seeding rules — regenerate them first",
@@ -3919,18 +4468,50 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
         { stageId },
       );
     }
-    const computedTies = ties.map((t) => ({
-      slots: t.descriptors.map((sourced) => {
-        // seedProposalKey on the read side too (Task 2) — must match the
-        // build side above exactly, or a best_nth tie resolves to whichever
-        // OTHER same-position/different-nth qualifier happened to be
-        // inserted last.
-        const seed = seedOfKey.get(seedProposalKey(sourced.sourceIndex, sourced.descriptor));
-        return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(sourced.descriptor);
-      }),
-      entrantIds: t.entrantIds,
-      reason: t.reason,
-    }));
+    // A qualifier who has left the field is never OFFERED. Progression
+    // resolves over the standings tables, which deliberately still carry her
+    // (see departedEntrantIds) — so without this an organiser is shown, and
+    // pre-ticked into, a bracket seat for someone who has withdrawn.
+    //
+    // Her SEAT is left empty rather than closed up: nobody is promoted into
+    // the vacancy (owner decision pending), so every surviving qualifier
+    // keeps the seed and destination slot the engine gave her and the
+    // bracket simply gets smaller. This is the offer only — the binding
+    // refusal is confirmSeedProposal's, which also covers the `edits[]` and
+    // `tiePicks[]` routes this filter cannot see, and a draft computed
+    // BEFORE a withdrawal (a withdrawal does not change the frozen standings
+    // snapshot, so it does not stale the draft).
+    const departed = await departedEntrantIds(tx, stage.division_id);
+    const computedQualifiers = resolvedQualifiers.filter((q) => !departed.has(q.entrantId));
+    const survivingSlots = new Set(computedQualifiers.map((q) => q.destinationSlot));
+    const computedTies = ties
+      .map((t) => ({
+        slots: t.descriptors
+          .map((sourced) => {
+            // seedProposalKey on the read side too (Task 2) — must match the
+            // build side above exactly, or a best_nth tie resolves to whichever
+            // OTHER same-position/different-nth qualifier happened to be
+            // inserted last.
+            const seed = seedOfKey.get(seedProposalKey(sourced.sourceIndex, sourced.descriptor));
+            return (seed !== undefined ? slotBySeed.get(seed)?.[0] : undefined) ?? descriptorKey(sourced.descriptor);
+          })
+          // A tied slot whose qualifier has departed is no longer offered
+          // above, so leaving it in the tie would demand an edit for a seat
+          // that has no candidate left — and any candidate the organiser
+          // picked would then be double-assigned (she already holds her own
+          // slot), which is a dead end, not a refusal. `seedOfKey` is still
+          // built from the FULL slate, so the SURVIVING slots in a tie still
+          // resolve to their real slot ids rather than the descriptorKey
+          // fallback.
+          .filter((slot) => survivingSlots.has(slot)),
+        entrantIds: t.entrantIds.filter((id) => !departed.has(id)),
+        reason: t.reason,
+      }))
+      // Fewer than two candidates left is no longer an ambiguity to resolve,
+      // so dropping it is not the "silently ordered tie" the design forbids
+      // — there is nothing left to order. A tie with no surviving slots is
+      // likewise nothing to ask about.
+      .filter((t) => t.slots.length > 0 && t.entrantIds.length > 1);
 
     const computed = {
       qualifiers: computedQualifiers,
@@ -4082,6 +4663,31 @@ export async function confirmSeedProposal(
     if (known.length !== new Set(entrantIds).size) {
       throw new HttpError(422, "a qualifier does not belong to this division", "SEEDING_ENTRANT_FOREIGN");
     }
+    // ...and belongs to the FIELD, not merely to the division. A withdrawal
+    // is a status flip, so a departed entrant is still `known` above — and
+    // progression resolves over standings tables that deliberately still
+    // carry her (see departedEntrantIds). This is the binding refusal: it
+    // sits on the id set that is about to be FILLED, so it covers the
+    // computed slate, an `edits[]` override and a `tiePicks[]` order alike,
+    // and it catches a draft computed before the withdrawal (which the
+    // freshness check above cannot see — a withdrawal leaves the frozen
+    // standings snapshot, and therefore standingsHash, untouched).
+    //
+    // A refusal, not a silent drop: the organiser is told who has gone so
+    // they can recompute, rather than discovering a short bracket later.
+    // Deliberately NOT paired with a prune of the proposal row — an entrant
+    // can be un-withdrawn (patchEntrant), and a recompute then offers her
+    // again.
+    const departed = await departedEntrantIds(tx, stage.division_id);
+    const departedQualifiers = [...new Set(entrantIds)].filter((id) => departed.has(id));
+    if (departedQualifiers.length > 0) {
+      throw new HttpError(
+        422,
+        "a qualifier has withdrawn from this division — recompute the proposal",
+        "SEEDING_ENTRANT_WITHDRAWN",
+        { entrantIds: departedQualifiers },
+      );
+    }
     // #554 — a bye seed owns TWO destination slots (its own bye fixture's
     // slot AND the winner-feed target's slot), but the wire-level
     // `destinationSlot` above names only one of them (computeSeedProposal's
@@ -4104,6 +4710,26 @@ export async function confirmSeedProposal(
       }
     }
     const expandedEntries = [...expandedSlots.entries()];
+
+    // F1 (review finding, 2026-09-21) — a proposal with NOTHING left to fill
+    // must not be confirmable. Before the departed-qualifier filter,
+    // `computed.qualifiers` was never empty for a resolvable progression; it
+    // can be now (withdraw every qualifier of a small bracket), and the draft
+    // panel's only control is Confirm. Pressing it used to succeed with
+    // `filled: 0` and flip the proposal to the TERMINAL `confirmed` state —
+    // after which Recompute 409s SEEDING_ALREADY_CONFIRMED forever, including
+    // after un-withdrawing everybody, leaving a knockout final at
+    // `{home: null, away: null, scheduled}` with no way back through the
+    // product. Refusing here leaves the row `draft`, so a recompute still
+    // works: that is the whole point, and a refusal that also confirmed would
+    // be the same trap with extra steps.
+    if (expandedEntries.length === 0) {
+      throw new HttpError(
+        422,
+        "nobody is left to seed into this stage — recompute the proposal once the field is settled",
+        "SEEDING_NOTHING_TO_FILL",
+      );
+    }
 
     const fixtureIds = [...new Set(expandedEntries.map(([slot]) => slot.split(":")[0] as string))];
     const fixtureRows = await tx<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
@@ -4129,13 +4755,109 @@ export async function confirmSeedProposal(
       const filledId = await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
       if (filledId !== null) filledFixtureIds.add(filledId);
     }
+    // F2 (review finding, 2026-09-21) — the seeds this bracket PUBLISHED that
+    // no qualifier is going to fill. The entrant who would have taken one has
+    // left the field, and nobody is promoted into a vacancy (owner ruling
+    // 2026-09-21), so the slot stays empty — but it kept its
+    // `slot.winner_group` label, and a line with one real entrant, one
+    // labelled-TBD side and a null outcome is EXACTLY an ordinary match
+    // awaiting a draw. Driven on a real division it rendered
+    // "Winner of Group A vs Driver 2 — Awaiting draw", counted in
+    // "1 to schedule", forever: `isBye` (lib/run-sheet-groups) needs
+    // `outcome.kind === "award"`, which nothing was ever going to write.
+    //
+    // Stamping the vacated side as a BYE hands it to `awardSeededByes` just
+    // below — already in this transaction, and written for this exact shape —
+    // which awards the walkover to whoever IS in the line. That delivers the
+    // owner's ruling (the opponent advances; nobody is promoted) through the
+    // path that already exists, rather than a second one.
+    //
+    // Keyed on the SLOT, not on "which entrant departed": a slot the fill
+    // loop did not touch is vacated whatever the reason. Guarded on the seat
+    // still being null so a partial re-confirm cannot relabel a filled side.
+    //
+    // RETRACTION (2026-09-21, re-review). The first round of this work
+    // reported the `!expandedSlots.has(slot)` filter as independently
+    // load-bearing, on the reasoning that it "protects a slot expanded but
+    // silently unfilled". That is FALSE and is withdrawn: the
+    // `SEEDING_FIXTURES_ALREADY_FILLED` check above refuses the whole confirm
+    // if any expanded slot is non-null BEFORE this loop runs, so every one of
+    // them is null going in and filled coming out — the `*_entrant_id is null`
+    // predicate below refuses exactly the rows the filter would. Each guard
+    // alone is an equivalent mutant (verified: neither kills a test on its
+    // own). What makes the filter load-bearing is the doubly-vacated branch
+    // just above, which VOIDS a line — drop the filter and every seeded line
+    // looks doubly vacated and the whole bracket is abandoned. Dropping both
+    // guards together relabels a seated qualifier as a bye, which
+    // "a FULL slate stamps no bye anywhere" in vacated-seat-advancement
+    // catches. Recorded because a wrong reason that survives is worse than an
+    // uncovered line: the next reader would trust this filter to be doing
+    // something it is not.
+    //
+    // NOT symmetrical with the `on_complete` path's own answer
+    // (`walkoverDepartedQualifiers`), which seats the departed qualifier and
+    // records a TWO-SIDED forfeit. There the published draw — `config.qualified`,
+    // frozen at the previous stage's completion — NAMES her, so her line is a
+    // match that was drawn and then conceded. Here the draw is published AT
+    // confirm time and does not name her at all, so the line is a bye: the
+    // bracket is simply short a player. The difference shows up in the
+    // standings (a forfeit is a played match, a bye is a sit-out); if the
+    // owner wants one shape for both, this is the place to change.
+    const vacatedSlots = [...freshSlotsBySeed.values()].flat().filter((slot) => !expandedSlots.has(slot));
+    // ...unless BOTH published seats of a line vacated, which is reachable
+    // whenever enough of the bottom of the draw leaves (seeds 4 and 5 of an
+    // eight-slot bracket are each other's opponent). Stamping two byes there
+    // leaves a `scheduled` fixture with nobody in it that `awardSeededByes`
+    // cannot settle — it needs one real seat — so it would sit on the run
+    // sheet as a playable match forever. Same owner ruling as the generation
+    // path (re-review C2): a walkover needs a LIVE RECIPIENT, and where there
+    // is none the line is VOID and advances nobody. `abandoned` is the void's
+    // value in this column; see the insert in generateStageFixturesWrite.
+    const vacatedSides = new Map<string, Set<string>>();
+    for (const slot of vacatedSlots) {
+      const [fixtureId, side] = slot.split(":");
+      const sides = vacatedSides.get(fixtureId as string) ?? new Set<string>();
+      sides.add(side as string);
+      vacatedSides.set(fixtureId as string, sides);
+    }
+    for (const [fixtureId, sides] of vacatedSides) {
+      if (sides.size < 2) continue;
+      const [voidedRow] = await tx<{ id: string }[]>`
+        update fixtures set status = 'abandoned'
+        where id = ${fixtureId} and stage_id = ${stageId}
+          and home_entrant_id is null and away_entrant_id is null
+          and status = 'scheduled' and outcome is null
+        returning id`;
+      if (voidedRow) filledFixtureIds.add(voidedRow.id);
+    }
+    for (const slot of vacatedSlots) {
+      const [fixtureId, side] = slot.split(":");
+      if ((vacatedSides.get(fixtureId as string)?.size ?? 0) >= 2) continue;
+      if (side === "home") {
+        await tx`update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+                 where id = ${fixtureId} and stage_id = ${stageId} and home_entrant_id is null`;
+      } else {
+        await tx`update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+                 where id = ${fixtureId} and stage_id = ${stageId} and away_entrant_id is null`;
+      }
+    }
+
     // A bye seat just became a real entrant's, so the walkover the plain path
     // bakes at generation time can finally be recorded — see awardSeededByes.
     // AFTER the fills, in the SAME transaction: it reads the entrant ids they
     // just wrote. The decided lines join `filledFixtureIds` so the post-commit
     // publish below drops and re-pushes them too — their match centre now
     // shows a settled walkover rather than a fixture waiting on a draw.
-    for (const id of await awardSeededByes(tx, stageId)) filledFixtureIds.add(id);
+    // A bye seat just became a real entrant's, so the walkover the plain path
+    // bakes at generation time can finally be recorded, its winner advanced,
+    // and any seat whose feeder just turned out to be permanently dead settled
+    // behind it — all of it through `resolveBracketSeats`, the ONE cascade.
+    // AFTER the fills, in the SAME transaction: it reads the entrant ids they
+    // just wrote. The lines it settles join `filledFixtureIds` so the
+    // post-commit publish below drops and re-pushes them too — their match
+    // centre now shows a settled walkover rather than a fixture waiting on a
+    // draw.
+    for (const id of await resolveBracketSeats(tx, stageId)) filledFixtureIds.add(id);
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
@@ -4286,10 +5008,77 @@ export async function markDependentSeedProposalsStale(auth: AuthCtx, sourceStage
   }
 }
 
+/** A change to WHO IS IN THE FIELD invalidates any `timing: "setup"` draft
+ *  proposal in the division — mark it stale and recompute it against the
+ *  current field, exactly as markDependentSeedProposalsStale does for a
+ *  standings change. Division-scoped rather than source-scoped because a
+ *  withdrawal names no stage: it changes every dependent proposal at once,
+ *  whichever source each one draws from.
+ *
+ *  Why this is not optional. A withdrawal does NOT move the frozen standings
+ *  snapshot, so it does not move `standingsHash` either — the draft the
+ *  organiser is looking at stays 'draft' and keeps naming her. And the draft
+ *  panel's ONLY button is Confirm (progression-panel.tsx renders Recompute on
+ *  its null and stale branches, never on a draft), so without this the
+ *  organiser meets confirmSeedProposal's refusal with no control on the
+ *  screen that can clear it. Staling the row is what puts the existing
+ *  Recompute button in front of them — and the recompute that follows here
+ *  usually means they never see the refusal at all.
+ *
+ *  Called on BOTH directions of the flip (patchEntrant, the single status
+ *  funnel — withdrawEntrantCascade ends by calling it): an entrant who is
+ *  un-withdrawn must be OFFERED again, and a proposal computed while she was
+ *  out would otherwise keep her out until something else happened to stale it.
+ *
+ *  Best-effort throughout, like its sibling: a recompute that now trips (rules
+ *  unsatisfiable, already confirmed) leaves the stale row for the organiser to
+ *  act on rather than failing the withdrawal that already committed. */
+export async function markFieldChangeSeedProposalsStale(orgId: string, divisionId: string): Promise<void> {
+  const affected = await withTenant(orgId, async (tx) => {
+    const rows = await tx<{ stage_id: string }[]>`
+      select p.stage_id from stage_seed_proposals p
+      join stages s on s.id = p.stage_id
+      where s.division_id = ${divisionId}
+        and p.status = 'draft'
+        and s.progression is not null
+        and s.progression ->> 'timing' = 'setup'`;
+    const ids = rows.map((r) => r.stage_id);
+    if (ids.length > 0) {
+      await tx`update stage_seed_proposals set status = 'stale' where stage_id in ${tx(ids)} and status = 'draft'`;
+    }
+    return ids;
+  });
+  // An orgId, not an AuthCtx (review finding F3, 2026-09-21): the entrant
+  // status flip that triggers this does NOT always come from a route with one
+  // — `withdrawCore` (registrations.ts) reaches it from the PUBLIC
+  // self-cancel, which has a token and an org, no session. Safe because
+  // `computeSeedProposal` reads exactly one field off its `auth`, `orgId`
+  // (verified by reading its body: `withTenant(auth.orgId, …)` and the
+  // proposal INSERT's `org_id`), and every caller here has already authorised
+  // the write that changed the field. This is a system refresh of the org's
+  // OWN derived data, not a user action.
+  const systemCtx: AuthCtx = { orgId, via: "api_key", userId: null, role: null, keyId: null };
+  for (const stageId of affected) {
+    try {
+      await computeSeedProposal(systemCtx, stageId);
+    } catch {
+      // best-effort, see docstring
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Ladder challenges (Jul3/08 §6): no pre-generated fixtures — players issue
 // challenges within range; the result reorders the ladder (scoring hook).
 // ---------------------------------------------------------------------------
+
+/** The reach a ladder stage gets when its `config` does not name one. The
+ *  ONE place this default lives: a test that types `3` into its own table
+ *  goes on asserting yesterday's rule after this moves, so tests derive
+ *  their distances from here instead. (The `challengeRange: 3` literals in
+ *  the format templates are those templates' own declared config, not this
+ *  fallback.) */
+export const DEFAULT_LADDER_CHALLENGE_RANGE = 3;
 
 export async function issueChallenge(
   auth: AuthCtx,
@@ -4342,11 +5131,94 @@ export async function issueChallenge(
     }
     const ci = order.indexOf(input.challenger_id);
     const oi = order.indexOf(input.opponent_id);
-    if (ci < 0 || oi < 0) throw new HttpError(422, "both players must be on the ladder");
-    if (oi >= ci) throw new HttpError(422, "you can only challenge upward");
-    const range = typeof stage.config.challengeRange === "number" ? stage.config.challengeRange : 3;
-    if (ci - oi > range) {
-      throw new HttpError(422, `challenges reach at most ${range} places up the ladder`);
+    // Every refusal below carries a LADDER_* wire code. The console renders
+    // `err.message` — the server's own English — unless it recognises the
+    // code, and there is no server-side i18n in this repo, so a refusal
+    // without a code is an English sentence in all four locales. The codes
+    // and their copy live in lib/ladder-error.ts + dictionaries/*/errors.json.
+    if (ci < 0 || oi < 0) {
+      throw new HttpError(422, "both players must be on the ladder", "LADDER_ENTRANT_FOREIGN");
+    }
+    // Presence on the ladder is not eligibility. `ladder_order` is written
+    // ONCE, from the live field, and never pruned afterwards; a withdrawal
+    // is a status flip that leaves her row and her rung in place, so the
+    // check above waves a departed player through in EITHER role.
+    //
+    // Filtered here, at read time, rather than pruned from `config` when she
+    // withdraws: a pruned array cannot be un-pruned, and an entrant CAN be
+    // un-withdrawn (patchEntrant) — `ladder_order` only initialises while it
+    // is empty, so she would never be re-seated and would silently lose the
+    // rung she earned. Read-time filtering also cannot leave stale config
+    // behind, and needs no matching hook on the un-withdraw path.
+    //
+    // BOTH sides, checked together: she can be the challenger or the
+    // opponent, and a guard that looks at one is half a fix.
+    const departed = await departedEntrantIds(tx, stage.division_id);
+    if (departed.has(input.challenger_id) || departed.has(input.opponent_id)) {
+      throw new HttpError(
+        422,
+        "a player who has withdrawn from this division can neither issue nor receive a challenge",
+        "LADDER_ENTRANT_WITHDRAWN",
+      );
+    }
+    // RAW indices, and provably the same answer as live ones would give: a
+    // filter preserves relative order, so for two players who are BOTH on
+    // the live ladder — which the guard immediately above has just
+    // guaranteed — `oi < ci` holds in the filtered array exactly when it
+    // holds in the stored one. Kept raw because it is the array already in
+    // hand, and noted here so the next reader does not "fix" it: computing
+    // it live would also be WRONG if the departed guard ever moved below,
+    // since a departed player is absent from the live array and would index
+    // -1 rather than compare.
+    if (oi >= ci) {
+      throw new HttpError(422, "you can only challenge upward", "LADDER_CHALLENGE_NOT_UPWARD");
+    }
+    const range =
+      typeof stage.config.challengeRange === "number"
+        ? stage.config.challengeRange
+        : DEFAULT_LADDER_CHALLENGE_RANGE;
+    // REACH IS MEASURED IN LIVE RUNGS (owner ruling, 2026-09-21, finding F7).
+    // `ladder_order` still CONTAINS the departed — read-time filtering, never
+    // a prune, for every reason the block above gives — so counting its
+    // positions made a withdrawn player between two actives eat one of the
+    // challenger's places. Reach is a COMPETITIVE-DISTANCE rule, and someone
+    // who has left is not competitive distance, she is a hole: counting her
+    // silently SHORTENED everyone's reach whenever somebody above them
+    // withdrew, a rule change nobody announced and nobody could see (the
+    // published ladder still lists her, with a "withdrawn" badge). The live
+    // reading keeps the ladder the same size for the people still climbing.
+    //
+    // The accepted cost runs the other way: a burst of withdrawals lets a
+    // challenger reach further than she could yesterday. That one is visible
+    // and explicable — "three people above you left" — which is why the
+    // owner took it over the invisible failure.
+    //
+    // Only the RANGE check reads the live array. The foreign check above
+    // stays raw (presence on the ladder AT ALL is its question, and a
+    // departed player must fail the guard that owns her reason, with its own
+    // code and its own four-locale sentence, rather than be misreported as
+    // somebody else's player), and the upward check stays raw because
+    // filtering cannot reorder what it keeps.
+    //
+    // Safe to index without a not-found branch: the departed guard above has
+    // already thrown for either player being gone, so both are present here.
+    // If that guard ever moves below this point, these lookups return -1 and
+    // the refusal a customer gets changes — the precedence case in
+    // ladder-reach-counts-live-rungs.test.ts is what stops that silently.
+    const liveOrder = order.filter((id) => !departed.has(id));
+    const liveCi = liveOrder.indexOf(input.challenger_id);
+    const liveOi = liveOrder.indexOf(input.opponent_id);
+    if (liveCi - liveOi > range) {
+      // `range` rides in `extra`, not only in the English prose: the copy in
+      // every locale names the number, and a client cannot parse it back out
+      // of a sentence it does not speak. What the ruling moved is what
+      // counts as a place, not how many — so `extra` is unchanged.
+      throw new HttpError(
+        422,
+        `challenges reach at most ${range} places up the ladder, counting only players still in the field`,
+        "LADDER_CHALLENGE_OUT_OF_RANGE",
+        { range },
+      );
     }
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from fixtures where stage_id = ${stageId}`;

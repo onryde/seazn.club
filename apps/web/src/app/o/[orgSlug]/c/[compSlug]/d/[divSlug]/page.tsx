@@ -21,7 +21,7 @@ import { STAGE_RULES_SPORTS } from "@/lib/match-rules";
 import { isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
-import { listEntrants } from "@/server/usecases/entrants";
+import { listEntrants, DEPARTED_STATUSES } from "@/server/usecases/entrants";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 // P9 pass 4d, item 1: StagesPanel's per-fixture court editor needs the org's
 // real courts (id/name/venue) to build its picker and to venue-qualify a
@@ -283,6 +283,15 @@ export default async function DivisionPage({
   // ranked among the competing and styled exactly like them.
   // `listEntrants` already selects `status`, so this costs no extra query.
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+  // Entrants who have left the field. A withdrawal is a STATUS FLIP, not a
+  // delete, so these ids are still in `entrantNames` and in a ladder's
+  // persisted order — which is exactly how a <select> came to offer a choice
+  // the server 422s on. Derived here, beside the roster read, because the
+  // panels below only ever receive id -> NAME and cannot tell the two apart.
+  // The pair is NOT spelled here. `standings-withdrawn-wiring` reds on a page
+  // that restates it, because a page that names one status will miss the next
+  // one added — read it from the server's single source instead.
+  const departedEntrantIds = entrants.filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
   // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
@@ -687,6 +696,8 @@ export default async function DivisionPage({
                     stageId={st.id}
                     order={(st.config.ladder_order as string[] | undefined) ?? []}
                     entrants={entrantNames}
+                    departedEntrantIds={departedEntrantIds}
+                    locale={locale}
                     canEdit={editable}
                     viewerPlan={viewerPlan}
                   />
@@ -705,6 +716,7 @@ export default async function DivisionPage({
                 fixtures={fixtures}
                 entrantNames={entrantNames}
                 stageNames={stageNames}
+                departedEntrantIds={departedEntrantIds}
                 locale={locale}
                 canEdit={editable}
               />

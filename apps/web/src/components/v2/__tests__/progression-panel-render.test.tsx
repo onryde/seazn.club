@@ -35,6 +35,7 @@ function baseProps(overrides: Partial<ProgressionPanelProps> = {}): ProgressionP
     fixtures: FIXTURES,
     entrantNames: ENTRANT_NAMES,
     stageNames: STAGE_NAMES,
+    departedEntrantIds: [],
     locale: "en",
     canEdit: true,
     ...overrides,
@@ -110,6 +111,49 @@ describe("ProgressionPanel — already confirmed", () => {
     expect(html).toContain("were filled from a confirmed proposal.");
     expect(html).not.toContain("<button");
     expect(html).not.toContain("<select");
+  });
+});
+
+describe("ProgressionPanel — a draft with NOBODY in it (review finding F1)", () => {
+  // Reachable since departed qualifiers stopped being offered: withdraw every
+  // qualifier of a small bracket and the slate is empty. What the organiser
+  // was shown then was the ordinary draft branch — four column headers, zero
+  // rows, and ONE control, Confirm — and pressing it burned the stage into
+  // the terminal `confirmed` status with `filled: 0`, after which Recompute
+  // 409s forever. The server refuses that now; this is the screen side of the
+  // same fix, because a lone Confirm whose only outcome is a 422 is the same
+  // dead end one step later.
+  const emptyDraft: SeedProposal = {
+    ...DRAFT,
+    computed: { ...DRAFT.computed, qualifiers: [], ties: [] },
+  };
+
+  it("says what happened and offers Recompute — never a bare Confirm over an empty table", () => {
+    const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal: emptyDraft })} />);
+    expect(html).toContain('data-progression-state="draft-empty"');
+    expect(html).toContain("Nobody has qualified for this stage");
+    // Anchored on the BUTTON, not on the word: `progression.noQualifiersLeft`
+    // ends "...Recompute once the field is settled", so a bare
+    // `toContain("Recompute")` is satisfied by the paragraph alone and stayed
+    // green with the button deleted (re-review M1/N17b). A card that explains
+    // the dead end without offering the way out of it is the defect F1 exists
+    // to close.
+    expect(html).toMatch(/<button[^>]*>\s*Recompute\s*<\/button>/);
+    expect(html).not.toContain("Confirm proposal");
+    expect(html).not.toContain("<table");
+  });
+
+  it("the control: ONE surviving qualifier is still an ordinary draft to confirm", () => {
+    // The guard must key on an EMPTY slate, not on a short one — a draw that
+    // lost somebody but still seats a survivor is exactly the F2 walkover
+    // case, and it must stay confirmable.
+    const shortDraft: SeedProposal = {
+      ...DRAFT,
+      computed: { ...DRAFT.computed, qualifiers: [DRAFT.computed.qualifiers[0]!], ties: [] },
+    };
+    const html = renderToStaticMarkup(<ProgressionPanel {...baseProps({ proposal: shortDraft })} />);
+    expect(html).toContain('data-progression-state="draft"');
+    expect(html).toContain("Confirm proposal");
   });
 });
 

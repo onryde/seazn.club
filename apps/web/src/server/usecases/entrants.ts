@@ -27,6 +27,9 @@ import type {
 } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { gateRosterEligibility, type EligibilityIssue } from "./registration-eligibility";
+// One-way edge (stages.ts does not import this module): a status flip has to
+// reach the seed proposals that were computed over the old field.
+import { markFieldChangeSeedProposalsStale } from "./stages";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -468,16 +471,33 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
   });
 }
 
+/** `entrants.status` values that mean "no longer in the field" — the
+ *  complement of the house `status in ('registered','confirmed')` predicate.
+ *
+ *  Exported because this is the ONE place the departed vocabulary is spelled
+ *  on the server side. Callers that need "who has left" must read it from
+ *  here rather than restating the pair: three pages each spelling it out, and
+ *  each getting half of it, is precisely the C1 defect that left a
+ *  disqualified entrant unmarked in the public standings. The presentation
+ *  half lives in `DEPARTED_STATUS_CHIPS` (standings-table.tsx) and is pinned
+ *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
+export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
+
 export async function patchEntrant(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
 ): Promise<EntrantWithMembers> {
-  return withTenant(auth.orgId, async (tx) => {
+  const { out, fieldChanged, divisionId } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
     // it never reaches the `update entrants set ...` below.
     const { members, eligibility_override, ...fields } = patch;
+    // Read the status BEFORE the update, so "did this patch move the entrant
+    // in or out of the field?" is answerable below. A patch that re-asserts
+    // the status it already had must NOT count as a field change — it would
+    // stale and recompute a seed proposal for nothing.
+    const [prior] = await tx<{ status: string }[]>`select status from entrants where id = ${id}`;
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {
       const cols = Object.keys(fields);
@@ -488,6 +508,12 @@ export async function patchEntrant(
       [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     }
     if (!row) throw new HttpError(404, "entrant not found");
+    // Crossing the field boundary in EITHER direction: a withdrawal removes a
+    // qualifier a draft proposal may already name, and an un-withdrawal makes
+    // one offerable again. Both are field changes; a move between two departed
+    // statuses, or between two active ones, is not.
+    const fieldChanged =
+      prior !== undefined && DEPARTED_STATUSES.has(prior.status) !== DEPARTED_STATUSES.has(row.status);
     if (members) {
       // Full roster replacement — recheck the count against THIS entrant's kind
       // (kind itself isn't patchable, so only the roster is being written).
@@ -501,8 +527,26 @@ export async function patchEntrant(
         context: "patch_entrant",
       });
     }
-    return withMembers(tx, row);
+    return { out: await withMembers(tx, row), fieldChanged, divisionId: row.division_id };
   });
+  // AFTER the transaction commits: the recompute opens its own transaction
+  // and takes the division advisory lock, which would deadlock against the
+  // one above. Best-effort — a proposal that cannot be recomputed is left
+  // stale, which is still what puts Recompute in front of the organiser.
+  if (fieldChanged) {
+    // In its OWN try/catch (review finding, 2026-09-21): the entrant patch has
+    // already COMMITTED by the time we get here, and `confirmSeedProposal`
+    // refuses a departed qualifier regardless, so a failure in this refresh
+    // must not turn a withdrawal that succeeded into a 500 for the caller.
+    // The cost of swallowing it is an un-staled draft — the behaviour before
+    // this hook existed, not a new hazard.
+    try {
+      await markFieldChangeSeedProposalsStale(auth.orgId, divisionId);
+    } catch {
+      // see above
+    }
+  }
+  return out;
 }
 
 /** Replace an entrant's roster with its team's CURRENT squad. Enrollment

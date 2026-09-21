@@ -499,7 +499,55 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
   // suspensions.fixture_id), so a status-only test can delete real evidence
   // under any status it does not happen to name. These two cases fail against
   // a status-only guard.
-  it("an 'abandoned' fixture blocks — it was PLAYED, and match-reports accepts a report on exactly that status", async () => {
+  // SPLIT AND NARROWED 2026-09-21 (the cascade). This used to be one test that
+  // set `status = 'abandoned'` and nothing else, and it passed because the
+  // guard blocked on that status ALONE. That stopped being safe the moment
+  // `abandoned` also became the value the GENERATOR writes for a bracket line
+  // with nobody left to play it (walkoverDepartedQualifiers, re-review C2):
+  // the old guard made every such stage permanently un-rebuildable, and told
+  // the organiser their unplayed board "already has recorded results" —
+  // observed in a browser on 2026-09-21.
+  //
+  // A real abandonment leaves an event ledger behind it (the `core.abandon`
+  // that produced the status), and a no-result leaves an outcome. The
+  // generator's void leaves NEITHER. One test per side, plus the negative.
+  it("an 'abandoned' fixture that was PLAYED blocks — its event ledger is real evidence", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "knockout", name: "KO", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await sql`update fixtures set status = 'abandoned' where id = ${fixtures[0]!.id}`;
+    await sql`
+      insert into score_events (fixture_id, org_id, seq, type, payload)
+      values (${fixtures[0]!.id}, ${auth.orgId}, 1, 'core.abandon', ${sql.json({ reason: "waterlogged" } as never)})`;
+
+    await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({
+      status: 409,
+      code: "STAGE_HAS_RESULTS",
+    });
+  });
+
+  it("an 'abandoned' fixture carrying an outcome blocks — a no-result is still a result", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "knockout", name: "KO", config: {}, progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await sql`
+      update fixtures set status = 'abandoned',
+        outcome = ${sql.json({ kind: "no_result", method: "abandoned" } as never)}
+      where id = ${fixtures[0]!.id}`;
+
+    await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({
+      status: 409,
+      code: "STAGE_HAS_RESULTS",
+    });
+  });
+
+  it("an 'abandoned' fixture with no outcome and no evidence does NOT block — that shape is the generator's own void", async () => {
     const { auth } = await seedOrg();
     const { divisionId } = await seedDivision(auth, ["A", "B", "C", "D"]);
     const [stage] = await createStages(auth, divisionId, {
@@ -508,10 +556,8 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
     const { fixtures } = await generateStageFixtures(auth, stage!.id);
     await sql`update fixtures set status = 'abandoned' where id = ${fixtures[0]!.id}`;
 
-    await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({
-      status: 409,
-      code: "STAGE_HAS_RESULTS",
-    });
+    const out = await rebuildStageFixtures(auth, stage!.id);
+    expect(out.removed).toBe(fixtures.length);
   });
 
   it("a fixture carrying score_events blocks even while its status is still 'scheduled'", async () => {

@@ -51,6 +51,17 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  validateStageProgression's save-time check — so it has a real call site
  *  today, independent of any rules-editor UI.
  *
+ *  SEEDING_ENTRANT_WITHDRAWN is the 16th. confirmSeedProposal throws it when
+ *  an entrant about to be FILLED into the bracket has left the field
+ *  (`status in ('withdrawn','disqualified')`) — reachable from the computed
+ *  slate, an `edits[]` override or a `tiePicks[]` order alike, and most
+ *  commonly from a draft computed BEFORE the withdrawal (a withdrawal leaves
+ *  the frozen standings snapshot untouched, so it does not stale the draft).
+ *  It needed a code of its own rather than SEEDING_ENTRANT_FOREIGN's: she
+ *  does still belong to the division — that copy would send an organiser
+ *  looking for a roster mistake that isn't there — and the action that fixes
+ *  it is a recompute, not a correction.
+ *
  *  SEEDING_CARRY_SOURCE_INVALID is the 15th, added by F6 (#625) under the
  *  design of record's own authorisation to "reuse or add beside seeding-error
  *  helpers" (docs/superpowers/specs/2026-09-15-standings-carry-over-f6-design.md,
@@ -60,7 +71,17 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  every kind outside REAL_TABLE_KINDS (usecases/stages.ts), whose comment
  *  carries the per-kind detail. It needed a code of its own rather than
  *  SEEDING_RULES_MISSING's: that copy tells the organiser to add rules or
- *  regenerate fixtures, and neither would fix this. */
+ *  regenerate fixtures, and neither would fix this.
+ *
+ *  SEEDING_NOTHING_TO_FILL is the 17th (review finding F1, 2026-09-21).
+ *  confirmSeedProposal throws it when the proposal has no slot left to fill
+ *  at all — every qualifier has left the field. Before the departed-qualifier
+ *  filter that could not happen; now it can, and confirming an empty draw
+ *  used to SUCCEED with `filled: 0` and burn the terminal `confirmed` status,
+ *  after which nothing in the product could recompute the stage. Its own code
+ *  rather than SEEDING_SOURCE_INCOMPLETE's: the source stage IS complete, and
+ *  the remedy is to wait for the field to settle and recompute, not to go
+ *  finish something. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -74,9 +95,11 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_TIE_UNRESOLVED",
   "SEEDING_SLOT_DOUBLE_ASSIGNED",
   "SEEDING_ENTRANT_FOREIGN",
+  "SEEDING_ENTRANT_WITHDRAWN",
   "SEEDING_SLOT_FOREIGN_FIXTURE",
   "SEEDING_FIXTURES_ALREADY_FILLED",
   "SEEDING_CARRY_SOURCE_INVALID",
+  "SEEDING_NOTHING_TO_FILL",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 

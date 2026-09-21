@@ -28,7 +28,7 @@ describe("seedingErrorMessage — mechanics", () => {
     expect(out).not.toBe("fallback");
   });
 
-  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes, plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS and F6's SEEDING_CARRY_SOURCE_INVALID (15 total)", () => {
+  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes, plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS, F6's SEEDING_CARRY_SOURCE_INVALID the withdrawn-qualifier refusal and the empty-draw refusal (17 total)", () => {
     const expected: SeedingErrorCode[] = [
       "SEEDING_MAP_SLOT_INVALID",
       "SEEDING_MAP_SOURCE_INVALID",
@@ -48,6 +48,18 @@ describe("seedingErrorMessage — mechanics", () => {
       // the design of record's own authorisation to add beside these helpers,
       // not by re-opening the "do NOT add more" scope note in seeding-error.ts.
       "SEEDING_CARRY_SOURCE_INVALID",
+      // confirmSeedProposal's departed-qualifier refusal: an entrant about to
+      // be filled into the bracket has withdrawn or been disqualified. Her
+      // seat is left empty (nobody is promoted into it — owner decision
+      // pending), so the copy tells the organiser to recompute rather than to
+      // go looking for a roster mistake, which is why it is not
+      // SEEDING_ENTRANT_FOREIGN.
+      "SEEDING_ENTRANT_WITHDRAWN",
+      // confirmSeedProposal's empty-draw refusal (review finding F1). Before
+      // the departed-qualifier filter a resolvable progression always had at
+      // least one qualifier; now it can have none, and confirming an empty
+      // draw used to succeed and burn the terminal `confirmed` status.
+      "SEEDING_NOTHING_TO_FILL",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });
