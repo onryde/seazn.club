@@ -3468,8 +3468,19 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
     for (const id of await advanceSettledByes(tx, settled)) touched.add(id);
     if (wrote === 0 && settled.length === 0) return [...touched];
   }
+  // Deliberately not a typed, localised refusal. This is a runaway guard for a
+  // FUTURE bug — reaching it needs a bracket of more than 32 rounds, or a write
+  // in the loop above that stops being idempotent — so there is no organiser
+  // copy to write for a state the product cannot produce. The message says the
+  // score stood because `onDecided` is a POST-COMMIT hook (see scoring.ts's
+  // R10 M3 note): the event has already committed by the time the cascade
+  // runs, so a throw here 500s a score that is in the database. That is the
+  // documented contract for every hook on that path, not something the cascade
+  // introduced, and changing it for this one caller alone would split it.
   throw new Error(
-    `resolveBracketSeats: stage ${stageId} did not reach a fixed point in ${MAX_CASCADE_PASSES} passes`,
+    `resolveBracketSeats: stage ${stageId} did not reach a fixed point in ` +
+      `${MAX_CASCADE_PASSES} passes. Any score that triggered this HAS been saved — ` +
+      `this is a post-commit hook.`,
   );
 }
 
