@@ -30,6 +30,28 @@ export function playerMatchesKey(competitionId: string, generation: string, pers
 }
 
 /**
+ * Retire ONE competition's player-matches documents: a DEL of its generation
+ * token. For a write that changes a name those documents print but is scoped to
+ * a single competition, which is an entrant write (usecases/entrants.ts). An
+ * entrant's name appears in these documents as the OPPONENT in its rivals'
+ * lines, and each document lives under exactly one competition's generation. So
+ * the org-wide `retireOrgPlayerMatches` below would cost an extra read to reach
+ * nothing more.
+ *
+ * One DEL is enough, with no second pass after the response. The document is
+ * rebuilt from Postgres (`readPlayerMatchLines`), never from a tagged cache
+ * entry that a poll could catch before its expiry flushes. Not awaited and
+ * never rejects, like `retireOrgPlayerMatches`: the write it follows has
+ * already committed.
+ */
+export function retireCompetitionPlayerMatches(competitionId: string, context: Record<string, unknown>): void {
+  const key = playerMatchesGenKey(competitionId);
+  void cacheDel(key).catch((err: unknown) => {
+    log.error({ err, ...context, key }, "player matches: a public Redis delete failed (the write stands)");
+  });
+}
+
+/**
  * Retire every player-matches document in an ORG: one DEL of the generation
  * token of each of its competitions. Called AFTER COMMIT by every writer that
  * changes what those documents may show about a person — their consent, their
@@ -58,28 +80,6 @@ export function playerMatchesKey(competitionId: string, generation: string, pers
  * and not awaited — ioredis has no command timeout, so a Redis that stops
  * answering must not hold the writer's response — and logged if it fails.
  */
-/**
- * Retire ONE competition's player-matches documents: a DEL of its generation
- * token. For a write that changes a name those documents print but is scoped to
- * a single competition, which is an entrant write (usecases/entrants.ts). An
- * entrant's name appears in these documents as the OPPONENT in its rivals'
- * lines, and each document lives under exactly one competition's generation. So
- * the org-wide `retireOrgPlayerMatches` below would cost an extra read to reach
- * nothing more.
- *
- * One DEL is enough, with no second pass after the response. The document is
- * rebuilt from Postgres (`readPlayerMatchLines`), never from a tagged cache
- * entry that a poll could catch before its expiry flushes. Not awaited and
- * never rejects, like `retireOrgPlayerMatches`: the write it follows has
- * already committed.
- */
-export function retireCompetitionPlayerMatches(competitionId: string, context: Record<string, unknown>): void {
-  const key = playerMatchesGenKey(competitionId);
-  void cacheDel(key).catch((err: unknown) => {
-    log.error({ err, ...context, key }, "player matches: a public Redis delete failed (the write stands)");
-  });
-}
-
 export async function retireOrgPlayerMatches(orgId: string, context: Record<string, unknown>): Promise<void> {
   let keys: string[];
   try {
