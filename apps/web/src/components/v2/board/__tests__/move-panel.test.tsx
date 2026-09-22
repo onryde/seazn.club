@@ -10,6 +10,8 @@
 // uses for the one other stateful piece of this UX.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactElement } from "react";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
 import es from "@/dictionaries/es/ui.json";
@@ -55,6 +57,7 @@ const baseProps = {
   entrantNames: {},
   feedLabels: {},
   onMove: () => {},
+  onRemove: () => {},
   onClose: () => {},
 };
 
@@ -193,5 +196,56 @@ describe("MovePanel", () => {
       <MovePanel {...baseProps} boardConfig={{ config: baseConfig, orgTz: "UTC" }} />,
     );
     expect(html).toContain('class="w-80 max-w-full"');
+  });
+});
+
+// REMOVE — taking a placed card off the board.
+//
+// Two halves, because either alone is satisfiable by a broken button. The
+// static render proves the label comes from the DICTIONARY (asserted in es, so
+// a hardcoded English string fails), and the island proves the button is
+// WIRED — a rendered control nothing calls is the inert seam this repo ships
+// most often, and `renderToStaticMarkup` cannot press anything.
+//
+// The island path also corrects this file's own header: `MovePanel`'s hooks
+// (useState/useMemo/useMsg) are all supplied by `_hook-harness.tsx`, so the
+// claim that it "cannot be called as a plain function outside React" is no
+// longer true. `useMsg` falls back to the English catalog outside a
+// DictProvider, which is why the island half reads English.
+describe("MovePanel — Remove", () => {
+  const removeButton = (els: ReactElement[]) =>
+    els.find((el) => (el.props as { "data-testid"?: string })["data-testid"] === "move-panel-remove");
+
+  it("renders the Remove control with the org's own copy, not hardcoded English", () => {
+    const html = renderToStaticMarkup(
+      <DictProvider dict={esDict} locale="es">
+        <MovePanel {...baseProps} boardConfig={{ config: baseConfig, orgTz: "UTC" }} />
+      </DictProvider>,
+    );
+    expect(html).toContain('data-testid="move-panel-remove"');
+    expect(html).toContain(esDict["board.remove"] as string);
+    expect(html).not.toContain(">Remove<");
+  });
+
+  it("calls onRemove when pressed, and never onMove", () => {
+    let removed = 0;
+    let moved = 0;
+    const island = renderIsland(MovePanel, {
+      ...baseProps,
+      boardConfig: { config: baseConfig, orgTz: "UTC" },
+      onRemove: () => {
+        removed += 1;
+      },
+      onMove: () => {
+        moved += 1;
+      },
+    });
+    const btn = removeButton(island.tree());
+    expect(btn).toBeDefined();
+    (btn!.props as { onClick: () => void }).onClick();
+    expect(removed).toBe(1);
+    // Wiring Remove to the move handler would publish a slot instead of
+    // clearing one — the opposite of the action's name.
+    expect(moved).toBe(0);
   });
 });
