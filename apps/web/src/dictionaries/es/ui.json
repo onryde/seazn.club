@@ -5264,5 +5264,17 @@
   "slideshow.rung": "Escalón {n}",
   "slideshow.phoneCard.title": "Este panel está pensado para una TV",
   "slideshow.phoneCard.openLive": "Abrir la página en directo",
-  "slideshow.phoneCard.showBoard": "Mostrar el panel de todos modos"
+  "slideshow.phoneCard.showBoard": "Mostrar el panel de todos modos",
+  "board.publishAll.headline.one": "{count} de {total} divisiones no está publicada: el público sigue viendo Hora por confirmar en sus partidos.",
+  "board.publishAll.headline.other": "{count} de {total} divisiones no están publicadas: el público sigue viendo Hora por confirmar en sus partidos.",
+  "board.publishAll.cta": "Publicar todas",
+  "board.publishAll.publishedCount.one": "Se ha publicado {count} división.",
+  "board.publishAll.publishedCount.other": "Se han publicado {count} divisiones.",
+  "board.publishAll.publishedNone": "No se ha publicado nada.",
+  "board.publishAll.remainingTitle": "Sin publicar todavía",
+  "board.publishAll.blocked": "Bloqueada por conflictos",
+  "board.publishAll.needsAck": "Necesita tu confirmación",
+  "board.publishAll.gateDivisions": "Divisiones con avisos: {names}",
+  "board.publishAll.notice.one": "Se ha publicado {count} división: sus partidos ya aparecen en el panel público y en los feeds .ics.",
+  "board.publishAll.notice.other": "Se han publicado {count} divisiones: sus partidos ya aparecen en el panel público y en los feeds .ics."
 }

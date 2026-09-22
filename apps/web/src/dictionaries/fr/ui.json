@@ -5264,5 +5264,17 @@
   "slideshow.rung": "Échelon {n}",
   "slideshow.phoneCard.title": "Ce tableau est conçu pour une TV",
   "slideshow.phoneCard.openLive": "Ouvrir la page en direct",
-  "slideshow.phoneCard.showBoard": "Afficher le tableau quand même"
+  "slideshow.phoneCard.showBoard": "Afficher le tableau quand même",
+  "board.publishAll.headline.one": "{count} division sur {total} n'est pas publiée — le public voit toujours Heure à déterminer pour ses matchs.",
+  "board.publishAll.headline.other": "{count} divisions sur {total} ne sont pas publiées — le public voit toujours Heure à déterminer pour leurs matchs.",
+  "board.publishAll.cta": "Tout publier",
+  "board.publishAll.publishedCount.one": "{count} division publiée.",
+  "board.publishAll.publishedCount.other": "{count} divisions publiées.",
+  "board.publishAll.publishedNone": "Rien n'a été publié.",
+  "board.publishAll.remainingTitle": "Toujours pas publiées",
+  "board.publishAll.blocked": "Bloquée par des conflits",
+  "board.publishAll.needsAck": "Nécessite votre confirmation",
+  "board.publishAll.gateDivisions": "Divisions concernées par des avertissements — {names}",
+  "board.publishAll.notice.one": "{count} division publiée — ses matchs figurent désormais sur le tableau public et dans les flux .ics.",
+  "board.publishAll.notice.other": "{count} divisions publiées — leurs matchs figurent désormais sur le tableau public et dans les flux .ics."
 }

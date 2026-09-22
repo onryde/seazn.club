@@ -56,6 +56,11 @@ import {
 } from "./board/types";
 import { matchRef, type SlotLabelLookup } from "@/lib/slot-label";
 import { useBoardActions, type AutoScheduleMode, type GateRefusal } from "./board/use-board-actions";
+import {
+  UnreleasedBanner,
+  partitionPublishOutcome,
+  shouldShowUnreleasedBanner,
+} from "./board/unreleased-banner";
 
 export type { BoardConfig, BoardConflict, BoardDivision, BoardFixture, BoardStage } from "./board/types";
 
@@ -1080,8 +1085,19 @@ export function ScheduleBoard({
   // warnings are a question, blocking conflicts are a report. The refusal is
   // held here — path and copy included — so "Publish anyway" re-sends the SAME
   // action rather than assuming it was publish.
+  //
+  // TWO SCOPES, ONE DIALOG. `division` is the original: one division, one
+  // endpoint, re-sent verbatim on "Publish anyway". `competition` is the
+  // "Publish all" banner's — a single gate covering every division the
+  // competition-wide publish could not release without an acknowledgement, so
+  // it carries their NAMES instead of a path (the endpoint is the same one for
+  // the whole set). Discriminated rather than overloading `path` with a
+  // sentinel: the confirm handler has to branch on which call to re-send, and a
+  // magic string would make that branch a string comparison nobody can typecheck.
   const [gate, setGate] = useState<
-    (GateRefusal & { action: GateAction; path: string; done: string }) | null
+    | (GateRefusal & { scope: "division"; action: GateAction; path: string; done: string })
+    | (GateRefusal & { scope: "competition"; action: "publish"; divisionNames: string[] })
+    | null
   >(null);
   const runGated = useCallback(
     async (action: GateAction, path: string, done: string, acknowledge = false) => {
@@ -1089,9 +1105,47 @@ export function ScheduleBoard({
       // Re-opened rather than closed on a second refusal: an organiser who
       // acknowledges warnings while another organiser drags a card into a court
       // clash must be told THAT, not silently dropped back onto the board.
-      setGate(refused ? { ...refused, action, path, done } : null);
+      setGate(refused ? { ...refused, scope: "division", action, path, done } : null);
     },
     [actions],
+  );
+
+  // ------------------------------------------- competition-wide publish (all)
+  // The answer itself lives in `useBoardActions` beside `notice`/`error`/
+  // `lastRun` — it is the same kind of transient receipt, and every other
+  // write on this board clears it, so a division cannot go on being reported
+  // as blocked after the organiser has fixed the clash on the grid.
+  const runPublishAll = useCallback(
+    async (acknowledge = false) => {
+      const competitionId = competition?.id;
+      // `shouldShowUnreleasedBanner` already refuses to render the control
+      // without one; this is the type narrowing, not a second policy.
+      if (!competitionId) return;
+      const out = await actions.publishAll(competitionId, acknowledge);
+      if (!out) return;
+      const { needsAck } = partitionPublishOutcome(out.results);
+      // ONE gate for the whole set — never one dialog per division, which on a
+      // nine-division board would be nine sheets to dismiss in a row.
+      //
+      // Not re-opened after an acknowledgement, unlike the single-division path
+      // above. There the second refusal can be a DIFFERENT, blocking one that
+      // the organiser has not seen; here every outcome — including a division
+      // that somehow still wants acknowledging — is already written into the
+      // banner's own report, so re-opening would be the identical dialog with
+      // no new information in it, once per press, for ever.
+      setGate(
+        !acknowledge && needsAck.length > 0
+          ? {
+              scope: "competition",
+              kind: "warnings",
+              action: "publish",
+              conflicts: needsAck.flatMap((r) => r.refusal?.conflicts ?? []),
+              divisionNames: needsAck.map((r) => r.name),
+            }
+          : null,
+      );
+    },
+    [actions, competition?.id],
   );
 
   const [highlightId, setHighlightId] = useState<string | null>(null);
@@ -1623,6 +1677,32 @@ export function ScheduleBoard({
         />
       )}
 
+      {/* "Some of this competition is still invisible to the public" (Option A,
+          owner-approved). Above the board, below every piece of chrome that
+          aims the actions — the competition board had NO publish path at all
+          before this, and no symptom of one being needed. */}
+      {shouldShowUnreleasedBanner({
+        single,
+        canEdit,
+        competitionId: competition?.id,
+        divisions,
+        // `actions.board`, never the legend-filtered `board` below it: an
+        // organiser filtering a division out of view would otherwise make it
+        // look empty and take the button away.
+        fixtures: actions.board,
+      }) && (
+        <UnreleasedBanner
+          divisions={divisions}
+          outcome={actions.publishAllOutcome}
+          busy={actions.busy}
+          onPublishAll={() => void runPublishAll()}
+          board={actions.board}
+          entrantNames={entrantNames}
+          feedLabels={feedLabels}
+          fixtureTitles={fixtureTitles}
+        />
+      )}
+
       {/* Repair nudge (Task 16) — amber banner above the grid; its CTA opens the
           console in repair mode pre-scoped to the disruptions. */}
       {showRepairBanner && single && (
@@ -1764,13 +1844,23 @@ export function ScheduleBoard({
           honest statement that there is none. */}
       <ScheduleGateDialog
         gate={gate}
-        board={board}
+        // The competition-wide gate's conflicts can name fixtures in divisions
+        // the legend filter has hidden; a map built from the FILTERED board
+        // would render them as "removed fixture", which is a different and
+        // alarming thing to tell an organiser. The single-division path keeps
+        // the filtered board it has always had.
+        board={gate?.scope === "competition" ? actions.board : board}
         entrantNames={entrantNames}
         feedLabels={feedLabels}
         fixtureTitles={fixtureTitles}
+        divisionNames={gate?.scope === "competition" ? gate.divisionNames : undefined}
         busy={actions.busy}
         onConfirm={() => {
           if (!gate) return;
+          if (gate.scope === "competition") {
+            void runPublishAll(true);
+            return;
+          }
           void runGated(gate.action, gate.path, gate.done, true);
         }}
         onDismiss={() => setGate(null)}

@@ -5264,5 +5264,17 @@
   "slideshow.rung": "Trede {n}",
   "slideshow.phoneCard.title": "Dit bord is gemaakt voor een tv",
   "slideshow.phoneCard.openLive": "Open de livepagina",
-  "slideshow.phoneCard.showBoard": "Toch het bord tonen"
+  "slideshow.phoneCard.showBoard": "Toch het bord tonen",
+  "board.publishAll.headline.one": "{count} van de {total} divisies is niet gepubliceerd — het publiek ziet nog steeds Tijd NNB bij die wedstrijden.",
+  "board.publishAll.headline.other": "{count} van de {total} divisies zijn niet gepubliceerd — het publiek ziet nog steeds Tijd NNB bij hun wedstrijden.",
+  "board.publishAll.cta": "Alles publiceren",
+  "board.publishAll.publishedCount.one": "{count} divisie gepubliceerd.",
+  "board.publishAll.publishedCount.other": "{count} divisies gepubliceerd.",
+  "board.publishAll.publishedNone": "Er is niets gepubliceerd.",
+  "board.publishAll.remainingTitle": "Nog niet gepubliceerd",
+  "board.publishAll.blocked": "Geblokkeerd door conflicten",
+  "board.publishAll.needsAck": "Vereist je bevestiging",
+  "board.publishAll.gateDivisions": "Divisies met waarschuwingen: {names}",
+  "board.publishAll.notice.one": "{count} divisie gepubliceerd — de wedstrijden staan nu op het publieke dashboard en in de .ics-feeds.",
+  "board.publishAll.notice.other": "{count} divisies gepubliceerd — hun wedstrijden staan nu op het publieke dashboard en in de .ics-feeds."
 }

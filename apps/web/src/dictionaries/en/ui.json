@@ -5264,5 +5264,17 @@
   "slideshow.rung": "Rung {n}",
   "slideshow.phoneCard.title": "This board is made for a TV",
   "slideshow.phoneCard.openLive": "Open the live page",
-  "slideshow.phoneCard.showBoard": "Show the board anyway"
+  "slideshow.phoneCard.showBoard": "Show the board anyway",
+  "board.publishAll.headline.one": "{count} of {total} divisions isn't released — the public still sees Time TBD on its matches.",
+  "board.publishAll.headline.other": "{count} of {total} divisions aren't released — the public still sees Time TBD on their matches.",
+  "board.publishAll.cta": "Publish all",
+  "board.publishAll.publishedCount.one": "Published {count} division.",
+  "board.publishAll.publishedCount.other": "Published {count} divisions.",
+  "board.publishAll.publishedNone": "Nothing was published.",
+  "board.publishAll.remainingTitle": "Still not released",
+  "board.publishAll.blocked": "Blocked by conflicts",
+  "board.publishAll.needsAck": "Needs your acknowledgement",
+  "board.publishAll.gateDivisions": "Divisions with warnings: {names}",
+  "board.publishAll.notice.one": "Published {count} division — its matches are now on the public dashboard and .ics feeds.",
+  "board.publishAll.notice.other": "Published {count} divisions — their matches are now on the public dashboard and .ics feeds."
 }
