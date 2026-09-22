@@ -2002,6 +2002,7 @@
   "bracket.tbd": "TBD",
   "stage.err.swissRoundsRequired": "A Swiss stage needs a number of rounds before it can be saved. Set Rounds to 1 or more and apply again.",
   "stage.swissLegend.line": "{rounds} · {matches} · {fixtures}",
+  "stage.swissLegend.lineComplete": "{rounds} · {fixtures}",
   "stage.swissLegend.rounds.one": "{count} round",
   "stage.swissLegend.rounds.other": "{count} rounds",
   "stage.swissLegend.matches.one": "{count} match per round",

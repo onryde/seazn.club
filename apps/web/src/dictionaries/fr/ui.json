@@ -2002,6 +2002,7 @@
   "bracket.tbd": "À définir",
   "stage.err.swissRoundsRequired": "Une phase suisse a besoin d'un nombre de tours avant de pouvoir être enregistrée. Mettez Tours à 1 ou plus, puis appliquez à nouveau.",
   "stage.swissLegend.line": "{rounds} · {matches} · {fixtures}",
+  "stage.swissLegend.lineComplete": "{rounds} · {fixtures}",
   "stage.swissLegend.rounds.one": "{count} tour",
   "stage.swissLegend.rounds.other": "{count} tours",
   "stage.swissLegend.matches.one": "{count} match par tour",

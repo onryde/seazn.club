@@ -913,8 +913,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // the whole point is that the rows can be stale — minted for an older
         // field — and the legend has to say what the CURRENT field needs so
         // the disagreement is visible. See lib/swiss-legend.ts's header.
+        //
+        // `stage.status` is the STAGE's own (`pending | active | complete`) —
+        // the same value the badge two blocks down renders. On `complete` the
+        // legend withholds the per-round clause, because a post-event
+        // disqualification shrinks the field and would otherwise make a stage
+        // that played perfectly correctly read as mis-sized.
         const swissLegend = swissStageLegend({
           kind: stage.kind,
+          status: stage.status,
           config: stage.config,
           activeEntrantIds,
           fixtureCount: stageFixtures.length,
