@@ -596,17 +596,18 @@ Then `cd /Users/ashokhein/github/seazn.club-wt/swiss-round-one-pairing && pnpm i
 ### Task 5: E2E, smoke, screenshots
 
 **Files:**
-- Create: `apps/web/e2e/swiss-round-one-pairing.spec.ts`
+- Create: `apps/web/e2e/walkthrough/swiss-round-one-pairing.spec.ts`
 - Modify: `scripts/smoke.ts` (rank_adjacent block ~L8199-8281)
 - Modify if red: `apps/web/e2e/mobile.spec.ts` only by opening the new disclosure where a test asserts the rail (AGENTS rule 22 — never weaken)
 
+- [ ] **Step 0 (owner ruling 2026-09-22: it is a WALKTHROUGH).** The spec lives in `apps/web/e2e/walkthrough/` and runs in the `--project=walkthrough` Playwright project. Rule of that folder: setup may use the API to REACH a state; every event under test is TAPPED in the desk (Pair next, ▾, Neighbours, Unpair, the round-2 menu). Run to the TERMINAL state: round 1 paired → played → round 2 paired by the cascade → round-2 menu read-only. Register the file in `WALKTHROUGH_SPECS` in `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts`, in the Swiss group beside `swiss-pre-start-field-change.spec.ts` (grouped by programme, NOT alphabetical) — omitting it reds two CI jobs. Model on `e2e/walkthrough/swiss-pre-start-field-change.spec.ts`. Verification is scoped (owner rule): run this spec + `e2e-ci-wiring.test.ts` only; CI is the full gate.
 - [ ] **Step 1: E2E spec.** Copy the division/stage setup of `apps/web/e2e/swiss-shell.spec.ts` (read L1-100: it creates a Swiss stage, starts the division and drives `stage-generate`), with 8 seeded entrants and `config.pairing = "rank_adjacent"`. Three tests:
   1. Default: click `stage-generate` → read round-1 pairs back through `GET /api/v1/divisions/{id}/fixtures` and map to seeds → equals `roundOnePairs(8, "fold")` (import it from `../src/lib/swiss-pairing`).
   2. Unpair (`stage-unpair`), open `stage-pairing-toggle`, click `stage-pairing-rank_adjacent`, click `stage-generate` → round 1 equals `roundOnePairs(8, "rank_adjacent")`.
   3. Score round 1 through the API as `swiss-shell.spec.ts` does, open the toggle for round 2 → `stage-pairing-readonly` visible with the laterAdjacent text, `stage-pairing-hint` visible, and no `[role=radio][aria-checked=false]` inside `stage-pairing-menu`.
   Hit-test the toggle with `elementFromPoint` at its centre (AGENTS rule 2), not `boundingBox`.
 
-- [ ] **Step 2: Run the whole file, three times** (flaky-shaped gate): `cd .../apps/web && PLAYWRIGHT_BASE=http://localhost:<port> pnpm exec playwright test e2e/swiss-round-one-pairing.spec.ts` against a prod build per `seazn-local-env` (BASE must be `localhost`, never 127.0.0.1). Then run the FULL `e2e/mobile.spec.ts` (all width projects, no `-g`) and `e2e/swiss-shell.spec.ts`; a serial-file red is a floor, re-run after each fix.
+- [ ] **Step 2: Run the whole file, three times** (flaky-shaped gate): `cd .../apps/web && PLAYWRIGHT_BASE=http://localhost:<port> pnpm exec playwright test e2e/walkthrough/swiss-round-one-pairing.spec.ts` against a prod build per `seazn-local-env` (BASE must be `localhost`, never 127.0.0.1). Then run the FULL `e2e/mobile.spec.ts` (all width projects, no `-g`) and `e2e/swiss-shell.spec.ts`; a serial-file red is a floor, re-run after each fix.
 
 - [ ] **Step 3: Smoke.** In the rank_adjacent smoke block, after "Pair next seats round 1", assert the seated round-1 pairs equal the fold pairs for that field (same `roundOnePairs` derivation), not only that boards are seated. Run the smoke target locally per the skill.
 
