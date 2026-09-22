@@ -721,6 +721,13 @@ function mergeEnvelopesIntoLedger(
  * Reads the LAST element rather than scanning for a max: the sort order is
  * that function's contract, and duplicating a max() here would let the two
  * drift apart silently.
+ *
+ * That contract is only worth leaning on because EVERY writer into
+ * `ledgerEvents` now reduces to `mergeEnvelopesIntoLedger` — the poll/realtime
+ * path, the `initialEvents`-adoption effect, `runDrain`'s ack append, AND (fix
+ * round 1) the mount-time `useState` seed, which used to be a raw spread that
+ * preserved the caller's order. If a future writer is added that does not go
+ * through it, this function is the thing that breaks, quietly.
  */
 function ledgerTipSeq(events: readonly EventEnvelope[]): number {
   return events.length === 0 ? 0 : (events[events.length - 1]?.seq ?? 0);
@@ -990,7 +997,22 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
 
   const store = useMemo(() => indexedDbQueueStore(dbName), [dbName]);
 
-  const [ledgerEvents, setLedgerEvents] = useState<EventEnvelope[]>(() => [...(params.initialEvents ?? [])]);
+  // W3 task 1 fix round 1 — seeded THROUGH `mergeEnvelopesIntoLedger`, not by
+  // a raw spread. This was the one writer into `ledgerEvents` that bypassed
+  // that primitive, and a raw spread preserves whatever order the caller
+  // handed down. `.length` did not care; `ledgerTipSeq` does — it reads the
+  // LAST element on the strength of that function's ascending-sort contract,
+  // so a seed that never touched it left the tip resting on an invariant
+  // nothing enforced. Both real loaders order by seq
+  // (`server/usecases/fixtures.ts` `listEvents`), so this is not live today —
+  // but `v3/pad-host.tsx` takes `initialEvents` from any caller, and an
+  // unsorted batch would have made the tip silently wrong rather than loudly.
+  // Seeding through the primitive closes it at the source, which is better
+  // than a max() fallback inside `ledgerTipSeq`: a second max here is exactly
+  // the duplicated-sort-logic drift that helper's own doc warns against.
+  const [ledgerEvents, setLedgerEvents] = useState<EventEnvelope[]>(() =>
+    mergeEnvelopesIntoLedger([], params.initialEvents ?? []),
+  );
   // Mirrors `ledgerEvents` for synchronous reads inside `runDrain`/`submit`
   // (stable useCallbacks that must see the LATEST ledger without churning
   // their own identity on every ack — see the file header for why a plain
@@ -1364,8 +1386,10 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           const acked = pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(next, ledgerEventsRef.current), confirmedSeq);
           // S12/#421 pass F — was a raw spread
           // (`[...ledgerEventsRef.current, acked]`), never routed through
-          // mergeEnvelopesIntoLedger like the other two writers into
-          // ledgerEvents. ledgerEventsRef.current can ALREADY hold an entry
+          // mergeEnvelopesIntoLedger like the other writers into
+          // ledgerEvents (the poll path, the initialEvents effect, and — since
+          // W3 task 1 fix round 1 — the mount seed too).
+          // ledgerEventsRef.current can ALREADY hold an entry
           // at acked.seq if a poll tick (onStreamEvents) or an initialEvents
           // re-seed observed the server's committed row for this SAME event
           // before this append's own HTTP response made it back -
