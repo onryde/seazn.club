@@ -960,7 +960,7 @@ type SwissExistingFixture = {
   outcome: unknown;
 };
 
-type SwissGenResult = { gen: GenFixture[]; seatedCount: number };
+type SwissGenResult = { gen: GenFixture[]; seatedCount: number; reshaped: SwissReshape };
 
 // Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
 // every round the organiser declared in `config.rounds`; Pair next (a later
@@ -990,12 +990,13 @@ async function swissGen(
         away: null,
       })),
       seatedCount: 0,
+      reshaped: NO_SWISS_RESHAPE,
     };
   }
 
   const target = nextUnseatedSwissRound(existing);
   if (target === null) {
-    return { gen: [], seatedCount: 0 };
+    return { gen: [], seatedCount: 0, reshaped: NO_SWISS_RESHAPE };
   }
 
   if (target > 1) {
@@ -1123,7 +1124,7 @@ async function swissGen(
   const laterRounds = eager
     ? [...new Set(existing.map((f) => f.round_no))].filter((r) => r > target).sort((a, b) => a - b)
     : [];
-  const roundShells = await reconcileSwissRoundShells(
+  const targetReconcile = await reconcileSwissRoundShells(
     tx,
     stageId,
     divisionId,
@@ -1132,8 +1133,13 @@ async function swissGen(
     entrants.length,
     "refuse",
   );
+  // Summed across every round this pass touched, so the organiser is told what
+  // the whole press did rather than what its last round did. A round that
+  // early-returned or was skipped contributes zeroes, which is what keeps the
+  // ordinary Pair silent.
+  let reshaped = targetReconcile.delta;
   for (const roundNo of laterRounds) {
-    await reconcileSwissRoundShells(
+    const later = await reconcileSwissRoundShells(
       tx,
       stageId,
       divisionId,
@@ -1142,7 +1148,9 @@ async function swissGen(
       entrants.length,
       "skip",
     );
+    reshaped = addSwissReshape(reshaped, later.delta);
   }
+  const roundShells = targetReconcile.shells;
   const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
   const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
 
@@ -1180,7 +1188,7 @@ async function swissGen(
     seatedCount++;
   }
 
-  return { gen: [], seatedCount };
+  return { gen: [], seatedCount, reshaped };
 }
 
 /**
@@ -1234,6 +1242,55 @@ async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> 
  * — every guard is read before the first write.
  */
 type SwissReconcileBlockedPolicy = "refuse" | "skip";
+
+/**
+ * What a reconcile pass actually MOVED, so pressing Generate can say so.
+ *
+ * Byes are counted apart from matches because they are not the same thing to
+ * an organiser: a match row needs a court and a slot, a bye row needs neither.
+ * Reporting "4 matches added" when one of them is a bye would be a number they
+ * cannot reconcile against the run sheet.
+ *
+ * `matches_removed` is the one that earns this whole seam. A removed board takes
+ * its `scheduled_at` and `court_id` with it, and before this the organiser was
+ * told only how many fixtures were seated — never that three of the slots they
+ * had laid out were gone.
+ */
+export interface SwissReshape {
+  matches_added: number;
+  matches_removed: number;
+  byes_added: number;
+  byes_removed: number;
+}
+
+const NO_SWISS_RESHAPE: SwissReshape = {
+  matches_added: 0,
+  matches_removed: 0,
+  byes_added: 0,
+  byes_removed: 0,
+};
+
+/** True when a reshape moved nothing — the common Pair, which must stay silent. */
+export function isEmptySwissReshape(r: SwissReshape): boolean {
+  return (
+    r.matches_added === 0 && r.matches_removed === 0 && r.byes_added === 0 && r.byes_removed === 0
+  );
+}
+
+function addSwissReshape(a: SwissReshape, b: SwissReshape): SwissReshape {
+  return {
+    matches_added: a.matches_added + b.matches_added,
+    matches_removed: a.matches_removed + b.matches_removed,
+    byes_added: a.byes_added + b.byes_added,
+    byes_removed: a.byes_removed + b.byes_removed,
+  };
+}
+
+/** One round's reconcile: the round as it now stands, and what moved. */
+interface SwissRoundReconcile {
+  shells: SwissExistingFixture[];
+  delta: SwissReshape;
+}
 
 /**
  * Bring round `target`'s shells into line with the CURRENT active field, and
@@ -1292,7 +1349,7 @@ async function reconcileSwissRoundShells(
   existing: readonly SwissExistingFixture[],
   fieldSize: number,
   onBlocked: SwissReconcileBlockedPolicy,
-): Promise<SwissExistingFixture[]> {
+): Promise<SwissRoundReconcile> {
   const bySeq = (a: SwissExistingFixture, b: SwissExistingFixture) =>
     a.seq_in_round - b.seq_in_round;
   const isByeShell = (f: SwissExistingFixture) => f.ext_key?.endsWith("-bye") === true;
@@ -1304,7 +1361,9 @@ async function reconcileSwissRoundShells(
   const { boards, bye } = swissBoardsForField(fieldSize);
   // The overwhelmingly common case: the field has not moved, so nothing is
   // written and every row keeps its id, its schedule and its court.
-  if (boardRows.length === boards && (byeRow !== undefined) === bye) return round;
+  if (boardRows.length === boards && (byeRow !== undefined) === bye) {
+    return { shells: round, delta: NO_SWISS_RESHAPE };
+  }
 
   // All three guards below are reached only once the round NEEDS reshaping —
   // the early return above is what keeps a correct-shaped round Pairing even
@@ -1312,14 +1371,14 @@ async function reconcileSwissRoundShells(
   // nothing has been written yet at any of them, so a skip leaves the round
   // exactly as it was found.
   if (round.some((f) => isSwissBoardSeated(f))) {
-    if (onBlocked === "skip") return round;
+    if (onBlocked === "skip") return { shells: round, delta: NO_SWISS_RESHAPE };
     throw new EngineError("STAGE_NOT_READY", "swiss round is already partly seated — reconcile refused", {
       stageId,
       round: target,
     });
   }
   if (swissRoundHasPlayedResult(round, target)) {
-    if (onBlocked === "skip") return round;
+    if (onBlocked === "skip") return { shells: round, delta: NO_SWISS_RESHAPE };
     throw new EngineError("STAGE_NOT_READY", "swiss round has played results — reconcile refused", {
       stageId,
       round: target,
@@ -1332,7 +1391,7 @@ async function reconcileSwissRoundShells(
       where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
       limit 1`;
     if (blocked) {
-      if (onBlocked === "skip") return round;
+      if (onBlocked === "skip") return { shells: round, delta: NO_SWISS_RESHAPE };
       throw new EngineError("STAGE_NOT_READY", "swiss round has recorded match data — reconcile refused", {
         stageId,
         round: target,
@@ -1393,7 +1452,15 @@ async function reconcileSwissRoundShells(
       outcome: null,
     });
   }
-  return kept.sort(bySeq);
+  return {
+    shells: kept.sort(bySeq),
+    delta: {
+      matches_added: minted.filter((r) => !r.ext_key.endsWith("-bye")).length,
+      matches_removed: doomed.filter((f) => !isByeShell(f)).length,
+      byes_added: minted.filter((r) => r.ext_key.endsWith("-bye")).length,
+      byes_removed: doomed.filter(isByeShell).length,
+    },
+  };
 }
 
 // Distribute seed-ordered entrants into `count` pools by seeded snake
@@ -1741,6 +1808,10 @@ export interface GenerateOutcome {
   created: number;
   existing: number;
   fixtures: FixtureRow[];
+  /** Swiss only, and ABSENT unless the shell set actually moved — a Generate
+   *  that changed no round's shape must stay silent rather than announce four
+   *  zeroes. See `SwissReshape`. */
+  reshaped?: SwissReshape;
 }
 
 /**
@@ -2088,11 +2159,13 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       from fixtures where stage_id = ${stageId}`;
 
     let swissSeatedCount = 0;
+    let swissReshaped: SwissReshape | undefined;
     let gen: GenFixture[];
     if (stage.kind === "swiss") {
       const swiss = await swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing);
       gen = swiss.gen;
       swissSeatedCount = swiss.seatedCount;
+      if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
     } else if (stage.kind === "americano") {
       gen = await americanoGen(tx, stage.division_id, stageId, stage.config, entrants);
     } else if (stage.kind === "ladder") {
@@ -2436,7 +2509,12 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     return {
-      outcome: { created, existing: gen.length - newRows.length, fixtures },
+      outcome: {
+        created,
+        existing: gen.length - newRows.length,
+        fixtures,
+        ...(swissReshaped ? { reshaped: swissReshaped } : {}),
+      },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
       swissSeatedCount,

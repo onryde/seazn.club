@@ -21546,6 +21546,38 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "reshaped": {
+                          "type": "object",
+                          "properties": {
+                            "matches_added": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "matches_removed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "byes_added": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "byes_removed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "matches_added",
+                            "matches_removed",
+                            "byes_added",
+                            "byes_removed"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -21599,7 +21631,13 @@
                         "schedule_locked": true,
                         "created_at": "example"
                       }
-                    ]
+                    ],
+                    "reshaped": {
+                      "matches_added": -9007199254740991,
+                      "matches_removed": -9007199254740991,
+                      "byes_added": -9007199254740991,
+                      "byes_removed": -9007199254740991
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -22378,6 +22416,38 @@
                             "additionalProperties": false
                           }
                         },
+                        "reshaped": {
+                          "type": "object",
+                          "properties": {
+                            "matches_added": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "matches_removed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "byes_added": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "byes_removed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "matches_added",
+                            "matches_removed",
+                            "byes_added",
+                            "byes_removed"
+                          ],
+                          "additionalProperties": false
+                        },
                         "removed": {
                           "type": "integer",
                           "minimum": -9007199254740991,
@@ -22437,6 +22507,12 @@
                         "created_at": "example"
                       }
                     ],
+                    "reshaped": {
+                      "matches_added": -9007199254740991,
+                      "matches_removed": -9007199254740991,
+                      "byes_added": -9007199254740991,
+                      "byes_removed": -9007199254740991
+                    },
                     "removed": -9007199254740991
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
