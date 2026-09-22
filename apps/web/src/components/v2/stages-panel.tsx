@@ -29,6 +29,7 @@ import {
   type DivisionPhase,
 } from "@/lib/division-phase";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey } from "@seazn/engine/competition";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
@@ -145,6 +146,17 @@ interface FixtureRow {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** The bracket FEED edges (V214__fixtures.sql): which fixture this one's winner/loser
+   *  advances into, and which seat there (1 = home, 2 = away). Mirrors
+   *  `FixtureRow.winner_to_fixture` etc. on the shared server type;
+   *  `listDivisionFixtures` selects them, and `feedLabels()` turns them into
+   *  the "Winner of R1·1" the run sheet renders for a seat whose stored
+   *  `*_slot_label` is null. Optional for the same reason `ext_key` and the
+   *  four below it are: pre-existing hand-built test props predate them. */
+  winner_to_fixture?: string | null;
+  winner_to_slot?: number | null;
+  loser_to_fixture?: string | null;
+  loser_to_slot?: number | null;
 }
 
 /** Adapts this panel's hand-declared `FixtureRow` to `RunSheetFixture`
@@ -162,6 +174,26 @@ function toRunSheetFixture(f: FixtureRow): RunSheetFixture {
     away_slot_label: f.away_slot_label ?? null,
     venue_name: f.venue_name ?? null,
     officials: f.officials ?? [],
+  };
+}
+
+/** Adapts this panel's rows to `feedLabels()`'s input — the same normalising
+ *  job `toRunSheetFixture` above does, for the same reason: the four feed
+ *  columns are OPTIONAL here (hand-built test props predate them) and
+ *  REQUIRED on `FeedRow` (lib/schedule-board.ts), which the schedule pages
+ *  feed straight from their own `tx<FeedRow[]>` read. Normalising here rather
+ *  than widening `FeedRow` keeps the board's contract untouched — a row that
+ *  genuinely has no edge and a row from a caller that never selected the
+ *  columns are the same thing to the builder: not a feeder. */
+function toFeedRow(f: FixtureRow): FeedRow {
+  return {
+    id: f.id,
+    round_no: f.round_no,
+    seq_in_round: f.seq_in_round,
+    winner_to_fixture: f.winner_to_fixture ?? null,
+    winner_to_slot: f.winner_to_slot ?? null,
+    loser_to_fixture: f.loser_to_fixture ?? null,
+    loser_to_slot: f.loser_to_slot ?? null,
   };
 }
 
@@ -396,6 +428,21 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // "is this name ambiguous" implementation. Feeds both the "now playing"
   // strip below and every FixtureLine's badge/editor.
   const courtNamesById = useMemo(() => resolveCourtNames(venues), [venues]);
+  // The draw list's feeder labels, keyed by fixture id — "Winner of R1·3" for
+  // a seat no result has filled yet, instead of "TBD".
+  //
+  // Built from the WHOLE division fixture list, here, because this is the one
+  // place that holds it: `<RunSheet>` only ever sees `blocks`, which
+  // `buildRunSheet` has already grouped and filtered (R7(c) drops an untimed
+  // plain-league bye outright), so a seat's label would otherwise depend on
+  // whether its feeder happened to survive grouping.
+  //
+  // `feedLabels` is the schedule board's own builder, unchanged and
+  // un-forked — the two organiser surfaces that render these same fixtures
+  // now resolve an empty seat through ONE function and ONE pair of dictionary
+  // keys, which is exactly the drift this closes. It needs no query of its
+  // own: the four feed columns ride `listDivisionFixtures`'s existing select.
+  const runSheetFeedLabels = useMemo(() => feedLabels(fixtures.map(toFeedRow)), [fixtures]);
   // #622 tag suggestions for the per-stage editors below: every tag any court
   // in the loaded venues carries, ranked by use (the same rule
   // division-settings.tsx and venues-panel.tsx apply). Read off the `venues`
@@ -1238,6 +1285,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           setUndoable(true);
         }}
         stream={stream}
+        /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"),
+           not "TBD" — the same `feedLabels()` builder and the same
+           `slot.winner_match`/`slot.loser_match` vocabulary the schedule board
+           already renders these very fixtures with. Derived from the WHOLE
+           division fixture list (never `blocks`, which is grouped and
+           filtered), and never a second query: the four feed columns ride
+           `listDivisionFixtures`'s existing select. */
+        feedLabels={runSheetFeedLabels}
       />
 
       {canEdit && (

@@ -102,6 +102,31 @@ describe.skipIf(!HAS_DB)("GET /divisions/{id}/fixtures (G3)", () => {
     }
   });
 
+  // `listDivisionFixtures` now also selects the four bracket FEED columns, so
+  // the division page's draw list can name an unfilled seat by its feeder
+  // ("Winner of R1·3") instead of "TBD". They are internal bracket wiring and
+  // are NOT declared on `S.Fixture`, and nothing applies a response schema at
+  // runtime — so without this, widening the internal row would have silently
+  // widened the PUBLISHED payload, which is the exact "spec vs real payload"
+  // gap `fixture_no` and `lane`'s own schema comments were written about.
+  it("does not leak the internal bracket feed columns onto the v1 payload", async () => {
+    const { auth, divisionId } = await seedDivisionWithFixtures();
+    authState.userId = auth.userId!;
+
+    const { status, body } = await read(await GET(req(), { params: Promise.resolve({ id: divisionId }) }));
+    expect(status).toBe(200);
+    const rows = body.data as Record<string, unknown>[];
+    expect(rows.length).toBeGreaterThan(0); // the positive pair: rows really came back
+    for (const row of rows) {
+      for (const col of ["winner_to_fixture", "winner_to_slot", "loser_to_fixture", "loser_to_slot"]) {
+        expect(row, `${col} reached the published v1 payload`).not.toHaveProperty(col);
+      }
+      // …and the strip did not take a declared field with it.
+      expect(row).toHaveProperty("home_slot_label");
+      expect(row).toHaveProperty("away_slot_label");
+    }
+  });
+
   it("404s a division that doesn't exist", async () => {
     const { auth } = await seedOrg();
     authState.userId = auth.userId!;

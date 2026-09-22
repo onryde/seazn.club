@@ -111,6 +111,12 @@ const REST = [
   // reddened in CI the moment they landed — note it reds only HERE, in the
   // repo-root scripts suite, which a green `cd apps/web && vitest` cannot see.
   "src/server/public-site/__tests__/public-entrants-departed.test.ts",
+  // Draw feeder labels: the namer's feed map is scoped per stage, so a
+  // cross-stage edge cannot name a public seat after its own stage's
+  // coordinates. Begins with "p", so it belongs here rather than in
+  // C_GLOBBED. Seventh wave running — and it reddened this gate on the
+  // wave's own full run, which is the list doing what its comments promise.
+  "src/server/public-site/__tests__/public-round-namer-cross-stage-feed.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

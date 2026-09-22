@@ -345,6 +345,29 @@ export interface PublicFixture {
    *  `public_fixtures_v`: `getPublicDivision` selects it as a subquery on the
    *  view row's own id. Optional, same convention as the four fields above. */
   ext_key?: string | null;
+  /** The bracket FEED EDGES — which fixture this one's winner/loser walks into,
+   *  and into which seat (`fixtures.winner_to_*` / `loser_to_*`, V214).
+   *
+   *  WHY A PUBLIC SURFACE NEEDS THEM. `publicSlotLabel` turns a STORED
+   *  `slot.winner_match` into "Winner of Semi-finals, match 1". A
+   *  `timing: "setup"` progression bracket deliberately stores NO label on a
+   *  sibling-fed seat (`generateProgressionSetupFixtures` —
+   *  `stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒ sibling-fed"), so the
+   *  feed edges are the only record of who feeds it. Without them a spectator
+   *  read "TBD" on the very match an organiser was shown as
+   *  "Winner of R1·1" — the same defect the desk side fixed, one surface over.
+   *
+   *  NOT columns of `public_fixtures_v`: read as a join on the view row's own
+   *  id, exactly as `ext_key` above is, so the VIEW still decides which rows
+   *  exist and no visibility rule is bypassed. Optional for the same reason
+   *  the four `lane`/`is_final` fields are — hand-built `PublicFixture`
+   *  literals in older tests predate them — and, as that comment warns, every
+   *  explicit SELECT that returns `PublicFixture[]` must list them by hand or
+   *  they read `undefined` at runtime despite the TS type. */
+  winner_to_fixture?: string | null;
+  winner_to_slot?: number | null;
+  loser_to_fixture?: string | null;
+  loser_to_slot?: number | null;
   /** The club's own broadcast link (V401). Null unless an organiser saved one,
    *  and null for a `setup` division — the view redacts it alongside the
    *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
@@ -893,7 +916,17 @@ export async function getPublicDivision(
                scheduled_at, venue, court_label,
                status, outcome, summary, last_seq,
                lane, is_final, third_place, conditional,
-               (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
+               (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
+               -- The feed edges, by the same rule as ext_key above: not
+               -- columns of the view, read off fixtures by the VIEW row's own
+               -- id, so the view still decides which rows exist. They are what
+               -- lets a sibling-fed seat with no stored label read "Winner of
+               -- Semi-finals, match 1" instead of "TBD" (see PublicFixture).
+               -- (No backticks in here: this is inside a tagged template.)
+               (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
+               (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
+               (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
+               (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
       const fixtures = await withCourtVenueNames(rawFixtures);
@@ -982,7 +1015,17 @@ export async function getPublicFixture(
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
                status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional, stream_url
+               lane, is_final, third_place, conditional, stream_url,
+               -- The feed edges, listed for the same reason as the three other
+               -- reads above: PublicFixture declares them OPTIONAL, so a
+               -- select that omits them compiles clean and reads undefined at
+               -- runtime. Nothing off this row names a seat today, but the
+               -- next caller that tries would get a silent TBD rather than a
+               -- type error. (No backticks in here: inside a tagged template.)
+               (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
+               (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
+               (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
+               (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;

@@ -72,6 +72,23 @@ export interface BuildDrawModelInput {
    *  fallback guards) resolves to the localized "unknown entrant" string,
    *  never a raw id or hardcoded English. */
   entrantNames: Record<string, string>;
+  /** One unfilled seat's text, for a seat that has NO stored label — the case
+   *  that used to print "TBD". A seat WITH a stored label never reaches this;
+   *  it keeps the existing resolution, because rewording a stored label on a
+   *  public artifact is a separate copy decision (owner, 2026-09-22). `label`
+   *  is therefore always null today; it is in the signature so the resolver
+   *  keeps the same shape as every other seat resolver in the codebase.
+   *
+   *  It is a FUNCTION rather than pre-filled labels because the two halves of
+   *  naming a seat live in different vocabularies: the label a seat really has
+   *  is `stored ?? feed`, but resolving `slot.winner_match` through the ORGANISER
+   *  dictionary yields the board's short code "Winner of R1-1", and a public
+   *  sheet must say "Winner of Semi-finals, match 1". Passing the resolved text
+   *  in keeps that choice with the caller who knows which audience is reading —
+   *  the same reason `components/public-site/bracket.tsx` takes `slotText`.
+   *
+   *  This module stays pure: the resolver is supplied, never imported. */
+  seatText?: (fixtureId: string, seat: "home" | "away", label: PublicFixture["home_slot_label"]) => string;
 }
 
 type Lane = PublicFixture["lane"];
@@ -89,10 +106,22 @@ function sideText(
   label: PublicFixture["home_slot_label"],
   entrantNames: Record<string, string>,
   lookup: SlotLabelLookup,
+  seatText?: BuildDrawModelInput["seatText"],
+  fixtureId?: string,
+  seat?: "home" | "away",
 ): string {
-  return id
-    ? (entrantNames[id] ?? lookup("calendar.unknownEntrant"))
-    : resolveSlotLabel(label, lookup, "schedule.tbd");
+  if (id) return entrantNames[id] ?? lookup("calendar.unknownEntrant");
+  // A STORED label is resolved exactly as it always was. `seatText` fills in
+  // ONLY the case that used to print "TBD" — a seat with no stored label at
+  // all. That split is the owner's ruling (2026-09-22) and it is deliberate,
+  // not an implementation convenience: rewording a stored label is a separate
+  // copy decision about what a public artifact should say, and it has not been
+  // made. `e2e/poster-pdf-draw.spec.ts` pins the stored half's current words
+  // and must keep passing unchanged.
+  if (label) return resolveSlotLabel(label, lookup, "schedule.tbd");
+  return seatText && fixtureId && seat
+    ? seatText(fixtureId, seat, null)
+    : resolveSlotLabel(null, lookup, "schedule.tbd");
 }
 
 /** A bucket row while it is still mid-build — carries `isFinal`/`thirdPlace`
@@ -111,7 +140,7 @@ interface RoundBucket {
 }
 
 export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLookup): DrawStageGroup[] {
-  const { stages, pools, fixtures, entrantNames } = input;
+  const { stages, pools, fixtures, entrantNames, seatText } = input;
   const stageById = new Map(stages.map((s) => [s.id, s]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
   const poolRank = new Map(pools.map((p, i) => [p.id, i]));
@@ -146,8 +175,8 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
     }
     bucket.rows.push({
       id: f.id,
-      home: sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup),
-      away: sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup),
+      home: sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup, seatText, f.id, "home"),
+      away: sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup, seatText, f.id, "away"),
       isFinal: f.is_final === true,
       thirdPlace: f.third_place === true,
     });

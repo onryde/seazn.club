@@ -235,6 +235,23 @@ export interface FixtureRow {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** The bracket FEED edges (V214__fixtures.sql): the fixture this one's winner/loser
+   *  advances INTO, and which seat there (1 = home, 2 = away). Written by
+   *  `wireCrossFeeds` and by both generators' feed pass; read by
+   *  `advanceWinner`/`fillSlot`.
+   *
+   *  `.optional()`, and NOT in `FIXTURE_COLS`, deliberately: exactly one
+   *  reader selects them — `listDivisionFixtures`, so the division page's
+   *  draw list can name an unfilled seat by its feeder ("Winner of R1·3")
+   *  the way the schedule board already does. `getFixture` does not, and the
+   *  published v1 `Fixture` contract does not carry them (the list route
+   *  strips them, beside `venue`/`court_label`). Keeping them off
+   *  `FIXTURE_COLS` is what stops that array from claiming a column every
+   *  one of its readers selects. */
+  winner_to_fixture?: string | null;
+  winner_to_slot?: number | null;
+  loser_to_fixture?: string | null;
+  loser_to_slot?: number | null;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {

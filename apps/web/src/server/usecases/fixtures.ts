@@ -114,7 +114,22 @@ export async function loadFixturePadCfg(auth: AuthCtx, fixtureId: string): Promi
   });
 }
 
-/** All fixtures of a division in play order — the organiser console read. */
+/** All fixtures of a division in play order — the organiser console read.
+ *
+ *  The four `*_to_fixture`/`*_to_slot` columns are FOUR EXTRA COLUMNS on this
+ *  one existing select, never a second round trip. They are the bracket feed
+ *  edges, and the division page's draw sheet needs them to name an unfilled
+ *  knockout seat by its feeder ("Winner of R1·3") instead of "TBD" —
+ *  `feedLabels()` (lib/schedule-board.ts) turns them into the same
+ *  `{key, params}` the schedule board already renders these very fixtures
+ *  with. The stored `*_slot_label` cannot answer for them: the SETUP
+ *  progression path leaves a sibling-fed seat's label NULL on purpose,
+ *  because `stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒ sibling-fed"
+ *  for `timing: "setup"` stages.
+ *
+ *  They are NOT part of the published v1 `Fixture` contract — GET
+ *  /divisions/{id}/fixtures strips them alongside `venue`/`court_label`, the
+ *  same projection that route already documents. */
 export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): Promise<FixtureRow[]> {
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
@@ -125,7 +140,8 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              f.scheduled_at, f.venue, f.court_label, f.court_id,
              f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
+             f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}

@@ -108,7 +108,17 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
              -- page playoff's rounds apart for the widget's round namer. The view
              -- has no such column; read it off the view row's own fixture, as
              -- getPublicDivision does.
-             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
+             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
+             -- The bracket feed edges, read by the same rule as ext_key above.
+             -- PublicFixture declares them optional, so OMITTING them here
+             -- compiles clean and reads undefined at runtime: the widget's
+             -- namer would build an empty feed map and print "TBD" on a seat
+             -- every other public surface names.
+             -- (No backticks in here: this is inside a tagged template.)
+             (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
+             (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
+             (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
+             (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`
       .then((rows) => rows.map(iso))

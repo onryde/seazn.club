@@ -27,6 +27,9 @@
 // fall back to the page-count/magic-byte style of proof used elsewhere here.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import zlib from "node:zlib";
+import { getDictionary, t } from "@/lib/i18n";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
 import type { PublicFixture, PublicEntrant, PublicDivision } from "@/server/public-site/data";
 
 const getPublicCompetition = vi.fn();
@@ -197,6 +200,46 @@ const KNOCKOUT_DRAW = {
       home_slot_label: { key: "slot.winner_group", params: { g: "A" } },
       away_slot_label: { key: "slot.runner_up_group", params: { g: "B" } },
     }),
+  ],
+  standings: [],
+  entrants: [
+    E({ id: "e1", display_name: "Lions" }),
+    E({ id: "e2", display_name: "Tigers", seed: 2 }),
+    E({ id: "e3", display_name: "Bears", seed: 3 }),
+    E({ id: "e4", display_name: "Wolves", seed: 4 }),
+  ],
+  tz: "UTC",
+};
+
+/** The shape the poster used to print blank: a final whose two seats have NO
+ *  stored label and are fed by their OWN stage's semis. `KNOCKOUT_DRAW` above
+ *  cannot see this — its final carries stored group labels, which win under
+ *  `seatLabel`'s precedence and hide the question entirely. */
+const SIBLING_FED_DRAW = {
+  stages: [
+    { id: "s1", division_id: "d1", seq: 1, kind: "knockout" as const, name: "Cup", status: "setup" },
+  ],
+  pools: [],
+  fixtures: [
+    F({
+      id: "semi1",
+      round_no: 1,
+      seq_in_round: 1,
+      home_entrant_id: "e1",
+      away_entrant_id: "e2",
+      winner_to_fixture: "final",
+      winner_to_slot: 1,
+    }),
+    F({
+      id: "semi2",
+      round_no: 1,
+      seq_in_round: 2,
+      home_entrant_id: "e3",
+      away_entrant_id: "e4",
+      winner_to_fixture: "final",
+      winner_to_slot: 2,
+    }),
+    F({ id: "final", round_no: 2, seq_in_round: 1, is_final: true }),
   ],
   standings: [],
   entrants: [
@@ -392,6 +435,131 @@ describe("GET .../poster.pdf — day-one fixtures add the draw from page 2", () 
     const text = decodePdfText(buf);
     expect(text).toContain("contre");
     expect(text).not.toContain("vs");
+  });
+});
+
+describe("GET .../poster.pdf — a sibling-fed seat is NAMED, not left blank", () => {
+  // The poster resolved seats with `resolveSlotLabel` alone, so a seat with no
+  // STORED label printed "TBD" while the bracket, the hub, the match centre
+  // and the embed all said "Winner of Semi-finals, match 1" for the same
+  // match. A spectator holding the printed sheet beside the page its QR code
+  // opens saw two different answers.
+  //
+  // Both assertions are needed and neither replaces the other: the positive
+  // proves the public sentence arrives, the negative proves the old TBD is
+  // gone. A test with only the positive would pass on a page that printed
+  // both.
+  const mockDraw = () => {
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION,
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...SIBLING_FED_DRAW,
+    });
+  };
+
+  it("prints the public feeder sentence for the final's two seats, not the TBD word", async () => {
+    mockDraw();
+    const dict = await getDictionary("en", "public");
+    // DERIVED from the dictionaries, never typed here — so moving the wording
+    // moves this test with it instead of leaving it asserting yesterday's copy.
+    const round = msgFor("en", "bracket.round.semi");
+    const first = t(dict, "knockout.feederWinner", { round, seq: 1 });
+    const second = t(dict, "knockout.feederWinner", { round, seq: 2 });
+    const tbd = msgFor("en", "schedule.tbd");
+    // The premise, stated rather than assumed: the sentence this test looks
+    // for is not the word it also requires to be absent.
+    expect(first, "the premise: the feeder sentence IS the tbd word").not.toBe(tbd);
+
+    const text = decodePdfText(await get().then((r) => r.buf));
+    expect(text, "the poster lost the final's first feeder").toContain(first);
+    expect(text, "the poster lost the final's second feeder").toContain(second);
+    expect(text, "the poster still prints TBD for a seat it can name").not.toContain(tbd);
+  });
+
+  it("leaves a STORED label's words alone — only the blank seat is filled", async () => {
+    // The half the owner deferred, pinned so it cannot drift by accident.
+    //
+    // This is the regression CI caught and every unit test here missed: the
+    // first fix resolved BOTH halves through the public namer, which reworded
+    // a stored `slot.winner_match` from the board's "Winner of R1-1" into
+    // "Winner of Semi-finals, match 1". `e2e/poster-pdf-draw.spec.ts` reds on
+    // that; nothing local did, because the fixture above has no stored label
+    // for the namer to overwrite. A seat with one is the missing case.
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION,
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...SIBLING_FED_DRAW,
+      fixtures: SIBLING_FED_DRAW.fixtures.map((f) =>
+        f.id === "final"
+          ? { ...f, home_slot_label: { key: "slot.winner_match" as const, params: { round: 1, seq: 1 } } }
+          : f,
+      ),
+    });
+
+    // Through the production resolver, not a hand-built msgFor call:
+    // `slot.winner_match`'s `{ext}` is composed INSIDE resolveSlotLabel from
+    // {round, seq}, so spelling the expectation by hand yields the raw
+    // "Winner of {ext}" and proves nothing.
+    const board = resolveSlotLabel(
+      { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+      (k, v) => msgFor("en", k, v),
+      "schedule.tbd",
+    );
+    const publicWords = t(await getDictionary("en", "public"), "knockout.feederWinner", {
+      round: msgFor("en", "bracket.round.semi"),
+      seq: 1,
+    });
+    // The premise: the two vocabularies really do differ, or this test cannot
+    // witness the regression it exists for.
+    expect(board, "the premise: board and public words are the same string").not.toBe(publicWords);
+
+    const text = decodePdfText(await get().then((r) => r.buf));
+    expect(text, "a stored label lost the words it has always printed").toContain(board);
+    expect(text, "the namer reworded a STORED label — that is the deferred half").not.toContain(
+      publicWords,
+    );
+  });
+
+  it("says it in the org's own locale, so the fix is not an English accident", async () => {
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION,
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...SIBLING_FED_DRAW,
+    });
+    const frDict = await getDictionary("fr", "public");
+    const expected = t(frDict, "knockout.feederWinner", {
+      round: msgFor("fr", "bracket.round.semi"),
+      seq: 1,
+    });
+    const english = t(await getDictionary("en", "public"), "knockout.feederWinner", {
+      round: msgFor("en", "bracket.round.semi"),
+      seq: 1,
+    });
+    expect(expected, "the premise: the fr sentence is the English one").not.toBe(english);
+
+    const text = decodePdfText(await get().then((r) => r.buf));
+    expect(text, "a French org's poster named the seat in English").toContain(expected);
   });
 });
 

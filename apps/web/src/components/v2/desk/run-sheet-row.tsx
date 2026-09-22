@@ -18,6 +18,11 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { DateTimeField } from "../shared/datetime-field";
 import { resolveSlotLabel } from "@/lib/slot-label";
+// `seatLabel` is SHARED with the bracket tree (`bracket-panel.tsx`): the tree
+// renders directly above this list on ?tab=fixtures, so one composition point
+// rather than one per surface — and one test then covers both seats here
+// instead of needing a mirror case per side.
+import { seatLabel, type FeedLabelPair } from "@/lib/schedule-board";
 import { courtDisplayName } from "@/components/v2/board/types";
 import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
@@ -106,6 +111,7 @@ export function RunSheetRow({
   onRescheduled,
   stageName,
   stream,
+  feedLabels,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -153,6 +159,24 @@ export function RunSheetRow({
    *  read as NOT entitled, so an un-threaded caller shows no panel rather than
    *  a broken one. */
   stream?: StreamPanelContext;
+  /** Feeder labels for seats no result has filled yet, keyed by fixture id —
+   *  `feedLabels()`'s output (lib/schedule-board.ts), the SAME builder and the
+   *  SAME `{key, params}` vocabulary the schedule board reads.
+   *
+   *  Why the row needs this at all: `home_slot_label`/`away_slot_label` are
+   *  the persisted authority, but the SETUP progression path deliberately
+   *  leaves a sibling-fed seat NULL (`generateProgressionSetupFixtures`
+   *  stamps a label only for a synthetic seed ref and for `bracket.slot.bye`
+   *  — `stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒ sibling-fed" for
+   *  `timing: "setup"` stages, so stamping one there would break the draw
+   *  ledger). The result was a draw list whose semi-finals and final read
+   *  "TBD vs TBD" while the schedule board, which derives the same seats from
+   *  the feed EDGES, read "Winner of R1·1 vs Winner of R1·2".
+   *
+   *  Optional, so a caller that never carried it keeps today's TBD fallback.
+   *  Never a substitute for the stored label — see the precedence at `home`
+   *  below. */
+  feedLabels?: Record<string, FeedLabelPair>;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -237,12 +261,21 @@ export function RunSheetRow({
   });
 
   // C3: copied verbatim from FixtureLine's own derivation — never reinvented.
+  //
+  // Step 1 is here and here only: a FILLED seat is the entrant's NAME, and
+  // nothing else may answer. Steps 2 and 3 — stored label, then feed edge —
+  // are `seatLabel()` in lib/schedule-board.ts, SHARED with the bracket tree
+  // that renders directly above this list, with the reasoning for that order
+  // (and the live bye collision that depends on it) stated there once.
+  // A seat with no stored label and no feeder reaches neither and keeps the
+  // localized "schedule.tbd" fallback, exactly as before.
+  const feed = feedLabels?.[fixture.id];
   const home = fixture.home_entrant_id
     ? (entrantNames[fixture.home_entrant_id] ?? "?")
-    : resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd");
+    : resolveSlotLabel(seatLabel(fixture.home_slot_label, feed, "home"), msg, "schedule.tbd");
   const away = fixture.away_entrant_id
     ? (entrantNames[fixture.away_entrant_id] ?? "?")
-    : resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd");
+    : resolveSlotLabel(seatLabel(fixture.away_slot_label, feed, "away"), msg, "schedule.tbd");
   const decided = outcomeText(msg, fixture.outcome, entrantNames);
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,

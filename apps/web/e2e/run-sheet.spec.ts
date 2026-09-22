@@ -2603,3 +2603,153 @@ test("a wrapped day header pushes the bracket round header down with it, at 320 
   // against `top-[86px]` coming back.
   expect(bracketTopPx, "offset is back to the assumed-height literal").toBeGreaterThan(86);
 });
+
+// ---------------------------------------------------------------------------
+// The DRAW LIST and the BRACKET TREE name the SAME feeder for the SAME match
+// — at 1280 (2026-09-21).
+//
+// The owner's report, off the live product: a division page's `?tab=fixtures`
+// showed a knockout whose seeded semis read "Rank 1 vs Rank 4" but whose
+// final read "TBD vs TBD — Awaiting draw", while the SCHEDULE showed that
+// same fixture as "Winner of R1·1 vs Winner of R1·2". A defect in the gap
+// between two individually-correct screens.
+//
+// `mobile.spec.ts` covers this at 320/360/375/390/430/768/834. Nothing
+// covered it at 1280 — which is not a missing PROJECT (`parallel`, `serial`
+// and `walkthrough` all run `devices["Desktop Chrome"]`, viewport 1280x720,
+// so the width was already in CI) but a missing TEST. This is the organiser's
+// own width, and the width the two panels sit side by side at.
+//
+// The shape that reproduces it is a SETUP-timed progression bracket, and only
+// that: the plain `generateStageFixtures` stamps `slot.winner_match` into
+// `*_slot_label`, so a plain knockout was never affected.
+// `generateProgressionSetupFixtures` leaves a sibling-fed seat's stored label
+// NULL on purpose (`stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒
+// sibling-fed"), so the FEED EDGES are the only thing that knows. A league of
+// 4 feeding a 4-qualifier knockout is the smallest bracket with such a seat.
+//
+// This is the case the width sweep cannot be: it ties the two panels to ONE
+// match by its `fixture_no` — `data-fixture-no` on the list row, `/f/<no>` on
+// the tree node's href — rather than asserting each surface separately and
+// hoping they meant the same fixture. Asserting them separately is exactly
+// what let them drift apart in the first place.
+// ---------------------------------------------------------------------------
+
+/** The shipped sentence for a winner-fed seat, composed the way
+ *  `resolveSlotLabel` composes it (`{ext}` via `slot.match_ref`), so a
+ *  dictionary edit moves this test instead of freezing today's copy.
+ *  `UI_EN` is this file's existing one-authority idiom. */
+const feederEn = (round: number, seq: number): string =>
+  UI_EN["slot.winner_match"]!.replace(
+    "{ext}",
+    UI_EN["slot.match_ref"]!.replace("{round}", String(round)).replace("{seq}", String(seq)),
+  );
+
+/** The shipped sentence for a seat still held by a SEED, from the same
+ *  authority — a retyped "Rank 1" would be this file's one un-sourced string. */
+const seedSeatEn = (rank: number): string => UI_EN["slot.rank_range"]!.replace("{rank}", String(rank));
+
+test("at 1280 the tree and the draw list under it name the same feeder for the same match", async ({
+  page,
+  request,
+}) => {
+  // Pin the width this test exists for. `devices["Desktop Chrome"]` is 1280
+  // wide today; if a config change moves it, this says so rather than
+  // quietly proving a different width (and the mobile projects never match
+  // this file, so there is no second viewport to accommodate).
+  expect(page.viewportSize()?.width, "this case is the 1280 one").toBe(1280);
+
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `DrawFeed E2E ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition POST failed: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Open",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, `division POST failed: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Seed A", "Seed B", "Seed C", "Seed D"]);
+
+  const stages = await apiJson<{ id: string; kind: string }[]>(
+    request,
+    `/api/v1/divisions/${divisionId}/stages`,
+    "POST",
+    [
+      { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "Cup",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      },
+    ],
+  );
+  expect(stages.status, `stages POST failed: ${JSON.stringify(stages.error)}`).toBeLessThan(300);
+  const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+
+  const gen = await apiJson<{
+    created: number;
+    fixtures: { round_no: number; fixture_no: number; home_entrant_id: string | null }[];
+  }>(request, `/api/v1/stages/${koId}/generate`, "POST");
+  expect(gen.status, `generate POST failed: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  // Two semis + a final, every seat empty: the bracket is drawn but unplayed.
+  // Without this the assertions below could pass against a bracket that never
+  // had a sibling-fed seat in it.
+  expect(gen.data!.created).toBe(3);
+  const finals = gen.data!.fixtures.filter((f) => f.round_no === 2);
+  expect(finals.length, "no round-2 fixture — nothing here is sibling-fed").toBe(1);
+  expect(gen.data!.fixtures.every((f) => f.home_entrant_id === null)).toBe(true);
+  const finalNo = finals[0]!.fixture_no;
+  expect(typeof finalNo, "the generate payload carried no fixture_no to tie the panels by").toBe("number");
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+
+  const sheet = page.getByTestId("run-sheet");
+  const tree = page.getByTestId("bracket-panel");
+  await expect(sheet, "the draw list never rendered").toBeVisible({ timeout: 20_000 });
+  await expect(tree, "the bracket tree never rendered").toBeVisible({ timeout: 20_000 });
+
+  const R1_1 = feederEn(1, 1);
+  const R1_2 = feederEn(1, 2);
+  // The two derivations must differ, or "both panels contain both" is
+  // satisfied by one string appearing twice.
+  expect(R1_2, "the two feeder sentences are identical").not.toBe(R1_1);
+
+  // THE SAME MATCH, by its per-division ordinal: `data-fixture-no` on the
+  // list row, `/f/<no>` on the tree node's href.
+  const listRow = sheet.locator(`[data-fixture-no="${finalNo}"]`);
+  const treeNode = tree.locator(`a[href$="/f/${finalNo}"]`);
+  await expect(listRow, `no draw-list row for fixture ${finalNo}`).toHaveCount(1);
+  await expect(treeNode, `no tree node for fixture ${finalNo}`).toHaveCount(1);
+
+  // THE CLAIM. Both seats of that one match, named by their feeder, on BOTH
+  // panels. Removing `seatLabel`'s feed branch puts all four back to TBD.
+  await expect(listRow).toContainText(R1_1);
+  await expect(listRow).toContainText(R1_2);
+  await expect(treeNode).toContainText(R1_1);
+  await expect(treeNode).toContainText(R1_2);
+
+  // The POSITIVE pair for the negative below: the seeded semis DID render
+  // their own stored labels, so an absent "Winner of" above would be a real
+  // absence rather than a blank tab.
+  await expect(sheet.getByText(seedSeatEn(1), { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(seedSeatEn(1), { exact: false }).first()).toBeVisible();
+  // …and no seat anywhere on this tab still says TBD, on a bracket where
+  // every seat has a known feeder or a known seed.
+  await expect(sheet.getByText(/^TBD$/)).toHaveCount(0);
+  await expect(tree.getByText(/^TBD$/)).toHaveCount(0);
+  // A resolved lookup, not a leaked key.
+  await expect(sheet).not.toContainText("slot.winner_match");
+  await expect(tree).not.toContainText("slot.winner_match");
+  await expectNoHorizontalScroll(page);
+});

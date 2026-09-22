@@ -18,8 +18,10 @@ import PDFDocument from "pdfkit";
 import { notFound } from "next/navigation";
 import { getPublicCompetition, getPublicDivision } from "@/server/public-site/data";
 import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary } from "@/lib/i18n";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msgFor } from "@/lib/messages-i18n";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { buildDrawModel, type DrawStageGroup } from "@/lib/poster-draw";
 
 export const revalidate = 300;
@@ -101,11 +103,43 @@ export async function GET(req: Request, { params }: Ctx) {
     drawDivisions.map((d) => getPublicDivision(orgSlug, competitionSlug, d.slug)),
   );
   const draw: DrawDivision[] = [];
+  const dict = await getDictionary(locale, "public");
   for (const detail of details) {
     if (!detail) continue;
     const entrantNames = Object.fromEntries(detail.entrants.map((e) => [e.id, e.display_name]));
+    // A seat fed by a sibling match has NO stored label until the feeder is
+    // played, so `sideText`'s `resolveSlotLabel` fell through to "TBD" and the
+    // poster printed a blank where every other public surface — the bracket,
+    // the hub, the match centre, the embed — already says "Winner of
+    // Semi-finals, match 1". Fill the label in through the SAME namer those
+    // surfaces use, so the printed sheet and the page a spectator scans the QR
+    // onto cannot disagree about the same match.
+    //
+    // Handed in as a RESOLVER, not as pre-filled labels. Filling the labels
+    // and letting the poster resolve them would have swapped one wrong answer
+    // for another: `buildDrawModel`'s own resolver is the ORGANISER dictionary,
+    // which renders `slot.winner_match` as the board's short code "Winner of
+    // R1-1". `namer.seat` renders the same `{round, seq}` as the public rail's
+    // "Winner of Semi-finals, match 1" — the vocabulary differs, the rule does
+    // not. (Verified by the test: filling labels alone still failed it.)
+    //
+    // `buildDrawModel` stays pure and server-free; it only calls what it is
+    // given.
+    const kindById = new Map(detail.stages.map((s) => [s.id, s.kind]));
+    const namer = publicRoundNamer({
+      ui: lookup,
+      dict,
+      fixtures: detail.fixtures,
+      stageKind: (stageId) => kindById.get(stageId),
+    });
     const stages = buildDrawModel(
-      { stages: detail.stages, pools: detail.pools, fixtures: detail.fixtures, entrantNames },
+      {
+        stages: detail.stages,
+        pools: detail.pools,
+        fixtures: detail.fixtures,
+        entrantNames,
+        seatText: (fixtureId, seat, label) => namer.seat(fixtureId, seat, label),
+      },
       lookup,
     );
     if (stages.length > 0) draw.push({ name: detail.division.name, stages });

@@ -113,8 +113,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
   });
   const slotLabels: Record<string, string> = {};
   for (const f of fixtures) {
-    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
-    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
+    // `seat`, not `slot` — same reason as the shared division page.
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.seat(f.id, "home", f.home_slot_label);
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.seat(f.id, "away", f.away_slot_label);
   }
   // N1d d5: the schedule's round view heads each group with the round's NAME,
   // the hub rail's own label ("Round {n}" in the org's locale only for a
@@ -153,7 +154,16 @@ export default async function EmbedWidgetPage({ params }: Props) {
     body = stage ? (
       <Bracket
         kind={stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff"}
-        fixtures={fixtures.filter((f) => f.stage_id === stage.id)}
+        // See the shared division page: the bracket owns its own "TBD" word,
+        // so it takes the seat's real LABEL (stored, else the feed edge) and
+        // resolves it itself.
+        fixtures={fixtures
+          .filter((f) => f.stage_id === stage.id)
+          .map((f) => ({
+            ...f,
+            home_slot_label: namer.seatLabelOf(f.id, "home", f.home_slot_label),
+            away_slot_label: namer.seatLabelOf(f.id, "away", f.away_slot_label),
+          }))}
         entrantNames={entrantNames}
         entrantLogos={entrantLogos}
         fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}

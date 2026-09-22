@@ -157,8 +157,10 @@ export default async function DivisionHomePage({ params }: Props) {
   // schedule tab and the bracket name one waiting side with one text.
   const slotLabels: Record<string, string> = {};
   for (const f of fixtures) {
-    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
-    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
+    // `seat`, not `slot`: a sibling-fed seat of a `timing: "setup"` bracket
+    // carries no stored label, so the stored-only path printed "TBD".
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.seat(f.id, "home", f.home_slot_label);
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.seat(f.id, "away", f.away_slot_label);
   }
   // N1d d5: the schedule tab's round view heads each group with the round's
   // NAME from the same namer ("Round {n}" in the org's locale only for a
@@ -222,7 +224,21 @@ export default async function DivisionHomePage({ params }: Props) {
     <div className="space-y-8">
       {stagesByRelevance.map((stage) => {
         if (BRACKET_KINDS.has(stage.kind)) {
-          const stageFixtures = fixtures.filter((f) => f.stage_id === stage.id);
+          // The bracket resolves a seat's label ITSELF (it owns its own
+          // `bracket.tbd`, a different word from the namer's `schedule.tbd`
+          // in es/fr/nl), so it cannot take a pre-resolved string. What it
+          // can take is the label the seat really has: `seatLabelOf` fills in
+          // the FEED-derived one for a seat a `timing: "setup"` bracket left
+          // stored-null. Without this the schedule tab named the final's
+          // seats and the tree beside it said "TBD" — the same match, one
+          // page, two answers.
+          const stageFixtures = fixtures
+            .filter((f) => f.stage_id === stage.id)
+            .map((f) => ({
+              ...f,
+              home_slot_label: namer.seatLabelOf(f.id, "home", f.home_slot_label),
+              away_slot_label: namer.seatLabelOf(f.id, "away", f.away_slot_label),
+            }));
           if (stageFixtures.length === 0) return null;
           return (
             <section key={stage.id}>

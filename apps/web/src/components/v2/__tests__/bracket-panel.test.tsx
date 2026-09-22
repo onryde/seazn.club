@@ -43,6 +43,10 @@ function markup(extra: Partial<Parameters<typeof BracketPanel>[0]> = {}): string
   return renderToStaticMarkup(
     createElement(BracketPanel, {
       fixtures: fixtures as never,
+      // Whole-division scope for the feed-label map. These cases are all
+      // single-stage, so it is the same row list; `extra` overrides both
+      // together where a case supplies its own fixtures.
+      divisionFixtures: (extra.fixtures ?? fixtures) as never,
       entrantNames,
       entrantBadges: { e1: "https://flags.example/mex.png" },
       headlines: { f1: "2–1" },

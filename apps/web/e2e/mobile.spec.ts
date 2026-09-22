@@ -1,4 +1,6 @@
 import { test, expect, type Page, type Locator, type APIRequestContext } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -3097,6 +3099,176 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
   await expect(page.getByText("Ganador del Grupo B", { exact: false }).first()).toBeVisible();
   await expect(page.locator("body")).not.toContainText("Winner of Group");
   await expect(page.locator("body")).not.toContainText("slot.winner_group");
+  await expectNoHorizontalScroll(page);
+});
+
+// ---------------------------------------------------------------------------
+// The DRAW LIST names an unfilled knockout seat by its FEEDER (2026-09-21).
+//
+// The owner's report, off the live product: a division page's `?tab=fixtures`
+// draw list showed a knockout whose quarter-finals read "Rank 1 vs Rank 8"
+// but whose semi-final and final rows all read "TBD vs TBD — Awaiting draw",
+// while the SCHEDULE showed the very same fixtures as "Winner of R1·1 vs
+// Winner of R1·2". A defect in the gap between two individually-correct
+// screens, which is exactly the class no single-surface test can see.
+//
+// The shape that reproduces it is a SETUP-timed progression bracket, and only
+// that: `generateStageFixtures` (the plain path) stamps
+// `slot.winner_match` into `*_slot_label`, so a plain knockout was never
+// affected. `generateProgressionSetupFixtures` labels a synthetic seed ref
+// and `bracket.slot.bye` and nothing else — deliberately, because
+// `stageOwesDraw`/`awaitsSeedDraw` read "no label ⇒ sibling-fed" for
+// `timing: "setup"` stages — so a sibling-fed seat's stored label is NULL and
+// the FEED EDGES are the only thing that knows. A league of 4 feeding a
+// 4-qualifier knockout is the smallest bracket with a sibling-fed seat: two
+// semis seeded from the league, then a final fed by both.
+//
+// Lives here rather than in a new spec file for the same reason the P6 block
+// above does: a new file would run desktop-only and never see
+// 320/360/375/390/430/768/834.
+// ---------------------------------------------------------------------------
+
+let dlDivisionId = "";
+const DL_EMAIL = () => `delivered+drawfeed-${TAG}-${projectTag()}@resend.dev`;
+
+/** The SHIPPED copy for both legs of the draw-list test below, so a
+ *  dictionary edit moves the assertions with it instead of freezing today's
+ *  sentence (the idiom `progression-bye.spec.ts` and four other specs use).
+ *  Asserting a hand-typed "Winner of R1·1" is how an EN leg ends up able to
+ *  pass on the wrong copy — and how the es leg stops proving it is a lookup
+ *  at all. `slot.match_ref` is identical in every locale by design, so only
+ *  the sentence around it changes. */
+const dlDict = (locale: "en" | "es"): Record<string, string> =>
+  JSON.parse(
+    readFileSync(fileURLToPath(new URL(`../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8"),
+  ) as Record<string, string>;
+const dlFeeder = (locale: "en" | "es", round: number, seq: number): string => {
+  const d = dlDict(locale);
+  return d["slot.winner_match"]!.replace(
+    "{ext}",
+    d["slot.match_ref"]!.replace("{round}", String(round)).replace("{seq}", String(seq)),
+  );
+};
+
+test("draw list setup: a league feeding a 2-round knockout at timing:setup (sibling-fed final, no stored label)", async ({
+  page,
+}) => {
+  await loginUi(page, DL_EMAIL());
+
+  const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Draw List ${TAG}`,
+    visibility: "unlisted",
+  });
+  expect(comp.status).toBeLessThan(300);
+
+  const div = await apiJson<{ id: string; slug: string }>(
+    page.request,
+    `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST",
+    {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  expect(div.status).toBeLessThan(300);
+  const divisionId = div.data!.id;
+
+  await addEntrantsViaApi(page.request, divisionId, ["Seed A", "Seed B", "Seed C", "Seed D"]);
+
+  const stages = await apiJson<{ id: string; kind: string }[]>(
+    page.request,
+    `/api/v1/divisions/${divisionId}/stages`,
+    "POST",
+    [
+      { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+      {
+        seq: 2, kind: "knockout", name: "Cup", config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      },
+    ],
+  );
+  expect(stages.status).toBeLessThan(300);
+  const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+
+  const gen = await apiJson<{ created: number; fixtures: { round_no: number; home_entrant_id: string | null }[] }>(
+    page.request,
+    `/api/v1/stages/${koId}/generate`,
+    "POST",
+  );
+  expect(gen.status).toBeLessThan(300);
+  // Two semis + a final, every seat empty: the bracket is drawn but unplayed.
+  expect(gen.data!.created).toBe(3);
+  expect(gen.data!.fixtures.filter((f) => f.round_no === 2).length).toBe(1);
+  expect(gen.data!.fixtures.every((f) => f.home_entrant_id === null)).toBe(true);
+
+  dlDivisionId = divisionId;
+});
+
+test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2', not TBD", async ({ page }) => {
+  test.skip(dlDivisionId === "", "draw list setup test did not run/complete");
+  await loginUi(page, DL_EMAIL());
+  await page.goto(await divisionPath(page.request, dlDivisionId, "?tab=fixtures"));
+
+  const sheet = page.getByTestId("run-sheet");
+  await expect(sheet).toBeVisible({ timeout: 20_000 });
+  // The POSITIVE pair for every negative below: the seeded semis DID render
+  // their own (stored) labels, so the sheet is populated and any absent
+  // "Winner of" is a real absence rather than a blank page.
+  await expect(sheet.getByText("Rank 1", { exact: false }).first()).toBeVisible();
+  await expect(sheet.getByText("Rank 4", { exact: false }).first()).toBeVisible();
+
+  // The fix: BOTH of the final's seats named by their feeder. Copy from the
+  // dictionary, never typed here — see `dlFeeder`.
+  const EN_R1_1 = dlFeeder("en", 1, 1);
+  const EN_R1_2 = dlFeeder("en", 1, 2);
+  const ES_R1_1 = dlFeeder("es", 1, 1);
+  // The derivations are only worth asserting if they differ: an es leg that
+  // silently equalled the en one would make the locale switch below vacuous.
+  expect(ES_R1_1, "the es feeder sentence is identical to the en one").not.toBe(EN_R1_1);
+  expect(EN_R1_2).not.toBe(EN_R1_1);
+  await expect(sheet.getByText(EN_R1_1, { exact: false }).first()).toBeVisible();
+  await expect(sheet.getByText(EN_R1_2, { exact: false }).first()).toBeVisible();
+  // …and no seat left saying TBD, which is what four of these rows said.
+  await expect(sheet.getByText(/^TBD$/)).toHaveCount(0);
+  await expect(sheet).not.toContainText("slot.winner_match");
+  await expectNoHorizontalScroll(page);
+
+  // THE PAIR, on ONE tab. The bracket TREE sits directly above this list and
+  // is fed by the same `listDivisionFixtures` rows. Round 1 of this fix
+  // taught only the list, which left the tree printing "TBD" immediately
+  // above a row reading "Winner of R1·1" — adjacent panels contradicting each
+  // other, which reads as broken rather than merely uninformative. Asserting
+  // each surface on its own is what let them drift, so this asserts they
+  // agree about the SAME match.
+  const tree = page.getByTestId("bracket-panel");
+  await expect(tree).toBeVisible({ timeout: 20_000 });
+  await expect(tree.getByText(EN_R1_1, { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(EN_R1_2, { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(/^TBD$/)).toHaveCount(0);
+  // The tree's own positive pair: the seeded semis still read their stored
+  // labels, so an absent "Winner of" above would be a real absence.
+  await expect(tree.getByText("Rank 1", { exact: false }).first()).toBeVisible();
+
+  // A LOOKUP, not a coincidentally-English literal — and the ORGANISER
+  // vocabulary ("Ganador de R1·1"), never the public `knockout.feederWinner`
+  // form. `slot.match_ref` is identical in every locale by design, so the
+  // ref survives the switch while the sentence around it does not.
+  const origin = new URL(page.url()).origin;
+  await page.context().addCookies([{ name: "seazn_locale", value: "es", url: origin }]);
+  await page.reload({ waitUntil: "load" });
+  await expect(sheet.getByText(ES_R1_1, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(sheet).not.toContainText(EN_R1_1);
+  // The tree localizes with it — both surfaces read the dictionary, neither
+  // carries its own copy of the sentence.
+  await expect(tree.getByText(ES_R1_1, { exact: false }).first()).toBeVisible();
+  await expect(tree).not.toContainText(EN_R1_1);
   await expectNoHorizontalScroll(page);
 });
 
