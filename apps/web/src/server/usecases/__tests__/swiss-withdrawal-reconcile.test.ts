@@ -36,8 +36,9 @@ import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
-import { startDivision } from "../schedule";
+import { publishSchedule, startDivision } from "../schedule";
 import { addFixture, createStages, generateStageFixtures } from "../stages";
+import { swissBoardsForField } from "@/lib/swiss-shell";
 import { createVenue, createCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
@@ -76,6 +77,28 @@ async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
 
 const inRound = (rows: FixtureRow[], r: number) => rows.filter((f) => f.round_no === r);
 const keysIn = (rows: FixtureRow[], r: number) => inRound(rows, r).map((f) => f.ext_key);
+
+/**
+ * The ext_keys round `roundNo` must hold for a field of `field` entrants,
+ * DERIVED from the engine's own `swissBoardsForField` rather than typed out
+ * (AGENTS.md 19) — the same authority `planSwissShells` mints from and
+ * `reconcileSwissRoundShells` reshapes to, so a change to the shape rule moves
+ * every expectation below with it instead of leaving them on yesterday's
+ * numbers.
+ *
+ * Deriving from the production authority is a tautology risk on its own, so
+ * the naming convention and the arithmetic are ALSO pinned literally, once,
+ * by "the expected-key helper matches the shipped shell naming" below. That
+ * is the case where the right answer differs from a wrong constant; here the
+ * subject under test is which ROUNDS get reshaped and whether ids survive,
+ * not the board count.
+ */
+function expectedRoundKeys(roundNo: number, field: number): string[] {
+  const { boards, bye } = swissBoardsForField(field);
+  const keys = Array.from({ length: boards }, (_, i) => `sw-r${roundNo}-b${i + 1}`);
+  if (bye) keys.push(`sw-r${roundNo}-bye`);
+  return keys;
+}
 
 function isSeated(f: FixtureRow): boolean {
   const o = f.outcome as { kind?: string } | null;
@@ -210,6 +233,35 @@ async function playR1ThenWithdraw(
   expect(row!.status).toBe("withdrawn");
   return { withdrawn };
 }
+
+// The ONE place the shell naming convention and the board arithmetic are
+// written down literally. Every other expectation in this file derives from
+// `swissBoardsForField`, which would otherwise make them agree with production
+// by construction; this test is what stops that being a tautology. It needs no
+// database, so it runs even when the suite above skips.
+describe("swiss — the expected-key helper matches the shipped shell naming", () => {
+  it("names boards `sw-r{n}-b{k}` from 1, and appends `-bye` only on an odd field", () => {
+    expect(expectedRoundKeys(1, 6)).toEqual(["sw-r1-b1", "sw-r1-b2", "sw-r1-b3"]);
+    expect(expectedRoundKeys(2, 7)).toEqual([
+      "sw-r2-b1",
+      "sw-r2-b2",
+      "sw-r2-b3",
+      "sw-r2-bye",
+    ]);
+    // A field of 8 takes a FOURTH board and no bye — the case where the right
+    // answer differs from 7's constant in both dimensions at once.
+    expect(expectedRoundKeys(3, 8)).toEqual([
+      "sw-r3-b1",
+      "sw-r3-b2",
+      "sw-r3-b3",
+      "sw-r3-b4",
+    ]);
+    // The bye sits LAST, after every board — the order `fixturesOf` returns and
+    // every `toEqual` above depends on.
+    expect(expectedRoundKeys(1, 9).at(-1)).toBe("sw-r1-bye");
+    expect(expectedRoundKeys(1, 9)).toHaveLength(5);
+  });
+});
 
 describe.runIf(HAS_DB)("swiss — a mid-tournament withdrawal reconciles the next round's shells", () => {
   it("even→odd: a 6-player field losing one seats round 2 on two boards plus a bye", async () => {
@@ -440,7 +492,7 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     await generateStageFixtures(auth, stageId); // mint shells for six
     const before = await fixturesOf(stageId);
     for (const r of [1, 2, 3]) {
-      expect(keysIn(before, r)).toEqual([`sw-r${r}-b1`, `sw-r${r}-b2`, `sw-r${r}-b3`]);
+      expect(keysIn(before, r)).toEqual(expectedRoundKeys(r, 6));
     }
 
     await addEntrants(auth, divisionId, 1);
@@ -449,14 +501,10 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     await generateStageFixtures(auth, stageId); // reconcile every round + seat round 1
 
     const rows = await fixturesOf(stageId);
-    // Seven is three boards plus a bye — in EVERY round, not just the paired one.
+    // Seven takes a bye where six did not — in EVERY round, not just the paired
+    // one. The shape comes from the engine, so only the FIELD is stated here.
     for (const r of [1, 2, 3]) {
-      expect(keysIn(rows, r)).toEqual([
-        `sw-r${r}-b1`,
-        `sw-r${r}-b2`,
-        `sw-r${r}-b3`,
-        `sw-r${r}-bye`,
-      ]);
+      expect(keysIn(rows, r)).toEqual(expectedRoundKeys(r, 7));
     }
     expect(seatedIn(rows, 1)).toHaveLength(7);
     // Reshaped, never seated: pairing is still one round at a time.
@@ -471,12 +519,7 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     await generateStageFixtures(auth, stageId); // mint shells for seven
     const before = await fixturesOf(stageId);
     for (const r of [1, 2, 3]) {
-      expect(keysIn(before, r)).toEqual([
-        `sw-r${r}-b1`,
-        `sw-r${r}-b2`,
-        `sw-r${r}-b3`,
-        `sw-r${r}-bye`,
-      ]);
+      expect(keysIn(before, r)).toEqual(expectedRoundKeys(r, 7));
     }
 
     const gone = await deleteLastEntrant(auth, divisionId);
@@ -486,7 +529,7 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
 
     const rows = await fixturesOf(stageId);
     for (const r of [1, 2, 3]) {
-      expect(keysIn(rows, r)).toEqual([`sw-r${r}-b1`, `sw-r${r}-b2`, `sw-r${r}-b3`]);
+      expect(keysIn(rows, r)).toEqual(expectedRoundKeys(r, 6));
     }
     expect(seatedIn(rows, 1)).toHaveLength(6);
     expect(seatedIn(rows, 1)).not.toContain(gone);
@@ -508,12 +551,7 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
 
     const rows = await fixturesOf(stageId);
     for (const r of [1, 2, 3]) {
-      expect(keysIn(rows, r)).toEqual([
-        `sw-r${r}-b1`,
-        `sw-r${r}-b2`,
-        `sw-r${r}-b3`,
-        `sw-r${r}-b4`,
-      ]);
+      expect(keysIn(rows, r)).toEqual(expectedRoundKeys(r, 8));
     }
     expect(seatedIn(rows, 1)).toHaveLength(8);
   });
@@ -553,22 +591,61 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
   });
 
   // The boundary, pinned. 'scheduled' means "timetable published, NOT yet
-  // started" (`publishSchedule` moves setup → scheduled; `startDivision` moves
-  // it to active), so it is on the EAGER side. A predicate written
+  // started", so it is on the EAGER side. A predicate written
   // `status !== 'setup'` passes every other test in this describe and fails
   // this one.
+  //
+  // Driven through the REAL producer, `publishSchedule` — a fixture on both
+  // ends proves the fixture. Publishing is also what makes this case bite: the
+  // timetable the eager pass then reshapes is one an organiser has already
+  // published.
   it("a published (scheduled) division is still before Start, so the reconcile stays eager", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
 
     await generateStageFixtures(auth, stageId); // mint shells for six
-    await sql`update divisions set status = 'scheduled' where id = ${divisionId}`;
+    const published = await publishSchedule(auth, divisionId, { acknowledge_warnings: true });
+    expect(published.status).toBe("scheduled");
+    const [division] = await sql<{ status: string }[]>`
+      select status from divisions where id = ${divisionId}`;
+    expect(division!.status).toBe("scheduled");
+
     await addEntrants(auth, divisionId, 2); // six → eight
 
     await generateStageFixtures(auth, stageId);
 
     const rows = await fixturesOf(stageId);
-    expect(keysIn(rows, 3)).toEqual(["sw-r3-b1", "sw-r3-b2", "sw-r3-b3", "sw-r3-b4"]);
+    expect(keysIn(rows, 3)).toEqual(expectedRoundKeys(3, 8));
+  });
+
+  // The other side of the same predicate: `completed` is a STARTED status, so
+  // the scope must fall back to lazy there exactly as it does for `active`.
+  // Delete `"completed"` from `DIVISION_STARTED_STATUSES` and this test reds.
+  //
+  // The status is set by SQL rather than driven, and that is a real limitation
+  // stated rather than hidden: the producer is `completeStage`, which flips a
+  // division to `completed` only once EVERY stage is complete — and a complete
+  // swiss stage has every round seated, at which point `nextUnseatedSwissRound`
+  // returns null and `swissGen` returns before this predicate is ever read. So
+  // the `completed` arm is defensive: reachable in the type, not reachable
+  // through the product today. The test keeps it honest rather than asserting
+  // it is load-bearing.
+  it("a completed division is on the STARTED side, so the reconcile falls back to lazy", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+    await addEntrants(auth, divisionId, 1); // six → seven
+    await sql`update divisions set status = 'completed' where id = ${divisionId}`;
+
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    // Round 1 is the one being paired, so it reshapes either way.
+    expect(keysIn(rows, 1)).toEqual(expectedRoundKeys(1, 7));
+    // Lazy: rounds 2 and 3 keep the six-player shape.
+    expect(keysIn(rows, 2)).toEqual(expectedRoundKeys(2, 6));
+    expect(keysIn(rows, 3)).toEqual(expectedRoundKeys(3, 6));
   });
 
   // The widened scope must not reach a round it cannot legally reshape.
@@ -599,12 +676,7 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
 
     const rows = await fixturesOf(stageId);
     for (const r of [1, 2, 3]) {
-      expect(keysIn(rows, r)).toEqual([
-        `sw-r${r}-b1`,
-        `sw-r${r}-b2`,
-        `sw-r${r}-b3`,
-        `sw-r${r}-bye`,
-      ]);
+      expect(keysIn(rows, r)).toEqual(expectedRoundKeys(r, 7));
     }
     const adhoc = inRound(rows, 4);
     expect(adhoc.map((f) => f.id)).toEqual([fixture_id]);
@@ -667,13 +739,7 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
 
     await generateStageFixtures(auth, stageId); // nine ⇒ four boards + a bye
     const before = await fixturesOf(stageId);
-    expect(keysIn(before, 3)).toEqual([
-      "sw-r3-b1",
-      "sw-r3-b2",
-      "sw-r3-b3",
-      "sw-r3-b4",
-      "sw-r3-bye",
-    ]);
+    expect(keysIn(before, 3)).toEqual(expectedRoundKeys(3, 9));
 
     // The surplus board a 9 → 6 shrink removes, laid out in advance.
     const surplus = inRound(before, 3).find((f) => f.ext_key === "sw-r3-b4")!;
@@ -703,6 +769,83 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     // The boards the field still needs keep their identity, which is the whole
     // point of a reconcile — the loss is confined to the surplus.
     expect(inRound(rows, 3).find((f) => f.ext_key === "sw-r3-b1")!.id).toBe(survivor.id);
+  });
+
+  // Generate used to report only how many fixtures it SEATED, so an eager
+  // shrink could delete three boards — and the times and courts pinned on them
+  // — while the organiser was told nothing at all. The owner's whole reported
+  // problem was staleness they could not see; silently fixing it in a way they
+  // still cannot see is the same defect wearing a different hat.
+  it("reports what an eager shrink removed across every round, not just the paired one", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 9);
+
+    await generateStageFixtures(auth, stageId); // nine ⇒ four boards + a bye, ×3
+    for (let i = 0; i < 3; i++) await deleteLastEntrant(auth, divisionId);
+    expect(await activeFieldSize(divisionId)).toBe(6);
+
+    const out = await generateStageFixtures(auth, stageId);
+
+    // Six needs three boards and no bye, so each of the three rounds loses its
+    // fourth board AND its bye. Counted across the whole press.
+    expect(out.reshaped).toEqual({
+      matches_added: 0,
+      matches_removed: 3,
+      byes_added: 0,
+      byes_removed: 3,
+    });
+  });
+
+  it("reports what an eager growth added, matches and byes counted apart", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // six ⇒ three boards, no bye, ×3
+    await addEntrants(auth, divisionId, 1); // six → seven
+
+    const out = await generateStageFixtures(auth, stageId);
+
+    // Seven is still three boards, so nothing is added but the bye — in all
+    // three rounds. A single "4 matches added" would be a number the organiser
+    // could not match against the run sheet.
+    expect(out.reshaped).toEqual({
+      matches_added: 0,
+      matches_removed: 0,
+      byes_added: 3,
+      byes_removed: 0,
+    });
+  });
+
+  it("counts a board added when the field crosses into another board", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId);
+    await addEntrants(auth, divisionId, 2); // six → eight ⇒ a fourth board, no bye
+
+    const out = await generateStageFixtures(auth, stageId);
+
+    expect(out.reshaped).toEqual({
+      matches_added: 3,
+      matches_removed: 0,
+      byes_added: 0,
+      byes_removed: 0,
+    });
+  });
+
+  // The no-op must stay SILENT. `reshaped` absent, not four zeroes — the
+  // organiser presses Pair next far more often than they change the field.
+  it("says nothing about reshaping when the field has not moved", async () => {
+    const { auth } = await seedOrg();
+    const { stageId } = await seedSwissStage(auth, 3, 6);
+
+    const mint = await generateStageFixtures(auth, stageId);
+    expect(mint.reshaped).toBeUndefined();
+
+    const pair = await generateStageFixtures(auth, stageId); // seats round 1
+    // The press really did do something — otherwise "silent" is vacuous.
+    expect(pair.created).toBeGreaterThan(0);
+    expect(pair.reshaped).toBeUndefined();
   });
 
   // The early return still holds per round: a field that has not moved writes

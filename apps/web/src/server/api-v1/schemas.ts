@@ -1570,10 +1570,22 @@ export const CreatedDeviceLink = DeviceLink.extend({
 // Generate (fixtures) response
 // ---------------------------------------------------------------------------
 
+/** Swiss only: what a Generate/Pair-next press MOVED in the shell set, so the
+ *  organiser can be told. Optional and omitted entirely when nothing moved —
+ *  the ordinary Pair must not report four zeroes. Matches and byes are counted
+ *  apart because only a match needs a court and a slot. */
+export const SwissReshapeResult = z.object({
+  matches_added: z.number().int(),
+  matches_removed: z.number().int(),
+  byes_added: z.number().int(),
+  byes_removed: z.number().int(),
+});
+
 export const GenerateResult = z.object({
   created: z.number().int(),
   existing: z.number().int(),
   fixtures: z.array(Fixture),
+  reshaped: SwissReshapeResult.optional(),
 });
 
 /** F3 Task 5 (5b) — POST /stages/{id}/rebuild's response: GenerateResult plus

@@ -84,6 +84,17 @@ import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { StageRail } from "@/components/v2/desk/stage-rail";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+type MsgPlural = (key: string, count: number, vars?: Record<string, string | number>) => string;
+
+/** The `reshaped` half of POST /stages/{id}/generate — Swiss only, and absent
+ *  unless the shell set actually moved. Mirrors `SwissReshapeResult`
+ *  (api-v1/schemas.ts); snake_case because it is the wire, not a view model. */
+export interface SwissReshapeWire {
+  matches_added: number;
+  matches_removed: number;
+  byes_added: number;
+  byes_removed: number;
+}
 
 interface StageRow {
   id: string;
@@ -534,14 +545,24 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         await apiV1(`/api/v1/stages/${stageId}`, { method: "DELETE" });
         setNotice(msg("schedule.notice.stageDeleted"));
       } else if (action === "generate") {
-        const out = await apiV1<{ created: number; existing: number }>(
-          `/api/v1/stages/${stageId}/generate`,
-          { method: "POST", json: {} },
-        );
+        const out = await apiV1<{
+          created: number;
+          existing: number;
+          reshaped?: SwissReshapeWire;
+        }>(`/api/v1/stages/${stageId}/generate`, { method: "POST", json: {} });
         setNotice(
-          out.created > 0
-            ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
-            : msg("schedule.notice.nothingNew"),
+          [
+            out.created > 0
+              ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
+              : msg("schedule.notice.nothingNew"),
+            // Swiss pre-Start: this press may also have resized rounds nobody
+            // paired, deleting boards along with the times and courts pinned on
+            // them. Silent before this; `reshapeNotice` returns null when
+            // nothing moved, so the ordinary Pair reads exactly as it did.
+            reshapeNotice(out.reshaped, msg, msgPlural, locale),
+          ]
+            .filter((line): line is string => line !== null)
+            .join(" "),
         );
       } else if (action === "unpair") {
         const out = await apiV1<{ cleared: number; round: number }>(
@@ -1488,6 +1509,66 @@ export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, loca
   if (parts.length === 0) return "";
   const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);
   return msg("progression.rosterDrift.alsoCleared", { items });
+}
+
+/**
+ * What a Swiss Generate/Pair-next ALSO did to the rounds nobody paired.
+ *
+ * Before Start the reconcile resizes every unseated round to the current
+ * field, which can delete surplus boards — and a deleted board takes its
+ * `scheduled_at` and `court_id` with it. The organiser used to be told only
+ * how many fixtures were seated, so three rounds' worth of pinned times could
+ * vanish on one press with nothing on screen about it. That silence is the
+ * defect this closes.
+ *
+ * Returns `null` when nothing moved, which is the overwhelmingly common Pair —
+ * a no-op must stay silent rather than announce four zeroes. Every clause is
+ * suppressed at zero for the same reason (`_RULES.md`: "an empty cell is not
+ * information"), and every count goes through `plural()` rather than a bare
+ * `${n} matches`, which is this programme's own repeat offender.
+ *
+ * Matches and byes are counted apart because they are not the same thing to an
+ * organiser: a match needs a court and a slot, a bye needs neither. Copy says
+ * "match", never "board" — board is internal vocabulary, and `board.*` in these
+ * dictionaries already means the scheduling board.
+ *
+ * Exported (pure) for the same reason `attachmentWarning` is: `apps/web` vitest
+ * runs in `environment: "node"`, so this is testable only outside the component.
+ */
+export function reshapeNotice(
+  reshaped: SwissReshapeWire | undefined,
+  msg: Msg,
+  msgPlural: MsgPlural,
+  locale: string,
+): string | null {
+  if (!reshaped) return null;
+  const clauses = [
+    reshaped.matches_added > 0
+      ? msgPlural("schedule.notice.reshapedMatchesAdded", reshaped.matches_added)
+      : null,
+    reshaped.matches_removed > 0
+      ? msgPlural("schedule.notice.reshapedMatchesRemoved", reshaped.matches_removed)
+      : null,
+    reshaped.byes_added > 0
+      ? msgPlural("schedule.notice.reshapedByesAdded", reshaped.byes_added)
+      : null,
+    reshaped.byes_removed > 0
+      ? msgPlural("schedule.notice.reshapedByesRemoved", reshaped.byes_removed)
+      : null,
+  ].filter((c): c is string => c !== null);
+  if (clauses.length === 0) return null;
+  // `Intl.ListFormat` on the caller's locale rather than a hardcoded ", "/" and ":
+  // the separator and the conjunction differ per language, and the four
+  // dictionaries would otherwise need keys that exist only to spell punctuation.
+  const changes = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(
+    clauses,
+  );
+  const head = msg("schedule.notice.reshaped", { changes });
+  // The lost layout is the part that matters, so it is said outright — but only
+  // when something was actually removed.
+  return reshaped.matches_removed > 0
+    ? `${head} ${msg("schedule.notice.reshapedSlotsCleared")}`
+    : head;
 }
 
 export function rebuildBlockedMessage(err: unknown, msg: Msg): string | null {
