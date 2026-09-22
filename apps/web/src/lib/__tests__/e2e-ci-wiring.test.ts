@@ -315,6 +315,18 @@ const WALKTHROUGH_SPECS: string[] = [
   // trustworthy together — each one alone is satisfied by a product that
   // simply deleted her.
   "withdrawn-entrant-organiser.spec.ts",
+  // Swiss shell hardening (Task 1.0, and the eager pre-Start extension) — one
+  // organiser lays a three-round Swiss out BEFORE Start, pins a court and a
+  // time on a LATER round's TBD shell, then changes the field the way a club
+  // night changes it (people arrive, somebody drops out) and Pairs. Two
+  // directions, because a bye appearing and a bye disappearing are different
+  // branches: 6→9 (even→odd, a board minted) and 9→6 (odd→even, the surplus
+  // board and the bye deleted while the pinned `b1` survives). No unit test can
+  // see the part that matters — that rounds 2 AND 3 come back SCHEDULABLE for
+  // the field the organiser now has, rather than for the one that was there
+  // when the shells were minted.
+  "swiss-pre-start-field-change.spec.ts",
+
   // Device-link write path W1 — the realtime propagation flows §6b of the
   // design surveyed and found uncovered: a courtside device's goal reaching
   // the organiser's SCREEN, and the organiser's goal reaching a device pad
