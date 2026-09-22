@@ -30,6 +30,20 @@ export const DERIVED_METRICS: readonly DerivedMetricSpec[] = [
   { key: "sberger", label: "SB", decimals: 2 },
 ];
 
+/**
+ * The integer won/lost pair each ratio column divides. Declared ONCE: the
+ * ratio text below reads it, and so does the standings table's breakdown
+ * popover, which prints these two totals beside the ratio — two copies of
+ * the pair would let the popover explain a number the cell did not compute.
+ */
+export const RATIO_LEDGERS = {
+  set_ratio: ["sets_won", "sets_lost"],
+  board_ratio: ["boards_won", "boards_lost"],
+  point_ratio: ["points_won", "points_lost"],
+} as const satisfies Partial<Record<TiebreakerKey, readonly [string, string]>>;
+
+export type RatioKey = keyof typeof RATIO_LEDGERS;
+
 function metric(row: StandingsRow, key: string): number {
   return row.metrics[key] ?? 0;
 }
@@ -54,11 +68,11 @@ export function derivedMetricText(row: StandingsRow, key: TiebreakerKey): string
       return nrr > 0 ? `+${text}` : text;
     }
     case "set_ratio":
-      return ratioText(metric(row, "sets_won"), metric(row, "sets_lost"), 2);
     case "board_ratio":
-      return ratioText(metric(row, "boards_won"), metric(row, "boards_lost"), 2);
-    case "point_ratio":
-      return ratioText(metric(row, "points_won"), metric(row, "points_lost"), 2);
+    case "point_ratio": {
+      const [won, lost] = RATIO_LEDGERS[key];
+      return ratioText(metric(row, won), metric(row, lost), 2);
+    }
     case "buchholz":
     case "buchholz_cut1": {
       const value = row.metrics[key];

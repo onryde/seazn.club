@@ -21,8 +21,10 @@ import "server-only";
 // which that component now reads from here too.
 import {
   DERIVED_METRICS,
+  RATIO_LEDGERS,
   derivedMetricText,
   tieBreakLabel,
+  type RatioKey,
   type StandingsRow,
 } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
@@ -218,6 +220,48 @@ export function tieBreakRule(key: string, msg: (key: TKey) => string): string {
   return dictKey === undefined ? tieBreakLabel(key) : msg(dictKey);
 }
 
+/** The ratio columns that explain themselves on tap, and the sentence each one
+ *  says: the two integer totals the engine divides (`RATIO_LEDGERS`), then the
+ *  cell's own ratio text. Totals only, never per match (owner-approved).
+ *
+ *  `set_ratio` is left out ON PURPOSE. Its unit is the sport's word — "sets"
+ *  in volleyball and tennis, "games" in badminton, table tennis and carrom,
+ *  which all ride the same `sets_won` key (`METRIC_HEADER_KEYS` above keys the
+ *  header by label for exactly that reason) — so one sentence would tell a
+ *  badminton spectator about sets they never played. Points and boards mean
+ *  the same thing in every sport that ranks on them. Spelled out rather than
+ *  built from the key, like `TIE_BREAK_MSG_KEYS`, so the family stays
+ *  grep-able. */
+export const RATIO_NOTE_KEYS: Readonly<Partial<Record<RatioKey, TKey>>> = {
+  board_ratio: "table.ratioNote.board_ratio",
+  point_ratio: "table.ratioNote.point_ratio",
+};
+
+/** The breakdown popover's text for one ratio cell, or null when there is
+ *  nothing to explain: a column without a note, or a row with no ledger yet
+ *  (the engine's "—"). Null means NO trigger — the cell stays plain text
+ *  rather than becoming a button that opens onto "won 0 · lost 0".
+ *
+ *  The ratio is the engine's own `derivedMetricText`, not a local division,
+ *  so the popover can never show a number the cell beside it does not.
+ *  Shared by both standings tables, like `columnHeader` and `tieBreakRule`. */
+export function ratioNote(
+  row: StandingsRow,
+  key: string,
+  msg: (key: TKey, vars?: Record<string, string | number>) => string,
+): string | null {
+  const noteKey = Object.hasOwn(RATIO_NOTE_KEYS, key) ? RATIO_NOTE_KEYS[key as RatioKey] : undefined;
+  if (noteKey === undefined) return null;
+  const ratio = derivedMetricText(row, key as RatioKey);
+  if (ratio === null || ratio === "—") return null;
+  const [won, lost] = RATIO_LEDGERS[key as RatioKey];
+  return msg(noteKey, {
+    won: formatMetric(row.metrics[won] ?? 0),
+    lost: formatMetric(row.metrics[lost] ?? 0),
+    ratio,
+  });
+}
+
 export interface TableViewInput {
   /** Stable id for this table within the document — a division may publish an
    *  overall table and one per pool, so this is not the division id. */
@@ -279,6 +323,9 @@ export function buildTableView(input: TableViewInput): TableViewT {
             ? formatMetric(r[c.key as "played" | "won" | "drawn" | "lost" | "points"])
             : formatMetric(r.metrics[c.key], c.decimals),
       ),
+      // Paired with `cells` by index, like the cells with the columns. Only a
+      // derived column can carry one; `ratioNote` decides which of those do.
+      cellNotes: columns.map((c) => (c.kind === "derived" ? ratioNote(r, c.key, input.msg) : null)),
       tieBreakText: r.tieBreak
         ? input.msg("table.tieBreak", {
             with: r.tieBreak.with.map(name).join(", "),

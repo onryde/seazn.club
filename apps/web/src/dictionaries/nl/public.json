@@ -331,6 +331,8 @@
   "table.tieBreak.sberger": "Sonneborn–Berger",
   "table.tieBreak.seed": "reekshoofdpositie",
   "table.tieBreak.lots": "loting",
+  "table.ratioNote.point_ratio": "Punten gewonnen {won} · Punten verloren {lost} · Verhouding {ratio}",
+  "table.ratioNote.board_ratio": "Borden gewonnen {won} · Borden verloren {lost} · Verhouding {ratio}",
   "format.minutes": "{minutes} min",
   "format.cricket.overs": "{overs}-over match",
   "format.sets.bestOf": "Beste van de {n}",

@@ -6154,6 +6154,8 @@ export type DictionaryKey =
   | "table.fullDivision"
   | "table.more"
   | "table.pool"
+  | "table.ratioNote.board_ratio"
+  | "table.ratioNote.point_ratio"
   | "table.region"
   | "table.regionCaptioned"
   | "table.team"

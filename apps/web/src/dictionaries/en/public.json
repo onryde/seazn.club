@@ -331,6 +331,8 @@
   "table.tieBreak.sberger": "Sonneborn–Berger",
   "table.tieBreak.seed": "seeding",
   "table.tieBreak.lots": "drawing of lots",
+  "table.ratioNote.point_ratio": "Points won {won} · Points lost {lost} · Ratio {ratio}",
+  "table.ratioNote.board_ratio": "Boards won {won} · Boards lost {lost} · Ratio {ratio}",
   "format.minutes": "{minutes} min",
   "format.cricket.overs": "{overs}-over match",
   "format.sets.bestOf": "Best of {n}",

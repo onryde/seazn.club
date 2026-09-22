@@ -191,6 +191,13 @@ export const TableRow = z.object({
   /** One formatted string per `TableColumn`, in the same order. Strings, not
    *  numbers: the builder has already applied the locale's number format. */
   cells: z.array(z.string()),
+  /** One entry per `cells` entry: the resolved breakdown a ratio cell opens
+   *  onto ("Points won 120 · Points lost 98 · Ratio 1.22"), or null for a
+   *  cell with nothing to explain (`ratioNote`, `standings-view.ts`).
+   *  Optional because a hub document cached before the field existed (Redis
+   *  15s, ISR 30s) reaches the client without it — absent reads as "no
+   *  note", which renders the plain cell it always did. */
+  cellNotes: z.array(z.string().nullable()).optional(),
   tieBreakText: z.string().nullable(),
   champion: z.boolean(),
 });

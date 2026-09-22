@@ -39025,6 +39025,19 @@
                                         "type": "string"
                                       }
                                     },
+                                    "cellNotes": {
+                                      "type": "array",
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
                                     "tieBreakText": {
                                       "anyOf": [
                                         {
