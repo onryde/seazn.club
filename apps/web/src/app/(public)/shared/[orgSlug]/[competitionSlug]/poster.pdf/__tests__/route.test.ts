@@ -29,6 +29,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import zlib from "node:zlib";
 import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
 import type { PublicFixture, PublicEntrant, PublicDivision } from "@/server/public-site/data";
 
 const getPublicCompetition = vi.fn();
@@ -480,6 +481,57 @@ describe("GET .../poster.pdf — a sibling-fed seat is NAMED, not left blank", (
     expect(text, "the poster lost the final's first feeder").toContain(first);
     expect(text, "the poster lost the final's second feeder").toContain(second);
     expect(text, "the poster still prints TBD for a seat it can name").not.toContain(tbd);
+  });
+
+  it("leaves a STORED label's words alone — only the blank seat is filled", async () => {
+    // The half the owner deferred, pinned so it cannot drift by accident.
+    //
+    // This is the regression CI caught and every unit test here missed: the
+    // first fix resolved BOTH halves through the public namer, which reworded
+    // a stored `slot.winner_match` from the board's "Winner of R1-1" into
+    // "Winner of Semi-finals, match 1". `e2e/poster-pdf-draw.spec.ts` reds on
+    // that; nothing local did, because the fixture above has no stored label
+    // for the namer to overwrite. A seat with one is the missing case.
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION,
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...SIBLING_FED_DRAW,
+      fixtures: SIBLING_FED_DRAW.fixtures.map((f) =>
+        f.id === "final"
+          ? { ...f, home_slot_label: { key: "slot.winner_match" as const, params: { round: 1, seq: 1 } } }
+          : f,
+      ),
+    });
+
+    // Through the production resolver, not a hand-built msgFor call:
+    // `slot.winner_match`'s `{ext}` is composed INSIDE resolveSlotLabel from
+    // {round, seq}, so spelling the expectation by hand yields the raw
+    // "Winner of {ext}" and proves nothing.
+    const board = resolveSlotLabel(
+      { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+      (k, v) => msgFor("en", k, v),
+      "schedule.tbd",
+    );
+    const publicWords = t(await getDictionary("en", "public"), "knockout.feederWinner", {
+      round: msgFor("en", "bracket.round.semi"),
+      seq: 1,
+    });
+    // The premise: the two vocabularies really do differ, or this test cannot
+    // witness the regression it exists for.
+    expect(board, "the premise: board and public words are the same string").not.toBe(publicWords);
+
+    const text = decodePdfText(await get().then((r) => r.buf));
+    expect(text, "a stored label lost the words it has always printed").toContain(board);
+    expect(text, "the namer reworded a STORED label — that is the deferred half").not.toContain(
+      publicWords,
+    );
   });
 
   it("says it in the org's own locale, so the fix is not an English accident", async () => {
