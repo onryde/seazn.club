@@ -14,14 +14,14 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { ScheduleConflict } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
-import { publishSchedule, validateSchedule } from "../schedule";
+import { PUBLISH_ALREADY_LIVE, publishSchedule, validateSchedule } from "../schedule";
 import { createVenue, createCourt } from "../venues";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -388,5 +388,185 @@ describe.skipIf(!HAS_DB)("publish validates the board it is about to publish (#2
       expect(thrown).toBeDefined();
       expect(thrownConflicts(thrown)).toEqual(panel.conflicts);
     }
+  }, 120_000);
+});
+
+// ─── The row publish DECIDES on (2026-09-22) ─────────────────────────────────
+//
+// `publishSchedule` read the division, THEN took its advisory lock, and then
+// made every decision on the row it had read first. A division someone Started
+// in that gap was therefore judged as the `setup`/`scheduled` row it used to
+// be: the status update was skipped (the row was already past `setup`, so
+// `status !== division.status` was false) but `appendPublishedEvent` ran
+// anyway, so a division that was already live took a SECOND
+// `schedule_published` row and the caller was told `published: true`. Only
+// `completed` was refused, and only against the stale read.
+//
+// Two changes, tested separately below because two guards that cover for each
+// other are each untested:
+//
+//   * the read moved INSIDE the lock, so the decision is made on the row this
+//     transaction is actually holding;
+//   * an `active` division is refused outright (owner ruling — see the guard's
+//     own comment in `schedule.ts`).
+//
+// The race is driven for real, not stubbed: a second connection takes publish's
+// own advisory lock first, so the usecase parks on `pg_advisory_xact_lock` — the
+// exact gap — and the division is moved while it waits.
+
+/** Poll until some backend other than `holderPid` is WAITING on the same
+ *  advisory lock `holderPid` holds. That is the positive evidence that
+ *  `publishSchedule` got past its pre-lock statements and parked; without it a
+ *  slow start would leave the update landing FIRST and the test would pass as
+ *  the plain "already live" case below, proving nothing about the race. */
+async function waitUntilParkedOn(holderPid: number): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n
+      from pg_locks w
+      join pg_locks h
+        on h.locktype = 'advisory' and h.granted and h.pid = ${holderPid}
+       and w.classid = h.classid and w.objid = h.objid and w.objsubid = h.objsubid
+      where w.locktype = 'advisory' and not w.granted and w.pid <> ${holderPid}`;
+    if ((row?.n ?? 0) > 0) return;
+    if (Date.now() > deadline) {
+      throw new Error("publishSchedule never parked on the division's advisory lock");
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+interface Settled<T> {
+  value?: T;
+  error?: unknown;
+}
+
+/**
+ * Run `start()` against a division whose publish lock is already held by a
+ * SECOND connection, apply `whileParked` once `start()` is provably blocked on
+ * that lock, then commit the holder and let `start()` through.
+ *
+ * `hashtext('division:' + id)` is publish's own key, verbatim — a different key
+ * would not block it and the whole exercise would be theatre.
+ */
+async function raceAgainstPublishLock<T>(
+  divisionId: string,
+  start: () => Promise<T>,
+  whileParked: (tx: Tx) => Promise<void>,
+): Promise<Settled<T>> {
+  let announceHeld!: (pid: number) => void;
+  const held = new Promise<number>((r) => { announceHeld = r; });
+  let letGo!: () => void;
+  const gate = new Promise<void>((r) => { letGo = r; });
+
+  const holder = sql.begin(async (tx) => {
+    const [me] = await tx<{ pid: number }[]>`select pg_backend_pid()::int as pid`;
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+    announceHeld(me!.pid);
+    await gate;
+    await whileParked(tx);
+    // Returning COMMITS, which drops the advisory lock and admits `start()`.
+  });
+
+  const holderPid = await held;
+  // Settled immediately so a rejection is never unhandled while we wait.
+  const settled: Promise<Settled<T>> = start().then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await waitUntilParkedOn(holderPid);
+  } finally {
+    letGo();
+  }
+  await holder;
+  return settled;
+}
+
+describe.skipIf(!HAS_DB)("publish decides on the row it locked, not the one it read first", () => {
+  it("does not re-publish a division that goes live while publish waits for the lock", async () => {
+    const board = await seedBoard(CLEAN, {});
+    // A legitimate publish first, so the BEFORE count is 1 rather than 0 — a
+    // 0→0 assertion could be satisfied by a ledger that simply never works.
+    await publishSchedule(board.auth, board.divisionId);
+    expect(await publishedEvents(board.divisionId)).toHaveLength(1);
+    expect(await divisionStatus(board.divisionId)).toBe("scheduled");
+
+    const settled = await raceAgainstPublishLock(
+      board.divisionId,
+      () => publishSchedule(board.auth, board.divisionId),
+      // What pressing Start does to this row. `scheduled → active` appends no
+      // publish event of its own (`startDivision` publishes from `setup` only),
+      // so the ledger count below is entirely publish's doing.
+      async (tx) => {
+        await tx`update divisions set status = 'active' where id = ${board.divisionId}`;
+      },
+    );
+
+    // THE defect, asserted FIRST. The throw and the append are different lines,
+    // so a refusal assertion alone would pass with the duplicate row still on
+    // the ledger — and that row is the damage.
+    expect(
+      await publishedEvents(board.divisionId),
+      "a second schedule_published row landed on an already-live division",
+    ).toHaveLength(1);
+    expect(
+      settled.value,
+      "publish reported success against a division that had gone live under it",
+    ).toBeUndefined();
+    expect(settled.error).toMatchObject({ status: 422, code: PUBLISH_ALREADY_LIVE });
+    // And the live division was not dragged back to `scheduled`.
+    expect(await divisionStatus(board.divisionId)).toBe("active");
+  }, 120_000);
+
+  it("refuses a division that is already live, with the live division's own message", async () => {
+    const board = await seedBoard(CLEAN, {});
+    await sql`update divisions set status = 'active' where id = ${board.divisionId}`;
+
+    let thrown: unknown;
+    await publishSchedule(board.auth, board.divisionId).catch((err: unknown) => {
+      thrown = err;
+    });
+    expect(thrown).toMatchObject({
+      status: 422,
+      code: PUBLISH_ALREADY_LIVE,
+      message: "a division that has already started cannot publish a schedule",
+    });
+    expect(await publishedEvents(board.divisionId)).toHaveLength(0);
+    expect(await divisionStatus(board.divisionId)).toBe("active");
+  }, 120_000);
+
+  it("still refuses a completed division exactly as before, uncoded", async () => {
+    const board = await seedBoard(CLEAN, {});
+    await sql`update divisions set status = 'completed' where id = ${board.divisionId}`;
+
+    let thrown: unknown;
+    await publishSchedule(board.auth, board.divisionId).catch((err: unknown) => {
+      thrown = err;
+    });
+    expect(thrown).toMatchObject({
+      status: 422,
+      message: "a completed division cannot publish a schedule",
+    });
+    // Pinned ABSENT: the completed refusal has never carried a code, and a
+    // caller that switches on one must keep seeing it as an uncoded fault.
+    expect((thrown as { code?: string }).code).toBeUndefined();
+    expect(await publishedEvents(board.divisionId)).toHaveLength(0);
+  }, 120_000);
+
+  it("still lets an already-PUBLISHED division publish again", async () => {
+    // The over-refusal guard. `scheduled` is the republish state the organiser
+    // reaches every time they change a live-but-not-started timetable, and a
+    // guard written as `status !== "setup"` would silently eat it.
+    const board = await seedBoard(CLEAN, {});
+    await publishSchedule(board.auth, board.divisionId);
+
+    const out = await publishSchedule(board.auth, board.divisionId, {
+      reason: "court swap confirmed",
+    });
+    expect(out).toMatchObject({ status: "scheduled", published: true });
+    expect(await publishedEvents(board.divisionId)).toHaveLength(2);
+    expect(await divisionStatus(board.divisionId)).toBe("scheduled");
   }, 120_000);
 });
