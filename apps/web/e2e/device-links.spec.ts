@@ -142,8 +142,9 @@ test("the device-link pad sends its dl_ token to the realtime-token door", async
   // `browser.newContext()` inherits `use.storageState`, and an organiser cookie
   // would authorise the token door by itself and make the header irrelevant.
   const anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  // Hoisted out of the try so `finally` can unroute it — see the note there.
+  const page = await anonCtx.newPage();
   try {
-    const page = await anonCtx.newPage();
     // Armed BEFORE the navigation: the hook fires this request from its mount
     // effect, so a listener attached after `goto` resolves is a race.
     const authHeaders: (string | undefined)[] = [];
@@ -192,6 +193,13 @@ test("the device-link pad sends its dl_ token to the realtime-token door", async
     // that sent the pad back to the 15s poll can no longer pass as green.
     expect(tokenStatuses[0]).toBe(200);
   } finally {
+    // Retire the route BEFORE the context goes, or `route.fetch()` above dies
+    // with "Request context disposed" (CI run 35706434734). The pad re-requests
+    // its token on every resubscribe, so a callback is routinely still in
+    // flight when the test body ends — this is not a rare race. Playwright's
+    // own error names this as the cure; `ignoreErrors` is what makes it safe
+    // for the in-flight callback rather than merely moving the throw.
+    await page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => undefined);
     await anonCtx.close();
   }
 });

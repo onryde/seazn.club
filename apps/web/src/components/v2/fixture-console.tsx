@@ -35,6 +35,11 @@ import type { MessageKey } from "@/lib/messages";
 // server-side bootstrap-resolution failure (fidelity.ts's own doc) means
 // "no pad renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
+// The shared module constant, NOT an inline `{ kind: "session" }`. See its own
+// comment: `useFixtureStream`'s subscribe effect depends on `auth` by identity,
+// so a literal here resubscribes the realtime channel on every render of this
+// console — which is every `setBusy` and every resync.
+import { SESSION_AUTH } from "@/components/v2/scorepad/use-pad-pipeline";
 // Owner ruling 17 (2026-09-06) — `shouldMountPad`/`resolvePadSpecForMount`
 // below need the SAME client-side module resolver `<ScorePad>` itself uses
 // (module-client.ts's own doc: no server round trip, a process-wide
@@ -899,7 +904,7 @@ export function FixtureConsole({
                   home={home}
                   away={away}
                   initialEvents={scorePadV2.initialEvents}
-                  auth={{ kind: "session" }}
+                  auth={SESSION_AUTH}
                   identity={scorePadV2.identity}
                   entitlements={scorePadV2.entitlements}
                   onEvents={handlePadEvents}

@@ -356,7 +356,12 @@ export const HUMAN_FASTEST_REPEAT_MS = 350;
 // on `auth` by identity, so a fresh object each render would tear down and
 // resubscribe (a new token fetch, a new realtime handshake) on every render
 // instead of once per mount.
-const SESSION_AUTH: PadAuthMode = { kind: "session" };
+// EXPORTED (2026-09-22) because the hazard above is not the hook's alone: a
+// CALLER passing `auth={{ kind: "session" }}` inline re-creates it on every
+// render and gets the identical teardown-and-resubscribe, which is invisible
+// from inside this file. `fixture-console.tsx` did exactly that. Callers that
+// want plain session auth import this constant rather than writing the literal.
+export const SESSION_AUTH: PadAuthMode = { kind: "session" };
 
 export interface UsePadPipelineParams {
   fixtureId: string;
