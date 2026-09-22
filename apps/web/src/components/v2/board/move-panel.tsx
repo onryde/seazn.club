@@ -20,6 +20,7 @@ export function MovePanel({
   feedLabels,
   boardConfig,
   onMove,
+  onRemove,
   onClose,
 }: {
   fixture: BoardFixture;
@@ -62,6 +63,13 @@ export function MovePanel({
    */
   boardConfig: { config: BoardConfig; orgTz: string };
   onMove: (atIso: string | null, court: string | null) => void;
+  /** Take the card off the board: clears BOTH the time and the court, the
+   *  shape `POST /api/v1/schedule/clear` already produces. The run sheet's
+   *  own "Unschedule" clears only the time and leaves the court behind
+   *  (`run-sheet-row.tsx`), which is how a fixture ends up with a court and
+   *  no slot; this does not copy that. Undoable from the history panel, so
+   *  it asks for no confirmation. */
+  onRemove: () => void;
   onClose: () => void;
 }) {
   const msg = useMsg();
@@ -153,6 +161,18 @@ export function MovePanel({
         </select>
       </label>
       <div className="ml-auto flex gap-2">
+        {/* Leftmost of the three, away from the primary: Remove and Move are
+            the same kind of decision about the same card, so they belong in
+            one group, but the destructive one should not sit under the thumb
+            reaching for Move. Not red-filled — this is reversible. */}
+        <button
+          type="button"
+          data-testid="move-panel-remove"
+          onClick={onRemove}
+          className="btn btn-ghost px-3 py-1.5 text-xs text-rose-700"
+        >
+          {msg("board.remove")}
+        </button>
         <button type="button" onClick={onClose} className="btn btn-ghost px-3 py-1.5 text-xs">
           {msg("board.cancel")}
         </button>
