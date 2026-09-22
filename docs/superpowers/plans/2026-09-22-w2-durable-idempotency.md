@@ -49,6 +49,23 @@ vitest (`environment: "node"`), Playwright.
 - **No new user-facing strings are expected.** If one appears, it goes in all
   four locale dictionaries (`en`/`es`/`fr`/`nl`) and `gen-keys` is re-run.
 - **Do not file issues.** Fix inline unless the blast radius says otherwise.
+- **PREMISE CORRECTED 2026-09-22, during Task 1.** The test code drafted in
+  Tasks 2-5 below uses `badminton.rally`. **That event type is wrong for this
+  rig.** `divisionRig` (`_rig.ts:61-92`) seeds `sport_key: "generic"`,
+  `variant_key: "score"`, so the only events `appendEvent` / `scoreEvent` will
+  accept on a `startedDivisionWithFixture` are the three in `decidingStream()`
+  (`_rig.ts:159-165`):
+  `core.start` → `generic.result` (`{ p1Score, p2Score }`, this is the
+  DECIDING event) → `core.finalize`. Substitute accordingly:
+  - a two-event stream is `core.start` then `generic.result`;
+  - the "a LATER event moved the state on" differential in Task 3 is
+    `core.finalize` after the keyed `generic.result` — the replay must report
+    `decided` while the fixture now reads `finalized`;
+  - "two DIFFERENT taps" in Task 4 is `core.start` and `generic.result`, not
+    two rallies: `generic.result` decides the fixture and a second one is
+    refused by the module.
+  A bare `insert into score_events` (Task 1) is unaffected — no engine runs, so
+  the `type` text is arbitrary there.
 
 ---
 
