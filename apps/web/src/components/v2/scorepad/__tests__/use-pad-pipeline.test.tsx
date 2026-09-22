@@ -82,6 +82,12 @@ function fakeTransport(opts: {
 }) {
   const appendCalls: { fixtureId: string; body: AppendEventBody }[] = [];
   const fetchStateCalls: string[] = [];
+  // W3 task 1 — the two CURSORS this pad hands the server. Recorded at the
+  // wire rather than read out of the hook's own state on purpose: the
+  // defect is about what the SERVER is told, so only the argument that
+  // actually crossed this boundary witnesses it. `listEventsSince` still
+  // answers with an empty batch, exactly as before.
+  const listEventsSinceCalls: { fixtureId: string; sinceSeq: number }[] = [];
   let cursor = 0;
   const transport: PadTransport = {
     async appendEvent(fixtureId, body) {
@@ -91,7 +97,8 @@ function fakeTransport(opts: {
       if (!next) throw new Error(`fakeTransport: no scripted appendEvent response left (call #${cursor})`);
       return next;
     },
-    async listEventsSince(): Promise<LedgerSlotEvent[]> {
+    async listEventsSince(fixtureId, sinceSeq): Promise<LedgerSlotEvent[]> {
+      listEventsSinceCalls.push({ fixtureId, sinceSeq });
       return [];
     },
     async getLastSeq(): Promise<number> {
@@ -103,7 +110,19 @@ function fakeTransport(opts: {
       return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
     },
   };
-  return { transport, appendCalls, fetchStateCalls };
+  return {
+    transport,
+    appendCalls,
+    fetchStateCalls,
+    listEventsSinceCalls,
+    /** The `sinceSeq` the live stream last asked this transport for — i.e.
+     *  where the pad believes its ledger ends. `undefined` until a poll tick
+     *  or a realtime signal has actually fired. */
+    lastSinceSeq: (): number | undefined => listEventsSinceCalls.at(-1)?.sinceSeq,
+    /** The `expected_seq` on the last body this pad actually submitted — i.e.
+     *  the slot the pad claims is free. `undefined` before the first append. */
+    lastSubmittedExpectedSeq: (): number | undefined => appendCalls.at(-1)?.body.expected_seq,
+  };
 }
 
 const success = (seq: number): AppendCallResult => ({
@@ -2678,5 +2697,120 @@ describe("R8/#675 — a reload inside the amendment's hold window", () => {
       "the original event stands, exactly once",
     ).toHaveLength(1);
     expect(appendCalls, "and nothing further was ever sent").toHaveLength(1);
+  });
+});
+
+// W3 task 1 (device-link scoring gaps, §5) — the pad's own ledger cursor.
+describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 1)", () => {
+  // THE DEFECT: `sinceSeq`/`expectedSeq` read the ARRAY LENGTH as if it were
+  // the ledger tip. That is true only while the ledger is gapless. A 409
+  // renegotiation makes it sparse: our ack is merged at the SERVER's seq
+  // (`runDrain`'s `confirmedSeq`) while the foreign row that caused the
+  // conflict is read inside `resolveConflict` and never committed. Length 3
+  // over {1,2,4} then asks the poll for `seq > 3`, so the foreign seq 3 is
+  // skipped FOREVER — nothing ever lowers the length again, and only an
+  // `initialEvents` re-seed heals it.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const POLL_MS = 1_000;
+
+  /** One committed ledger row at `seq`. Only the seq matters to these tests;
+   *  the type/payload just have to fold through the generic module. */
+  const slotEvent = (seq: number): EventEnvelope => ({
+    id: `e-${seq}`,
+    fixtureId: "fx-1",
+    seq,
+    type: "generic.score",
+    payload: { by: "H", points: 1 },
+    recordedAt: new Date(Date.UTC(2026, 8, 22, 0, 0, seq)).toISOString(),
+    recordedBy: "user-1",
+  });
+
+  /** Thin wrapper over this suite's own `mountPipeline`/`fakeTransport` — not
+   *  a second rig. It only does the two settling steps every case here needs:
+   *  `neverConfirmConnector` so a REAL poll interval is armed (the suite's
+   *  default `autoConfirmConnector` confirms synchronously and never polls, so
+   *  `listEventsSince` would never be called at all and `lastSinceSeq()` would
+   *  be vacuously undefined), then one poll tick so the cursor actually
+   *  crosses the wire. */
+  async function renderPipeline(initialEvents: EventEnvelope[], appendResults: AppendCallResult[] = []) {
+    const rig = fakeTransport({ appendResults });
+    const pad = mountPipeline(
+      baseParams({
+        transport: rig.transport,
+        initialEvents,
+        streamConnector: neverConfirmConnector(),
+        streamPollMs: POLL_MS,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0); // token door resolves, startPolling arms the interval
+    await vi.advanceTimersByTimeAsync(POLL_MS); // one tick: `sinceSeq` crosses the seam
+    return { pad, ...rig };
+  }
+
+  it("asks the poll for events after the TIP, not after the count", async () => {
+    // {1,2,4} — deliberately sparse, exactly the post-renegotiation shape.
+    const rig = await renderPipeline([slotEvent(1), slotEvent(2), slotEvent(4)]);
+
+    // The cursor the stream was handed. A count says 3 and loses seq 3 — the
+    // organiser's row — permanently; the tip says 4.
+    expect(rig.lastSinceSeq()).toBe(4);
+  });
+
+  it("derives the next expectedSeq from the TIP, not the count", async () => {
+    const rig = await renderPipeline([slotEvent(1), slotEvent(2), slotEvent(4)], [success(5)]);
+
+    await rig.pad.current.submit("generic.score", { by: "A", points: 1 });
+
+    // With a count the pad claims expected_seq 3 — a seq the server already
+    // filled — and takes a 409 it did not need, which renegotiates into
+    // another gap. It compounds.
+    expect(rig.lastSubmittedExpectedSeq()).toBe(4);
+  });
+
+  it("derives submitHeld's expectedSeq from the TIP too — the copy every real v3 tap calls", async () => {
+    // NOT in the task brief, and load-bearing: `submitHeld` carries its own
+    // copy of the same `length + pending.size` line (use-pad-pipeline.ts's
+    // soft-commit entry point), and `createSkinDispatch`'s `heldSubmit` is
+    // what every v3 pad tap actually routes through. Fixing `submit()` alone
+    // would have left the compounding-409 half live on the ONLY path a
+    // scorer ever hits — the same trap that function's own R7-42 comment
+    // already records once.
+    const rig = await renderPipeline([slotEvent(1), slotEvent(2), slotEvent(4)], [success(5)]);
+
+    const onDue = vi.fn(() => {
+      void rig.pad.current.retryDrain();
+    });
+    const held = await rig.pad.current.submitHeld("generic.score", { by: "A", points: 1 }, HOLD_MS, onDue);
+    expect(held).not.toBeNull();
+
+    await releaseHeld(rig.pad.current.queueStore, held!.heldId); // "send now", the Dock's own path
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(rig.lastSubmittedExpectedSeq()).toBe(4);
+  });
+
+  it("is unchanged for a gapless ledger — the normal case", async () => {
+    // The POSITIVE pair. A "fix" that always returned `length + 1` would
+    // satisfy every assertion above and break every ordinary pad; this is the
+    // case that catches it.
+    const rig = await renderPipeline([slotEvent(1), slotEvent(2), slotEvent(3)], [success(4)]);
+
+    expect(rig.lastSinceSeq()).toBe(3);
+    await rig.pad.current.submit("generic.score", { by: "A", points: 1 });
+    expect(rig.lastSubmittedExpectedSeq()).toBe(3);
+  });
+
+  it("asks from 0 on an empty ledger", async () => {
+    // The boundary a tip helper is most likely to get wrong: `events[len - 1]`
+    // on an empty array is `undefined`, and `undefined.seq` throws where the
+    // old `length` quietly answered 0.
+    const rig = await renderPipeline([]);
+    expect(rig.lastSinceSeq()).toBe(0);
   });
 });
