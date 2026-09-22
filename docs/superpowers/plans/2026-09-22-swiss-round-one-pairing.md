@@ -4,7 +4,7 @@
 
 **Goal:** Every Swiss stage pairs round 1 top-vs-bottom by default, and the organiser can pick the mode for round 1 only, from a split button on Pair next.
 
-**Architecture:** A pure shared module `apps/web/src/lib/swiss-pairing.ts` owns the rule (`effectiveSwissPairing`, `swissHasDecidedRound`, the hint builder). `swissGen` in `server/usecases/stages.ts` and the desk (`stages-panel.tsx` → `stage-rail.tsx`) both call it. `POST /stages/{id}/generate` gains an optional `{ pairing }` body; the stored `stages.config.pairing` is never written.
+**Architecture:** A pure shared module `apps/web/src/lib/swiss-pairing.ts` owns the rule (`effectiveSwissPairing`, the hint builder). `swissGen` in `server/usecases/stages.ts` and the desk (`stages-panel.tsx` → `stage-rail.tsx`) both call it. `POST /stages/{id}/generate` gains an optional `{ pairing }` body; the stored `stages.config.pairing` is never written.
 
 **Tech Stack:** Next.js (repo's own version — read `node_modules/next/dist/docs/` before touching routes), TypeScript, zod, postgres.js, vitest (`environment: "node"`), Playwright, pnpm.
 
@@ -16,7 +16,9 @@
 - `pnpm`, not `npm`.
 - `stages.config` is never written by this feature.
 - `division_events.payload.fixture_ids` of `fixtures_generated` is the UNDO contract (undo DELETEs those ids, `history.ts:203-215,340-352`). It must stay exactly `createdIds` (newly inserted rows). Seated ids go in `seated_fixture_ids`.
-- An override that cannot take effect is refused with 422, never swallowed: non-Swiss stage, first Generate (shell mint), nothing left to pair, or a decided Swiss round exists.
+- An override that cannot take effect is refused with 422, never swallowed: non-Swiss stage, first Generate (shell mint), nothing left to pair, or the round being paired is not `round_no = 1`.
+- "Round 1" is the round NUMBER from `nextUnseatedSwissRound`, never "no decided board" (odd-field byes are `forfeited` at seat time).
+- **Sequencing:** Task 1 and Task 3's schema test/schema do not touch Swiss machinery. Task 2, Task 3's route (it calls Task 2's signature), Task 4 and Task 5 start only after PR #831 (swiss-fix session: `latestSwissRoundWithAnySeat`, `clearSwissFixtureSeats`, the `swissRoundHasPlayedResult` bye exemption) has merged and this branch is rebased onto it. Re-pin every line number in Tasks 2 and 4 after that rebase.
 - Every new user-facing string in all 4 dictionaries `apps/web/src/dictionaries/{en,fr,es,nl}/ui.json`, then `pnpm i18n:gen-keys` (regenerates `apps/web/src/lib/i18n-keys.ts`).
 - UI: one DOM for all widths (`max-md:*`), tap targets ≥44px (`min-h-11`), no horizontal page scroll at 320/768/1280.
 - Vitest: run from `apps/web`, JSON reporter, judge only `numPassedTests`/`numTotalTests` and confirm `.testResults[].name` paths are in THIS worktree. DB suites need a fresh local DB (`seazn-local-env` skill: `db:apply` + `sync:sports`, `DB_SCHEMA` set).
@@ -32,19 +34,17 @@
 - Test: `apps/web/src/lib/__tests__/swiss-pairing.test.ts`
 
 **Interfaces:**
-- Consumes: `isSwissBoardSeated` from `@/lib/swiss-shell`; `pairRound`, `SwissStanding` from `@seazn/engine/scheduling`; `EntrantId` from `@seazn/engine/core`.
+- Consumes: `pairRound`, `SwissStanding` from `@seazn/engine/scheduling`; `EntrantId` from `@seazn/engine/core`.
 - Produces:
   ```ts
   export type SwissPairing = "fold" | "rank_adjacent";
   export const SWISS_PAIRINGS: readonly SwissPairing[];
-  export const SWISS_DECIDED_STATUSES: ReadonlySet<string>;           // decided, finalized, forfeited
   export const SWISS_PAIRING_ROUND_ONE_ONLY_CODE = "SWISS_PAIRING_ROUND_ONE_ONLY";
   export const SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE: string;
   export const SWISS_PAIRING_NOT_SWISS_CODE = "SWISS_PAIRING_NOT_SWISS";
   export const SWISS_PAIRING_NOT_SWISS_MESSAGE: string;
   export function storedSwissPairing(config: Record<string, unknown>): SwissPairing;
-  export function swissHasDecidedRound(fixtures: readonly SwissDecidedRow[]): boolean;
-  export function effectiveSwissPairing(i: { override?: SwissPairing; stored: SwissPairing; hasDecidedRound: boolean }): SwissPairing;
+  export function effectiveSwissPairing(i: { override?: SwissPairing; stored: SwissPairing; round: number }): SwissPairing;
   export function roundOnePairs(fieldSize: number, pairing: SwissPairing): Array<[number, number]>;
   ```
 
@@ -59,32 +59,23 @@ import {
   effectiveSwissPairing,
   roundOnePairs,
   storedSwissPairing,
-  swissHasDecidedRound,
-  SWISS_DECIDED_STATUSES,
 } from "@/lib/swiss-pairing";
-
-const board = (status: string, seated = true) => ({
-  home_entrant_id: seated ? "a" : null,
-  away_entrant_id: seated ? "b" : null,
-  outcome: null,
-  status,
-});
 
 describe("effectiveSwissPairing", () => {
   // Empty case FIRST (AGENTS rule: a ladder states its empty case first).
-  it("no override, no decided round, fold stored ⇒ fold", () => {
-    expect(effectiveSwissPairing({ stored: "fold", hasDecidedRound: false })).toBe("fold");
+  it("no override, round 1, fold stored ⇒ fold", () => {
+    expect(effectiveSwissPairing({ stored: "fold", round: 1 })).toBe("fold");
   });
   it("round 1 of a rank_adjacent stage defaults to fold (ruling C)", () => {
-    expect(effectiveSwissPairing({ stored: "rank_adjacent", hasDecidedRound: false })).toBe("fold");
+    expect(effectiveSwissPairing({ stored: "rank_adjacent", round: 1 })).toBe("fold");
   });
-  it("after a decided round the stored mode applies", () => {
-    expect(effectiveSwissPairing({ stored: "rank_adjacent", hasDecidedRound: true })).toBe("rank_adjacent");
-    expect(effectiveSwissPairing({ stored: "fold", hasDecidedRound: true })).toBe("fold");
+  it.each([2, 3, 4])("round %i uses the stored mode", (round) => {
+    expect(effectiveSwissPairing({ stored: "rank_adjacent", round })).toBe("rank_adjacent");
+    expect(effectiveSwissPairing({ stored: "fold", round })).toBe("fold");
   });
   it("an override wins in round 1", () => {
-    expect(effectiveSwissPairing({ override: "rank_adjacent", stored: "fold", hasDecidedRound: false })).toBe("rank_adjacent");
-    expect(effectiveSwissPairing({ override: "fold", stored: "rank_adjacent", hasDecidedRound: false })).toBe("fold");
+    expect(effectiveSwissPairing({ override: "rank_adjacent", stored: "fold", round: 1 })).toBe("rank_adjacent");
+    expect(effectiveSwissPairing({ override: "fold", stored: "rank_adjacent", round: 1 })).toBe("fold");
   });
 });
 
@@ -94,15 +85,6 @@ describe("storedSwissPairing", () => {
     expect(storedSwissPairing({ pairing: "nonsense" })).toBe("fold");
     expect(storedSwissPairing({ pairing: "rank_adjacent" })).toBe("rank_adjacent");
   });
-});
-
-describe("swissHasDecidedRound", () => {
-  it("empty ⇒ false", () => expect(swissHasDecidedRound([])).toBe(false));
-  it("seated but scheduled ⇒ false", () => expect(swissHasDecidedRound([board("scheduled")])).toBe(false));
-  it("unseated shell with a decided status never counts", () =>
-    expect(swissHasDecidedRound([board("decided", false)])).toBe(false));
-  it.each([...SWISS_DECIDED_STATUSES])("seated + %s ⇒ true", (s) =>
-    expect(swissHasDecidedRound([board(s)])).toBe(true));
 });
 
 describe("roundOnePairs mirrors the engine", () => {
@@ -141,18 +123,14 @@ describe("roundOnePairs mirrors the engine", () => {
 // swissGen (server) and the desk's split button (client), the same way
 // swiss-shell.ts is. Spec: docs/superpowers/specs/2026-09-22-swiss-round-one-pairing-design.md
 //
-// Round 1 (no seated, decided board yet) always defaults to top-vs-bottom:
+// Round 1 (the round being paired has round_no 1) defaults to top-vs-bottom:
 // rank-adjacent (Hammes) pairs neighbours by STANDINGS, and before any result
 // the only rank is the seed, so neighbours would be seed 1 v seed 2.
 import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import type { EntrantId } from "@seazn/engine/core";
-import { isSwissBoardSeated } from "@/lib/swiss-shell";
 
 export type SwissPairing = "fold" | "rank_adjacent";
 export const SWISS_PAIRINGS: readonly SwissPairing[] = ["fold", "rank_adjacent"];
-
-/** Kept identical to stages.ts's DECIDED set; stages.ts now imports this. */
-export const SWISS_DECIDED_STATUSES: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
 
 export const SWISS_PAIRING_ROUND_ONE_ONLY_CODE = "SWISS_PAIRING_ROUND_ONE_ONLY";
 export const SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE =
@@ -164,24 +142,16 @@ export function storedSwissPairing(config: Record<string, unknown>): SwissPairin
   return config.pairing === "rank_adjacent" ? "rank_adjacent" : "fold";
 }
 
-export type SwissDecidedRow = {
-  home_entrant_id: string | null;
-  away_entrant_id: string | null;
-  outcome: unknown;
-  status: string;
-};
-
-export function swissHasDecidedRound(fixtures: readonly SwissDecidedRow[]): boolean {
-  return fixtures.some((f) => isSwissBoardSeated(f) && SWISS_DECIDED_STATUSES.has(f.status));
-}
-
 export function effectiveSwissPairing(i: {
   override?: SwissPairing;
   stored: SwissPairing;
-  hasDecidedRound: boolean;
+  /** The round being paired — `nextUnseatedSwissRound`. Round NUMBER, never
+   *  "has a decided board": a bye is minted `forfeited` at seat time, so that
+   *  test is already true the moment an odd round 1 is paired. */
+  round: number;
 }): SwissPairing {
   if (i.override !== undefined) return i.override;
-  return i.hasDecidedRound ? i.stored : "fold";
+  return i.round === 1 ? "fold" : i.stored;
 }
 
 /** Round-1 pairs by seed position (1-based), lower seed first, sorted —
@@ -208,7 +178,7 @@ Note: the test's `engine()` helper and `roundOnePairs` share a shape on purpose 
 
 - [ ] **Step 4: Run — expect PASS**, same command; read `numPassedTests === numTotalTests` from `/tmp/sp1.json`.
 
-- [ ] **Step 5: Mutation check** — change `return i.hasDecidedRound ? i.stored : "fold";` to `return i.stored;` → the "round 1 of a rank_adjacent stage" case must go red. Revert. Replace `rank: i + 1` with `rank: fieldSize - i` in `roundOnePairs` → the n=… cases must go red. Revert.
+- [ ] **Step 5: Mutation check** — change `return i.round === 1 ? "fold" : i.stored;` to `return i.stored;` → the "round 1 of a rank_adjacent stage" case must go red. Revert. Replace `rank: i + 1` with `rank: fieldSize - i` in `roundOnePairs` → the n=… cases must go red. Revert.
 
 - [ ] **Step 6: Commit**
 
@@ -223,11 +193,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ### Task 2: Server — effective mode, round-1 override, 422s, audit
 
 **Files:**
-- Modify: `apps/web/src/server/usecases/stages.ts` — `DECIDED` (L941), `swissGen` (L970-1190), `generateStageFixtures` (L1860), `generateStageFixturesWrite` (L1991; swiss branch L2163-2168; audit L2498-2508)
+- Modify: `apps/web/src/server/usecases/stages.ts` — `swissGen` (L970-1190), `generateStageFixtures` (L1860), `generateStageFixturesWrite` (L1991; swiss branch L2163-2168; audit L2498-2508)
 - Test: `apps/web/src/server/usecases/__tests__/swiss-playoff-pairing.test.ts` (modify L193-212, L305-328; add cases)
 
 **Interfaces:**
-- Consumes (Task 1): `SwissPairing`, `SWISS_DECIDED_STATUSES`, `storedSwissPairing`, `swissHasDecidedRound`, `effectiveSwissPairing`, the four code/message constants.
+- Consumes (Task 1): `SwissPairing`, `storedSwissPairing`, `effectiveSwissPairing`, the four code/message constants.
 - Produces:
   ```ts
   export interface GenerateOptions { pairing?: SwissPairing }
@@ -248,6 +218,7 @@ import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import type { EntrantId } from "@seazn/engine/core";
 import { roundOnePairs } from "@/lib/swiss-pairing";
 import { undoDivision } from "../history";
+import { unpairSwissRound } from "../stages";
 
 /** Expected round-1 pairs as "E<a>|E<b>" names, from the shared engine-backed builder. */
 function expectedRoundOne(n: number, pairing: "fold" | "rank_adjacent"): string[] {
@@ -271,6 +242,17 @@ it("pairs round 1 top-vs-bottom by default on a rank_adjacent stage (the prod ca
   const got = (await fixturesOfRound(stageId, 1)).map((f) => pairOf(f, nameOf)).sort();
   expect(got).toEqual(expectedRoundOne(10, "fold"));
   expect(got).not.toEqual(expectedRoundOne(10, "rank_adjacent")); // differential
+});
+
+it("ODD field: round 1 defaults to fold, and after Unpair a Neighbours pick still works (the bye is 'forfeited' at seat time)", async () => {
+  const { auth, nameOf, stageId } = await newSwiss(7, { pairing: "rank_adjacent" });
+  await generateStageFixtures(auth, stageId);
+  const real = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
+  expect(real.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(7, "fold"));
+  await unpairSwissRound(auth, stageId);
+  await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" }); // must not 422
+  const again = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
+  expect(again.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(7, "rank_adjacent"));
 });
 
 it("a round-1 override of rank_adjacent pairs seed neighbours, and leaves config untouched", async () => {
@@ -367,29 +349,31 @@ Before relying on `toMatchObject({ status, code })`: open `apps/web/src/lib/erro
 1. Imports: add
    ```ts
    import {
-     type SwissPairing, SWISS_DECIDED_STATUSES, storedSwissPairing, swissHasDecidedRound,
-     effectiveSwissPairing, SWISS_PAIRING_ROUND_ONE_ONLY_CODE, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE,
+     type SwissPairing, storedSwissPairing, effectiveSwissPairing,
+     SWISS_PAIRING_ROUND_ONE_ONLY_CODE, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE,
      SWISS_PAIRING_NOT_SWISS_CODE, SWISS_PAIRING_NOT_SWISS_MESSAGE,
    } from "@/lib/swiss-pairing";
    ```
-   and replace L941 `const DECIDED = new Set([...])` with `const DECIDED = SWISS_DECIDED_STATUSES;`.
+   Leave `DECIDED` (L941) and the `cascadeRank` condition's decided-board test exactly as they are.
 2. `export interface GenerateOptions { pairing?: SwissPairing }` above `generateStageFixtures`.
 3. `SwissGenResult` → `{ gen; seatedCount; reshaped; pairing: SwissPairing | null; defaultPairing: SwissPairing | null; round: number | null; seatedIds: string[] }`. Every existing `return` in `swissGen` that seats nothing returns `pairing: null, defaultPairing: null, round: null, seatedIds: []`.
 4. `swissGen(..., existing, override?: SwissPairing)`:
    - Shell-mint branch (`existing.length === 0`, L983) and `target === null` branch (L997): first line `if (override !== undefined) throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);`
-   - Replace `const rankAdjacent = cfg.pairing === "rank_adjacent";` (L1017) with:
+   - Directly after the `target === null` return (L997-999), before the `target > 1` readiness check and before any write:
      ```ts
-     const hasDecidedRound = swissHasDecidedRound(existing);
-     if (override !== undefined && hasDecidedRound) {
+     if (override !== undefined && target !== 1) {
        throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
      }
+     ```
+     Round NUMBER, never "a decided board exists": on an odd field the bye is minted `forfeited` + award at seat time (swiss-fix review, 2026-09-22), and an ad-hoc fixture can sit at `maxRound + 1` fully seated.
+   - Replace `const rankAdjacent = cfg.pairing === "rank_adjacent";` (L1017) with:
+     ```ts
      const stored = storedSwissPairing(cfg);
-     const defaultPairing = effectiveSwissPairing({ stored, hasDecidedRound });
-     const pairing = effectiveSwissPairing({ override, stored, hasDecidedRound });
+     const defaultPairing = effectiveSwissPairing({ stored, round: target });
+     const pairing = effectiveSwissPairing({ override, stored, round: target });
      const rankAdjacent = pairing === "rank_adjacent";
      ```
-     The 422 must precede every write in `swissGen` (the reshape and the seat UPDATEs come later — keep it that way).
-   - L1075 condition becomes `if (rankAdjacent && hasDecidedRound)` (same meaning, one derivation).
+     The `cascadeRank` fill (L1075) keeps its own condition untouched.
    - In the seat block (L1157-1189) add `returning id` to each `update fixtures` that seats a board or the bye, collect into `const seatedIds: string[]`, and return `{ ..., pairing, defaultPairing, round: target, seatedIds }`.
 5. `generateStageFixtures(auth, stageId, opts: GenerateOptions = {})` passes `opts` to `generateStageFixturesWrite(auth, stageId, opts)`. `generateStageFixturesUnpublished` passes `{}`.
 6. In `generateStageFixturesWrite`, right after the stage row is read and before any write: `if (opts.pairing !== undefined && stage.kind !== "swiss") throw new HttpError(422, SWISS_PAIRING_NOT_SWISS_MESSAGE, SWISS_PAIRING_NOT_SWISS_CODE);`. Swiss branch (L2165): `swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing, opts.pairing)`; keep the result in `let swissAudit: Record<string, unknown> | undefined` =
@@ -402,7 +386,7 @@ Before relying on `toMatchObject({ status, code })`: open `apps/web/src/lib/erro
 
 - [ ] **Step 4: Run — expect PASS** (same command). Then run the other Swiss suites that share `swissGen`: `pnpm exec vitest run src/server/usecases/__tests__/swiss --reporter=json --outputFile=/tmp/sp2b.json` and list `.testResults[].name` — every `swiss*.test.ts` in the dir must appear (the positional is a literal filename filter). Any red that asserts round-1 adjacency without an override is a test pinning the old default: add `{ pairing: "rank_adjacent" }` to its round-1 call with the same comment as Step 1 — never loosen an assertion.
 
-- [ ] **Step 5: Mutations** (each must go red, then revert): (a) replace `pairing` with `stored` in `rankAdjacent`; (b) delete the `hasDecidedRound` 422; (c) drop `opts.pairing` from the `swissGen` call; (d) put `swiss.seatedIds` into `fixture_ids` (the Undo test must go red); (e) delete the non-swiss 422.
+- [ ] **Step 5: Mutations** (each must go red, then revert): (a) replace `pairing` with `stored` in `rankAdjacent`; (b) delete the `target !== 1` 422; (c) drop `opts.pairing` from the `swissGen` call; (d) put `swiss.seatedIds` into `fixture_ids` (the Undo test must go red); (e) delete the non-swiss 422.
 
 - [ ] **Step 6: Typecheck + commit**
 
@@ -497,13 +481,13 @@ openapi.ts L130: add `request: S.GenerateStageInput,` and `errors: [400, 422]`, 
 - Regenerate: `apps/web/src/lib/i18n-keys.ts` via `pnpm i18n:gen-keys`
 
 **Interfaces:**
-- Consumes: `SwissPairing`, `storedSwissPairing`, `swissHasDecidedRound`, `effectiveSwissPairing`, `roundOnePairs` (Task 1); POST body `{ pairing }` (Task 3).
+- Consumes: `SwissPairing`, `storedSwissPairing`, `effectiveSwissPairing`, `roundOnePairs` (Task 1); POST body `{ pairing }` (Task 3).
 - Produces (StageRail props):
   ```ts
   /** Swiss only, and only while a round waits to be paired; null otherwise. */
   swissPairingMenu: {
     round: number;               // nextUnseatedSwissRound
-    choosable: boolean;          // !swissHasDecidedRound
+    choosable: boolean;          // round === 1
     defaultPairing: SwissPairing;
     stored: SwissPairing;
     fieldSize: number;           // activeEntrantIds.length
@@ -528,20 +512,19 @@ openapi.ts L130: add `request: S.GenerateStageInput,` and `errors: [400, 422]`, 
 Then `cd /Users/ashokhein/github/seazn.club-wt/swiss-round-one-pairing && pnpm i18n:gen-keys; echo EXIT=$?`.
 
 - [ ] **Step 2: Panel wiring** (`stages-panel.tsx`)
-  - Import `{ type SwissPairing, storedSwissPairing, swissHasDecidedRound, effectiveSwissPairing }` from `@/lib/swiss-pairing`.
+  - Import `{ type SwissPairing, storedSwissPairing, effectiveSwissPairing }` from `@/lib/swiss-pairing`.
   - Beside `swissHasUnseated` (L900):
     ```ts
     const swissPairingMenu = (() => {
       if (stage.kind !== "swiss" || fixtureCount === 0 /* shells not minted */) return null;
       const round = nextUnseatedSwissRound(swissShellFixtures);
       if (round === null) return null;
-      const hasDecidedRound = swissHasDecidedRound(swissShellFixtures);
       const stored = storedSwissPairing(stage.config);
-      return { round, choosable: !hasDecidedRound, stored, fieldSize: activeEntrantIds.length,
-               defaultPairing: effectiveSwissPairing({ stored, hasDecidedRound }) };
+      return { round, choosable: round === 1, stored, fieldSize: activeEntrantIds.length,
+               defaultPairing: effectiveSwissPairing({ stored, round }) };
     })();
     ```
-    (`fixtureCount` here is `stageFixtures.length`; `swissShellFixtures` rows carry `status` — confirm the `FixtureRow` type has it; it does at the fetch, add it to the mapped shape if TS says otherwise.)
+    (`fixtureCount` here is `stageFixtures.length`.)
   - `act(stageId, action, opts?: { pairing?: SwissPairing })`; generate branch sends `json: opts?.pairing ? { pairing: opts.pairing } : {}`.
   - Pass `swissPairingMenu={swissPairingMenu}` to `<StageRail>`.
 

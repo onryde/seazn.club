@@ -22,10 +22,15 @@ writes to `stages.config` are rules, rank overrides and ladder order).
 ## Rulings
 
 1. **C — round 1 is top-vs-bottom by default, on every Swiss stage.** "Round 1"
-   means *no seated, decided Swiss fixture exists yet* — the same test that
-   gates `cascadeRank` today (`stages.ts:1074`). Unpair of round 1 therefore
-   re-opens it. From the first decided round on, the stage's stored
-   `config.pairing` applies exactly as today.
+   means *the round being paired is `round_no = 1`* (`nextUnseatedSwissRound`
+   returns 1). Unpair of round 1 therefore re-opens it. From round 2 on, the
+   stage's stored `config.pairing` applies exactly as today.
+   (Amended 2026-09-22 after the swiss-fix session's overlap review. The first
+   draft used "no seated, decided board exists", which is false on every odd
+   field the instant round 1 is paired — the bye is minted `forfeited` with an
+   award at seat time — so a partly-seated round 1 rescued by Unpair (#831)
+   would have fallen back to the stored mode and refused the pick. An ad-hoc
+   fixture at `maxRound + 1` cannot move the round number either.)
 2. **A — an organiser may pick the mode for round 1 only**, on every Swiss
    stage (plain and Hammes). The pick applies to that one press; it is never
    written to `stages.config`.
@@ -43,14 +48,15 @@ Later rounds follow the stage's stored mode regardless of what round 1 used
 ### Effective mode — one pure function beside `swissGen`
 
 ```
-effectivePairing({ override, stored, hasDecidedRound }):
-  if override !== undefined: return override            // only reachable when !hasDecidedRound
-  if !hasDecidedRound:       return "fold"              // C
-  return stored ?? "fold"                               // unchanged behaviour
+effectivePairing({ override, stored, round }):
+  if override !== undefined: return override            // only reachable when round === 1
+  if round === 1:            return "fold"              // C
+  return stored                                         // unchanged behaviour (absent ⇒ fold)
 ```
 
-- `rankAdjacent` in `swissGen` becomes `effective === "rank_adjacent"`, so the
-  `cascadeRank` fill keys off the effective mode, not the raw config.
+- `rankAdjacent` in `swissGen` becomes `effective === "rank_adjacent"`. The
+  `cascadeRank` fill condition (`rankAdjacent && a seated decided board exists`)
+  is otherwise unchanged.
 - A round-1 override of `rank_adjacent` reproduces today's 1v2 behaviour by
   seed — available on request, no longer the default.
 - The engine (`packages/engine/src/scheduling/swiss.ts`, `pairRound`) is
@@ -65,7 +71,7 @@ effectivePairing({ override, stored, hasDecidedRound }):
 - Absent/empty body ⇒ identical to today apart from ruling C. The desk's
   existing `json {}` keeps working.
 - `pairing` on a non-Swiss stage ⇒ **422**.
-- `pairing` when the target round is not round 1 (a decided round exists) ⇒
+- `pairing` when the target round is not round 1 ⇒
   **422**, message "pairing mode can only be chosen for round 1".
 - `pairing` on the very first Generate of a Swiss stage (which mints empty
   shells and seats nobody, `stages.ts:983-995`) ⇒ **422**. An override that
@@ -76,9 +82,9 @@ effectivePairing({ override, stored, hasDecidedRound }):
 The desk already derives Swiss state client-side from the shared pure module
 `lib/swiss-shell.ts` (`nextUnseatedSwissRound`, `latestSeatedSwissRound`), which
 `stages.ts` imports too. The pairing rule follows that pattern instead of a new
-payload field: a pure `lib/swiss-pairing.ts` holds `swissHasDecidedRound`,
-`effectiveSwissPairing` and the hint builder; `swissGen` and `stages-panel.tsx`
-both call it, so neither re-derives "has a decided round". (First draft proposed
+payload field: a pure `lib/swiss-pairing.ts` holds `effectiveSwissPairing` and the hint builder;
+`swissGen` and `stages-panel.tsx` both call it with the round from
+`nextUnseatedSwissRound`, so neither re-derives "is this round 1". (First draft proposed
 a server-computed `swissPairing` payload; changed while planning, 2026-09-22,
 to match the existing pattern and avoid a loader change.)
 
@@ -144,13 +150,16 @@ Unit / integration (`apps/web`, JSON reporter, `.testResults[].name` checked):
 - New: `fixtures_generated` payload carries `round`, `pairing`, `override` and
   `seated_fixture_ids` on Pair next, with `fixture_ids` still `[]`; and Undo of
   that Pair next deletes no fixture (shell count unchanged).
-- New: `effectivePairing` truth table, empty case first (no override, no
-  decided round, no stored mode ⇒ fold).
+- New: `effectivePairing` truth table, empty case first (no override, round 1,
+  no stored mode ⇒ fold).
+- New: ODD field (7): default round 1 is fold with the bottom seed on the bye;
+  Unpair then a Neighbours pick still works (the bye's `forfeited` status must
+  not close round 1).
 - Tighten `packages/engine/src/scheduling/formats-ext.test.ts:127-152` only if
   it is affected (it drives the engine directly, so ruling C should not touch
   it — confirm, do not assume).
 
-Mutation (each must go red): delete the `!hasDecidedRound` branch; ignore the
+Mutation (each must go red): delete the `round === 1` branch; ignore the
 override; drop the round-2 422; key `cascadeRank` off `cfg.pairing` again.
 
 E2E (full spec files, never `-g` slices):
