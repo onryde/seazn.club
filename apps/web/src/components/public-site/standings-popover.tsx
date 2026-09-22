@@ -29,12 +29,17 @@
 //    `overflow-x-auto` box, which computes `overflow-y: auto` too, so a panel
 //    hanging below the final row is clipped by that box — and clipping
 //    happens before stacking, so no z-index can rescue it.
+//  * Any OTHER row whose panel would still run past that box's bottom opens
+//    upward too, measured on open (`data-side="up"`). The last-row rule alone
+//    left the hub's third row of four 3px short: a two-line panel is taller
+//    than the one short row beneath it. The CSS rule stays as the default, so
+//    the last row never paints downward even for a frame.
 //
 // The panel is `z-20`, above the sticky rank cells' `z-10`. Inside a sticky
 // cell that number is local to the cell (the raise above does the work); in a
 // plain cell — a ratio column — it is what keeps a panel that hangs left over
 // the frozen rank column from being painted under it.
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /** Fired on `document` with the opener's id when a popover opens, so every
  *  other open one closes. An event rather than shared state because the
@@ -62,7 +67,17 @@ export interface StandingsPopoverProps {
  *  (points) or right-aligned (every numeric column), and the note must read
  *  the same wherever it opens. */
 export const PANEL_CLASS =
-  "absolute top-full z-20 mt-1 block w-56 rounded-lg border border-zinc-200 bg-surface p-2 text-left text-xs font-normal normal-case leading-snug tracking-normal whitespace-normal text-zinc-700 shadow-lg [tr:last-child_&]:bottom-full [tr:last-child_&]:top-auto [tr:last-child_&]:mb-1 [tr:last-child_&]:mt-0";
+  "absolute top-full z-20 mt-1 block w-56 rounded-lg border border-zinc-200 bg-surface p-2 text-left text-xs font-normal normal-case leading-snug tracking-normal whitespace-normal text-zinc-700 shadow-lg [tr:last-child_&]:bottom-full [tr:last-child_&]:top-auto [tr:last-child_&]:mb-1 [tr:last-child_&]:mt-0 data-[side=up]:bottom-full data-[side=up]:top-auto data-[side=up]:mb-1 data-[side=up]:mt-0";
+
+/** The nearest ancestor that clips its content — on both tables, the
+ *  `overflow-x-auto` scroll box. `null` when nothing clips. */
+function clippingAncestor(el: HTMLElement): HTMLElement | null {
+  for (let a = el.parentElement; a; a = a.parentElement) {
+    const cs = getComputedStyle(a);
+    if (cs.overflowX !== "visible" || cs.overflowY !== "visible") return a;
+  }
+  return null;
+}
 
 export function StandingsPopover({
   trigger,
@@ -76,6 +91,27 @@ export function StandingsPopover({
   const panelId = `${id}-panel`;
   const rootRef = useRef<HTMLSpanElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLSpanElement>(null);
+
+  // Before paint, on every open: measure the panel where the CSS put it (down,
+  // or up on the last row) and, if that runs past the bottom of the box that
+  // clips it, open it upward instead — when there is more room above than
+  // below. Written straight to the node (React renders no `data-side`, so it
+  // never overwrites it) and cleared first, so each open measures afresh.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const root = rootRef.current;
+    if (!open || !panel || !root) return;
+    delete panel.dataset.side;
+    const box = clippingAncestor(root);
+    if (!box) return;
+    const edge = box.getBoundingClientRect();
+    const top = edge.top + box.clientTop;
+    const bottom = top + box.clientHeight;
+    if (panel.getBoundingClientRect().bottom <= bottom + 0.5) return;
+    const anchor = root.getBoundingClientRect();
+    if (anchor.top - top > bottom - anchor.bottom) panel.dataset.side = "up";
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -122,6 +158,7 @@ export function StandingsPopover({
         {trigger}
       </button>
       <span
+        ref={panelRef}
         id={panelId}
         role="note"
         data-testid={testid ? `${testid}-panel` : undefined}

@@ -171,8 +171,9 @@ let seedContext: BrowserContext | undefined;
 
 /** ONE entrant's own name cell in the standings.
  *
- *  Not `filter` on the ROW: a tie-break `<details>` popover in another row's
- *  rank cell lists who that row is tied WITH, by name (`table.tieBreak`), so a
+ *  Not `filter` on the ROW: a tie-break popover in another row's rank cell
+ *  (`standings-popover.tsx` — its panel is in the markup, `hidden`, even while
+ *  closed) lists who that row is tied WITH, by name (`table.tieBreak`), so a
  *  rival's row carries her name too and a row filter resolves to two. The chip
  *  renders inside the `<th scope="row">`, which is the only place a name is its
  *  own. */

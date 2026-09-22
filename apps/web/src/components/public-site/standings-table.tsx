@@ -132,7 +132,7 @@ export function StandingsTable({
       <StandingsPopover
         testid={`standings-ratio-${key}-${row.entrantId}`}
         align="end"
-        className="-mx-1 -my-2.5 px-1 py-2.5 underline decoration-zinc-300 decoration-dotted underline-offset-4"
+        className="-my-2.5 py-2.5 underline decoration-zinc-300 decoration-dotted underline-offset-4"
         trigger={text}
       >
         {note}
@@ -206,18 +206,26 @@ export function StandingsTable({
                   `[tr:last-child_&]` classes, because the `overflow-x-auto`
                   box above clips a panel hanging below the final row, and
                   clipping happens before stacking (measured at 1280: panel
-                  bottom 704 against a container bottom of 679). */}
+                  bottom 704 against a container bottom of 679). Any other
+                  row whose panel would still cross that bottom edge is
+                  flipped the same way, measured on open (`data-side`). */}
               <td
                 className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums has-[[data-open]]:z-30 ${
                   row.rank === 1 ? "bg-amber-50" : "bg-surface"
                 }`}
               >
                 {row.tieBreak ? (
-                  // `-my-2.5 py-2.5` / `-mx-1 px-1`: the button's hit area is
-                  // the whole cell height without making the row any taller.
+                  // `-my-2.5 py-2.5`: the button's hit area takes in the cell's
+                  // vertical padding (a 40px band, not the 20px chip) without
+                  // making the row any taller; a row a wrapped name has made
+                  // taller still has its top and bottom beyond it. VERTICAL only —
+                  // a horizontal overhang (`-mx-1 px-1`, tried first) widens
+                  // the button past its own box, which the public board's
+                  // clip scan (`overflowingIn`) rightly reads as clipped
+                  // content at 320.
                   <StandingsPopover
                     testid={`standings-tie-${row.entrantId}`}
-                    className="-mx-1 -my-2.5 inline-flex items-start whitespace-nowrap px-1 py-2.5"
+                    className="-my-2.5 inline-flex items-start whitespace-nowrap py-2.5"
                     trigger={
                       <>
                         {rankChip(row.rank)}
