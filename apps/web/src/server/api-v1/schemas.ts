@@ -1592,6 +1592,11 @@ export const GenerateResult = z.object({
   reshaped: SwissReshapeResult.optional(),
 });
 
+/** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override
+ *  (spec 2026-09-22); never stored. Absent body ≡ {}. */
+export const GenerateStageInput = z.object({ pairing: z.enum(["fold", "rank_adjacent"]).optional() }).strict();
+export type GenerateStageInput = z.infer<typeof GenerateStageInput>;
+
 /** F3 Task 5 (5b) — POST /stages/{id}/rebuild's response: GenerateResult plus
  *  how many stale fixtures were deleted before regenerating. */
 export const RebuildResult = GenerateResult.extend({
