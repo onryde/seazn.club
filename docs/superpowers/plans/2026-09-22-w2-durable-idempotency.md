@@ -614,6 +614,35 @@ fails with `25P02`, and the original error is then masked by the second one. So
 the duplicate is caught where `appendEvent`'s own `withTenant` has already
 unwound, and the reconstruction opens its own transaction.
 
+**PREMISE CORRECTION (2026-09-22, measured during Task 4).** Everything above
+this line stands. What this plan got WRONG is that `23505` is the only shape a
+duplicate arrives in. It is not, and it is not even the common one:
+
+`appendEvent`'s optimistic-concurrency check (`append-event.ts:198`) compares
+`expected_seq` against the ledger tip and throws `SEQ_CONFLICT` **before the
+insert is ever attempted**. So in the ordinary sequential retry — the pad on
+flaky Wi-Fi resending a tap whose first write already COMMITTED — the tip has
+moved, the seq check fires first, and no unique violation ever happens. A catch
+matching only on `23505` never runs, and the retry is answered `409`: exactly
+the defect this wave exists to remove. Measured, red, before the fix:
+`EngineError: expected seq 1 but ledger is at 2`.
+
+`23505` covers only the genuine RACE — two requests, same key, both carrying a
+valid `expected_seq`, both past the seq check, one losing the insert.
+
+So the branch matches **both** error shapes and gates the answer on the ledger
+lookup rather than on the error code:
+
+- `SEQ_CONFLICT` **or** a `score_events_idem_key` violation, **and**
+- `replayOutcomeFor` finds that key on that fixture → answer it.
+- Lookup returns null → the `SEQ_CONFLICT` is genuine (another device got
+  ahead) and must still raise `409`.
+
+That last gate needs its own test or nothing kills a mutant that drops it: a
+stale write carrying a **new** key. It is in the suite as "still raises
+SEQ_CONFLICT when the stale write carries a NEW key", and it is the only test
+that reds when the gate is removed.
+
 - [ ] **Step 1: Write the failing test**
 
 Create `apps/web/src/server/usecases/__tests__/scoring-durable-idempotency.test.ts`:

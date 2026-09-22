@@ -11,7 +11,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
 import { EngineError } from "@seazn/engine/core";
-import { appendEvent } from "@/server/engine-db";
+import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
@@ -64,6 +64,17 @@ const REPLAY_LIMIT = {
   windowSeconds: SCORING_LIMIT.windowSeconds,
 };
 
+/** The unique index V413 added: `(fixture_id, idempotency_key)`. Matched on the
+ *  NAME, never on a bare 23505 — `score_events` carries other unique
+ *  constraints (its primary key, and the `(fixture_id, seq)` gapless index),
+ *  and treating one of THOSE as "you already sent this" would answer a real
+ *  collision with a fabricated success. Same rule as `slugs.ts:61` and
+ *  `event-import.ts:84`. */
+function isIdemKeyViolation(e: unknown): boolean {
+  const pg = e as { code?: string; constraint_name?: string } | null;
+  return pg?.code === "23505" && pg?.constraint_name === "score_events_idem_key";
+}
+
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
 const ENGINE_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -106,6 +117,13 @@ export async function scoreEvent(
   fixtureId: string,
   input: AppendEventRequest,
 ): Promise<ScoreOutcome> {
+  // A FAST PATH, no longer the guarantee (W2, design §6). Until this wave the
+  // cache was the ONLY thing standing between a retry and a second write, so a
+  // cold, down, or past-TTL Redis meant a duplicated score — silently, because
+  // cacheGet fails open. The durable answer now lives in the ledger, on the
+  // `(fixture_id, idempotency_key)` unique index, and is served from the catch
+  // block below. This check survives only to spare Postgres the round trip.
+  //
   // The replay check runs FIRST (2026-09-21, W1). A retry carrying a key we
   // have already answered performs no write, so charging it a WRITE slot made
   // retries self-amplifying against a bucket that is PER FIXTURE — every device
@@ -143,12 +161,51 @@ export async function scoreEvent(
       // doc 13 §7) + the device_link_id rider so the ledger distinguishes them.
       recordedBy: auth.userId,
       deviceLinkId: auth.deviceLinkId ?? null,
+      // W2 — the durable half of idempotency. The cache above is now only a
+      // fast path; THIS is what makes a retry safe when Redis is down, cold,
+      // or past its 24h TTL. The column is nullable and NULLs are distinct in
+      // a unique index, so un-keyed callers are entirely unaffected.
+      idempotencyKey: input.idempotency_key ?? null,
       ...(input.type === "core.void" &&
       typeof (input.payload as { event_id?: unknown })?.event_id === "string"
         ? { voids: (input.payload as { event_id: string }).event_id }
         : {}),
     });
   } catch (err) {
+    // A duplicate of a write we ALREADY recorded arrives in two shapes, and
+    // the plan for this wave only anticipated the second. Both are caught here,
+    // OUTSIDE appendEvent's own `withTenant`: a 23505 aborts that transaction,
+    // so any query issued inside it would fail 25P02 and mask the real error.
+    //
+    //   1. The sequential retry — the common case, and the one the Redis cache
+    //      used to absorb. The first write COMMITTED, so the ledger tip has
+    //      moved and the retry's `expected_seq` is now stale: appendEvent's
+    //      optimistic-concurrency check (append-event.ts:198) raises
+    //      SEQ_CONFLICT and returns BEFORE the insert is ever attempted. No
+    //      unique violation happens, so matching only on 23505 would let this
+    //      case through as a 409 — measured, not assumed (2026-09-22).
+    //   2. The genuine race — two requests carrying the same key, both with a
+    //      valid `expected_seq`, both past the seq check. The loser's insert
+    //      trips the unique index.
+    //
+    // In both, the question is the same: did THIS fixture already record THIS
+    // key? The ledger answers it. A SEQ_CONFLICT with no such key is a real
+    // conflict — another device got ahead — and must still raise 409, which is
+    // why the lookup gates the answer rather than the error code alone.
+    if (
+      input.idempotency_key &&
+      ((err instanceof EngineError && err.code === "SEQ_CONFLICT") || isIdemKeyViolation(err))
+    ) {
+      const replayed = await replayOutcomeFor(auth.orgId, fixtureId, input.idempotency_key);
+      if (replayed) {
+        await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
+        // Warm the fast path so the NEXT retry never reaches Postgres. Best
+        // effort by design: cacheSet is a no-op without Redis, and the ledger
+        // answer above does not depend on it.
+        if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
+        return replayed;
+      }
+    }
     // SEQ_CONFLICT is the hot recovery path and carries no ids — skip it.
     if (err instanceof EngineError && err.code !== "SEQ_CONFLICT") {
       err.message = await humanizeEngineMessage(auth.orgId, err.message);
