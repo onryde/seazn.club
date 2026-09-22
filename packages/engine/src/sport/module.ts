@@ -624,6 +624,36 @@ export function stampAttributionRequired(
   };
 }
 
+/** Points ONE side can take from ONE match under a cfg — standings
+ *  qualification status (spec 2026-09-22 §3.1, plan P1). `max`/`min` bound
+ *  every outcome (a bye included: it scores through `standingsDelta` as a
+ *  win). `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
+ *  `lossCeil` is the most ANY loss can still pay. A forecast that promised
+ *  "win and you're through" with `max` would be wrong for an OT win. */
+export interface MatchPointsBounds {
+  max: number;
+  min: number;
+  winFloor: number;
+  lossCeil: number;
+}
+
+/** Build bounds from a sport's win-type values, loss-type values and every
+ *  other per-side value (draw, tie, no-result). `min` never exceeds 0: a
+ *  no-result scores 0, and every shipped cfg schema is nonnegative (plan P8). */
+export function boundsFrom(
+  wins: readonly number[],
+  losses: readonly number[],
+  others: readonly number[] = [],
+): MatchPointsBounds {
+  const all = [...wins, ...losses, ...others];
+  return {
+    max: Math.max(...all),
+    min: Math.min(0, ...all),
+    winFloor: Math.min(...wins),
+    lossCeil: Math.max(...losses),
+  };
+}
+
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every
 // SportModule folds through foldMatch unchanged.
 export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> {
@@ -771,6 +801,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // §9.3 — allowed per-fixture point totals under cfg (football {3, 2}, …);
   // the conformance kit checks Σ points of both deltas is in this set.
   declaredPointsSets(cfg: Cfg): readonly number[];
+
+  // Standings qualification (spec 2026-09-22 §3.1) — per-SIDE bounds, checked
+  // against real `standingsDelta` output by conformance §9.3b.
+  matchPointsBounds(cfg: Cfg): MatchPointsBounds;
 
   officialLabel: { scorer: string }; // doc 13 §1 — 'Umpire'/'Referee'/'Arbiter'
 

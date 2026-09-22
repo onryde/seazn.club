@@ -24,7 +24,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -3972,6 +3972,11 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
         (cfg.points.draw ?? cfg.points.tie) * 2,
       ]),
     ];
+  },
+
+  matchPointsBounds(cfg) {
+    const p = cfg.points;
+    return boundsFrom([p.win], [p.loss], [p.tie, p.noResult, ...(p.draw !== undefined ? [p.draw] : [])]);
   },
 
   playerStats: CRICKET_PLAYER_STATS,

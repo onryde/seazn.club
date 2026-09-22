@@ -15,7 +15,7 @@ import {
   type StageKind,
   type StandingsDelta,
 } from "../../core/types.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -657,6 +657,10 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   // can produce no_result even when allowDraws is false).
   declaredPointsSets(cfg) {
     return [...new Set([cfg.points.w + cfg.points.l, cfg.points.d * 2])];
+  },
+
+  matchPointsBounds(cfg) {
+    return boundsFrom([cfg.points.w], [cfg.points.l], [cfg.points.d]);
   },
 
   officialLabel: { scorer: "Scorer" }, // doc 13 §1

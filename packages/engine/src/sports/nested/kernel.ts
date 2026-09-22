@@ -40,7 +40,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   FidelityBand,
   ModuleEvent,
@@ -2226,6 +2226,10 @@ export function makeNestedModule(
 
     declaredPointsSets(cfg) {
       return [cfg.points.win + cfg.points.loss];
+    },
+
+    matchPointsBounds(cfg) {
+      return boundsFrom([cfg.points.win], [cfg.points.loss]);
     },
 
     officialLabel: preset.officialLabel,

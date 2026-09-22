@@ -27,7 +27,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -990,6 +990,10 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.
   declaredPointsSets(cfg) {
     return [...new Set([cfg.points.win + cfg.points.loss, cfg.points.draw * 2])];
+  },
+
+  matchPointsBounds(cfg) {
+    return boundsFrom([cfg.points.win], [cfg.points.loss], [cfg.points.draw]);
   },
 
   officialLabel: { scorer: "Umpire" }, // ICF laws officiate through an Umpire

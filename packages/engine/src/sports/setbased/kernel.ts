@@ -34,7 +34,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import {
   personsForEntrant,
   type PlayerStatMetric,
@@ -2474,6 +2474,11 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     // clean-sweep pair, whose sum is already present).
     declaredPointsSets(cfg) {
       return [...new Set(Object.values(cfg.pointsMap).map(([w, l]) => w + l))];
+    },
+
+    matchPointsBounds(cfg) {
+      const pairs = Object.values(cfg.pointsMap) as readonly (readonly [number, number])[];
+      return boundsFrom(pairs.map((p) => p[0]), pairs.map((p) => p[1]));
     },
 
     officialLabel: preset.officialLabel,
