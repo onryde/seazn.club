@@ -41,6 +41,11 @@
 // against the expected "Published 1 division." while test 1 stays green — i.e.
 // the assertions run through the real button, route, use-case and database
 // rather than being satisfied by the state the seed already left behind.
+// Test 3 was killed the same way, with the mutation that IS its subject:
+// deleting the candidate query's `exists (select 1 from fixtures ...)` clause
+// — so the server releases the empty division the banner never counted — reds
+// it on `published: Expected 1, Received 2`, the exact disagreement the case
+// exists to catch, while tests 1 and 2 stay green.
 //
 // SEEDING. Setup reaches the state over the API (the folder's rule: "setup may
 // use the API to REACH a state"). Every step that IS the thing under test —
@@ -434,4 +439,174 @@ test("Publish all gives the public a real kick-off time, and a blocked division 
   await expect(dayOf(spectatorPage, UNSCHEDULED, rig.b.fixtureId)).toHaveCount(1);
 
   await expectNoHorizontalScroll(spectatorPage);
+});
+
+// ---------------------------------------------------------------------------
+// 3 — the division the organiser has not built yet
+// ---------------------------------------------------------------------------
+//
+// Owner ruling 2026-09-22: Publish all skips a `setup` division with NO
+// fixtures. Leaving `setup` is irreversible in effect — `public_fixtures_v`
+// stops redacting that division for ever, so anything placed in it afterwards
+// goes public the instant it is placed, with no second publish to consent to.
+// A bulk button must not arm a division nobody has built.
+//
+// WHY THIS CASE IS HERE AND NOT IN EITHER UNIT SUITE. The rule was implemented
+// TWICE, independently: the server narrowed its candidate SELECT, and the
+// board narrowed `unreleasedDivisions`. Each is unit-tested against its own
+// idea of the rule, and a green pair proves only that each side is
+// self-consistent. The defect neither can witness is DISAGREEMENT — a banner
+// promising "2 of 3" over a server that publishes one, which reads to the
+// organiser as a division that silently refused. So this case pins ONE number
+// against BOTH surfaces: the count the banner renders, and the length of the
+// report the server sends back on the wire.
+//
+// The absence is asserted on the RESPONSE BODY rather than on the outcome
+// block, deliberately. A clean publish leaves no unreleased candidate, so the
+// banner's own predicate goes false and it unmounts with the outcome inside it
+// — "no row names the empty division" would then be true of a DOM that renders
+// no rows at all, which is the vacuous shape AGENTS.md #3 warns about. The
+// wire body is the artefact that block renders, and `results` is demonstrably
+// non-empty, so the empty division being absent from it is a real absence.
+
+/** As much of `CompetitionPublishOut` (usecases/competition-schedule-publish.ts)
+ *  as this case reads. Declared here rather than imported: the use-case module
+ *  is `server-only` and pulling it into a spec would drag the app's DB graph in
+ *  with it. Only the four fields asserted below are named, so a widening of the
+ *  wire shape does not touch this file. */
+interface PublishAllReport {
+  published: number;
+  needs_acknowledgement: number;
+  blocked: number;
+  results: { division_id: string; name: string; published: boolean }[];
+}
+
+/** The number the two surfaces must agree on: divisions Publish all will
+ *  release. One number, used for the banner's sentence AND for the length of
+ *  the server's report — if either side counts the empty division, one of the
+ *  two assertions below fails, which is the whole point of the case. */
+const BUILT_CANDIDATES = 1;
+/** `total` in the sentence stays the competition's DIVISION count — the
+ *  denominator is "how much of this competition", not "how many candidates". */
+const DIVISIONS_IN_COMPETITION = 2;
+
+test("Publish all leaves a fixture-less division alone, and never reports it", async ({
+  request,
+  page,
+}) => {
+  test.setTimeout(Math.max(FLOOR_MS, 14 * API_CALL_MS + 5 * STEP_MS));
+
+  // A competition of its own, in the org test 1 minted: the rig above has
+  // already moved its divisions, and a candidate count is only readable on a
+  // board whose divisions were all seeded for it.
+  await switchActiveOrg(request, rig.orgId);
+  const comp = await publicCompetition(request, {
+    name: `Half Built ${TAG}`,
+    orgId: rig.orgId,
+    startsOn: COMP_STARTS_ON,
+    endsOn: COMP_ENDS_ON,
+  });
+  const { courts } = await seedVenueWithCourts(request, ["Court 3"], { orgId: rig.orgId });
+
+  const built = await unreleasedDivision(
+    request,
+    comp.id,
+    `Built ${TAG}`,
+    courts[0]!.id,
+    KICKOFF_A,
+  );
+
+  // The unbuilt one carries ENTRANTS but no stage, so it has no fixtures at
+  // all. That is the realistic shape of the ruling's subject — an organiser
+  // who has entered the teams and not yet drawn the matches — and a stronger
+  // case than a division with nothing in it, which a rule keyed on the wrong
+  // table might exclude by accident.
+  const unbuilt = await division(request, comp.id, {
+    name: `Unbuilt ${TAG}`,
+    sport_key: "generic",
+    variant_key: "score",
+  });
+  const seeded = await addEntrantsViaApi(request, unbuilt.id, [
+    `Unbuilt ${TAG} Home`,
+    `Unbuilt ${TAG} Away`,
+  ]);
+  expect(seeded.status, "entrants for the unbuilt division").toBeLessThan(300);
+  const noFixtures = await apiJson<unknown[]>(
+    request,
+    `/api/v1/divisions/${unbuilt.id}/fixtures`,
+  );
+  expect(noFixtures.data ?? [], "the unbuilt division must have no fixtures").toHaveLength(0);
+
+  // --- surface one: what the banner COUNTS --------------------------------
+  await switchActiveOrg(page.request, rig.orgId);
+  await page.goto(await competitionPath(page.request, comp.id, "/schedule"));
+  await expect(
+    page.getByTestId("board-unreleased-headline"),
+    "the banner must count only the division Publish all would release — an empty one is not a candidate",
+  ).toHaveText(
+    uiString("en", "board.publishAll.headline.one", {
+      count: BUILT_CANDIDATES,
+      total: DIVISIONS_IN_COMPETITION,
+    }),
+  );
+
+  // --- surface two: what the SERVER reports -------------------------------
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/v1/competitions/${comp.id}/schedule/publish`) &&
+        r.request().method() === "POST",
+    ),
+    page.getByTestId("board-publish-all").click(),
+  ]);
+  const report = ((await response.json()) as { data?: PublishAllReport }).data;
+  expect(report, `publish-all answered ${response.status()} with no report`).toBeDefined();
+  expect(report!.published, "one built division published").toBe(BUILT_CANDIDATES);
+  expect(report!.needs_acknowledgement, "nothing was left awaiting acknowledgement").toBe(0);
+  expect(report!.blocked, "nothing was blocked").toBe(0);
+  // ABSENT — not blocked, not failed, not a `published: false` row. The report
+  // names the built division and stops, and it is the same length as the
+  // number the banner rendered a moment ago.
+  expect(
+    report!.results.map((r) => r.division_id),
+    "the report must name the built division and nothing else",
+  ).toEqual([built.id]);
+  expect(
+    report!.results,
+    "the banner's count and the server's report must be the same number",
+  ).toHaveLength(BUILT_CANDIDATES);
+
+  // --- the organiser is still told -----------------------------------------
+  // A clean publish unmounts the banner (every candidate is gone), so the
+  // confirmation arrives on the board's own notice channel instead. Located by
+  // its sentence because that element carries no testid — which is also the
+  // claim: this is the copy the organiser reads.
+  await expect(
+    page.getByText(uiString("en", "board.publishAll.notice.one", { count: BUILT_CANDIDATES })),
+    "a clean Publish all must confirm itself somewhere the organiser can see",
+  ).toBeVisible();
+
+  // --- and the empty division does not re-arm the button -------------------
+  // Read after a full reload, so this is the server-rendered board's own
+  // verdict rather than a stale client tree. `schedule-action-bar` is asserted
+  // first: "no banner" on a page that failed to render is not a finding.
+  await page.reload();
+  await expect(page.getByTestId("schedule-action-bar")).toBeVisible();
+  await expect(
+    page.getByTestId("board-unreleased-banner"),
+    "a setup division with no fixtures must not arm Publish all on its own",
+  ).toHaveCount(0);
+
+  // --- the record ----------------------------------------------------------
+  const after = await Promise.all(
+    [built, unbuilt].map(async (d) => ({
+      id: d.id,
+      status: (await apiJson<{ status: string }>(page.request, `/api/v1/divisions/${d.id}`)).data
+        ?.status,
+    })),
+  );
+  expect(after, "the built division released; the unbuilt one was never touched").toEqual([
+    { id: built.id, status: "scheduled" },
+    { id: unbuilt.id, status: "setup" },
+  ]);
 });
