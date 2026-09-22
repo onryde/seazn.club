@@ -224,6 +224,14 @@ export default async function DivisionHomePage({ params }: Props) {
     <div className="space-y-8">
       {stagesByRelevance.map((stage) => {
         if (BRACKET_KINDS.has(stage.kind)) {
+          // The bracket resolves a seat's label ITSELF (it owns its own
+          // `bracket.tbd`, a different word from the namer's `schedule.tbd`
+          // in es/fr/nl), so it cannot take a pre-resolved string. What it
+          // can take is the label the seat really has: `seatLabelOf` fills in
+          // the FEED-derived one for a seat a `timing: "setup"` bracket left
+          // stored-null. Without this the schedule tab named the final's
+          // seats and the tree beside it said "TBD" — the same match, one
+          // page, two answers.
           const stageFixtures = fixtures
             .filter((f) => f.stage_id === stage.id)
             .map((f) => ({
@@ -241,14 +249,6 @@ export default async function DivisionHomePage({ params }: Props) {
                 entrantNames={entrantNames}
                 entrantLogos={entrantLogos}
                 fixtureHref={(id) => `${basePath}/fixtures/${id}`}
-              // The bracket resolves a seat's label ITSELF (it owns its own
-              // `bracket.tbd`, a different word from the namer's
-              // `schedule.tbd` in es/fr/nl), so it cannot take a pre-resolved
-              // string. What it can take is the label the seat really has:
-              // `seatLabelOf` fills in the FEED-derived one for a seat a
-              // `timing: "setup"` bracket left stored-null. Without this the
-              // schedule tab named the final's seats and the tree beside it
-              // said "TBD" — the same match, one page, two answers.
                 lookup={lookup}
                 slotText={namer.slot}
                 copy={scheduleCopy}

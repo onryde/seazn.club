@@ -65,8 +65,11 @@ const REACH_MS = STEP_MS / 4;
 /** Each test's budget is derived from ITS OWN list of full page loads, never a
  *  literal beside it (AGENTS.md 20 — a blown budget reports as whichever
  *  assertion was in flight, i.e. as a data defect). Adding a `goto` without
- *  adding a line here shrinks the allowance per step, so the lists are
- *  asserted against the journey at the top of each test. */
+ *  adding a line here shrinks the allowance per step, so each test COUNTS its
+ *  own page loads (`visit`) and compares the count with its list at the end.
+ *  Not `LIST.length === 5` at the top: that compares two literals and passes
+ *  over any journey at all, which is what the first version of this guard
+ *  did. */
 const CUP_NAVIGATIONS = [
   "?tab=fixtures — the proposal, before she leaves",
   "?tab=entrants — where the organiser withdraws her",
@@ -79,6 +82,15 @@ const LADDER_NAVIGATIONS = [
   "?tab=entrants — where the organiser withdraws her",
   "?tab=fixtures — neither picker offers her",
 ] as const;
+/** Every navigation in this file goes through here, so the number each test
+ *  checks its list against is MEASURED rather than declared. Reset at the top
+ *  of each test — the two journeys have separate lists and separate budgets. */
+let visits = 0;
+const visit = async (p: Page, url: string): Promise<void> => {
+  visits += 1;
+  await p.goto(url);
+};
+
 /** The cup journey scores six league matches over the API. */
 const CUP_API_SCORES = 6;
 /** 1280 / 768 / 320 at the end of each test. */
@@ -183,7 +195,7 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
       CUP_NAVIGATIONS.length * STEP_MS + (CUP_API_SCORES + WIDTH_CHECKS) * REACH_MS,
     ),
   );
-  expect(CUP_NAVIGATIONS.length, "the navigation list no longer describes this journey").toBe(5);
+  visits = 0; // settled against the COUNT at the end of this test
 
   const compId = await newCompetition(request, `Withdraw Walkthrough ${TAG}`);
   const divisionId = await newDivision(request, compId, "Open");
@@ -262,7 +274,7 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
   // the refusal below cannot tell a working filter from a picker that was
   // always empty.
   const fixturesUrl = await divisionPath(request, divisionId, "?tab=fixtures");
-  await page.goto(fixturesUrl);
+  await visit(page, fixturesUrl);
   const draftPanel = page.locator('[data-progression-state="draft"]');
   await expect(draftPanel, "the seeding proposal panel never appeared").toBeVisible({ timeout: STEP_MS });
   await expect(
@@ -271,12 +283,12 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
   ).toBeAttached();
 
   // ------------------------------------------------ the organiser's own hands
-  await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
+  await visit(page, await divisionPath(request, divisionId, "?tab=entrants"));
   await withdrawThroughTheScreen(page, quitter);
 
   // §2 — she cannot be seeded into the bracket. Read off the real <select>,
   // because a server-side filter says nothing about what a person is SHOWN.
-  await page.goto(fixturesUrl);
+  await visit(page, fixturesUrl);
   await expect(draftPanel).toBeVisible({ timeout: STEP_MS });
   await expect(
     draftPanel.locator("select").filter({ hasText: quitter }),
@@ -320,7 +332,7 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
 
   // And what the organiser SEES of it: the surviving name on that line, and
   // no seat anywhere still advertising a qualifier who has gone.
-  await page.goto(fixturesUrl);
+  await visit(page, fixturesUrl);
   // A settled walkover does NOT render as an ordinary draw-list row: it takes
   // `run-sheet-row.tsx`'s bye branch, which has no `data-fixture-no` at all.
   // (Looking for one is how this assertion first failed — worth recording,
@@ -338,7 +350,7 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
   await expect(liveRow).toContainText(names[3]!);
 
   // §3 — her standings row STAYS, and carries the product's own word for it.
-  await page.goto(await divisionPath(request, divisionId, "?tab=standings"));
+  await visit(page, await divisionPath(request, divisionId, "?tab=standings"));
   const chip = page.getByTestId("standings-withdrawn");
   // COUNT, not presence: "a chip exists somewhere" is equally satisfied by a
   // chip on every row, which is the opposite of what it means.
@@ -356,6 +368,11 @@ test("an organiser withdraws a qualifier, and the draw walks her line over inste
     await expectNoHorizontalScroll(page);
   }
   await page.setViewportSize({ width: 1280, height: 900 });
+
+  // The budget's premise, against what this test ACTUALLY did.
+  expect(visits, "the cup navigation list no longer describes this journey").toBe(
+    CUP_NAVIGATIONS.length,
+  );
 });
 
 test("the same organiser withdraws a rung from the club ladder, and the challenge picker stops offering her", async ({
@@ -365,7 +382,7 @@ test("the same organiser withdraws a rung from the club ladder, and the challeng
   test.setTimeout(
     Math.max(120_000, LADDER_NAVIGATIONS.length * STEP_MS + WIDTH_CHECKS * REACH_MS),
   );
-  expect(LADDER_NAVIGATIONS.length, "the navigation list no longer describes this journey").toBe(3);
+  visits = 0; // settled against the COUNT at the end of this test
 
   // A SECOND division, because a ladder is a different shape from a cup and
   // the first test's division cannot be one. Same organiser, same evening.
@@ -405,18 +422,18 @@ test("the same organiser withdraws a rung from the club ladder, and the challeng
   const quitter = nameOf.get(quitterId)!;
 
   const fixturesUrl = await divisionPath(request, divisionId, "?tab=fixtures");
-  await page.goto(fixturesUrl);
+  await visit(page, fixturesUrl);
   // BEFORE: both pickers offer her.
   await expect(
     page.locator("select").filter({ hasText: quitter }),
     "she was never offered — the refusal below would prove nothing",
   ).toHaveCount(2);
 
-  await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
+  await visit(page, await divisionPath(request, divisionId, "?tab=entrants"));
   await withdrawThroughTheScreen(page, quitter);
 
   // §1 — gone from both pickers…
-  await page.goto(fixturesUrl);
+  await visit(page, fixturesUrl);
   await expect(
     page.locator("select").filter({ hasText: quitter }),
     "the challenge picker still offers the player who left",
@@ -437,4 +454,9 @@ test("the same organiser withdraws a rung from the club ladder, and the challeng
     await page.setViewportSize({ width, height: 900 });
     await expectNoHorizontalScroll(page);
   }
+
+  // The budget's premise, against what this test ACTUALLY did.
+  expect(visits, "the ladder navigation list no longer describes this journey").toBe(
+    LADDER_NAVIGATIONS.length,
+  );
 });

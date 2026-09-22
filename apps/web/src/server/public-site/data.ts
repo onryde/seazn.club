@@ -1015,7 +1015,17 @@ export async function getPublicFixture(
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
                status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional, stream_url
+               lane, is_final, third_place, conditional, stream_url,
+               -- The feed edges, listed for the same reason as the three other
+               -- reads above: PublicFixture declares them OPTIONAL, so a
+               -- select that omits them compiles clean and reads undefined at
+               -- runtime. Nothing off this row names a seat today, but the
+               -- next caller that tries would get a silent TBD rather than a
+               -- type error. (No backticks in here: inside a tagged template.)
+               (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
+               (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
+               (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
+               (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;

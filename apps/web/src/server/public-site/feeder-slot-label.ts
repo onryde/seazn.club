@@ -261,25 +261,35 @@ export function publicRoundNamer(a: {
   }
   const fixtureAt = new Map([...byStage].map(([stageId, rows]) => [stageId, stageFixtureAt(rows)]));
 
-  // The feed-label map, over EVERY fixture handed in — a division's list when
-  // the caller reads a division, a stage's when it reads a stage. `feedLabels`
-  // needs both ends of an edge in one list, so a caller that reads one stage
-  // sees only that stage's own edges; that is enough for the shape this
-  // exists for (a setup bracket's final, fed by its own semis) and is why
-  // widening a caller's read is a caller's decision, not this function's.
-  const feeds = feedLabels(
-    a.fixtures.map(
-      (f): FeedRow => ({
-        id: f.id,
-        round_no: f.round_no,
-        seq_in_round: f.seq_in_round,
-        winner_to_fixture: f.winner_to_fixture ?? null,
-        winner_to_slot: f.winner_to_slot ?? null,
-        loser_to_fixture: f.loser_to_fixture ?? null,
-        loser_to_slot: f.loser_to_slot ?? null,
-      }),
-    ),
-  );
+  // The feed-label map, built ONE STAGE AT A TIME and merged — never over the
+  // division's whole list.
+  //
+  // This is a correctness constraint, not a tidiness one. A feed label is
+  // `{round, seq}` and nothing else, and `say` below resolves those numbers
+  // inside the SEAT's stage. A cross-stage edge — `wireCrossFeeds`
+  // (usecases/stages.ts) writes them, from a league into a knockout — would
+  // hand the seat a `{round, seq}` that means something in the SOURCE stage,
+  // and the seat's own stage would then either miss it (falling back to
+  // `resolveSlotLabel`, which prints the ORGANISER board's "Winner of R1·1"
+  // on a public page) or, worse, find a DIFFERENT fixture sitting at that
+  // coordinate and name the wrong match. Both are worse than the "TBD" this
+  // branch exists to remove, because neither is visibly wrong.
+  //
+  // Feeding `feedLabels` one stage's rows at a time makes its own
+  // `!byId.has(target)` clause drop every cross-stage edge, so a seat is named
+  // only from a feeder whose `{round, seq}` its own stage can resolve. Targets
+  // are unique per stage, so merging the per-stage records cannot collide.
+  const toFeedRow = (f: NamedFixture): FeedRow => ({
+    id: f.id,
+    round_no: f.round_no,
+    seq_in_round: f.seq_in_round,
+    winner_to_fixture: f.winner_to_fixture ?? null,
+    winner_to_slot: f.winner_to_slot ?? null,
+    loser_to_fixture: f.loser_to_fixture ?? null,
+    loser_to_slot: f.loser_to_slot ?? null,
+  });
+  const feeds: ReturnType<typeof feedLabels> = {};
+  for (const rows of byStage.values()) Object.assign(feeds, feedLabels(rows.map(toFeedRow)));
   const stageOf = new Map(a.fixtures.map((f) => [f.id, f.stage_id]));
 
   const say = (stageId: string, label: SlotLabel | null): string =>

@@ -31,6 +31,11 @@
 //     — `server/usecases/schedule-ai.ts` and `server/usecases/divisions.ts`;
 //     and as the departed set itself, `status in ('withdrawn','disqualified')`
 //     — `server/usecases/officials.ts`;
+//   - TS, as a bare `=== "withdrawn"` READ plus three writes —
+//     `server/usecases/withdrawal.ts` (:126 reads, :37/:132/:235 write). This
+//     one is the sharpest of the lot: it is the module that PERFORMS a
+//     withdrawal, and it knows only that one word, so a disqualification does
+//     not travel this path at all;
 //   - TS — `components/v2/entrants-panel.tsx` (the row's own
 //     `withdrawn || disqualified`), and both schedule pages:
 //     `app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` and its division
@@ -67,11 +72,28 @@ const ENTRANTS_TABLE = join(MIGRATIONS, "v2-engine/tables/V212__entrants.sql");
  *  the query, or the query without the export, and the complement below reds.
  */
 const ENTRANTS_USECASE = resolve(WEB, "src/server/usecases/entrants.ts");
+/** Source with comments removed. `entrants.ts` QUOTES the live predicate in
+ *  `DEPARTED_STATUSES`'s own doc comment — prose that describes the rule is
+ *  not a second definition of it, and counting it as one would red this file
+ *  for being well documented. Only executable text is a definition site. */
+const withoutComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
 function liveStatuses(): string[] {
-  const src = readFileSync(ENTRANTS_USECASE, "utf8");
-  const m = /status\s+in\s*\(([^)]*)\)/i.exec(src);
-  if (!m) throw new Error(`no live-status SQL predicate in ${ENTRANTS_USECASE}`);
-  const found = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+  const src = withoutComments(readFileSync(ENTRANTS_USECASE, "utf8"));
+  // EXACTLY one, not the first one. `exec` returns the earliest match, so a
+  // second `status in (...)` added ABOVE the live predicate — a departed-set
+  // query is the obvious one — would be read as the live list instead, and
+  // the complement assertion below would then quietly assert its own
+  // inverse and still pass. Two matches is not "pick the right one", it is
+  // "this file can no longer tell which is authoritative": red, and say so.
+  const all = [...src.matchAll(/status\s+in\s*\(([^)]*)\)/gi)];
+  if (all.length === 0) throw new Error(`no live-status SQL predicate in ${ENTRANTS_USECASE}`);
+  if (all.length > 1)
+    throw new Error(
+      `${all.length} 'status in (...)' predicates in ${ENTRANTS_USECASE} — this file reads the live one by being the only one. Anchor it, or narrow this match.`,
+    );
+  const found = [...all[0]![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
   if (found.length === 0) throw new Error(`the live-status predicate names nobody`);
   return found;
 }
@@ -167,12 +189,25 @@ describe("the departed set is the schema's own complement, not a chosen pair", (
     // `alter table public.entrants`, nor a later `create table entrants`, nor
     // a `status` clause further than 400 chars into a long statement — three
     // ways for a redefinition to slip past the assertion above.
+    // Two further ways a redefinition could slip past a naive version of this:
+    //
+    //   • a `;` INSIDE a dollar-quoted body ($$ … $$, the usual shape of a
+    //     migration's DO block or function) is not a statement terminator, so
+    //     splitting on it tears one statement into halves — and an
+    //     `alter table entrants … status` living in such a block then matches
+    //     NEITHER half. Strip the bodies before splitting; nothing this scan
+    //     looks for is ever written inside one.
+    //   • the qualifier. This database holds TWO schemas and runs with
+    //     `search_path=seazn_club`, so pinning the anchor to `public.` would
+    //     miss a `seazn_club.entrants` redefinition entirely. Accept any
+    //     single identifier qualifier, or none.
+    const stripDollarQuoted = (sql: string): string => sql.replace(/\$([A-Za-z_]*)\$[\s\S]*?\$\1\$/g, " ");
     const definesStatus = (sql: string): boolean =>
-      sql
+      stripDollarQuoted(sql)
         .split(";")
         .some(
           (stmt) =>
-            /\b(alter|create)\s+table\s+(if\s+not\s+exists\s+|only\s+)*(?:"?public"?\.)?"?entrants"?\b/i.test(
+            /\b(alter|create)\s+table\s+(if\s+not\s+exists\s+|only\s+)*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?entrants"?\b/i.test(
               stmt,
             ) && /\bstatus\b/i.test(stmt),
         );

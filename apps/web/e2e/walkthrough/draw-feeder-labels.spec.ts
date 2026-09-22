@@ -54,7 +54,7 @@
 // browser.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { expect, test, type APIRequestContext, type Locator } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
   addEntrantsViaApi,
@@ -154,6 +154,34 @@ const BUDGET_MS = Math.max(
   NAVIGATIONS.length * STEP_MS + (API_SCORES + WIDTH_CHECKS) * REACH_MS,
 );
 
+/**
+ * THE COUNTER THE BUDGET IS ACTUALLY CHECKED AGAINST.
+ *
+ * The first version of this guard was `expect(NAVIGATIONS.length).toBe(11)` —
+ * a literal against a literal, which passes no matter how many page loads the
+ * journey really performs. It asserted the list was the length it is, and the
+ * comment above it claimed it asserted the list describes the test.
+ *
+ * Every navigation below goes through `visit`, which counts, and the test ends
+ * by comparing the count with the list's length. A `goto` added without a line
+ * in NAVIGATIONS now reds.
+ */
+let visits = 0;
+const visit = async (p: Page, url: string): Promise<void> => {
+  visits += 1;
+  await p.goto(url);
+};
+/** A `waitForURL` after a form submit IS a page load, and is counted as one. */
+const visitBySubmit = async (p: Page, url: RegExp): Promise<void> => {
+  visits += 1;
+  await p.waitForURL(url, { timeout: STEP_MS });
+};
+/** `createCompetitionViaUi` does two of its own (the wizard, then the page it
+ *  lands on) inside `e2e/helpers.ts`. Counted by declaration because they are
+ *  not this file's to route — and they cannot drift without that shared helper
+ *  changing, which is a different file's test to keep honest. */
+const WIZARD_LOADS = 2;
+
 /** `division-builder.tsx`'s own default for the `qualified` knob. Pinned
  *  because it is what decides the bracket has TWO rounds — and therefore a
  *  sibling-fed seat at all (AGENTS.md 19: pin what a control opens at). */
@@ -187,10 +215,11 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
 }) => {
   // Derived — see `BUDGET_MS` and the `NAVIGATIONS` list it is built from.
   test.setTimeout(BUDGET_MS);
-  // The list is the budget's only input, so it must describe THIS test. A
+  // The list is the budget's only input, so it must describe THIS test — a
   // navigation added below without a line up there silently shrinks the
-  // allowance per step, which is the shape rule 20 exists to stop.
-  expect(NAVIGATIONS.length, "the navigation list no longer describes this journey").toBe(11);
+  // allowance per step, which is the shape rule 20 exists to stop. That claim
+  // is settled at the END of this test, against a COUNT (see `visit`).
+  visits = WIZARD_LOADS;
 
   // ---------------------------------------------------------------- the draw
   // PUBLIC, because the second half of this journey is a spectator reading the
@@ -201,7 +230,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // The division through the wizard, on the Format tab, picking the template
   // that ships two stages. `createDivisionViaUi` never visits that tab and
   // always ships one `league` stage, which has no sibling-fed seat in it.
-  await page.goto(await competitionPath(request, compId, "/d/new"));
+  await visit(page, await competitionPath(request, compId, "/d/new"));
   await page.getByRole("textbox").first().fill(`Singles ${TAG}`);
   // `generic` explicitly: the wizard defaults to whichever sport sorts first
   // by NAME, and this journey scores eight matches through `generic.result`.
@@ -219,7 +248,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   await expect(leagueKo.locator("input"), "the League + Finals radio did not take").toBeChecked();
   await page.getByRole("button", { name: L["wizard.tab.scheduling"], exact: true }).click();
   await page.getByRole("button", { name: /create division/i }).click();
-  await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: STEP_MS });
+  await visitBySubmit(page, /\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/);
   const divSlug = page.url().match(/\/d\/([^/?]+)/)![1]!;
   const divisions = await apiJson<{ id: string; slug: string }[]>(
     request,
@@ -291,7 +320,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   expect(R1_2, "the two feeder sentences are identical — nothing below could tell them apart").not.toBe(R1_1);
 
   // --------------------------------------------- what the organiser now sees
-  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await visit(page, await divisionPath(request, divisionId, "?tab=fixtures"));
   const sheet = page.getByTestId("run-sheet");
   const tree = page.getByTestId("bracket-panel");
   await expect(sheet, "the draw list never rendered").toBeVisible({ timeout: STEP_MS });
@@ -356,7 +385,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   expect(completed.data!.seed_proposal?.status, "no draft proposal to confirm").toBe("draft");
 
   // THROUGH THE SCREEN: the organiser confirms the draw.
-  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await visit(page, await divisionPath(request, divisionId, "?tab=fixtures"));
   const panel = page.locator('[data-progression-state="draft"]');
   await expect(panel, "the seeding proposal panel never appeared").toBeVisible({ timeout: STEP_MS });
   const confirmBtn = panel.getByRole("button", { name: L["progression.confirmCta"]!, exact: true });
@@ -389,7 +418,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
     /^\/o\/([^/]+)\/c\/([^/]+)\/d\/([^/]+)$/,
   )!;
   const spectator = await anonPage(browser, { width: 1280, height: 900 });
-  await spectator.goto(`/shared/${orgSlug}/${compSlug}/${pubDivSlug}`);
+  await visit(spectator, `/shared/${orgSlug}/${compSlug}/${pubDivSlug}`);
   // The share link lands on Schedule; the DRAW is one tab across. Tapping is
   // what a spectator does and costs no page load — and the panels are all in
   // the ISR payload, so the bracket is ATTACHED from the first byte and only
@@ -470,7 +499,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // The match centre — where a share link actually lands, and a separate read
   // (`match-centre-load.ts`) with its own stage-scoped query. A fix applied
   // only to the division page would leave this page saying TBD.
-  await spectator.goto(publicFixturePath(orgSlug, compSlug, pubDivSlug, finalRow.id));
+  await visit(spectator, publicFixturePath(orgSlug, compSlug, pubDivSlug, finalRow.id));
   const centre = spectator.locator("main");
   await expect(centre, "the match centre never rendered").toBeVisible({ timeout: STEP_MS });
   await expect(centre, "the match centre's home seat lost its feeder").toContainText(publicR1_1);
@@ -485,7 +514,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // It is here because a read that omits the feed columns compiles clean and
   // returns undefined for them: without a surface that drives it, that select
   // is exactly the shape that ships inert.
-  await spectator.goto(`/embed/divisions/${divisionId}/bracket`);
+  await visit(spectator, `/embed/divisions/${divisionId}/bracket`);
   const embedFinal = spectator.locator(`a[href$="/fixtures/${finalRow.id}"]`).first();
   await expect(embedFinal, "the embed bracket never rendered the final").toBeVisible({ timeout: STEP_MS });
   const embedTitles = await embedFinal
@@ -501,7 +530,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // `?tab=matches` deliberately: that tab is the one built from `hubSides`,
   // the hub's own naming path. The hub lands on Overview, which shows a
   // selection rather than every match.
-  await spectator.goto(`/shared/${orgSlug}/${compSlug}?tab=matches`);
+  await visit(spectator, `/shared/${orgSlug}/${compSlug}?tab=matches`);
   const hubFinal = spectator.locator(`a[href$="/fixtures/${finalRow.id}"]`).first();
   await expect(hubFinal, "the hub never showed the final").toBeVisible({ timeout: STEP_MS });
   await expect(hubFinal, "the hub's final lost its first feeder").toContainText(publicR1_1);
@@ -539,7 +568,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // STATE 3 — one feeder resolved. The seat R1·1 fed is now a PERSON, and the
   // other seat still reads its feeder. Both halves matter: a fix that
   // replaced every label with a name, or none of them, passes half of this.
-  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  await visit(page, await divisionPath(request, divisionId, "?tab=fixtures"));
   await expect(sheet).toBeVisible({ timeout: STEP_MS });
   for (const where of [finalInList, finalInTree]) {
     await expect(where).toContainText(semiWinner);
@@ -554,4 +583,9 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
     nameById.get(seededRows.find((f) => f.id === semi2.id)!.home_entrant_id!)!,
   );
   await expectNoHorizontalScroll(page);
+
+  // …and the budget's premise, settled against what this test ACTUALLY did.
+  // Not `NAVIGATIONS.length === 11`: that compares two literals and passes
+  // over any journey at all.
+  expect(visits, "the navigation list no longer describes this journey").toBe(NAVIGATIONS.length);
 });
