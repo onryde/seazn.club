@@ -549,12 +549,30 @@ export interface FollowedRosterName {
  * whole roster under the names it has now, before anything moves. A
  * team-linked entrant carries its team's name, never one derived from a
  * roster, so it is not read (`createEntrants`).
+ *
+ * It LOCKS what it reads, until the caller commits (review 2, R2-2). Two
+ * renames of the two players of one pair used to read the pair at the same
+ * moment. The second then derived from the first player's OLD name, its
+ * guarded write found the name already moved, and the pair kept a name that
+ * named nobody's current name, for good. Locked, the second waits here and
+ * reads the pair, and its roster's names, only once the first has committed.
+ *
+ * The lock order is persons, then entrants in id order, the order
+ * `mergePersons` takes them (its `persons ... for update` comes first). A
+ * rename that took the entrants first could hold a pair while a merge of one
+ * of its players held that player and wanted the pair. The person lock is
+ * `for no key update`, what the `update persons` that follows would take
+ * anyway, so it never blocks a roster insert's foreign-key check
+ * (`for key share`) on this person.
  */
 export async function entrantNamesFollowing(tx: Tx, personId: string): Promise<PendingRosterName[]> {
+  await tx`select id from persons where id = ${personId} for no key update`;
   const entrants = await tx<{ id: string; display_name: string }[]>`
     select e.id, e.display_name
     from entrants e join entrant_members em on em.entrant_id = e.id
-    where em.person_id = ${personId} and e.team_id is null`;
+    where em.person_id = ${personId} and e.team_id is null
+    order by e.id
+    for update of e`;
   if (entrants.length === 0) return [];
   const members = await rosterNamesOf(tx, entrants.map((e) => e.id));
   return entrants.map((e) => ({
@@ -573,8 +591,11 @@ export async function entrantNamesFollowing(tx: Tx, personId: string): Promise<P
  * - when both records were on one roster, the absorbed record's seat goes.
  *
  * A custom name is never touched. Each rename is guarded on the name step one
- * read, like `patchEntrant`'s, so an explicit rename that commits first
- * stands. Returns what moved, so a merge can record it for its undo.
+ * read, like `patchEntrant`'s. Step one's lock already stops anything moving
+ * the name in between for the two callers here; the guard keeps the promise
+ * for a caller whose read was not held, so an explicit rename that landed
+ * after the read stands. Returns what moved, so a merge can record it for its
+ * undo.
  *
  * Refreshing the public pages after the commit is the caller's job.
  * `firePersonRevalidate`, which both callers already fire, expires every

@@ -17,18 +17,29 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
+import { withTenant } from "@/lib/db";
+import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 
-// The public-page refresh is asserted by spying on the two helpers the name
-// change fires, keeping the rest of the module real (stages.ts, imported by
+// The public-page refresh is asserted by spying on the two helpers an ENTRANT
+// write fires, keeping the rest of the module real (stages.ts, imported by
 // entrants.ts, still needs `fireDivisionRevalidate`).
 const fireScoreRevalidate = vi.hoisted(() => vi.fn(async () => {}));
 const dropNamedPublicDocuments = vi.hoisted(() => vi.fn());
-const firePersonRevalidate = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("@/server/public-site/revalidate", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/revalidate")>()),
   fireScoreRevalidate,
   dropNamedPublicDocuments,
-  firePersonRevalidate,
+}));
+// A PERSON write's refresh (`firePersonRevalidate`) runs for real: it reads the
+// person's rosters after the commit and drops the Redis documents of every
+// division they name. Its own call to `dropNamedPublicDocuments` is inside its
+// module, where the spy above cannot see it, so the drop is observed one layer
+// down, at the Redis DEL. Asserting only that `firePersonRevalidate` was CALLED
+// (review 2, R2-4) proved nothing about which divisions it reached.
+const cacheDel = vi.hoisted(() => vi.fn<(...keys: string[]) => Promise<void>>(async () => {}));
+vi.mock("@/lib/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cache")>()),
+  cacheDel,
 }));
 // The public player page's poll document prints opponents' names too; its
 // generation token is retired by name, so that is spied the same way.
@@ -40,7 +51,15 @@ vi.mock("@/server/public-site/player-matches-cache-keys", async (importOriginal)
 
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants, deleteEntrant, getEntrant, patchEntrant, syncEntrantRosterFromSquad } from "../entrants";
+import {
+  createEntrants,
+  deleteEntrant,
+  entrantNamesFollowing,
+  followRosterNames,
+  getEntrant,
+  patchEntrant,
+  syncEntrantRosterFromSquad,
+} from "../entrants";
 import { createPerson, patchPerson } from "../persons";
 import { mergePersons, reverseMerge } from "../person-merge";
 import { createTeam, setTeamSquad } from "../teams";
@@ -107,7 +126,23 @@ function clearRefreshSpies(): void {
   fireScoreRevalidate.mockClear();
   dropNamedPublicDocuments.mockClear();
   retireCompetitionPlayerMatches.mockClear();
-  firePersonRevalidate.mockClear();
+  cacheDel.mockClear();
+}
+
+/** Every Redis key a write has deleted so far. */
+function deletedKeys(): string[] {
+  return cacheDel.mock.calls.flat();
+}
+
+/** The public documents of each division were dropped: its schedule, standings
+ *  and entrants, derived from the key builder rather than typed here. */
+function expectDivisionDocumentsDropped(...divisionIds: string[]): void {
+  const deleted = deletedKeys();
+  for (const id of divisionIds) {
+    expect(deleted, `the public documents of division ${id}`).toEqual(
+      expect.arrayContaining(publicDivisionCacheKeys(id)),
+    );
+  }
 }
 
 /** The scope of the one `dropNamedPublicDocuments` call a write made. */
@@ -555,8 +590,7 @@ describe.skipIf(!HAS_DB)("patchPerson — derived entrant names follow a player'
     expect(await storedName(second.id)).toBe(derived(priya, renamed));
     // After the commit: the person write's own refresh, whose roster read
     // reaches every division this player is rostered in, so both of these.
-    expect(firePersonRevalidate).toHaveBeenCalledTimes(1);
-    expect(firePersonRevalidate).toHaveBeenCalledWith([sankar.id], expect.any(Object));
+    expectDivisionDocumentsDropped(one.division.id, two.division.id);
   });
 
   it("a patch that leaves the name as it was renames nothing", async () => {
@@ -572,6 +606,68 @@ describe.skipIf(!HAS_DB)("patchPerson — derived entrant names follow a player'
     await patchPerson(auth, sankar.id, { full_name: "Sankar" });
 
     expect(await storedName(pair.id)).toBe(derived(ritwik, sankar));
+  });
+
+  it("both players of one pair renamed at once: the name follows BOTH, whichever commits first", async () => {
+    // Review 2, R2-2. Each rename reads the pair's name and roster, then
+    // writes. Unserialised, the second read the pair BEFORE the first
+    // committed, so it re-derived from the first player's OLD name, and its
+    // guarded write then found the name moved and wrote nothing. The pair kept
+    // "Sankar Krishnan & Ritwik" for good, and, naming nobody's current name,
+    // it was custom from then on. Driven for real: a second connection holds
+    // the first rename uncommitted, exactly as `patchPerson` would have written
+    // it; the second rename runs into it, and only then does the first commit.
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const sankar = await seedPerson(auth, "Sankar");
+    const ritwik = await seedPerson(auth, "Ritwik");
+    const pair = await seedPair(auth, division.id, sankar, ritwik);
+    const sankarK = { ...sankar, full_name: "Sankar Krishnan" };
+    const ritwikR = { ...ritwik, full_name: "Ritwik Rao" };
+
+    let renaming!: Promise<unknown>;
+    await sql.begin(async (holder) => {
+      await holder`update persons set full_name = ${sankarK.full_name} where id = ${sankar.id}`;
+      await holder`update entrants set display_name = ${derived(sankarK, ritwik)} where id = ${pair.id}`;
+      const [held] = await holder<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      renaming = patchPerson(auth, ritwik.id, { full_name: ritwikR.full_name });
+      renaming.catch(() => {}); // awaited below; never an unhandled rejection
+      const deadline = Date.now() + 10_000;
+      while ((await waitersBlockedBy(held!.pid)) === 0) {
+        if (Date.now() > deadline) throw new Error("the second rename never queued behind the first");
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    }); // commits the first rename while the second waits on it
+
+    await renaming;
+    expect(await storedName(pair.id)).toBe(derived(sankarK, ritwikR));
+  });
+
+  it("step two never writes over a name that moved after step one read it", async () => {
+    // Review 2, R2-3: the guard on `followRosterNames`' write. Step one locks
+    // the pairs it reads (R2-2), so within one `patchPerson` or `mergePersons`
+    // nothing can move the name between the steps, and a second connection
+    // cannot reach this guard at all. It is `followRosterNames`' own contract,
+    // for any caller whose read was not held: here step one's transaction ENDS,
+    // an explicit rename commits, and step two runs afterwards on the stale
+    // read. The organiser's name must stand.
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const sankar = await seedPerson(auth, "Sankar");
+    const ritwik = await seedPerson(auth, "Ritwik");
+    const pair = await seedPair(auth, division.id, sankar, ritwik);
+
+    const pending = await withTenant(auth.orgId, (tx) => entrantNamesFollowing(tx, sankar.id));
+    expect(pending.map((p) => p.display_name)).toEqual([derived(sankar, ritwik)]);
+    await patchEntrant(auth, pair.id, { display_name: "Court Kings" });
+
+    const moved = await withTenant(auth.orgId, async (tx) => {
+      await tx`update persons set full_name = ${"Sankar Krishnan"} where id = ${sankar.id}`;
+      return followRosterNames(tx, pending);
+    });
+
+    expect(moved).toEqual([]);
+    expect(await storedName(pair.id)).toBe("Court Kings");
   });
 });
 
@@ -599,7 +695,7 @@ describe.skipIf(!HAS_DB)("mergePersons — derived entrant names follow the merg
     expect(await storedName(pair.id)).toBe(derived(survivor, ritwik));
     // After the commit, the merge's own refresh. Its roster read now finds the
     // survivor on this pair, so it reaches this division.
-    expect(firePersonRevalidate).toHaveBeenCalledWith([survivor.id, absorbed.id], expect.any(Object));
+    expectDivisionDocumentsDropped(division.id);
   });
 
   it("a custom name is left alone", async () => {

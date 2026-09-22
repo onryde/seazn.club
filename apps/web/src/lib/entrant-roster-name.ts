@@ -58,7 +58,7 @@ export interface RosterNamePerson {
  *
  * A person on both rosters takes the name they have in `next`. For a roster
  * edit that is the name they already had. For a PLAYER's rename
- * (`followPersonRename`, usecases/entrants.ts), `prior` carries the old name
+ * (`followRosterNames`, usecases/entrants.ts), `prior` carries the old name
  * the entrant's was derived from and `next` the new one. So "Sankar & Ritwik"
  * becomes "Sankar Krishnan & Ritwik" when Sankar is renamed, and Sankar keeps
  * his seat.
