@@ -574,10 +574,10 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
   // The widened scope must not reach a round it cannot legally reshape.
   // `addFixture` puts an ad-hoc swiss fixture at `maxRound + 1`, SEATED on both
   // sides (it requires two entrant ids), so a 3-round stage can hold a fully
-  // seated round 4. Handing that round to the reconcile would trip its
-  // "already partly seated" refusal and turn a Generate that works today into
-  // STAGE_NOT_READY — so the later-round filter skips seated rounds. Drop the
-  // `isSwissBoardSeated` filter in `swissGen` and this test reds.
+  // seated round 4. It trips the reconcile's "already partly seated" guard —
+  // which, on a NON-target round, skips instead of throwing. Hand the later
+  // rounds `"refuse"` in `swissGen` and this test reds with STAGE_NOT_READY,
+  // which is a Generate that works today turned into a hard refusal.
   it("an ad-hoc fixture beyond the round budget neither blocks the eager reconcile nor is reshaped", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
@@ -612,6 +612,99 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     expect(adhoc[0]!.away_entrant_id).toBe(pair[1]!.id);
   });
 
+  // I1. The eager loop must not widen the REFUSAL surface. All three of the
+  // reconcile's guards — seated, `swissRoundHasPlayedResult`, and the canonical
+  // `fixtureEvidenceSql` — fire on a later round too, and a throw there would
+  // abort the whole Generate and take the target round's pairing with it. That
+  // is the very thing "does not refuse a round it would not change" forbids for
+  // the paired round. So a NON-TARGET round that cannot be reshaped is SKIPPED
+  // and left stale; only the target round refuses out loud.
+  it("a later round carrying evidence is skipped, and the round being paired still seats", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+    // `config_snapshot` is the monotonic arm of the canonical evidence guard,
+    // and it is the ONLY thing that can block this row: no seats, no events,
+    // no played status.
+    const blocked = inRound(await fixturesOf(stageId), 3).find((f) => f.ext_key === "sw-r3-b1")!;
+    await sql`
+      update fixtures set config_snapshot = ${sql.json({ points: { w: 3 } })},
+                          config_snapshot_at = now()
+      where id = ${blocked.id}`;
+    const roundThreeBefore = inRound(await fixturesOf(stageId), 3).map((f) => f.id);
+
+    await addEntrants(auth, divisionId, 1); // six → seven
+
+    // Must NOT throw: round 3's evidence is not round 1's business.
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    expect(seatedIn(rows, 1)).toHaveLength(7);
+    expect(keysIn(rows, 1)).toEqual(["sw-r1-b1", "sw-r1-b2", "sw-r1-b3", "sw-r1-bye"]);
+    // Round 2 has nothing against it, so the eager reconcile still resized it.
+    expect(keysIn(rows, 2)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3", "sw-r2-bye"]);
+    // Round 3 was skipped whole: stale, untouched, and above all not deleted.
+    expect(keysIn(rows, 3)).toEqual(["sw-r3-b1", "sw-r3-b2", "sw-r3-b3"]);
+    expect(inRound(rows, 3).map((f) => f.id)).toEqual(roundThreeBefore);
+  });
+
+  // I2. The other half of an eager shrink, recorded rather than discovered in
+  // production: a board the field no longer needs is DELETED, and its pinned
+  // time and court go with it — now in every unseated round at once, where the
+  // lazy scope dropped one round at a time. `scheduled` status means the
+  // timetable has been PUBLISHED, so this is visible to an organiser.
+  //
+  // This is not a defect to fix here: a board that no longer exists cannot
+  // carry a slot. It is asserted so the cost is a pinned fact.
+  it("an eager shrink deletes a surplus board in a later round, pinned time and court included", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 9);
+
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 4", sort: 0, tags: [] });
+    const pinnedAt = "2030-09-09T16:45:00.000Z";
+
+    await generateStageFixtures(auth, stageId); // nine ⇒ four boards + a bye
+    const before = await fixturesOf(stageId);
+    expect(keysIn(before, 3)).toEqual([
+      "sw-r3-b1",
+      "sw-r3-b2",
+      "sw-r3-b3",
+      "sw-r3-b4",
+      "sw-r3-bye",
+    ]);
+
+    // The surplus board a 9 → 6 shrink removes, laid out in advance.
+    const surplus = inRound(before, 3).find((f) => f.ext_key === "sw-r3-b4")!;
+    const survivor = inRound(before, 3).find((f) => f.ext_key === "sw-r3-b1")!;
+    await sql`
+      update fixtures set scheduled_at = ${pinnedAt}, court_id = ${court.id}
+      where id = ${surplus.id}`;
+
+    for (let i = 0; i < 3; i++) await deleteLastEntrant(auth, divisionId);
+    expect(await activeFieldSize(divisionId)).toBe(6);
+
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    expect(keysIn(rows, 3)).toEqual(["sw-r3-b1", "sw-r3-b2", "sw-r3-b3"]);
+    // The surplus row is GONE — not emptied, not re-keyed.
+    const [gone] = await sql<{ id: string }[]>`select id from fixtures where id = ${surplus.id}`;
+    expect(gone).toBeUndefined();
+    // And its slot left the timetable with it: nothing in the stage holds that
+    // court or that time any more.
+    expect(rows.filter((f) => f.court_id === court.id)).toEqual([]);
+    const stillAt = rows.filter((f) => {
+      const at = f.scheduled_at;
+      return (at instanceof Date ? at.toISOString() : at) === pinnedAt;
+    });
+    expect(stillAt).toEqual([]);
+    // The boards the field still needs keep their identity, which is the whole
+    // point of a reconcile — the loss is confined to the surplus.
+    expect(inRound(rows, 3).find((f) => f.ext_key === "sw-r3-b1")!.id).toBe(survivor.id);
+  });
+
   // The early return still holds per round: a field that has not moved writes
   // nothing anywhere, so the ordinary Pair is untouched by the wider scope.
   it("a field that has not moved rewrites no round, paired or not", async () => {
@@ -633,7 +726,41 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
 
 // Three refusal arms, mutated one at a time. Each row below is invisible to the
 // other two guards, so no arm can cover for another.
+//
+// These are all TARGET-round rows, and deliberately so: the target keeps its
+// loud refusal while a later round is skipped instead (I1, above). The pair of
+// tests that hold that line apart are "a later round carrying evidence is
+// skipped …" and "before Start, the round being paired still refuses …".
 describe.runIf(HAS_DB)("swiss — the reconcile refuses a round that is not provably empty", () => {
+  // The eager path's own half of the asymmetry. The three tests below run
+  // post-Start (`playR1ThenWithdraw` starts the division), so without this one
+  // nothing witnesses that "skip" was applied to the later rounds only.
+  it("before Start, the round being paired still refuses on evidence, and nothing is written", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+    const [shell] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId} and ext_key = 'sw-r1-b1'`;
+    await sql`
+      update fixtures set config_snapshot = ${sql.json({ points: { w: 3 } })},
+                          config_snapshot_at = now()
+      where id = ${shell!.id}`;
+
+    await addEntrants(auth, divisionId, 1); // six → seven, so round 1 must reshape
+
+    await expect(generateStageFixtures(auth, stageId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, "STAGE_NOT_READY"),
+    );
+
+    // The whole transaction rolled back, so the later rounds the eager loop had
+    // already reshaped are back at the old field's shape too.
+    const rows = await fixturesOf(stageId);
+    for (const r of [1, 2, 3]) {
+      expect(keysIn(rows, r)).toEqual([`sw-r${r}-b1`, `sw-r${r}-b2`, `sw-r${r}-b3`]);
+    }
+  });
+
   it("refuses when a target-round shell already carries a frozen config_snapshot", async () => {
     // `config_snapshot` is monotonic where `status` is not, and is part of the
     // canonical evidence guard. No events, no award, no seats — the SQL
