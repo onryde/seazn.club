@@ -1036,6 +1036,25 @@ export function ScheduleBoard({
     [actions, entrantNames, feedLabels, pickedFixture],
   );
 
+  // Take the picked card off the board. Deliberately NOT `place(null, null)`:
+  // `place` types its instant as a non-null string and announces a time, and
+  // the MovePanel call site coerces a null `when` to `new Date()` — which is
+  // exactly why the board could not unplace before this. `moveCard` has always
+  // accepted nulls for both, and `PatchFixture` marks both `.nullable()`, so
+  // nothing below the console needed changing. The guards this inherits are
+  // `moveCard`'s own: `canEdit`, a fixture still at `scheduled` (so a decided
+  // one refuses here exactly as it refuses a move), plus the freeze, the scope
+  // lock and `expected_seq` on the server.
+  const unplace = useCallback(async () => {
+    if (!pickedFixture) return;
+    const title = cardTitle(pickedFixture, entrantNames, feedLabels, msg);
+    const ok = await actions.moveCard(pickedFixture.id, null, null);
+    if (ok) {
+      setPickedId(null);
+      setAnnounce(msg("board.announce.removed", { title }));
+    }
+  }, [actions, entrantNames, feedLabels, msg, pickedFixture]);
+
   // Esc anywhere cancels the pick.
   useEffect(() => {
     if (!pickedId) return;
@@ -1596,6 +1615,9 @@ export function ScheduleBoard({
           boardConfig={{ config: cfg, orgTz: settings.orgTz }}
           onMove={(atIso, court) => {
             void place(atIso ?? new Date().toISOString(), court);
+          }}
+          onRemove={() => {
+            void unplace();
           }}
           onClose={() => setPickedId(null)}
         />
