@@ -21,13 +21,15 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { swissRoundsForFieldSize } from "@/lib/swiss-rounds";
+import { roundOnePairs, type SwissPairingMode } from "@/lib/swiss-pairing";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
+import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -143,6 +145,44 @@ async function playRoundHomeWins(orgId: string, stageId: string, roundNo: number
   }
 }
 
+/** Expected round-1 pairs as "E<a>|E<b>" names, from the shared engine-backed
+ *  builder. Each pair is ordered the way `pairOf` orders a DB row — display-name
+ *  STRING order, so seeds 9 and 10 read "E10|E9" — or a 10-seed comparison
+ *  would differ on spelling alone and the differential below would pass
+ *  whatever got seated. */
+function expectedRoundOne(n: number, pairing: SwissPairingMode): string[] {
+  return roundOnePairs(n, pairing)
+    .map(([a, b]) => {
+      const [x, y] = [`E${a}`, `E${b}`];
+      return x < y ? `${x}|${y}` : `${y}|${x}`;
+    })
+    .sort();
+}
+
+/** A started Swiss stage over N seeded badminton entrants: the shells exist
+ *  and nobody is seated, so the next Generate pairs round 1. */
+async function newSwiss(count: number, config: Record<string, unknown>) {
+  const { auth } = await seedOrg();
+  const { divisionId, nameOf } = await seedBadmintonDivision(auth, count);
+  const [stage] = await createStages(auth, divisionId, {
+    seq: 1,
+    kind: "swiss",
+    name: "Swiss",
+    config: { rounds: swissRoundsFor(count), ...config },
+    progression: null,
+  });
+  await startDivision(auth, divisionId);
+  return { auth, divisionId, nameOf, stageId: stage!.id };
+}
+
+/** The latest `fixtures_generated` ledger row written for a stage. */
+async function lastGeneratedEvent(stageId: string): Promise<Record<string, unknown>> {
+  const [ev] = await sql<{ payload: Record<string, unknown> }[]>`
+    select payload from division_events where type = 'fixtures_generated'
+      and payload->>'stage_id' = ${stageId} order by seq desc limit 1`;
+  return ev!.payload;
+}
+
 describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real cascade", () => {
   /** Round 1 is seeded, so rank-adjacent pairs 1v2, 3v4, 5v6, 7v8 and the
    *  winners below are E1, E3, E5, E7 — i.e. SEED order among winners is
@@ -201,7 +241,9 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       progression: null,
     });
     await startDivision(auth, divisionId);
-    await generateStageFixtures(auth, stage!.id);
+    // round 1 adjacent BY OVERRIDE — the default is now fold (spec 2026-09-22);
+    // this scenario needs seed-neighbour round 1 to script the cascade
+    await generateStageFixtures(auth, stage!.id, { pairing: "rank_adjacent" });
 
     const round1 = await fixturesOfRound(stage!.id, 1);
     expect(round1.map((f) => pairOf(f, nameOf)).sort()).toEqual([
@@ -315,7 +357,9 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
       progression: null,
     });
     await startDivision(auth, divisionId);
-    await generateStageFixtures(auth, stage!.id);
+    // round 1 adjacent BY OVERRIDE — the default is now fold (spec 2026-09-22);
+    // this scenario needs seed-neighbour round 1 to script the cascade
+    await generateStageFixtures(auth, stage!.id, { pairing: "rank_adjacent" });
 
     // Round 1 is adjacent over the six pairable seeds with the bottom seed
     // sitting out — NOT the fold (which would have been E1vE4, E2vE5, E3vE6).
@@ -389,6 +433,146 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     const done = await generateStageFixtures(auth, stage!.id);
     expect(done.created).toBe(0);
     expect(await lastRoundOf(stage!.id)).toBe(declared);
+  });
+
+  // Round-1 pairing (spec 2026-09-22): round 1 defaults to top-vs-bottom on
+  // EVERY Swiss stage; `pairing` on a Generate is a round-1-only override.
+  // Each default case compares the DB seats to `expectedRoundOne` — the shared
+  // builder the desk's hint prints — so the hint is proven against a REAL
+  // swissGen seat, not only against the engine it wraps.
+
+  it("pairs round 1 top-vs-bottom by default on a rank_adjacent stage (the prod case, 10 seeds)", async () => {
+    const { auth, nameOf, stageId } = await newSwiss(10, { pairing: "rank_adjacent" });
+    await generateStageFixtures(auth, stageId);
+    const got = (await fixturesOfRound(stageId, 1)).map((f) => pairOf(f, nameOf)).sort();
+    expect(got).toEqual(expectedRoundOne(10, "fold"));
+    expect(got).not.toEqual(expectedRoundOne(10, "rank_adjacent")); // differential
+  });
+
+  it("ODD field: round 1 defaults to fold, and after Unpair a Neighbours pick still works (the bye is 'forfeited' at seat time)", async () => {
+    const { auth, nameOf, stageId } = await newSwiss(7, { pairing: "rank_adjacent" });
+    await generateStageFixtures(auth, stageId);
+    const real = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
+    expect(real.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(7, "fold"));
+    await unpairSwissRound(auth, stageId);
+    await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" }); // must not 422
+    const again = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
+    expect(again.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(7, "rank_adjacent"));
+  });
+
+  it("a round-1 override of rank_adjacent pairs seed neighbours, and leaves config untouched", async () => {
+    const { auth, nameOf, stageId } = await newSwiss(8, {});
+    const before = JSON.stringify(await configOf(stageId));
+    await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" });
+    expect((await fixturesOfRound(stageId, 1)).map((f) => pairOf(f, nameOf)).sort()).toEqual(
+      expectedRoundOne(8, "rank_adjacent"),
+    );
+    expect(JSON.stringify(await configOf(stageId))).toBe(before);
+  });
+
+  it("round 2 after a fold round 1 still pairs by the stored rank_adjacent cascade", async () => {
+    const { auth, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
+    await generateStageFixtures(auth, stageId); // round 1: fold (default)
+    await playRoundHomeWins(auth.orgId, stageId, 1);
+    await generateStageFixtures(auth, stageId); // round 2: stored mode
+    const [ev] = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from division_events where type = 'fixtures_generated'
+        and payload->>'stage_id' = ${stageId} and (payload->>'round')::int = 2`;
+    expect(ev!.payload.pairing).toBe("rank_adjacent");
+    expect(ev!.payload.override).toBe(false);
+  });
+
+  it.each([["rank_adjacent"], ["fold"]] as const)(
+    "refuses an override once a round is decided (stored %s), seating nothing",
+    async (stored) => {
+      const { auth, stageId } = await newSwiss(8, stored === "fold" ? {} : { pairing: stored });
+      await generateStageFixtures(auth, stageId);
+      await playRoundHomeWins(auth.orgId, stageId, 1);
+      await expect(generateStageFixtures(auth, stageId, { pairing: "fold" })).rejects.toMatchObject({
+        status: 422,
+        code: "SWISS_PAIRING_ROUND_ONE_ONLY",
+      });
+      const r2 = await fixturesOfRound(stageId, 2);
+      expect(r2.length).toBeGreaterThan(0); // the shells are there to be seated
+      expect(r2.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
+    },
+  );
+
+  it("refuses an override on a non-swiss stage", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedBadmintonDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "league",
+      name: "League",
+      config: {},
+      progression: null,
+    });
+    await expect(generateStageFixtures(auth, stage!.id, { pairing: "fold" })).rejects.toMatchObject({
+      status: 422,
+      code: "SWISS_PAIRING_NOT_SWISS",
+    });
+    // refused before any write: the league drew nothing
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${stage!.id}`;
+    expect(n).toBe(0);
+  });
+
+  it("refuses an override on the shell-minting first Generate", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedBadmintonDivision(auth, 8);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: swissRoundsFor(8) },
+      progression: null,
+    });
+    // no startDivision: no shells exist, so this press would only mint them
+    await expect(generateStageFixtures(auth, stage!.id, { pairing: "rank_adjacent" })).rejects.toMatchObject({
+      status: 422,
+      code: "SWISS_PAIRING_ROUND_ONE_ONLY",
+    });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${stage!.id}`;
+    expect(n).toBe(0);
+  });
+
+  it("refuses an override once every round is seated — nothing is waiting to be paired", async () => {
+    const { auth, stageId } = await newSwiss(4, {});
+    const rounds = swissRoundsFor(4);
+    for (let round = 1; round <= rounds; round++) {
+      await generateStageFixtures(auth, stageId);
+      await playRoundHomeWins(auth.orgId, stageId, round);
+    }
+    // the same press with no body is the silent no-op this override must not become
+    expect((await generateStageFixtures(auth, stageId)).created).toBe(0);
+    await expect(generateStageFixtures(auth, stageId, { pairing: "fold" })).rejects.toMatchObject({
+      status: 422,
+      code: "SWISS_PAIRING_ROUND_ONE_ONLY",
+    });
+  });
+
+  it("records the round, mode, override and seated ids — and Undo deletes no shell", async () => {
+    const { auth, divisionId, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
+    const [{ n: shellsBefore }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+    await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" }); // differs from round-1 default
+    const payload = await lastGeneratedEvent(stageId);
+    const seatedIds = (await fixturesOfRound(stageId, 1)).map((f) => f.id).sort();
+    expect(payload).toMatchObject({ round: 1, pairing: "rank_adjacent", override: true, fixture_ids: [] });
+    expect([...(payload.seated_fixture_ids as string[])].sort()).toEqual(seatedIds);
+
+    await undoDivision(auth, divisionId);
+    const [{ n: shellsAfter }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+    expect(shellsAfter).toBe(shellsBefore);
+  });
+
+  it("records override=false when the body names the default", async () => {
+    const { auth, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
+    await generateStageFixtures(auth, stageId, { pairing: "fold" }); // fold IS the round-1 default
+    expect(await lastGeneratedEvent(stageId)).toMatchObject({ pairing: "fold", override: false });
   });
 });
 
