@@ -915,26 +915,43 @@ const echoMsg = ((key: string, vars?: Record<string, string | number>) =>
 
 describe("queueStatusText", () => {
   it("offline beats every other state, even mid-resync with a full queue", () => {
-    expect(queueStatusText({ offline: true, resyncing: true, queueDepth: 4 }, identityMsg)).toBe(
+    expect(queueStatusText({ offline: true, resyncing: true, queueDepth: 4, throttled: false }, identityMsg)).toBe(
       "scorepad.queue.offline",
     );
   });
 
   it("resyncing beats a non-zero queue when not offline", () => {
-    expect(queueStatusText({ offline: false, resyncing: true, queueDepth: 4 }, identityMsg)).toBe(
+    expect(queueStatusText({ offline: false, resyncing: true, queueDepth: 4, throttled: false }, identityMsg)).toBe(
       "scorepad.queue.resyncing",
     );
   });
 
   it("a non-zero queue reports its own count", () => {
-    expect(queueStatusText({ offline: false, resyncing: false, queueDepth: 2 }, echoMsg)).toBe(
+    expect(queueStatusText({ offline: false, resyncing: false, queueDepth: 2, throttled: false }, echoMsg)).toBe(
       'scorepad.queue.pending:{"count":2}',
     );
   });
 
   it("synced when offline, resyncing and the queue are all clear", () => {
-    expect(queueStatusText({ offline: false, resyncing: false, queueDepth: 0 }, identityMsg)).toBe(
+    expect(queueStatusText({ offline: false, resyncing: false, queueDepth: 0, throttled: false }, identityMsg)).toBe(
       "scorepad.queue.synced",
+    );
+  });
+
+  // W1 (2026-09-21). The count branch is the one that would swallow this: a
+  // throttled pad ALWAYS has a backlog, so a rung below the count would never
+  // be reached and the scorer would read a bare "4 queued" with no reason.
+  it("throttled beats the queued count, which would otherwise swallow it", () => {
+    expect(queueStatusText({ offline: false, resyncing: false, queueDepth: 4, throttled: true }, identityMsg)).toBe(
+      "scorepad.queue.throttled",
+    );
+  });
+
+  // …and it does NOT displace the two rungs above it. A pad with no
+  // connection learns nothing from a 429 it never managed to send.
+  it("offline still outranks throttled", () => {
+    expect(queueStatusText({ offline: true, resyncing: false, queueDepth: 4, throttled: true }, identityMsg)).toBe(
+      "scorepad.queue.offline",
     );
   });
 });

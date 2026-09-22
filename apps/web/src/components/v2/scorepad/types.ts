@@ -54,6 +54,41 @@ export interface PendingEvent {
    *  exactly why a first-ever send (`0`) must still renegotiate on a
    *  content-matching 409 instead of assuming it is its own retry. */
   attempts: number;
+  /**
+   * W1 (2026-09-21) — how many drain passes this event has spent LOSING A SEQ
+   * RACE: incremented only where a renegotiated resend conflicted again
+   * (pipeline.ts's `sendOne` tail), never anywhere else.
+   *
+   * Deliberately NOT `attempts`. That counter is a pre-send marker written on
+   * every physical send of every outcome kind, so an event that merely sat on
+   * dead venue wifi carries a large `attempts` and no seq race at all. The
+   * conflict ceiling read `attempts` for about an hour of this wave and would
+   * have dead-lettered a scorer's point on its FIRST genuine race purely
+   * because the pad had been offline first — offline-then-contended being the
+   * normal condition of a courtside device, not an edge case.
+   *
+   * Also NOT incremented for an `indeterminate` 409 (the ledger slot was
+   * unreadable or had not caught up): that pass never proved a foreign slot
+   * and never renegotiated, and an unreadable ledger is itself usually a
+   * network symptom — counting it would rebuild the same defect one door
+   * along.
+   *
+   * Optional for records persisted before this field existed. A missing value
+   * reads 0, which fails SAFE: more passes allowed, never fewer. Nothing may
+   * ever be dropped because a counter was absent.
+   */
+  conflictPasses?: number;
+  /**
+   * W1 (2026-09-21) — epoch-ms before which this event must not touch the
+   * limiter again, set when a send came back 429 (pipeline.ts's
+   * `throttleBackoffMs`). Distinct from `heldUntil`, which is the soft-commit
+   * take-back window and is owned exclusively by queue.ts's held path: this
+   * one is pacing, not a hold, and a paced entry is not take-back-able.
+   *
+   * Absent until a first throttle. A value in the past is inert — it is
+   * overwritten by the next throttle rather than cleared.
+   */
+  retryNotBefore?: number;
   /** The most recent send failure, if any (network failure, or a 409 whose
    *  ledger slot could not be read/resolved). Absent once a send attempt has
    *  not yet failed. */
@@ -224,7 +259,10 @@ export type SendOutcome =
       kind: "stayed-queued";
       localId: string;
       idempotencyKey: string;
-      reason: "network" | "indeterminate" | "conflict-again";
+      /** W1 (2026-09-21) — `throttled` is SEPARATE from `network` on purpose:
+       *  `use-pad-pipeline` raises the offline chip on `network` alone, and a
+       *  429 is not a connectivity failure. */
+      reason: "network" | "indeterminate" | "conflict-again" | "throttled";
     };
 
 /** `reconcile()`'s verdict (pipeline.ts). Generic over the module's own

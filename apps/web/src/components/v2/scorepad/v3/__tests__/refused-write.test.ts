@@ -84,8 +84,18 @@ const PAYMENT_REQUIRED_BODY = {
 
 const RAW_402_PROSE = PAYMENT_REQUIRED_BODY.error.message;
 
-function fakeResponse(status: number, body: unknown): Response {
-  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+function fakeResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  // `headers` is not optional on a real Response, and transport.ts reads
+  // `Retry-After` off a 429 (W1, 2026-09-21) — a stub without it threw
+  // "Cannot read properties of undefined" on the 429 row of the transient
+  // sweep below. Faithful stub, not a defensive read in production code.
+  const lower = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (name: string) => lower.get(name.toLowerCase()) ?? null },
+    json: async () => body,
+  } as Response;
 }
 
 const FIXTURE_ID = "fx-band1";

@@ -42,10 +42,15 @@ import type { RejectionInfo } from "./use-pad-pipeline";
  * the 5xx never reach a rejection surface at all, so they are deliberately
  * absent rather than mapped to something reassuring.
  *
- * `CONFLICT` is deliberately ABSENT: a 409 goes to the append/replay
- * protocol's renegotiation path and never reaches this resolver, so giving it
- * copy here would be dead weight that the paired test — which pins this map
- * against `http.ts`'s own `statusCode()` — would then have to explain away.
+ * A bare `CONFLICT` is still deliberately ABSENT: a renegotiable 409 goes to
+ * the append/replay protocol and never reaches this resolver. The four
+ * `UNDO_*` codes DO reach it (W1, 2026-09-21) — they are 409s the server will
+ * refuse no matter what seq we send (`transport.ts`'s
+ * `TERMINAL_CONFLICT_CODES`), so they are surfaced rather than retried.
+ *
+ * `QUEUE_STALLED` is the one code here the SERVER never sends: `pipeline.ts`
+ * mints it when an event has spent its conflict-pass ceiling, so that a write
+ * the pad cannot land is said out loud instead of sitting at the queue head.
  */
 export const REFUSAL_KEY: Readonly<Record<string, MessageKey>> = {
   VALIDATION: "scorepad.refusal.invalid",
@@ -53,6 +58,11 @@ export const REFUSAL_KEY: Readonly<Record<string, MessageKey>> = {
   PAYMENT_REQUIRED: "scorepad.refusal.planLocked",
   FORBIDDEN: "scorepad.refusal.notAllowed",
   NOT_FOUND: "scorepad.refusal.missing",
+  UNDO_NOOP: "scorepad.refusal.undoNothing",
+  UNDO_TARGET_MISSING: "scorepad.refusal.undoMissing",
+  UNDO_ALREADY_VOIDED: "scorepad.refusal.undoAlready",
+  UNDO_NOT_UNDOABLE: "scorepad.refusal.undoNotUndoable",
+  QUEUE_STALLED: "scorepad.refusal.queueStalled",
 };
 
 /** The one sentence that is true of every refusal, known code or not. */

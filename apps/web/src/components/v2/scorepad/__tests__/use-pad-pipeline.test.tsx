@@ -436,6 +436,63 @@ describe("usePadPipeline — offline flag", () => {
   });
 });
 
+// W1 (2026-09-21). The seam between the new `throttled` reason and the chip
+// that reads it. Without this, both ends are tested and the wire between them
+// is not: `sendOne` returns the reason, `queueStatusText` renders it, and the
+// hook in between could set nothing at all and stay green.
+describe("usePadPipeline — throttled flag", () => {
+  it("a 429 raises throttled and NOT offline, keeps the tap, paces the retry, and clears once the wait is out", async () => {
+    let limited = true;
+    let appendCalls = 0;
+    const transport: PadTransport = {
+      async appendEvent() {
+        appendCalls++;
+        if (limited) return { kind: "throttled", message: "Too many requests", retryAfterMs: null };
+        return success(1);
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(pad.current.throttled).toBe(true);
+    // THE assertion this describe exists for: the venue wifi is fine, and the
+    // scorer must not be sent to go and fix it.
+    expect(pad.current.offline).toBe(false);
+    expect(pad.current.queueDepth).toBe(1); // stayed queued, never dropped
+    expect(pad.current.lastRejection).toBeNull(); // throttled, not a refusal
+    const callsAfterThrottle = appendCalls;
+
+    // Spec §4.6's pacing, driven through the real hook: the limiter has freed
+    // up, but the entry is still inside its computed wait, so a drain must NOT
+    // spend a request on it. A retry that feeds the limiter it is waiting on is
+    // the defect this backoff exists to prevent.
+    limited = false;
+    await pad.current.retryDrain();
+    expect(appendCalls).toBe(callsAfterThrottle); // the limiter was not touched
+    expect(pad.current.throttled).toBe(true);
+    expect(pad.current.queueDepth).toBe(1);
+
+    // Now let the wait elapse — in the store, the way the clock would, rather
+    // than by sleeping a whole limiter window inside a unit test.
+    const queued = await pad.current.queueStore.list();
+    await pad.current.queueStore.put({ ...queued[0]!, retryNotBefore: Date.now() - 1 });
+
+    await pad.current.retryDrain();
+    expect(appendCalls).toBeGreaterThan(callsAfterThrottle); // …and now it sends
+    expect(pad.current.throttled).toBe(false); // latched chips lie the other way
+    expect(pad.current.queueDepth).toBe(0);
+  });
+});
+
 describe("usePadPipeline — lastRejection", () => {
   it("captures a 422-class permanent rejection and clears it on the next submit", async () => {
     const { transport } = fakeTransport({

@@ -542,13 +542,20 @@ export function rejectionText(rejection: RejectionInfo | null, m: MsgFn): string
  * `resyncing`/`queueDepth` were sitting on `pipeline` unused the whole time.
  * Ports the legacy renderer's own four-way precedence verbatim: offline
  * beats resyncing beats a non-zero queue beats synced.
+ *
+ * W1 (2026-09-21) adds a fifth rung, `throttled`, AHEAD of the queued count:
+ * a rate-limited pad has a backlog too, so the count branch would otherwise
+ * swallow it and the scorer would read a bare "3 queued" with no reason and
+ * nothing to do. It sits BELOW offline because a pad with no connection is
+ * not learning anything useful from a 429 it cannot even send.
  */
 export function queueStatusText(
-  pipeline: Pick<UsePadPipelineResult, "offline" | "resyncing" | "queueDepth">,
+  pipeline: Pick<UsePadPipelineResult, "offline" | "resyncing" | "queueDepth" | "throttled">,
   m: MsgFn,
 ): string {
   if (pipeline.offline) return m("scorepad.queue.offline");
   if (pipeline.resyncing) return m("scorepad.queue.resyncing");
+  if (pipeline.throttled) return m("scorepad.queue.throttled");
   if (pipeline.queueDepth > 0) return m("scorepad.queue.pending", { count: pipeline.queueDepth });
   return m("scorepad.queue.synced");
 }
@@ -1507,8 +1514,18 @@ export interface PadHostV3Props {
    *  `SESSION_AUTH`, that request goes out unauthenticated, the token door
    *  refuses a fixture in a private competition, and a courtside device-link
    *  pad silently runs on the 15s poll instead of realtime — with no error
-   *  anywhere. Forwarded from `ScorePadProps.auth`. */
-  auth?: PadAuthMode;
+   *  anywhere. Forwarded from `ScorePadProps.auth`.
+   *
+   *  REQUIRED, not optional, and deliberately so (W1 review finding I5,
+   *  2026-09-21). `auth?:` plus a `?? SESSION_AUTH` default is the exact
+   *  shape that let this ship inert in the first place: registry.tsx simply
+   *  did not forward the prop, the default silently absorbed it, and tsc had
+   *  nothing to say. `ScorePadProps.auth` is already required and there is
+   *  exactly one mount (`registry.tsx`), so the `?` bought no caller
+   *  anything — it only disarmed the compiler. Keep it required: the next
+   *  dropped forward should be a build error, not a silent downgrade to
+   *  polling. */
+  auth: PadAuthMode;
 }
 
 interface HeldTap {

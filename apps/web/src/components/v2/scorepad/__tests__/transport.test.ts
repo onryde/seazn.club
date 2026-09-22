@@ -1,5 +1,7 @@
 // The real ScoringTransport over fetch (S10/#419 W8, network-wiring pass).
 // Every case injects its own fetch double — no server is ever contacted.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AppendEventBody } from "../pipeline";
 import {
@@ -7,6 +9,7 @@ import {
   deviceLinkTransport,
   isPermanentRefusal,
   sessionTransport,
+  TERMINAL_CONFLICT_CODES,
   type FixtureStateResult,
 } from "../transport";
 
@@ -18,10 +21,15 @@ interface Call {
 /** A hand-rolled Response stub — only `.ok`/`.status`/`.json()` are ever read
  *  by transport.ts, so this avoids depending on the platform's real Response
  *  constructor being available under vitest's node environment. */
-function fakeResponse(status: number, body: unknown): Response {
+function fakeResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  // Header lookup is case-insensitive on a real `Headers`, so the stub
+  // lowercases both sides — otherwise a test could pass only because it
+  // happened to spell the header the same way the code does.
+  const lower = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (name: string) => lower.get(name.toLowerCase()) ?? null },
     json: async () => body,
   } as Response;
 }
@@ -137,9 +145,14 @@ describe("appendEvent — outcome mapping", () => {
   // The other direction, and it matters just as much: a fix that made every
   // non-2xx permanent would throw away a scorer's tap on flaky courtside
   // wifi, which is worse than the bug it replaced.
+  // W1 (2026-09-21): 429 LEFT this table. It is still transient — the queue
+  // still keeps the tap, and `isPermanentRefusal(429)` is still false — but it
+  // no longer maps to `network-error`, because that is what put "Offline" on a
+  // pad whose wifi was fine. Its own case is in the "429 is throttled"
+  // describe below; the rest of this table is unchanged and still pins that a
+  // fix here did not make every non-2xx permanent.
   const TRANSIENT: readonly { status: number; why: string }[] = [
     { status: 408, why: "request timeout — the server explicitly invites a retry" },
-    { status: 429, why: "rate limited — retry after backoff is the correct response" },
     { status: 500, why: "server fault" },
     { status: 502, why: "bad gateway, e.g. a proxy between pad and server" },
     { status: 503, why: "deploying" },
@@ -353,6 +366,202 @@ describe("listEventsSince — ledger row validation at the wire boundary (review
   it("a non-array body rejects with a parse error", async () => {
     const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { not: "an array" } }));
     await expect(sessionTransport({ fetchFn: fn }).listEventsSince("fx-1", 0)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 (2026-09-21) — a 409 is classified by its CODE, not by its status.
+// Measured on staging: 10 queued actions stacked behind one already-undone
+// void, because every 409 took the renegotiation path, failed identically on
+// the resend, and was left at the queue HEAD forever.
+// ---------------------------------------------------------------------------
+describe("409 classification", () => {
+  const body = (code: string, extra: Record<string, unknown> = {}) => ({
+    ok: false,
+    error: { code, message: "nope", ...extra },
+  });
+
+  it.each(["UNDO_NOOP", "UNDO_TARGET_MISSING", "UNDO_ALREADY_VOIDED", "UNDO_NOT_UNDOABLE"])(
+    "%s is terminal, not renegotiable",
+    async (code) => {
+      const { fn } = fakeFetch(() => fakeResponse(409, body(code)));
+      const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", {
+        expected_seq: 1,
+        type: "core.void",
+        payload: {},
+        idempotency_key: "k",
+      });
+      expect(outcome.kind).toBe("rejected");
+      expect(outcome).toMatchObject({ code });
+    },
+  );
+
+  // The positive pair. Without it, "terminal" would also pass if EVERY 409
+  // became terminal — which would silently break the replay ruling and drop
+  // real writes.
+  it("SEQ_CONFLICT stays renegotiable", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(409, body("SEQ_CONFLICT", { current_seq: 9 })));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", {
+      expected_seq: 1,
+      type: "badminton.rally",
+      payload: {},
+      idempotency_key: "k",
+    });
+    expect(outcome).toMatchObject({ kind: "conflict", currentSeq: 9 });
+  });
+
+  // An un-migrated server sends 409 with no explicit code. It must keep
+  // today's behaviour, or a new client would wedge against an old server.
+  it("a 409 with no recognised code stays renegotiable", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(409, body("CONFLICT")));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", {
+      expected_seq: 1,
+      type: "badminton.rally",
+      payload: {},
+      idempotency_key: "k",
+    });
+    expect(outcome.kind).toBe("conflict");
+  });
+
+  // The list is not a hand-typed table: it is pinned against the codes the
+  // server's own undo path throws, so a fifth terminal refusal added there
+  // without a client entry fails HERE rather than wedging a queue in a venue.
+  it("TERMINAL_CONFLICT_CODES is exactly the set scoring.ts refuses an undo with", () => {
+    // Read as TEXT, not imported: `@/server/**` is banned from this bundle by
+    // the pad's purity gate (`__tests__/server-boundary.test.ts`) — the same
+    // trick `refusal-copy.test.ts` uses to pin against `http.ts`.
+    const src = readFileSync(join(process.cwd(), "src/server/usecases/scoring.ts"), "utf8");
+    const thrown = new Set([...src.matchAll(/"(UNDO_[A-Z_]+)"/g)].map((m) => m[1]!));
+    expect(thrown.size).toBeGreaterThan(0);
+    expect([...TERMINAL_CONFLICT_CODES].sort()).toEqual([...thrown].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 (2026-09-21) — a 429 is THROTTLED, not offline. It stays retryable (the
+// tap is kept), but telling a scorer standing in a venue with working wifi
+// that they have no connection sends them to fix the wrong thing. The bucket
+// is per FIXTURE, so a second device on the same match can cause it without
+// this scorer doing anything at all.
+// ---------------------------------------------------------------------------
+describe("429 is throttled, not offline", () => {
+  const limited = { ok: false, error: { code: "RATE_LIMITED", message: "Too many requests" } };
+
+  it("429 maps to the throttled outcome", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(429, limited));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome).toEqual({ kind: "throttled", message: "Too many requests", retryAfterMs: null });
+  });
+
+  // Our own API does not send `Retry-After` today (nothing under
+  // `src/server/api-v1` sets it) — this reads one if a server ever does, and
+  // must degrade to `null` rather than NaN until then.
+  it("carries a numeric Retry-After as milliseconds", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(429, limited, { "Retry-After": "3" }));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome).toMatchObject({ kind: "throttled", retryAfterMs: 3000 });
+  });
+
+  // `Retry-After` is legally an HTTP-date too. `Number("Wed, 21 Oct 2026…")`
+  // is NaN, and a NaN delay compares false against everything — the entry
+  // would either never send or never wait. Ignored, never guessed.
+  it("ignores an HTTP-date Retry-After instead of parsing it into NaN", async () => {
+    const { fn } = fakeFetch(() =>
+      fakeResponse(429, limited, { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" }),
+    );
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome).toMatchObject({ kind: "throttled", retryAfterMs: null });
+  });
+
+  // Positive pair: a real transport failure must STILL be a network error, or
+  // "throttled" could pass by swallowing everything.
+  it("a thrown fetch is still a network error", async () => {
+    const { fn } = fakeFetch(() => {
+      throw new Error("dns");
+    });
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome.kind).toBe("network-error");
+  });
+
+  // …and so is the other transient class. A 5xx is a server fault, not a
+  // rate limit, and must not be relabelled as one.
+  it("a 5xx is still a network error, not throttled", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(503, { ok: false, error: { code: "INTERNAL", message: "deploying" } }));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome.kind).toBe("network-error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 (2026-09-22) — an edge challenge is not OUR refusal.
+//
+// Verified against the live `seazn.club` zone: `security_level: "medium"` and
+// `browser_check: "on"`, with NO WAF custom ruleset, so no `/api/` skip — a
+// challenge can land on the scoring write path. Cloudflare's own docs: a
+// challenge "interrupts the request flow by returning a full HTML page … This
+// mechanism fails when the browser expects a non-HTML response, such as an
+// AJAX or XHR (fetch) request." A venue behind carrier-grade NAT with a poor
+// IP reputation is the realistic trigger.
+//
+// The discriminator is the ENVELOPE SHAPE, never a `cf-mitigated` header: our
+// API always answers in the v1 envelope, an HTML challenge page never does,
+// and coupling the pad's transport to one vendor's header name would rot the
+// day that vendor renames it or another one is in front.
+// ---------------------------------------------------------------------------
+describe("a 403 from an intermediary is not our refusal", () => {
+  /** A challenge/block page: an HTML body, so `res.json()` throws. */
+  function challenge(status: number): Response {
+    return {
+      ok: false,
+      status,
+      headers: { get: () => null },
+      json: async () => {
+        throw new SyntaxError("Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON");
+      },
+    } as unknown as Response;
+  }
+
+  // The positive pair, and it is the one that keeps this narrow: a 403 our own
+  // server sent stays permanent, exactly as `isPermanentRefusal`'s own comment
+  // argues it must.
+  it("a 403 carrying OUR envelope is still a permanent refusal", async () => {
+    const { fn } = fakeFetch(() =>
+      fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "device link revoked" } }),
+    );
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome).toEqual({ kind: "rejected", code: "FORBIDDEN", message: "device link revoked" });
+  });
+
+  it("a 403 carrying a challenge HTML page is transient, so the tap is kept", async () => {
+    const { fn } = fakeFetch(() => challenge(403));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome.kind).toBe("network-error");
+  });
+
+  // Not every intermediary answers in HTML. A JSON error page that is not OUR
+  // envelope is equally not our refusal — the test is the shape, not the
+  // content type.
+  it("a 403 carrying JSON that is not our envelope is transient too", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { error: "blocked", ray: "8f2a" }));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome.kind).toBe("network-error");
+  });
+
+  // NOT widened to 401. `isPermanentRefusal`'s own comment spends a paragraph
+  // on why an expired session must refuse VISIBLY rather than queue behind a
+  // pad claiming the action landed, and that reasoning is untouched.
+  it("a 401 with the same unparseable body is STILL permanent", async () => {
+    const { fn } = fakeFetch(() => challenge(401));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome.kind).toBe("rejected");
+  });
+
+  // …nor to 402. A malformed body from OUR entitlement gate is still our
+  // refusal, and retrying it forever is the R6 ship-blocker reintroduced.
+  it("a 402 with an unparseable body is STILL permanent", async () => {
+    const { fn } = fakeFetch(() => challenge(402));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome).toEqual({ kind: "rejected", code: "UNKNOWN", message: "request failed (402)" });
   });
 });
 
