@@ -179,10 +179,17 @@ async function withdrawThroughTheScreen(page: Page, name: string): Promise<void>
   // "she is not offered" everywhere below, so this is the assertion that
   // tells the two apart.
   await expect(row, "her entrants row vanished — she was deleted, not withdrawn").toHaveCount(1);
-  // A VALUE, not copy: the status badge prints `entrant.status` verbatim
-  // (`entrants-panel.tsx`), so this asserts the column the server wrote — the
-  // same string `DEPARTED_STATUSES` holds — and not a translated word.
-  await expect(row).toContainText("withdrawn", { timeout: STEP_MS });
+  // A VALUE, not copy — same claim as before, now in the one place that still
+  // carries it. The badge used to PRINT `entrant.status` verbatim and this
+  // read the text; since 2026-09-22 it prints the translated word
+  // (`entrants.status.*`) and publishes the raw column on
+  // `data-entrant-status`, so a Dutch organiser's console would have failed a
+  // text probe. The assertion is unchanged in substance: the column the server
+  // wrote, the same string `DEPARTED_STATUSES` holds.
+  await expect(
+    row.locator("[data-entrant-status]"),
+    "her row does not carry the status the server wrote",
+  ).toHaveAttribute("data-entrant-status", "withdrawn", { timeout: STEP_MS });
 }
 
 test.describe.configure({ mode: "serial" });

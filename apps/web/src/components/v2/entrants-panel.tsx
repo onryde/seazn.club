@@ -61,6 +61,30 @@ const ENTRANT_KIND_LABEL: Record<EntrantKind, MessageKey> = {
   team: "divset.entrants.kind.team",
 };
 
+/** The entrant STATUS enum, as `V212__entrants.sql` declares it. Its own keys,
+ *  deliberately NOT `reg.hub.registrants.status.*`: that is a different enum
+ *  (pending / paid / waitlisted / expired / rejected) which merely shares two
+ *  names, and one key serving two domains breaks whoever changes one of them.
+ *  The WORDING is pinned to the registrants table where the two overlap —
+ *  `entrants-panel-enum-i18n.test.tsx` holds that to locale by locale. */
+const ENTRANT_STATUS_LABEL: Record<"registered" | "confirmed" | "withdrawn" | "disqualified", MessageKey> = {
+  registered: "entrants.status.registered",
+  confirmed: "entrants.status.confirmed",
+  withdrawn: "entrants.status.withdrawn",
+  disqualified: "entrants.status.disqualified",
+};
+
+/** The catalogue key for a stored enum value, or `undefined` when the column
+ *  holds something these maps have never heard of — a status the schema gains
+ *  after this file, most likely. The callers then print the STORED VALUE:
+ *  `t()` answers a miss with the key PATH, so the do-nothing option would show
+ *  a customer "entrants.status.suspended", and an empty cell would hide a real
+ *  state altogether. `Partial` because the index signature is otherwise a lie
+ *  — nothing constrains what the API hands us. */
+function labelKeyFor(map: Record<string, MessageKey>, value: string): MessageKey | undefined {
+  return (map as Partial<Record<string, MessageKey>>)[value];
+}
+
 interface PositionGroup {
   key: string;
   name: string;
@@ -1362,6 +1386,8 @@ export function EntrantTableRow({
   }
 
   const withdrawn = entrant.status === "withdrawn" || entrant.status === "disqualified";
+  const kindKey = labelKeyFor(ENTRANT_KIND_LABEL, entrant.kind);
+  const statusKey = labelKeyFor(ENTRANT_STATUS_LABEL, entrant.status);
 
   return (
     <>
@@ -1389,7 +1415,13 @@ export function EntrantTableRow({
             </span>
           )}
         </td>
-        <td className="px-4 py-2 text-sm text-slate-500">{entrant.kind}</td>
+        {/* The VALUE, not just the header above it. The same kind words the
+            add form's chips already print — one vocabulary per console. The
+            raw value stays on the element: it is what a spec or a style map
+            can key on once the text is four different words. */}
+        <td className="px-4 py-2 text-sm text-slate-500" data-entrant-kind={entrant.kind}>
+          {kindKey ? msg(kindKey) : entrant.kind}
+        </td>
         <td className="px-4 py-2 text-sm text-slate-500">
           {canEdit ? (
             <input
@@ -1415,7 +1447,17 @@ export function EntrantTableRow({
           )}
         </td>
         <td className="px-4 py-2">
-          <span className={`badge ${entrantStatusStyle(entrant.status)}`}>{entrant.status}</span>
+          {/* `entrantStatusStyle` and the `withdrawn` branch above both read
+              the RAW value and keep doing so — only the printed word moves.
+              `withdrawn-entrant-organiser.spec.ts` asserted on this cell's
+              text to prove the server's own column; it reads the attribute
+              now, which is the same claim in a form four locales share. */}
+          <span
+            className={`badge ${entrantStatusStyle(entrant.status)}`}
+            data-entrant-status={entrant.status}
+          >
+            {statusKey ? msg(statusKey) : entrant.status}
+          </span>
         </td>
         {canEdit && (
           <td className="px-4 py-2 text-right">
