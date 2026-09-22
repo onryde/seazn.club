@@ -71,12 +71,16 @@ effectivePairing({ override, stored, hasDecidedRound }):
   shells and seats nobody, `stages.ts:983-995`) ⇒ **422**. An override that
   cannot take effect is refused, not silently swallowed.
 
-### Stage payload for the desk
+### One authority, shared by server and desk
 
-Each Swiss stage the desk receives gains
-`swissPairing: { next: "fold" | "rank_adjacent", round: number, choosable: boolean }`
-computed server-side by the same `effectivePairing` (no override) — one
-authority; the client never re-derives "has a decided round".
+The desk already derives Swiss state client-side from the shared pure module
+`lib/swiss-shell.ts` (`nextUnseatedSwissRound`, `latestSeatedSwissRound`), which
+`stages.ts` imports too. The pairing rule follows that pattern instead of a new
+payload field: a pure `lib/swiss-pairing.ts` holds `swissHasDecidedRound`,
+`effectiveSwissPairing` and the hint builder; `swissGen` and `stages-panel.tsx`
+both call it, so neither re-derives "has a decided round". (First draft proposed
+a server-computed `swissPairing` payload; changed while planning, 2026-09-22,
+to match the existing pattern and avoid a loader change.)
 
 ### Audit
 
