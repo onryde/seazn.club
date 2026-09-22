@@ -101,11 +101,15 @@ export interface StageRailProps {
   busy: string | null;
   fixtureCount: number;
   deletable: boolean;
+  /** Resolves `true` when the action LANDED, `false` when it was refused or
+   *  failed (the panel has already said why). The split button clears its
+   *  round-1 pick only on `true` — review M2: a pick cleared at click time was
+   *  lost to a failed press, and the retry quietly paired the default. */
   onAct: (
     stageId: string,
     action: "generate" | "complete" | "delete" | "unpair",
     opts?: { pairing?: SwissPairingMode },
-  ) => void;
+  ) => Promise<boolean>;
   /** Swiss-only: lowest round still has unseated shells — drives Pair next label. */
   swissHasUnseated: boolean;
   /** Swiss-only: latest seated round has no played results — shows Unpair. */
@@ -191,12 +195,15 @@ export function StageRail({
   // beyond `useMsg`.
   const sheetId = `stage-rail-sheet-${stage.id}`;
 
-  // The split button's state, stamped with the ROUND it belongs to. A state
-  // for any other round reads as closed with no pick, so a round moving under
-  // the desk (a Pair next landing, an Unpair, another organiser's press)
-  // resets the menu by derivation — no effect that sets state, no window in
-  // which a round-1 pick could ride along into round 2. Every Generate press
-  // also clears it outright (below).
+  // The split button's state, stamped with the ROUND it belongs to. While the
+  // waiting round is a different one, the state reads as closed with no pick —
+  // so a round-1 pick can never ride along into round 2, with no effect that
+  // sets state. That HIDES the state; it does not clear it: if the round comes
+  // back (1 → 2 → 1 with no press from this rail — another organiser pairs,
+  // then unpairs), the old state is live again and the menu reopens as it was
+  // left. The pick is shown checked there, so a press still sends what the
+  // screen shows. What CLEARS it is a Pair next press from this rail that
+  // lands (below).
   const [pairingState, setPairingState] = useState<{
     round: number;
     open: boolean;
@@ -511,10 +518,15 @@ export function StageRail({
                     // named specific (if wrong) numbers. Regeneration is
                     // simply a normal, unguarded action now, same as the
                     // common first-generate case always was.
-                    onAct(stage.id, "generate", swissPairingOverride(pairingPick, swissPairingMenu));
-                    // Selection resets after every press (spec): the pick was
-                    // for THIS press only and is never stored on the stage.
-                    setPairingState(null);
+                    const pressed = onAct(stage.id, "generate", swissPairingOverride(pairingPick, swissPairingMenu));
+                    // Selection resets after every press that LANDS (spec;
+                    // review M2): the pick was for that press only and is never
+                    // stored on the stage. A press that fails keeps it, menu
+                    // and all, so the retry sends what the organiser last saw
+                    // instead of quietly falling back to the default.
+                    void pressed.then((landed) => {
+                      if (landed) setPairingState(null);
+                    });
                   }}
                   data-testid="stage-generate"
                   className={`btn min-h-11 grow px-3 py-1.5 text-xs ${
@@ -551,9 +563,11 @@ export function StageRail({
                       e.preventDefault();
                       closePairing();
                     }}
-                    className={`btn min-h-11 min-w-11 rounded-l-none border-l px-2 text-xs ${
-                      pairingIsNext ? "btn-primary border-white/40" : "btn-ghost"
-                    }`}
+                    // Always the filled primary, like Generate beside it: a menu
+                    // exists only while a Swiss round waits to be paired, which
+                    // is exactly when `pairingIsNext` holds (both read
+                    // `nextUnseatedSwissRound` over the same fixtures).
+                    className="btn btn-primary min-h-11 min-w-11 rounded-l-none border-l border-white/40 px-2 text-xs"
                   >
                     <span aria-hidden="true">{pairingOpen ? "▴" : "▾"}</span>
                   </button>
@@ -578,7 +592,7 @@ export function StageRail({
                 <button
                   type="button"
                   disabled={busy !== null}
-                  onClick={() => onAct(stage.id, "unpair")}
+                  onClick={() => void onAct(stage.id, "unpair")}
                   data-testid="stage-unpair"
                   className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                 >
@@ -589,7 +603,7 @@ export function StageRail({
                 <button
                   type="button"
                   disabled={busy !== null}
-                  onClick={() => onAct(stage.id, "complete")}
+                  onClick={() => void onAct(stage.id, "complete")}
                   data-testid="stage-complete"
                   className={`btn min-h-11 px-3 py-1.5 text-xs ${
                     pairingIsNext ? "btn-ghost" : "btn-primary"

@@ -1,6 +1,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { StageRail } from "@/components/v2/desk/stage-rail";
+import { ApiV1Error } from "@/lib/client-v1";
+import { SWISS_PAIRING_ROUND_ONE_ONLY_CODE } from "@/lib/swiss-pairing";
+
+const apiV1Mock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-v1", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  apiV1: apiV1Mock,
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -120,5 +130,52 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
     );
     expect(html).not.toContain('data-testid="stage-generate"');
     expect(html).not.toContain(TOGGLE);
+  });
+});
+
+// Review M2 (Task 4): the rail clears the organiser's round-1 pick only when a
+// press LANDS, and it learns that from what `onAct` resolves to. This pins the
+// panel's half of that contract through the real `act()`: the StageRail
+// element's own `onAct` (the one production hands down), with only the
+// network mocked. A panel that went back to `void act(...)`, or an `act()` that
+// reported a refused press as landed, would hand the rail a lie — the pick
+// would vanish on a failure, or survive a success into the next press.
+describe("StagesPanel — tells the rail whether a press landed (review M2)", () => {
+  type OnAct = (stageId: string, action: "generate", opts?: { pairing?: "fold" | "rank_adjacent" }) => Promise<boolean>;
+
+  function railOnAct(): OnAct {
+    const island = renderIsland(StagesPanel, { ...props, stages: [swissStage()], fixtures: fixtures() });
+    const rails = island.tree().filter((el) => el.type === StageRail);
+    expect(rails).toHaveLength(1);
+    return propsOf(rails[0]!).onAct as OnAct;
+  }
+
+  function generateAnswers(answer: () => Promise<unknown>) {
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation((path: string) =>
+      path.endsWith("/generate") ? answer() : Promise.resolve({}),
+    );
+  }
+
+  const generateBodies = () =>
+    apiV1Mock.mock.calls
+      .filter(([path]) => String(path).endsWith("/generate"))
+      .map(([, init]) => (init as { json?: unknown }).json);
+
+  it("resolves true when generate lands — and sent the pick it was given", async () => {
+    generateAnswers(() => Promise.resolve({ created: 4, existing: 4 }));
+    await expect(railOnAct()("s1", "generate", { pairing: "rank_adjacent" })).resolves.toBe(true);
+    expect(generateBodies()).toEqual([{ pairing: "rank_adjacent" }]);
+  });
+
+  it.each([
+    ["a refused pick (422)", () => new ApiV1Error("wire", 422, SWISS_PAIRING_ROUND_ONE_ONLY_CODE, {})],
+    ["a server error (500)", () => new ApiV1Error("boom", 500, "INTERNAL", {})],
+    ["a paywall (402)", () => new ApiV1Error("pay", 402, "PAYMENT_REQUIRED", { feature_key: "x" })],
+    ["a dropped connection", () => new TypeError("Failed to fetch")],
+  ])("resolves false when generate does not land: %s", async (_label, failure) => {
+    generateAnswers(() => Promise.reject(failure()));
+    await expect(railOnAct()("s1", "generate", { pairing: "rank_adjacent" })).resolves.toBe(false);
+    expect(generateBodies()).toEqual([{ pairing: "rank_adjacent" }]);
   });
 });

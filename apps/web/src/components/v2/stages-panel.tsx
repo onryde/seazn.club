@@ -577,7 +577,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     // Swiss round 1 only: the organiser's split-button pick, already reduced
     // to "the non-default mode, or nothing" by `swissPairingOverride`.
     opts?: { pairing?: SwissPairingMode },
-  ) {
+  ): Promise<boolean> {
+    // Resolves whether the action LANDED — the rail's split button clears its
+    // round-1 pick only on `true` (review M2). A refused or failed action is
+    // caught and shown below, and resolves `false`.
     setError(null);
     setPaywallFeature(null);
     setNotice(null);
@@ -639,6 +642,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         );
       }
       router.refresh();
+      return true;
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
@@ -652,6 +656,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           if (classified.refresh) router.refresh();
         }
       }
+      return false;
     } finally {
       setBusy(null);
     }
@@ -1348,9 +1353,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   busy={busy}
                   fixtureCount={stageFixtures.length}
                   deletable={deletable}
-                  onAct={(stageId, action, opts) => {
-                    void act(stageId, action, opts);
-                  }}
+                  onAct={(stageId, action, opts) => act(stageId, action, opts)}
                   onDelete={(s) => {
                     void (async () => {
                       const ok = await confirmDialog({
