@@ -39,10 +39,18 @@
 -- and the retry carries the same idempotency key this index is being built
 -- for, so the drain cannot double-write.
 --
--- MEASURED 2026-09-22, before shipping: production `score_events` holds 4,323
--- rows / 2,504 kB. A two-column index over that builds in under a
--- millisecond, so the block is not observable today at all. The reasoning
--- above is kept because it stops being true quietly — it is the row count that
+-- SIZING, 2026-09-22, and be precise about WHICH database each half came from:
+--   - STAGING (`seazn-stg`, the only Supabase project this tooling can see)
+--     holds 4,323 rows / 2,504 kB. A two-column index over that builds in
+--     under a millisecond. MEASURED.
+--   - PRODUCTION is empty — no data yet. OWNER'S STATEMENT, 2026-09-22, not
+--     measured here; nothing in this repo's tooling reaches a prod database.
+-- An earlier revision of this comment called the staging figure "production".
+-- It was an inference from a remote Supabase host in `.env.local`, and it was
+-- wrong. Do not treat a staging row count as a prod one.
+--
+-- So the block is not observable in either database today. The reasoning above
+-- is kept because it stops being true QUIETLY — it is the row count that
 -- decides it, and nothing warns you when that count has moved.
 --
 -- `lock_timeout` is the real protection, and it is the pathological case this
