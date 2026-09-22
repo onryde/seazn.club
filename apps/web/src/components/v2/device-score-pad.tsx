@@ -205,6 +205,29 @@ export function DeviceScorePad({
     [scorePadV2, sport.key, sport.config],
   );
 
+  // STABLE IDENTITY, and the whole point of the memo (2026-09-22). This object
+  // is forwarded to `usePadPipeline` -> `useFixtureStream`, where `auth` is a
+  // DEPENDENCY of the subscribe effect (`use-fixture-stream.ts`). A fresh
+  // literal here therefore tore the realtime channel down and re-handshook it
+  // on EVERY render of this component — and this component re-renders on every
+  // `setBusy`, every resync, every local state change, which is to say
+  // constantly while someone is scoring.
+  //
+  // Measured both ways against a real prod build and a real Supabase project
+  // (`device-links.spec.ts`, "reaches its own inner pad faster than the poll",
+  // E2E_REQUIRE_REALTIME=1). With the memo: the socket joins and the chrome's
+  // `core.start` paints on the inner pad well inside POLL_MS. Revert this one
+  // line to a fresh literal and the same test reds with "never moved off
+  // \"0\" at all" — the teardown/re-handshake also restarts the polling
+  // interval on every render, so while the component is re-rendering NEITHER
+  // transport ever delivers. `use-fixture-stream.ts` already
+  // reads `sinceSeq`/`onEvents`/`skipPollWhile` through refs for exactly this
+  // reason, and its comment says so; the identity hazard was re-introduced
+  // from the CALLER, which is why nothing in that file could see it.
+  //
+  // `token` is the only field, so this is stable for the life of the link.
+  const padAuth = useMemo(() => ({ kind: "device_link" as const, token }), [token]);
+
   // Doc 13 §7: the pad's dead-end when the link dies mid-day.
   if (dead) {
     return (
@@ -344,7 +367,7 @@ export function DeviceScorePad({
               home={home}
               away={away}
               initialEvents={scorePadV2.initialEvents}
-              auth={{ kind: "device_link", token }}
+              auth={padAuth}
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
               onEvents={handlePadEvents}

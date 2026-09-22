@@ -2,6 +2,8 @@
 // (resolveConflict, deepEqual, reconcile) plus the thin network-driving
 // functions (sendOne, drainQueue) that consume an INJECTED transport double
 // — no real server anywhere in this file.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AppendSuccess, LedgerSlotEvent, OwnIdentity, PendingEvent } from "../types";
 import { memoryQueueStore } from "../queue-store";
@@ -12,10 +14,15 @@ import {
   reconcile,
   resolveConflict,
   sendOne,
+  throttleBackoffMs,
+  THROTTLE_BASE_MS,
+  THROTTLE_MAX_MS,
+  THROTTLE_SERVER_MAX_MS,
   type AppendCallResult,
   type AppendEventBody,
   type ScoringTransport,
 } from "../pipeline";
+import { sessionTransport } from "../transport";
 
 function event(idempotencyKey: string, overrides: Partial<PendingEvent> = {}): PendingEvent {
   return {
@@ -776,5 +783,332 @@ describe("Task 10 fix round 4 (R68/C1) — a resend after an unobserved send sti
     // treated as an already-sent retry on the strength of a corrupted or
     // missing counter.
     expect(remaining[0]?.attempts).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 (2026-09-22) — the customer harm of an edge challenge, proven one layer
+// out. `transport.test.ts` pins the classification; only THIS can see whether
+// the scorer keeps the tap, because the drop is `markDropped` in `sendOne` and
+// a transport-only test never reaches it. Driven through the REAL
+// `sessionTransport` against a fetch double, so the two halves cannot agree
+// with each other about a shape neither of them produces.
+// ---------------------------------------------------------------------------
+describe("an edge challenge does not cost the scorer a tap", () => {
+  /** A challenge/block page: an HTML body, so `res.json()` throws. */
+  const challenge = (status: number) =>
+    ({
+      ok: false,
+      status,
+      headers: { get: () => null },
+      json: async () => {
+        throw new SyntaxError("Unexpected token '<'");
+      },
+    }) as unknown as Response;
+
+  const envelope403 = () =>
+    ({
+      ok: false,
+      status: 403,
+      headers: { get: () => null },
+      json: async () => ({ ok: false, error: { code: "FORBIDDEN", message: "device link revoked" } }),
+    }) as unknown as Response;
+
+  it("a 403 challenge leaves the event QUEUED rather than dropping it", async () => {
+    const store = memoryQueueStore();
+    const pending = event("cf1", { expectedSeq: 1 });
+    await store.put(pending);
+    const transport = sessionTransport({ fetchFn: async () => challenge(403) });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "network" });
+    // THE assertion: `markDropped` was not called. This is the whole defect.
+    expect(await peekInOrder(store)).toHaveLength(1);
+  });
+
+  it("…while a 403 that really IS ours still drops, so this did not become retry-forever", async () => {
+    const store = memoryQueueStore();
+    const pending = event("cf2", { expectedSeq: 1 });
+    await store.put(pending);
+    const transport = sessionTransport({ fetchFn: async () => envelope403() });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "rejected", code: "FORBIDDEN" });
+    expect(await peekInOrder(store)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 (2026-09-21), spec §4.6 — a throttled retry must not feed the limiter it
+// is waiting on. The delay is DERIVED from the limiter's own fixed window, not
+// picked; the server's own `Retry-After` outranks it when one arrives.
+// ---------------------------------------------------------------------------
+describe("throttle backoff", () => {
+  // The derivation, pinned to its source of truth rather than to a number
+  // typed in beside it: `SCORING_LIMIT` is a FIXED window, so the shortest
+  // wait that can possibly clear it is one whole window. Move the server's
+  // window and this test moves the client with it.
+  it("the base wait is the limiter's own window, read out of scoring.ts", () => {
+    const src = readFileSync(join(process.cwd(), "src/server/usecases/scoring.ts"), "utf8");
+    const windowSeconds = /SCORING_LIMIT\s*=\s*\{[^}]*windowSeconds:\s*(\d+)/.exec(src)?.[1];
+    expect(windowSeconds, "SCORING_LIMIT's windowSeconds is no longer readable").toBeDefined();
+    expect(THROTTLE_BASE_MS).toBe(Number(windowSeconds) * 1000);
+  });
+
+  it("doubles per send, stays monotonic, and is bounded by the cap it declares", () => {
+    const waits = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((sends) => throttleBackoffMs(sends, null));
+    expect(waits[0]).toBe(THROTTLE_BASE_MS); // the first throttle waits exactly one window
+    for (let i = 1; i < waits.length; i++) {
+      const prev = waits[i - 1]!;
+      expect(waits[i]!).toBeGreaterThanOrEqual(prev);
+      expect(waits[i]!).toBeLessThanOrEqual(THROTTLE_MAX_MS);
+      if (prev * 2 <= THROTTLE_MAX_MS) expect(waits[i]).toBe(prev * 2);
+    }
+    expect(waits.at(-1)).toBe(THROTTLE_MAX_MS); // the cap is REACHED, not merely declared
+  });
+
+  it("a server Retry-After outranks the computed backoff", () => {
+    expect(throttleBackoffMs(1, THROTTLE_BASE_MS * 3)).toBe(THROTTLE_BASE_MS * 3);
+  });
+
+  // Owner ruling 2026-09-21: obey generously, guess conservatively. This is
+  // the case the old behaviour got WRONG — 30s is past our own 8s guess, so
+  // clamping to `THROTTLE_MAX_MS` silently overrode a server that had told us
+  // exactly what it wanted. The expected value differs from BOTH ceilings on
+  // purpose; against either constant alone this test could not witness the
+  // regression it exists for.
+  it("honours a Retry-After well past our own guessed cap, verbatim", () => {
+    const thirtySeconds = 30_000;
+    expect(thirtySeconds).toBeGreaterThan(THROTTLE_MAX_MS); // the premise, not an assumption
+    expect(thirtySeconds).toBeLessThan(THROTTLE_SERVER_MAX_MS);
+    expect(throttleBackoffMs(1, thirtySeconds)).toBe(thirtySeconds);
+  });
+
+  // Still bounded, and the bound now matters more than it reads: nothing under
+  // `src/server/api-v1` sets `Retry-After` (verified 2026-09-21), and
+  // Cloudflare sits in front of this app, so every value this branch receives
+  // today is set by an edge we do not configure in this repo. A header we do
+  // not own must not be able to freeze a courtside queue behind a chip that
+  // says "Catching up".
+  it("…but is still bounded, so one unowned header cannot park a queue for an hour", () => {
+    expect(throttleBackoffMs(1, 60 * 60 * 1000)).toBe(THROTTLE_SERVER_MAX_MS);
+  });
+
+  it("does NOT re-enter the limiter before the delay has passed", async () => {
+    const store = memoryQueueStore();
+    const pending = event("p1", { expectedSeq: 1, retryNotBefore: Date.now() + THROTTLE_MAX_MS });
+    await store.put(pending);
+    const { transport, calls } = fakeTransport({ appendScript: { p1: [{ kind: "ok", data: success(2) }] } });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(calls).toHaveLength(0); // THE assertion: the limiter was never touched
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "throttled" });
+    const remaining = await peekInOrder(store);
+    expect(remaining).toHaveLength(1); // the tap is kept
+    // No send happened, so the pre-send marker must not move either — a
+    // backoff that counted its own refusals would inflate itself to the cap.
+    expect(remaining[0]?.attempts).toBe(0);
+  });
+
+  it("sends again once the delay has passed", async () => {
+    const store = memoryQueueStore();
+    const pending = event("p2", { expectedSeq: 1, retryNotBefore: Date.now() - 1 });
+    await store.put(pending);
+    const { transport, calls } = fakeTransport({ appendScript: { p2: [{ kind: "ok", data: success(2) }] } });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(calls).toHaveLength(1);
+    expect(outcome.kind).toBe("acked");
+  });
+
+  it("a 429 stamps a retryNotBefore at least the computed delay out", async () => {
+    const store = memoryQueueStore();
+    const pending = event("p3", { expectedSeq: 1, attempts: 0 });
+    await store.put(pending);
+    const { transport } = fakeTransport({
+      appendScript: { p3: [{ kind: "throttled", message: "Too many requests", retryAfterMs: null }] },
+    });
+    const before = Date.now();
+
+    await sendOne(transport, store, "fx-1", pending, ME);
+
+    const remaining = (await peekInOrder(store))[0]!;
+    expect(remaining.retryNotBefore).toBeGreaterThanOrEqual(before + throttleBackoffMs(1, null));
+  });
+
+  it("honours the server's Retry-After when the 429 carries one", async () => {
+    const store = memoryQueueStore();
+    const pending = event("p4", { expectedSeq: 1, attempts: 0 });
+    await store.put(pending);
+    const { transport } = fakeTransport({
+      appendScript: { p4: [{ kind: "throttled", message: "slow down", retryAfterMs: THROTTLE_MAX_MS }] },
+    });
+    const before = Date.now();
+
+    await sendOne(transport, store, "fx-1", pending, ME);
+
+    const remaining = (await peekInOrder(store))[0]!;
+    // Strictly longer than the backoff this send would otherwise have chosen,
+    // so the assertion cannot pass on the computed value by coincidence.
+    expect(throttleBackoffMs(1, null)).toBeLessThan(THROTTLE_MAX_MS);
+    expect(remaining.retryNotBefore).toBeGreaterThanOrEqual(before + THROTTLE_MAX_MS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 (2026-09-21) — a throttled write is throttled, never "offline".
+// `use-pad-pipeline` raises the offline chip on `reason === "network"` alone,
+// so the reason this function returns is what the scorer is told.
+// ---------------------------------------------------------------------------
+describe("throttled", () => {
+  it("a throttled send stays queued WITHOUT claiming the pad is offline", async () => {
+    const store = memoryQueueStore();
+    const pending = event("t1", { expectedSeq: 1, attempts: 0 });
+    await store.put(pending);
+    const { transport } = fakeTransport({
+      appendScript: { t1: [{ kind: "throttled", message: "Too many requests", retryAfterMs: null }] },
+    });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "throttled" });
+    expect(await peekInOrder(store)).toHaveLength(1); // the tap is NOT lost
+    expect((await peekInOrder(store))[0]?.lastError).toBe("Too many requests");
+  });
+
+  // The SECOND place a 429 can land, and the easy one to leave lying: the
+  // post-renegotiation tail reports "conflict-again" or "network", so a
+  // throttled resend was about to be filed as a connectivity failure — the
+  // very lie this task exists to remove, one branch deeper.
+  it("a throttled RESEND is throttled too, not relabelled as a network failure", async () => {
+    const store = memoryQueueStore();
+    const pending = event("t2", { expectedSeq: 5, attempts: 0 });
+    await store.put(pending);
+    const { transport } = fakeTransport({
+      appendScript: {
+        t2: [
+          { kind: "conflict", currentSeq: 99, message: "stale" },
+          { kind: "throttled", message: "Too many requests", retryAfterMs: null },
+        ],
+      },
+      slotsBySinceSeq: {
+        5: [{ seq: 6, type: "core.note", payload: { text: "SOMEONE ELSE" }, recorded_by: "user-2", device_link_id: null }],
+      },
+    });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "throttled" });
+    expect(await peekInOrder(store)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W1 (2026-09-21) — the queue always makes progress.
+//
+// Task 4 classifies the four terminal undo refusals we know about. This is the
+// backstop for the ones we do not: any event still conflicting after
+// renegotiation, past a bounded number of drain passes, is surfaced instead of
+// left at the head blocking every write behind it.
+// ---------------------------------------------------------------------------
+describe("conflict ceiling", () => {
+  /** The 409 → foreign slot → renegotiate → 409 again shape, scripted once. */
+  function conflictTwiceOn(key: string, secondAttempt: AppendCallResult) {
+    return fakeTransport({
+      appendScript: { [key]: [{ kind: "conflict", currentSeq: 99, message: "stale" }, secondAttempt] },
+      slotsBySinceSeq: {
+        5: [{ seq: 6, type: "core.note", payload: { text: "SOMEONE ELSE" }, recorded_by: "user-2", device_link_id: null }],
+      },
+    });
+  }
+
+  // THE differential case, and the reason the ceiling counts its own passes
+  // instead of reusing `attempts`. `attempts` is a PRE-SEND marker written on
+  // every physical send of EVERY outcome kind, so an event that merely sat on
+  // dead venue wifi arrives at its first genuine seq race with the ceiling
+  // already armed — and gets dead-lettered for losing that race once. Offline
+  // THEN contended is the normal condition of a courtside device.
+  //
+  // Fixtured with attempts well past the ceiling and ZERO conflict passes: the
+  // two counters must not be the same counter.
+  it("does NOT dead-letter on a first genuine race just because the pad had been offline", async () => {
+    const store = memoryQueueStore();
+    const pending = event("c0", { expectedSeq: 5, attempts: 7, conflictPasses: 0 });
+    await store.put(pending);
+    const { transport } = conflictTwiceOn("c0", { kind: "conflict", currentSeq: 99, message: "stale again" });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "conflict-again" });
+    const remaining = await peekInOrder(store);
+    expect(remaining).toHaveLength(1); // the scorer's point is NOT dropped
+    expect(remaining[0]?.conflictPasses).toBe(1); // …and this race was counted
+  });
+
+  it("dead-letters an event that keeps conflicting after the ceiling", async () => {
+    const store = memoryQueueStore();
+    // Both counters set: a real event with spent conflict passes has also made
+    // sends. It is `conflictPasses` that arms the ceiling.
+    const pending = event("c1", { expectedSeq: 5, attempts: 2, conflictPasses: 2 });
+    await store.put(pending);
+    const { transport } = conflictTwiceOn("c1", { kind: "conflict", currentSeq: 99, message: "stale again" });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "rejected", code: "QUEUE_STALLED" });
+    expect(await peekInOrder(store)).toHaveLength(0); // head cleared
+  });
+
+  it("below the ceiling it still renegotiates rather than giving up", async () => {
+    const store = memoryQueueStore();
+    const pending = event("c2", { expectedSeq: 5, attempts: 0, conflictPasses: 0 });
+    await store.put(pending);
+    const { transport } = conflictTwiceOn("c2", { kind: "conflict", currentSeq: 99, message: "stale again" });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "conflict-again" });
+    expect(await peekInOrder(store)).toHaveLength(1); // still queued, by design
+  });
+
+  // THE load-bearing negative, in both places a network failure can land. An
+  // offline venue must queue forever; a ceiling that catches network failures
+  // turns a wifi blip into lost rallies, which is a worse defect than the
+  // wedge this whole wave exists to fix.
+  //
+  // The FIRST-SEND case alone cannot witness that: it returns before the
+  // ceiling is ever consulted, so it stays green under a mutant that deletes
+  // the `second.kind === "conflict"` guard entirely. The RESEND case is the
+  // one that reaches the tail the ceiling actually lives in — it is the mutant
+  // killer, and the reason both are here.
+  it("NEVER dead-letters a network failure on the FIRST send, however many attempts", async () => {
+    const store = memoryQueueStore();
+    const pending = event("n1", { expectedSeq: 5, attempts: 500, conflictPasses: 5 });
+    await store.put(pending);
+    const { transport } = fakeTransport({ appendScript: { n1: [{ kind: "network-error", message: "offline" }] } });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "network" });
+    expect(await peekInOrder(store)).toHaveLength(1);
+  });
+
+  it("NEVER dead-letters a network failure on the RESEND either, well past the ceiling", async () => {
+    const store = memoryQueueStore();
+    // conflictPasses deliberately PAST the ceiling: this case must stay lethal
+    // to a mutant that drops the `second.kind === "conflict"` guard, and it can
+    // only be lethal if the counter the ceiling reads is already spent.
+    const pending = event("n2", { expectedSeq: 5, attempts: 500, conflictPasses: 5 });
+    await store.put(pending);
+    const { transport } = conflictTwiceOn("n2", { kind: "network-error", message: "offline" });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME);
+
+    expect(outcome).toMatchObject({ kind: "stayed-queued", reason: "network" });
+    expect(await peekInOrder(store)).toHaveLength(1); // the tap is NOT lost
   });
 });

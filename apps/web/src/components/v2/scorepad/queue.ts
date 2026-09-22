@@ -69,7 +69,12 @@ async function patch(
 export async function recordAttempt(
   store: QueueStore,
   idempotencyKey: string,
-  fields: { attempts: number; lastError?: string },
+  // W1 (2026-09-21) — `conflictPasses`/`retryNotBefore` ride the same
+  // put-as-replace patch rather than getting their own writer: they are
+  // written at exactly the moments this function is already called, and a
+  // second write path would be a second chance to forget one. Both optional,
+  // so every existing call site is unchanged. See their JSDoc in types.ts.
+  fields: { attempts: number; lastError?: string; conflictPasses?: number; retryNotBefore?: number },
 ): Promise<void> {
   await patch(store, idempotencyKey, (event) => ({ ...event, ...fields }));
 }

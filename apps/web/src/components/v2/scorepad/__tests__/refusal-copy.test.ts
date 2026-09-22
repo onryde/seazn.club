@@ -101,10 +101,33 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
     }
   });
 
-  it("does not invent codes the server never sends", () => {
-    const src = readFileSync(join(process.cwd(), "src/server/api-v1/http.ts"), "utf8");
+  // W1 (2026-09-21): this used to pin against `http.ts` ALONE, and that was
+  // the whole truth while every code the pad could see came from a status.
+  // It no longer is. Two producers joined it, and both are real:
+  //
+  //   - `scoring.ts` throws four 409s with an EXPLICIT code, bypassing
+  //     `statusCode()` entirely — the terminal undo refusals;
+  //   - `pipeline.ts` MINTS `QUEUE_STALLED` client-side when an event has
+  //     spent its conflict-pass ceiling. No server ever sends it.
+  //
+  // So the guard is "minted by a real producer", not "absent from one file" —
+  // widened rather than weakened: a code belonging to no producer at all still
+  // fails, which is the invention this test exists to catch.
+  it("does not invent codes: every entry is minted by a real producer", () => {
+    const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+    const http = read("src/server/api-v1/http.ts");
+    const scoring = read("src/server/usecases/scoring.ts");
+    const pipeline = read("src/components/v2/scorepad/pipeline.ts");
+
     for (const code of Object.keys(REFUSAL_KEY)) {
-      expect(src, `${code} is not in the server's statusCode() map`).toContain(`return "${code}"`);
+      const producer = http.includes(`return "${code}"`)
+        ? "http.ts statusCode()"
+        : scoring.includes(`"${code}"`)
+          ? "scoring.ts explicit refusal"
+          : pipeline.includes(`code: "${code}"`)
+            ? "pipeline.ts (client-minted)"
+            : null;
+      expect(producer, `${code} is minted by nothing: no status map, no usecase throw, no client path`).not.toBeNull();
     }
   });
 });

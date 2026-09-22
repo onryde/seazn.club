@@ -356,7 +356,12 @@ export const HUMAN_FASTEST_REPEAT_MS = 350;
 // on `auth` by identity, so a fresh object each render would tear down and
 // resubscribe (a new token fetch, a new realtime handshake) on every render
 // instead of once per mount.
-const SESSION_AUTH: PadAuthMode = { kind: "session" };
+// EXPORTED (2026-09-22) because the hazard above is not the hook's alone: a
+// CALLER passing `auth={{ kind: "session" }}` inline re-creates it on every
+// render and gets the identical teardown-and-resubscribe, which is invisible
+// from inside this file. `fixture-console.tsx` did exactly that. Callers that
+// want plain session auth import this constant rather than writing the literal.
+export const SESSION_AUTH: PadAuthMode = { kind: "session" };
 
 export interface UsePadPipelineParams {
   fixtureId: string;
@@ -415,6 +420,13 @@ export interface UsePadPipelineResult {
    *  every real request keeps failing, so that signal is a HINT only (used
    *  to opportunistically retry, below), never the source of truth here. */
   offline: boolean;
+  /** The server is rate-limiting this fixture (429). NOT a connectivity
+   *  failure, and deliberately not folded into `offline`: the queue keeps the
+   *  tap either way, but a scorer told "Offline" while the venue wifi is fine
+   *  goes and fixes the wrong thing. The bucket is per FIXTURE, so a second
+   *  device on the same match can raise this without this scorer doing
+   *  anything at all. */
+  throttled: boolean;
   /** The most recent permanent (422-class) refusal, if any. Cleared at the
    *  start of the next submit. */
   lastRejection: RejectionInfo | null;
@@ -1011,6 +1023,8 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
 
   const [queueDepth, setQueueDepth] = useState(0);
   const [offline, setOffline] = useState(false);
+  // Separate from `offline` on purpose — see the field's own JSDoc.
+  const [throttled, setThrottled] = useState(false);
   const [lastRejection, setLastRejection] = useState<RejectionInfo | null>(null);
   const [resyncing, setResyncing] = useState(false);
   // Server-wins override — set only when reconciliation finds a REAL
@@ -1304,6 +1318,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
 
         if (outcome.kind === "acked" || outcome.kind === "already-applied") {
           setOffline(false);
+          setThrottled(false);
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
           commitPendingEnvelopes(remaining);
@@ -1392,14 +1407,18 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           void reconcileAfterAck(withAck);
         } else if (outcome.kind === "rejected") {
           setOffline(false);
+          // Cleared on every resolved outcome, exactly like `offline` — a
+          // chip that latches "Catching up" forever lies the other way.
+          setThrottled(false);
           setLastRejection({ code: outcome.code, message: outcome.message });
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
           commitPendingEnvelopes(remaining);
         } else {
-          // stayed-queued: network failure or an indeterminate 409 — stop
-          // here, in order, exactly like pipeline.ts's own drainQueue.
+          // stayed-queued: network failure, throttling, or an indeterminate
+          // 409 — stop here, in order, exactly like pipeline.ts's drainQueue.
           setOffline(outcome.reason === "network");
+          setThrottled(outcome.reason === "throttled");
           break;
         }
       }
@@ -1702,6 +1721,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     summary,
     queueDepth,
     offline,
+    throttled,
     lastRejection,
     resyncing,
     submit,

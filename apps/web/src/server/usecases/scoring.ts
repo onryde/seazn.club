@@ -47,6 +47,23 @@ const idemKey = (fixtureId: string, key: string) => `idemv1:${fixtureId}:${key}`
 // One scorer's cadence (doc 08 §6).
 const SCORING_LIMIT = { max: 10, windowSeconds: 1 };
 
+/** The replay path's abuse CEILING — not a pacing control (2026-09-21, W1
+ *  round 2). A replay performs no write, so nothing about a real pad's rhythm
+ *  should ever approach this: a queue drained after a tab death is a handful of
+ *  requests, and even several devices on one fixture retrying at once are tens,
+ *  not hundreds. It exists only to bound a caller hammering ONE known
+ *  idempotency key, which a leaked `dl_` URL makes reachable — see the note on
+ *  the replay branch below.
+ *
+ *  Derived from `SCORING_LIMIT`, never typed beside it, so raising the scoring
+ *  cadence raises this with it and the two cannot silently invert. Deliberately
+ *  fail-OPEN (no `failClosed`), exactly like the write limiter: a Redis outage
+ *  must never stop a scorer recording a match. */
+const REPLAY_LIMIT = {
+  max: SCORING_LIMIT.max * 6,
+  windowSeconds: SCORING_LIMIT.windowSeconds,
+};
+
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
 const ENGINE_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -89,13 +106,30 @@ export async function scoreEvent(
   fixtureId: string,
   input: AppendEventRequest,
 ): Promise<ScoreOutcome> {
-  await rateLimit(`scorev1:${fixtureId}`, SCORING_LIMIT);
-
+  // The replay check runs FIRST (2026-09-21, W1). A retry carrying a key we
+  // have already answered performs no write, so charging it a WRITE slot made
+  // retries self-amplifying against a bucket that is PER FIXTURE — every device
+  // scoring the same match shares it.
+  //
+  // That ordering is right and stays. What it left behind (found in review, W1
+  // round 2) is that a replay then passed NO limiter at all. The first version
+  // of this comment argued it was not a new surface because the check is one
+  // Redis GET, "the same cost class as the limiter's own INCR" — which is true
+  // about the cost of one request and says nothing about how many may be sent.
+  // Bounded cost times unbounded count is unbounded, and a `dl_` secret is a
+  // shareable URL, so anyone holding a leaked link could replay one known key
+  // forever. Hence a SECOND, far more generous ceiling on the replay branch
+  // only; the write path below is untouched.
   const cacheKey = input.idempotency_key ? idemKey(fixtureId, input.idempotency_key) : null;
   if (cacheKey) {
     const replay = await cacheGet<ScoreOutcome>(cacheKey);
-    if (replay) return replay; // retried request: same answer, no double write
+    if (replay) {
+      await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
+      return replay; // retried request: same answer, no double write
+    }
   }
+
+  await rateLimit(`scorev1:${fixtureId}`, SCORING_LIMIT);
 
   await assertEntitledToScore(auth, fixtureId, input);
   if (input.type === "core.void") await assertUndoTarget(auth, fixtureId, input);
@@ -264,6 +298,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // Undo with nothing to undo is a 409, never a crash (v3/09 §2): a missing /
 // unknown / already-voided target answers CONFLICT before the fold would 422,
 // so a double-tapped "Undo last" degrades to a calm "already undone".
+//
+// Each case carries its OWN wire code (2026-09-21, W1). All four are TERMINAL:
+// no expected_seq can satisfy them. `transport.ts` classifies on these codes so
+// the pad stops renegotiating a refusal it can never win — which used to wedge
+// the queue head permanently. A new terminal case added here MUST get a code
+// and copy, or it falls back to CONFLICT and reintroduces the wedge.
 async function assertUndoTarget(
   auth: AuthCtx,
   fixtureId: string,
@@ -271,7 +311,7 @@ async function assertUndoTarget(
 ): Promise<void> {
   const eventId = (input.payload as { event_id?: unknown } | null)?.event_id;
   if (typeof eventId !== "string" || !UUID_RE.test(eventId)) {
-    throw new HttpError(409, "Nothing to undo");
+    throw new HttpError(409, "Nothing to undo", "UNDO_NOOP");
   }
   const [target] = await withTenant(auth.orgId, (tx) => tx<{ type: string; voided: boolean }[]>`
     select e.type,
@@ -279,12 +319,29 @@ async function assertUndoTarget(
                    where v.fixture_id = e.fixture_id and v.voids_event_id = e.id) as voided
     from score_events e
     where e.id = ${eventId} and e.fixture_id = ${fixtureId}`);
-  if (!target) throw new HttpError(409, "Nothing to undo — that entry does not exist");
-  if (target.voided) throw new HttpError(409, "Nothing to undo — that entry is already undone");
+  if (!target) {
+    throw new HttpError(409, "Nothing to undo — that entry does not exist", "UNDO_TARGET_MISSING");
+  }
+  if (target.voided) {
+    throw new HttpError(
+      409,
+      "Nothing to undo — that entry is already undone",
+      "UNDO_ALREADY_VOIDED",
+    );
+  }
   if (target.type === "core.void") {
-    throw new HttpError(409, "An undo cannot be undone — re-record the entry instead");
+    throw new HttpError(
+      409,
+      "An undo cannot be undone — re-record the entry instead",
+      "UNDO_NOT_UNDOABLE",
+    );
   }
 }
+
+/** Test-only alias. `assertUndoTarget` is module-private by intent; the wire
+ *  codes it throws are a contract `transport.ts` classifies on, so they get a
+ *  direct test rather than one mediated by the whole scoreEvent path. */
+export const __assertUndoTargetForTests = assertUndoTarget;
 
 // Entitlement gates at THE scoring door:
 //  - cricket.dls: a `cricket.revise` WITHOUT a manual target under a

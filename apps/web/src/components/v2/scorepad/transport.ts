@@ -118,11 +118,41 @@ interface V1Envelope<T> {
   requestId?: string;
 }
 
-async function parseEnvelope<T>(res: Response): Promise<V1Envelope<T>> {
+/**
+ * Did this body actually come from OUR API?
+ *
+ * `ok` is the v1 envelope's one unconditional field (`http.ts` writes it on
+ * every response, success or failure), so a boolean `ok` on an object is the
+ * cheapest complete test. An HTML challenge page fails at `res.json()`; a
+ * JSON error page from some intermediary parses but has no `ok`.
+ *
+ * Deliberately NOT a `cf-mitigated` header sniff: that couples the pad's
+ * transport to one vendor's header name, and rots the day it is renamed or
+ * another proxy sits in front. The envelope is OUR contract, so it is the
+ * thing we are entitled to test for.
+ */
+function isV1Envelope(raw: unknown): raw is V1Envelope<unknown> {
+  return typeof raw === "object" && raw !== null && typeof (raw as { ok?: unknown }).ok === "boolean";
+}
+
+interface ParsedResponse<T> {
+  body: V1Envelope<T>;
+  /** False when the body was unparseable OR parsed into something that is not
+   *  our envelope — i.e. this response was written by something that is not
+   *  our API. `appendEvent` uses it to tell an intermediary's 403 from ours. */
+  fromOurApi: boolean;
+}
+
+async function parseEnvelope<T>(res: Response): Promise<ParsedResponse<T>> {
+  const fallback: V1Envelope<T> = {
+    ok: false,
+    error: { code: "UNKNOWN", message: `request failed (${res.status})` },
+  };
   try {
-    return (await res.json()) as V1Envelope<T>;
+    const raw: unknown = await res.json();
+    return isV1Envelope(raw) ? { body: raw as V1Envelope<T>, fromOurApi: true } : { body: fallback, fromOurApi: false };
   } catch {
-    return { ok: false, error: { code: "UNKNOWN", message: `request failed (${res.status})` } };
+    return { body: fallback, fromOurApi: false };
   }
 }
 
@@ -132,7 +162,7 @@ async function parseEnvelope<T>(res: Response): Promise<V1Envelope<T>> {
  *  documented contract ("May reject; sendOne treats a rejection the same as
  *  ... unavailable", pipeline.ts). */
 export async function readV1Envelope<T>(res: Response): Promise<T> {
-  const body = await parseEnvelope<T>(res);
+  const { body } = await parseEnvelope<T>(res);
   if (!res.ok || body.ok === false || body.data === undefined) {
     throw new Error(body.error?.message ?? `request failed (${res.status})`);
   }
@@ -144,12 +174,67 @@ function messageOf(err: unknown): string {
 }
 
 /**
+ * `Retry-After`, in milliseconds, or null when the server did not send a
+ * usable one.
+ *
+ * The anchored digits test is load-bearing and is the same one
+ * `server/relay/fly-client.ts` applies to Fly's 429s: `Retry-After` is legally
+ * EITHER delta-seconds OR an HTTP-date, and `Number("Wed, 21 Oct 2026 …")` is
+ * NaN. A NaN delay compares false against every `<` and `>`, so the entry
+ * carrying it would either never wait or never send, depending on which side
+ * of the comparison saw it. Unparseable means absent, never guessed.
+ *
+ * Nothing under `src/server/api-v1` sets this header today (checked
+ * 2026-09-21), so in practice the pad's own derived backoff is what paces a
+ * retry. This exists so that a server which later starts sending one is
+ * obeyed rather than second-guessed.
+ */
+export function retryAfterMsOf(res: Response): number | null {
+  const raw = res.headers.get("retry-after");
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  return Number(trimmed) * 1000;
+}
+
+/**
  * The two 4xx statuses that genuinely invite the SAME request again — 408 is
  * "you took too long, try again" and 429 is "slow down and try again". Both
  * are transient by the server's own definition, which is exactly what the
  * offline queue exists to ride out.
  */
 const RETRYABLE_CLIENT_STATUS: ReadonlySet<number> = new Set([408, 429]);
+
+/**
+ * The 409s no `expected_seq` can ever satisfy.
+ *
+ * A 409 normally means "your write is fine, its expected_seq is stale" and the
+ * pipeline's replay protocol renegotiates it. These four do not mean that. The
+ * server is refusing the UNDO ITSELF — the target is missing, already struck,
+ * or is a void that cannot be voided (`server/usecases/scoring.ts`'s undo
+ * path).
+ *
+ * Renegotiating them resends a request that fails identically, which
+ * `pipeline.ts` answers with `stayed-queued`/`conflict-again`, which
+ * `drainQueue` answers by leaving the event at the HEAD — blocking every write
+ * behind it, permanently and silently (`use-pad-pipeline.ts` only raises the
+ * offline chip for `network`). Measured on staging 2026-09-21: 10 queued
+ * actions behind one already-undone void, while the pad went on showing a
+ * score that had stopped being true.
+ *
+ * An UNRECOGNISED code stays renegotiable on purpose: an un-migrated server
+ * sends a bare `CONFLICT`, and a new client must not wedge against it.
+ *
+ * Exported for its paired test only — nothing else imports it. That test pins
+ * this set against the codes `scoring.ts` actually throws, so a fifth terminal
+ * refusal cannot arrive server-side without one here.
+ */
+export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
+  "UNDO_NOOP",
+  "UNDO_TARGET_MISSING",
+  "UNDO_ALREADY_VOIDED",
+  "UNDO_NOT_UNDOABLE",
+]);
 
 /**
  * Is this status the server permanently refusing THIS write?
@@ -228,16 +313,51 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
       } catch (err) {
         return { kind: "network-error", message: messageOf(err) };
       }
-      const envelope = await parseEnvelope<AppendSuccess>(res);
+      const { body: envelope, fromOurApi } = await parseEnvelope<AppendSuccess>(res);
       if (res.ok && envelope.ok && envelope.data !== undefined) {
         return { kind: "ok", data: envelope.data };
       }
       const message = envelope.error?.message ?? `request failed (${res.status})`;
-      // 409 is the one RENEGOTIABLE outcome the pipeline's replay ruling
-      // distinguishes: the write is fine, its expected_seq is stale.
+      // 409 splits two ways, on its CODE rather than its status. A stale
+      // expected_seq is RENEGOTIABLE and belongs to the pipeline's replay
+      // ruling. A terminal undo refusal is not — see TERMINAL_CONFLICT_CODES.
       if (res.status === 409) {
+        const code = envelope.error?.code;
+        if (code !== undefined && TERMINAL_CONFLICT_CODES.has(code)) {
+          return { kind: "rejected", code, message };
+        }
         const currentSeq = typeof envelope.error?.current_seq === "number" ? envelope.error.current_seq : null;
         return { kind: "conflict", currentSeq, message };
+      }
+      // 429 stays RETRYABLE (the queue keeps the tap — `isPermanentRefusal`
+      // is unchanged and still answers false for it), but it is reported for
+      // what it is. Filed as `network-error` it reached the pad as "Offline",
+      // which is a lie the scorer cannot act on.
+      // W1 (2026-09-22) — a 403 whose body is NOT our envelope did not come
+      // from our server at all. It is an edge challenge: verified live on the
+      // `seazn.club` zone (`security_level: "medium"`, `browser_check: "on"`,
+      // and NO WAF custom ruleset, so nothing skips `/api/`). Cloudflare's own
+      // docs: a challenge "interrupts the request flow by returning a full
+      // HTML page … This mechanism fails when the browser expects a non-HTML
+      // response, such as an AJAX or XHR (fetch) request." A venue behind
+      // carrier-grade NAT with a poor IP reputation is the realistic trigger.
+      //
+      // This does NOT contradict `isPermanentRefusal`'s argument below; it
+      // falls outside it. That comment reasons about OUR refusals — "one tap
+      // refused VISIBLY beats an hour of taps claimed silently" — and stays
+      // true for every one of them, which is why a 403 that DOES carry our
+      // envelope still lands in the permanent class one line down. An
+      // intermediary's challenge is not a refusal by our server; the write was
+      // never seen, and discarding the scorer's tap over it is the same class
+      // of silent loss the rest of this file exists to stop.
+      //
+      // Narrow ON PURPOSE — 403 only. See the file's test suite: 401 and 402
+      // with the identical unparseable body stay permanent.
+      if (res.status === 403 && !fromOurApi) {
+        return { kind: "network-error", message };
+      }
+      if (res.status === 429) {
+        return { kind: "throttled", message, retryAfterMs: retryAfterMsOf(res) };
       }
       if (isPermanentRefusal(res.status)) {
         return { kind: "rejected", code: envelope.error?.code ?? "UNKNOWN", message };
