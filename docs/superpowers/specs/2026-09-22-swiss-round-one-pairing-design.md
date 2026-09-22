@@ -81,15 +81,18 @@ authority; the client never re-derives "has a decided round".
 ### Audit
 
 `fixtures_generated` (`stages.ts:2498-2508`) gains
-`{ round, pairing: <effective>, override: <boolean> }` on a Swiss seat, and its
-`fixture_ids` lists the fixtures seated by the press (today it is `[]` on Pair
-next, because seating is an UPDATE and `createdIds` only reads `newRows`,
-`stages.ts:2331`). `override` is true only when the body carried a `pairing`
-that differs from the default — picking the default sends no body.
+`{ round, pairing: <effective>, override: <boolean>, seated_fixture_ids }` on a
+Swiss seat. `override` is true only when the body carried a `pairing` that
+differs from the default — picking the default sends no body.
 
-Before filling `fixture_ids`, grep every reader of `fixtures_generated`
-(`division_events` consumers, activity feed, analytics) by the event name — a
-reader that treated the empty list as "nothing new" would change behaviour.
+**`fixture_ids` is NOT touched.** It is the Undo contract, not an audit list:
+undo turns a `fixtures_generated` into a `fixtures_cleared` whose `fixture_ids`
+are DELETEd (`server/usecases/history.ts:203-215, 340-352`). Seating is an
+UPDATE of shells that already existed, so listing seated shells there would
+make Undo of a Pair next delete the round's fixtures outright. (The spec's first
+draft proposed exactly that; caught while planning, 2026-09-22.) The seated ids
+go in the new `seated_fixture_ids` key, which no undo path reads — a test pins
+that Undo of a Pair next leaves the shells in place.
 
 ## UI — option A, split button
 
@@ -134,8 +137,9 @@ Unit / integration (`apps/web`, JSON reporter, `.testResults[].name` checked):
 - New: round 2 on a Hammes stage whose round 1 was fold still pairs by the
   standings cascade (rulings 1 + "later rounds follow the stored mode").
 - New: `stages.config` byte-identical before and after an override press.
-- New: `fixtures_generated` payload carries `round`, `pairing`, `override`, and
-  non-empty `fixture_ids` on Pair next.
+- New: `fixtures_generated` payload carries `round`, `pairing`, `override` and
+  `seated_fixture_ids` on Pair next, with `fixture_ids` still `[]`; and Undo of
+  that Pair next deletes no fixture (shell count unchanged).
 - New: `effectivePairing` truth table, empty case first (no override, no
   decided round, no stored mode ⇒ fold).
 - Tighten `packages/engine/src/scheduling/formats-ext.test.ts:127-152` only if
