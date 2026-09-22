@@ -154,12 +154,14 @@ async function newDivision(
 async function withdrawThroughTheScreen(page: Page, name: string): Promise<void> {
   const row = page.locator("tbody tr").filter({ hasText: name });
   await expect(row, `no entrants row for ${name}`).toHaveCount(1);
-  // "Withdraw" is HARDCODED ENGLISH in `entrants-panel.tsx` — it is not in
-  // any dictionary, so unlike every other string this file asserts it cannot
-  // be read from one. Recorded here rather than silently retyped: the control
-  // an organiser presses to remove somebody from a competition renders in
-  // English in all four locales, which is a real gap in a different file.
-  await row.getByRole("button", { name: "Withdraw", exact: true }).click();
+  // By TESTID, not by the word on the button. "Withdraw" WAS hardcoded English
+  // in `entrants-panel.tsx` — this comment used to record that gap as a real
+  // one — and it is `entrants.row.withdraw` in all four catalogues as of
+  // 2026-09-22. Keying on the English literal would have broken this
+  // walkthrough the moment the gap was closed, so the two moved together. The
+  // label itself is pinned by `entrants-panel-row-i18n.test.tsx`; the confirm
+  // button below stays on its dict value because it is READ from the dict.
+  await row.getByTestId("entrant-row-withdraw").click();
   // The dialog is not decoration: it is where the policy is stated, so the
   // journey goes through it rather than around it.
   // `alertdialog`, not `dialog` — `confirm-provider.tsx` uses the alert role,

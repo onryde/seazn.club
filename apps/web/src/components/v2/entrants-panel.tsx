@@ -1256,7 +1256,14 @@ export function EntrantBadgeControl({
   );
 }
 
-function EntrantTableRow({
+/** Exported for tests only — nothing else imports it. The row's EXPANDED half
+ *  (Sync from team squad, the roster's loading line) sits behind `open`, a
+ *  `useState` this row owns, so `renderToStaticMarkup` can never reach it: it
+ *  renders one frozen instant with no way to press the disclosure. Driving the
+ *  row itself under `_hook-harness`'s dispatcher is the only way those two
+ *  strings can be WITNESSED rendering rather than merely declared in a
+ *  catalogue, which is the difference this repo keeps paying for. */
+export function EntrantTableRow({
   entrant,
   logoUrl,
   canEdit,
@@ -1331,6 +1338,7 @@ function EntrantTableRow({
           <button
             type="button"
             onClick={toggle}
+            data-testid="entrant-row-disclosure"
             className="flex items-center gap-2 text-left text-sm font-medium text-slate-800 hover:text-purple-700"
           >
             {(() => {
@@ -1363,7 +1371,12 @@ function EntrantTableRow({
               // `.input`'s own padding loses to `px-2 py-1 text-xs` under
               // Tailwind's utilities layer (S13/#422 W11). `min-h-11` survives it.
               className="input min-h-11 w-16 px-2 py-1 text-xs"
-              aria-label={`Seed for ${entrant.display_name}`}
+              // The field has no visible label — its accessible name IS the
+              // label, so an English one left every non-English screen-reader
+              // user with an unnamed number box. `mobile.spec.ts` used to
+              // select on this string; it is on the testid now.
+              aria-label={msg("entrants.row.seedLabel", { name: entrant.display_name })}
+              data-testid="entrant-row-seed"
             />
           ) : (
             (entrant.seed ?? "—")
@@ -1380,18 +1393,23 @@ function EntrantTableRow({
                   type="button"
                   disabled={busy}
                   onClick={() => onPatch({ status: "registered" })}
+                  data-testid="entrant-row-reinstate"
                   className="btn btn-ghost px-2 py-1 text-xs"
                 >
-                  Reinstate
+                  {msg("entrants.row.reinstate")}
                 </button>
               ) : (
                 <button
                   type="button"
                   disabled={busy}
                   onClick={onWithdraw}
+                  // `withdrawn-entrant-organiser.spec.ts` used to find this by
+                  // the English word, and said so in a comment. On the testid
+                  // now — see the Delete sibling below.
+                  data-testid="entrant-row-withdraw"
                   className="btn btn-danger px-2 py-1 text-xs"
                 >
-                  Withdraw
+                  {msg("entrants.row.withdraw")}
                 </button>
               )}
               {deletable && (
@@ -1437,14 +1455,18 @@ function EntrantTableRow({
                     }
                   }}
                   className="btn min-h-[44px] text-xs"
-                  title="Replace this entry's roster with the team's current squad"
+                  title={msg("entrants.row.syncSquadHint")}
+                  // `enroll.spec.ts` used to find this by the English label.
+                  data-testid="entrant-row-sync-squad"
                 >
-                  Sync from team squad
+                  {msg("entrants.row.syncSquad")}
                 </button>
               )}
             </div>
             {members === null ? (
-              <p className="text-xs text-slate-400">Loading roster…</p>
+              <p className="text-xs text-slate-400" data-testid="entrant-row-roster-loading">
+                {msg("entrants.row.loadingRoster")}
+              </p>
             ) : (
               <RosterEditor
                 key={rosterVersion}

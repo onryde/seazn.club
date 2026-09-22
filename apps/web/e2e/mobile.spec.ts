@@ -3623,7 +3623,12 @@ test("density-pair sweep: four more .select/.input controls hold the 44px floor 
   // Entrants tab (entrants-panel.tsx) — the shared setup division's own
   // entrants (Ada M et al.) already carry a seed input each; no extra seeding.
   await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"), { waitUntil: "load" });
-  await assertFloor(page.locator('input[aria-label^="Seed for "]').first(), "entrant seed input");
+  // By TESTID, not by the accessible name: that name is
+  // `entrants.row.seedLabel` in all four catalogues as of 2026-09-22, so an
+  // `aria-label^="Seed for "` prefix match selects nothing outside English —
+  // and `.first()` on an empty locator fails as a tap-target defect rather
+  // than as the selector fault it would be.
+  await assertFloor(page.getByTestId("entrant-row-seed").first(), "entrant seed input");
   await expectNoHorizontalScroll(page);
 
   // Registrations tab (the org-console "registrations panel" component) was
