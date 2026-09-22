@@ -82,6 +82,21 @@ COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static    ./apps/web/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public          ./apps/web/public
 
+# Turbopack's standalone file-tracing drops the COMPILED instrumentation.js
+# (and the lazy chunks it await-imports for sentry.server.config /
+# sentry.edge.config) from apps/web/.next/standalone/apps/web/.next/server —
+# it copies the raw, unusable instrumentation.ts source next to server.js
+# instead. Next's runtime looks only for the compiled file, silently skips
+# register() when it's missing, and Sentry.init() has NEVER run server-side in
+# any deploy since instrumentation.ts was added — confirmed live: fly logs on
+# seazn-club-stg show pino error/warn lines every deploy, zero of them ever
+# reached Sentry, and `node apps/web/server.js` throws a ChunkLoadError
+# resolving "register" the moment the missing chunk is reproduced locally.
+# Overlaying the full compiled server/ dir (superset of the standalone one)
+# supplies every chunk the tracer dropped; confirmed fixed by rebuilding this
+# way and reproducing a real request error end to end.
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/server ./apps/web/.next/server
+
 USER nextjs
 EXPOSE 3000
 

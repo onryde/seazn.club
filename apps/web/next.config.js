@@ -59,7 +59,15 @@ const nextConfig = {
   // either one left behind is config that does nothing. See that task's entry
   // in `docs/superpowers/specs/2026-08-12-release2-prompts/_INDEX.md` if a
   // future runtime needs the same treatment.
-  serverExternalPackages: ["pdfkit", "exceljs"],
+  // pino must also stay external: Sentry's pinoIntegration hooks the real
+  // `require("pino")` call (require-in-the-middle) to wrap the logger.
+  // Bundled into the server chunk it never sees that require, so
+  // server/logger.ts's pino instance goes unpatched and every log.* call
+  // reaches stdout but never Sentry — confirmed live on seazn-club-stg:
+  // fly logs show level:50 pino JSON for "billing: subscription stamped
+  // with unknown group" while the same window has zero rows in Sentry's
+  // logs dataset for the project.
+  serverExternalPackages: ["pdfkit", "exceljs", "pino"],
   outputFileTracingIncludes: {
     "/*": ["src/lib/email-templates/html/**/*", "content/help/**/*"],
   },
