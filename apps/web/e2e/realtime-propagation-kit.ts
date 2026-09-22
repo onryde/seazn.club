@@ -114,10 +114,32 @@ export async function watchFixtureRealtime(
   // which is the branch that SKIPS the assertion — the one direction a
   // detector must never fail in.
   const STATUS_OK = /"status"\s*:\s*"ok"/;
+  // E2E_RT_DEBUG=1 dumps every Phoenix frame this page sends and receives.
+  // `joined` is a BOOLEAN, so when it stays false the failure message can only
+  // say "no websocket ever joined" — it cannot say WHY, and the three plausible
+  // whys (socket never opened / join refused / joined a different topic) call
+  // for three different fixes. Playwright's trace does not record websocket
+  // frames, so there is nowhere else to recover this from after the fact.
+  //
+  // Paid for on 2026-09-22: a local run was refused with
+  // `JwtSignatureError: Failed to validate JWT signature` on an `alg: HS256`
+  // token, because the standalone server is started with only
+  // `apps/web/.env.local` and `SUPABASE_JWT_PRIVATE_KEY` lives in the ROOT
+  // `.env.local` — so the mint fell back to the legacy HS256 secret that the
+  // project's imported JWKS no longer accepts. One frame said that outright;
+  // without it the same reading was mis-attributed twice, once to the code
+  // under test and once to cross-test interference.
   page.on("websocket", (ws) => {
+    if (process.env.E2E_RT_DEBUG === "1") console.warn(`[rt] socket ${ws.url()}`);
+    ws.on("framesent", (frame) => {
+      if (process.env.E2E_RT_DEBUG !== "1") return;
+      const t = typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");
+      console.warn(`[rt] -> ${t.slice(0, 400)}`);
+    });
     ws.on("framereceived", (frame) => {
       const text =
         typeof frame.payload === "string" ? frame.payload : frame.payload.toString("utf8");
+      if (process.env.E2E_RT_DEBUG === "1") console.warn(`[rt] <- ${text.slice(0, 400)}`);
       if (!text.includes(`fixture:${fixtureId}`)) return;
       if (!text.includes("phx_reply") || !STATUS_OK.test(text)) return;
       joined = true;
