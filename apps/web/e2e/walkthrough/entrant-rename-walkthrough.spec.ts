@@ -73,8 +73,8 @@ const LOADS = [
   "console: Doubles entrants, reloaded after the second swap",
   "console: Doubles fixtures, after the second swap",
   "public: Doubles, after the second swap",
-  "public: Mixed, warm",
   "console: directory",
+  "public: Mixed, warm",
   "public: Mixed, after the player's rename",
   "console: Mixed entrants",
   "console: Doubles entrants, after the player's rename",
@@ -224,16 +224,20 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   // ---- 3. A player renamed from the directory ----
   // Sankar is in two pairs now: "Smash Bros" in Doubles (a name of its own) and
   // "Sankar & Asha" in Mixed (built from his name). Only the second follows.
-  const mixedWarmedAt = Date.now();
-  const mixedWarm = await spectate(publicMixed);
-  await expect(shown(mixedWarm.locator("#panel-schedule"), mixedPair)).toBeVisible();
-
+  // The directory is loaded and the ✎ opened BEFORE the public page is warmed
+  // (review 2, R2-5), so the cache-lifetime bound below spans the warm load,
+  // the rename and the next load, never a console page load.
   const renamed = { ...sankar, name: `Sankar Krishnan ${TAG}` };
   await visit("/directory?tab=players");
   await waitForHydration(personPencil(page, sankar.name));
   await personPencil(page, sankar.name).click();
   const field = page.getByTestId("person-name-field");
   await expect(field).toHaveValue(sankar.name);
+
+  const mixedWarmedAt = Date.now();
+  const mixedWarm = await spectate(publicMixed);
+  await expect(shown(mixedWarm.locator("#panel-schedule"), mixedPair)).toBeVisible();
+
   await field.fill(renamed.name);
   await field.press("Enter");
   await expect(personPencil(page, renamed.name)).toBeVisible();
