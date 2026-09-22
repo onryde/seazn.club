@@ -37,15 +37,15 @@
 - Consumes: `pairRound`, `SwissStanding` from `@seazn/engine/scheduling`; `EntrantId` from `@seazn/engine/core`.
 - Produces:
   ```ts
-  export type SwissPairing = "fold" | "rank_adjacent";
-  export const SWISS_PAIRINGS: readonly SwissPairing[];
+  export type SwissPairingMode = "fold" | "rank_adjacent";
+  export const SWISS_PAIRINGS: readonly SwissPairingMode[];
   export const SWISS_PAIRING_ROUND_ONE_ONLY_CODE = "SWISS_PAIRING_ROUND_ONE_ONLY";
   export const SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE: string;
   export const SWISS_PAIRING_NOT_SWISS_CODE = "SWISS_PAIRING_NOT_SWISS";
   export const SWISS_PAIRING_NOT_SWISS_MESSAGE: string;
-  export function storedSwissPairing(config: Record<string, unknown>): SwissPairing;
-  export function effectiveSwissPairing(i: { override?: SwissPairing; stored: SwissPairing; round: number }): SwissPairing;
-  export function roundOnePairs(fieldSize: number, pairing: SwissPairing): Array<[number, number]>;
+  export function storedSwissPairing(config: Record<string, unknown>): SwissPairingMode;
+  export function effectiveSwissPairing(i: { override?: SwissPairingMode; stored: SwissPairingMode; round: number }): SwissPairingMode;
+  export function roundOnePairs(fieldSize: number, pairing: SwissPairingMode): Array<[number, number]>;
   ```
 
 - [ ] **Step 1: Write the failing test**
@@ -53,7 +53,7 @@
 ```ts
 // apps/web/src/lib/__tests__/swiss-pairing.test.ts
 import { describe, expect, it } from "vitest";
-import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
+import { pairRound, type SwissStanding } from "@seazn/engine/scheduling/swiss";
 import type { EntrantId } from "@seazn/engine/core";
 import {
   effectiveSwissPairing,
@@ -126,11 +126,11 @@ describe("roundOnePairs mirrors the engine", () => {
 // Round 1 (the round being paired has round_no 1) defaults to top-vs-bottom:
 // rank-adjacent (Hammes) pairs neighbours by STANDINGS, and before any result
 // the only rank is the seed, so neighbours would be seed 1 v seed 2.
-import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
+import { pairRound, type SwissStanding } from "@seazn/engine/scheduling/swiss";
 import type { EntrantId } from "@seazn/engine/core";
 
-export type SwissPairing = "fold" | "rank_adjacent";
-export const SWISS_PAIRINGS: readonly SwissPairing[] = ["fold", "rank_adjacent"];
+export type SwissPairingMode = "fold" | "rank_adjacent";
+export const SWISS_PAIRINGS: readonly SwissPairingMode[] = ["fold", "rank_adjacent"];
 
 export const SWISS_PAIRING_ROUND_ONE_ONLY_CODE = "SWISS_PAIRING_ROUND_ONE_ONLY";
 export const SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE =
@@ -138,25 +138,25 @@ export const SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE =
 export const SWISS_PAIRING_NOT_SWISS_CODE = "SWISS_PAIRING_NOT_SWISS";
 export const SWISS_PAIRING_NOT_SWISS_MESSAGE = "pairing only applies to swiss stages";
 
-export function storedSwissPairing(config: Record<string, unknown>): SwissPairing {
+export function storedSwissPairing(config: Record<string, unknown>): SwissPairingMode {
   return config.pairing === "rank_adjacent" ? "rank_adjacent" : "fold";
 }
 
 export function effectiveSwissPairing(i: {
-  override?: SwissPairing;
-  stored: SwissPairing;
+  override?: SwissPairingMode;
+  stored: SwissPairingMode;
   /** The round being paired — `nextUnseatedSwissRound`. Round NUMBER, never
    *  "has a decided board": a bye is minted `forfeited` at seat time, so that
    *  test is already true the moment an odd round 1 is paired. */
   round: number;
-}): SwissPairing {
+}): SwissPairingMode {
   if (i.override !== undefined) return i.override;
   return i.round === 1 ? "fold" : i.stored;
 }
 
 /** Round-1 pairs by seed position (1-based), lower seed first, sorted —
  *  computed by the engine's own pairRound so the hint cannot drift from it. */
-export function roundOnePairs(fieldSize: number, pairing: SwissPairing): Array<[number, number]> {
+export function roundOnePairs(fieldSize: number, pairing: SwissPairingMode): Array<[number, number]> {
   if (fieldSize < 2) return [];
   const standings: SwissStanding[] = Array.from({ length: fieldSize }, (_, i) => ({
     entrantId: String(i + 1) as EntrantId,
@@ -197,12 +197,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Test: `apps/web/src/server/usecases/__tests__/swiss-playoff-pairing.test.ts` (modify L193-212, L305-328; add cases)
 
 **Interfaces:**
-- Consumes (Task 1): `SwissPairing`, `storedSwissPairing`, `effectiveSwissPairing`, the four code/message constants.
+- Consumes (Task 1): `SwissPairingMode`, `storedSwissPairing`, `effectiveSwissPairing`, the four code/message constants.
 - Produces:
   ```ts
-  export interface GenerateOptions { pairing?: SwissPairing }
+  export interface GenerateOptions { pairing?: SwissPairingMode }
   export async function generateStageFixtures(auth: AuthCtx, stageId: string, opts?: GenerateOptions): Promise<GenerateOutcome>;
-  // SwissGenResult gains: pairing: SwissPairing | null; defaultPairing: SwissPairing | null; round: number | null; seatedIds: string[]
+  // SwissGenResult gains: pairing: SwissPairingMode | null; defaultPairing: SwissPairingMode | null; round: number | null; seatedIds: string[]
   // fixtures_generated payload on a Swiss seat: { stage_id, fixture_ids, round, pairing, override, seated_fixture_ids }
   ```
 
@@ -214,7 +214,7 @@ In `swiss-playoff-pairing.test.ts`:
 3. Add, in the same `describe`:
 
 ```ts
-import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
+import { pairRound, type SwissStanding } from "@seazn/engine/scheduling/swiss";
 import type { EntrantId } from "@seazn/engine/core";
 import { roundOnePairs } from "@/lib/swiss-pairing";
 import { undoDivision } from "../history";
@@ -349,15 +349,15 @@ Before relying on `toMatchObject({ status, code })`: open `apps/web/src/lib/erro
 1. Imports: add
    ```ts
    import {
-     type SwissPairing, storedSwissPairing, effectiveSwissPairing,
+     type SwissPairingMode, storedSwissPairing, effectiveSwissPairing,
      SWISS_PAIRING_ROUND_ONE_ONLY_CODE, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE,
      SWISS_PAIRING_NOT_SWISS_CODE, SWISS_PAIRING_NOT_SWISS_MESSAGE,
    } from "@/lib/swiss-pairing";
    ```
    Leave `DECIDED` (L941) and the `cascadeRank` condition's decided-board test exactly as they are.
-2. `export interface GenerateOptions { pairing?: SwissPairing }` above `generateStageFixtures`.
-3. `SwissGenResult` → `{ gen; seatedCount; reshaped; pairing: SwissPairing | null; defaultPairing: SwissPairing | null; round: number | null; seatedIds: string[] }`. Every existing `return` in `swissGen` that seats nothing returns `pairing: null, defaultPairing: null, round: null, seatedIds: []`.
-4. `swissGen(..., existing, override?: SwissPairing)`:
+2. `export interface GenerateOptions { pairing?: SwissPairingMode }` above `generateStageFixtures`.
+3. `SwissGenResult` → `{ gen; seatedCount; reshaped; pairing: SwissPairingMode | null; defaultPairing: SwissPairingMode | null; round: number | null; seatedIds: string[] }`. Every existing `return` in `swissGen` that seats nothing returns `pairing: null, defaultPairing: null, round: null, seatedIds: []`.
+4. `swissGen(..., existing, override?: SwissPairingMode)`:
    - Shell-mint branch (`existing.length === 0`, L983) and `target === null` branch (L997): first line `if (override !== undefined) throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);`
    - Directly after the `target === null` return (L997-999), before the `target > 1` readiness check and before any write:
      ```ts
@@ -481,18 +481,18 @@ openapi.ts L130: add `request: S.GenerateStageInput,` and `errors: [400, 422]`, 
 - Regenerate: `apps/web/src/lib/i18n-keys.ts` via `pnpm i18n:gen-keys`
 
 **Interfaces:**
-- Consumes: `SwissPairing`, `storedSwissPairing`, `effectiveSwissPairing`, `roundOnePairs` (Task 1); POST body `{ pairing }` (Task 3).
+- Consumes: `SwissPairingMode`, `storedSwissPairing`, `effectiveSwissPairing`, `roundOnePairs` (Task 1); POST body `{ pairing }` (Task 3).
 - Produces (StageRail props):
   ```ts
   /** Swiss only, and only while a round waits to be paired; null otherwise. */
   swissPairingMenu: {
     round: number;               // nextUnseatedSwissRound
     choosable: boolean;          // round === 1
-    defaultPairing: SwissPairing;
-    stored: SwissPairing;
+    defaultPairing: SwissPairingMode;
+    stored: SwissPairingMode;
     fieldSize: number;           // activeEntrantIds.length
   } | null;
-  onAct: (stageId: string, action: "generate" | "complete" | "delete" | "unpair", opts?: { pairing?: SwissPairing }) => void;
+  onAct: (stageId: string, action: "generate" | "complete" | "delete" | "unpair", opts?: { pairing?: SwissPairingMode }) => void;
   ```
 
 - [ ] **Step 1: Strings.** Add to all four `ui.json` (keys identical, values translated):
@@ -512,7 +512,7 @@ openapi.ts L130: add `request: S.GenerateStageInput,` and `errors: [400, 422]`, 
 Then `cd /Users/ashokhein/github/seazn.club-wt/swiss-round-one-pairing && pnpm i18n:gen-keys; echo EXIT=$?`.
 
 - [ ] **Step 2: Panel wiring** (`stages-panel.tsx`)
-  - Import `{ type SwissPairing, storedSwissPairing, effectiveSwissPairing }` from `@/lib/swiss-pairing`.
+  - Import `{ type SwissPairingMode, storedSwissPairing, effectiveSwissPairing }` from `@/lib/swiss-pairing`.
   - Beside `swissHasUnseated` (L900):
     ```ts
     const swissPairingMenu = (() => {
@@ -525,7 +525,7 @@ Then `cd /Users/ashokhein/github/seazn.club-wt/swiss-round-one-pairing && pnpm i
     })();
     ```
     (`fixtureCount` here is `stageFixtures.length`.)
-  - `act(stageId, action, opts?: { pairing?: SwissPairing })`; generate branch sends `json: opts?.pairing ? { pairing: opts.pairing } : {}`.
+  - `act(stageId, action, opts?: { pairing?: SwissPairingMode })`; generate branch sends `json: opts?.pairing ? { pairing: opts.pairing } : {}`.
   - Pass `swissPairingMenu={swissPairingMenu}` to `<StageRail>`.
 
 - [ ] **Step 3: Split button** (`stage-rail.tsx`). Wrap the existing `stage-generate` button (keep its testid, label logic and the long comment untouched) in `<div className="flex items-stretch">`, give it `rounded-r-none` when `swissPairingMenu` is non-null, and add after it:
@@ -543,7 +543,7 @@ Then `cd /Users/ashokhein/github/seazn.club-wt/swiss-round-one-pairing && pnpm i
     >▾</button>
   )}
   ```
-  State: `const [pairingOpen, setPairingOpen] = useState(false); const [pick, setPick] = useState<SwissPairing | null>(null);` — reset both to closed/null after every generate press and when `swissPairingMenu?.round` changes (`useEffect` on `[swissPairingMenu?.round]`). Escape closes and returns focus to the toggle.
+  State: `const [pairingOpen, setPairingOpen] = useState(false); const [pick, setPick] = useState<SwissPairingMode | null>(null);` — reset both to closed/null after every generate press and when `swissPairingMenu?.round` changes (`useEffect` on `[swissPairingMenu?.round]`). Escape closes and returns focus to the toggle.
   Generate click: `onAct(stage.id, "generate", pick && pick !== swissPairingMenu?.defaultPairing ? { pairing: pick } : undefined)`.
 
   Menu, rendered as a full-width row directly under the button row (inline disclosure — not a floating popover, so nothing can overflow at 320):
