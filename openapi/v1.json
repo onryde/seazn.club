@@ -21222,7 +21222,7 @@
     },
     "/api/v1/stages/{id}/generate": {
       "post": {
-        "summary": "Generate fixtures (idempotent, returns diff)",
+        "summary": "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored.",
         "tags": [
           "stages"
         ],
@@ -21238,6 +21238,29 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pairing": {
+                    "type": "string",
+                    "enum": [
+                      "fold",
+                      "rank_adjacent"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "pairing": "fold"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -21645,7 +21668,7 @@
             }
           },
           "400": {
-            "description": "Validation error",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
