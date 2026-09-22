@@ -176,38 +176,92 @@ jobs:
             slice: heavy
             args: ""
           # Whole matches played by hand, through the decider — the suite's
-          # product-level proofs (#667, #670). Its own leg so a failure reads
-          # as "a scorer cannot finish a match" rather than "a shard broke",
-          # and so its ~174s does not sit on top of the sharded remainder.
-          # `slice` is irrelevant to this project and left empty deliberately:
-          # E2E_PARALLEL_SLICE only selects between the parallel project's own
-          # halves, and setting it here would imply otherwise.
+          # product-level proofs (#667, #670). Its own project so a failure
+          # reads as "a scorer cannot finish a match" rather than "a shard
+          # broke". `slice` is irrelevant to this project and left empty
+          # deliberately: E2E_PARALLEL_SLICE only selects between the parallel
+          # project's own halves, and setting it here would imply otherwise.
           #
-          # `--workers=3` overrides playwright.config.ts's global `CI ? 2 : 4`
-          # for THIS leg only (workers is not a per-project option, so the
-          # override has to come from the command line). Measured on the run
-          # that prompted it: the step took 483s against the ~174s the config
-          # comment budgets, and 153s of that — 32% — was a TAIL running 3 -> 2
-          # -> 1 test wide. Playwright dispatches files in discovery order and
-          # the three most expensive specs (tabletennis-match, tennis-mtb,
-          # volleyball-match, each a single unsplittable test) sort LAST
-          # alphabetically, so they start last and drain one after another.
-          # Ten of the eighteen files hold exactly one test, so the scheduling
-          # unit is effectively the file and two workers cannot pack around
-          # them.
+          # SHARDED THREE WAYS 2026-09-22 (owner ruling), replacing the single
+          # `--workers=3` leg this block used to describe. The file has grown
+          # well past the eighteen specs the old comment was derived from, and
+          # the old derivation is superseded rather than merely restated — read
+          # what follows instead of the paragraph it replaced.
           #
-          # Three workers is chosen against the three long files specifically:
-          # it lets them run CONCURRENTLY instead of serially, which collapses
-          # that tail to roughly the longest of them. It is also the honest
-          # ceiling here — the runner is `ubuntu-latest` (4 vCPUs) and shares
-          # those 4 vCPUs with Postgres and the standalone Next server, so 4 workers
-          # would contend with the server under test and buy flake rather than
-          # speed.
-          - group: walkthrough
-            slug: walkthrough
+          # WHAT THE SINGLE LEG COST. The Playwright step measured 483s against
+          # the ~174s the config comment budgets, and 153s of that — 32% — was a
+          # TAIL running 3 -> 2 -> 1 test wide: Playwright dispatches files in
+          # discovery order, many walkthrough files hold exactly ONE test, so
+          # the scheduling unit is effectively the file, and the longest ones
+          # drained one after another at the end.
+          #
+          # WHY SHARDING RATHER THAN MORE WORKERS. `--workers=3` is kept, and it
+          # is kept for the runner rather than for the old tail argument: this
+          # is `ubuntu-latest` (4 vCPUs) sharing those vCPUs with the Postgres
+          # service and the standalone Next server under test, so 3 remains the
+          # honest per-runner ceiling and 4 would buy contention with the server
+          # being tested. Shards get their OWN runners, so each shard keeps its
+          # own 3 workers on its own 4 vCPUs — which is the only way this leg
+          # gets more parallelism at all.
+          #
+          # WHAT TO EXPECT, stated rather than assumed. Playwright shards by
+          # TEST COUNT over a contiguous, file-ordered slice and has no idea
+          # what a test costs (the same property e2e-parallel's comment above
+          # gave up on). This project's cost is wildly uneven —
+          # `scorepad-v3-tennis-mtb.spec.ts` is ONE unsplittable test measured
+          # at 307s locally — so whichever shard happens to hold it is this
+          # leg's floor at roughly 307s + setup, whatever the test counts say,
+          # and that shard cannot be made faster by splitting further. The win
+          # is the OTHER two thirds, which should fall well under it. Do not
+          # read three roughly equal legs into this; expect one long leg and two
+          # short ones, and expect which leg is long to MOVE as files are added.
+          #
+          # THE COST, plainly. Three jobs means three Postgres services and
+          # three full setups (~106s each: Flyway migrate, sport sync,
+          # production build, placement image, server start). This leg now
+          # spends roughly 3x the runner-minutes it did. The owner accepted that
+          # knowingly to buy back the tail; it is recorded here rather than
+          # hidden so the next person revisiting leg counts has the real trade.
+          #
+          # WHEN TO STOP SPLITTING. The rule this file already applies to
+          # e2e-mobile and e2e-parallel: measure a leg against the OTHER jobs'
+          # slowest leg, never against itself. Those are ~234s predicted for
+          # e2e-parallel's slowest shard and 244s measured for e2e-mobile's
+          # phones-small (this file's header carries both). Two of the three
+          # shards below should land under that, at which point they are no
+          # longer the workflow's wall clock and splitting them further buys
+          # nothing. The remaining question is only ever the tennis-mtb shard.
+          #
+          # `slug` must stay unique across the WHOLE matrix and carry no "/":
+          # upload-artifact@v4 rejects the slash and FAILS THE JOB on a
+          # duplicate name. `group` is the human label and may contain it, as
+          # `parallel 1/2` above already does.
+          #
+          # One consequence worth knowing before reading a red: every shard has
+          # `project: walkthrough`, so all three satisfy the `matrix.project ==
+          # 'walkthrough'` conditions below and all three start their own
+          # `stripe listen` forwarder against the same Stripe test account. Each
+          # forwards to its own server with its own minted secret, so the shard
+          # holding a money spec is served correctly; the other two additionally
+          # receive events for rows that exist only in a sibling shard's
+          # database. That is noise in their logs, not a failure — but it is new
+          # with this split and it is where to look first if a money spec goes
+          # red in a way that names an id nothing in its own DB owns.
+          - group: walkthrough 1/3
+            slug: walkthrough-1
             project: walkthrough
             slice: ""
-            args: --workers=3
+            args: --workers=3 --shard=1/3
+          - group: walkthrough 2/3
+            slug: walkthrough-2
+            project: walkthrough
+            slice: ""
+            args: --workers=3 --shard=2/3
+          - group: walkthrough 3/3
+            slug: walkthrough-3
+            project: walkthrough
+            slice: ""
+            args: --workers=3 --shard=3/3
 
     services:
       postgres:
