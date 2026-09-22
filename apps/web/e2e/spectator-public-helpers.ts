@@ -475,7 +475,14 @@ export async function shotAllTabs(page: Page, testInfo: TestInfo, namePrefix: st
 /** Visible interactive controls, in DOM order — the same shape
  *  w0-spectator-capture.spec.ts's own `controlSet` used for its manifest,
  *  trimmed to what a 320-vs-1280 diff needs (R1: membership, order, repeats
- *  — never box size). */
+ *  — never box size).
+ *
+ *  A test id is kept WHOLE; only free text (an aria-label, the inner text) is
+ *  cut at 64 characters. Cutting ids too made distinct controls collide: the
+ *  hub table's per-row tie-break buttons (`mh-table-<viewId>-tie-<entrant>`)
+ *  and its column toggle (`mh-table-<viewId>-more`) all cut to the same
+ *  64-character `mh-table-<viewId>-o…` once the view id carries a uuid, so a
+ *  diff could neither tell them apart nor remove the toggle alone. */
 export async function controlSet(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const visible = (el: Element) => {
@@ -484,7 +491,8 @@ export async function controlSet(page: Page): Promise<string[]> {
       return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none";
     };
     const label = (el: Element) =>
-      (el.getAttribute("data-testid") || el.getAttribute("aria-label") || (el as HTMLElement).innerText || el.textContent || "")
+      el.getAttribute("data-testid") ||
+      (el.getAttribute("aria-label") || (el as HTMLElement).innerText || el.textContent || "")
         .trim()
         .replace(/\s+/g, " ")
         .slice(0, 64);
