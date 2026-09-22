@@ -16,10 +16,17 @@
 // the one that separates the two implementations — without it a recreate passes
 // every other assertion in this file.
 //
-// Scope is LAZY: only the round being paired is reconciled. Rounds beyond it
-// stay minted at the old size until their own Pair reaches them — pinned by
-// "leaves later rounds' shells alone" below, so a future change to all-rounds
-// reconciliation has to move a test rather than slip through.
+// Scope depends on whether the division has STARTED (owner ruling 2026-09-22,
+// closing Open question 1's deferred half):
+//
+//  - BEFORE Start (`divisions.status` in 'setup'/'scheduled') the reconcile is
+//    EAGER — every unseated round is brought into line with the current field,
+//    because organisers schedule courts and times for ALL rounds in advance and
+//    a round minted for a stale field has no boards to hang the new players on.
+//    Pinned by the "eager scope" describe below.
+//  - AFTER Start ('active'/'completed') it stays LAZY — only the round being
+//    paired. No reason to widen a destructive write mid-event. Pinned by
+//    "after Start … leaves later rounds' shells alone (lazy scope)".
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -28,9 +35,9 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, deleteEntrant } from "../entrants";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures } from "../stages";
+import { addFixture, createStages, generateStageFixtures } from "../stages";
 import { createVenue, createCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
@@ -122,6 +129,40 @@ async function seedSwissStage(
     progression: null,
   });
   return { divisionId: division.id, stageId: stage!.id };
+}
+
+/** Enrol `count` more entrants, seeded after the ones already there. */
+async function addEntrants(auth: AuthCtx, divisionId: string, count: number): Promise<void> {
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from entrants where division_id = ${divisionId}`;
+  await createEntrants(
+    auth,
+    divisionId,
+    Array.from({ length: count }, (_, i) => ({
+      kind: "individual" as const,
+      display_name: `E${n + i + 1}`,
+      seed: n + i + 1,
+      members: [],
+    })),
+  );
+}
+
+/** Remove the highest-seeded entrant through the real `deleteEntrant` — the
+ *  pre-Start departure path. (After Start it refuses and `withdrawEntrantCascade`
+ *  is the tool; that half is covered by the lazy-scope describe.) */
+async function deleteLastEntrant(auth: AuthCtx, divisionId: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    select id from entrants where division_id = ${divisionId}
+    order by seed desc nulls last, created_at desc limit 1`;
+  await deleteEntrant(auth, row!.id);
+  return row!.id;
+}
+
+async function activeFieldSize(divisionId: string): Promise<number> {
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from entrants
+    where division_id = ${divisionId} and status in ('registered','confirmed')`;
+  return n;
 }
 
 async function playRoundHomeWins(orgId: string, stageId: string, roundNo: number): Promise<void> {
@@ -277,9 +318,13 @@ describe.runIf(HAS_DB)("swiss — a mid-tournament withdrawal reconciles the nex
     expect(snap(await fixturesOf(stageId))).toEqual(before);
   });
 
-  // Pins the LAZY scope decision: round 3 is wrong-sized for the new field and
-  // stays that way until its own Pair reconciles it.
-  it("leaves later rounds' shells alone (lazy scope)", async () => {
+  // Pins the LAZY scope decision for a STARTED division: round 3 is wrong-sized
+  // for the new field and stays that way until its own Pair reconciles it.
+  // `playR1ThenWithdraw` calls `startDivision`, so the division is `active`
+  // here — which is the whole reason this stays lazy after the 2026-09-22 owner
+  // ruling made the PRE-Start case eager (Open question 1's deferred half).
+  // Forcing the pre-Start predicate `true` reds this test.
+  it("after Start, leaves later rounds' shells alone (lazy scope)", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
     await playR1ThenWithdraw(auth, divisionId, stageId);
@@ -365,8 +410,224 @@ describe.runIf(HAS_DB)("swiss — a mid-tournament withdrawal reconciles the nex
     expect(at instanceof Date ? at.toISOString() : at).toBe(pinnedAt);
     expect(inRound(rows, 1).every(isSeated)).toBe(true);
     expect(seatedIn(rows, 1)).toHaveLength(6);
-    // Lazy again: round 2 is still minted for four.
-    expect(keysIn(rows, 2)).toEqual(["sw-r2-b1", "sw-r2-b2"]);
+    // EAGER before Start (owner ruling 2026-09-22, closing Open question 1's
+    // deferred half): round 2 tracks the new field too, so the organiser can
+    // schedule courts and times for it. This assertion read
+    // `["sw-r2-b1", "sw-r2-b2"]` while the scope was lazy in both states.
+    expect(keysIn(rows, 2)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3"]);
+    expect(inRound(rows, 2).every((f) => !isSeated(f))).toBe(true);
+  });
+});
+
+/**
+ * EAGER scope before Start — owner ruling 2026-09-22, closing the half of Open
+ * question 1 the design doc left open ("rounds BEYOND the one being paired are
+ * also wrong-sized...").
+ *
+ * The production defect: a Swiss division pre-Start, three entrants added and
+ * one deleted. Round 1 re-paired correctly through Unpair → Pair next, but
+ * rounds 2 and 3 kept the shells minted for the OLD field — no boards for the
+ * new players, so they could not be scheduled at all.
+ *
+ * Every assertion below is on a round the Generate did NOT pair. Round 1 is
+ * seated by the same call; rounds 2 and 3 are the ones that were stale.
+ */
+describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the current field", () => {
+  it("even→odd: an entrant joining mints the -bye shell in rounds 2 and 3, not only round 1", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+    const before = await fixturesOf(stageId);
+    for (const r of [1, 2, 3]) {
+      expect(keysIn(before, r)).toEqual([`sw-r${r}-b1`, `sw-r${r}-b2`, `sw-r${r}-b3`]);
+    }
+
+    await addEntrants(auth, divisionId, 1);
+    expect(await activeFieldSize(divisionId)).toBe(7);
+
+    await generateStageFixtures(auth, stageId); // reconcile every round + seat round 1
+
+    const rows = await fixturesOf(stageId);
+    // Seven is three boards plus a bye — in EVERY round, not just the paired one.
+    for (const r of [1, 2, 3]) {
+      expect(keysIn(rows, r)).toEqual([
+        `sw-r${r}-b1`,
+        `sw-r${r}-b2`,
+        `sw-r${r}-b3`,
+        `sw-r${r}-bye`,
+      ]);
+    }
+    expect(seatedIn(rows, 1)).toHaveLength(7);
+    // Reshaped, never seated: pairing is still one round at a time.
+    expect(inRound(rows, 2).every((f) => !isSeated(f))).toBe(true);
+    expect(inRound(rows, 3).every((f) => !isSeated(f))).toBe(true);
+  });
+
+  it("odd→even: an entrant deleted removes the -bye shell in rounds 2 and 3, not only round 1", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 7);
+
+    await generateStageFixtures(auth, stageId); // mint shells for seven
+    const before = await fixturesOf(stageId);
+    for (const r of [1, 2, 3]) {
+      expect(keysIn(before, r)).toEqual([
+        `sw-r${r}-b1`,
+        `sw-r${r}-b2`,
+        `sw-r${r}-b3`,
+        `sw-r${r}-bye`,
+      ]);
+    }
+
+    const gone = await deleteLastEntrant(auth, divisionId);
+    expect(await activeFieldSize(divisionId)).toBe(6);
+
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    for (const r of [1, 2, 3]) {
+      expect(keysIn(rows, r)).toEqual([`sw-r${r}-b1`, `sw-r${r}-b2`, `sw-r${r}-b3`]);
+    }
+    expect(seatedIn(rows, 1)).toHaveLength(6);
+    expect(seatedIn(rows, 1)).not.toContain(gone);
+    expect(inRound(rows, 2).every((f) => !isSeated(f))).toBe(true);
+    expect(inRound(rows, 3).every((f) => !isSeated(f))).toBe(true);
+  });
+
+  // The owner's production case, both directions inside ONE Generate.
+  it("three join and one is deleted: rounds 2 and 3 gain the boards the new players need", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+    await addEntrants(auth, divisionId, 3);
+    await deleteLastEntrant(auth, divisionId);
+    expect(await activeFieldSize(divisionId)).toBe(8);
+
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    for (const r of [1, 2, 3]) {
+      expect(keysIn(rows, r)).toEqual([
+        `sw-r${r}-b1`,
+        `sw-r${r}-b2`,
+        `sw-r${r}-b3`,
+        `sw-r${r}-b4`,
+      ]);
+    }
+    expect(seatedIn(rows, 1)).toHaveLength(8);
+  });
+
+  // THE DISTINGUISHING TEST for the eager loop. A delete-and-recreate satisfies
+  // every count assertion above and fails this one — it changes fixture ids and
+  // throws away the layout the organiser built for a round nobody has paired.
+  it("a round 2 shell scheduled ahead keeps its id, slot and court across the eager reconcile", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    const venue = await createVenue(auth, { name: "Main", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const pinnedAt = "2030-08-02T11:30:00.000Z";
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+    const shell = inRound(await fixturesOf(stageId), 2).find((f) => f.ext_key === "sw-r2-b1")!;
+    await sql`
+      update fixtures set scheduled_at = ${pinnedAt}, court_id = ${court.id}
+      where id = ${shell.id}`;
+
+    await addEntrants(auth, divisionId, 1); // six → seven, so round 2 gains a bye
+
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    // The eager reconcile really did reach round 2 — otherwise this is vacuous.
+    expect(keysIn(rows, 2)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3", "sw-r2-bye"]);
+
+    const kept = inRound(rows, 2).find((f) => f.ext_key === "sw-r2-b1")!;
+    expect(kept.id).toBe(shell.id);
+    const at = kept.scheduled_at;
+    expect(at instanceof Date ? at.toISOString() : at).toBe(pinnedAt);
+    expect(kept.court_id).toBe(court.id);
+    // Still a shell: round 2 has not been paired.
+    expect(isSeated(kept)).toBe(false);
+  });
+
+  // The boundary, pinned. 'scheduled' means "timetable published, NOT yet
+  // started" (`publishSchedule` moves setup → scheduled; `startDivision` moves
+  // it to active), so it is on the EAGER side. A predicate written
+  // `status !== 'setup'` passes every other test in this describe and fails
+  // this one.
+  it("a published (scheduled) division is still before Start, so the reconcile stays eager", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+    await sql`update divisions set status = 'scheduled' where id = ${divisionId}`;
+    await addEntrants(auth, divisionId, 2); // six → eight
+
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    expect(keysIn(rows, 3)).toEqual(["sw-r3-b1", "sw-r3-b2", "sw-r3-b3", "sw-r3-b4"]);
+  });
+
+  // The widened scope must not reach a round it cannot legally reshape.
+  // `addFixture` puts an ad-hoc swiss fixture at `maxRound + 1`, SEATED on both
+  // sides (it requires two entrant ids), so a 3-round stage can hold a fully
+  // seated round 4. Handing that round to the reconcile would trip its
+  // "already partly seated" refusal and turn a Generate that works today into
+  // STAGE_NOT_READY — so the later-round filter skips seated rounds. Drop the
+  // `isSwissBoardSeated` filter in `swissGen` and this test reds.
+  it("an ad-hoc fixture beyond the round budget neither blocks the eager reconcile nor is reshaped", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId); // mint shells for six
+
+    const pair = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${divisionId}
+        and status in ('registered','confirmed') order by seed limit 2`;
+    const { fixture_id } = await addFixture(auth, stageId, {
+      home_entrant_id: pair[0]!.id,
+      away_entrant_id: pair[1]!.id,
+    });
+    expect(inRound(await fixturesOf(stageId), 4).map((f) => f.id)).toEqual([fixture_id]);
+
+    await addEntrants(auth, divisionId, 1); // six → seven
+
+    await generateStageFixtures(auth, stageId); // must NOT refuse
+
+    const rows = await fixturesOf(stageId);
+    for (const r of [1, 2, 3]) {
+      expect(keysIn(rows, r)).toEqual([
+        `sw-r${r}-b1`,
+        `sw-r${r}-b2`,
+        `sw-r${r}-b3`,
+        `sw-r${r}-bye`,
+      ]);
+    }
+    const adhoc = inRound(rows, 4);
+    expect(adhoc.map((f) => f.id)).toEqual([fixture_id]);
+    expect(adhoc[0]!.home_entrant_id).toBe(pair[0]!.id);
+    expect(adhoc[0]!.away_entrant_id).toBe(pair[1]!.id);
+  });
+
+  // The early return still holds per round: a field that has not moved writes
+  // nothing anywhere, so the ordinary Pair is untouched by the wider scope.
+  it("a field that has not moved rewrites no round, paired or not", async () => {
+    const { auth } = await seedOrg();
+    const { stageId } = await seedSwissStage(auth, 3, 6);
+
+    await generateStageFixtures(auth, stageId);
+    const before = await fixturesOf(stageId);
+    const idsOf = (rows: FixtureRow[]) => rows.map((f) => `${f.round_no}:${f.seq_in_round}:${f.id}`);
+
+    await generateStageFixtures(auth, stageId); // seats round 1, reshapes nothing
+
+    const rows = await fixturesOf(stageId);
+    expect(idsOf(rows)).toEqual(idsOf(before));
+    expect(inRound(rows, 1).every(isSeated)).toBe(true);
+    expect(inRound(rows, 2).every((f) => !isSeated(f))).toBe(true);
   });
 });
 
