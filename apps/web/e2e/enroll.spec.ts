@@ -44,11 +44,19 @@ test("enroll an existing team into a division via the UI", async ({ page }) => {
   await page.getByRole("textbox", { name: "Search teams" }).fill(`Riverside U12 ${TAG}`);
   await page.getByText(`Riverside U12 ${TAG}`, { exact: true }).first().click();
   // The enroll form reads the squad it is about to copy. The sibling test
-  // below drives the OTHER branch of this same element ("Team squad is
-  // empty"), so the two together pin both states rather than one.
-  await expect(page.getByTestId("squad-preview")).toContainText(
-    "Team squad: 1 player will be copied to this entry.",
-  );
+  // below drives the OTHER branch of this same element, so the two together
+  // pin both states rather than one.
+  //
+  // By STATE, not by copy: the sentence is `entrants.add.squadPreview` in all
+  // four catalogues as of 2026-09-22, and pluralised through `plural()`, so an
+  // English literal here would break the day somebody reworded it. What the
+  // e2e is actually for is that the preview reflects the REAL squad — so it
+  // pins the count's value, not the prose. The sentence itself (singular and
+  // plural, four locales) is pinned by
+  // `entrants-panel-enroll-prose-i18n.test.tsx`.
+  const preview = page.getByTestId("squad-preview");
+  await expect(preview).toHaveAttribute("data-squad-empty", "false");
+  await expect(preview).toHaveAttribute("data-squad-count", "1");
   await page.getByRole("button", { name: /Enroll team/ }).click();
 
   // The team now appears as an entrant in the division table.
@@ -134,7 +142,8 @@ test("empty-squad enroll warns, then Sync from team squad pulls late players", a
   await page.getByRole("button", { name: "Existing team" }).click();
   await page.getByRole("textbox", { name: "Search teams" }).fill(teamName);
   await page.getByText(teamName, { exact: true }).first().click();
-  await expect(page.getByTestId("squad-preview")).toContainText("Team squad is empty");
+  // The empty branch, by state rather than copy — see the sibling test above.
+  await expect(page.getByTestId("squad-preview")).toHaveAttribute("data-squad-empty", "true");
   await page.getByRole("button", { name: /Enroll team/ }).click();
   const cell = page.getByRole("cell", { name: teamName });
   await expect(cell).toBeVisible();
