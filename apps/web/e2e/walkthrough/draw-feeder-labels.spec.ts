@@ -28,6 +28,23 @@
 // that seat. Driving the real template is what keeps this test about the
 // product rather than about a stage payload typed into a test file.
 //
+// THE SPECTATOR IS IN THIS FILE TOO, and deliberately in the SAME journey
+// rather than a file of its own. The gap the owner reported is not "a public
+// page is wrong" — it is that on the SAME DAY, on the SAME match, the
+// organiser read "Winner of R1·1" and a spectator read "TBD". Only one
+// test can witness that: one that has both readers look at one fixture at one
+// moment. So this competition is PUBLIC, and after the draw is confirmed an
+// anonymous context opens the share pages and reads the same final.
+//
+// THE VOCABULARY SPLIT IS DELIBERATE AND IS ASSERTED AS SUCH. The organiser
+// board says "Winner of R1·1" (`slot.winner_match` + the board's short
+// match ref); the public surfaces say "Winner of Semi-finals, match 1"
+// (`knockout.feederWinner` + the rail's round name). Same `{round, seq}`, two
+// vocabularies, on purpose. The spectator half below therefore asserts BOTH
+// directions: the public phrase is present AND the organiser's phrasing is
+// absent, because a "fix" that leaked the board's text onto a share page
+// would pass a presence-only test.
+//
 // WHAT IS A REACH AND WHAT IS THE TEST. Per this folder's README: entrants,
 // generation and the scoring of eight matches are REACHES over the API — the
 // pad is walked tap by tap in `scorepad-v3-*.spec.ts` and replaying it here
@@ -48,6 +65,10 @@ import {
   expectNoHorizontalScroll,
   scoreFixture,
 } from "../helpers";
+// A genuinely signed-out context with the cookie banner already dismissed —
+// the spectator surfaces' own helper, never a bare `browser.newContext()`
+// (that one inherits the storage state and would read the pages as staff).
+import { anonPage, closeOpenContexts, publicFixturePath } from "../spectator-public-helpers";
 
 /** Every user-facing string this file asserts comes from the dictionary the
  *  product renders, never retyped here (house pattern). A copy change reds
@@ -55,6 +76,25 @@ import {
 const L = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
 ) as Record<string, string>;
+
+/** The PUBLIC dictionary — a different book from `ui.json` above, and that is
+ *  the point: the two vocabularies are asserted against their own sources so a
+ *  copy change in either one reds this file rather than passing by accident. */
+const P = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/public.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+
+/** The shipped sentence a PUBLIC surface gives a winner-fed seat:
+ *  `knockout.feederWinner`, filled with the round's own NAME (never a round
+ *  number, and never the board's `R1·1` ref). The round name is read off
+ *  the page itself rather than recomputed here — see `SEMIS_CAPTION`. */
+const publicFeeder = (round: string, seq: number): string =>
+  P["knockout.feederWinner"]!.replace("{round}", round).replace("{seq}", String(seq));
+
+/** The bracket's round captions, in either shape it renders: the two-sided
+ *  tree paints them as direct-child spans, the column fallback as `h3`s. The
+ *  first is round 1's — the round that feeds the final. */
+const SEMIS_CAPTION = '[data-bracket="two-sided"] > div > span, [data-bracket="columns"] h3';
 
 /** The shipped sentence for a winner-fed seat, composed the way
  *  `resolveSlotLabel` composes it — `{ext}` filled from `slot.match_ref`,
@@ -65,8 +105,54 @@ const feeder = (round: number, seq: number): string =>
     L["slot.match_ref"]!.replace("{round}", String(round)).replace("{seq}", String(seq)),
   );
 
+/** The shipped sentence for a seat still held by a SEED — `slot.rank_range`,
+ *  what a setup progression stamps on every round-1 seat. From the dictionary
+ *  for the same reason the feeder is: a retyped "Rank 1" is a second home for
+ *  copy this file's header promises it never keeps. */
+const seedSeat = (rank: number): string => L["slot.rank_range"]!.replace("{rank}", String(rank));
+
 /** The wait every `goto` and every state read in this file is given. */
 const STEP_MS = 20_000;
+
+/**
+ * THE BUDGET, derived from the steps rather than typed beside them.
+ *
+ * AGENTS.md 20: when a Playwright budget blows, the runner prints whichever
+ * assertion was in flight — so a wall-clock overrun reports as "the final lost
+ * its feeder", a DATA defect, ABOVE the timeout line. A flat literal beside a
+ * growing test is therefore a latent misdiagnosis, and the first version of
+ * this file had one: `PAGE_LOADS = 3` with a comment claiming four, against a
+ * journey that really performs seven.
+ *
+ * `NAVIGATIONS` is the list itself, so adding a step moves the budget with it.
+ * Each entry is one FULL page load — `waitForURL` included, because the wizard
+ * navigates on submit and the wait is the page load, not a state read.
+ */
+const NAVIGATIONS = [
+  "/competitions/new — the competition wizard",
+  "…and the competition page it lands on",
+  "/d/new — the division wizard",
+  "…and the division page it lands on",
+  "?tab=fixtures — drawn and unplayed",
+  "?tab=fixtures — after the seeding is confirmed",
+  "/shared/… — the same draw, read by an anonymous spectator (both tabs)",
+  "/shared/…/fixtures/<final> — the match centre a share link lands on",
+  "/embed/divisions/<id>/bracket — the same draw in somebody else's page",
+  "/shared/<org>/<comp>?tab=matches — the hub's own card for that match",
+  "?tab=fixtures — after the first semi is decided",
+] as const;
+/** The API reaches this journey makes that cost real time: six league matches
+ *  and one semi, each a `/state` read plus an `/events` POST. */
+const API_SCORES = 7;
+/** 1280 / 768 / 320 on the organiser tab, plus the spectator's own
+ *  no-horizontal-scroll read — a relayout and a visibility wait each. */
+const WIDTH_CHECKS = 4;
+/** A reach or a relayout is a fraction of a page load, not a page load. */
+const REACH_MS = STEP_MS / 4;
+const BUDGET_MS = Math.max(
+  120_000,
+  NAVIGATIONS.length * STEP_MS + (API_SCORES + WIDTH_CHECKS) * REACH_MS,
+);
 
 /** `division-builder.tsx`'s own default for the `qualified` knob. Pinned
  *  because it is what decides the bracket has TWO rounds — and therefore a
@@ -90,19 +176,27 @@ async function fixturesOf(request: APIRequestContext, divisionId: string): Promi
   return res.data!;
 }
 
+// The anonymous contexts the spectator half opens are closed here, never in a
+// `finally`: a Playwright timeout skips `finally` and never skips `afterEach`.
+test.afterEach(closeOpenContexts);
+
 test("an organiser builds a League + Finals draw, reads who feeds each seat, and watches one become a name", async ({
+  browser,
   page,
   request,
 }) => {
-  // Derived from the waits this test actually spends, never a flat literal
-  // beside them (AGENTS.md 20): four full page loads at STEP_MS plus ~9
-  // in-page state waits. Moving STEP_MS moves the budget with it.
-  const PAGE_LOADS = 3;
-  const UI_STEPS = 9;
-  test.setTimeout(Math.max(60_000, PAGE_LOADS * STEP_MS + UI_STEPS * 2_000));
+  // Derived — see `BUDGET_MS` and the `NAVIGATIONS` list it is built from.
+  test.setTimeout(BUDGET_MS);
+  // The list is the budget's only input, so it must describe THIS test. A
+  // navigation added below without a line up there silently shrinks the
+  // allowance per step, which is the shape rule 20 exists to stop.
+  expect(NAVIGATIONS.length, "the navigation list no longer describes this journey").toBe(11);
 
   // ---------------------------------------------------------------- the draw
-  const compId = await createCompetitionViaUi(page, `Draw Feeders ${TAG}`, "private");
+  // PUBLIC, because the second half of this journey is a spectator reading the
+  // same draw over the share link. Nothing else about the organiser half
+  // depends on it.
+  const compId = await createCompetitionViaUi(page, `Draw Feeders ${TAG}`, "public");
 
   // The division through the wizard, on the Format tab, picking the template
   // that ships two stages. `createDivisionViaUi` never visits that tab and
@@ -221,8 +315,8 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   }
   // The positive pair: the seeded semis DID render their own stored labels,
   // so an absent "Winner of" above would be a real absence, not a blank tab.
-  await expect(sheet.getByText("Rank 1", { exact: false }).first()).toBeVisible();
-  await expect(tree.getByText("Rank 1", { exact: false }).first()).toBeVisible();
+  await expect(sheet.getByText(seedSeat(1), { exact: false }).first()).toBeVisible();
+  await expect(tree.getByText(seedSeat(1), { exact: false }).first()).toBeVisible();
   // …and nothing on this tab says TBD, on a bracket where every seat has
   // either a known seed or a known feeder.
   await expect(sheet.getByText(/^TBD$/)).toHaveCount(0);
@@ -265,7 +359,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   const panel = page.locator('[data-progression-state="draft"]');
   await expect(panel, "the seeding proposal panel never appeared").toBeVisible({ timeout: STEP_MS });
-  const confirmBtn = panel.getByRole("button", { name: "Confirm proposal" });
+  const confirmBtn = panel.getByRole("button", { name: L["progression.confirmCta"]!, exact: true });
   // Nothing is tied, so it is actionable immediately — asserted, because a
   // disabled button here would mean the league produced a tie and the rest
   // of this journey is about a different scenario than the one described.
@@ -286,6 +380,154 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
     await expect(where).toContainText(R1_2);
   }
   await expect(sheet.getByText(/^TBD$/)).toHaveCount(0);
+
+  // ------------------------------------------- THE SAME MATCH, A SPECTATOR
+  // Same fixture, same moment, a signed-out reader. This is the half the
+  // owner's report is actually about: the organiser above has just read both
+  // feeders off the final; a spectator opening the share link read "TBD".
+  const [, orgSlug, compSlug, pubDivSlug] = (await divisionPath(request, divisionId)).match(
+    /^\/o\/([^/]+)\/c\/([^/]+)\/d\/([^/]+)$/,
+  )!;
+  const spectator = await anonPage(browser, { width: 1280, height: 900 });
+  await spectator.goto(`/shared/${orgSlug}/${compSlug}/${pubDivSlug}`);
+  // The share link lands on Schedule; the DRAW is one tab across. Tapping is
+  // what a spectator does and costs no page load — and the panels are all in
+  // the ISR payload, so the bracket is ATTACHED from the first byte and only
+  // `hidden`. Asserting `toBeVisible` after the tap is therefore the assertion
+  // that has to be made: a `toBeAttached` here would pass without the tap and
+  // prove nothing about what anyone can read.
+  await expect(spectator.locator("#panel-schedule"), "the public division page never rendered").toBeVisible({
+    timeout: STEP_MS,
+  });
+  await spectator.getByRole("tab", { name: P["division.tab.standings"]!, exact: true }).click();
+  const publicBracket = spectator.locator("[data-bracket]").first();
+  await expect(publicBracket, "the public draw never rendered").toBeVisible({ timeout: STEP_MS });
+
+  // The round's PUBLIC name, taken from the page's own caption rather than
+  // recomputed here — the claim being made is that the final names the round
+  // THIS page calls round 1, which a name typed into the test cannot check.
+  // `textContent`, NOT `innerText`: the caption is `uppercase` in CSS and
+  // `innerText` returns what is PAINTED — "SEMI-FINALS" — which would never
+  // match the sentence the namer composes from the underlying word.
+  const semisName = ((await spectator.locator(SEMIS_CAPTION).first().textContent()) ?? "").trim();
+  expect(semisName, "the public bracket printed no round name to compose against").not.toBe("");
+  expect(
+    semisName,
+    "the public bracket captioned round 1 with the board's short ref, not a round name",
+  ).not.toMatch(/R\d/);
+  const publicR1_1 = publicFeeder(semisName, 1);
+  const publicR1_2 = publicFeeder(semisName, 2);
+  expect(publicR1_2, "the two public feeder sentences are identical").not.toBe(publicR1_1);
+  // …and they are NOT the organiser's sentences, or every assertion below
+  // would pass in both vocabularies and witness nothing.
+  expect(publicR1_1, "the public and board phrasings collapsed into one").not.toBe(R1_1);
+
+  const publicFinal = publicBracket.locator(`a[href$="/fixtures/${finalRow.id}"]`);
+  await expect(publicFinal, "no public bracket card for the final").toHaveCount(1);
+  // BOTH seats, EXACTLY and IN ORDER, read off the two side spans' own
+  // `title` — not `toContainText` on the card.
+  //
+  // Two reasons, and the second is a trap worth leaving written down. A
+  // contains-check cannot tell "home is named" from "away is named", so it
+  // passes on a half-fix. And the card's FOOTER carries its own "TBD" — the
+  // schedule rail's word for a match with no result and no time (`copy.tbd`,
+  // nothing to do with a seat) — so a card-level `not.toContainText("TBD")`
+  // reds on a card whose seats are both perfectly named. It did, on the first
+  // run of this test, against a build where the fix was working.
+  const sideTitles = await publicFinal
+    .locator("span[title]")
+    .evaluateAll((els) => els.map((e) => e.getAttribute("title")));
+  expect(
+    sideTitles,
+    "the spectator's final does not name both its feeders in the public vocabulary",
+  ).toEqual([publicR1_1, publicR1_2]);
+  // Said as the symptom, so a future reader can see the defect in the test:
+  // neither seat is the bracket's "to be decided" word any more.
+  expect(sideTitles, "the spectator is still reading TBD on a seat").not.toContain(L["bracket.tbd"]!);
+  // And the other direction — the deliberate split held. The board's "Winner
+  // of R1·1" must never appear on a share page.
+  expect(sideTitles, "the organiser's board vocabulary leaked onto a public page").not.toContain(R1_1);
+  // The positive pair for that negative: a seeded semi still shows a real
+  // person, so "no board text" cannot be passing on an empty card.
+  await expect(
+    publicBracket.locator(`a[href$="/fixtures/${semi1.id}"]`),
+    "the public bracket rendered no entrant at all",
+  ).toContainText(names[0]!);
+
+  // Back on the tab the share link actually lands on. The schedule rail names
+  // its waiting sides through a DIFFERENT path from the bracket beside it
+  // (`slotLabels`, pre-resolved on the server), and a fix applied to one and
+  // not the other is precisely the defect this file exists for, one tab over.
+  await spectator.getByRole("tab", { name: P["division.tab.schedule"]!, exact: true }).click();
+  const schedulePanel = spectator.locator("#panel-schedule");
+  await expect(schedulePanel).toBeVisible();
+  const scheduleFinal = schedulePanel.locator(`a[href$="/fixtures/${finalRow.id}"]`).first();
+  await expect(scheduleFinal, "no schedule row for the final").toHaveCount(1);
+  await expect(scheduleFinal, "the schedule rail's final lost its first feeder").toContainText(publicR1_1);
+  await expect(scheduleFinal, "the schedule rail's final lost its second feeder").toContainText(publicR1_2);
+  await expect(scheduleFinal, "the board's vocabulary leaked into the schedule rail").not.toContainText(R1_1);
+
+  // The match centre — where a share link actually lands, and a separate read
+  // (`match-centre-load.ts`) with its own stage-scoped query. A fix applied
+  // only to the division page would leave this page saying TBD.
+  await spectator.goto(publicFixturePath(orgSlug, compSlug, pubDivSlug, finalRow.id));
+  const centre = spectator.locator("main");
+  await expect(centre, "the match centre never rendered").toBeVisible({ timeout: STEP_MS });
+  await expect(centre, "the match centre's home seat lost its feeder").toContainText(publicR1_1);
+  await expect(centre, "the match centre's away seat lost its feeder").toContainText(publicR1_2);
+  await expect(centre, "the organiser's board vocabulary leaked into the match centre").not.toContainText(
+    R1_1,
+  );
+  await expectNoHorizontalScroll(spectator);
+
+  // The embed widget — a THIRD read (`server/embed-data.ts`, its own explicit
+  // select), rendering the same bracket component inside a stranger's page.
+  // It is here because a read that omits the feed columns compiles clean and
+  // returns undefined for them: without a surface that drives it, that select
+  // is exactly the shape that ships inert.
+  await spectator.goto(`/embed/divisions/${divisionId}/bracket`);
+  const embedFinal = spectator.locator(`a[href$="/fixtures/${finalRow.id}"]`).first();
+  await expect(embedFinal, "the embed bracket never rendered the final").toBeVisible({ timeout: STEP_MS });
+  const embedTitles = await embedFinal
+    .locator("span[title]")
+    .evaluateAll((els) => els.map((e) => e.getAttribute("title")));
+  expect(embedTitles, "the embedded draw does not name the final's feeders").toEqual([
+    publicR1_1,
+    publicR1_2,
+  ]);
+
+  // The competition hub — its own read (`server/public-site/competition-hub.ts`,
+  // `hubSides`) and the page most spectators actually land on first.
+  // `?tab=matches` deliberately: that tab is the one built from `hubSides`,
+  // the hub's own naming path. The hub lands on Overview, which shows a
+  // selection rather than every match.
+  await spectator.goto(`/shared/${orgSlug}/${compSlug}?tab=matches`);
+  const hubFinal = spectator.locator(`a[href$="/fixtures/${finalRow.id}"]`).first();
+  await expect(hubFinal, "the hub never showed the final").toBeVisible({ timeout: STEP_MS });
+  await expect(hubFinal, "the hub's final lost its first feeder").toContainText(publicR1_1);
+  await expect(hubFinal, "the hub's final lost its second feeder").toContainText(publicR1_2);
+
+  // The subscribed CALENDAR — the one public surface with no page to open, and
+  // therefore the one most likely to be left behind. Fetched through the
+  // spectator's own signed-out context, never the staff `request`.
+  //
+  // TWO layers of RFC 5545 stand between the feed and a substring match, and
+  // both of them red a perfectly correct calendar:
+  //   1. FOLDING — any line over 75 octets continues on the next line, which
+  //      begins with a space, splitting the sentence mid-word.
+  //   2. TEXT ESCAPING — a comma inside a SUMMARY is written `\,`. The public
+  //      feeder phrase has a comma in it ("Winner of Semi-finals, match 1"),
+  //      so the raw body never contains the sentence as the dictionary spells
+  //      it. This one cost a run: the calendar was already right.
+  // Undo both, in that order, before asserting.
+  const ics = await spectator.request.get(
+    `/shared/${orgSlug}/${compSlug}/${pubDivSlug}/calendar.ics`,
+  );
+  expect(ics.status(), "the public calendar did not serve").toBe(200);
+  const unfolded = (await ics.text()).replace(/\r\n /g, "").replace(/\\([,;\\])/g, "$1");
+  expect(unfolded, "the calendar's final lost its first feeder").toContain(publicR1_1);
+  expect(unfolded, "the calendar's final lost its second feeder").toContain(publicR1_2);
+  expect(unfolded, "the organiser's board vocabulary leaked into the calendar").not.toContain(R1_1);
 
   // REACH: the first semi is played, top seed through.
   const seededRows = await fixturesOf(request, divisionId);

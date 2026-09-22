@@ -366,6 +366,21 @@ export interface PublicSlideInput {
     third_place?: boolean | null;
     conditional?: boolean | null;
     ext_key?: string | null;
+    /** The bracket feed edges, which name a seat a `timing: "setup"`
+     *  progression left stored-null ("Winner of Semi-finals, match 1" instead
+     *  of "TBD"). Optional for the same reason the five above are: hand-built
+     *  inputs predate them, and absent reads as "no feed known".
+     *
+     *  Both real callers spread `getPublicDivision`'s fixtures wholesale
+     *  (`{ ...data }` in each /present page), so widening the type is what
+     *  actually delivers them — WITHOUT it the namer here builds an empty feed
+     *  map and the kiosk keeps saying "TBD" while every other public surface
+     *  names the seat. A type that omits a field the caller passes is exactly
+     *  how a seam ships inert. */
+    winner_to_fixture?: string | null;
+    winner_to_slot?: number | null;
+    loser_to_fixture?: string | null;
+    loser_to_slot?: number | null;
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
   entrants: {
@@ -462,13 +477,30 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     });
   }
 
+  // The BRACKET slide owns its own "to be decided" word (`bracket.tbd`, a
+  // different string from the namer's `schedule.tbd` in es/fr/nl), so it
+  // cannot take a pre-resolved `seat()` string. It resolves the seat's LABEL
+  // first — stored, else the feed edge — and falls back only when there is
+  // genuinely none. Written this way because the obvious shape,
+  // `f.home_slot_label ? namer.seat(...) : tbd`, short-circuits on exactly the
+  // seat this exists for: a `timing: "setup"` bracket leaves a sibling-fed
+  // seat's stored label NULL, so the namer was never reached and the kiosk
+  // kept printing "TBD".
+  const bracketSeat = (f: PublicSlideInput["fixtures"][number], which: "home" | "away"): string => {
+    const stored = (which === "home" ? f.home_slot_label : f.away_slot_label) ?? null;
+    const label = namer.seatLabelOf(f.id, which, stored);
+    return label === null ? resolveSlotLabel(null, lookup, "bracket.tbd") : namer.seat(f.id, which, label);
+  };
+
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : namer.slot(f.stage_id, f.home_slot_label ?? null),
+      // `seat`, not `slot` — a setup bracket's sibling-fed seat has no stored
+      // label, so the kiosk showed "TBD" on a match with a known feeder.
+      : namer.seat(f.id, "home", f.home_slot_label ?? null),
     away: f.away_entrant_id
       ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : namer.slot(f.stage_id, f.away_slot_label ?? null),
+      : namer.seat(f.id, "away", f.away_slot_label ?? null),
     homeLogo: null,
     awayLogo: null,
     line: f.summary?.headline ?? null,
@@ -511,16 +543,8 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
         // the public Bracket component makes (R10d n4).
         fixtures: stageFixtures.map((f) => ({
           id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round,
-          home: f.home_entrant_id
-            ? (names[f.home_entrant_id] ?? null)
-            : f.home_slot_label
-              ? namer.slot(f.stage_id, f.home_slot_label)
-              : resolveSlotLabel(null, lookup, "bracket.tbd"),
-          away: f.away_entrant_id
-            ? (names[f.away_entrant_id] ?? null)
-            : f.away_slot_label
-              ? namer.slot(f.stage_id, f.away_slot_label)
-              : resolveSlotLabel(null, lookup, "bracket.tbd"),
+          home: f.home_entrant_id ? (names[f.home_entrant_id] ?? null) : bracketSeat(f, "home"),
+          away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : bracketSeat(f, "away"),
           home_slot_label: f.home_slot_label ?? null,
           away_slot_label: f.away_slot_label ?? null,
           line: f.summary?.headline ?? null,

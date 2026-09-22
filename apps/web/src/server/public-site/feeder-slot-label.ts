@@ -28,8 +28,21 @@
 //   - the public kiosk's fixtures and bracket slides (`server/slideshow-data.ts`,
 //     `buildPublicDivisionSlides`, behind both `/present` pages).
 //
+// A seat with NO stored label is the other half of this (2026-09-21). A
+// `timing: "setup"` progression bracket leaves a sibling-fed seat's
+// `*_slot_label` null on purpose, so `slot()` above had nothing to read and a
+// spectator got "TBD" on the same match an organiser saw as "Winner of R1·1".
+// `seat()` consults the fixture's FEED EDGES in that case, through the SAME
+// `seatLabel` precedence the organiser surfaces use — so the two sides share
+// the rule and differ only in vocabulary, which is the intended split.
+//
 // Pure: no `server-only`, no database. The callers own the reads.
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+// `lib/schedule-board.ts` is isomorphic by design (its own header: "used by
+// the server page (feed labels) and the client board"). Sharing it here is
+// what makes the public seat rule the SAME rule the organiser surfaces use —
+// a second implementation is how the two sides drifted in the first place.
+import { feedLabels, seatLabel, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel, type LaneRoundFixture } from "@/lib/round-role-label";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
@@ -148,6 +161,14 @@ export interface NamedFixture extends RoundRoleFixture {
   id: string;
   stage_id: string;
   seq_in_round: number;
+  /** The bracket feed edges, when the caller's read selects them. Optional
+   *  because several public reads predate them; a caller that omits them gets
+   *  exactly today's behaviour (`seat()` falls back to the stored label), so
+   *  adding this is additive rather than a cutover. */
+  winner_to_fixture?: string | null;
+  winner_to_slot?: number | null;
+  loser_to_fixture?: string | null;
+  loser_to_slot?: number | null;
 }
 
 export interface PublicRoundNamer {
@@ -156,8 +177,42 @@ export interface PublicRoundNamer {
   roundLabel(fixtureId: string): string | null;
   /** An unfilled side's text, its feeder looked up in `stageId`: the side's OWN
    *  stage, because a league's round 1 match 2 and a knockout's share a
-   *  `{round, seq}`. */
+   *  `{round, seq}`.
+   *
+   *  Reads the STORED label only. Prefer `seat()` — a seat that a sibling
+   *  feeds may have no stored label at all, and this returns "TBD" for it. */
   slot(stageId: string, label: SlotLabel | null): string;
+  /**
+   * One SEAT's public text — the same thing `slot()` returns, except that a
+   * seat with no stored label falls back to what its FEED EDGES say.
+   *
+   * The precedence is `lib/schedule-board.ts`'s `seatLabel`, shared with the
+   * draw list, the bracket tree and the schedule board, so a spectator and an
+   * organiser cannot be looking at two different rules. What differs is the
+   * VOCABULARY, not the rule: the organiser's resolver renders
+   * `slot.winner_match` as "Winner of R1·1" (the board's short code) and this
+   * one renders it as "Winner of Semi-finals, match 1" (the rail's round
+   * name). Both read the SAME `{round, seq}`.
+   *
+   * A fixture id this namer does not know falls back to the stored label
+   * alone, which is exactly today's behaviour.
+   */
+  seat(fixtureId: string, seat: "home" | "away", stored: SlotLabel | null): string;
+  /**
+   * The same resolution as `seat()`, stopping one step earlier: the SlotLabel
+   * a seat really has (`stored ?? feed`), or null when it has none.
+   *
+   * It exists because a caller that owns its own "to be decided" word cannot
+   * use `seat()`. `components/public-site/bracket.tsx` is the one: a side with
+   * no label at all keeps `bracket.tbd`, which is a DIFFERENT string from the
+   * namer's `schedule.tbd` in es, fr and nl ("Por definir" vs "Por confirmar",
+   * "À définir" vs "À déterminer", "N.t.b." vs "NNB"). Handing that caller a
+   * pre-resolved string would silently retranslate three locales.
+   *
+   * Same `seatLabel` precedence as `seat()` — literally the same call — so
+   * there is one rule here, not two.
+   */
+  seatLabelOf(fixtureId: string, seat: "home" | "away", stored: SlotLabel | null): SlotLabel | null;
 }
 
 /**
@@ -206,20 +261,52 @@ export function publicRoundNamer(a: {
   }
   const fixtureAt = new Map([...byStage].map(([stageId, rows]) => [stageId, stageFixtureAt(rows)]));
 
+  // The feed-label map, over EVERY fixture handed in — a division's list when
+  // the caller reads a division, a stage's when it reads a stage. `feedLabels`
+  // needs both ends of an edge in one list, so a caller that reads one stage
+  // sees only that stage's own edges; that is enough for the shape this
+  // exists for (a setup bracket's final, fed by its own semis) and is why
+  // widening a caller's read is a caller's decision, not this function's.
+  const feeds = feedLabels(
+    a.fixtures.map(
+      (f): FeedRow => ({
+        id: f.id,
+        round_no: f.round_no,
+        seq_in_round: f.seq_in_round,
+        winner_to_fixture: f.winner_to_fixture ?? null,
+        winner_to_slot: f.winner_to_slot ?? null,
+        loser_to_fixture: f.loser_to_fixture ?? null,
+        loser_to_slot: f.loser_to_slot ?? null,
+      }),
+    ),
+  );
+  const stageOf = new Map(a.fixtures.map((f) => [f.id, f.stage_id]));
+
+  const say = (stageId: string, label: SlotLabel | null): string =>
+    publicSlotLabel(
+      label,
+      a.ui,
+      (key, vars) => t(a.dict, key, vars),
+      (round, seq) => {
+        const feeder = fixtureAt.get(stageId)?.(round, seq);
+        const name = feeder === undefined ? null : (nameById.get(feeder.id) ?? null);
+        if (feeder === undefined || name === null) return null;
+        // The feeder is one of the fixtures counted under its own key.
+        return { name, matches: matchesInRound.get(roundKey(stageId, feeder.round_no, name)) ?? 1 };
+      },
+    );
+
+  const seatLabelOf = (fixtureId: string, which: "home" | "away", stored: SlotLabel | null) =>
+    seatLabel(stored, feeds[fixtureId], which);
+
   return {
     roundLabel: (fixtureId) => nameById.get(fixtureId) ?? null,
-    slot: (stageId, label) =>
-      publicSlotLabel(
-        label,
-        a.ui,
-        (key, vars) => t(a.dict, key, vars),
-        (round, seq) => {
-          const feeder = fixtureAt.get(stageId)?.(round, seq);
-          const name = feeder === undefined ? null : (nameById.get(feeder.id) ?? null);
-          if (feeder === undefined || name === null) return null;
-          // The feeder is one of the fixtures counted under its own key.
-          return { name, matches: matchesInRound.get(roundKey(stageId, feeder.round_no, name)) ?? 1 };
-        },
-      ),
+    slot: say,
+    seat: (fixtureId, which, stored) => {
+      const stageId = stageOf.get(fixtureId);
+      if (stageId === undefined) return say("", stored);
+      return say(stageId, seatLabelOf(fixtureId, which, stored));
+    },
+    seatLabelOf,
   };
 }

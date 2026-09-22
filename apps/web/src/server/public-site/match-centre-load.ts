@@ -171,7 +171,7 @@ async function loadSides(
   sql: Sql,
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
   division: { youth: boolean; playerNameDisplay: string | null },
-  slot: (label: SlotLabel | null) => string,
+  slot: (label: SlotLabel | null, seat: "home" | "away") => string,
 ): Promise<[SideT, SideT]> {
   const ids = [fixture.home_entrant_id, fixture.away_entrant_id].filter(
     (id): id is string => id !== null,
@@ -193,9 +193,13 @@ async function loadSides(
   const maskedNames = rows.length > 0 ? await maskSideNames(sql, rows, division) : new Map<string, string>();
   const byId = new Map(rows.map((r) => [r.id, r]));
 
-  const sideOf = (entrantId: string | null, slotLabel: SlotLabel | null): SidePre => {
+  const sideOf = (
+    entrantId: string | null,
+    slotLabel: SlotLabel | null,
+    seat: "home" | "away",
+  ): SidePre => {
     if (entrantId === null) {
-      const name = slot(slotLabel);
+      const name = slot(slotLabel, seat);
       return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false };
     }
     const row = byId.get(entrantId);
@@ -218,8 +222,8 @@ async function loadSides(
     };
   };
 
-  const home = sideOf(fixture.home_entrant_id, fixture.home_slot_label);
-  const away = sideOf(fixture.away_entrant_id, fixture.away_slot_label);
+  const home = sideOf(fixture.home_entrant_id, fixture.home_slot_label, "home");
+  const away = sideOf(fixture.away_entrant_id, fixture.away_slot_label, "away");
   // R11 fix round, C9 — resolved TOGETHER, not independently: a collision
   // can only be seen — and broken — by comparing both sides at once.
   const [homeShort, awayShort] = disambiguatedShorts(home, away);
@@ -334,7 +338,11 @@ export async function loadMatchCentre(
   // so a fixture with both entrants set (every live and finished match) reads
   // neither the stage's rows nor the dictionary; its `slot` is today's text,
   // never asked for.
-  let slot = (label: SlotLabel | null): string => resolveSlotLabel(label, ctx.slotLabelLookup, "schedule.tbd");
+  // Annotated rather than inferred so the fallback can simply IGNORE the seat
+  // (a narrower function is assignable) instead of naming a parameter it never
+  // reads, which lint calls out.
+  let slot: (label: SlotLabel | null, seat: "home" | "away") => string = (label) =>
+    resolveSlotLabel(label, ctx.slotLabelLookup, "schedule.tbd");
   if (fixture.home_entrant_id === null || fixture.away_entrant_id === null) {
     const stageRows = await sql<
       {
@@ -347,10 +355,23 @@ export async function loadMatchCentre(
         third_place: boolean | null;
         conditional: boolean | null;
         ext_key: string | null;
+        winner_to_fixture: string | null;
+        winner_to_slot: number | null;
+        loser_to_fixture: string | null;
+        loser_to_slot: number | null;
       }[]
     >`
       select id, stage_id, round_no, seq_in_round, lane, is_final, third_place, conditional,
-             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
+             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
+             -- The feed edges, by the same rule as ext_key: not columns of the
+             -- view, read off fixtures by the VIEW row's own id. This read is
+             -- stage-scoped, which is enough for the shape that needs it — a
+             -- setup bracket's final, fed by its own semis.
+             -- (No backticks in here: this is inside a tagged template.)
+             (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
+             (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
+             (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
+             (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
       from public_fixtures_v where stage_id = ${fixture.stage_id}`;
     const namer = publicRoundNamer({
       ui: ctx.slotLabelLookup,
@@ -360,7 +381,10 @@ export async function loadMatchCentre(
       // the type the destructured query result leaves, and then nothing is named.
       stageKind: () => stageRow?.kind,
     });
-    slot = (label) => namer.slot(fixture.stage_id, label);
+    // `seat`, not `slot` — see `publicRoundNamer.seat`. The match centre is
+    // where a spectator lands from a share link, so a bracket seat reading
+    // "TBD" here is the most visible copy of this defect.
+    slot = (label, seat) => namer.seat(fixture.id, seat, label);
   }
   const sides = await loadSides(
     sql,

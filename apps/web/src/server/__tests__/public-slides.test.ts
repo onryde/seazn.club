@@ -247,6 +247,49 @@ describe("buildPublicDivisionSlides — waiting sides name their feeder's ROUND;
     expect(upcoming!.items.find((i) => i.round === 2)!.home).toBe(msgFor("fr", "schedule.tbd"));
   });
 
+  // A `timing: "setup"` progression bracket leaves a sibling-fed seat's STORED
+  // label null on purpose — the feed edges are the only thing that knows who
+  // feeds it. The kiosk is a public surface like any other and has to read the
+  // same sentence the share page does; before this it printed "to be decided"
+  // on both slides.
+  //
+  // Driving it through the real builder is the point: the bracket slide's
+  // seat used to be `f.home_slot_label ? namer.seat(...) : tbd`, which reads
+  // correctly and short-circuits on exactly this shape, so the namer was never
+  // reached. A test that only fed it a STORED label could never see that.
+  it("a seat with no stored label but a known FEED EDGE names its feeder on BOTH slides", async () => {
+    const fedByEdges = {
+      ...knockout,
+      fixtures: knockout.fixtures.map((f) =>
+        f.id === "final"
+          ? { ...f, home_slot_label: null, away_slot_label: null }
+          : { ...f, winner_to_fixture: "final", winner_to_slot: f.id === "semi-1" ? 1 : 2 },
+      ),
+    };
+    const slides = await buildPublicDivisionSlides({ ...fedByEdges, orgLocale: "fr" });
+    const dict = await getDictionary("fr", "public");
+    const semi = msgFor("fr", "bracket.round.semi");
+    const expected = [1, 2].map((seq) => t(dict, "knockout.feederWinner", { round: semi, seq }));
+    // The premise, stated rather than assumed: the sentence under test is not
+    // either "to be decided" word, so the assertions below cannot pass on the
+    // old behaviour.
+    expect(expected[0]).not.toBe(msgFor("fr", "bracket.tbd"));
+    expect(expected[0]).not.toBe(msgFor("fr", "schedule.tbd"));
+
+    const bracket = slides.find((s) => s.kind === "bracket") as {
+      fixtures: { id: string; home: string | null; away: string | null }[];
+    };
+    const node = bracket.fixtures.find((f) => f.id === "final")!;
+    expect([node.home, node.away], "the bracket slide still shows an unfed seat").toEqual(expected);
+
+    const upcoming = slides.find(
+      (s): s is Extract<(typeof slides)[number], { kind: "fixtures" }> =>
+        s.kind === "fixtures" && s.items.some((i) => i.round === 2),
+    );
+    const final = upcoming!.items.find((i) => i.round === 2)!;
+    expect([final.home, final.away], "the fixtures slide still shows an unfed seat").toEqual(expected);
+  });
+
   it("fr: the in-play, latest-results and coming-up slides take their titles from the dictionary in the org's locale", async () => {
     const slides = await buildPublicDivisionSlides({ ...knockout, orgLocale: "fr" });
     for (const k of TITLE_KEYS) expect(msgFor("fr", k), `the premise: fr ${k} differs from en`).not.toBe(msgFor("en", k));

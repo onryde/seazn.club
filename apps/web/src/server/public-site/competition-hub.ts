@@ -162,8 +162,11 @@ export interface HubSideCtx {
   kinds: Record<string, string>;
   badges: Record<string, string | null>;
   colours: Record<string, string | null>;
-  /** `{key,params}` → the org-locale slot sentence for an unfilled side. */
-  slot: (label: SlotLabel | null) => string;
+  /** `{key,params}` → the org-locale slot sentence for an unfilled side.
+   *  Takes the SEAT as well as the label: a seat with no stored label is named
+   *  from the fixture's feed edges (`publicRoundNamer.seat`), and which seat it
+   *  is decides which end of the edge answers. */
+  slot: (label: SlotLabel | null, seat: "home" | "away") => string;
 }
 
 type SidePre = SideT & { isPerson: boolean };
@@ -190,11 +193,11 @@ export function hubSides(
   >,
   ctx: HubSideCtx,
 ): [SideT, SideT] {
-  const pre = (entrantId: string | null, label: SlotLabel | null): SidePre => {
+  const pre = (entrantId: string | null, label: SlotLabel | null, seat: "home" | "away"): SidePre => {
     if (entrantId === null) {
       return {
         entrantId: "",
-        name: ctx.slot(label),
+        name: ctx.slot(label, seat),
         short: "",
         colour: null,
         badgeUrl: null,
@@ -213,8 +216,8 @@ export function hubSides(
       isPerson: (ctx.kinds[entrantId] ?? "team") !== "team",
     };
   };
-  const home = pre(fixture.home_entrant_id, fixture.home_slot_label);
-  const away = pre(fixture.away_entrant_id, fixture.away_slot_label);
+  const home = pre(fixture.home_entrant_id, fixture.home_slot_label, "home");
+  const away = pre(fixture.away_entrant_id, fixture.away_slot_label, "away");
   const [homeShort, awayShort] = disambiguatedShorts(home, away);
   const side = (pre_: SidePre, short: string): SideT => ({
     entrantId: pre_.entrantId,
@@ -703,7 +706,16 @@ export async function loadCompetitionHub(
       stageKind: (stageId) => stageById.get(stageId)?.kind,
     });
     for (const f of fixtures) {
-      const sides = hubSides(f, { names, kinds, badges, colours, slot: (label) => namer.slot(f.stage_id, label) });
+      // `seat`, not `slot`: a sibling-fed seat of a `timing: "setup"` bracket
+      // has NO stored label, and reading the stored label alone is what put
+      // "TBD" on a card the organiser saw named.
+      const sides = hubSides(f, {
+        names,
+        kinds,
+        badges,
+        colours,
+        slot: (label, seat) => namer.seat(f.id, seat, label),
+      });
       const stage = stageById.get(f.stage_id);
       if (f.venue_name) venues.add(f.venue_name);
       const { bucket } = hubLiveness(f.status);
