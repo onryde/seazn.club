@@ -67,7 +67,7 @@ import { zonedTimeInput } from "@/lib/zoned-datetime";
 // drifted", shared with the page's tests rather than restated in each.
 import { swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
 import {
-  latestSeatedSwissRound,
+  latestSwissRoundWithAnySeat,
   nextUnseatedSwissRound,
   swissRoundHasPlayedResult,
 } from "@/lib/swiss-shell";
@@ -899,9 +899,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const swissShellFixtures = stageFixtures.map((f) => ({ ...f, ext_key: f.ext_key ?? null }));
         const swissHasUnseated =
           stage.kind === "swiss" && nextUnseatedSwissRound(swissShellFixtures) !== null;
+        // PARTLY seated counts (2026-09-22). This asked `latestSeatedSwissRound`
+        // for a WHOLLY seated round, so an organiser who deleted an entrant
+        // before Start — leaving one board with a single null slot — lost the
+        // Unpair button entirely, on the one round that needed it. It must stay
+        // the same predicate the server's `unpairSwissRound` uses, or the page
+        // renders a control that 500s.
         const canUnpairSwiss = (() => {
           if (stage.kind !== "swiss") return false;
-          const latest = latestSeatedSwissRound(swissShellFixtures);
+          const latest = latestSwissRoundWithAnySeat(swissShellFixtures);
           return latest !== null && !swissRoundHasPlayedResult(swissShellFixtures, latest);
         })();
         // The swiss shape legend (owner-approved 2026-09-22, option B) — the
