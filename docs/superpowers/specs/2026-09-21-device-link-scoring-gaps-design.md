@@ -408,6 +408,47 @@ envelope proves the limiter fired. "Available on staging today" is not
 the same claim as "never misses", and only the second would justify
 leaving a correctness guarantee in a cache.
 
+### As built (2026-09-22) — and the one premise above that is false
+
+The ruling stands and shipped as written, with one correction that would
+have made the wave inert had it not been caught by a red test.
+
+**"A duplicate insert raises a constraint violation" is true only for the
+RACE, and the race is not the common case.** `appendEvent` compares
+`expected_seq` against the ledger tip (`append-event.ts:198`) and throws
+`SEQ_CONFLICT` **before it attempts any insert**. In the ordinary
+sequential retry — a pad resending a tap whose first write already
+committed — the tip has moved, the seq check fires, and no unique
+violation is ever raised. A handler matching only `23505` would compile,
+pass review, and answer every real retry with a `409`: precisely the
+defect this wave exists to remove. Measured red before the fix:
+`EngineError: expected seq 1 but ledger is at 2`.
+
+So the handler matches **both** shapes and gates the answer on a ledger
+lookup rather than on the error code:
+
+- `SEQ_CONFLICT` **or** a `score_events_idem_key` violation, **and**
+- the fixture actually holds that key → answer with its original outcome.
+- It does not → the `SEQ_CONFLICT` is genuine (another device got ahead)
+  and still raises `409`.
+
+Three more as-built notes:
+
+- **The original outcome is reconstructed from the ledger**
+  (`engine-db/replay.ts`), by folding UP TO the keyed event's seq through
+  the write path's own `nextStatus`. Not a `match_states` read: that table
+  holds the CURRENT state, which is a different answer the moment one more
+  event lands, so a retrying pad would be handed a silently regressed score.
+- **The ledger answer is rate limited** on `REPLAY_LIMIT`. It performs no
+  write, but a `dl_` secret is a shareable URL, so an unbounded free
+  surface is reachable by anyone holding a leaked link.
+- **The claim above that this becomes "exercised by the existing suite for
+  free" was optimistic.** It is exercised only by tests written to run with
+  no cache mock at all; a suite that mocks `cacheGet` to hit never reaches
+  the database branch. That is not hypothetical — it is why mutant M7
+  survived `scoring-replay-is-free.test.ts`, the file that exists to pin
+  that very limiter.
+
 ## 6b. Realtime propagation has almost no coverage (surveyed 2026-09-21)
 
 Surveyed after the owner asked whether the realtime flows could be
@@ -513,9 +554,10 @@ cookie-consent so the banner cannot race the pad.
 
 1. **W1** — write-path correctness (§4), including the score-line fix
    folded in at §4.8 **and the `auth` forwarding pulled forward from §5**
-   (see below).
-2. **W2** — durable idempotency (§6). Money path.
-3. **W3** — the realtime seam (§5), less the `auth` forwarding.
+   (see below). **MERGED 2026-09-22** (PR #823, squashed as `df892fac2`).
+2. **W2** — durable idempotency (§6). Money path. **BUILT 2026-09-22** —
+   see "As built" under §6 for the one design premise that proved false.
+3. **W3** — the realtime seam (§5), less the `auth` forwarding. NEXT.
 
 ### `auth` forwarding pulled into W1 (owner ruling 2026-09-21)
 
