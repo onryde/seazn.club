@@ -398,8 +398,10 @@ export function PersonNameCell({
               title={msg("persons.rename", { name: shown })}
               onClick={() => setEditing(true)}
               // 44px to tap, 20px of layout: the negative margin keeps the
-              // row as tall as the name line.
-              className="-my-3 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              // row as tall as the name line. slate-500, not 400: the glyph is
+              // the control's only mark, and 400 on white is 2.56:1, under
+              // the 3:1 a control needs (WCAG 1.4.11).
+              className="-my-3 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
             >
               <span aria-hidden="true">✎</span>
             </button>
@@ -466,9 +468,9 @@ export function PersonNameInput({
         onClose(byKey.current);
       }}
       onKeyDown={(e) => {
-        const composing = e.nativeEvent.isComposing;
-        const cancel = nameFieldEscapeCancels(e.key, composing);
-        if (!cancel && !nameFieldEnterCommits(e.key, composing)) return;
+        const { isComposing, keyCode } = e.nativeEvent;
+        const cancel = nameFieldEscapeCancels(e.key, isComposing, keyCode);
+        if (!cancel && !nameFieldEnterCommits(e.key, isComposing, keyCode)) return;
         // Focus goes back to the ✎ as the field closes, and without this the
         // SAME Enter's keypress lands on it and opens the field again.
         e.preventDefault();

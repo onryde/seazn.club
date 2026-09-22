@@ -13,16 +13,29 @@ export function nameFieldCommit(typed: string, current: string): string | null {
   return next;
 }
 
+/** The `keyCode` a browser gives a keydown that an input method (Japanese,
+ *  Chinese or Korean input) is handling — the "Process" key. */
+export const IME_PROCESS_KEY_CODE = 229;
+
+/** Is an input method handling this keydown? `isComposing` alone is not
+ *  enough. Safari fires the Enter that COMMITS a composition after
+ *  `compositionend`, so `isComposing` is already false, but the keydown still
+ *  carries keyCode 229. Acting on that Enter would save the text a moment
+ *  before the candidate the user just picked lands in it. */
+function imeOwnsKey(isComposing: boolean, keyCode: number): boolean {
+  return isComposing || keyCode === IME_PROCESS_KEY_CODE;
+}
+
 /** Does this keydown commit the field? Enter does, except while an input
- *  method is composing (Japanese, Chinese or Korean input): there Enter picks
- *  the candidate, and committing then would save half-typed text. */
-export function nameFieldEnterCommits(key: string, isComposing: boolean): boolean {
-  return key === "Enter" && !isComposing;
+ *  method owns the key (`imeOwnsKey`): there Enter picks the candidate, and
+ *  committing then would save half-typed text. */
+export function nameFieldEnterCommits(key: string, isComposing: boolean, keyCode: number): boolean {
+  return key === "Enter" && !imeOwnsKey(isComposing, keyCode);
 }
 
 /** Does this keydown abandon the edit? Escape does, except while an input
- *  method is composing: there Escape drops the candidate being composed, and
+ *  method owns the key: there Escape drops the candidate being composed, and
  *  the typing around it stays. */
-export function nameFieldEscapeCancels(key: string, isComposing: boolean): boolean {
-  return key === "Escape" && !isComposing;
+export function nameFieldEscapeCancels(key: string, isComposing: boolean, keyCode: number): boolean {
+  return key === "Escape" && !imeOwnsKey(isComposing, keyCode);
 }

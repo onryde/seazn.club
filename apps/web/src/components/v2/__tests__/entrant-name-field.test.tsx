@@ -11,7 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import uiEn from "@/dictionaries/en/ui.json";
 import { t } from "@/lib/i18n-runtime";
 import { ENTRANT_NAME_MAX } from "@/lib/entrant-roster-name";
-import { nameFieldCommit, nameFieldEnterCommits } from "@/lib/inline-name-edit";
+import { IME_PROCESS_KEY_CODE, nameFieldCommit, nameFieldEnterCommits } from "@/lib/inline-name-edit";
 import { EntrantNameField } from "@/components/v2/entrants-panel";
 
 vi.mock("next/navigation", () => ({
@@ -76,18 +76,29 @@ describe("nameFieldCommit — what a blur saves", () => {
   });
 });
 
+// keyCode as a browser sends it: 13 for a plain Enter, 229 while an input
+// method handles the key.
+const ENTER = 13;
+
 describe("nameFieldEnterCommits — which keydown saves the name", () => {
   it("Enter commits", () => {
-    expect(nameFieldEnterCommits("Enter", false)).toBe(true);
+    expect(nameFieldEnterCommits("Enter", false, ENTER)).toBe(true);
   });
 
   it("Enter while an input method is composing picks the candidate, and does not commit", () => {
     // Japanese/Chinese/Korean input: committing here would save half-typed text.
-    expect(nameFieldEnterCommits("Enter", true)).toBe(false);
+    expect(nameFieldEnterCommits("Enter", true, IME_PROCESS_KEY_CODE)).toBe(false);
+  });
+
+  it("Safari's composition-ending Enter (isComposing already false, keyCode 229) does not commit", () => {
+    // Safari fires this keydown AFTER compositionend, so only its keyCode says
+    // the input method owns it.
+    expect(IME_PROCESS_KEY_CODE).toBe(229);
+    expect(nameFieldEnterCommits("Enter", false, IME_PROCESS_KEY_CODE)).toBe(false);
   });
 
   it("no other key commits", () => {
-    expect(nameFieldEnterCommits("a", false)).toBe(false);
-    expect(nameFieldEnterCommits("Tab", false)).toBe(false);
+    expect(nameFieldEnterCommits("a", false, 65)).toBe(false);
+    expect(nameFieldEnterCommits("Tab", false, 9)).toBe(false);
   });
 });

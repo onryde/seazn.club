@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import uiEn from "@/dictionaries/en/ui.json";
 import { t } from "@/lib/i18n-runtime";
-import { nameFieldEscapeCancels } from "@/lib/inline-name-edit";
+import { IME_PROCESS_KEY_CODE, nameFieldEscapeCancels } from "@/lib/inline-name-edit";
 import { PERSON_NAME_MAX } from "@/lib/person-name";
 import { PatchPerson } from "@/server/api-v1/schemas";
 import { PersonNameCell, PersonNameInput } from "@/components/v2/persons-panel";
@@ -93,18 +93,26 @@ describe("PersonNameInput — the field the ✎ opens", () => {
   });
 });
 
+// keyCode as a browser sends it: 27 for a plain Escape, 229 while an input
+// method handles the key.
+const ESCAPE = 27;
+
 describe("nameFieldEscapeCancels — which keydown abandons the edit", () => {
   it("Escape cancels", () => {
-    expect(nameFieldEscapeCancels("Escape", false)).toBe(true);
+    expect(nameFieldEscapeCancels("Escape", false, ESCAPE)).toBe(true);
   });
 
   it("Escape while an input method is composing drops the candidate, not the edit", () => {
-    expect(nameFieldEscapeCancels("Escape", true)).toBe(false);
+    expect(nameFieldEscapeCancels("Escape", true, IME_PROCESS_KEY_CODE)).toBe(false);
+  });
+
+  it("an Escape the input method owns (keyCode 229, isComposing false, as Safari sends) does not cancel", () => {
+    expect(nameFieldEscapeCancels("Escape", false, IME_PROCESS_KEY_CODE)).toBe(false);
   });
 
   it("no other key cancels", () => {
     for (const key of ["Enter", "Esc", "Tab", "Backspace", "a"]) {
-      expect(nameFieldEscapeCancels(key, false)).toBe(false);
+      expect(nameFieldEscapeCancels(key, false, 0)).toBe(false);
     }
   });
 });

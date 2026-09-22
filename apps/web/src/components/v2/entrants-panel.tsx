@@ -1386,7 +1386,9 @@ export function EntrantNameField({
           }
         }}
         onKeyDown={(e) => {
-          if (nameFieldEnterCommits(e.key, e.nativeEvent.isComposing)) e.currentTarget.blur();
+          if (nameFieldEnterCommits(e.key, e.nativeEvent.isComposing, e.nativeEvent.keyCode)) {
+            e.currentTarget.blur();
+          }
         }}
         className="input min-h-11 w-full text-sm"
         data-testid="entrant-name-field"
