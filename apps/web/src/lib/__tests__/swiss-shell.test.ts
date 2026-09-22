@@ -5,6 +5,7 @@ import {
   isSwissBoardSeated,
   nextUnseatedSwissRound,
   latestSeatedSwissRound,
+  latestSwissRoundWithAnySeat,
   swissRoundHasPlayedResult,
 } from "@/lib/swiss-shell";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
@@ -475,5 +476,109 @@ describe("seating / readiness helpers", () => {
       },
     ];
     expect(latestSeatedSwissRound(fx)).toBe(2);
+  });
+});
+
+// 2026-09-22 — the two pure predicates behind "deleting an entrant pre-Start
+// strands the organiser". Both exist because `on delete set null` on
+// `fixtures.home_entrant_id` leaves a ROUND in a shape no control could act on.
+describe("swiss — rounds damaged by a deleted entrant", () => {
+  const board = (round_no: number, home: string | null, away: string | null, seq = 1) => ({
+    round_no,
+    home_entrant_id: home,
+    away_entrant_id: away,
+    outcome: null as unknown,
+    ext_key: `sw-r${round_no}-b${seq}`,
+    status: "scheduled",
+  });
+
+  describe("latestSwissRoundWithAnySeat", () => {
+    // THE DEFECT, in one assertion. `latestSeatedSwissRound` demands the round
+    // be WHOLLY seated, so a single null slot returned null and Unpair — the
+    // only control that could have cleared the round — never rendered.
+    it("picks a PARTLY seated round that latestSeatedSwissRound refuses to see", () => {
+      const fx = [board(1, "a", "b", 1), board(1, null, "d", 2), board(2, null, null, 1)];
+      expect(latestSeatedSwissRound(fx)).toBeNull();
+      expect(latestSwissRoundWithAnySeat(fx)).toBe(1);
+    });
+
+    // An ORDERING differential: the wrong answer (1) is a round that really is
+    // seated — fully, so `latestSeatedSwissRound` picks it — which means
+    // "returns a round that holds a seat" cannot distinguish the two. Round 2
+    // is the DAMAGED one and the one Unpair must act on.
+    it("prefers the highest round with a seat, not the first", () => {
+      const fx = [
+        board(1, "a", "b", 1),
+        board(2, "c", "d", 1),
+        board(2, null, "e", 2),
+        board(3, null, null, 1),
+      ];
+      expect(latestSeatedSwissRound(fx)).toBe(1);
+      expect(latestSwissRoundWithAnySeat(fx)).toBe(2);
+    });
+
+    it("is null when nothing anywhere is seated", () => {
+      expect(latestSwissRoundWithAnySeat([board(1, null, null, 1), board(2, null, null, 1)])).toBeNull();
+    });
+
+    // Unchanged for the healthy case the shipped predicate already handled —
+    // so widening the target does not move an ordinary Unpair.
+    it("agrees with latestSeatedSwissRound on a wholly seated stage", () => {
+      const fx = [board(1, "a", "b", 1), board(1, "c", "d", 2), board(2, null, null, 1)];
+      expect(latestSeatedSwissRound(fx)).toBe(1);
+      expect(latestSwissRoundWithAnySeat(fx)).toBe(1);
+    });
+  });
+
+  describe("swissRoundHasPlayedResult — the orphaned bye award", () => {
+    /** What the FK leaves when the BYE RECIPIENT is deleted: the award and the
+     *  `forfeited` status survive, both seats are gone, and the winner names a
+     *  row that no longer exists. */
+    const orphan = {
+      round_no: 1,
+      status: "forfeited",
+      outcome: { kind: "award", winner: "gone" },
+      ext_key: "sw-r1-bye",
+      home_entrant_id: null,
+      away_entrant_id: null,
+    };
+
+    it("is not a played result — it is a bye whose holder was deleted", () => {
+      expect(swissRoundHasPlayedResult([orphan], 1)).toBe(false);
+    });
+
+    // The guard this must NOT weaken, pinned beside it: a two-sided award is a
+    // real forfeit or retirement and still blocks. Only "no seat on EITHER
+    // side" is exempt — drop the `away_entrant_id === null` half of the orphan
+    // test and this is the assertion that reds.
+    it("still refuses a two-sided forfeit award, seats intact", () => {
+      expect(
+        swissRoundHasPlayedResult(
+          [{ ...orphan, ext_key: "sw-r1-b1", home_entrant_id: "a", away_entrant_id: "b" }],
+          1,
+        ),
+      ).toBe(true);
+    });
+
+    // …and a genuine one-sided bye is still exempt, as it always was.
+    it("still exempts a live one-sided bye", () => {
+      expect(
+        swissRoundHasPlayedResult(
+          [{ ...orphan, home_entrant_id: "w", outcome: { kind: "award", winner: "w" } }],
+          1,
+        ),
+      ).toBe(false);
+    });
+
+    // The orphan sits NEXT TO live boards in production. The round as a whole
+    // must still read "nothing played here" or Unpair refuses the rescue.
+    it("reads a stranded round whole: orphan bye plus untouched boards", () => {
+      const fx = [
+        { ...board(1, "a", "b", 1) },
+        { ...board(1, null, "d", 2) },
+        orphan,
+      ];
+      expect(swissRoundHasPlayedResult(fx, 1)).toBe(false);
+    });
   });
 });
