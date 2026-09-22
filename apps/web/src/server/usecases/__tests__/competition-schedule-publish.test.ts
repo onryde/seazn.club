@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { HttpError } from "@/lib/errors";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -309,6 +310,72 @@ describe.skipIf(!HAS_DB)("publishCompetitionSchedule", () => {
       publishCompetitionSchedule(frozen.auth, frozen.competitionId),
     ).rejects.toMatchObject({ status: 402, featureKey: "competitions.max_active" });
     expect(await divisionStatus(div.divisionId)).toBe("setup");
+  }, 180_000);
+
+  it("an UNCODED 422 from a division that left `setup` mid-run propagates, never becomes a refusal", async () => {
+    // THE RACE, DRIVEN FOR REAL. The candidate SELECT and each division's
+    // publish are separate transactions, so `setup` is only true of a division
+    // when it was READ. A division someone starts or completes in the gap
+    // reaches `publishSchedule` at another status, where schedule.ts:3648
+    // raises an HttpError 422 with NO `code` — not a gate verdict at all.
+    //
+    // Recorded as a refusal it would reach the organiser as HTTP 200 carrying
+    // a "blocked by conflicts" row with an EMPTY conflict list: a refusal they
+    // can neither understand nor act on. It has to come back out as the error
+    // it is.
+    //
+    // A scoped AFTER UPDATE trigger closes the gap deterministically — there is
+    // no JS hook between two `withTenant` calls — so this drives the real
+    // sequence rather than asserting over a stubbed callee.
+    const comp = await seedCompetition();
+    const a = await seedDivision(comp, "First", [comp.courts[0]]);
+    const b = await seedDivision(comp, "Second", [comp.courts[1]]);
+    // Neither division is given fixtures: an empty board yields no assignments
+    // and therefore no conflicts, so BOTH would publish cleanly and the only
+    // thing that can stop the second one is the status change below.
+    //
+    // The loop runs in division-id order, so the trigger must hang off
+    // whichever id sorts FIRST and target the other.
+    const [first, second] =
+      a.divisionId < b.divisionId ? [a.divisionId, b.divisionId] : [b.divisionId, a.divisionId];
+    // Named off the competition's own uuid so parallel test FILES cannot collide.
+    const tag = `puball_race_${comp.competitionId.replace(/-/g, "").slice(0, 12)}`;
+    await sql.unsafe(`create function ${tag}() returns trigger language plpgsql as $$
+      begin
+        if NEW.id = '${first}'::uuid and NEW.status = 'scheduled' then
+          update divisions set status = 'completed' where id = '${second}'::uuid;
+        end if;
+        return NEW;
+      end $$`);
+    await sql.unsafe(`create trigger ${tag} after update on divisions
+      for each row execute function ${tag}()`);
+    try {
+      let outcome: unknown;
+      await publishCompetitionSchedule(comp.auth, comp.competitionId).then(
+        (resolved) => {
+          outcome = { resolved };
+        },
+        (err: unknown) => {
+          outcome = err;
+        },
+      );
+
+      // It THREW. A resolved value here is the defect: a 200 hiding a fault.
+      expect(outcome).toBeInstanceOf(HttpError);
+      const err = outcome as HttpError;
+      expect(err.status).toBe(422);
+      // …and the thing that makes it not a gate verdict: no code. Neither of
+      // the two refusal codes may be substituted for its absence.
+      expect(err.code).toBeUndefined();
+
+      // The run aborted where it stood: the first division is published and
+      // committed (best effort, separate transactions), the second is not.
+      expect(await divisionStatus(first)).toBe("scheduled");
+      expect(await divisionStatus(second)).toBe("completed");
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${tag} on divisions`);
+      await sql.unsafe(`drop function if exists ${tag}()`);
+    }
   }, 180_000);
 
   it("the published division's times stop being redacted by public_fixtures_v", async () => {

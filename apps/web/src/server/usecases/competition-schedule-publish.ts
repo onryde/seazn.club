@@ -64,23 +64,31 @@ export interface CompetitionPublishOut {
  * Split a refusal from `publishSchedule` into the two cases the organiser can
  * act on differently, or return null for anything that is NOT a gate refusal.
  *
- * Only 422 is a refusal. Everything else — 403, 404, 409, a 402 from the
- * entitlement freeze — is a fault of the operation itself rather than a verdict
- * on one division's board, and the caller lets it propagate (see the loop).
+ * THE TEST IS THE CODE, NOT THE STATUS. Only the two codes `assertPublishable`
+ * raises are verdicts on a board; every other error — 403, 404, 409, a 402 from
+ * the entitlement freeze, AND an uncoded 422 — is a fault of the operation, and
+ * the caller lets it propagate (see the loop).
  *
- * `blocking` is the ACKNOWLEDGEABILITY question, asked the safe way round:
- * `PUBLISH_UNACKNOWLEDGED` is the one code a flag clears, so everything else is
- * reported as blocking. The only two codes `publishSchedule` can reach from a
- * `setup` division are the two named here; the fallback exists so a future
- * uncoded 422 is never mis-sold to the organiser as "just confirm it".
+ * Reading "422" as "refusal" was wrong, and reachable. The candidate SELECT and
+ * each division's publish are separate transactions, so a division that leaves
+ * `setup` in the gap — someone presses Start, or the division completes —
+ * reaches `publishSchedule` at another status and gets an UNCODED 422
+ * ("a completed division cannot publish a schedule", schedule.ts:3648). Folded
+ * into a refusal with a `PUBLISH_BLOCKED` fallback it reached the organiser as
+ * HTTP 200 carrying a "blocked by conflicts" row with an EMPTY conflict list:
+ * a refusal with nothing under it to read and nothing to fix.
+ *
+ * `blocking` is then exactly "is this `PUBLISH_BLOCKED`", because those are the
+ * only two values `code` can hold.
  */
 function refusalOf(err: unknown): CompetitionPublishDivision["refusal"] | null {
   if (!(err instanceof HttpError) || err.status !== 422) return null;
-  const code = err.code ?? PUBLISH_BLOCKED;
+  const code = err.code;
+  if (code !== PUBLISH_BLOCKED && code !== PUBLISH_UNACKNOWLEDGED) return null;
   const raw = (err.extra as { conflicts?: unknown } | undefined)?.conflicts;
   return {
     code,
-    blocking: code !== PUBLISH_UNACKNOWLEDGED,
+    blocking: code === PUBLISH_BLOCKED,
     conflicts: Array.isArray(raw) ? (raw as ScheduleConflict[]) : [],
   };
 }
@@ -100,11 +108,13 @@ function refusalOf(err: unknown): CompetitionPublishDivision["refusal"] | null {
  * depends on the order, but a best-effort report that shuffles between two
  * identical calls is impossible to diff.
  *
- * Throws 404 when the competition is not visible to `auth`. Any non-422 raised
- * by a division's publish ABORTS the run and propagates unchanged: divisions
- * already published stay published (separate transactions, decision 1 above),
- * and the caller gets the real error instead of a success report with a silent
- * hole in it.
+ * Throws 404 when the competition is not visible to `auth`. Anything a
+ * division's publish raises that is NOT one of the two gate codes ABORTS the
+ * run and propagates unchanged — including an uncoded 422: divisions already
+ * published stay published (separate transactions, decision 1 above), and the
+ * caller gets the real error instead of a success report with a silent hole in
+ * it. `status = 'setup'` was true when the candidate was READ, and a division
+ * can leave that status before its turn comes.
  */
 export async function publishCompetitionSchedule(
   auth: AuthCtx,
