@@ -473,6 +473,14 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     if (!row) throw new HttpError(404, "entrant not found");
+    // This is now a FIXTURE write as well as a roster one, so it takes the
+    // same division lock `generateStageFixturesWrite` and `unpairSwissRound`
+    // take — stages.ts's stated convention is that a destructive swiss write
+    // reads `existing` UNDER the lock. Taken before the status read so a
+    // concurrent Start cannot slip between the guard and the write. Same key
+    // and the same acquire-then-write order as the sibling paths, so there is
+    // no lock-ordering inversion to deadlock on.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + row.division_id}))`;
     const [division] = await tx<{ status: string }[]>`
       select status from divisions where id = ${row.division_id}`;
     if (!division) throw new HttpError(404, "division not found");
