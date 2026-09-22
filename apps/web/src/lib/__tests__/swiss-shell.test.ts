@@ -560,6 +560,33 @@ describe("swiss — rounds damaged by a deleted entrant", () => {
       ).toBe(true);
     });
 
+    // The two seat halves of the orphan test, pinned SEPARATELY — dropping
+    // either one alone leaves a row with ONE seat still standing exempt, and
+    // a single both-seats-set case cannot see that. Each of these is the only
+    // test that reds for its half.
+    //
+    // Away side: `{home: null, away: b, award → a}` is a real two-sided
+    // forfeit the HOME player won, whose home player was later deleted. The
+    // winner is dangling, but a result was played and it still blocks.
+    it("still refuses an away-seated award whose winner is not the seated side", () => {
+      expect(
+        swissRoundHasPlayedResult(
+          [{ ...orphan, away_entrant_id: "b", outcome: { kind: "award", winner: "a" } }],
+          1,
+        ),
+      ).toBe(true);
+    });
+
+    // Home side, the mirror.
+    it("still refuses a home-seated award whose winner is not the seated side", () => {
+      expect(
+        swissRoundHasPlayedResult(
+          [{ ...orphan, home_entrant_id: "a", outcome: { kind: "award", winner: "b" } }],
+          1,
+        ),
+      ).toBe(true);
+    });
+
     // …and a genuine one-sided bye is still exempt, as it always was.
     it("still exempts a live one-sided bye", () => {
       expect(
