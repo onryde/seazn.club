@@ -8,6 +8,7 @@ import { entrantKindCap } from "@seazn/engine/sport";
 import type { EffectiveEntrantModel, EntrantKind } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
+import { ENTRANT_NAME_MAX, rosterDerivedName } from "@/lib/entrant-roster-name";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -956,7 +957,9 @@ export function NewEntrantFields({
       .map((id) => persons.find((p) => p.id === id)?.full_name)
       .filter((n): n is string => Boolean(n));
     if (isIndividual) return picked[0] ?? "";
-    if (kind === "pair") return picked.join(" & ");
+    // The shared create-time join: a later roster edit recognises (and
+    // follows) only a name built by it — see lib/entrant-roster-name.ts.
+    if (kind === "pair") return rosterDerivedName(picked);
     return "";
   }, [isIndividual, kind, memberIds, persons]);
 
@@ -1312,6 +1315,60 @@ export function EntrantBadgeControl({
   );
 }
 
+/** What a blur on the Name field saves: the trimmed name when it is a real
+ *  change, or `null` — save nothing and put the field back — when it was
+ *  emptied (the column cannot be empty) or left as it was. Exported for the
+ *  markup test. */
+export function nameFieldCommit(typed: string, current: string): string | null {
+  const next = typed.trim();
+  if (next === "" || next === current) return null;
+  return next;
+}
+
+/** The entrant's name, editable in place at the top of an expanded card
+ *  (2026-09-22 — `display_name` was set once at create and no screen could
+ *  change it). Saves on blur, or Enter; the row header follows through the
+ *  panel's `router.refresh()`. Nothing for a read-only viewer. Exported for the
+ *  markup test.
+ *
+ *  Uncontrolled, and remounted by the caller on `key={name}`: a rename made
+ *  ELSEWHERE — the roster editor's save renaming a pair whose name was derived
+ *  from its people (`patchEntrant`) — must land in this field too, not leave it
+ *  holding the old name for the next blur to write straight back. */
+export function EntrantNameField({
+  name,
+  canEdit,
+  onRename,
+}: {
+  name: string;
+  canEdit: boolean;
+  onRename: (next: string) => void;
+}) {
+  const msg = useMsg();
+  if (!canEdit) return null;
+  return (
+    <label className="mb-3 block min-w-0 max-w-sm">
+      <span className="label">{msg("entrants.row.name")}</span>
+      <input
+        type="text"
+        defaultValue={name}
+        maxLength={ENTRANT_NAME_MAX}
+        autoComplete="off"
+        onBlur={(e) => {
+          const next = nameFieldCommit(e.currentTarget.value, name);
+          if (next === null) e.currentTarget.value = name;
+          else onRename(next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+        className="input min-h-11 w-full text-sm"
+        data-testid="entrant-name-field"
+      />
+    </label>
+  );
+}
+
 /** Exported for tests only — nothing else imports it. The row's EXPANDED half
  *  (Sync from team squad, the roster's loading line) sits behind `open`, a
  *  `useState` this row owns, so `renderToStaticMarkup` can never reach it: it
@@ -1509,6 +1566,12 @@ export function EntrantTableRow({
       {open && (
         <tr>
           <td colSpan={canEdit ? 5 : 4} className="bg-slate-50 px-4 py-3">
+            <EntrantNameField
+              key={entrant.display_name}
+              name={entrant.display_name}
+              canEdit={canEdit}
+              onRename={(display_name) => onPatch({ display_name })}
+            />
             <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
               <EntrantBadgeControl
                 entrant={entrant}

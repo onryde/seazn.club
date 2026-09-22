@@ -1902,6 +1902,7 @@ export type DictionaryKey =
   | "entrants.row.delete"
   | "entrants.row.deleteHint"
   | "entrants.row.loadingRoster"
+  | "entrants.row.name"
   | "entrants.row.reinstate"
   | "entrants.row.seedLabel"
   | "entrants.row.syncSquad"

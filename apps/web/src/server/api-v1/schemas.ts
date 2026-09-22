@@ -19,6 +19,8 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 // resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
+// The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
+import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // Task 9 (spectator surface W1) — the match-centre document schema, reused
 // verbatim as `PublicFixtureSummary.match_centre`'s type below rather than
 // restated: match-centre-schema.ts is pure Zod with no imports beyond zod
@@ -569,7 +571,7 @@ export const CreateEntrant = z
     kind: EntrantKind,
     // Optional when enrolling an existing team: the server snapshots the name
     // from teams.name at creation so a later rename never rewrites history.
-    display_name: z.string().min(1).max(200).optional(),
+    display_name: z.string().min(1).max(ENTRANT_NAME_MAX).optional(),
     team_id: Uuid.nullish(),
     seed: z.number().int().min(1).nullish(),
     // National-squad sizes (~26) must pass; 40 caps abuse (PROMPT-60 §2).
@@ -620,7 +622,7 @@ export type SyncEntrantRoster = z.infer<typeof SyncEntrantRoster>;
 
 export const PatchEntrant = z
   .object({
-    display_name: z.string().min(1).max(200),
+    display_name: z.string().min(1).max(ENTRANT_NAME_MAX),
     seed: z.number().int().min(1).nullable(),
     status: EntrantStatus, // withdraw = status: 'withdrawn'
     members: z.array(EntrantMemberInput), // full replacement

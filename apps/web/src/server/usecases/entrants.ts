@@ -31,6 +31,8 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
 import { markFieldChangeSeedProposalsStale, unseatSwissRoundsSeatingEntrant } from "./stages";
+import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
+import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -514,7 +516,7 @@ export async function patchEntrant(
   id: string,
   patch: PatchEntrant,
 ): Promise<EntrantWithMembers> {
-  const { out, fieldChanged, divisionId } = await withTenant(auth.orgId, async (tx) => {
+  const { out, fieldChanged, divisionId, competitionId, fixtureIds } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
     // it never reaches the `update entrants set ...` below.
@@ -545,6 +547,20 @@ export async function patchEntrant(
       // (kind itself isn't patchable, so only the roster is being written).
       const eff = await loadEntrantShape(tx, row.division_id);
       assertRosterFits(eff, row.kind, members.length);
+      // The name follows the roster (2026-09-22, reported from production:
+      // "Sankar & Ritwik" kept that name after Ritwik was swapped out) — but
+      // only an AD-HOC entrant's, and only when this patch does not name it
+      // itself. A team-linked entrant's name is the team's snapshot, which
+      // must never be rewritten from a roster (createEntrants above). The
+      // people the name was derived from are read HERE, before the delete
+      // below takes them away.
+      const followName = fields.display_name === undefined && row.team_id === null;
+      const priorPeople = followName
+        ? await tx<RosterNamePerson[]>`
+            select em.person_id, p.full_name
+            from entrant_members em join persons p on p.id = em.person_id
+            where em.entrant_id = ${id}`
+        : [];
       await tx`delete from entrant_members where entrant_id = ${id}`;
       await insertMembers(tx, id, members, {
         divisionId: row.division_id,
@@ -552,9 +568,61 @@ export async function patchEntrant(
         actorId: auth.userId,
         context: "patch_entrant",
       });
+      if (followName) {
+        // `insertMembers` has already proved every id visible and distinct. An
+        // emptied roster reads no one, and `followRosterEdit` then keeps the
+        // name rather than empty it.
+        const people = await tx<RosterNamePerson[]>`
+          select id as person_id, full_name from persons
+          where id in ${tx(members.map((m) => m.person_id))}`;
+        const byId = new Map(people.map((p) => [p.person_id, p]));
+        // SUBMITTED order — newcomers take vacated seats in the order given.
+        const next = members.flatMap((m) => byId.get(m.person_id) ?? []);
+        const renamed = followRosterEdit(row.display_name, priorPeople, next);
+        if (renamed !== null) {
+          const [updated] = await tx<EntrantRow[]>`
+            update entrants set display_name = ${renamed}
+            where id = ${id} returning ${tx(COLS)}`;
+          if (updated) row = updated;
+        }
+      }
     }
-    return { out: await withMembers(tx, row), fieldChanged, divisionId: row.division_id };
+    const [division] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${row.division_id}`;
+    // Every fixture this entrant plays: their match-centre documents print
+    // its name (`dropNamedPublicDocuments`, after the commit below).
+    const fixtures = await tx<{ id: string }[]>`
+      select id from fixtures where home_entrant_id = ${id} or away_entrant_id = ${id}`;
+    return {
+      out: await withMembers(tx, row),
+      fieldChanged,
+      divisionId: row.division_id,
+      competitionId: division?.competition_id ?? null,
+      fixtureIds: fixtures.map((f) => f.id),
+    };
   });
+  // AFTER the commit, and synchronously inside this request — never behind a
+  // `void`: Next flushes a request's revalidations once, when the handler
+  // resolves, and silently drops any that arrive later. Before this, an entrant
+  // patch refreshed nothing, so a rename (or a roster, seed, status or badge
+  // edit) reached the public pages only when their 30s cache ran out.
+  //
+  // The NAME-change pattern, `patchDivision`'s for a name-policy change, not
+  // `fireDivisionRevalidate`'s: that one marks the division 'max' (stale-while-
+  // revalidate), so the organiser's first look at the public page after a
+  // rename still showed the OLD name. `fireScoreRevalidate` EXPIRES the
+  // division tag (competition stays 'max'), and the public Redis documents
+  // printing the name — the hub, the division's schedule/standings/entrants,
+  // this entrant's match-centre documents — are dropped, or a poll would bake
+  // the old name straight back for their 15–30s TTL.
+  if (competitionId) {
+    const peersExpired = fireScoreRevalidate(divisionId, competitionId);
+    dropNamedPublicDocuments(
+      { competitionIds: [competitionId], divisionIds: [divisionId], fixtureIds },
+      { entrantId: id },
+      peersExpired,
+    );
+  }
   // AFTER the transaction commits: the recompute opens its own transaction
   // and takes the division advisory lock, which would deadlock against the
   // one above. Best-effort — a proposal that cannot be recomputed is left

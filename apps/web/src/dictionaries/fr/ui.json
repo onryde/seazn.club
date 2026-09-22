@@ -2370,6 +2370,7 @@
   "entrants.add.kind": "Type",
   "entrants.add.player": "Joueur",
   "entrants.add.pairPlayers": "Joueurs — choisissez-en 2",
+  "entrants.row.name": "Nom",
   "divset.sharing": "Partage et intégration",
   "divset.sharingSummary": "Widgets pour votre site web",
   "divset.danger": "Zone sensible",
