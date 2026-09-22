@@ -10,11 +10,14 @@
 // would make every assertion below pass while proving the Redis fast path,
 // which is not what this wave built.
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { cacheEnabled } from "@/lib/cache";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { scoreEvent } from "../scoring";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
+
+afterEach(() => __setRateLimitCounterForTests(null));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -137,6 +140,46 @@ describe.skipIf(!HAS_DB)("scoreEvent — durable idempotency, with no cache at a
         idempotency_key: `idem-${randomUUID()}`,
       }),
     ).rejects.toMatchObject({ code: "SEQ_CONFLICT" });
+  });
+
+  it("charges the REPLAY bucket when it answers from the ledger", async () => {
+    // The ledger answer is a free, unbounded surface otherwise: a `dl_` secret
+    // is a shareable URL, so anyone holding a leaked link could replay one
+    // known key forever. `scoring-replay-is-free.test.ts` already pins this for
+    // the CACHE branch, but it mocks `cacheGet` to HIT, so it never reaches the
+    // database branch at all — measured: deleting this rateLimit left that file
+    // 10/10 green. Hence a counting test here, where the cache always misses.
+    //
+    // No cache mock is added for this: the counter is not a cache, and the
+    // file's no-Redis contract above still holds.
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    const key = `idem-${randomUUID()}`;
+    await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, fixtureId, {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: RESULT,
+      idempotency_key: key,
+    });
+
+    // Armed only for the RETRY, so the buckets seen below belong to it alone.
+    const seen: string[] = [];
+    __setRateLimitCounterForTests(async (k: string) => {
+      seen.push(k);
+      return 1;
+    });
+    await scoreEvent(auth, fixtureId, {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: RESULT,
+      idempotency_key: key,
+    });
+
+    expect(
+      seen.some((k) => k.includes(`scorereplayv1:${fixtureId}`)),
+      `the ledger answer was not rate limited — buckets charged: ${seen.join(",") || "(none)"}`,
+    ).toBe(true);
   });
 
   it("does not answer a key minted on a DIFFERENT fixture", async () => {
