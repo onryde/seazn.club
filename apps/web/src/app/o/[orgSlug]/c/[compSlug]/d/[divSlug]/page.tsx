@@ -302,10 +302,14 @@ export default async function DivisionPage({
   // `lib/__tests__/swiss-legend.test.ts`, which reds if `EntrantStatus` grows
   // a value that is neither departed nor in the field.
   //
-  // Feeds StagesPanel's swiss shape legend and nothing else. Ids, not a count:
-  // a swiss stage carrying `config.qualified` pairs only the qualifiers still
-  // in the field, which is an intersection.
+  // Feeds StagesPanel's swiss shape legend and its round-1 pairing menu, and
+  // nothing else. Ids, not a count: a swiss stage carrying `config.qualified`
+  // pairs only the qualifiers still in the field, which is an intersection.
   const activeEntrantIds = entrants.filter((e) => !DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
+  // Swiss round-1 pairing, review ruling R1: the menu's hint prints seed
+  // NUMBERS only when the field's seeds really are 1..N in pairing order, so
+  // it needs each entrant's seed. `listEntrants` already selects `seed`.
+  const entrantSeeds = Object.fromEntries(entrants.map((e) => [e.id, e.seed]));
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
   // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
@@ -746,6 +750,7 @@ export default async function DivisionPage({
               fixtures={fixtures}
               entrantNames={entrantNames}
               activeEntrantIds={activeEntrantIds}
+              entrantSeeds={entrantSeeds}
               venues={panelVenues}
               rosterDrift={rosterDrift}
               canEdit={editable}

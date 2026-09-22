@@ -60,8 +60,25 @@
 // first). `sheetId` is derived from `stage.id` (already unique, already a
 // prop) rather than `useId()`, for the same reason — no hook this component
 // does not already have.
-import { useEffect, useRef } from "react";
+//
+// Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI —
+// option A, split button"): the split button's open/pick state IS a local
+// `useState`, the exception the STATEFUL HOOKS note above anticipated. That
+// note's constraint no longer binds this component — review M4 already gave
+// it `useEffect`/`useRef`, which `expandWithHooks` rejects just the same, and
+// nothing walks it through that helper any more (every test renders it with
+// `renderToStaticMarkup`). The state is also genuinely per-stage and
+// per-press, unlike the panel-wide single values `open`/`addingTo` are.
+import { useEffect, useRef, useState } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
+import {
+  swissPairingForKey,
+  swissPairingHint,
+  swissPairingOptionLabel,
+  swissPairingOverride,
+  type SwissPairingMenu,
+} from "@/lib/swiss-pairing-menu";
 // Reused, never restated: `modal.tsx` already owns this repo's definition of
 // "what is focusable" and its pure Tab-wrap rule. The phone sheet cribbed that
 // component's bottom-sheet CSS; review finding M4 was that it cribbed ONLY the
@@ -84,11 +101,19 @@ export interface StageRailProps {
   busy: string | null;
   fixtureCount: number;
   deletable: boolean;
-  onAct: (stageId: string, action: "generate" | "complete" | "delete" | "unpair") => void;
+  onAct: (
+    stageId: string,
+    action: "generate" | "complete" | "delete" | "unpair",
+    opts?: { pairing?: SwissPairingMode },
+  ) => void;
   /** Swiss-only: lowest round still has unseated shells — drives Pair next label. */
   swissHasUnseated: boolean;
   /** Swiss-only: latest seated round has no played results — shows Unpair. */
   canUnpairSwiss: boolean;
+  /** Swiss only, and only while a round waits to be paired; null otherwise
+   *  (`swissPairingMenuFor`, lib/swiss-pairing-menu.ts). Non-null renders the
+   *  ▾ half of the Pair next split button. */
+  swissPairingMenu: SwissPairingMenu | null;
   onDelete: (stage: { id: string; name: string }) => void;
   /** Stage id whose inline "Add match" form is currently open (owned by the
    *  panel's `addingTo` state) — used only to reflect the trigger's disclosure
@@ -158,12 +183,34 @@ export function StageRail({
   unscheduledBadgeSlot,
   swissHasUnseated,
   canUnpairSwiss,
+  swissPairingMenu,
 }: StageRailProps) {
   const msg = useMsg();
   // Derived, not `useId()`: `stage.id` is already unique and already a prop
   // — see this file's own header for why this component gains no hook
   // beyond `useMsg`.
   const sheetId = `stage-rail-sheet-${stage.id}`;
+
+  // The split button's state, stamped with the ROUND it belongs to. A state
+  // for any other round reads as closed with no pick, so a round moving under
+  // the desk (a Pair next landing, an Unpair, another organiser's press)
+  // resets the menu by derivation — no effect that sets state, no window in
+  // which a round-1 pick could ride along into round 2. Every Generate press
+  // also clears it outright (below).
+  const [pairingState, setPairingState] = useState<{
+    round: number;
+    open: boolean;
+    pick: SwissPairingMode | null;
+  } | null>(null);
+  const livePairing =
+    swissPairingMenu && pairingState?.round === swissPairingMenu.round ? pairingState : null;
+  const pairingOpen = livePairing?.open ?? false;
+  const pairingPick = livePairing?.pick ?? null;
+  const pairingToggleRef = useRef<HTMLButtonElement>(null);
+  const closePairing = () => {
+    if (swissPairingMenu) setPairingState({ round: swissPairingMenu.round, open: false, pick: pairingPick });
+    pairingToggleRef.current?.focus();
+  };
 
   // WHICH action gets the filled primary. Found by driving the product
   // (2026-09-20): on a Swiss stage that had paired nothing, "Complete stage"
@@ -415,58 +462,112 @@ export function StageRail({
         <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:px-4">
           {stage.status !== "complete" && (
             <>
-              <button
-                type="button"
-                disabled={busy !== null}
-                onClick={() => {
-                  // P6/D4b task B, scope item 2 — REVERSED (fix round 3,
-                  // Critical 1, whole-branch review): this click used to
-                  // be gated behind a "you'll lose N fixtures" confirm
-                  // dialog whenever stageFixtures.length > 0. That
-                  // premise was never checked against the code and is
-                  // false — generateStageFixtures (stages.ts) is
-                  // ADDITIVE ONLY. It builds `byKey` from the stage's
-                  // existing fixtures and inserts only the generated
-                  // rows missing from it (stages.ts:997-1031); any
-                  // existing fixture that no longer matches the current
-                  // rules is left in place, untouched, not discarded.
-                  // The repo's only `delete from fixtures` are
-                  // history.ts's checkpoint restore and a demo seed —
-                  // neither is this code path. So the dialog blocked a
-                  // routine, safe action (an organiser adding a late
-                  // entrant, then clicking Generate again) behind a
-                  // false data-loss warning.
-                  //
-                  // Deliberately NOT replaced with a truthful-but-vague
-                  // "this won't remove stale fixtures" disclaimer either:
-                  // there is no client-side way to tell whether any
-                  // existing fixture actually IS stale (that diff is
-                  // engine-only, server-side, out of this task's scope —
-                  // same reason the old dialog computed a client-side
-                  // "blast radius" instead of the real diff in the first
-                  // place). A disclaimer with no computed fact behind it
-                  // would just be new boilerplate to click through on
-                  // every regenerate, forever, in place of one that
-                  // named specific (if wrong) numbers. Regeneration is
-                  // simply a normal, unguarded action now, same as the
-                  // common first-generate case always was.
-                  onAct(stage.id, "generate");
-                }}
-                data-testid="stage-generate"
-                className={`btn min-h-11 px-3 py-1.5 text-xs ${
-                  pairingIsNext ? "btn-primary" : "btn-ghost"
-                }`}
-              >
-                {busy === stage.id
-                  ? msg("schedule.working")
-                  : stage.kind === "swiss"
-                    ? fixtureCount === 0
-                      ? msg("schedule.generate")
-                      : swissHasUnseated
-                        ? msg("schedule.pairNext")
-                        : msg("schedule.generate")
-                    : msg("schedule.generate")}
-              </button>
+              {/* Swiss round-1 pairing — the split button (spec
+                  2026-09-22-swiss-round-one-pairing, "UI — option A"). Pair
+                  next is wrapped, not changed (review ruling R5): same
+                  testid, same label, same click, plus the pick. `grow` keeps
+                  it full-width in the phone sheet's column, where it used to
+                  stretch on its own; in the desktop row the wrapper is
+                  content-sized, so it grows into nothing. */}
+              <div className="flex items-stretch">
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    // P6/D4b task B, scope item 2 — REVERSED (fix round 3,
+                    // Critical 1, whole-branch review): this click used to
+                    // be gated behind a "you'll lose N fixtures" confirm
+                    // dialog whenever stageFixtures.length > 0. That
+                    // premise was never checked against the code and is
+                    // false — generateStageFixtures (stages.ts) is
+                    // ADDITIVE ONLY. It builds `byKey` from the stage's
+                    // existing fixtures and inserts only the generated
+                    // rows missing from it (stages.ts:997-1031); any
+                    // existing fixture that no longer matches the current
+                    // rules is left in place, untouched, not discarded.
+                    // The repo's only `delete from fixtures` are
+                    // history.ts's checkpoint restore and a demo seed —
+                    // neither is this code path. So the dialog blocked a
+                    // routine, safe action (an organiser adding a late
+                    // entrant, then clicking Generate again) behind a
+                    // false data-loss warning.
+                    //
+                    // Deliberately NOT replaced with a truthful-but-vague
+                    // "this won't remove stale fixtures" disclaimer either:
+                    // there is no client-side way to tell whether any
+                    // existing fixture actually IS stale (that diff is
+                    // engine-only, server-side, out of this task's scope —
+                    // same reason the old dialog computed a client-side
+                    // "blast radius" instead of the real diff in the first
+                    // place). A disclaimer with no computed fact behind it
+                    // would just be new boilerplate to click through on
+                    // every regenerate, forever, in place of one that
+                    // named specific (if wrong) numbers. Regeneration is
+                    // simply a normal, unguarded action now, same as the
+                    // common first-generate case always was.
+                    onAct(stage.id, "generate", swissPairingOverride(pairingPick, swissPairingMenu));
+                    // Selection resets after every press (spec): the pick was
+                    // for THIS press only and is never stored on the stage.
+                    setPairingState(null);
+                  }}
+                  data-testid="stage-generate"
+                  className={`btn min-h-11 grow px-3 py-1.5 text-xs ${
+                    pairingIsNext ? "btn-primary" : "btn-ghost"
+                  }${swissPairingMenu ? " rounded-r-none" : ""}`}
+                >
+                  {busy === stage.id
+                    ? msg("schedule.working")
+                    : stage.kind === "swiss"
+                      ? fixtureCount === 0
+                        ? msg("schedule.generate")
+                        : swissHasUnseated
+                          ? msg("schedule.pairNext")
+                          : msg("schedule.generate")
+                      : msg("schedule.generate")}
+                </button>
+                {swissPairingMenu && (
+                  <button
+                    ref={pairingToggleRef}
+                    type="button"
+                    aria-expanded={pairingOpen}
+                    aria-controls={`pairing-menu-${stage.id}`}
+                    aria-label={msg("schedule.pairing.toggle")}
+                    data-testid="stage-pairing-toggle"
+                    disabled={busy !== null}
+                    onClick={() =>
+                      setPairingState({ round: swissPairingMenu.round, open: !pairingOpen, pick: pairingPick })
+                    }
+                    onKeyDown={(e) => {
+                      // Escape closes the menu and stops there: the phone
+                      // sheet's own document-level Escape (above) would
+                      // otherwise close the whole sheet on the same key.
+                      if (e.key !== "Escape" || !pairingOpen) return;
+                      e.stopPropagation();
+                      closePairing();
+                    }}
+                    className={`btn min-h-11 min-w-11 rounded-l-none border-l px-2 text-xs ${
+                      pairingIsNext ? "btn-primary border-white/40" : "btn-ghost"
+                    }`}
+                  >
+                    <span aria-hidden="true">{pairingOpen ? "▴" : "▾"}</span>
+                  </button>
+                )}
+              </div>
+              {/* The menu is an inline disclosure directly after its toggle —
+                  in the DOM and on screen — never a floating popover, so
+                  nothing can overflow at 320. In the phone sheet's column it
+                  is the next row; in the desktop row `md:basis-full` breaks
+                  it onto a line of its own, and the buttons after it wrap
+                  below. Tab order therefore matches what the eye sees. */}
+              {swissPairingMenu && pairingOpen && (
+                <SwissPairingMenuPanel
+                  stageId={stage.id}
+                  menu={swissPairingMenu}
+                  pick={pairingPick}
+                  onPick={(mode) => setPairingState({ round: swissPairingMenu.round, open: true, pick: mode })}
+                  onClose={closePairing}
+                />
+              )}
               {stage.kind === "swiss" && canUnpairSwiss && (
                 <button
                   type="button"
@@ -538,5 +639,116 @@ export function StageRail({
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * The open Swiss pairing menu — the ▾ half of Pair next's split button.
+ * Stateless: the rail owns the open/pick state and mounts this only while the
+ * menu is open, so it is exported for `renderToStaticMarkup` tests (there is
+ * no DOM to open it in). Every decision it renders — checked mode, labels,
+ * hints, keys — comes from `lib/swiss-pairing-menu.ts`, pinned there.
+ *
+ * Round 1 (`choosable`): a radiogroup of the two modes, the default checked,
+ * a roving tab stop on the checked radio, arrows move and select.
+ * Round 2+: the same group, `aria-disabled`, holding ONE checked, disabled
+ * radio naming the stage's own mode, plus the reason in visible text (spec:
+ * a disabled control cannot show a hint on a phone — no hover).
+ */
+export function SwissPairingMenuPanel({
+  stageId,
+  menu,
+  pick,
+  onPick,
+  onClose,
+}: {
+  stageId: string;
+  menu: SwissPairingMenu;
+  pick: SwissPairingMode | null;
+  onPick: (mode: SwissPairingMode) => void;
+  /** Escape: close, and hand focus back to the toggle. */
+  onClose: () => void;
+}) {
+  const msg = useMsg();
+  const checkedMode = pick ?? menu.defaultPairing;
+  return (
+    <div
+      id={`pairing-menu-${stageId}`}
+      role="radiogroup"
+      aria-label={msg("schedule.pairing.groupLabel", { round: menu.round })}
+      aria-disabled={!menu.choosable || undefined}
+      data-testid="stage-pairing-menu"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        // Stop here: the phone sheet listens for Escape on `document` and
+        // would close itself on the same key.
+        e.stopPropagation();
+        onClose();
+      }}
+      className="flex w-full min-w-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs md:basis-full"
+    >
+      {menu.choosable ? (
+        SWISS_PAIRINGS.map((mode) => {
+          const checked = checkedMode === mode;
+          return (
+            <button
+              key={mode}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              tabIndex={checked ? 0 : -1}
+              data-testid={`stage-pairing-${mode}`}
+              data-pairing-mode={mode}
+              onClick={() => onPick(mode)}
+              onKeyDown={(e) => {
+                const next = swissPairingForKey(e.key, checkedMode);
+                if (!next) return;
+                e.preventDefault();
+                onPick(next);
+                // Roving tab stop: DOM focus follows the selection, or the
+                // focus ring stays on a radio that is no longer checked.
+                e.currentTarget
+                  .closest('[role="radiogroup"]')
+                  ?.querySelector<HTMLElement>(`[data-pairing-mode="${next}"]`)
+                  ?.focus();
+              }}
+              className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                checked ? "bg-purple-50" : ""
+              }`}
+            >
+              <span aria-hidden="true" className={`shrink-0 ${checked ? "text-purple-700" : "text-slate-400"}`}>
+                {checked ? "●" : "○"}
+              </span>
+              <span className="flex min-w-0 flex-col">
+                <span className="font-semibold text-slate-800">
+                  {swissPairingOptionLabel(mode, menu.defaultPairing, msg)}
+                </span>
+                <span className="text-slate-500">{swissPairingHint(mode, menu, msg)}</span>
+              </span>
+            </button>
+          );
+        })
+      ) : (
+        <>
+          <p
+            role="radio"
+            aria-checked="true"
+            aria-disabled="true"
+            data-testid="stage-pairing-readonly"
+            className="flex min-h-11 min-w-0 items-center gap-2 px-2 font-semibold text-slate-800"
+          >
+            <span aria-hidden="true" className="shrink-0 text-purple-700">
+              ✓
+            </span>
+            <span className="min-w-0">
+              {msg(menu.stored === "rank_adjacent" ? "schedule.pairing.laterAdjacent" : "schedule.pairing.laterFold")}
+            </span>
+          </p>
+          <p className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-hint">
+            {msg("schedule.pairing.roundOneOnly")}
+          </p>
+        </>
+      )}
+    </div>
   );
 }

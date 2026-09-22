@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { StageRail } from "../stage-rail";
+import en from "@/dictionaries/en/ui.json";
+import type { SwissPairingMenu } from "@/lib/swiss-pairing-menu";
+import { StageRail, SwissPairingMenuPanel } from "../stage-rail";
 
 const stage = { id: "s1", name: "League", kind: "league", seq: 1, status: "active" } as never;
 
@@ -30,6 +32,9 @@ const NEUTRAL = {
   onToggleOpen: () => {},
   swissHasUnseated: false,
   canUnpairSwiss: false,
+  // Swiss round-1 pairing: `null` is "no menu" — every pre-existing test
+  // below keeps asserting exactly what it did.
+  swissPairingMenu: null,
 };
 const BADGE = <p data-testid="stage-unscheduled-count">3</p>;
 
@@ -250,6 +255,173 @@ describe("StageRail — which action holds the filled primary", () => {
     expect(variants(rail({ stage: league, swissHasUnseated: true }))).toEqual({
       generate: "ghost",
       complete: "primary",
+    });
+  });
+});
+
+// Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI — option
+// A, split button"). Static markup only — this file has no DOM, so the OPEN
+// menu is rendered through `SwissPairingMenuPanel` directly (the rail mounts
+// exactly that component when its toggle is open), and the click/keyboard
+// behaviour is pinned as pure functions in `swiss-pairing-menu.test.ts`.
+describe("StageRail — the Pair next split button", () => {
+  const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", config: {} } as never;
+  const ROUND_ONE: SwissPairingMenu = {
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+  };
+  const rail = (over: Record<string, unknown>) =>
+    renderToStaticMarkup(
+      <StageRail stage={swiss} canEdit busy={null} fixtureCount={10} deletable={false}
+        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated {...over} />,
+    );
+  const tag = (html: string, testid: string) =>
+    new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? null;
+
+  it("no menu ⇒ no toggle, and Generate keeps its own rounded corners", () => {
+    const html = rail({ swissPairingMenu: null });
+    expect(tag(html, "stage-generate")).not.toBeNull(); // positive pair first
+    expect(html).not.toContain('data-testid="stage-pairing-toggle"');
+    expect(tag(html, "stage-generate")).not.toMatch(/\brounded-r-none\b/);
+  });
+
+  it("a menu ⇒ a toggle that is a real disclosure: named, collapsed, pointing at the menu", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE });
+    const toggle = tag(html, "stage-pairing-toggle");
+    expect(toggle).not.toBeNull();
+    expect(toggle).toContain('aria-expanded="false"');
+    expect(toggle).toContain('aria-controls="pairing-menu-s1"');
+    expect(toggle).toContain(`aria-label="${en["schedule.pairing.toggle"]}"`);
+    // 44px tap floor on both axes — this control has no text to give it width.
+    expect(toggle).toMatch(/\bmin-h-11\b/);
+    expect(toggle).toMatch(/\bmin-w-11\b/);
+    // Closed until tapped: the menu is not in the markup at all.
+    expect(html).not.toContain('data-testid="stage-pairing-menu"');
+  });
+
+  it("the toggle sits flush against Generate, in ONE wrapper — a split button, not two buttons", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE });
+    expect(html).toMatch(
+      /<div class="flex[^"]*items-stretch[^"]*"><button[^>]*data-testid="stage-generate"[^>]*>[^<]*<\/button><button[^>]*data-testid="stage-pairing-toggle"/,
+    );
+    expect(tag(html, "stage-generate")).toMatch(/\brounded-r-none\b/);
+    expect(tag(html, "stage-pairing-toggle")).toMatch(/\brounded-l-none\b/);
+  });
+
+  it("Generate keeps its testid and its label logic (review ruling R5)", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE });
+    expect(html).toContain(">Pair next round</button>");
+  });
+
+  it("the toggle is disabled while any stage action is in flight, like its neighbours", () => {
+    expect(tag(rail({ swissPairingMenu: ROUND_ONE, busy: "s1" }), "stage-pairing-toggle")).toMatch(/\sdisabled=""/);
+    expect(tag(rail({ swissPairingMenu: ROUND_ONE, busy: null }), "stage-pairing-toggle")).not.toMatch(/\sdisabled=""/);
+  });
+
+  it("the toggle wears Generate's variant — the filled primary while pairing is next", () => {
+    expect(tag(rail({ swissPairingMenu: ROUND_ONE }), "stage-pairing-toggle")).toMatch(/\bbtn-primary\b/);
+  });
+
+  it("a completed stage renders no split button at all", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE, stage: { ...(swiss as object), status: "complete" } });
+    expect(html).not.toContain('data-testid="stage-generate"');
+    expect(html).not.toContain('data-testid="stage-pairing-toggle"');
+  });
+});
+
+describe("SwissPairingMenuPanel — the open menu", () => {
+  const ROUND_ONE: SwissPairingMenu = {
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+  };
+  const panel = (menu: SwissPairingMenu, pick: "fold" | "rank_adjacent" | null = null) =>
+    renderToStaticMarkup(
+      <SwissPairingMenuPanel stageId="s1" menu={menu} pick={pick} onPick={() => {}} onClose={() => {}} />,
+    );
+  const radios = (html: string) =>
+    [...html.matchAll(/<(?:button|p)[^>]*role="radio"[^>]*>/g)].map((m) => ({
+      testid: /data-testid="([^"]+)"/.exec(m[0])?.[1],
+      checked: /aria-checked="([^"]+)"/.exec(m[0])?.[1],
+      tabIndex: /tabindex="([^"]+)"/i.exec(m[0])?.[1],
+    }));
+
+  it("round 1 is a named radiogroup with the id the toggle controls", () => {
+    const html = panel(ROUND_ONE);
+    const group = /<div[^>]*role="radiogroup"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(group).toContain('id="pairing-menu-s1"');
+    expect(group).toContain('data-testid="stage-pairing-menu"');
+    expect(group).toContain('aria-label="Round 1 pairing"');
+    expect(group).not.toContain("aria-disabled");
+  });
+
+  it("offers both modes, the default checked, with a roving tab stop on the checked one", () => {
+    expect(radios(panel(ROUND_ONE))).toEqual([
+      { testid: "stage-pairing-fold", checked: "true", tabIndex: "0" },
+      { testid: "stage-pairing-rank_adjacent", checked: "false", tabIndex: "-1" },
+    ]);
+  });
+
+  it("a pick moves the check (and the tab stop) off the default", () => {
+    expect(radios(panel(ROUND_ONE, "rank_adjacent"))).toEqual([
+      { testid: "stage-pairing-fold", checked: "false", tabIndex: "-1" },
+      { testid: "stage-pairing-rank_adjacent", checked: "true", tabIndex: "0" },
+    ]);
+  });
+
+  it("each option names its mode, marks the default, and shows its seed hint", () => {
+    const html = panel(ROUND_ONE);
+    expect(html).toContain("Top vs bottom (default)");
+    expect(html).toContain("1v6, 2v7, 3v8…");
+    expect(html).toContain("Neighbours");
+    expect(html).toContain("1v2, 3v4, 5v6…");
+  });
+
+  it("R1: seeds that are not 1..N get the generic hints — no seed number anywhere", () => {
+    const html = panel({ ...ROUND_ONE, seedsNumbered: false });
+    expect(html).toContain(en["schedule.pairing.hintFoldGeneric"]);
+    expect(html).toContain(en["schedule.pairing.hintAdjacentGeneric"]);
+    expect(html).not.toMatch(/\d+v\d+/);
+  });
+
+  it("every option clears the 44px tap floor", () => {
+    const options = [...panel(ROUND_ONE).matchAll(/<button[^>]*role="radio"[^>]*>/g)].map((m) => m[0]);
+    expect(options).toHaveLength(2); // positive pair: an empty list would pass the loop vacuously
+    for (const option of options) expect(option).toMatch(/\bmin-h-11\b/);
+  });
+
+  describe("round 2+ opens read-only (spec ruling 3)", () => {
+    const LATER: SwissPairingMenu = {
+      round: 2, choosable: false, defaultPairing: "rank_adjacent", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+    };
+
+    it("the group is aria-disabled and named for the round", () => {
+      const group = /<div[^>]*role="radiogroup"[^>]*>/.exec(panel(LATER))?.[0] ?? "";
+      expect(group).toContain('aria-disabled="true"');
+      expect(group).toContain('aria-label="Round 2 pairing"');
+    });
+
+    it("shows the stage's mode checked and nothing checkable", () => {
+      const html = panel(LATER);
+      expect(radios(html)).toEqual([{ testid: "stage-pairing-readonly", checked: "true", tabIndex: undefined }]);
+      expect(html).not.toContain('aria-checked="false"');
+      expect(html).not.toMatch(/<button[^>]*role="radio"/);
+      expect(html).toMatch(/data-testid="stage-pairing-readonly"[^>]*aria-disabled="true"|aria-disabled="true"[^>]*data-testid="stage-pairing-readonly"/);
+    });
+
+    it("names the Hammes mode for a rank_adjacent stage, the fold mode otherwise", () => {
+      expect(panel(LATER)).toContain(en["schedule.pairing.laterAdjacent"]);
+      expect(panel(LATER)).not.toContain(en["schedule.pairing.laterFold"]);
+      const plain = panel({ ...LATER, defaultPairing: "fold", stored: "fold" });
+      expect(plain).toContain(en["schedule.pairing.laterFold"]);
+      expect(plain).not.toContain(en["schedule.pairing.laterAdjacent"]);
+    });
+
+    it("says why, in visible text — a phone has no hover", () => {
+      const html = panel(LATER);
+      expect(html).toMatch(/data-testid="stage-pairing-hint"[^>]*>Mode is chosen in round 1 only\.</);
+    });
+
+    it("prints no seed hint — the later rounds pair by standings, not seeds", () => {
+      expect(panel(LATER)).not.toMatch(/\d+v\d+/);
     });
   });
 });

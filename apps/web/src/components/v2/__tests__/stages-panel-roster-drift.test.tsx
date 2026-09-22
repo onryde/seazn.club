@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import {
+  SWISS_PAIRING_NOT_SWISS_CODE,
+  SWISS_PAIRING_NOT_SWISS_MESSAGE,
+  SWISS_PAIRING_ROUND_ONE_ONLY_CODE,
+  SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE,
+} from "@/lib/swiss-pairing";
 import {
   StagesPanel,
   attachmentWarning,
@@ -269,5 +276,25 @@ describe("classifyActError — amber vs red, and whether the board is stale", ()
       text: "network down",
       refresh: false,
     });
+  });
+
+  // Swiss round-1 pairing, review ruling R4: the server's English
+  // `*_MESSAGE` must never reach the desk. Without the mapping these fall
+  // through to `seedingErrorMessage`, which echoes the wire sentence.
+  it.each([
+    [SWISS_PAIRING_ROUND_ONE_ONLY_CODE, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE],
+    [SWISS_PAIRING_NOT_SWISS_CODE, SWISS_PAIRING_NOT_SWISS_MESSAGE],
+  ])("a refused pairing pick (%s) shows the dictionary line, never the server's English, and re-reads the board", (code, wire) => {
+    const err = new ApiV1Error(wire, 422, code, {});
+    const out = classifyActError(err, msg, "en");
+    expect(out.text).toBe(en["schedule.pairing.error.roundOneOnly"]);
+    expect(out.text).not.toContain(wire);
+    // The desk offered a pick the server says is gone — its board is stale.
+    expect(out.refresh).toBe(true);
+    expect(out.tone).toBe("warning");
+    // …and the line is the organiser's locale, not English.
+    const frOut = classifyActError(err, (k, v) => msgFor("fr", k as never, v), "fr");
+    expect(frOut.text).toBe(fr["schedule.pairing.error.roundOneOnly"]);
+    expect(frOut.text).not.toBe(out.text);
   });
 });
