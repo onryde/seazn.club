@@ -253,6 +253,12 @@ export function StageRail({
     if (!sheet?.contains(document.activeElement)) focusables()[0]?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // An inner disclosure (the Swiss pairing menu) that already spent
+        // this Escape marks it handled. `stopPropagation` cannot keep it from
+        // reaching this listener: the App Router hydrates React onto
+        // `document` itself, the very node this listens on, so React's
+        // handler and this one are siblings, React's registered first.
+        if (e.defaultPrevented) return;
         toggleRef.current(stage.id);
         return;
       }
@@ -538,11 +544,11 @@ export function StageRail({
                       setPairingState({ round: swissPairingMenu.round, open: !pairingOpen, pick: pairingPick })
                     }
                     onKeyDown={(e) => {
-                      // Escape closes the menu and stops there: the phone
-                      // sheet's own document-level Escape (above) would
-                      // otherwise close the whole sheet on the same key.
+                      // Escape closes the menu and stops there: marked
+                      // handled, so the phone sheet's own Escape (above)
+                      // leaves the sheet open — see the note on that listener.
                       if (e.key !== "Escape" || !pairingOpen) return;
-                      e.stopPropagation();
+                      e.preventDefault();
                       closePairing();
                     }}
                     className={`btn min-h-11 min-w-11 rounded-l-none border-l px-2 text-xs ${
@@ -672,83 +678,92 @@ export function SwissPairingMenuPanel({
   const msg = useMsg();
   const checkedMode = pick ?? menu.defaultPairing;
   return (
-    <div
-      id={`pairing-menu-${stageId}`}
-      role="radiogroup"
-      aria-label={msg("schedule.pairing.groupLabel", { round: menu.round })}
-      aria-disabled={!menu.choosable || undefined}
-      data-testid="stage-pairing-menu"
-      onKeyDown={(e) => {
-        if (e.key !== "Escape") return;
-        // Stop here: the phone sheet listens for Escape on `document` and
-        // would close itself on the same key.
-        e.stopPropagation();
-        onClose();
-      }}
-      className="flex w-full min-w-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs md:basis-full"
-    >
-      {menu.choosable ? (
-        SWISS_PAIRINGS.map((mode) => {
-          const checked = checkedMode === mode;
-          return (
-            <button
-              key={mode}
-              type="button"
-              role="radio"
-              aria-checked={checked}
-              tabIndex={checked ? 0 : -1}
-              data-testid={`stage-pairing-${mode}`}
-              data-pairing-mode={mode}
-              onClick={() => onPick(mode)}
-              onKeyDown={(e) => {
-                const next = swissPairingForKey(e.key, checkedMode);
-                if (!next) return;
-                e.preventDefault();
-                onPick(next);
-                // Roving tab stop: DOM focus follows the selection, or the
-                // focus ring stays on a radio that is no longer checked.
-                e.currentTarget
-                  .closest('[role="radiogroup"]')
-                  ?.querySelector<HTMLElement>(`[data-pairing-mode="${next}"]`)
-                  ?.focus();
-              }}
-              className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-                checked ? "bg-purple-50" : ""
-              }`}
-            >
-              <span aria-hidden="true" className={`shrink-0 ${checked ? "text-purple-700" : "text-slate-400"}`}>
-                {checked ? "●" : "○"}
-              </span>
-              <span className="flex min-w-0 flex-col">
-                <span className="font-semibold text-slate-800">
-                  {swissPairingOptionLabel(mode, menu.defaultPairing, msg)}
+    // The outer box claims the desktop row's whole line (`md:basis-full`),
+    // so the buttons after it wrap below; the group inside keeps a reading
+    // width (`md:max-w-md`) instead of stretching a two-line choice across
+    // the card. Capping the group ITSELF would not do: a flex item's line
+    // break uses its max-clamped size, so the next buttons would sit beside it.
+    <div className="min-w-0 md:basis-full">
+      <div
+        id={`pairing-menu-${stageId}`}
+        role="radiogroup"
+        aria-label={msg("schedule.pairing.groupLabel", { round: menu.round })}
+        aria-disabled={!menu.choosable || undefined}
+        data-testid="stage-pairing-menu"
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          // Marked handled, so the phone sheet — which listens for Escape on
+          // `document` — stays open and only this menu closes.
+          e.preventDefault();
+          onClose();
+        }}
+        className="flex w-full min-w-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs md:max-w-md"
+      >
+        {menu.choosable ? (
+          SWISS_PAIRINGS.map((mode) => {
+            const checked = checkedMode === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                tabIndex={checked ? 0 : -1}
+                data-testid={`stage-pairing-${mode}`}
+                data-pairing-mode={mode}
+                onClick={() => onPick(mode)}
+                onKeyDown={(e) => {
+                  const next = swissPairingForKey(e.key, checkedMode);
+                  if (!next) return;
+                  e.preventDefault();
+                  onPick(next);
+                  // Roving tab stop: DOM focus follows the selection, or the
+                  // focus ring stays on a radio that is no longer checked.
+                  e.currentTarget
+                    .closest('[role="radiogroup"]')
+                    ?.querySelector<HTMLElement>(`[data-pairing-mode="${next}"]`)
+                    ?.focus();
+                }}
+                className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                  checked ? "bg-purple-50" : ""
+                }`}
+              >
+                <span aria-hidden="true" className={`shrink-0 ${checked ? "text-purple-700" : "text-slate-400"}`}>
+                  {checked ? "●" : "○"}
                 </span>
-                <span className="text-slate-500">{swissPairingHint(mode, menu, msg)}</span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="font-semibold text-slate-800">
+                    {swissPairingOptionLabel(mode, menu.defaultPairing, msg)}
+                  </span>
+                  {/* slate-600, not -500: -500 on the checked row's purple-50 wash
+                      measured under 4.5:1 (axe color-contrast, serious). */}
+                  <span className="text-slate-600">{swissPairingHint(mode, menu, msg)}</span>
+                </span>
+              </button>
+            );
+          })
+        ) : (
+          <>
+            <p
+              role="radio"
+              aria-checked="true"
+              aria-disabled="true"
+              data-testid="stage-pairing-readonly"
+              className="flex min-h-11 min-w-0 items-center gap-2 px-2 font-semibold text-slate-800"
+            >
+              <span aria-hidden="true" className="shrink-0 text-purple-700">
+                ✓
               </span>
-            </button>
-          );
-        })
-      ) : (
-        <>
-          <p
-            role="radio"
-            aria-checked="true"
-            aria-disabled="true"
-            data-testid="stage-pairing-readonly"
-            className="flex min-h-11 min-w-0 items-center gap-2 px-2 font-semibold text-slate-800"
-          >
-            <span aria-hidden="true" className="shrink-0 text-purple-700">
-              ✓
-            </span>
-            <span className="min-w-0">
-              {msg(menu.stored === "rank_adjacent" ? "schedule.pairing.laterAdjacent" : "schedule.pairing.laterFold")}
-            </span>
-          </p>
-          <p className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-hint">
-            {msg("schedule.pairing.roundOneOnly")}
-          </p>
-        </>
-      )}
+              <span className="min-w-0">
+                {msg(menu.stored === "rank_adjacent" ? "schedule.pairing.laterAdjacent" : "schedule.pairing.laterFold")}
+              </span>
+            </p>
+            <p className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-hint">
+              {msg("schedule.pairing.roundOneOnly")}
+            </p>
+          </>
+        )}
+      </div>
     </div>
   );
 }
