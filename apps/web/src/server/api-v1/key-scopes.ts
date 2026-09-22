@@ -103,6 +103,10 @@ const RULES: RouteRule[] = [
   // …and the atomic apply of what it planned: a WRITE across every selected
   // division, so `manage`, pinned to the competition that owns them.
   { method: "POST", path: "/competitions/:id/schedule/apply", scope: "manage", pin: "competition" },
+  // Publish every unreleased division at once. It moves division statuses and
+  // appends a ledger event per division, so `manage` — the same scope the
+  // per-division publish carries, pinned to the competition that owns them.
+  { method: "POST", path: "/competitions/:id/schedule/publish", scope: "manage", pin: "competition" },
   // D3 joint health — report-only, reads every division's stages, `read`
   // pinned to the competition (same scope as the single-stage GET).
   { method: "GET", path: "/competitions/:id/schedule/health", scope: "read", pin: "competition" },

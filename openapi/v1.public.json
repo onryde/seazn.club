@@ -75892,6 +75892,582 @@
         ]
       }
     },
+    "/api/v1/competitions/{id}/schedule/publish": {
+      "post": {
+        "summary": "Publish every division of the competition whose schedule is still unreleased (`status = 'setup'` — the status `public_fixtures_v` redacts times, venue, court, officials and stream link for). The competition-wide twin of /divisions/{id}/publish-schedule, running that endpoint's gate per division, so the refusal codes are identical. BEST EFFORT, unlike the joint apply: publishing a division touches nothing another division shares, so a board the gate refuses does NOT withhold the clean ones — the response reports every candidate division with `published` true or a `refusal` carrying its full conflict list. ONE `acknowledge_warnings` covers the whole competition: `blocking: false` refusals (`PUBLISH_UNACKNOWLEDGED`) clear on a second call with the flag, `blocking: true` ones (`PUBLISH_BLOCKED`) never do. A division at any other status is not a candidate and appears nowhere in `results`. Free on every plan — it is a convenience over N single-division publishes the organiser can already make",
+        "tags": [
+          "scheduling"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "acknowledge_warnings": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "acknowledge_warnings": true,
+                "reason": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "published": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "needs_acknowledgement": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "blocked": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "results": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "division_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "published": {
+                                "type": "boolean"
+                              },
+                              "refusal": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string"
+                                  },
+                                  "blocking": {
+                                    "type": "boolean"
+                                  },
+                                  "conflicts": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fixture_id": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        },
+                                        "code": {
+                                          "type": "string",
+                                          "enum": [
+                                            "conflict.court",
+                                            "conflict.start_window",
+                                            "warn.rest",
+                                            "warn.person_overlap",
+                                            "warn.order",
+                                            "warn.blackout",
+                                            "warn.window",
+                                            "warn.instruction",
+                                            "warn.no_slot",
+                                            "warn.official_declined",
+                                            "warn.official_unavailable"
+                                          ]
+                                        },
+                                        "blocking": {
+                                          "type": "boolean"
+                                        },
+                                        "detail": {
+                                          "type": "string"
+                                        },
+                                        "details": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "person_double_booking",
+                                                "locked_slot_clash",
+                                                "no_slot_start_window",
+                                                "no_slot_person_bound",
+                                                "no_slot_horizon",
+                                                "instruction_feeder_gap",
+                                                "instruction_day_cap",
+                                                "instruction_weekday",
+                                                "instruction_date",
+                                                "instruction_time",
+                                                "outside_competition_window",
+                                                "outside_start_window",
+                                                "court_double_booking",
+                                                "court_tag_mismatch",
+                                                "outside_court_hours",
+                                                "inside_blackout",
+                                                "outside_session_windows",
+                                                "entrant_overlap",
+                                                "entrant_below_rest",
+                                                "person_overlap",
+                                                "person_below_rest",
+                                                "order_before_feeder",
+                                                "order_inside_feeder_rest",
+                                                "round_order_day",
+                                                "round_order_same_day",
+                                                "no_slot_lattice",
+                                                "no_slot_budget",
+                                                "stranded_fixture"
+                                              ]
+                                            },
+                                            "entrant_ids": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                              }
+                                            },
+                                            "person_ids": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                              }
+                                            },
+                                            "other_fixture_id": {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                            },
+                                            "court": {
+                                              "type": "string"
+                                            },
+                                            "court_name": {
+                                              "type": "string"
+                                            },
+                                            "day": {
+                                              "type": "string"
+                                            },
+                                            "other_day": {
+                                              "type": "string"
+                                            },
+                                            "weekday": {
+                                              "type": "string"
+                                            },
+                                            "required_weekday": {
+                                              "type": "string"
+                                            },
+                                            "required_date": {
+                                              "type": "string"
+                                            },
+                                            "time": {
+                                              "type": "string"
+                                            },
+                                            "required_time": {
+                                              "type": "string"
+                                            },
+                                            "rule_type": {
+                                              "type": "string"
+                                            },
+                                            "round_no": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "other_round_no": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "minutes": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "required_minutes": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "count": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "required_count": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "kind"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        "rule": {
+                                          "type": "string",
+                                          "enum": [
+                                            "H2",
+                                            "H3",
+                                            "H4",
+                                            "H5",
+                                            "H6",
+                                            "H8",
+                                            "CAP"
+                                          ]
+                                        },
+                                        "shortfall_minutes": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "fixture_id",
+                                        "code",
+                                        "blocking"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "blocking",
+                                  "conflicts"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "division_id",
+                              "name",
+                              "published"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "published",
+                        "needs_acknowledgement",
+                        "blocked",
+                        "results"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "published": -9007199254740991,
+                    "needs_acknowledgement": -9007199254740991,
+                    "blocked": -9007199254740991,
+                    "results": [
+                      {
+                        "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "name": "example",
+                        "published": true,
+                        "refusal": {
+                          "code": "example",
+                          "blocking": true,
+                          "conflicts": [
+                            {
+                              "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                              "code": "conflict.court",
+                              "blocking": true,
+                              "detail": "example"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/competitions/{id}/schedule/health": {
       "get": {
         "summary": "Schedule health score (D3), joint variant: every division's stages assessed via the SAME per-stage computation the single-stage route uses, reported per division (a stage with no applied schedule yet is `{stageId, status:\"empty\"}`, never an aborted call), plus a COMBINED block (gapDispersion + primeSlotFairness only, over the union of every ready stage's fixtures across divisions — the two metrics that key off shared court-day resources rather than a single division's own entrant pool). Report-only; blocks nothing",
