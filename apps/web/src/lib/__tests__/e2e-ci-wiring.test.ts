@@ -160,6 +160,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // Scheduling — the organiser's day end to end, and the officials hand-off.
   "scheduling-officials-handoff.spec.ts",
   "scheduling-organiser-day.spec.ts",
+  // The competition board's Publish all, carried through to the spectator:
+  // "Time TBD" under Unscheduled on the public hub before, a real kick-off
+  // time after, and a division the gate blocked still hidden beside it. It is
+  // the only test anywhere that crosses that seam — the banner's own suite
+  // renders it outside the page that mounts it, and the use-case's suite never
+  // meets the button or the hub, so both stay green if the wiring between them
+  // dies.
+  "publish-all-releases-public-times.spec.ts",
 
   // MONEY. The only specs in the suite that put real value through Stripe;
   // each already degrades to a silent skip without its secrets, so losing the
