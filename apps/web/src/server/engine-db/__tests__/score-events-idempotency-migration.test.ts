@@ -83,3 +83,36 @@ describe.skipIf(!HAS_DB)("V413 — score_events.idempotency_key", () => {
     expect(bad).toBeNull();
   });
 });
+
+// The column existing is not the column being WRITTEN. Everything downstream
+// of here — the unique index refusing a duplicate, the replay reconstruction
+// finding the original row — is dead unless the append adapter actually
+// carries the caller's key into the insert.
+describe.skipIf(!HAS_DB)("appendEvent carries the idempotency key", () => {
+  it("writes the key it was given, and null when it was given none", async () => {
+    const { appendEvent } = await import("@/server/engine-db");
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    const key = `idem-${randomUUID()}`;
+
+    await appendEvent(auth.orgId, fixtureId, 0, {
+      type: "core.start",
+      payload: {},
+      idempotencyKey: key,
+    });
+    // `generic.result` is the deciding event for this rig's sport (`generic` /
+    // `score`, see _rig.ts's divisionRig) — deliberately sent with NO key.
+    await appendEvent(auth.orgId, fixtureId, 1, {
+      type: "generic.result",
+      payload: { p1Score: 3, p2Score: 1 },
+    });
+
+    const rows = await sql<{ seq: number; idempotency_key: string | null }[]>`
+      select seq, idempotency_key from score_events
+      where fixture_id = ${fixtureId} order by seq`;
+    // BOTH ends pinned in one assertion. Asserting only the first row would
+    // pass against a hardcoded value; asserting only the second would pass
+    // against a column that is never written at all.
+    expect(rows.map((r) => r.idempotency_key)).toEqual([key, null]);
+  });
+});
