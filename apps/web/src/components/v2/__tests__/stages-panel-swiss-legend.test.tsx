@@ -26,14 +26,22 @@ vi.mock("@/components/ui/confirm-provider", () => ({
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
 
-const swissStage = (config: Record<string, unknown> = { rounds: 3 }) => ({
+/** `status` is the STAGE's own vocabulary — `pending | active | complete`
+ *  (V210__stages.sql), NOT the division's `active | completed`. It is a
+ *  parameter here because the legend's SHAPE depends on it: a complete stage
+ *  withholds the per-round match clause, whose number tracks the live field
+ *  and therefore decays after the stage has stopped caring about it. */
+const swissStage = (
+  config: Record<string, unknown> = { rounds: 3 },
+  status: string = "active",
+) => ({
   id: "s1",
   seq: 1,
   kind: "swiss",
   name: "Swiss",
   config,
   progression: null,
-  status: "active",
+  status,
 });
 
 /** N unseated swiss shells on stage s1, the shape a freshly-generated stage
@@ -121,6 +129,103 @@ describe("StagesPanel — Swiss shape legend", () => {
       />,
     );
     expect(legendOf(html)).toBe("3 rounds · 5 matches + 1 bye per round · 12 fixtures");
+  });
+
+  it("stages-panel-swiss-legend-complete-wiring: a COMPLETE stage prints rounds and fixtures, no per-round clause", () => {
+    // The PANEL is what proves this, not the builder: the builder cannot tell
+    // whether anyone ever hands it `stage.status`. Delete `status: stage.status`
+    // from the `swissStageLegend({...})` call in stages-panel.tsx and this is
+    // the test that reds — the builder suite stays entirely green, because a
+    // missing status simply is not in the completed set.
+    const html = renderToStaticMarkup(
+      <StagesPanel
+        {...baseProps}
+        canEdit
+        stages={[swissStage({ rounds: 3 }, "complete")]}
+        fixtures={shells(18)}
+        activeEntrantIds={ids(9)}
+      />,
+    );
+    const text = legendOf(html);
+    // The live field of 9 would say "4 matches + 1 bye per round" — a number
+    // that accuses a stage which played 11 entrants entirely correctly. The
+    // finished stage says only what is still true.
+    expect(text).toBe("3 rounds · 18 fixtures");
+    expect(text).not.toContain("match");
+    expect(text).not.toContain("per round");
+    expect(text).not.toContain("bye");
+  });
+
+  it("the SAME stage on 'pending' and on 'active' still carries the match clause", () => {
+    // The positive pair for the negative above — the clause is dropped by the
+    // completed status, not by something incidental to this fixture.
+    for (const status of ["pending", "active"]) {
+      const html = renderToStaticMarkup(
+        <StagesPanel
+          {...baseProps}
+          canEdit
+          stages={[swissStage({ rounds: 3 }, status)]}
+          fixtures={shells(18)}
+          activeEntrantIds={ids(9)}
+        />,
+      );
+      expect(legendOf(html), status).toBe("3 rounds · 4 matches + 1 bye per round · 18 fixtures");
+    }
+  });
+
+  it("stages-panel-swiss-legend-empty-field: a stage created before any entrant exists renders NOTHING", () => {
+    // A stage is created BEFORE entrants, so "0 matches per round" was the
+    // first thing an organiser saw on a new stage.
+    const html = renderToStaticMarkup(
+      <StagesPanel {...baseProps} canEdit stages={[swissStage()]} fixtures={[]} activeEntrantIds={[]} />,
+    );
+    expect(html).not.toContain('data-testid="stage-swiss-legend"');
+  });
+
+  it("stages-panel-swiss-legend-single-entrant: one entrant renders NOTHING either", () => {
+    const html = renderToStaticMarkup(
+      <StagesPanel {...baseProps} canEdit stages={[swissStage()]} fixtures={[]} activeEntrantIds={ids(1)} />,
+    );
+    expect(html).not.toContain('data-testid="stage-swiss-legend"');
+  });
+
+  it("TWO entrants — the smallest field swiss can pair — DOES render", () => {
+    // The positive pair: the suppression is the threshold, not "this panel
+    // never renders a legend on a small stage".
+    const html = renderToStaticMarkup(
+      <StagesPanel
+        {...baseProps}
+        canEdit
+        stages={[swissStage({ rounds: 1 })]}
+        fixtures={shells(1)}
+        activeEntrantIds={ids(2)}
+      />,
+    );
+    expect(legendOf(html)).toBe("1 round · 1 match per round · 1 fixture");
+  });
+
+  it("an EMPTY roster and an ABSENT roster render the same nothing, at every status", () => {
+    for (const status of ["pending", "active", "complete"]) {
+      const empty = renderToStaticMarkup(
+        <StagesPanel
+          {...baseProps}
+          canEdit
+          stages={[swissStage({ rounds: 3 }, status)]}
+          fixtures={shells(18)}
+          activeEntrantIds={[]}
+        />,
+      );
+      const absent = renderToStaticMarkup(
+        <StagesPanel
+          {...baseProps}
+          canEdit
+          stages={[swissStage({ rounds: 3 }, status)]}
+          fixtures={shells(18)}
+        />,
+      );
+      expect(empty, `${status} / empty`).not.toContain('data-testid="stage-swiss-legend"');
+      expect(absent, `${status} / absent`).not.toContain('data-testid="stage-swiss-legend"');
+    }
   });
 
   it("a NON-editing viewer sees it too — it is information, not an action", () => {

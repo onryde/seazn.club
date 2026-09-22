@@ -67,7 +67,7 @@ import { zonedTimeInput } from "@/lib/zoned-datetime";
 // drifted", shared with the page's tests rather than restated in each.
 import { swissAwaitingPairing } from "@/lib/roster-drift-eligibility";
 import {
-  latestSeatedSwissRound,
+  latestSwissRoundWithAnySeat,
   nextUnseatedSwissRound,
   swissRoundHasPlayedResult,
 } from "@/lib/swiss-shell";
@@ -899,9 +899,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const swissShellFixtures = stageFixtures.map((f) => ({ ...f, ext_key: f.ext_key ?? null }));
         const swissHasUnseated =
           stage.kind === "swiss" && nextUnseatedSwissRound(swissShellFixtures) !== null;
+        // PARTLY seated counts (2026-09-22). This asked `latestSeatedSwissRound`
+        // for a WHOLLY seated round, so an organiser who deleted an entrant
+        // before Start — leaving one board with a single null slot — lost the
+        // Unpair button entirely, on the one round that needed it. It must stay
+        // the same predicate the server's `unpairSwissRound` uses, or the page
+        // renders a control that 500s.
         const canUnpairSwiss = (() => {
           if (stage.kind !== "swiss") return false;
-          const latest = latestSeatedSwissRound(swissShellFixtures);
+          const latest = latestSwissRoundWithAnySeat(swissShellFixtures);
           return latest !== null && !swissRoundHasPlayedResult(swissShellFixtures, latest);
         })();
         // The swiss shape legend (owner-approved 2026-09-22, option B) — the
@@ -913,8 +919,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // the whole point is that the rows can be stale — minted for an older
         // field — and the legend has to say what the CURRENT field needs so
         // the disagreement is visible. See lib/swiss-legend.ts's header.
+        //
+        // `stage.status` is the STAGE's own (`pending | active | complete`) —
+        // the same value the badge two blocks down renders. On `complete` the
+        // legend withholds the per-round clause, because a post-event
+        // disqualification shrinks the field and would otherwise make a stage
+        // that played perfectly correctly read as mis-sized.
         const swissLegend = swissStageLegend({
           kind: stage.kind,
+          status: stage.status,
           config: stage.config,
           activeEntrantIds,
           fixtureCount: stageFixtures.length,

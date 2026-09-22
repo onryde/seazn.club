@@ -28,8 +28,9 @@ import type {
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { gateRosterEligibility, type EligibilityIssue } from "./registration-eligibility";
 // One-way edge (stages.ts does not import this module): a status flip has to
-// reach the seed proposals that were computed over the old field.
-import { markFieldChangeSeedProposalsStale } from "./stages";
+// reach the seed proposals that were computed over the old field, and a
+// pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
+import { markFieldChangeSeedProposalsStale, unseatSwissRoundsSeatingEntrant } from "./stages";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -448,14 +449,38 @@ export async function getEntrant(auth: AuthCtx, id: string): Promise<EntrantWith
 /** Hard delete — only while the division is still `setup` (mirrors the
  *  division-delete guard, divisions.ts:445): once scheduling has produced
  *  fixtures there is something to unwind, and `withdrawEntrantCascade`
- *  (withdrawal.ts) is the reversible tool for that. Pre-setup there is
- *  nothing downstream yet — cascades on entrant_members/lineups do the rest,
- *  and fixtures/registrations/suspensions/officials set the FK null rather
- *  than block, which is only safe because none of those rows can exist yet. */
+ *  (withdrawal.ts) is the reversible tool for that. Cascades on
+ *  entrant_members/lineups do the rest, and registrations/suspensions/
+ *  officials set the FK null rather than block.
+ *
+ *  FIXTURES ARE THE EXCEPTION, and this comment used to say otherwise — it
+ *  claimed "none of those rows can exist yet", which is false and was the
+ *  defect (2026-09-22, reported live from production). A swiss stage mints its
+ *  shells AND pairs its first round while the division is still `setup`, so
+ *  `fixtures.home_entrant_id`'s `on delete set null` left the departing
+ *  player's board half filled — one null slot beside neighbours still fully
+ *  seated. That round then refused every control on the page: the reconcile
+ *  refuses a partly seated round, and Unpair required a wholly seated one.
+ *
+ *  So the swiss rounds this entrant sits in are put back onto their shells
+ *  FIRST, in this same transaction — see `unseatSwissRoundsSeatingEntrant` for
+ *  the shape, the guards, and why the whole round moves rather than one board.
+ *  Order matters twice over: the round is read while the entrant is still
+ *  seated (a live bye is exempt from the played-result guard only while its
+ *  seat is filled), and once the seats are cleared the FK below has nothing
+ *  left to null. */
 export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     if (!row) throw new HttpError(404, "entrant not found");
+    // This is now a FIXTURE write as well as a roster one, so it takes the
+    // same division lock `generateStageFixturesWrite` and `unpairSwissRound`
+    // take — stages.ts's stated convention is that a destructive swiss write
+    // reads `existing` UNDER the lock. Taken before the status read so a
+    // concurrent Start cannot slip between the guard and the write. Same key
+    // and the same acquire-then-write order as the sibling paths, so there is
+    // no lock-ordering inversion to deadlock on.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + row.division_id}))`;
     const [division] = await tx<{ status: string }[]>`
       select status from divisions where id = ${row.division_id}`;
     if (!division) throw new HttpError(404, "division not found");
@@ -467,6 +492,7 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
         { withdraw: true },
       );
     }
+    await unseatSwissRoundsSeatingEntrant(tx, id);
     await tx`delete from entrants where id = ${id}`;
   });
 }

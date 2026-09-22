@@ -131,6 +131,81 @@ export function latestSeatedSwissRound(fixtures: readonly SwissFixtureRow[]): nu
 }
 
 /**
+ * Highest round holding AT LEAST ONE seated board — the round Unpair acts on
+ * (2026-09-22).
+ *
+ * WHY this is not `latestSeatedSwissRound`. Deleting an entrant before Start
+ * runs a bare `delete from entrants`; `fixtures.home_entrant_id` is
+ * `on delete set null`, so the departed player's already-paired board survives
+ * with ONE null slot beside neighbours that are still fully seated. That round
+ * then answered every control with a refusal: reconcile refuses a partly
+ * seated round, and Unpair — which asked for a WHOLLY seated round — did not
+ * render at all. The organiser had no way forward from any button on the page.
+ *
+ * So the round Unpair TARGETS is the widest sensible one: anything holding a
+ * seat can be cleared back onto its shells. Whether it MAY be cleared is a
+ * separate question answered by `swissRoundHasPlayedResult` here and, on the
+ * server, by the canonical `fixtureEvidenceSql` as well — two guards, neither
+ * covering for the other. Widening the target deliberately does not widen the
+ * permission.
+ *
+ * `latestSeatedSwissRound` survives because `swissGen`'s implicit-bye
+ * inference needs the stricter question ("which rounds are COMPLETE"), and
+ * answering that one with this one would walk the inference into a round that
+ * was never finished.
+ */
+export function latestSwissRoundWithAnySeat(
+  fixtures: readonly SwissFixtureRow[],
+): number | null {
+  const roundNos = [...new Set(fixtures.map((f) => f.round_no))].sort((a, b) => a - b);
+  let latest: number | null = null;
+  for (const roundNo of roundNos) {
+    const seated = fixtures.some(
+      (f) =>
+        f.round_no === roundNo &&
+        isSwissBoardSeated({
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          outcome: f.outcome,
+        }),
+    );
+    if (seated) latest = roundNo;
+  }
+  return latest;
+}
+
+/**
+ * An `award` outcome with NO seat left on EITHER side — the wreck the
+ * `on delete set null` FK makes of a bye row when its recipient is deleted
+ * (2026-09-22).
+ *
+ * A bye is written `home = winner, away = null, status = 'forfeited',
+ * outcome = {award, winner}` (stages.ts's swiss seating). Delete the winner
+ * and the award and the status both survive while the seat does not, so the
+ * row reads as a two-sided played result to `swissRoundHasPlayedResult` and as
+ * SEATED to `isSwissBoardSeated`. That combination is why deleting the bye
+ * holder produced a different dead end from deleting a board player: Generate
+ * walked past the round as complete and threw "current swiss round has
+ * undecided fixtures", while Unpair refused it as played.
+ *
+ * Nothing legitimate has this shape. A real two-sided award (forfeit,
+ * retirement) names BOTH its sides — that is `isOneSidedAwardBye`'s whole
+ * subject — and a live bye names one. An award naming neither names a row that
+ * no longer exists.
+ *
+ * This is a CLIENT-side relaxation only. If such a row somehow did carry real
+ * recorded data, the server's `fixtureEvidenceSql` still refuses it
+ * independently; that guard is not weakened here and is tested on its own.
+ */
+function isOrphanedAwardShell(f: {
+  outcome: unknown;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+}): boolean {
+  return isAwardOutcome(f.outcome) && f.home_entrant_id === null && f.away_entrant_id === null;
+}
+
+/**
  * Statuses that are evidence a fixture has been played. Mirrors the status
  * arm of this repo's canonical destructive guard (`rebuildStageFixtures` in
  * `server/usecases/stages.ts`), `abandoned` included — an abandoned match was
@@ -188,6 +263,12 @@ export function swissRoundHasPlayedResult(
   return fixtures
     .filter((f) => f.round_no === roundNo)
     .some((f) => {
+      // BOTH exemptions come first and both are about byes: a live one
+      // (`isOneSidedAwardBye`) and one whose recipient has been deleted
+      // (`isOrphanedAwardShell`). The orphan must also skip the STATUS test
+      // below, not only the award test — the bye row is written `forfeited`,
+      // so checking the outcome alone would leave the status still blocking.
+      if (isOrphanedAwardShell(f)) return false;
       if (isOneSidedAwardBye(f)) return false;
       if (isAwardOutcome(f.outcome)) return true;
       return SWISS_PLAYED_STATUSES.has(f.status);

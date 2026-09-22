@@ -58,6 +58,7 @@ import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/
 import {
   isSwissBoardSeated,
   latestSeatedSwissRound,
+  latestSwissRoundWithAnySeat,
   nextUnseatedSwissRound,
   planSwissShells,
   swissBoardsForField,
@@ -1900,7 +1901,111 @@ function fixtureEvidenceSql(tx: Tx) {
     or exists (select 1 from suspensions s where s.fixture_id = f.id)`;
 }
 
-/** Clear the latest fully seated Swiss round back onto its shells (2026-09-18). */
+/**
+ * THE clear-onto-shells write — the one place a seated swiss row is put back
+ * to a shell, shared by Unpair and by the pre-Start entrant delete below
+ * (2026-09-22). Extracted rather than restated so the two paths cannot drift
+ * into leaving different residue behind.
+ *
+ * What it deliberately does NOT touch is `scheduled_at` and `court_id`. A
+ * shell scheduled ahead of Pair is a shipped feature (`e2e/swiss-shell.spec.ts`
+ * pins it), and an organiser's advance court layout must survive both a
+ * deliberate Unpair and a player leaving. That is also why the row is UPDATED
+ * rather than deleted and re-minted: the fixture id survives with it.
+ */
+async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await tx`
+    update fixtures set
+      home_entrant_id = null,
+      away_entrant_id = null,
+      status = 'scheduled',
+      outcome = null,
+      home_slot_label = null,
+      away_slot_label = null
+    where id in ${tx(ids)}`;
+}
+
+/**
+ * Put every swiss round that SEATS `entrantId` back onto its shells, so the
+ * caller can then delete the entrant without leaving a half-filled board
+ * (2026-09-22 — reported live from production).
+ *
+ * THE DEFECT. `deleteEntrant` guards only on `division.status !== 'setup'` and
+ * runs a bare `delete from entrants`. It never touches `fixtures`; the FK does,
+ * `home_entrant_id ... on delete set null` (V214__fixtures.sql:12). Its header
+ * comment assumed "none of those rows can exist yet" — and that assumption is
+ * the bug, because swiss shells AND swiss pairings both exist before Start
+ * while the division is still `setup`. The survivor was a board with ONE null
+ * slot beside neighbours that were still fully seated, and that round refused
+ * every control the page offers: `reconcileSwissRoundShells` refuses a partly
+ * seated round, and Unpair required a wholly seated one so it did not render.
+ *
+ * WHY UNSEAT THE WHOLE ROUND rather than patch the single board. "Wholly
+ * unseated" is the state `reconcileSwissRoundShells` already knows how to
+ * resize, so the next Generate reshapes the round for the new field and
+ * re-pairs it through the ordinary path — no second mechanism, and no partial
+ * round left for the pairer to reason about. Clearing only the damaged board
+ * would leave its neighbours holding a pairing computed for a field that no
+ * longer exists.
+ *
+ * SWISS ONLY, and only rounds this entrant actually sat in. Other stage kinds
+ * regenerate through `rebuildStageFixtures` and are not this function's
+ * business; an entrant seated nowhere costs one query and no writes.
+ *
+ * GUARDS. This is a destructive write on live rows, so it carries the same two
+ * arms the sibling paths do, and NEITHER covers for the other:
+ * `swissRoundHasPlayedResult` (status/outcome, evaluated on the round as it
+ * stands BEFORE the delete — which matters, because a live bye is exempt only
+ * while its seat is still filled) and the canonical `fixtureEvidenceSql`. A
+ * round that trips either REFUSES THE DELETE rather than skipping: leaving the
+ * entrant in place preserves the recorded data and reproduces no stranding,
+ * whereas skipping would delete the player and leave exactly the wreck this
+ * function exists to prevent. Refusals reuse `STAGE_NOT_READY` and this file's
+ * existing sentences, so no organiser-facing string is introduced.
+ */
+export async function unseatSwissRoundsSeatingEntrant(
+  tx: Tx,
+  entrantId: string,
+): Promise<number> {
+  const rounds = await tx<{ stage_id: string; round_no: number }[]>`
+    select distinct f.stage_id, f.round_no
+    from fixtures f
+    join stages s on s.id = f.stage_id
+    where s.kind = 'swiss'
+      and (f.home_entrant_id = ${entrantId} or f.away_entrant_id = ${entrantId})
+    order by f.stage_id, f.round_no`;
+  let cleared = 0;
+  for (const { stage_id, round_no } of rounds) {
+    const inRound = await tx<SwissExistingFixture[]>`
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+      from fixtures where stage_id = ${stage_id} and round_no = ${round_no}`;
+    if (swissRoundHasPlayedResult(inRound, round_no)) {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "swiss round has played results — delete refused",
+        { stageId: stage_id, round: round_no, entrantId },
+      );
+    }
+    const ids = inRound.map((f) => f.id);
+    const [blocked] = await tx<{ id: string }[]>`
+      select f.id from fixtures f
+      where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
+      limit 1`;
+    if (blocked) {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "swiss round has recorded match data — delete refused",
+        { stageId: stage_id, round: round_no, entrantId, fixtureId: blocked.id },
+      );
+    }
+    await clearSwissFixtureSeats(tx, ids);
+    cleared += ids.length;
+  }
+  return cleared;
+}
+
+/** Clear the latest seated Swiss round back onto its shells (2026-09-18). */
 export async function unpairSwissRound(
   auth: AuthCtx,
   stageId: string,
@@ -1922,7 +2027,17 @@ export async function unpairSwissRound(
       select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
       from fixtures where stage_id = ${stageId}`;
 
-    const round = latestSeatedSwissRound(existing);
+    // PARTLY seated counts (2026-09-22). This used to ask for a WHOLLY seated
+    // round, which is precisely why an organiser whose pre-Start delete left
+    // one null slot had no way out: the reconcile refused the round and the
+    // only control that could have cleared it answered "no seated swiss round
+    // to unpair" — and did not even render, since `canUnpairSwiss` in
+    // `stages-panel.tsx` reads the SAME predicate. The two must agree or the
+    // page shows a button that 500s.
+    //
+    // Widening the TARGET is not widening the permission: the two guards below
+    // are untouched and still decide whether this round may be cleared.
+    const round = latestSwissRoundWithAnySeat(existing);
     if (round === null) {
       throw new EngineError("STAGE_NOT_READY", "no seated swiss round to unpair", { stageId });
     }
@@ -1958,15 +2073,7 @@ export async function unpairSwissRound(
       );
     }
 
-    await tx`
-      update fixtures set
-        home_entrant_id = null,
-        away_entrant_id = null,
-        status = 'scheduled',
-        outcome = null,
-        home_slot_label = null,
-        away_slot_label = null
-      where id in ${tx(ids)}`;
+    await clearSwissFixtureSeats(tx, ids);
 
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;

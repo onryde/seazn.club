@@ -2002,6 +2002,7 @@
   "bracket.tbd": "N.t.b.",
   "stage.err.swissRoundsRequired": "Een Zwitserse fase heeft een aantal rondes nodig voordat die kan worden opgeslagen. Zet Rondes op 1 of meer en pas het opnieuw toe.",
   "stage.swissLegend.line": "{rounds} · {matches} · {fixtures}",
+  "stage.swissLegend.lineComplete": "{rounds} · {fixtures}",
   "stage.swissLegend.rounds.one": "{count} ronde",
   "stage.swissLegend.rounds.other": "{count} rondes",
   "stage.swissLegend.matches.one": "{count} wedstrijd per ronde",
