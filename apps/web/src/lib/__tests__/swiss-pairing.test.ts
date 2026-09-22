@@ -1,6 +1,8 @@
 // apps/web/src/lib/__tests__/swiss-pairing.test.ts
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
+import { pairRound, type SwissStanding } from "@seazn/engine/scheduling/swiss";
 import type { EntrantId } from "@seazn/engine/core";
 import {
   effectiveSwissPairing,
@@ -56,4 +58,22 @@ describe("roundOnePairs mirrors the engine", () => {
     expect(roundOnePairs(10, "rank_adjacent")[0]).toEqual([1, 2]);
   });
   it("fewer than 2 ⇒ no pairs", () => expect(roundOnePairs(1, "fold")).toEqual([]));
+});
+
+describe("swiss-pairing.ts stays client-safe", () => {
+  // A "use client" component (the desk's stages-panel.tsx) imports this module.
+  // The bare `@seazn/engine/scheduling` barrel is SERVER-ONLY (its header,
+  // packages/engine/src/scheduling/index.ts): it reaches placement-client.ts →
+  // @grpc/grpc-js, and a browser bundle then dies on `Module not found: dns`.
+  // tsc, vitest and eslint are all blind to that, so read the source.
+  const source = readFileSync(join(__dirname, "..", "swiss-pairing.ts"), "utf8");
+  // Every module specifier: `from "x"`, `import "x"`, `import("x")`, `require("x")`.
+  const specifiers = [
+    ...source.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"']+)["']/g),
+  ].map((m) => m[1]);
+  it("imports the engine's swiss LEAF, never the scheduling barrel (not even type-only)", () => {
+    // Positive half first, so a broken extractor cannot pass the negative vacuously.
+    expect(specifiers).toContain("@seazn/engine/scheduling/swiss");
+    expect(specifiers).not.toContain("@seazn/engine/scheduling");
+  });
 });

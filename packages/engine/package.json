@@ -24,6 +24,7 @@
     "./scheduling/health": "./src/scheduling/health.ts",
     "./scheduling/placement-client": "./src/scheduling/placement-client.ts",
     "./scheduling/rest-floor": "./src/scheduling/rest-floor.ts",
+    "./scheduling/swiss": "./src/scheduling/swiss.ts",
     "./scheduling/tz": "./src/scheduling/tz.ts",
     "./testkit": "./src/testkit/index.ts"
   },

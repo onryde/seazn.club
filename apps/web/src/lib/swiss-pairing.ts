@@ -5,7 +5,11 @@
 // Round 1 (the round being paired has round_no 1) defaults to top-vs-bottom:
 // rank-adjacent (Hammes) pairs neighbours by STANDINGS, and before any result
 // the only rank is the seed, so neighbours would be seed 1 v seed 2.
-import { pairRound, type SwissStanding } from "@seazn/engine/scheduling";
+//
+// Client-safe: import the swiss LEAF, never the scheduling barrel. The barrel
+// is server-only (it reaches @grpc/grpc-js); see its header in
+// packages/engine/src/scheduling/index.ts. The test pins this.
+import { pairRound, type SwissStanding } from "@seazn/engine/scheduling/swiss";
 import type { EntrantId } from "@seazn/engine/core";
 
 export type SwissPairing = "fold" | "rank_adjacent";
