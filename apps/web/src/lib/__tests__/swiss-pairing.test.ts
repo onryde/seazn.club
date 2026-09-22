@@ -26,6 +26,9 @@ describe("effectiveSwissPairing", () => {
     expect(effectiveSwissPairing({ override: "rank_adjacent", stored: "fold", round: 1 })).toBe("rank_adjacent");
     expect(effectiveSwissPairing({ override: "fold", stored: "rank_adjacent", round: 1 })).toBe("fold");
   });
+  it("an override wins in round 2 too (the round-1-only refusal is the caller's, not this rule's)", () => {
+    expect(effectiveSwissPairing({ override: "fold", stored: "rank_adjacent", round: 2 })).toBe("fold");
+  });
 });
 
 describe("storedSwissPairing", () => {
