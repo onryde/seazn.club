@@ -32,7 +32,7 @@ import nl from "@/dictionaries/nl/ui.json";
 const active = vi.hoisted(() => ({ locale: "en" }));
 
 vi.mock("@/components/i18n/dict-provider", async () => {
-  const { t: translate } = await import("@/lib/i18n-runtime");
+  const { t: translate, plural: pluralise } = await import("@/lib/i18n-runtime");
   const dicts: Record<string, unknown> = {
     en: (await import("@/dictionaries/en/ui.json")).default,
     es: (await import("@/dictionaries/es/ui.json")).default,
@@ -44,6 +44,14 @@ vi.mock("@/components/i18n/dict-provider", async () => {
       () =>
       (key: string, vars?: Record<string, string | number>): string =>
         translate(dicts[active.locale] as never, key as never, vars),
+    // `entrants-panel.tsx` also imports `useMsgPlural` (the enroll form's
+    // squad count). A partial mock that omitted it would hand the module an
+    // `undefined` import — fine until something in this file renders that
+    // form, and then a confusing "not a function" a long way from here.
+    useMsgPlural:
+      () =>
+      (key: string, count: number, vars?: Record<string, string | number>): string =>
+        pluralise(dicts[active.locale] as never, key, count, active.locale as never, vars),
   };
 });
 vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));

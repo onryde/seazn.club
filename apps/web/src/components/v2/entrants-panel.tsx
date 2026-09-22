@@ -11,7 +11,7 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { SuspensionChip } from "@/components/discipline/suspension-chip";
 // RS007/V380 — the SAME organiser-facing category/age-band derivations the
@@ -478,6 +478,7 @@ export function EntrantsPanel({
               if (!e.target.value) setClubEntrantIds(null);
             }}
             aria-label="Filter entrants by club"
+            data-testid="entrants-club-filter"
           >
             <option value="">All clubs</option>
             {clubs.map((c) => (
@@ -491,18 +492,26 @@ export function EntrantsPanel({
         <table className="table">
           <thead>
             <tr>
-              <th className="px-4 py-2 text-left">Entrant</th>
-              <th className="px-4 py-2 text-left">Kind</th>
-              <th className="px-4 py-2 text-left">Seed</th>
-              <th className="px-4 py-2 text-left">Status</th>
-              {canEdit && <th className="px-4 py-2 text-right">Actions</th>}
+              <th className="px-4 py-2 text-left">{msg("entrants.table.entrant")}</th>
+              <th className="px-4 py-2 text-left">{msg("entrants.table.kind")}</th>
+              <th className="px-4 py-2 text-left">{msg("entrants.table.seed")}</th>
+              {/* The column is translated; the VALUES under it are still the
+                  raw `entrants.status` enum, in English, for every locale.
+                  Deliberate and owner-scoped-out (2026-09-22): mapping the enum
+                  is a separate job from swapping a string. */}
+              <th className="px-4 py-2 text-left">{msg("entrants.table.status")}</th>
+              {canEdit && <th className="px-4 py-2 text-right">{msg("entrants.table.actions")}</th>}
             </tr>
           </thead>
           <tbody>
             {visibleEntrants.length === 0 && (
               <tr>
-                <td colSpan={canEdit ? 5 : 4} className="px-4 py-6 text-center text-sm text-slate-400">
-                  {clubFilter ? "No entrants from this club." : "No entrants registered yet."}
+                <td
+                  colSpan={canEdit ? 5 : 4}
+                  className="px-4 py-6 text-center text-sm text-slate-400"
+                  data-testid="entrants-table-empty"
+                >
+                  {clubFilter ? msg("entrants.table.emptyForClub") : msg("entrants.table.empty")}
                 </td>
               </tr>
             )}
@@ -710,7 +719,11 @@ function AddEntrantForm({
 }
 
 /** Mode A: enroll a team that already exists (season rollover, league + cup). */
-function ExistingTeamFields({
+/** Exported for tests only — nothing else imports it, for the same reason
+ *  `EntrantTableRow` is: the squad preview below is gated on `selectedId`, a
+ *  `useState` this form owns, so a static render can never pick a team and
+ *  the preview's copy could only ever be declared, never witnessed. */
+export function ExistingTeamFields({
   teams,
   enteredTeamIds,
   busy,
@@ -723,6 +736,8 @@ function ExistingTeamFields({
     payload: Record<string, unknown>,
   ) => Promise<{ roster_keys_dropped?: number } | undefined>;
 }) {
+  const msg = useMsg();
+  const msgPlural = useMsgPlural();
   const [filter, setFilter] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copyRoster, setCopyRoster] = useState(true);
@@ -788,6 +803,7 @@ function ExistingTeamFields({
               type="button"
               disabled={entered}
               onClick={() => setSelectedId(isSelected ? null : t.id)}
+              data-testid="enroll-team-option"
               className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs transition ${
                 entered
                   ? "cursor-not-allowed border-slate-200 text-slate-300"
@@ -831,14 +847,30 @@ function ExistingTeamFields({
           the organiser enrolls, not after they expand the row and wonder. */}
       {selected && !(copyRoster && canCopy) && (
         selected.squad_count > 0 ? (
-          <p className="text-xs text-slate-500" data-testid="squad-preview">
-            Team squad: {selected.squad_count} player{selected.squad_count > 1 ? "s" : ""} will be
-            copied to this entry.
+          <p
+            className="text-xs text-slate-500"
+            data-testid="squad-preview"
+            data-squad-empty="false"
+            data-squad-count={String(selected.squad_count)}
+          >
+            {/* `plural()`, not `count > 1 ? "s" : ""` — the suffix trick is the
+                construction that cannot survive translation at all. */}
+            {msgPlural("entrants.add.squadPreview", selected.squad_count)}
           </p>
         ) : (
-          <p className="text-xs text-amber-600" data-testid="squad-preview">
-            Team squad is empty — the entry will start with no roster. Add players on the club
-            page, or enroll now and use &ldquo;Sync from team squad&rdquo; later.
+          <p
+            className="text-xs text-amber-600"
+            data-testid="squad-preview"
+            data-squad-empty="true"
+            data-squad-count="0"
+          >
+            {/* The sentence NAMES A CONTROL, so it interpolates that control's
+                own key rather than gluing a translated fragment in: four
+                locales put the name in four different places (Dutch ends on
+                "gebruik later “…”"), and whatever the button says, this says.
+                A glued fragment is the word-order trap the Swiss legend paid
+                for. */}
+            {msg("entrants.add.squadEmpty", { control: msg("entrants.row.syncSquad") })}
           </p>
         )
       )}
