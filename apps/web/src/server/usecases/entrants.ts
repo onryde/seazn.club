@@ -523,46 +523,94 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
  *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
 export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
 
+/** An ad-hoc entrant's name and roster, read BEFORE a write that changes who
+ *  its people are or what they are called. */
+export interface PendingRosterName {
+  readonly id: string;
+  readonly display_name: string;
+  readonly prior: readonly RosterNamePerson[];
+}
+
+/** An entrant whose derived name a person write moved, from what to what. */
+export interface FollowedRosterName {
+  readonly id: string;
+  readonly before: string;
+  readonly after: string;
+}
+
 /**
- * A PLAYER was renamed (`patchPerson`, owner ruling 2026-09-22). Every ad-hoc
- * entrant whose name was derived from its people, with this player under
- * `oldName`, now carries the new name in the same seat. So "Sankar & Ritwik"
- * becomes "Sankar Krishnan & Ritwik". A custom name, or a team-linked
- * entrant's team snapshot, is never touched. The rule is the roster editor's
- * own (`followRosterEdit`): the same people before and after, one of them
- * under a new name.
+ * Step one of a person write that a derived entrant name must follow. The
+ * two writes are:
+ * - `patchPerson` renaming a player (owner ruling 2026-09-22, review item 10);
+ * - `mergePersons` moving an absorbed record's roster seats onto the
+ *   survivor (review item 13).
  *
- * This runs inside the person write's own transaction, after its UPDATE, so
- * `persons.full_name` already reads the new name. Each rename is guarded on the
- * name this read, like `patchEntrant`'s: an explicit rename that commits
- * first stands. The public pages are the caller's to refresh after the commit.
- * `firePersonRevalidate` already expires every division this player is
- * rostered in, which covers every entrant renamed here.
+ * This step reads every AD-HOC entrant this person is rostered on, with its
+ * whole roster under the names it has now, before anything moves. A
+ * team-linked entrant carries its team's name, never one derived from a
+ * roster, so it is not read (`createEntrants`).
  */
-export async function followPersonRename(
-  tx: Tx,
-  personId: string,
-  oldName: string,
-): Promise<void> {
+export async function entrantNamesFollowing(tx: Tx, personId: string): Promise<PendingRosterName[]> {
   const entrants = await tx<{ id: string; display_name: string }[]>`
     select e.id, e.display_name
     from entrants e join entrant_members em on em.entrant_id = e.id
     where em.person_id = ${personId} and e.team_id is null`;
-  if (entrants.length === 0) return;
-  const members = await tx<(RosterNamePerson & { entrant_id: string })[]>`
+  if (entrants.length === 0) return [];
+  const members = await rosterNamesOf(tx, entrants.map((e) => e.id));
+  return entrants.map((e) => ({
+    id: e.id,
+    display_name: e.display_name,
+    prior: members.filter((m) => m.entrant_id === e.id),
+  }));
+}
+
+/**
+ * Step two, after the write, in the same transaction. For each entrant read in
+ * step one, its roster is re-read and the name is followed with
+ * `followRosterEdit`, the roster editor's own rule. So:
+ * - a renamed player's token changes in its own seat;
+ * - a merged-away record's token becomes the survivor's in the same seat;
+ * - when both records were on one roster, the absorbed record's seat goes.
+ *
+ * A custom name is never touched. Each rename is guarded on the name step one
+ * read, like `patchEntrant`'s, so an explicit rename that commits first
+ * stands. Returns what moved, so a merge can record it for its undo.
+ *
+ * Refreshing the public pages after the commit is the caller's job.
+ * `firePersonRevalidate`, which both callers already fire, expires every
+ * division the person is rostered in, and that covers every entrant renamed
+ * here.
+ */
+export async function followRosterNames(
+  tx: Tx,
+  pending: readonly PendingRosterName[],
+): Promise<FollowedRosterName[]> {
+  if (pending.length === 0) return [];
+  const members = await rosterNamesOf(tx, pending.map((e) => e.id));
+  const moved: FollowedRosterName[] = [];
+  for (const entrant of pending) {
+    const next = members.filter((m) => m.entrant_id === entrant.id);
+    const renamed = followRosterEdit(entrant.display_name, entrant.prior, next);
+    if (renamed === null) continue;
+    const [updated] = await tx<{ id: string }[]>`
+      update entrants set display_name = ${renamed}
+      where id = ${entrant.id} and display_name = ${entrant.display_name}
+      returning id`;
+    if (updated) moved.push({ id: entrant.id, before: entrant.display_name, after: renamed });
+  }
+  return moved;
+}
+
+async function rosterNamesOf(
+  tx: Tx,
+  entrantIds: readonly string[],
+): Promise<(RosterNamePerson & { entrant_id: string })[]> {
+  return tx<(RosterNamePerson & { entrant_id: string })[]>`
     select em.entrant_id, em.person_id, p.full_name
     from entrant_members em join persons p on p.id = em.person_id
-    where em.entrant_id in ${tx(entrants.map((e) => e.id))}`;
-  for (const entrant of entrants) {
-    const next = members.filter((m) => m.entrant_id === entrant.id);
-    const prior = next.map((m) => (m.person_id === personId ? { ...m, full_name: oldName } : m));
-    const renamed = followRosterEdit(entrant.display_name, prior, next);
-    if (renamed === null) continue;
-    await tx`
-      update entrants set display_name = ${renamed}
-      where id = ${entrant.id} and display_name = ${entrant.display_name}`;
-  }
+    where em.entrant_id in ${tx(entrantIds as string[])}`;
 }
+
 
 /** Where an entrant write's public refresh must reach: its division, that
  *  division's competition, and every fixture the entrant plays (whose

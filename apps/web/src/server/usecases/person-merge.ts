@@ -20,6 +20,7 @@ import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cach
 import { firePersonRevalidate } from "@/server/public-site/revalidate";
 import { lockPlayerStatsDivisions, recomputePlayerStats } from "./player-stats";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
+import { entrantNamesFollowing, followRosterNames, type FollowedRosterName } from "./entrants";
 import {
   courtNamesById,
   divisionFixtures,
@@ -307,8 +308,14 @@ export async function mergePersons(
     // nothing moved, so nothing is cleared either.
     const tombstoneUserId = survivor.user_id === null ? null : absorbed.user_id;
 
-    // 3. Repoint, per §4.3.
+    // 3. Repoint, per §4.3. The ad-hoc entrants the absorbed record is on are
+    //    read first, while the names their rosters derive still hold. After the
+    //    repoint, each derived name follows: the absorbed record's token becomes
+    //    the survivor's, in the same seat (owner ruling 2026-09-22, review item
+    //    13). What moved goes into the snapshot, so an undo can put it back.
+    const namesPending = await entrantNamesFollowing(tx, absorbedId);
     await repointEntrantMembers(tx, survivorId, absorbedId);
+    snapshot.entrant_names = await followRosterNames(tx, namesPending);
     await repointPlayerProfiles(tx, survivorId, absorbedId);
     await repointLineups(tx, survivorId, absorbedId);
     await repointTeamMembers(tx, survivorId, absorbedId);
@@ -640,6 +647,15 @@ export async function reverseMerge(
     //    "everything these two people own" — that is what leaves post-merge rows
     //    alone.
     await restoreSlots(tx, "entrant_members", ids, rowsOf("entrant_members"), "entrant_id");
+    // The names the merge moved with those seats (review item 13) go back, but
+    // only where the name is still the one the merge wrote. A name the
+    // organiser gave after the merge is theirs. A merge recorded before this
+    // key existed moved no names and has none to restore.
+    for (const moved of rowsOf("entrant_names") as unknown as FollowedRosterName[]) {
+      await tx`
+        update entrants set display_name = ${moved.before}
+         where id = ${moved.id} and display_name = ${moved.after}`;
+    }
     await restoreSlots(tx, "player_profiles", ids, rowsOf("player_profiles"), "sport_key");
     await restoreSlots(tx, "team_members", ids, rowsOf("team_members"), "team_id");
     await restoreSlots(tx, "fixture_availability", ids, rowsOf("fixture_availability"), "fixture_id");

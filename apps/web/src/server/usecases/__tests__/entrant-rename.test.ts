@@ -42,6 +42,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant, getEntrant, patchEntrant, syncEntrantRosterFromSquad } from "../entrants";
 import { createPerson, patchPerson } from "../persons";
+import { mergePersons, reverseMerge } from "../person-merge";
 import { createTeam, setTeamSquad } from "../teams";
 import { createStages, generateStageFixtures } from "../stages";
 import { seedOrg as sharedSeedOrg, GENERIC_CONFIG } from "./_seed";
@@ -571,5 +572,110 @@ describe.skipIf(!HAS_DB)("patchPerson — derived entrant names follow a player'
     await patchPerson(auth, sankar.id, { full_name: "Sankar" });
 
     expect(await storedName(pair.id)).toBe(derived(ritwik, sankar));
+  });
+});
+
+// Two records of one player MERGED (owner ruling 2026-09-22, review item 13).
+// The absorbed record's roster seats move to the survivor, so a name derived
+// from the absorbed record's name now names nobody on the roster. It follows:
+// the absorbed token becomes the survivor's, in the same seat.
+describe.skipIf(!HAS_DB)("mergePersons — derived entrant names follow the merge", () => {
+  async function merge(auth: AuthCtx, survivor: Person, absorbed: Person) {
+    return mergePersons(auth, survivor.id, absorbed.id, { confirmedBy: auth.userId! });
+  }
+
+  it("the absorbed record's token becomes the survivor's, in its own seat", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const survivor = await seedPerson(auth, "Sankar Krishnan");
+    const absorbed = await seedPerson(auth, "Sankar K");
+    const ritwik = await seedPerson(auth, "Ritwik");
+    // The absorbed record sits in the FIRST seat.
+    const pair = await seedPair(auth, division.id, absorbed, ritwik);
+    clearRefreshSpies();
+
+    await merge(auth, survivor, absorbed);
+
+    expect(await storedName(pair.id)).toBe(derived(survivor, ritwik));
+    // After the commit, the merge's own refresh. Its roster read now finds the
+    // survivor on this pair, so it reaches this division.
+    expect(firePersonRevalidate).toHaveBeenCalledWith([survivor.id, absorbed.id], expect.any(Object));
+  });
+
+  it("a custom name is left alone", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const survivor = await seedPerson(auth, "Sankar Krishnan");
+    const absorbed = await seedPerson(auth, "Sankar K");
+    const ritwik = await seedPerson(auth, "Ritwik");
+    const pair = await seedPair(auth, division.id, absorbed, ritwik, "Smash Bros");
+
+    await merge(auth, survivor, absorbed);
+
+    expect(await storedName(pair.id)).toBe("Smash Bros");
+  });
+
+  it("a team-linked entrant keeps its team snapshot, even one that reads like its roster", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const survivor = await seedPerson(auth, "Sankar Krishnan");
+    const absorbed = await seedPerson(auth, "Sankar K");
+    const ritwik = await seedPerson(auth, "Ritwik");
+    const team = await createTeam(auth, { name: derived(absorbed, ritwik) });
+    const [entrant] = await createEntrants(auth, division.id, [
+      { kind: "team", team_id: team.id, members: roster(absorbed, ritwik) } as never,
+    ]);
+
+    await merge(auth, survivor, absorbed);
+
+    expect(await storedName(entrant!.id)).toBe(derived(absorbed, ritwik));
+  });
+
+  it("both records in ONE pair: the roster shrinks to the survivor, and so does the name", async () => {
+    // The same human entered twice. The merge leaves one member (the absorbed
+    // seat is deleted, `repointEntrantMembers`). The name follows the roster
+    // the way a roster edit that removes someone without a replacement does:
+    // that seat goes.
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const survivor = await seedPerson(auth, "Sankar Krishnan");
+    const absorbed = await seedPerson(auth, "Sankar K");
+    const pair = await seedPair(auth, division.id, absorbed, survivor);
+
+    await merge(auth, survivor, absorbed);
+
+    expect(await storedName(pair.id)).toBe(derived(survivor));
+    const full = await getEntrant(auth, pair.id);
+    expect((full.members as { person_id: string }[]).map((m) => m.person_id)).toEqual([survivor.id]);
+  });
+
+  it("undoing the merge puts the exact name back", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const survivor = await seedPerson(auth, "Sankar Krishnan");
+    const absorbed = await seedPerson(auth, "Sankar K");
+    const ritwik = await seedPerson(auth, "Ritwik");
+    const pair = await seedPair(auth, division.id, absorbed, ritwik);
+
+    const { merge_id } = await merge(auth, survivor, absorbed);
+    expect(await storedName(pair.id)).toBe(derived(survivor, ritwik));
+    await reverseMerge(auth, merge_id, { confirmedBy: auth.userId! });
+
+    expect(await storedName(pair.id)).toBe(derived(absorbed, ritwik));
+  });
+
+  it("undoing the merge leaves a name the organiser gave after it", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const survivor = await seedPerson(auth, "Sankar Krishnan");
+    const absorbed = await seedPerson(auth, "Sankar K");
+    const ritwik = await seedPerson(auth, "Ritwik");
+    const pair = await seedPair(auth, division.id, absorbed, ritwik);
+
+    const { merge_id } = await merge(auth, survivor, absorbed);
+    await patchEntrant(auth, pair.id, { display_name: "Court Kings" });
+    await reverseMerge(auth, merge_id, { confirmedBy: auth.userId! });
+
+    expect(await storedName(pair.id)).toBe("Court Kings");
   });
 });
