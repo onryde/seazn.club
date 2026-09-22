@@ -1089,9 +1089,36 @@ async function swissGen(
     { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
   );
 
-  // The shells were minted for the field as it was; a withdrawal since then has
-  // resized it. Bring THIS round (and only this round) into line before anyone
-  // is seated onto it — see reconcileSwissRoundShells.
+  // The shells were minted for the field as it was; a withdrawal (or, before
+  // Start, an enrolment or a deletion) since then has resized it. Bring the
+  // rounds that need it into line before anyone is seated — see
+  // reconcileSwissRoundShells for the per-round guards and the reconcile-vs-
+  // recreate reasoning.
+  //
+  // SCOPE turns on whether the division has STARTED (owner ruling 2026-09-22,
+  // closing the half of Open question 1 the design doc left open). Before
+  // Start an organiser lays out courts and times for EVERY round up front, so
+  // every unseated round has to match the current field: one still minted for
+  // the old field has no board to hang a new player on and cannot be scheduled
+  // at all. That was the production defect — round 1 re-paired correctly after
+  // Unpair → Pair next while rounds 2 and 3 kept the old field's shells.
+  // After Start the scope stays LAZY, only the round being paired: there is no
+  // reason to widen a destructive write mid-event, and a later round's shell
+  // count is cosmetic until its own Pair reaches it.
+  const eager = !(await divisionHasStarted(tx, divisionId));
+  // `target` is always reconciled and always carries the full guard set. The
+  // later rounds are filtered to the WHOLLY UNSEATED ones, which is exactly the
+  // set the reconcile can act on — a seated round refuses reshaping by its
+  // first guard, so including one could only turn a Generate that works today
+  // into a refusal. It is reachable: `addFixture` puts an ad-hoc swiss fixture
+  // at `maxRound + 1`, seated on both sides (Task 2.3).
+  const laterRounds = eager
+    ? [...new Set(existing.map((f) => f.round_no))]
+        .filter(
+          (r) => r > target && !existing.some((f) => f.round_no === r && isSwissBoardSeated(f)),
+        )
+        .sort((a, b) => a - b)
+    : [];
   const roundShells = await reconcileSwissRoundShells(
     tx,
     stageId,
@@ -1100,6 +1127,9 @@ async function swissGen(
     existing,
     entrants.length,
   );
+  for (const roundNo of laterRounds) {
+    await reconcileSwissRoundShells(tx, stageId, divisionId, roundNo, existing, entrants.length);
+  }
   const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
   const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
 
@@ -1141,6 +1171,35 @@ async function swissGen(
 }
 
 /**
+ * `divisions.status` values that mean the tournament is UNDER WAY. The column's
+ * check constraint is `('setup','scheduled','active','completed')`, and
+ * `scheduled` is "timetable published, not yet started" — `publishSchedule`
+ * moves setup → scheduled and only `startDivision` moves it to active. So the
+ * pre-Start side is `setup` AND `scheduled`; a predicate written
+ * `status !== 'setup'` would be wrong.
+ *
+ * Same polarity as `enrollEntrants`' roster lock (entrants.ts): "this
+ * tournament has started" is exactly `active` or `completed` there too.
+ */
+const DIVISION_STARTED_STATUSES: ReadonlySet<string> = new Set(["active", "completed"]);
+
+/**
+ * Read INSIDE the caller's write transaction, never in a separate pre-flight:
+ * `generateStageFixturesWrite` already holds
+ * `pg_advisory_xact_lock('division:' + division_id)` by the time `swissGen`
+ * runs, so this is read under the lock and cannot go stale between the check
+ * and the writes it gates (the file's stated convention; design-doc Task 2.4).
+ *
+ * A missing row reads as STARTED — the narrower, lazier write — rather than
+ * unlocking the wider one on an absence.
+ */
+async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> {
+  const [division] = await tx<{ status: string }[]>`
+    select status from divisions where id = ${divisionId}`;
+  return division === undefined || DIVISION_STARTED_STATUSES.has(division.status);
+}
+
+/**
  * Bring round `target`'s shells into line with the CURRENT active field, and
  * return the round as it now stands (2026-09-20 hardening, Task 1.0).
  *
@@ -1167,12 +1226,11 @@ async function swissGen(
  * the shape — shared with `planSwissShells`, so the mint and the reconcile can
  * never drift onto different arithmetic.
  *
- * LAZY scope: only the round being paired. Rounds beyond it are also
- * wrong-sized after a withdrawal and stay that way until their own Pair
- * reaches them. That is the narrower write on a destructive path, and a later
- * round has no results to lose by being reshaped late; reconciling every
- * unseated round here would widen the blast radius for a cosmetic fixture
- * count. Deliberate, and pinned by a test.
+ * ONE ROUND per call. Which rounds get a call is the CALLER's decision and
+ * turns on whether the division has started — see `swissGen`, and
+ * `divisionHasStarted` for the predicate. Before Start that is every unseated
+ * round; after Start it is only the round being paired. Either way this
+ * function reshapes exactly the round it was handed, under the same guards.
  *
  * GUARDS. The advisory lock is already held — `generateStageFixturesWrite`
  * takes `pg_advisory_xact_lock` before it reads either the entrant list or
