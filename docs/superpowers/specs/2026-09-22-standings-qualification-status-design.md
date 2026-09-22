@@ -196,10 +196,20 @@ The data is the same for every visitor and ISR-cached as today.
 
 ## 7. Sequencing
 
-1. Merge `feat/standings-popovers` first. It owns the popover component and
-   the rank-cell trigger in both table components.
-2. Phase 1 then branches from `main` and extends that popover. Running both
-   in parallel would guarantee a conflict on the same lines.
+Amended 2026-09-22 (owner: "One PR only"). The popovers and Phase 1 ship
+together in ONE pull request.
+
+1. The engine, migration and builder work (plan Tasks 1–6) comes first on
+   `feat/standings-qualification-status`. It does not depend on the popovers.
+2. `feat/standings-popovers` owns the popover component and the rank-cell
+   trigger in both table components. Once that branch's own review is
+   complete, rebase `feat/standings-qualification-status` onto it (not
+   `main`). Then re-read `standings-popover.tsx`'s props and adapt the UI
+   tasks (plan Tasks 7–9) to them. Building both on `main` in parallel
+   would guarantee a conflict on the same lines.
+3. ONE PR from `feat/standings-qualification-status` to `main`. It carries the
+   popover commits too, and its body covers both features. No separate PR is
+   opened for the popovers.
 
 ## 8. Out of scope / Phase 2
 
