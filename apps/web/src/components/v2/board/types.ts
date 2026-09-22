@@ -275,3 +275,33 @@ export const DENSITY_STORAGE_KEY = "seazn:board:density";
 /** The single "Unassigned venue" fallback column label (v3/04 §2) — a
  *  sentinel, never persisted: placing here writes court_label = null. */
 export const UNASSIGNED = " unassigned";
+
+/**
+ * One division's outcome from the COMPETITION-wide publish
+ * (`POST /api/v1/competitions/{id}/schedule/publish`, the board slice of the
+ * "Publish all" work). Only divisions at `status === "setup"` are reported —
+ * a division already past setup is not a failure to explain, it is simply not
+ * part of the question.
+ *
+ * Snake_case wire mirror, hand-declared for the same reason `BoardConflict`
+ * and `BoardConfig.constraints` above are: this stays a pure shapes file that
+ * a client bundle can import without dragging `server/api-v1/schemas.ts` (and
+ * therefore zod + the usecases) behind it.
+ */
+export interface PublishAllDivisionResult {
+  division_id: string;
+  name: string;
+  published: boolean;
+  /** Absent when `published` is true. `blocking: false` is the ONLY shape that
+   *  `acknowledge_warnings: true` can clear — same asymmetry as the
+   *  single-division gate, and derived from the CODE server-side, never
+   *  recomputed from the conflict rows. */
+  refusal?: { code: string; blocking: boolean; conflicts: BoardConflict[] };
+}
+
+export interface PublishAllOutcome {
+  published: number;
+  needs_acknowledgement: number;
+  blocked: number;
+  results: PublishAllDivisionResult[];
+}

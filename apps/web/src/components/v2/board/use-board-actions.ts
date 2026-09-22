@@ -28,6 +28,7 @@ import {
   type BoardConflict,
   type BoardDivision,
   type BoardFixture,
+  type PublishAllOutcome,
 } from "./types";
 
 // P9 pass 4a: court_id — the merge `{...f, ...o}` (below) has to overwrite
@@ -149,6 +150,30 @@ export interface BoardActions {
    * the way through.
    */
   act: (path: string, done: string, acknowledgeWarnings?: boolean) => Promise<GateRefusal | null>;
+  /**
+   * Release EVERY still-in-setup division of a competition in one call.
+   *
+   * A SIBLING of `act`, not a caller of it, because the two endpoints answer in
+   * structurally different ways and `act` cannot carry this one. `act` exists to
+   * turn a 422 refusal into a return value and it discards the success BODY; the
+   * competition-wide publish answers **200 with a per-division report** — some
+   * published, some awaiting acknowledgement, some blocked — which is exactly the
+   * payload the banner has to render. Routed through `act`, that report would be
+   * thrown away and a call that published nothing would read as a clean publish.
+   *
+   * Everything else is `act`'s own behaviour, reused rather than re-invented: the
+   * same `busy` flag every other board control reads, the same `fail` ladder
+   * (paywall / SEQ_CONFLICT / cooldown / rate limit), the same "no body unless
+   * acknowledging" request shape, and the same `router.refresh()` — fired here
+   * only when something actually moved, since a call that published nothing has
+   * left the RSC nothing new to read.
+   *
+   * Resolves to `null` only when `fail` handled a hard error.
+   */
+  publishAll: (
+    competitionId: string,
+    acknowledgeWarnings?: boolean,
+  ) => Promise<PublishAllOutcome | null>;
   shiftDay: (day: string, minutes: number) => Promise<void>;
   swapCourts: (day: string, a: string, b: string) => Promise<void>;
   queueValidate: () => void;
@@ -578,6 +603,40 @@ export function useBoardActions(
     [fail, router],
   );
 
+  const publishAll = useCallback(
+    async (competitionId: string, acknowledgeWarnings = false): Promise<PublishAllOutcome | null> => {
+      setError(null);
+      setNotice(null);
+      setLastRun(null);
+      setBusy(true);
+      try {
+        const out = await apiV1<PublishAllOutcome>(
+          `/api/v1/competitions/${competitionId}/schedule/publish`,
+          {
+            method: "POST",
+            // Same reasoning as `act` above: an absent body parses as `{}` and
+            // every existing key client sends none, so the console must not
+            // start making "there is always a body" a fact the server has to
+            // keep true.
+            json: acknowledgeWarnings ? { acknowledge_warnings: true } : undefined,
+          },
+        );
+        // Only when the board actually changed. A call that published nothing
+        // (every division blocked, or awaiting acknowledgement) has left the
+        // server-rendered props exactly as they were, and refetching them would
+        // melt the optimistic overrides a drag is holding for no reason.
+        if (out.published > 0) router.refresh();
+        return out;
+      } catch (err) {
+        fail(err);
+        return null;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [fail, router],
+  );
+
   // Bulk tools (doc 12 §2): shift a day ±N minutes / swap two courts. These
   // run as sequential single moves; the seq token rides along and self-heals.
   const shiftDay = useCallback(
@@ -690,6 +749,7 @@ export function useBoardActions(
     togglePin,
     autoRun,
     act,
+    publishAll,
     shiftDay,
     swapCourts,
     queueValidate,

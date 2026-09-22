@@ -18,18 +18,10 @@
 // blocking case has no such condition. `ConfirmDialog` renders no confirm button
 // at all when `confirmLabel` is omitted.
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
-import { useMsg } from "@/components/i18n/dict-provider";
-import type { MessageKey } from "@/lib/messages";
+import { useMsg, useLocaleOrDefault } from "@/components/i18n/dict-provider";
 import type { FeedLabelPair } from "@/lib/schedule-board";
-import {
-  CONFLICT_HELP,
-  CONFLICT_LABEL,
-  cardTitle,
-  type BoardConflict,
-  type BoardConflictDetail,
-  type BoardFixture,
-} from "./types";
-import { formatBoardConflictDetail } from "./conflict-detail-format";
+import type { BoardConflict, BoardFixture } from "./types";
+import { ConflictList } from "./conflict-list";
 
 /** Which action was refused. Only the copy differs — the contract does not. */
 export type GateAction = "publish" | "start";
@@ -49,7 +41,8 @@ export function ScheduleGateDialog({
   busy = false,
   onConfirm,
   onDismiss,
-  fixtureTitles: fixtureTitlesProp,
+  fixtureTitles,
+  divisionNames,
 }: {
   /** `null` closes it. The whole dialog is driven by the last refusal. */
   gate: ScheduleGate | null;
@@ -70,52 +63,34 @@ export function ScheduleGateDialog({
    *  DIVISION-filtered view — a cross-division counterparty is invisible to
    *  it, the same axis `FixtureBlock`'s own fix already covers. When
    *  supplied, this should be built from the UNFILTERED board
-   *  (schedule-board.tsx's `actions.board`). Absent, this dialog falls back
-   *  to deriving from its own `board` prop below — byte-for-byte its prior
+   *  (schedule-board.tsx's `actions.board`). Absent, `ConflictList` falls
+   *  back to deriving from the `board` prop — byte-for-byte its prior
    *  behaviour, for a caller that has not been updated to pass it. */
   fixtureTitles?: Record<string, string>;
+  /**
+   * The divisions this refusal covers, on the COMPETITION-wide "Publish all"
+   * (see `unreleased-banner.tsx`). One gate for the whole set, not one dialog
+   * per division — but then `board.gate.warnBodyPublish` ("These warnings will
+   * not stop the schedule going live…") says *the* schedule and names nothing,
+   * so an organiser acknowledging warnings on three of nine divisions could not
+   * tell which three they were agreeing to. The body sentence is reused
+   * unchanged and this line is ADDED beneath it; it renders nothing at all on
+   * the single-division path, which is byte-identical to before.
+   */
+  divisionNames?: string[];
 }) {
   const msg = useMsg();
-  // The same two lookups the conflicts panel uses, so a code reads identically
-  // whether the organiser met it in the panel or in this refusal.
-  const label = (code: string) => {
-    const key = `board.conflict.${code}` as MessageKey;
-    const out = msg(key);
-    return out === key ? (CONFLICT_LABEL[code] ?? code) : out;
-  };
-  // Same fallback order as the conflicts panel: the generic code-level help
-  // wins when the locale has it, otherwise this conflict's own structured
-  // `details` (localized, name-resolved — never the deprecated raw `detail`
-  // string, C3 2026-08-13 design amendment). NOT dead in production: this
-  // branch is what an organiser sees for any code with neither a
-  // `board.conflictHelp.<code>` key in any of the four dictionaries nor a
-  // `CONFLICT_HELP` entry (`types.ts`). `conflict.start_window`
-  // (`lib/schedule-board.ts:39`) used to be exactly that case; it gained
-  // both (P95 windows pass) and now resolves through the locale key above
-  // instead. Kept for every other unmapped future code.
-  const help = (code: string, details?: BoardConflictDetail) => {
-    const key = `board.conflictHelp.${code}` as MessageKey;
-    const out = msg(key);
-    if (out !== key) return out;
-    if (CONFLICT_HELP[code]) return CONFLICT_HELP[code];
-    return details ? formatBoardConflictDetail(details, { msg, entrantNames, fixtureTitles }) : "";
-  };
+  const locale = useLocaleOrDefault();
 
   if (!gate) return null;
   const warning = gate.kind === "warnings";
-  const byId = new Map(board.map((f) => [f.id, f]));
-  // Competition-wide fixture id -> title, for a conflict's
-  // `details.otherFixtureId`. NOT safely derivable from `board` alone (a
-  // prior comment here claimed it was): schedule-board.tsx passes this
-  // dialog the division-filtered `board`, so a cross-division counterparty
-  // is invisible to a map built from it (C3 review findings 2+3). Prefer
-  // the caller-supplied, board-wide map; fall back to the filtered
-  // self-derivation only when no caller has been updated to pass one.
-  const fixtureTitles =
-    fixtureTitlesProp ?? Object.fromEntries(board.map((f) => [f.id, cardTitle(f, entrantNames, feedLabels)]));
   const title = warning
     ? msg(gate.action === "start" ? "board.gate.warnTitleStart" : "board.gate.warnTitlePublish")
     : msg("board.gate.blockTitle");
+  const names =
+    divisionNames && divisionNames.length > 0
+      ? new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(divisionNames)
+      : null;
 
   return (
     <ConfirmDialog
@@ -138,44 +113,21 @@ export function ScheduleGateDialog({
           ? msg(gate.action === "start" ? "board.gate.warnBodyStart" : "board.gate.warnBodyPublish")
           : msg("board.gate.blockBody")}
       </p>
+      {names !== null && (
+        <p data-testid="board-gate-divisions" className="text-xs font-medium text-slate-700">
+          {msg("board.publishAll.gateDivisions", { names })}
+        </p>
+      )}
       {/* Scrolls inside itself: a board can be refused on a dozen conflicts and
           the sheet must still fit a 375px phone without the page scrolling. */}
-      <ul className="max-h-56 space-y-2 overflow-y-auto">
-        {gate.conflicts.map((c, i) => {
-          const f = byId.get(c.fixture_id);
-          return (
-            <li
-              key={`${c.fixture_id}-${c.code}-${i}`}
-              data-testid="board-gate-conflict"
-              data-code={c.code}
-              data-blocking={c.blocking ? "yes" : "no"}
-              className={`rounded-lg border p-2 text-xs ${
-                c.blocking ? "border-red-200 bg-red-50/60" : "border-amber-200 bg-amber-50/60"
-              }`}
-            >
-              <p className="font-medium text-slate-800">
-                {/* Fix round 3 (Important 3): `lookup` was left off — an
-                    unfilled slot's label fell through to cardTitle's
-                    client-safe English default instead of `msg` (useMsg(),
-                    line 62), regardless of this org's locale. */}
-                {f
-                  ? cardTitle(f, entrantNames, feedLabels, msg)
-                  : msg("board.conflicts.removedFixture")}
-              </p>
-              <p className="mt-0.5 text-slate-600">
-                <span
-                  className={`mr-1 rounded px-1 font-semibold ${
-                    c.blocking ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800"
-                  }`}
-                >
-                  {label(c.code)}
-                </span>
-                {help(c.code, c.details)}
-              </p>
-            </li>
-          );
-        })}
-      </ul>
+      <ConflictList
+        conflicts={gate.conflicts}
+        board={board}
+        entrantNames={entrantNames}
+        feedLabels={feedLabels}
+        fixtureTitles={fixtureTitles}
+        className="max-h-56 space-y-2 overflow-y-auto"
+      />
     </ConfirmDialog>
   );
 }
