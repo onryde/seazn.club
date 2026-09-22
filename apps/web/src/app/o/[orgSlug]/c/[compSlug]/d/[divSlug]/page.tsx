@@ -292,6 +292,20 @@ export default async function DivisionPage({
   // that restates it, because a page that names one status will miss the next
   // one added — read it from the server's single source instead.
   const departedEntrantIds = entrants.filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
+  // The FIELD — the exact complement of the line above, and the same set the
+  // generate path reads as `status in ('registered','confirmed')`. Spelled as
+  // a complement rather than by naming the two live statuses for the reason
+  // the line above documents: `DEPARTED_STATUSES` is the one place this
+  // vocabulary lives, and a page that restates it goes stale the day a fifth
+  // status arrives (`departed-entrants-wiring.test.ts` reds on a page that
+  // does). That the complement really IS the server's predicate is pinned by
+  // `lib/__tests__/swiss-legend.test.ts`, which reds if `EntrantStatus` grows
+  // a value that is neither departed nor in the field.
+  //
+  // Feeds StagesPanel's swiss shape legend and nothing else. Ids, not a count:
+  // a swiss stage carrying `config.qualified` pairs only the qualifiers still
+  // in the field, which is an intersection.
+  const activeEntrantIds = entrants.filter((e) => !DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
   // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
@@ -731,6 +745,7 @@ export default async function DivisionPage({
               stages={stages}
               fixtures={fixtures}
               entrantNames={entrantNames}
+              activeEntrantIds={activeEntrantIds}
               venues={panelVenues}
               rosterDrift={rosterDrift}
               canEdit={editable}
