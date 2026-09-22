@@ -46,6 +46,7 @@ describe("roundOnePairs mirrors the engine", () => {
       .pairings.map((p) => [Number(p.home), Number(p.away)].sort((a, b) => a - b) as [number, number])
       .sort((a, b) => a[0] - b[0]);
   }
+  // Odd sizes 3/7/11 are what kill a rank-order mutation, because the bye moves.
   it.each([2, 3, 7, 8, 10, 11])("n=%i", (n) => {
     expect(roundOnePairs(n, "fold")).toEqual(engine(n, "fold"));
     expect(roundOnePairs(n, "rank_adjacent")).toEqual(engine(n, "rank_adjacent"));
