@@ -72,6 +72,19 @@ export interface BuildDrawModelInput {
    *  fallback guards) resolves to the localized "unknown entrant" string,
    *  never a raw id or hardcoded English. */
   entrantNames: Record<string, string>;
+  /** One unfilled seat's text. Optional, and when absent the stored label is
+   *  resolved exactly as before.
+   *
+   *  It is a FUNCTION rather than pre-filled labels because the two halves of
+   *  naming a seat live in different vocabularies: the label a seat really has
+   *  is `stored ?? feed`, but resolving `slot.winner_match` through the ORGANISER
+   *  dictionary yields the board's short code "Winner of R1-1", and a public
+   *  sheet must say "Winner of Semi-finals, match 1". Passing the resolved text
+   *  in keeps that choice with the caller who knows which audience is reading —
+   *  the same reason `components/public-site/bracket.tsx` takes `slotText`.
+   *
+   *  This module stays pure: the resolver is supplied, never imported. */
+  seatText?: (fixtureId: string, seat: "home" | "away", label: PublicFixture["home_slot_label"]) => string;
 }
 
 type Lane = PublicFixture["lane"];
@@ -89,9 +102,13 @@ function sideText(
   label: PublicFixture["home_slot_label"],
   entrantNames: Record<string, string>,
   lookup: SlotLabelLookup,
+  seatText?: BuildDrawModelInput["seatText"],
+  fixtureId?: string,
+  seat?: "home" | "away",
 ): string {
-  return id
-    ? (entrantNames[id] ?? lookup("calendar.unknownEntrant"))
+  if (id) return entrantNames[id] ?? lookup("calendar.unknownEntrant");
+  return seatText && fixtureId && seat
+    ? seatText(fixtureId, seat, label)
     : resolveSlotLabel(label, lookup, "schedule.tbd");
 }
 
@@ -111,7 +128,7 @@ interface RoundBucket {
 }
 
 export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLookup): DrawStageGroup[] {
-  const { stages, pools, fixtures, entrantNames } = input;
+  const { stages, pools, fixtures, entrantNames, seatText } = input;
   const stageById = new Map(stages.map((s) => [s.id, s]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
   const poolRank = new Map(pools.map((p, i) => [p.id, i]));
@@ -146,8 +163,8 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
     }
     bucket.rows.push({
       id: f.id,
-      home: sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup),
-      away: sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup),
+      home: sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup, seatText, f.id, "home"),
+      away: sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup, seatText, f.id, "away"),
       isFinal: f.is_final === true,
       thirdPlace: f.third_place === true,
     });
