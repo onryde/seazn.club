@@ -2002,6 +2002,7 @@
   "bracket.tbd": "Por definir",
   "stage.err.swissRoundsRequired": "Una fase suiza necesita un número de rondas antes de poder guardarse. Pon Rondas en 1 o más y vuelve a aplicar.",
   "stage.swissLegend.line": "{rounds} · {matches} · {fixtures}",
+  "stage.swissLegend.lineComplete": "{rounds} · {fixtures}",
   "stage.swissLegend.rounds.one": "{count} ronda",
   "stage.swissLegend.rounds.other": "{count} rondas",
   "stage.swissLegend.matches.one": "{count} partido por ronda",

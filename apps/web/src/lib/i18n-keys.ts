@@ -5769,6 +5769,7 @@ export type DictionaryKey =
   | "stage.swissLegend.fixtures.one"
   | "stage.swissLegend.fixtures.other"
   | "stage.swissLegend.line"
+  | "stage.swissLegend.lineComplete"
   | "stage.swissLegend.matches.one"
   | "stage.swissLegend.matches.other"
   | "stage.swissLegend.matchesWithBye.one"
