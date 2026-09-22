@@ -472,7 +472,8 @@ async function checkoutGroupId(
     const [row] = await sql<{ id: string }[]>`
       select id from subscriptions where id = ${stamped}`;
     if (row) return row.id;
-    log.error(
+    const log_ = session.livemode ? log.error : log.warn;
+    log_(
       { sessionId: session.id, stamped },
       "billing: checkout session stamped with unknown group",
     );
@@ -585,7 +586,12 @@ async function resolveGroupForStripeSub(
     const [row] = await sql<{ id: string }[]>`
       select id from subscriptions where id = ${stamped}`;
     if (row) return { subscriptionId: row.id, via: "metadata_subscription_id" };
-    log.error(
+    // Test-mode ids routinely name a row from another environment's throwaway
+    // DB (CI's own e2e suite stamps against its ephemeral Postgres, and stg
+    // shares the same Stripe test-mode account) — not the corruption this
+    // check exists for. Live traffic still errors loudly.
+    const log_ = stripeSub.livemode ? log.error : log.warn;
+    log_(
       { stripeSubscriptionId: stripeSub.id, stamped },
       "billing: subscription stamped with unknown group",
     );
