@@ -5271,5 +5271,7 @@
   "board.publishAll.remainingTitle": "Nog niet gepubliceerd",
   "board.publishAll.blocked": "Geblokkeerd door conflicten",
   "board.publishAll.needsAck": "Vereist je bevestiging",
-  "board.publishAll.gateDivisions": "Divisies met waarschuwingen: {names}"
+  "board.publishAll.gateDivisions": "Divisies met waarschuwingen: {names}",
+  "board.publishAll.notice.one": "{count} divisie gepubliceerd — de wedstrijden staan nu op het publieke dashboard en in de .ics-feeds.",
+  "board.publishAll.notice.other": "{count} divisies gepubliceerd — hun wedstrijden staan nu op het publieke dashboard en in de .ics-feeds."
 }

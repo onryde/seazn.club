@@ -53,7 +53,6 @@ import {
   type BoardStage,
   type Density,
   type GhostBlock,
-  type PublishAllOutcome,
 } from "./board/types";
 import { matchRef, type SlotLabelLookup } from "@/lib/slot-label";
 import { useBoardActions, type AutoScheduleMode, type GateRefusal } from "./board/use-board-actions";
@@ -1093,11 +1092,10 @@ export function ScheduleBoard({
   );
 
   // ------------------------------------------- competition-wide publish (all)
-  // The last answer, held so the banner can report it. Survives the
-  // `router.refresh()` the hook fires on a partial success — same component
-  // instance, so the organiser keeps reading which divisions did NOT go live
-  // while the board around them updates with the ones that did.
-  const [publishAllOutcome, setPublishAllOutcome] = useState<PublishAllOutcome | null>(null);
+  // The answer itself lives in `useBoardActions` beside `notice`/`error`/
+  // `lastRun` — it is the same kind of transient receipt, and every other
+  // write on this board clears it, so a division cannot go on being reported
+  // as blocked after the organiser has fixed the clash on the grid.
   const runPublishAll = useCallback(
     async (acknowledge = false) => {
       const competitionId = competition?.id;
@@ -1106,7 +1104,6 @@ export function ScheduleBoard({
       if (!competitionId) return;
       const out = await actions.publishAll(competitionId, acknowledge);
       if (!out) return;
-      setPublishAllOutcome(out);
       const { needsAck } = partitionPublishOutcome(out.results);
       // ONE gate for the whole set — never one dialog per division, which on a
       // nine-division board would be nine sheets to dismiss in a row.
@@ -1670,7 +1667,7 @@ export function ScheduleBoard({
       }) && (
         <UnreleasedBanner
           divisions={divisions}
-          outcome={publishAllOutcome}
+          outcome={actions.publishAllOutcome}
           busy={actions.busy}
           onPublishAll={() => void runPublishAll()}
           board={actions.board}

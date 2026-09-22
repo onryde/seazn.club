@@ -86,6 +86,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { ScheduleBoard } from "../../schedule-board";
+import { useBoardActions, type BoardActions } from "../use-board-actions";
 import { ScheduleGateDialog } from "../schedule-gate-dialog";
 import {
   UnreleasedBanner,
@@ -551,6 +552,124 @@ describe("pressing Publish all", () => {
     expect(publishAllCalls()).toHaveLength(1);
     // Nothing published, so nothing to re-read.
     expect(nav.refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe("the organiser is told what happened even when the banner goes away", () => {
+  // REVIEW FINDING 1. On the common path every candidate publishes, the hook
+  // refreshes, the refreshed `divisions` carry no `setup` row, the visibility
+  // predicate goes false and the banner unmounts — taking any report rendered
+  // INSIDE it with it. Nothing else said a word. Neither the original harness
+  // tests (which never re-rendered with refreshed props) nor the e2e (which
+  // always leaves one division blocked, so the banner survives) could see it.
+  const ALL_CLEAN = {
+    published: 2,
+    needs_acknowledgement: 0,
+    blocked: 0,
+    results: [
+      PUBLISHED,
+      { division_id: "d2", name: "Ladies", published: true } as PublishAllDivisionResult,
+    ],
+  };
+
+  it("sets a notice carrying the published count, which outlives the banner", async () => {
+    net.publishAll.push(ALL_CLEAN);
+    const island = renderIsland(ScheduleBoard, baseProps());
+
+    bannerProps(island.tree()).onPublishAll();
+    await flush();
+
+    // The RSC comes back with nothing left in setup — the real consequence of
+    // the publish, and exactly what `router.refresh()` produces.
+    island.rerender(
+      baseProps({ divisions: [div("d1", "Open", "scheduled"), div("d2", "Ladies", "scheduled")] }),
+    );
+
+    expect(bannerOf(island.tree()), "the banner should be gone once nothing is unreleased").toBeUndefined();
+    // …and the organiser is STILL told, in the board's own confirmation
+    // channel, how many divisions went live and what that means.
+    expect(island.text()).toContain(
+      "Published 2 divisions — their matches are now on the public dashboard and .ics feeds.",
+    );
+  });
+
+  it("says nothing when the call published nothing — the banner explains that itself", async () => {
+    // A notice reading "Published 0 divisions" would be a green confirmation of
+    // a failure. The banner survives this path and carries the reasons.
+    net.publishAll.push({ published: 0, needs_acknowledgement: 0, blocked: 1, results: [BLOCKED] });
+    const island = renderIsland(ScheduleBoard, baseProps());
+
+    bannerProps(island.tree()).onPublishAll();
+    await flush();
+
+    expect(island.text()).not.toContain("are now on the public dashboard");
+    expect(bannerOf(island.tree())).toBeDefined();
+  });
+});
+
+describe("the report goes stale the moment the board changes under it", () => {
+  // REVIEW FINDING 4. The outcome is a receipt for the board that produced it.
+  // Left standing, it went on naming a division as blocked after the organiser
+  // had fixed the very clash it was reporting, with no way for the panel to
+  // know. It therefore lives in the hook beside `notice`/`error`/`lastRun`,
+  // and EVERY action's preamble clears it.
+  //
+  // Driven against the hook directly rather than through the board, because
+  // the thing being pinned is one line in each of seven preambles — a
+  // board-level test could only ever reach the two or three of those that have
+  // a control the harness can find, and would leave the rest decoration.
+  function Sink(_: { actions: BoardActions }) {
+    return null;
+  }
+  function ActionsProbe({ divisions, fixtures }: { divisions: BoardDivision[]; fixtures: BoardFixture[] }) {
+    const actions = useBoardActions(divisions, fixtures, {}, {}, true);
+    return <Sink actions={actions} />;
+  }
+  const actionsOf = (tree: ReactElement[]): BoardActions => {
+    const el = tree.find((n) => n.type === Sink);
+    if (!el) throw new Error("no Sink rendered");
+    return (propsOf(el) as { actions: BoardActions }).actions;
+  };
+
+  const PARTIAL = {
+    published: 1,
+    needs_acknowledgement: 0,
+    blocked: 1,
+    results: [PUBLISHED, BLOCKED],
+  };
+
+  /** Every write an organiser has on this board. One line per preamble. */
+  const WRITES: [string, (a: BoardActions) => Promise<unknown>][] = [
+    ["moveCard", (a) => a.moveCard("f1", "2026-08-01T11:00:00.000Z", null)],
+    ["togglePin", (a) => a.togglePin(BOARD_FIXTURES[0] as BoardFixture)],
+    ["autoRun", (a) => a.autoRun("s1", "d1", true)],
+    ["act", (a) => a.act("/api/v1/divisions/d1/publish-schedule", "done")],
+    ["shiftDay", (a) => a.shiftDay("2026-08-01", 15)],
+    ["swapCourts", (a) => a.swapCourts("2026-08-01", "Court 1", "Court 2")],
+    // `publishAll`'s own preamble clears too, but it then REPLACES the report
+    // rather than leaving it empty, so "becomes null" is the wrong assertion
+    // for it — "becomes the new answer" is, and the acknowledgement test above
+    // already pins that (`outcome!.published` moves 1 -> 3).
+  ];
+
+  it.each(WRITES)("%s clears the previous publish-all report", async (_name, write) => {
+    net.publishAll.push(PARTIAL);
+    const island = renderIsland(ActionsProbe, {
+      divisions: [div("d1", "Open", "setup"), div("d2", "Ladies", "scheduled")],
+      fixtures: BOARD_FIXTURES,
+    });
+
+    await actionsOf(island.tree()).publishAll("c1");
+    await flush();
+    expect(actionsOf(island.tree()).publishAllOutcome, "the report should be on screen first").not.toBeNull();
+
+    // The outcome is cleared in the PREAMBLE, so this holds whether the write
+    // lands or fails — which is the point: a board the organiser has touched
+    // can no longer be described by yesterday's report.
+    await write(actionsOf(island.tree())).catch(() => undefined);
+    await flush();
+
+    expect(actionsOf(island.tree()).publishAllOutcome).toBeNull();
   });
 });
 

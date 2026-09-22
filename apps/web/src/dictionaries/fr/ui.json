@@ -5271,5 +5271,7 @@
   "board.publishAll.remainingTitle": "Toujours pas publiées",
   "board.publishAll.blocked": "Bloquée par des conflits",
   "board.publishAll.needsAck": "Nécessite votre confirmation",
-  "board.publishAll.gateDivisions": "Divisions concernées par des avertissements — {names}"
+  "board.publishAll.gateDivisions": "Divisions concernées par des avertissements — {names}",
+  "board.publishAll.notice.one": "{count} division publiée — ses matchs figurent désormais sur le tableau public et dans les flux .ics.",
+  "board.publishAll.notice.other": "{count} divisions publiées — leurs matchs figurent désormais sur le tableau public et dans les flux .ics."
 }

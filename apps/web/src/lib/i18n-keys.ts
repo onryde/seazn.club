@@ -906,6 +906,8 @@ export type DictionaryKey =
   | "board.publishAll.headline.one"
   | "board.publishAll.headline.other"
   | "board.publishAll.needsAck"
+  | "board.publishAll.notice.one"
+  | "board.publishAll.notice.other"
   | "board.publishAll.publishedCount.one"
   | "board.publishAll.publishedCount.other"
   | "board.publishAll.publishedNone"

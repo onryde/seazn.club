@@ -5271,5 +5271,7 @@
   "board.publishAll.remainingTitle": "Still not released",
   "board.publishAll.blocked": "Blocked by conflicts",
   "board.publishAll.needsAck": "Needs your acknowledgement",
-  "board.publishAll.gateDivisions": "Divisions with warnings: {names}"
+  "board.publishAll.gateDivisions": "Divisions with warnings: {names}",
+  "board.publishAll.notice.one": "Published {count} division — its matches are now on the public dashboard and .ics feeds.",
+  "board.publishAll.notice.other": "Published {count} divisions — their matches are now on the public dashboard and .ics feeds."
 }

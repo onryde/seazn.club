@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import type { FeedLabelPair } from "@/lib/schedule-board";
@@ -174,6 +174,9 @@ export interface BoardActions {
     competitionId: string,
     acknowledgeWarnings?: boolean,
   ) => Promise<PublishAllOutcome | null>;
+  /** The last competition-wide publish's per-division report, or `null` before
+   *  one is made and after any write that could have changed the answer. */
+  publishAllOutcome: PublishAllOutcome | null;
   shiftDay: (day: string, minutes: number) => Promise<void>;
   swapCourts: (day: string, a: string, b: string) => Promise<void>;
   queueValidate: () => void;
@@ -187,6 +190,9 @@ export function useBoardActions(
   canEdit: boolean,
 ): BoardActions {
   const msg = useMsg();
+  // `useMsgPlural`, not the throwing `usePlural`: this hook is mounted by board
+  // components that several suites render with no DictProvider in the tree.
+  const plural = useMsgPlural();
   const router = useRouter();
   const [overrides, setOverrides] = useState<Record<string, Override>>({});
   const [conflicts, setConflicts] = useState<BoardConflict[]>([]);
@@ -197,6 +203,18 @@ export function useBoardActions(
   const [checkFailed, setCheckFailed] = useState(false);
   const [checking, setChecking] = useState(false);
   const [lastRun, setLastRun] = useState<BoardActions["lastRun"]>(null);
+  // The last competition-wide publish's per-division report. It lives HERE,
+  // beside `notice`, `error` and `lastRun`, because it is the same kind of
+  // thing they are: a receipt for the last write, true only of the board that
+  // produced it. Held in the board component instead, it outlived the board it
+  // described — an organiser who fixed a blocking clash went on being told that
+  // division was blocked, by a panel that had no way to know they had.
+  //
+  // So every action's preamble clears it, beside the `setLastRun(null)` they
+  // all already carry — written out at each call site rather than folded into
+  // `setLastRun`, so a future action that forgets it shows up in the diff
+  // instead of silently inheriting the behaviour.
+  const [publishAllOutcome, setPublishAllOutcome] = useState<PublishAllOutcome | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Monotonic ticket per conflicts check — see `runValidate`. */
   const validateSeq = useRef(0);
@@ -371,6 +389,7 @@ export function useBoardActions(
       if (!prev || prev.status !== "scheduled") return false;
       // After the two guards, so a refused drag does not throw the report away.
       setLastRun(null);
+      setPublishAllOutcome(null);
       setOverrides((o) => ({
         ...o,
         [fixtureId]: {
@@ -413,6 +432,7 @@ export function useBoardActions(
       if (!canEdit) return;
       setError(null);
       setLastRun(null);
+      setPublishAllOutcome(null);
       try {
         await apiV1(`/api/v1/fixtures/${f.id}`, {
           method: "PATCH",
@@ -438,6 +458,7 @@ export function useBoardActions(
       setError(null);
       setNotice(null);
       setLastRun(null);
+      setPublishAllOutcome(null);
       setBusy(true);
       try {
         type Proposal = {
@@ -566,6 +587,7 @@ export function useBoardActions(
       setError(null);
       setNotice(null);
       setLastRun(null);
+      setPublishAllOutcome(null);
       setBusy(true);
       try {
         // No body unless the organiser is acknowledging: publish and start both
@@ -608,6 +630,7 @@ export function useBoardActions(
       setError(null);
       setNotice(null);
       setLastRun(null);
+      setPublishAllOutcome(null);
       setBusy(true);
       try {
         const out = await apiV1<PublishAllOutcome>(
@@ -625,7 +648,23 @@ export function useBoardActions(
         // (every division blocked, or awaiting acknowledgement) has left the
         // server-rendered props exactly as they were, and refetching them would
         // melt the optimistic overrides a drag is holding for no reason.
-        if (out.published > 0) router.refresh();
+        if (out.published > 0) {
+          // THE CONFIRMATION, and the reason it is a notice rather than a line
+          // inside the banner. On the common all-clean path the refresh below
+          // brings back divisions with no `setup` row left, the banner's own
+          // visibility predicate goes false, and the banner unmounts — taking
+          // any report rendered inside it with it. The organiser would watch
+          // the warning vanish and be told nothing at all. `notice` is the
+          // board's one confirmation channel (every other write reports
+          // through it, `act`'s `done` included) and it outlives the banner.
+          //
+          // Gated on the same `published > 0` as the refresh: a call that
+          // moved nothing has nothing to confirm, and the banner survives to
+          // explain why.
+          setNotice(plural("board.publishAll.notice", out.published));
+          router.refresh();
+        }
+        setPublishAllOutcome(out);
         return out;
       } catch (err) {
         fail(err);
@@ -634,7 +673,7 @@ export function useBoardActions(
         setBusy(false);
       }
     },
-    [fail, router],
+    [fail, plural, router],
   );
 
   // Bulk tools (doc 12 §2): shift a day ±N minutes / swap two courts. These
@@ -644,6 +683,7 @@ export function useBoardActions(
       setBusy(true);
       setError(null);
       setLastRun(null);
+      setPublishAllOutcome(null);
       try {
         for (const f of board) {
           if (f.scheduled_at === null || f.status !== "scheduled") continue;
@@ -675,6 +715,7 @@ export function useBoardActions(
       setBusy(true);
       setError(null);
       setLastRun(null);
+      setPublishAllOutcome(null);
       try {
         for (const f of board) {
           if (f.scheduled_at === null || f.status !== "scheduled") continue;
@@ -750,6 +791,7 @@ export function useBoardActions(
     autoRun,
     act,
     publishAll,
+    publishAllOutcome,
     shiftDay,
     swapCourts,
     queueValidate,
