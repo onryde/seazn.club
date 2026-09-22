@@ -3533,6 +3533,22 @@ export interface PublishScheduleOut {
 export { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED };
 
 /**
+ * Publish refused because the division is already live (owner ruling
+ * 2026-09-22 — the reasoning is on the guard itself, in `publishSchedule`).
+ *
+ * CODED, unlike the `completed` refusal beside it, and deliberately so. That
+ * one is uncoded history; this one is a NEW way for a caller to be refused on
+ * a public endpoint, and it is the only refusal on this path that names an
+ * ordinary, expected state rather than a broken board. A batch publisher has
+ * to tell "already live, nothing to do" apart from "this board is broken", and
+ * the only alternative is matching on the English message. Not in
+ * `lib/schedule-board` with the other two: those live there because the board's
+ * confirm dialog branches on them, and the board never sees this one — it
+ * hides Publish for a live division (`schedule-board.tsx`).
+ */
+export const PUBLISH_ALREADY_LIVE = "DIVISION_ALREADY_LIVE";
+
+/**
  * THE GATE, in one place, for the two actions that put a timetable in front of
  * players: publish, and start (which publishes on the way through).
  *
@@ -3639,13 +3655,42 @@ export async function publishSchedule(
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   const out = await withTenant(auth.orgId, async (tx) => {
+    // THE LOCK FIRST, and the row read UNDER it. Reading the division before
+    // taking its lock was a TOCTOU: a division someone pressed Start on in that
+    // gap was judged as the `setup`/`scheduled` row it used to be, so the status
+    // update below was skipped (it was already past `setup`) while
+    // `appendPublishedEvent` ran anyway — a SECOND `schedule_published` row on
+    // a division that was already live, reported to the caller as a publish.
+    // Nothing needs the row before the lock: `frozen` is org-keyed and resolved
+    // above the transaction, and the 404 is no worse for being one statement
+    // later. `startDivision` has always re-read inside its own lock; this
+    // matches it. Isolation is READ COMMITTED (`withTenant` sets none), so this
+    // statement's snapshot includes whatever committed while we waited.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const [division] = await tx<{ status: string; competition_id: string }[]>`
       select status, competition_id from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     assertNotFrozen(frozen, division.competition_id);
     if (division.status === "completed") {
       throw new HttpError(422, "a completed division cannot publish a schedule");
+    }
+    // Owner ruling 2026-09-22: a live division cannot publish, refused exactly
+    // as a completed one is. Not derivable from the code — the board already
+    // hides Publish once a division is active (`schedule-board.tsx`), and past
+    // `setup` the public view stops redacting the timetable, so a later change
+    // is live the moment it is saved and needs no republish. Publishing a live
+    // division therefore achieves nothing but a misleading ledger row. This IS
+    // an API behaviour change on a public endpoint, and it is intended:
+    // `POST /divisions/{id}/publish-schedule` now 422s on `active` where it
+    // used to answer `published: true` and write that row. `scheduled` is
+    // untouched — republishing a timetable that has not started is the normal
+    // path, not the race.
+    if (division.status === "active") {
+      throw new HttpError(
+        422,
+        "a division that has already started cannot publish a schedule",
+        PUBLISH_ALREADY_LIVE,
+      );
     }
 
     // THE GATE. After the lock, before anything is written.
