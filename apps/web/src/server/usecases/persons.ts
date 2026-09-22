@@ -11,6 +11,7 @@ import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import type { CreatePerson, PatchPerson, PutProfile } from "@/server/api-v1/schemas";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { firePersonRevalidate } from "@/server/public-site/revalidate";
+import { followPersonRename } from "./entrants";
 
 export interface PersonRow {
   id: string;
@@ -142,12 +143,24 @@ const PUBLIC_IDENTITY_FIELDS: readonly string[] = ["consent", "full_name", "dob"
 
 export async function patchPerson(auth: AuthCtx, id: string, patch: PatchPerson): Promise<PersonRow> {
   const updated = await withTenant(auth.orgId, async (tx) => {
+    // The name BEFORE the write: the entrants derived from it follow below.
+    const [before] =
+      patch.full_name === undefined
+        ? []
+        : await tx<{ full_name: string }[]>`
+            select full_name from persons where id = ${id} and merged_into is null`;
     const cols = Object.keys(patch);
     const values = { ...patch, ...(patch.consent ? { consent: tx.json(patch.consent as never) } : {}) };
     const [row] = await tx<PersonRow[]>`
       update persons set ${tx(values as never, ...(cols as never[]))}
       where id = ${id} and merged_into is null returning ${tx(COLS)}`;
     if (!row) throw new HttpError(404, "person not found");
+    // A derived pair name follows its player's rename, in this transaction
+    // (owner ruling 2026-09-22). The refresh below already reaches every
+    // division they are rostered in.
+    if (before && before.full_name !== row.full_name) {
+      await followPersonRename(tx, id, before.full_name);
+    }
     return row;
   });
   // W2 Task 14 — after commit: a document rebuilt before it would put the old

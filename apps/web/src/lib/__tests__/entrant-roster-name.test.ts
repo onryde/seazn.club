@@ -130,3 +130,31 @@ describe("followRosterEdit — a name that is NOT the roster's own is never touc
     expect(followRosterEdit("Sankar & Ritwik", [], [sankar, ritwik])).toBeNull();
   });
 });
+
+// A PERSON rename (patchPerson): the same people before and after, one of them
+// under a new name. `prior` carries the name the entrant's was derived from,
+// `next` the name they go by now.
+describe("followRosterEdit — a derived name follows its player's rename", () => {
+  const sankarRenamed = { ...sankar, full_name: "Sankar Krishnan" };
+
+  it("the renamed player's token changes in its own seat, the partner's stays", () => {
+    // The FIRST seat renamed: a rebuild in roster order could not tell this
+    // apart from the second, so the seat is what is pinned.
+    expect(followRosterEdit(derived(sankar, ritwik), [sankar, ritwik], [sankarRenamed, ritwik])).toBe(
+      derived(sankarRenamed, ritwik),
+    );
+    expect(followRosterEdit(derived(ritwik, sankar), [ritwik, sankar], [ritwik, sankarRenamed])).toBe(
+      derived(ritwik, sankarRenamed),
+    );
+  });
+
+  it("a custom name is left alone by a player's rename", () => {
+    expect(followRosterEdit("Smash Bros", [sankar, ritwik], [sankarRenamed, ritwik])).toBeNull();
+  });
+
+  it("a name derived from somebody's NEW name already is not derived from the old roster", () => {
+    // Compared against the OLD name only: a name that already reads the new
+    // way is custom as far as the old roster goes.
+    expect(followRosterEdit(derived(sankarRenamed, ritwik), [sankar, ritwik], [sankarRenamed, ritwik])).toBeNull();
+  });
+});

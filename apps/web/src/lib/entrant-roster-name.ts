@@ -56,6 +56,13 @@ export interface RosterNamePerson {
  * left, dropped. So "Sankar & Ritwik" − Ritwik + Venkatesh is
  * "Sankar & Venkatesh", whatever order the roster arrived in.
  *
+ * A person on both rosters takes the name they have in `next`. For a roster
+ * edit that is the name they already had. For a PLAYER's rename
+ * (`followPersonRename`, usecases/entrants.ts), `prior` carries the old name
+ * the entrant's was derived from and `next` the new one. So "Sankar & Ritwik"
+ * becomes "Sankar Krishnan & Ritwik" when Sankar is renamed, and Sankar keeps
+ * his seat.
+ *
  * Returns `null`, too, when the rebuild would change nothing, or would leave no
  * name at all (a roster cleared to nobody keeps the last name it had — the
  * column cannot be empty, and an empty roster has nothing to name it after).
@@ -83,13 +90,14 @@ export function followRosterEdit(
     seats.push(unclaimed.splice(i, 1)[0]!);
   }
 
-  const staying = new Set(next.map((p) => p.person_id));
+  const staying = new Map(next.map((p) => [p.person_id, p.full_name]));
   const before = new Set(prior.map((p) => p.person_id));
   const newcomers = next.filter((p) => !before.has(p.person_id));
   let n = 0;
   const names: string[] = [];
   for (const seat of seats) {
-    if (staying.has(seat.person_id)) names.push(seat.full_name);
+    const stays = staying.get(seat.person_id);
+    if (stays !== undefined) names.push(stays);
     else if (n < newcomers.length) names.push(newcomers[n++]!.full_name);
     // else: left, and nobody to take the place — the seat goes.
   }

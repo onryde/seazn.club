@@ -11,7 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import uiEn from "@/dictionaries/en/ui.json";
 import { t } from "@/lib/i18n-runtime";
 import { ENTRANT_NAME_MAX } from "@/lib/entrant-roster-name";
-import { EntrantNameField, nameFieldCommit } from "@/components/v2/entrants-panel";
+import { EntrantNameField, nameFieldCommit, nameFieldEnterCommits } from "@/components/v2/entrants-panel";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -72,5 +72,21 @@ describe("nameFieldCommit — what a blur saves", () => {
 
   it("a one-character name is a real name", () => {
     expect(nameFieldCommit("Q", "Sankar & Ritwik")).toBe("Q");
+  });
+});
+
+describe("nameFieldEnterCommits — which keydown saves the name", () => {
+  it("Enter commits", () => {
+    expect(nameFieldEnterCommits("Enter", false)).toBe(true);
+  });
+
+  it("Enter while an input method is composing picks the candidate, and does not commit", () => {
+    // Japanese/Chinese/Korean input: committing here would save half-typed text.
+    expect(nameFieldEnterCommits("Enter", true)).toBe(false);
+  });
+
+  it("no other key commits", () => {
+    expect(nameFieldEnterCommits("a", false)).toBe(false);
+    expect(nameFieldEnterCommits("Tab", false)).toBe(false);
   });
 });

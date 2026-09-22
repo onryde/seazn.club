@@ -275,6 +275,22 @@ export function EntrantsPanel({
     }
   }, []);
 
+  /** The Name field's save. Deliberately NOT `run`: that puts the whole panel
+   *  busy, and the field saves on blur, which fires on the MOUSEDOWN of
+   *  whatever the organiser clicks next. Save roster, "remove" or "+ person"
+   *  were then disabled before their mouseup, and the click was silently lost
+   *  (review 2026-09-22, item 3). The field shows its own pending state
+   *  instead. A name-only patch carries no roster, so the eligibility gate
+   *  (`runGated`) cannot fire here. */
+  async function saveName(entrantId: string, display_name: string): Promise<void> {
+    try {
+      await apiV1(`/api/v1/entrants/${entrantId}`, { method: "PATCH", json: { display_name } });
+      router.refresh();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
     setError(null);
     setPaywallFeature(null);
@@ -555,6 +571,7 @@ export function EntrantsPanel({
                 suspensions={suspensions[e.id]}
                 otherTeamsFor={otherTeamsFor}
                 deletable={divisionStatus === "setup"}
+                onRename={(display_name) => saveName(e.id, display_name)}
                 onPatch={(patch) =>
                   runGated((override) =>
                     apiV1(`/api/v1/entrants/${e.id}`, {
@@ -1325,6 +1342,14 @@ export function nameFieldCommit(typed: string, current: string): string | null {
   return next;
 }
 
+/** Does this keydown commit the Name field? Enter does, except while an input
+ *  method is composing (Japanese, Chinese or Korean input): there Enter picks
+ *  the candidate, and committing then would save half-typed text. Exported
+ *  for the markup test. */
+export function nameFieldEnterCommits(key: string, isComposing: boolean): boolean {
+  return key === "Enter" && !isComposing;
+}
+
 /** The entrant's name, editable in place at the top of an expanded card
  *  (2026-09-22 — `display_name` was set once at create and no screen could
  *  change it). Saves on blur, or Enter; the row header follows through the
@@ -1342,9 +1367,13 @@ export function EntrantNameField({
 }: {
   name: string;
   canEdit: boolean;
-  onRename: (next: string) => void;
+  onRename: (next: string) => Promise<void> | void;
 }) {
   const msg = useMsg();
+  // The field's OWN pending state, never the panel's (see `saveName`). Read-only
+  // while its save is in flight, so nothing typed meanwhile is lost when the
+  // saved name arrives and remounts the field.
+  const [saving, setSaving] = useState(false);
   if (!canEdit) return null;
   return (
     // The cell this sits in spans the whole entrants table, which is wider than
@@ -1358,13 +1387,23 @@ export function EntrantNameField({
         defaultValue={name}
         maxLength={ENTRANT_NAME_MAX}
         autoComplete="off"
-        onBlur={(e) => {
+        readOnly={saving}
+        aria-busy={saving}
+        onBlur={async (e) => {
           const next = nameFieldCommit(e.currentTarget.value, name);
-          if (next === null) e.currentTarget.value = name;
-          else onRename(next);
+          if (next === null) {
+            e.currentTarget.value = name;
+            return;
+          }
+          setSaving(true);
+          try {
+            await onRename(next);
+          } finally {
+            setSaving(false);
+          }
         }}
         onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
+          if (nameFieldEnterCommits(e.key, e.nativeEvent.isComposing)) e.currentTarget.blur();
         }}
         className="input min-h-11 w-full text-sm"
         data-testid="entrant-name-field"
@@ -1393,6 +1432,7 @@ export function EntrantTableRow({
   suspensions,
   otherTeamsFor,
   deletable,
+  onRename,
   onPatch,
   onWithdraw,
   onBadge,
@@ -1415,6 +1455,8 @@ export function EntrantTableRow({
    *  `deleteEntrant`, entrants.ts). Once the division has started, Withdraw
    *  is the only removal path. */
   deletable: boolean;
+  /** The Name field's save: its own request, never the panel-wide busy. */
+  onRename: (next: string) => Promise<void>;
   onPatch: (patch: Record<string, unknown>) => void;
   /** Withdraw with fixture surgery (spec 05 §5) — confirm handled upstream. */
   onWithdraw: () => void;
@@ -1574,7 +1616,7 @@ export function EntrantTableRow({
               key={entrant.display_name}
               name={entrant.display_name}
               canEdit={canEdit}
-              onRename={(display_name) => onPatch({ display_name })}
+              onRename={onRename}
             />
             <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
               <EntrantBadgeControl

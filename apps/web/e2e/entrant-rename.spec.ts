@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
+import { rosterDerivedName } from "../src/lib/entrant-roster-name";
 import { TAG, apiJson, divisionPath, expectNoHorizontalScroll } from "./helpers";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { activeOrgSlug, division, leagueFixtures, publicCompetition, spectator } from "./spectator-w2-kit";
@@ -15,6 +18,16 @@ import { activeOrgSlug, division, leagueFixtures, publicCompetition, spectator }
 // stored, not what the page optimistically kept on screen. One test follows
 // both through to where a spectator reads the name: the division's fixtures tab
 // and the public division page, whose cached copy the write must expire.
+
+/** The console's own copy, read from the dictionary rather than retyped. */
+const uiEn = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+const NAME_LABEL = uiEn["entrants.row.name"]!;
+
+/** The name the console gives a pair of these people: the create-time join
+ *  itself (`rosterDerivedName`), never a hand-typed " & ". */
+const derivedFrom = (...people: { name: string }[]) => rosterDerivedName(people.map((p) => p.name));
 
 const GENERIC = {
   resultMode: "score",
@@ -45,12 +58,12 @@ async function seedPerson(request: APIRequestContext, fullName: string): Promise
 }
 
 /** A pair created the way the console's add form creates one — its people
- *  picked, its name their full names joined with " & ". */
+ *  picked, its name the create-time join of their full names. */
 async function seedPair(
   request: APIRequestContext,
   divisionId: string,
   people: { id: string; name: string }[],
-  displayName = people.map((p) => p.name).join(" & "),
+  displayName = derivedFrom(...people),
 ): Promise<string> {
   const res = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
     {
@@ -72,8 +85,8 @@ const rowToggle = (page: Page, name: string) =>
   page.getByRole("cell", { name }).getByRole("button", { name, exact: false });
 
 /** In an expanded card's roster editor, by hand: remove `out` (its own row's
- *  "remove"), find and add `incoming`, then save the roster. */
-async function swapPartner(page: Page, out: string, incoming: string): Promise<void> {
+ *  "remove"), then find and add `incoming`. Nothing is saved yet. */
+async function stagePartnerSwap(page: Page, out: string, incoming: string): Promise<void> {
   const roster = page.getByTestId("entrant-roster");
   await expect(roster.getByText(out, { exact: true })).toBeVisible();
   await roster
@@ -83,7 +96,20 @@ async function swapPartner(page: Page, out: string, incoming: string): Promise<v
     .click();
   await roster.getByPlaceholder("Find player…").fill(incoming);
   await roster.getByRole("button", { name: `+ ${incoming}` }).click();
-  await roster.getByRole("button", { name: "Save roster" }).click();
+}
+
+const saveRoster = (page: Page) => page.getByTestId("entrant-roster").getByRole("button", { name: "Save roster" });
+
+/** Stage the swap, then save the roster. */
+async function swapPartner(page: Page, out: string, incoming: string): Promise<void> {
+  await stagePartnerSwap(page, out, incoming);
+  await saveRoster(page).click();
+}
+
+/** The entrant's member ids as the SERVER holds them, sorted. */
+async function storedMembers(request: APIRequestContext, entrantId: string): Promise<string> {
+  const res = await apiJson<{ members: { person_id: string }[] }>(request, `/api/v1/entrants/${entrantId}`);
+  return res.data!.members.map((m) => m.person_id).sort().join(",");
 }
 
 // Spectator contexts are closed here, never in a `finally` (a timeout skips it).
@@ -95,7 +121,7 @@ test("rename a pair from its expanded card: the name persists across a reload", 
   const divisionId = await seedDivision(page.request, "Rename");
   const sankar = { id: await seedPerson(page.request, `Sankar ${TAG}`), name: `Sankar ${TAG}` };
   const ritwik = { id: await seedPerson(page.request, `Ritwik ${TAG}`), name: `Ritwik ${TAG}` };
-  const oldName = `${sankar.name} & ${ritwik.name}`;
+  const oldName = derivedFrom(sankar, ritwik);
   const newName = `Court Kings ${TAG}`;
   const pairId = await seedPair(page.request, divisionId, [sankar, ritwik]);
 
@@ -107,7 +133,7 @@ test("rename a pair from its expanded card: the name persists across a reload", 
   // blur away from a bad rename.
   await expect(field).toHaveValue(oldName);
   // Labelled, so a screen reader announces what it edits.
-  await expect(field).toHaveAccessibleName("Name");
+  await expect(field).toHaveAccessibleName(NAME_LABEL);
 
   await field.fill(newName);
   await field.press("Enter");
@@ -126,7 +152,7 @@ test("an emptied Name field puts the name back and saves nothing", async ({ page
   const divisionId = await seedDivision(page.request, "Rename Empty");
   const a = { id: await seedPerson(page.request, `Asha ${TAG}`), name: `Asha ${TAG}` };
   const b = { id: await seedPerson(page.request, `Bilal ${TAG}`), name: `Bilal ${TAG}` };
-  const name = `${a.name} & ${b.name}`;
+  const name = derivedFrom(a, b);
   const pairId = await seedPair(page.request, divisionId, [a, b]);
 
   await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
@@ -157,9 +183,9 @@ test("swapping a pair's partner in the roster editor renames the pair to match",
   const sankar = { id: await seedPerson(page.request, `Sankar ${TAG}`), name: `Sankar ${TAG}` };
   const ritwik = { id: await seedPerson(page.request, `Ritwik ${TAG}`), name: `Ritwik ${TAG}` };
   const venkatesh = { id: await seedPerson(page.request, `Venkatesh ${TAG}`), name: `Venkatesh ${TAG}` };
-  const oldName = `${sankar.name} & ${ritwik.name}`;
+  const oldName = derivedFrom(sankar, ritwik);
   // Sankar stays in his seat; Venkatesh takes Ritwik's.
-  const expected = `${sankar.name} & ${venkatesh.name}`;
+  const expected = derivedFrom(sankar, venkatesh);
   const pairId = await seedPair(page.request, divisionId, [sankar, ritwik]);
 
   await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
@@ -190,17 +216,61 @@ test("a custom pair name survives a roster swap untouched", async ({ page }) => 
   await rowToggle(page, custom).click();
   await swapPartner(page, b.name, c.name);
   // The roster save landed — read off the server, not the editor's own state…
-  await expect
-    .poll(async () =>
-      ((await apiJson<{ members: { person_id: string }[] }>(page.request, `/api/v1/entrants/${pairId}`)).data!
-        .members.map((m) => m.person_id)
-        .sort()
-        .join(",")),
-    )
-    .toBe([a.id, c.id].sort().join(","));
+  await expect.poll(() => storedMembers(page.request, pairId)).toBe([a.id, c.id].sort().join(","));
   // …and the organiser's own name was left alone.
   expect(await storedName(page.request, pairId)).toBe(custom);
   await page.reload();
+  await expect(rowToggle(page, custom)).toBeVisible();
+});
+
+test("a name typed and then Save roster clicked straight away: both are saved", async ({ page }) => {
+  // The Name field saves on blur, and the blur fires on the mousedown of
+  // whatever is clicked next. That save used to put the WHOLE panel busy, which
+  // disabled Save roster before its mouseup, so the click the organiser made
+  // was silently dropped and the roster edit lost.
+  const divisionId = await seedDivision(page.request, "Name And Roster");
+  const sankar = { id: await seedPerson(page.request, `Sankar ${TAG}`), name: `Sankar ${TAG}` };
+  const ritwik = { id: await seedPerson(page.request, `Ritwik ${TAG}`), name: `Ritwik ${TAG}` };
+  const venkatesh = { id: await seedPerson(page.request, `Venkatesh ${TAG}`), name: `Venkatesh ${TAG}` };
+  const typed = `Court Kings ${TAG}`;
+  const pairId = await seedPair(page.request, divisionId, [sankar, ritwik]);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  await rowToggle(page, derivedFrom(sankar, ritwik)).click();
+  await stagePartnerSwap(page, ritwik.name, venkatesh.name);
+  const field = page.getByTestId("entrant-name-field");
+  await field.fill(typed);
+  // No blur first: the click itself is what moves focus off the field.
+  await saveRoster(page).click();
+
+  await expect.poll(() => storedMembers(page.request, pairId)).toBe([sankar.id, venkatesh.id].sort().join(","));
+  // The typed name is the organiser's, so the roster save must not derive over it.
+  await expect.poll(() => storedName(page.request, pairId)).toBe(typed);
+  await page.reload();
+  await expect(rowToggle(page, typed)).toBeVisible();
+});
+
+test("renaming a player renames the pair named after them, and only that pair", async ({ page }) => {
+  // There is no console control that renames a person: `PATCH
+  // /api/v1/persons/{id}` is the one door, so the rename goes through it.
+  // What is asserted is what the organiser then sees on the entrants tab.
+  const divisionId = await seedDivision(page.request, "Player Rename");
+  const sankar = { id: await seedPerson(page.request, `Sankar ${TAG}`), name: `Sankar ${TAG}` };
+  const ritwik = { id: await seedPerson(page.request, `Ritwik ${TAG}`), name: `Ritwik ${TAG}` };
+  const asha = { id: await seedPerson(page.request, `Asha ${TAG}`), name: `Asha ${TAG}` };
+  const custom = `Smash Bros ${TAG}`;
+  await seedPair(page.request, divisionId, [sankar, ritwik]);
+  await seedPair(page.request, divisionId, [asha, sankar], custom);
+
+  const renamed = { ...sankar, name: `Sankar Krishnan ${TAG}` };
+  const res = await apiJson(page.request, `/api/v1/persons/${sankar.id}`, "PATCH", { full_name: renamed.name });
+  expect(res.status, JSON.stringify(res.error)).toBe(200);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  // Sankar keeps his seat: first, under his new name.
+  await expect(rowToggle(page, derivedFrom(renamed, ritwik))).toBeVisible();
+  await expect(page.getByRole("cell", { name: derivedFrom(sankar, ritwik) })).toHaveCount(0);
+  // The organiser's own name for the other pair is untouched.
   await expect(rowToggle(page, custom)).toBeVisible();
 });
 
@@ -256,8 +326,8 @@ test("a renamed pair reads the same on the fixtures tab and the public page, str
   const sankar = { id: await seedPerson(page.request, `Sankar ${TAG}`), name: `Sankar ${TAG}` };
   const ritwik = { id: await seedPerson(page.request, `Ritwik ${TAG}`), name: `Ritwik ${TAG}` };
   const venkatesh = { id: await seedPerson(page.request, `Venkatesh ${TAG}`), name: `Venkatesh ${TAG}` };
-  const derived = `${sankar.name} & ${ritwik.name}`;
-  const followed = `${sankar.name} & ${venkatesh.name}`;
+  const derived = derivedFrom(sankar, ritwik);
+  const followed = derivedFrom(sankar, venkatesh);
   const renamed = `Court Kings ${TAG}`;
   const pairId = await seedPair(page.request, div.id, [sankar, ritwik]);
   const controlId = await seedPair(page.request, div.id, [], `Control Pair ${TAG}`);
@@ -271,8 +341,16 @@ test("a renamed pair reads the same on the fixtures tab and the public page, str
   const consoleEntrants = await divisionPath(page.request, div.id, "?tab=entrants");
   const consoleFixtures = await divisionPath(page.request, div.id, "?tab=fixtures");
 
-  // Warm the public page: it caches the pair under its created name. Each
-  // clock starts BEFORE the load that fills the cache, so the bound errs long.
+  // Step 1 is STAGED in the console first (Ritwik out, Venkatesh in, not yet
+  // saved), so the cache-lifetime bound below spans only a fresh fill, the
+  // save and one public load, never console navigation (which made a flat 30s
+  // bound flaky on a slow machine).
+  await page.goto(consoleEntrants);
+  await rowToggle(page, derived).click();
+  await stagePartnerSwap(page, ritwik.name, venkatesh.name);
+
+  // Warm the public page: its FIRST load fills the cache under the created
+  // name. The clock starts before that load, so the bound errs long.
   const warmedAt = Date.now();
   const warm = await publicSchedule(browser, publicPath);
   await expect(shown(warm.locator("#panel-schedule"), derived)).toBeVisible();
@@ -285,27 +363,26 @@ test("a renamed pair reads the same on the fixtures tab and the public page, str
   await expect(shown(control.locator("#panel-schedule"), `Control Pair ${TAG}`)).toBeVisible();
   await expect(control.getByText(`Control Moved ${TAG}`)).toHaveCount(0);
 
-  // Step 1 — the roster swap, by hand: Venkatesh takes Ritwik's seat.
-  await page.goto(consoleEntrants);
-  await rowToggle(page, derived).click();
-  await swapPartner(page, ritwik.name, venkatesh.name);
+  // Step 1 — save the staged swap, by hand.
+  await saveRoster(page).click();
   await expect(rowToggle(page, followed)).toBeVisible();
 
-  // The organiser's fixtures tab names the pair by its new name…
-  await page.goto(consoleFixtures);
-  await expect(shown(page, followed)).toBeVisible();
-  await expect(page.getByText(derived)).toHaveCount(0);
-  // …and so does the public page, on its very next load.
+  // The public page names the pair anew on its very next load…
   const swapSeenAt = Date.now();
   const afterSwap = await publicSchedule(browser, publicPath);
   await expect(shown(afterSwap.locator("#panel-schedule"), followed)).toBeVisible();
   await expect(afterSwap.getByText(derived)).toHaveCount(0);
-  // The whole division document was expired, not one row patched: the control
-  // pair's raw write surfaces with it.
+  // …because the whole division entry was expired and REFILLED, not one row
+  // patched: the control pair's raw write surfaces with it. That refill, at or
+  // after `swapSeenAt`, is also what step 2's bound is measured from.
   await expect(shown(afterSwap.locator("#panel-schedule"), `Control Moved ${TAG}`)).toBeVisible();
   expect(Date.now() - warmedAt, "the swap reached the public page inside its cache lifetime").toBeLessThan(
     PUBLIC_DIVISION_TTL_MS,
   );
+  // …and so does the organiser's fixtures tab.
+  await page.goto(consoleFixtures);
+  await expect(shown(page, followed)).toBeVisible();
+  await expect(page.getByText(derived)).toHaveCount(0);
 
   // Step 2 — the Name field, by hand.
   await page.goto(consoleEntrants);
@@ -316,15 +393,15 @@ test("a renamed pair reads the same on the fixtures tab and the public page, str
   await field.press("Enter");
   await expect(rowToggle(page, renamed)).toBeVisible();
 
-  await page.goto(consoleFixtures);
-  await expect(shown(page, renamed)).toBeVisible();
-  await expect(page.getByText(followed)).toHaveCount(0);
   const afterRename = await publicSchedule(browser, publicPath);
   await expect(shown(afterRename.locator("#panel-schedule"), renamed)).toBeVisible();
   await expect(afterRename.getByText(followed)).toHaveCount(0);
   expect(Date.now() - swapSeenAt, "the rename reached the public page inside its cache lifetime").toBeLessThan(
     PUBLIC_DIVISION_TTL_MS,
   );
+  await page.goto(consoleFixtures);
+  await expect(shown(page, renamed)).toBeVisible();
+  await expect(page.getByText(followed)).toHaveCount(0);
   expect(await storedName(page.request, pairId)).toBe(renamed);
 });
 
@@ -334,7 +411,7 @@ test("the expanded card with its Name field never scrolls the page sideways at 3
   // A realistic long pair name — the shape that finds a missing min-w-0.
   const a = { id: await seedPerson(page.request, `Venkatasubramanian ${TAG}`), name: `Venkatasubramanian ${TAG}` };
   const b = { id: await seedPerson(page.request, `Chandrasekharan ${TAG}`), name: `Chandrasekharan ${TAG}` };
-  const name = `${a.name} & ${b.name}`;
+  const name = derivedFrom(a, b);
   await seedPair(page.request, divisionId, [a, b]);
 
   await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
