@@ -24,7 +24,12 @@
 //      → the unbeaten row prints "Infinity".
 //  (e) `RATIO_NOTE_KEYS` gains `set_ratio` → a sport that says "games" is told
 //      "sets" (see the set_ratio case).
-//  (f) `cellNotes` built for every column → a note on the points column.
+//  (f) `cellNotes[i]` built from the NEIGHBOURING column → the note lands on
+//      the column after point_ratio's, or none at all.
+//  (l) engine: `RATIO_LEDGERS.point_ratio` pointed at the sets pair → every
+//      note sentence (and `display.test.ts`).
+// (A "note for every column" mutant is EQUIVALENT — `ratioNote` is null for
+// any non-ratio key — so it is not claimed.)
 import { describe, expect, it } from "vitest";
 import { derivedMetricText, RATIO_LEDGERS, type StandingsRow } from "@seazn/engine/competition";
 import en from "@/dictionaries/en/public.json";
