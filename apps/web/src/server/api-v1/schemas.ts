@@ -2548,6 +2548,51 @@ export const PublishScheduleResult = z.object({
   published: z.boolean(),
 });
 
+/** POST /competitions/{id}/schedule/publish — the competition-wide twin.
+ *
+ *  Same two fields as the per-division request above, meaning the same things:
+ *  ONE acknowledgement covers every division in the run, and `reason` is
+ *  stamped on every `schedule_published` event it writes. A competition with
+ *  eight unreleased divisions is otherwise eight visits to eight pages.
+ *
+ *  Body optional, parsed from an absent one as `{}`, exactly like the
+ *  per-division route. */
+export const PublishCompetitionScheduleRequest = z.object({
+  acknowledge_warnings: z.boolean().optional(),
+  reason: z.string().max(500).optional(),
+});
+export type PublishCompetitionScheduleRequest = z.infer<typeof PublishCompetitionScheduleRequest>;
+
+/** BEST EFFORT, so the result is a REPORT, not a count.
+ *
+ *  Publishing is independent per division, so one refused board must not
+ *  withhold the rest: the `published` divisions are live and the refused ones
+ *  come back with their reason attached. `blocking` distinguishes the two
+ *  refusals an organiser acts on differently — `PUBLISH_UNACKNOWLEDGED`
+ *  (false) clears by re-sending with `acknowledge_warnings`, `PUBLISH_BLOCKED`
+ *  (true) never does. Only divisions still at `setup` are candidates, so a
+ *  division that has already released its times appears nowhere in `results`. */
+export const PublishCompetitionScheduleResult = z.object({
+  published: z.number().int(),
+  needs_acknowledgement: z.number().int(),
+  blocked: z.number().int(),
+  results: z.array(
+    z.object({
+      division_id: Uuid,
+      name: z.string(),
+      published: z.boolean(),
+      refusal: z
+        .object({
+          code: z.string(),
+          blocking: z.boolean(),
+          conflicts: z.array(ScheduleConflict),
+        })
+        .optional(),
+    }),
+  ),
+});
+export type PublishCompetitionScheduleResult = z.infer<typeof PublishCompetitionScheduleResult>;
+
 // ---------------------------------------------------------------------------
 // Scorer console (doc 13, PROMPT-18)
 // ---------------------------------------------------------------------------
