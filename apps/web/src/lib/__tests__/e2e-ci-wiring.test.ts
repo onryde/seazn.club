@@ -323,6 +323,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // propagation arrived FASTER than the pad's polling fallback — without that
   // clause every such test is satisfied by the 15-second poll.
   "console-device-live-sync.spec.ts",
+  // Device-link write path W2 — durable idempotency (design §6). A rally is
+  // tapped, the write commits, the RESPONSE is lost, and the pad's own request
+  // is replayed on the wire. It is the only test anywhere that proves the PAD
+  // sends an idempotency key rather than that the server honours one: it never
+  // constructs a request, it replays what the pad itself sent. The API-level
+  // cases beside it (`e2e/scoring-idempotency.spec.ts`) mint their own keys and
+  // so cannot witness that seam at all.
+  "scoring-idempotency-retry.spec.ts",
 ];
 
 afterEach(() => {

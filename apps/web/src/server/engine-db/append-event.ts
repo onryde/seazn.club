@@ -26,6 +26,12 @@ export interface AppendInput {
   /** Device-link attribution (doc 13 §7): set when the event arrived via a
    *  dl_ token. Rides OUTSIDE the hash-chain canonical. */
   deviceLinkId?: string | null;
+  /** W2 — durable idempotency (design §6). The client's retry key, written so
+   *  the unique index on (fixture_id, idempotency_key) can REFUSE a second
+   *  write of the same tap. Rides OUTSIDE the hash-chain canonical, exactly
+   *  like `deviceLinkId`: V226's trigger names its columns explicitly. Null
+   *  for the importer, the rebuild paths, and any caller that never retries. */
+  idempotencyKey?: string | null;
   voids?: string;
   id?: string;
   recordedAt?: string;
@@ -94,7 +100,13 @@ const LOCKED = LOCKED_FIXTURE_STATUSES;
 // status must follow the fold or the console dead-ends (v3/09 §2 — the cricket
 // "undo made scoring disappear" regression was status=in_play with the fold
 // back in the pre phase, so neither the Start button nor the pad rendered).
-function nextStatus(
+/** Exported for W2's replay reconstruction (`replay.ts`). A replay must report
+ *  the status the ORIGINAL write reported, and deriving that from a second,
+ *  hand-written rule is exactly how a read path and a write path drift apart —
+ *  the disagreement `fixture-cfg.ts` exists to prevent. One rule, two callers.
+ *  Note `fixtureStatusFromFold` alone can never answer "finalized": only this
+ *  can, and only because it is told the candidate's TYPE. */
+export function nextStatus(
   candidateType: string,
   outcome: MatchOutcome | null,
   active: readonly EventEnvelope[],
@@ -331,10 +343,11 @@ export async function appendEventInTx(
   }
 
   await tx`
-    insert into score_events (id, fixture_id, seq, type, payload, recorded_by, recorded_at, voids_event_id, device_link_id)
+    insert into score_events (id, fixture_id, seq, type, payload, recorded_by, recorded_at, voids_event_id, device_link_id, idempotency_key)
     values (${candidate.id}, ${fixtureId}, ${candidate.seq}, ${candidate.type},
             ${tx.json(candidate.payload as never)}, ${candidate.recordedBy},
-            ${candidate.recordedAt}, ${candidate.voids ?? null}, ${input.deviceLinkId ?? null})
+            ${candidate.recordedAt}, ${candidate.voids ?? null}, ${input.deviceLinkId ?? null},
+            ${input.idempotencyKey ?? null})
   `;
 
   await tx`
