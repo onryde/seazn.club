@@ -13,6 +13,52 @@
 -- it stops being load-bearing for correctness. Rate limiting STAYS in Redis —
 -- there, fail-open means "allow", which is the safe direction for a scorer.
 --
+-- -----------------------------------------------------------------------------
+-- WHY THIS IS A PLAIN INDEX AND NOT `CONCURRENTLY` (decided 2026-09-22, after
+-- trying it). `score_events` is THE ledger, the hottest write table here, and
+-- this lands while matches are being scored — so CONCURRENTLY is the obvious
+-- reach, and V254:15-17 already states the policy ("on a populated prod DB
+-- prefer CREATE INDEX CONCURRENTLY run outside Flyway to avoid write locks").
+-- Read that line again: **outside Flyway**. It cannot be done inside.
+--
+-- Measured here, not assumed: with `executeInTransaction=false` Flyway still
+-- holds its OWN schema-history transaction open for the duration of the
+-- script, so `create index concurrently` waits on that transaction forever.
+-- The run hung until killed (pg_stat_activity: one backend `idle in
+-- transaction` on flyway_schema_history, the index build `Lock`-waiting on
+-- it), and left `indisvalid = false` behind — an INVALID index that silently
+-- enforces nothing. The `.sql.conf` sidecar behaves identically.
+--
+-- The alternative — column here, index applied by hand out-of-band — was
+-- rejected: it would mean the correctness guarantee this whole wave exists to
+-- create is not, in fact, guaranteed by the migration that claims it.
+--
+-- So: a plain build, which takes a SHARE lock and blocks INSERTs on
+-- score_events for its duration. What that costs a scorer mid-match is a
+-- QUEUED tap, not a lost one — the pad's durable offline queue (W1) retries,
+-- and the retry carries the same idempotency key this index is being built
+-- for, so the drain cannot double-write.
+--
+-- MEASURED 2026-09-22, before shipping: production `score_events` holds 4,323
+-- rows / 2,504 kB. A two-column index over that builds in under a
+-- millisecond, so the block is not observable today at all. The reasoning
+-- above is kept because it stops being true quietly — it is the row count that
+-- decides it, and nothing warns you when that count has moved.
+--
+-- `lock_timeout` is the real protection, and it is the pathological case this
+-- guards: not the build itself (short, on a 2-column index), but the build
+-- QUEUEING behind some other long transaction, with every scorer's INSERT
+-- then queued behind IT. 5s means the migration fails fast and loudly and can
+-- be re-run, instead of stalling every pad on the platform. It is scoped to
+-- this transaction, so it reverts on commit.
+--
+-- `add column` with no default and no NOT NULL is a catalog-only change on
+-- PG 11+ — it rewrites nothing and holds its lock for microseconds.
+--
+-- This cannot fail on existing DATA: the column is brand new, so every
+-- existing row holds NULL, and NULLs do not collide.
+-- -----------------------------------------------------------------------------
+--
 -- NULLABLE on purpose: every existing row has no key, and the batch importer
 -- and the rebuild paths legitimately write without one. Postgres treats NULLs
 -- as DISTINCT in a unique index by default, so unlimited un-keyed rows per
@@ -24,6 +70,8 @@
 -- recorded_by|recorded_at), so adding one here changes no existing row's
 -- `row_hash`. Same treatment `device_link_id` gets.
 -- =============================================================================
+set local lock_timeout = '5s';
+
 alter table score_events add column if not exists idempotency_key text;
 
 -- The whole point of the wave. Scoped to the FIXTURE, not global: two scorers
