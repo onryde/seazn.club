@@ -216,10 +216,15 @@ async function addEntrantThroughTheScreen(page: Page, name: string): Promise<voi
 async function deleteEntrantThroughTheScreen(page: Page, name: string): Promise<void> {
   const row = page.locator("tbody tr").filter({ hasText: name });
   await expect(row, `no entrants row for ${name}`).toHaveCount(1);
-  // "Delete" is HARDCODED ENGLISH in `entrants-panel.tsx` — like its "Withdraw"
-  // sibling it is in no dictionary, so unlike the confirm label below it cannot
-  // be read from one. Recorded rather than silently retyped.
-  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  // By TESTID, not by the word on the button. "Delete" used to be hardcoded
+  // English in `entrants-panel.tsx`, and this line used to key on that literal
+  // — so translating it (2026-09-22, `entrants.row.delete` in all four
+  // catalogues) would have broken this walkthrough silently. A handle that a
+  // Dutch organiser's console carries too is the point; the label itself is
+  // pinned by `entrants-panel-row-delete-i18n.test.tsx`. The confirm button
+  // below stays on its dict value because it is read FROM the dict, never
+  // retyped.
+  await row.getByTestId("entrant-row-delete").click();
   // `alertdialog`, not `dialog` — `confirm-provider.tsx` uses the alert role.
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible({ timeout: STEP_MS });
