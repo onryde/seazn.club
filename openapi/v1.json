@@ -21239,7 +21239,7 @@
           }
         ],
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
@@ -21668,7 +21668,7 @@
             }
           },
           "400": {
-            "description": "Error",
+            "description": "Validation error",
             "content": {
               "application/json": {
                 "schema": {
