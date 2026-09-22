@@ -1347,7 +1347,11 @@ export function EntrantNameField({
   const msg = useMsg();
   if (!canEdit) return null;
   return (
-    <label className="mb-3 block min-w-0 max-w-sm">
+    // The cell this sits in spans the whole entrants table, which is wider than
+    // a phone and scrolls inside its card. `max-w-sm` alone let the field run
+    // 384px wide off a 320px screen; the viewport term keeps it inside the
+    // card's visible box (page gutter + card border + cell padding, both sides).
+    <label className="mb-3 block min-w-0 max-w-[min(24rem,calc(100vw-4.5rem))]">
       <span className="label">{msg("entrants.row.name")}</span>
       <input
         type="text"
