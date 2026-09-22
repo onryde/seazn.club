@@ -351,6 +351,16 @@ const WALKTHROUGH_SPECS: string[] = [
   // cases beside it (`e2e/scoring-idempotency.spec.ts`) mint their own keys and
   // so cannot witness that seam at all.
   "scoring-idempotency-retry.spec.ts",
+
+  // Entrant rename (2026-09-22, reported from production: a pair swapped a
+  // partner and kept the old partner's name). One organiser renames one pair
+  // three ways — a roster save that re-derives its name, the Name field saved
+  // together with a roster edit, and a player's ✎ in the directory — and reads
+  // each rename back from the entrant row, the fixtures tab, the standings and
+  // the public division page, inside the public cache's lifetime. The slices
+  // are in e2e/entrant-rename.spec.ts; this is the only test that carries one
+  // pair through all three, each starting from what the last one left.
+  "entrant-rename-walkthrough.spec.ts",
 ];
 
 afterEach(() => {
