@@ -30,15 +30,40 @@ import type {
 } from "./types";
 
 /**
- * The divisions the public still cannot see times for.
+ * The divisions Publish all would actually release — and, equivalently, the
+ * ones whose matches the public currently cannot see times for.
  *
- * `status === "setup"` is the WHOLE rule and it is the view's rule, not a
- * guess: V401 keys its NULLing on exactly this value, and division status is
- * forward-only (setup → scheduled → active → completed) so nothing later can
- * fall back into it.
+ * TWO conditions, and the second is an owner ruling (2026-09-22), not a nicety.
+ *
+ * `status === "setup"` is V401's own key: `public_fixtures_v` NULLs
+ * `scheduled_at`/`venue`/`court_label` on exactly that value, and division
+ * status is forward-only (setup → scheduled → active → completed) so nothing
+ * later can fall back into it.
+ *
+ * AT LEAST ONE FIXTURE is the ruling. Leaving setup is irreversible in effect:
+ * the view stops redacting that division for ever, so any fixture added to it
+ * afterwards goes public the moment it is placed, with no second publish to
+ * gate it. A bulk button must not arm a division the organiser has not built
+ * yet — so the server skips an empty one, and this count has to use the SAME
+ * rule or the banner promises a release that never happens ("3 of 9" followed
+ * by a report of 2, and an organiser hunting a third candidate that never
+ * existed).
+ *
+ * It also makes the banner's own sentence truer rather than weaker: the
+ * consequence it states is "the public still sees Time TBD on their matches",
+ * which is simply not a fact about a division that has no matches.
+ *
+ * `fixtures` is the UNFILTERED board (`actions.board` — the page loads every
+ * fixture of every division of the competition, `listDivisionFixturesForBoard`
+ * filtering on nothing but `division_id`, and the legend filter never touches
+ * it). No new plumbing: the component already holds this for its conflict rows.
  */
-export function unreleasedDivisions(divisions: BoardDivision[]): BoardDivision[] {
-  return divisions.filter((d) => d.status === "setup");
+export function unreleasedDivisions(
+  divisions: BoardDivision[],
+  fixtures: BoardFixture[],
+): BoardDivision[] {
+  const populated = new Set(fixtures.map((f) => f.division_id));
+  return divisions.filter((d) => d.status === "setup" && populated.has(d.id));
 }
 
 /**
@@ -57,11 +82,21 @@ export function shouldShowUnreleasedBanner(input: {
   canEdit: boolean;
   competitionId: string | null | undefined;
   divisions: BoardDivision[];
+  /** The UNFILTERED board. Required, not optional: the whole point of the
+   *  2026-09-22 ruling is that a division with no fixtures is not a candidate,
+   *  and an optional argument would let a call site keep the old, wider rule
+   *  by omission — silently, and exactly where it matters most. */
+  fixtures: BoardFixture[];
 }): boolean {
   if (input.single !== null) return false;
   if (!input.canEdit) return false;
   if (!input.competitionId) return false;
-  return unreleasedDivisions(input.divisions).length > 0;
+  // Through `unreleasedDivisions`, never a second copy of the rule: a board
+  // that counted candidates one way and decided whether to show the button
+  // another is how "Publish all" ends up on a competition it can do nothing
+  // for. If every setup division is empty this is 0 and the banner does not
+  // render at all — a button that publishes nothing is worse than no button.
+  return unreleasedDivisions(input.divisions, input.fixtures).length > 0;
 }
 
 /**
@@ -106,9 +141,12 @@ export function UnreleasedBanner({
   outcome: PublishAllOutcome | null;
   busy: boolean;
   onPublishAll: () => void;
-  /** The UNFILTERED board (`actions.board`) — a blocked division may well be
-   *  filtered out of the legend, and its conflict rows must still name their
-   *  fixtures rather than degrading to "removed fixture". */
+  /** The UNFILTERED board (`actions.board`). Two jobs: a blocked division may
+   *  well be filtered out of the legend and its conflict rows must still name
+   *  their fixtures rather than degrading to "removed fixture"; and since the
+   *  2026-09-22 ruling this is also what decides which divisions COUNT — an
+   *  empty one is not a Publish all candidate. The legend-filtered `board`
+   *  would under-count the moment an organiser filtered a division out. */
   board: BoardFixture[];
   entrantNames: Record<string, string>;
   feedLabels: Record<string, FeedLabelPair>;
@@ -117,7 +155,7 @@ export function UnreleasedBanner({
   const msg = useMsg();
   const plural = usePlural();
 
-  const unreleased = unreleasedDivisions(divisions);
+  const unreleased = unreleasedDivisions(divisions, board);
   const { published, needsAck, blocked } = partitionPublishOutcome(outcome?.results ?? []);
   // One list, ordered so the thing the organiser can act on sits first.
   const remaining = [...needsAck, ...blocked];

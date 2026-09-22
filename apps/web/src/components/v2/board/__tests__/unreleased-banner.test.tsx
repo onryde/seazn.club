@@ -125,13 +125,87 @@ describe("which divisions the public still cannot see times for", () => {
       div("d4", "Veterans", "active"),
       div("d5", "Plate", "completed"),
     ];
-    expect(unreleasedDivisions(list).map((d) => d.id)).toEqual(["d1", "d3"]);
+    expect(unreleasedDivisions(list, BOARD_FIXTURES).map((d) => d.id)).toEqual(["d1", "d3"]);
   });
 
   it("is empty when every division is past setup", () => {
-    expect(unreleasedDivisions([div("d1", "Open", "scheduled"), div("d2", "L", "active")])).toEqual(
-      [],
+    expect(
+      unreleasedDivisions([div("d1", "Open", "scheduled"), div("d2", "L", "active")], BOARD_FIXTURES),
+    ).toEqual([]);
+  });
+});
+
+describe("an empty division is not a Publish all candidate (owner ruling, 2026-09-22)", () => {
+  // Leaving `setup` is irreversible in effect — `public_fixtures_v` stops
+  // redacting that division for ever, so a fixture added afterwards goes
+  // public the moment it is placed, with no second publish. The server skips
+  // an empty division; this count has to skip it too, or the banner promises
+  // a release that never happens.
+  const MIXED = [
+    div("d1", "Open", "setup"), // has f1
+    div("d7", "Brand new", "setup"), // built but never drawn — NO fixtures
+    div("d2", "Ladies", "scheduled"),
+  ];
+
+  it("counts the populated setup division and not the empty one", () => {
+    // The differential is the whole test: both are `setup`, so a rule that
+    // still read status alone would return both and this would say ["d1","d7"].
+    expect(unreleasedDivisions(MIXED, BOARD_FIXTURES).map((d) => d.id)).toEqual(["d1"]);
+  });
+
+  it("says so in the sentence — 1 of 3, not 2 of 3", () => {
+    // The count an organiser reads has to be the number the server will
+    // actually publish, or they go hunting for a candidate that never existed.
+    expect(bannerMarkup(MIXED, null)).toContain(
+      esc("1 of 3 divisions isn't released — the public still sees Time TBD on its matches."),
     );
+  });
+
+  it("does not render the banner at all when EVERY setup division is empty", () => {
+    const allEmpty = [
+      div("d7", "Brand new", "setup"),
+      div("d8", "Also new", "setup"),
+      div("d2", "Ladies", "scheduled"),
+    ];
+    // There is nothing Publish all could do here. A button that publishes
+    // nothing is worse than no button: it reports a problem and then fails to
+    // act on it, and the organiser cannot tell which of the two went wrong.
+    expect(
+      shouldShowUnreleasedBanner({
+        single: null,
+        canEdit: true,
+        competitionId: "c1",
+        divisions: allEmpty,
+        fixtures: BOARD_FIXTURES,
+      }),
+    ).toBe(false);
+  });
+
+  it("still shows when at least one setup division is populated", () => {
+    // The positive pair: without it, "returns false" passes on a predicate
+    // that returns false for everything.
+    expect(
+      shouldShowUnreleasedBanner({
+        single: null,
+        canEdit: true,
+        competitionId: "c1",
+        divisions: MIXED,
+        fixtures: BOARD_FIXTURES,
+      }),
+    ).toBe(true);
+  });
+
+  it("takes the button away from a board whose only setup division is emptied", () => {
+    // Driven through the board, so the wiring is witnessed too: the call site
+    // must hand `shouldShowUnreleasedBanner` the UNFILTERED board, and a
+    // division with no fixtures must lose the banner rather than arm it.
+    const island = renderIsland(
+      ScheduleBoard,
+      baseProps({
+        divisions: [div("d7", "Brand new", "setup"), div("d2", "Ladies", "scheduled")],
+      }),
+    );
+    expect(bannerOf(island.tree())).toBeUndefined();
   });
 });
 
@@ -140,7 +214,13 @@ describe("whether the banner shows at all", () => {
 
   it("shows on a competition board carrying a setup division", () => {
     expect(
-      shouldShowUnreleasedBanner({ single: null, canEdit: true, competitionId: "c1", divisions: COMP }),
+      shouldShowUnreleasedBanner({
+        single: null,
+        canEdit: true,
+        competitionId: "c1",
+        divisions: COMP,
+        fixtures: BOARD_FIXTURES,
+      }),
     ).toBe(true);
   });
 
@@ -155,6 +235,7 @@ describe("whether the banner shows at all", () => {
         canEdit: true,
         competitionId: "c1",
         divisions: released,
+        fixtures: BOARD_FIXTURES,
       }),
     ).toBe(false);
   });
@@ -170,13 +251,20 @@ describe("whether the banner shows at all", () => {
         canEdit: true,
         competitionId: "c1",
         divisions: one,
+        fixtures: BOARD_FIXTURES,
       }),
     ).toBe(false);
   });
 
   it("hides from a viewer who cannot edit", () => {
     expect(
-      shouldShowUnreleasedBanner({ single: null, canEdit: false, competitionId: "c1", divisions: COMP }),
+      shouldShowUnreleasedBanner({
+        single: null,
+        canEdit: false,
+        competitionId: "c1",
+        divisions: COMP,
+        fixtures: BOARD_FIXTURES,
+      }),
     ).toBe(false);
   });
 
@@ -189,6 +277,7 @@ describe("whether the banner shows at all", () => {
         canEdit: true,
         competitionId: undefined,
         divisions: COMP,
+        fixtures: BOARD_FIXTURES,
       }),
     ).toBe(false);
   });
@@ -247,17 +336,27 @@ describe("how an outcome partitions", () => {
 // The banner's own markup, under a real provider.
 // ---------------------------------------------------------------------------
 
-const BOARD_FIXTURES: BoardFixture[] = [
-  {
-    id: "f1",
-    division_id: "d3",
+/** One fixture per division that any test needs to count as POPULATED. Since
+ *  the 2026-09-22 ruling an empty `setup` division is not a Publish all
+ *  candidate, so "which divisions have a fixture here" is now load-bearing in
+ *  this file rather than incidental scenery. `f1` is the one every conflict
+ *  fixture points at; the others exist only to make their division non-empty. */
+const fixture = (id: string, divisionId: string): BoardFixture =>
+  ({
+    id,
+    division_id: divisionId,
     home_entrant_id: "e1",
     away_entrant_id: "e2",
     scheduled_at: "2026-08-01T09:00:00.000Z",
     court_label: "Court 1",
     status: "scheduled",
     schedule_locked: false,
-  } as unknown as BoardFixture,
+  }) as unknown as BoardFixture;
+
+const BOARD_FIXTURES: BoardFixture[] = [
+  fixture("f1", "d1"),
+  fixture("f2", "d2"),
+  fixture("f3", "d3"),
 ];
 
 function bannerMarkup(divisions: BoardDivision[], outcome: PublishAllOutcome | null): string {

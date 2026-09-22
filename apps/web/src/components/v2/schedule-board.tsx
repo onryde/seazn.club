@@ -1664,6 +1664,10 @@ export function ScheduleBoard({
         canEdit,
         competitionId: competition?.id,
         divisions,
+        // `actions.board`, never the legend-filtered `board` below it: an
+        // organiser filtering a division out of view would otherwise make it
+        // look empty and take the button away.
+        fixtures: actions.board,
       }) && (
         <UnreleasedBanner
           divisions={divisions}
