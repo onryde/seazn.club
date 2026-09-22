@@ -21,6 +21,8 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
+// The player name limit, shared with the directory's rename field (persons-panel.tsx).
+import { PERSON_NAME_MAX } from "../../lib/person-name.ts";
 // Task 9 (spectator surface W1) — the match-centre document schema, reused
 // verbatim as `PublicFixtureSummary.match_centre`'s type below rather than
 // restated: match-centre-schema.ts is pure Zod with no imports beyond zod
@@ -659,7 +661,7 @@ export const Consent = z
   .default({});
 
 export const CreatePerson = z.object({
-  full_name: z.string().min(1).max(200),
+  full_name: z.string().min(1).max(PERSON_NAME_MAX),
   dob: z.iso.date().nullish(), // eligibility only; never exposed publicly
   gender: z.enum(["m", "f", "x"]).nullish(),
   consent: Consent,
@@ -670,7 +672,7 @@ export type CreatePerson = z.infer<typeof CreatePerson>;
 
 export const PatchPerson = z
   .object({
-    full_name: z.string().min(1).max(200),
+    full_name: z.string().min(1).max(PERSON_NAME_MAX),
     dob: z.iso.date().nullable(),
     gender: z.enum(["m", "f", "x"]).nullable(),
     consent: z.object({ public_name: z.boolean().optional(), public_photo: z.boolean().optional() }),

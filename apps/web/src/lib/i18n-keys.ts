@@ -4103,6 +4103,8 @@ export type DictionaryKey =
   | "persons.merge.tip"
   | "persons.mergingPost"
   | "persons.mergingPre"
+  | "persons.rename"
+  | "persons.rename.label"
   | "persons.search"
   | "persons.tableLabel"
   | "player.career.title"

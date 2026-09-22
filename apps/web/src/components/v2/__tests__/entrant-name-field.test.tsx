@@ -11,7 +11,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import uiEn from "@/dictionaries/en/ui.json";
 import { t } from "@/lib/i18n-runtime";
 import { ENTRANT_NAME_MAX } from "@/lib/entrant-roster-name";
-import { EntrantNameField, nameFieldCommit, nameFieldEnterCommits } from "@/components/v2/entrants-panel";
+import { nameFieldCommit, nameFieldEnterCommits } from "@/lib/inline-name-edit";
+import { EntrantNameField } from "@/components/v2/entrants-panel";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),

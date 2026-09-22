@@ -1496,6 +1496,8 @@
   "persons.consent.shownTip": "{label} is shown on public pages — click to hide",
   "persons.consent.hiddenTip": "{label} is hidden from public pages — click to show",
   "persons.keepThis": "Keep this one",
+  "persons.rename": "Rename {name}",
+  "persons.rename.label": "Player name",
   "persons.merge": "Merge…",
   "persons.col.player": "Player",
   "persons.col.public": "Public",

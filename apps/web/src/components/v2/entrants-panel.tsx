@@ -9,6 +9,7 @@ import type { EffectiveEntrantModel, EntrantKind } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { ENTRANT_NAME_MAX, rosterDerivedName } from "@/lib/entrant-roster-name";
+import { nameFieldCommit, nameFieldEnterCommits } from "@/lib/inline-name-edit";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -1330,24 +1331,6 @@ export function EntrantBadgeControl({
       )}
     </div>
   );
-}
-
-/** What a blur on the Name field saves: the trimmed name when it is a real
- *  change, or `null` — save nothing and put the field back — when it was
- *  emptied (the column cannot be empty) or left as it was. Exported for the
- *  markup test. */
-export function nameFieldCommit(typed: string, current: string): string | null {
-  const next = typed.trim();
-  if (next === "" || next === current) return null;
-  return next;
-}
-
-/** Does this keydown commit the Name field? Enter does, except while an input
- *  method is composing (Japanese, Chinese or Korean input): there Enter picks
- *  the candidate, and committing then would save half-typed text. Exported
- *  for the markup test. */
-export function nameFieldEnterCommits(key: string, isComposing: boolean): boolean {
-  return key === "Enter" && !isComposing;
 }
 
 /** The entrant's name, editable in place at the top of an expanded card

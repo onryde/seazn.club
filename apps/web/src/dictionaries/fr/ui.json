@@ -1496,6 +1496,8 @@
   "persons.consent.shownTip": "{label} est affiché sur les pages publiques — cliquez pour masquer",
   "persons.consent.hiddenTip": "{label} est masqué des pages publiques — cliquez pour afficher",
   "persons.keepThis": "Conserver celui-ci",
+  "persons.rename": "Renommer {name}",
+  "persons.rename.label": "Nom du joueur",
   "persons.merge": "Fusionner…",
   "persons.col.player": "Joueur",
   "persons.col.public": "Public",

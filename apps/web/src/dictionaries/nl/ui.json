@@ -1496,6 +1496,8 @@
   "persons.consent.shownTip": "{label} wordt getoond op openbare pagina's — klik om te verbergen",
   "persons.consent.hiddenTip": "{label} is verborgen op openbare pagina's — klik om te tonen",
   "persons.keepThis": "Behoud deze",
+  "persons.rename": "{name} hernoemen",
+  "persons.rename.label": "Naam van de speler",
   "persons.merge": "Samenvoegen…",
   "persons.col.player": "Speler",
   "persons.col.public": "Openbaar",
