@@ -1,6 +1,9 @@
 // Server component: MetricSpec-driven standings table (doc 09 §2 — zero
-// per-sport table code). Tie explanations render as a <details> popover from
-// the snapshot's tieBreak trace: no client JS.
+// per-sport table code). Two cells explain themselves through the shared
+// client `StandingsPopover`: the rank of a tied row (the snapshot's tieBreak
+// trace) and a point/board ratio with a ledger behind it (`ratioNote`). The
+// popover is the only client island; everything else still renders here. It
+// replaced a native `<details>` that never closed on an outside tap.
 //
 // Every word is the caller's dictionary's (Task 16 review, I1): the header
 // letters and their titles, "Team", and the tie note come from the SAME
@@ -20,8 +23,9 @@ import {
 } from "@/lib/public-site";
 import type { Dict } from "@/lib/i18n-constants";
 import { t, type TKey } from "@/lib/i18n-runtime";
-import { columnHeader, tieBreakRule } from "@/server/public-site/standings-view";
+import { columnHeader, ratioNote, tieBreakRule } from "@/server/public-site/standings-view";
 import { EntityLogo } from "@/components/ui/entity-logo";
+import { StandingsPopover } from "./standings-popover";
 
 /**
  * Every way OUT of a competing field, and the chip each one prints.
@@ -115,6 +119,27 @@ export function StandingsTable({
     </span>
   );
 
+  // A derived cell prints the engine's text; a ratio with a ledger behind it
+  // also opens onto the two totals it divides. `ratioNote` is null for every
+  // other derived column and for a row with no ledger ("—"), and null means a
+  // plain cell — never a button that explains nothing. `end`: these columns
+  // sit at the table's right, so the panel hangs left, inside the scroll box.
+  const derivedCell = (row: StandingsRow, key: string) => {
+    const text = derivedMetricText(row, key as TiebreakerKey) ?? "—";
+    const note = ratioNote(row, key, msg);
+    if (note === null) return text;
+    return (
+      <StandingsPopover
+        testid={`standings-ratio-${key}-${row.entrantId}`}
+        align="end"
+        className="-mx-1 -my-2.5 px-1 py-2.5 underline decoration-zinc-300 decoration-dotted underline-offset-4"
+        trigger={text}
+      >
+        {note}
+      </StandingsPopover>
+    );
+  };
+
   return (
     // `relative`: the containing block for the `.sr-only` column words in the
     // header. Left static, their containing block was `<body>`, outside this
@@ -163,48 +188,48 @@ export function StandingsTable({
               {/* Rank column frozen inside the scroll container (v3/02 §3.3)
                   — solid bg so scrolled columns pass underneath, not through.
 
-                  `has-[details[open]]:z-30` is what stops the tie-break
+                  `has-[[data-open]]:z-30` is what stops the tie-break
                   popover being painted over by the rows BELOW it. Every one of
-                  these cells is `z-10`, so an open tooltip (also `z-10`, and
-                  trapped in its own cell's stacking context) tied with the
-                  sticky cell of the next row and lost on DOM order: the next
-                  rank chip punched through the popover's left edge, and the
-                  row after that covered its bottom-left corner. Raising the
-                  CELL — not the tooltip — is the fix, because the comparison
-                  happens between the cells' stacking contexts, not between the
-                  tooltip and its cousins. Measured with `elementFromPoint` on
-                  every row, before and after. */}
+                  these cells is `z-10`, and an open panel is trapped in its
+                  own cell's stacking context, so however high the panel's own
+                  z-index it tied with the sticky cell of the next row and lost
+                  on DOM order: the next rank chip punched through the
+                  popover's left edge, and the row after that covered its
+                  bottom-left corner. Raising the CELL — not the panel — is the
+                  fix, because the comparison happens between the cells'
+                  stacking contexts, not between the panel and its cousins.
+                  Measured with `elementFromPoint` on every row, before and
+                  after. `data-open` is `StandingsPopover`'s open-state mark
+                  (the `<details open>` it replaced was the old one).
+
+                  The LAST row's panel opens UPWARD — the popover's own
+                  `[tr:last-child_&]` classes, because the `overflow-x-auto`
+                  box above clips a panel hanging below the final row, and
+                  clipping happens before stacking (measured at 1280: panel
+                  bottom 704 against a container bottom of 679). */}
               <td
-                className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums has-[details[open]]:z-30 ${
+                className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums has-[[data-open]]:z-30 ${
                   row.rank === 1 ? "bg-amber-50" : "bg-surface"
                 }`}
               >
                 {row.tieBreak ? (
-                  <details className="relative inline-block">
-                    <summary className="inline-flex cursor-help list-none items-start whitespace-nowrap">
-                      {rankChip(row.rank)}
-                      <span className="text-[10px] text-accent">*</span>
-                    </summary>
-                    {/* The LAST row opens its explanation UPWARD. The table
-                        sits in a `relative overflow-x-auto` box, and an
-                        `overflow-x: auto` computes `overflow-y: auto` too, so
-                        a popover hanging below the final row is CLIPPED by
-                        that box, not merely overlapped — measured on the live
-                        page at 1280: tooltip bottom 704 against a container
-                        bottom of 679, three of its four lines cut off. Raising
-                        the cell (above) cannot help, because clipping happens
-                        before stacking. Flipping it up keeps it inside the
-                        same box, where the raise then wins. */}
-                    <p
-                      role="tooltip"
-                      className="absolute left-0 z-10 mt-1 w-56 rounded-lg border border-zinc-200 bg-surface p-2 text-xs text-zinc-700 shadow-lg [tr:last-child_&]:bottom-full [tr:last-child_&]:top-auto [tr:last-child_&]:mb-1 [tr:last-child_&]:mt-0"
-                    >
-                      {msg("table.tieBreak", {
-                        with: row.tieBreak.with.map((id) => entrantNames[id] ?? "—").join(", "),
-                        rule: tieBreakRule(row.tieBreak.key, msg),
-                      })}
-                    </p>
-                  </details>
+                  // `-my-2.5 py-2.5` / `-mx-1 px-1`: the button's hit area is
+                  // the whole cell height without making the row any taller.
+                  <StandingsPopover
+                    testid={`standings-tie-${row.entrantId}`}
+                    className="-mx-1 -my-2.5 inline-flex items-start whitespace-nowrap px-1 py-2.5"
+                    trigger={
+                      <>
+                        {rankChip(row.rank)}
+                        <span aria-hidden="true" className="text-[10px] text-accent">*</span>
+                      </>
+                    }
+                  >
+                    {msg("table.tieBreak", {
+                      with: row.tieBreak.with.map((id) => entrantNames[id] ?? "—").join(", "),
+                      rule: tieBreakRule(row.tieBreak.key, msg),
+                    })}
+                  </StandingsPopover>
                 ) : (
                   rankChip(row.rank)
                 )}
@@ -246,7 +271,7 @@ export function StandingsTable({
                   }`}
                 >
                   {col.kind === "derived"
-                    ? (derivedMetricText(row, col.key as TiebreakerKey) ?? "—")
+                    ? derivedCell(row, col.key)
                     : col.kind === "structural"
                       ? formatMetric(row[col.key as "played" | "won" | "drawn" | "lost" | "points"])
                       : formatMetric(row.metrics[col.key], col.decimals)}

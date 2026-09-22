@@ -38,6 +38,13 @@ import { buildTableView, ratioNote, RATIO_NOTE_KEYS, type TableViewInput } from 
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
 
+/** A row as a document cached before `cellNotes` existed would carry it. */
+const withoutNotes = <R extends { cellNotes?: unknown }>(r: R): Omit<R, "cellNotes"> => {
+  const copy = { ...r };
+  delete copy.cellNotes;
+  return copy;
+};
+
 // Echoes the key and its params, so an assertion pins WHICH key was asked for
 // and with what — the same stub `standings-view.test.ts` uses.
 const msg: TableViewInput["msg"] = (key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : `${key}`);
@@ -176,7 +183,7 @@ describe("buildTableView — cellNotes, parallel to cells", () => {
 
   it("a document cached before cellNotes existed still parses (the field is optional)", () => {
     const view = buildTableView(input([row("a", LEDGER, { rank: 1 })]));
-    const legacy = { ...view, rows: view.rows.map(({ cellNotes: _drop, ...r }) => r) };
+    const legacy = { ...view, rows: view.rows.map(withoutNotes) };
     expect(TableView.safeParse(legacy).success).toBe(true);
   });
 });

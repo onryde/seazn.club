@@ -90,6 +90,7 @@ import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
+import { StandingsPopover } from "./standings-popover";
 
 export interface StandingsTableViewProps {
   view: TableViewT;
@@ -392,19 +393,32 @@ export function StandingsTableView({
                         break opportunity and overflowed into the name cell on
                         every tied row. The gap is real box, and the column is
                         sized for both together. */}
+                    {/* The tie note is the SAME popover the division page's
+                        table uses (`standings-popover.tsx`): a tap opens it, a
+                        tap anywhere else, Esc, or opening another closes it.
+                        It was a `title=` here, which a phone cannot hover — the
+                        sentence reached screen readers (as sr-only text) and
+                        nobody else. `aria-describedby` on the trigger keeps it
+                        spoken on focus without opening anything. */}
                     <td className="py-2 pl-2 align-middle tabular-nums">
-                      <span className="flex items-center gap-px">
-                        {rankChip(r.rank)}
-                        {r.tieBreakText ? (
-                          <span
-                            title={r.tieBreakText}
-                            className="shrink-0 text-[10px] leading-none text-accent"
-                          >
-                            <span aria-hidden>*</span>
-                            <span className="sr-only">{r.tieBreakText}</span>
-                          </span>
-                        ) : null}
-                      </span>
+                      {r.tieBreakText ? (
+                        <StandingsPopover
+                          testid={`${testid}-tie-${r.entrantId}`}
+                          className="-my-2 flex items-center gap-px py-2"
+                          trigger={
+                            <>
+                              {rankChip(r.rank)}
+                              <span aria-hidden className="shrink-0 text-[10px] leading-none text-accent">
+                                *
+                              </span>
+                            </>
+                          }
+                        >
+                          {r.tieBreakText}
+                        </StandingsPopover>
+                      ) : (
+                        <span className="flex items-center gap-px">{rankChip(r.rank)}</span>
+                      )}
                     </td>
                     {/* The name IS the row's header: without `scope="row"` a
                         screen reader reading "6" out of the Pts column cannot
@@ -429,19 +443,37 @@ export function StandingsTableView({
                         </span>
                       </span>
                     </th>
-                    {view.columns.map((c, i) => (
-                      <td
-                        key={c.key}
-                        data-col={c.key}
-                        className={`pl-0.5 ${endPad(i)} py-2 text-right ${
-                          c.key === "points"
-                            ? "font-display text-base font-bold text-accent-strong"
-                            : "text-zinc-600"
-                        }${foldCls(c)}`}
-                      >
-                        {r.cells[i]}
-                      </td>
-                    ))}
+                    {view.columns.map((c, i) => {
+                      // `cellNotes[i]` pairs with `cells[i]` exactly as the
+                      // cell pairs with its column. Absent on a cached
+                      // document from before the field, which renders the
+                      // plain cell it always did.
+                      const note = r.cellNotes?.[i] ?? null;
+                      return (
+                        <td
+                          key={c.key}
+                          data-col={c.key}
+                          className={`pl-0.5 ${endPad(i)} py-2 text-right ${
+                            c.key === "points"
+                              ? "font-display text-base font-bold text-accent-strong"
+                              : "text-zinc-600"
+                          }${foldCls(c)}`}
+                        >
+                          {note === null ? (
+                            r.cells[i]
+                          ) : (
+                            <StandingsPopover
+                              testid={`${testid}-ratio-${c.key}-${r.entrantId}`}
+                              align="end"
+                              className="-my-2 py-2 underline decoration-zinc-300 decoration-dotted underline-offset-4"
+                              trigger={r.cells[i]}
+                            >
+                              {note}
+                            </StandingsPopover>
+                          )}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
