@@ -71,6 +71,11 @@ import {
   nextUnseatedSwissRound,
   swissRoundHasPlayedResult,
 } from "@/lib/swiss-shell";
+// The Swiss shape legend (owner-approved 2026-09-22, option B) — the one line
+// under a swiss stage's title. Pure derivation + copy assembly live there; see
+// that module's header for why the match count is taken from the FIELD and
+// never from a count of the fixture rows.
+import { swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -235,6 +240,22 @@ interface Props {
   stages: StageRow[];
   fixtures: FixtureRow[];
   entrantNames: Record<string, string>;
+  /** The ids of the entrants who are IN THE FIELD — the division roster
+   *  filtered to the server's own `status in ('registered','confirmed')`
+   *  predicate (the page derives it as the complement of `DEPARTED_STATUSES`,
+   *  the one place that vocabulary is spelled; the equivalence is pinned by
+   *  `swiss-legend.test.ts`).
+   *
+   *  Feeds the swiss shape legend, and NOTHING else. Ids rather than a bare
+   *  count because a swiss stage carrying `config.qualified` pairs only the
+   *  qualifiers still in the field, which is an intersection, not a number —
+   *  the same resolution `generateStageFixturesWrite` performs.
+   *
+   *  Optional for the same reason `venues`/`rosterDrift`/`phase` are: a dozen
+   *  pre-existing `stages-panel-*.test.tsx` files build props without it.
+   *  ABSENT means "roster unknown" and renders NO legend — never a match count
+   *  of zero dressed up as a fact. */
+  activeEntrantIds?: string[];
   /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
    *  the per-fixture court editor's picker and the venue-qualified display
    *  name (P9 pass 4d, item 1). Same prop shape schedule-board.tsx's own
@@ -416,7 +437,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -883,6 +904,21 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           const latest = latestSeatedSwissRound(swissShellFixtures);
           return latest !== null && !swissRoundHasPlayedResult(swissShellFixtures, latest);
         })();
+        // The swiss shape legend (owner-approved 2026-09-22, option B) — the
+        // one line under this stage's title. `null` for every non-swiss kind,
+        // which is why nothing else on this card changes shape.
+        //
+        // `stageFixtures.length` is the THIRD figure (the rows this stage
+        // holds today) and is deliberately NOT the source of the match count:
+        // the whole point is that the rows can be stale — minted for an older
+        // field — and the legend has to say what the CURRENT field needs so
+        // the disagreement is visible. See lib/swiss-legend.ts's header.
+        const swissLegend = swissStageLegend({
+          kind: stage.kind,
+          config: stage.config,
+          activeEntrantIds,
+          fixtureCount: stageFixtures.length,
+        });
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -930,6 +966,31 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   </h3>
                   <span className="chip">{stage.kind.replace(/_/g, " ")}</span>
                   <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
+                  {/* The swiss shape legend. `w-full` inside the header's own
+                      `flex-wrap`, so it takes the SECOND line under the title
+                      and chips at every width rather than adding a row of
+                      chrome of its own — the stage card is already tall on
+                      phones. No width-conditional class at all (and none is
+                      wanted: the same sentence is the right answer at 320 and
+                      at 1280); it simply wraps, which is why it carries
+                      `min-w-0` and no `whitespace-nowrap`. Rendered for BOTH
+                      viewers — this is information, not an action, so unlike
+                      the rail it has no `canEdit` gate.
+
+                      Built inline rather than as a child component on purpose:
+                      this file's unit tests walk the panel with `renderIsland`,
+                      whose `walk()` never invokes a nested function
+                      component's render (see stage-rail.tsx's header for the
+                      full investigation), so a `<SwissLegend>` here would be
+                      invisible to them. */}
+                  {swissLegend && (
+                    <p
+                      data-testid="stage-swiss-legend"
+                      className="w-full min-w-0 text-xs text-slate-500"
+                    >
+                      {swissLegendText(swissLegend, { t: msg, plural: msgPlural })}
+                    </p>
+                  )}
                 </header>
 
                 {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
