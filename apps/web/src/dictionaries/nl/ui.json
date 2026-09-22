@@ -2381,6 +2381,8 @@
   "launch.confirm.lead": "Het speelschema gaat nu live voor spelers.",
   "launch.confirm.entrants": "De deelnemerslijst sluit. Afmelden kan nog steeds; er kan niemand nieuw meer bij.",
   "entrants.locked.note": "Dit toernooi is begonnen — de deelnemerslijst is vergrendeld. Afmeldingen werken nog; er kunnen geen nieuwe deelnemers meer worden toegevoegd.",
+  "entrants.row.delete": "Verwijderen",
+  "entrants.row.deleteHint": "Alleen beschikbaar voordat de divisie is gestart",
   "launch.confirm.competition": "De competitie gaat van gepubliceerd naar live.",
   "launch.confirm.format": "Het format ligt al vast — er bestaan wedstrijden.",
   "launch.confirm.formatLocksNow": "De wedstrijden worden nu gegenereerd en daarmee ligt het format vast.",

@@ -2426,6 +2426,8 @@
   "launch.confirm.lead": "The timetable goes live to players now.",
   "launch.confirm.entrants": "Entrant list closes. Withdrawals still work; no one new can be added.",
   "entrants.locked.note": "This tournament has started — the entrant list is locked. Withdrawals still work; no one new can be added.",
+  "entrants.row.delete": "Delete",
+  "entrants.row.deleteHint": "Only available before the division has started",
   "launch.confirm.competition": "The competition moves from published to live.",
   "launch.confirm.format": "The format is already locked — fixtures exist.",
   "launch.confirm.formatLocksNow": "Fixtures are generated now, and the format locks with them.",

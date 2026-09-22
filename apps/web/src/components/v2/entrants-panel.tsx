@@ -1301,6 +1301,7 @@ function EntrantTableRow({
   /** Hard delete (confirm handled upstream) — see `deletable`. */
   onDelete: () => void;
 }) {
+  const msg = useMsg();
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<Member[] | null>(null);
   // RosterEditor seeds its own state from `members` once (useState(initial)) —
@@ -1398,10 +1399,15 @@ function EntrantTableRow({
                   type="button"
                   disabled={busy}
                   onClick={onDelete}
-                  title="Only available before the division has started"
+                  title={msg("entrants.row.deleteHint")}
+                  // The walkthrough (`e2e/walkthrough/swiss-pre-start-field-change.spec.ts`)
+                  // used to find this button by the English word that used to be
+                  // hardcoded here. Now that the label is translated, the handle
+                  // has to be something a Dutch organiser's console still carries.
+                  data-testid="entrant-row-delete"
                   className="btn btn-danger px-2 py-1 text-xs"
                 >
-                  Delete
+                  {msg("entrants.row.delete")}
                 </button>
               )}
             </div>

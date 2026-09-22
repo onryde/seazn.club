@@ -1896,6 +1896,8 @@ export type DictionaryKey =
   | "entrants.add.pairPlayers"
   | "entrants.add.player"
   | "entrants.locked.note"
+  | "entrants.row.delete"
+  | "entrants.row.deleteHint"
   | "event.badminton.expedite.start"
   | "event.badminton.game.summary"
   | "event.badminton.rally"
