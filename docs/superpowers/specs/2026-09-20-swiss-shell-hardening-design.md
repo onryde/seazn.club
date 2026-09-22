@@ -407,19 +407,80 @@ reuses `STAGE_NOT_READY`, so no new user-facing string and no dictionary work.
   exports `SMOKE_BASE`, not `PLAYWRIGHT_BASE`; without the latter the preflight
   silently probes `:3000` and aborts. Environment, not defect.)
 
-**Scope is LAZY — only the round being paired.** A later round has no results
-to lose by being reshaped late, and reconciling every unseated round widens a
-destructive write for a cosmetic fixture count. Two tests assert that rounds 2
-and 3 keep their old size, so switching to all-rounds must move a test rather
-than slip through.
+**Scope WAS lazy — only the round being paired. Superseded 2026-09-22; see
+Task 1.4 below.** The original reasoning: a later round has no results to lose
+by being reshaped late, and reconciling every unseated round widens a
+destructive write for a cosmetic fixture count. Two tests asserted that rounds
+2 and 3 keep their old size, so switching to all-rounds had to move a test
+rather than slip through. It did — both were moved, not deleted.
+
+The premise that did not survive contact: the stale fixture count is NOT
+cosmetic before Start. An organiser lays out courts and times for every round
+up front, and a round still minted for the old field has no board to hang a
+new entrant on, so it cannot be scheduled at all.
 
 **Deliberate survivor.** The early return gates only the RESHAPE: a
 correct-shaped round still Pairs even when it carries evidence, because
 refusing it would regress a Pair that works today. Pinned by a named test, and
 it is the one mutant that survives by design in the force-false direction.
 
-**Still owed on this task:** no walkthrough spec (the programme's bar is one
-per task group) and the branch is unpushed with no PR.
+**Still owed on this task:** the branch is unpushed with no PR. The walkthrough
+spec owed here was written on 2026-09-22 alongside Task 1.4 —
+`apps/web/e2e/walkthrough/swiss-pre-start-field-change.spec.ts`, registered in
+`WALKTHROUGH_SPECS`. It covers Task 1.0's reconcile and 1.4's eager scope in one
+story, and it REDS against the pre-1.4 code.
+
+### Task 1.4 — the eager scope before Start (closes Open question 1's deferred half)
+
+**OWNER RULING 2026-09-22.** The reconcile is EAGER before the division has
+started — every wholly-unseated round is brought into line with the current
+field — and stays LAZY after Start, exactly as Task 1.0 shipped it.
+
+The motivating defect, reported from production: a pre-Start Swiss division
+where three entrants were added and one deleted. Round 1 re-paired correctly
+through Unpair → Pair next, while rounds 2 and 3 kept the shells minted for the
+old field. The new entrants had no board, so those rounds could not be
+scheduled — and nothing on the screen said so.
+
+**Built** (`stages.ts`): `swissGen` asks `divisionHasStarted` — read inside the
+write transaction, under the advisory lock `generateStageFixturesWrite` already
+holds, so no TOCTOU (Task 2.4's convention) — and when it has not, calls the
+EXISTING `reconcileSwissRoundShells` once per later round. No second reconcile
+path and no delete-and-recreate: surviving boards keep their id, `scheduled_at`
+and `court_id` in rounds 2 and 3 exactly as they already did in the paired
+round. Pre-Start is `setup` AND `scheduled` — `publishSchedule` moves setup →
+scheduled and only `startDivision` moves it to active, so a predicate written
+`status !== 'setup'` would be wrong. A missing division row reads as STARTED,
+the narrower write.
+
+**Two findings from review, both fixed on the branch:**
+
+- **A later round's guards could abort the whole Generate.** The first cut
+  filtered later rounds on `isSwissBoardSeated`, which covers guard 1 only —
+  `swissRoundHasPlayedResult` and the canonical `fixtureEvidenceSql` still
+  fired and threw `STAGE_NOT_READY`, taking the target round's pairing with it.
+  Filed PLAUSIBLE by the reviewer, then CONFIRMED by a RED test. The reconcile
+  now takes a policy: the target round REFUSES loudly, later rounds SKIP. The
+  seated pre-filter was deleted rather than kept beside it — two guards covering
+  for each other leave neither with a killer.
+- **An eager shrink deletes surplus boards in every unseated round at once**,
+  with their `scheduled_at` and `court_id`, where the lazy scope dropped one
+  round at a time. Note `scheduled` means the timetable is PUBLISHED. Behaviour
+  is unchanged and deliberate — a board the field no longer needs cannot survive
+  — but every slot assertion on the branch had pinned a SURVIVOR, so the loss is
+  now pinned by its own test.
+
+**Also shipped:** Generate's outcome carries the reshape (`GenerateOutcome
+.reshaped` → the desk panel's inline notice), so a shrink is no longer silent;
+byes are counted apart from matches, because a match needs a court and a slot
+and a bye needs neither. Absent entirely when nothing moved, so the ordinary
+Pair reads as before. 10 keys × 4 locales, `i18n-keys.ts` regenerated.
+
+**Deliberately NOT done, recorded for the owner:** surplus boards are deleted
+from the highest `seq_in_round` down, so a board holding a pinned time can be
+deleted while an unscheduled one survives. Preferring unscheduled boards would
+save real layout but breaks the contiguous `ext_key` / `seq_in_round` assumption
+the mint arithmetic and every reader depend on. Not taken unilaterally.
 
 ### Task 1.1 — a bye never freezes `config_snapshot`
 
@@ -702,13 +763,21 @@ them together means one screenshot pass instead of two.
    (Task 2.4), and the round being reconciled proven unseated and unplayed
    first.
 
-   **Deliberately left open:** rounds BEYOND the one being paired are also
-   wrong-sized after a withdrawal. Reconciling lazily — each round when it is
-   paired — is simpler and touches less, but leaves later shells stale, which
-   any UI counting fixtures will report. Reconciling all unseated rounds at
-   once is consistent but widens the write. Decide when building Task 1.0; the
-   lazy option is the safer default and is what the acceptance criteria above
-   assume.
+   **Deliberately left open — CLOSED 2026-09-22, see Task 1.4.** rounds BEYOND
+   the one being paired are also wrong-sized after a withdrawal. Reconciling
+   lazily — each round when it is paired — is simpler and touches less, but
+   leaves later shells stale, which any UI counting fixtures will report.
+   Reconciling all unseated rounds at once is consistent but widens the write.
+   Decide when building Task 1.0; the lazy option is the safer default and is
+   what the acceptance criteria above assume.
+
+   **OWNER RULING 2026-09-22: split on whether the division has STARTED.**
+   Eager before Start, lazy after. The lazy default was right for the
+   mid-tournament case it was written for and is kept there; it was wrong
+   before Start, where the organiser is laying out courts and times for every
+   round and a stale round cannot be scheduled at all. "Cosmetic fixture count"
+   understated it — a round minted for the old field has no board to hang a new
+   entrant on. Built as Task 1.4.
 2. **Task 2.2 — a round-count decrease with seated rounds beyond the new
    budget.** Refuse outright, or clear the seated rounds above the budget?
    **Recommendation: refuse** — clearing seated rounds is exactly the
