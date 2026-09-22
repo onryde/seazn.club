@@ -1106,18 +1106,22 @@ async function swissGen(
   // reason to widen a destructive write mid-event, and a later round's shell
   // count is cosmetic until its own Pair reaches it.
   const eager = !(await divisionHasStarted(tx, divisionId));
-  // `target` is always reconciled and always carries the full guard set. The
-  // later rounds are filtered to the WHOLLY UNSEATED ones, which is exactly the
-  // set the reconcile can act on — a seated round refuses reshaping by its
-  // first guard, so including one could only turn a Generate that works today
-  // into a refusal. It is reachable: `addFixture` puts an ad-hoc swiss fixture
-  // at `maxRound + 1`, seated on both sides (Task 2.3).
+  // The asymmetry that keeps the wider scope from widening the REFUSAL surface.
+  // The reconcile has THREE guards — seated, `swissRoundHasPlayedResult`, and
+  // the canonical `fixtureEvidenceSql` — and every one of them fires on a later
+  // round just as readily as on the target. `target` gets `"refuse"`: it is the
+  // round the organiser pressed Pair next on. The rounds the eager pass sweeps
+  // up get `"skip"`, so one of them being unreshapeable leaves it stale instead
+  // of aborting the Generate and taking round 1's pairing with it. See
+  // `SwissReconcileBlockedPolicy` for the full reasoning.
+  //
+  // This is also what absorbs the ad-hoc case: `addFixture` puts a swiss
+  // fixture at `maxRound + 1` seated on both sides (Task 2.3), so a 3-round
+  // stage can hold a fully seated round 4. It trips the seated guard and is
+  // skipped, rather than needing a filter of its own here — one mechanism, so
+  // neither can quietly cover for the other.
   const laterRounds = eager
-    ? [...new Set(existing.map((f) => f.round_no))]
-        .filter(
-          (r) => r > target && !existing.some((f) => f.round_no === r && isSwissBoardSeated(f)),
-        )
-        .sort((a, b) => a - b)
+    ? [...new Set(existing.map((f) => f.round_no))].filter((r) => r > target).sort((a, b) => a - b)
     : [];
   const roundShells = await reconcileSwissRoundShells(
     tx,
@@ -1126,9 +1130,18 @@ async function swissGen(
     target,
     existing,
     entrants.length,
+    "refuse",
   );
   for (const roundNo of laterRounds) {
-    await reconcileSwissRoundShells(tx, stageId, divisionId, roundNo, existing, entrants.length);
+    await reconcileSwissRoundShells(
+      tx,
+      stageId,
+      divisionId,
+      roundNo,
+      existing,
+      entrants.length,
+      "skip",
+    );
   }
   const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
   const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
@@ -1200,6 +1213,29 @@ async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> 
 }
 
 /**
+ * What a tripped reconcile guard means for the round that tripped it.
+ *
+ * `"refuse"` — throw `STAGE_NOT_READY`. Right for the round being PAIRED: the
+ * organiser pressed Pair next on it, so a round that cannot be reshaped is the
+ * answer to what they asked, and it has to be said out loud.
+ *
+ * `"skip"` — leave the round exactly as found and carry on. Right for every
+ * OTHER round the eager pre-Start pass sweeps up. Those rounds were never
+ * asked about; before the eager pass existed no guard could fire on them at
+ * all. Throwing there would abort the whole Generate and take the target
+ * round's pairing down with it — turning a Generate that works today into a
+ * hard refusal over a round nobody touched. That is the same promise
+ * `reconcileSwissRoundShells`' early return already makes for the paired
+ * round: evidence blocks a RESHAPE, never a Pair that needs none.
+ *
+ * The cost of `"skip"` is honest and bounded: such a round stays sized for the
+ * old field until something clears whatever blocks it. Stale beats refusing to
+ * run the tournament, and the round is left untouched rather than half-written
+ * — every guard is read before the first write.
+ */
+type SwissReconcileBlockedPolicy = "refuse" | "skip";
+
+/**
  * Bring round `target`'s shells into line with the CURRENT active field, and
  * return the round as it now stands (2026-09-20 hardening, Task 1.0).
  *
@@ -1244,6 +1280,9 @@ async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> 
  *
  * Refusals reuse `STAGE_NOT_READY`, the code this function's siblings already
  * raise, so no new organiser-facing string is introduced here.
+ *
+ * `onBlocked` decides what a tripped guard MEANS, and it is the caller's call
+ * because it depends on whose round this is — see `SwissReconcileBlockedPolicy`.
  */
 async function reconcileSwissRoundShells(
   tx: Tx,
@@ -1252,6 +1291,7 @@ async function reconcileSwissRoundShells(
   target: number,
   existing: readonly SwissExistingFixture[],
   fieldSize: number,
+  onBlocked: SwissReconcileBlockedPolicy,
 ): Promise<SwissExistingFixture[]> {
   const bySeq = (a: SwissExistingFixture, b: SwissExistingFixture) =>
     a.seq_in_round - b.seq_in_round;
@@ -1266,13 +1306,20 @@ async function reconcileSwissRoundShells(
   // written and every row keeps its id, its schedule and its court.
   if (boardRows.length === boards && (byeRow !== undefined) === bye) return round;
 
+  // All three guards below are reached only once the round NEEDS reshaping —
+  // the early return above is what keeps a correct-shaped round Pairing even
+  // where evidence exists. Each arm either refuses or skips per `onBlocked`;
+  // nothing has been written yet at any of them, so a skip leaves the round
+  // exactly as it was found.
   if (round.some((f) => isSwissBoardSeated(f))) {
+    if (onBlocked === "skip") return round;
     throw new EngineError("STAGE_NOT_READY", "swiss round is already partly seated — reconcile refused", {
       stageId,
       round: target,
     });
   }
   if (swissRoundHasPlayedResult(round, target)) {
+    if (onBlocked === "skip") return round;
     throw new EngineError("STAGE_NOT_READY", "swiss round has played results — reconcile refused", {
       stageId,
       round: target,
@@ -1285,6 +1332,7 @@ async function reconcileSwissRoundShells(
       where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
       limit 1`;
     if (blocked) {
+      if (onBlocked === "skip") return round;
       throw new EngineError("STAGE_NOT_READY", "swiss round has recorded match data — reconcile refused", {
         stageId,
         round: target,
