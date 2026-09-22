@@ -48,12 +48,21 @@ name: E2E
 #
 # That last sentence has now come due, and this paragraph is kept above rather
 # than rewritten because its ARITHMETIC is the part that expired, not its
-# method. `e2e-parallel` no longer shards by test count: its slowest leg is
-# predicted at ~234s (see that job's own comment), where phones-small measured
-# 244s on run 32272599493. THIS job is therefore the workflow's floor now, and
-# it is the leg count here — not there — that is worth revisiting next. Do it
-# the same way: against the other jobs' slowest leg, never against this one in
-# isolation.
+# method. `e2e-parallel` no longer shards by test count: its slowest `parallel`
+# leg is predicted at ~234s (see that job's own comment), where phones-small
+# measured 244s on run 32272599493. On those two numbers alone e2e-mobile was
+# the floor, which is what this paragraph used to conclude.
+#
+# SUPERSEDED 2026-09-22. That conclusion is no longer true and is corrected
+# here rather than left to mislead. The walkthrough leg was split three ways
+# inside `e2e-parallel`, and its cost is dominated by ONE unsplittable test —
+# `scorepad-v3-tennis-mtb.spec.ts`, ~307s — which no shard count can divide. So
+# the shard holding it sits at roughly 307s + ~106s setup, and THAT leg, not
+# e2e-mobile's phones-small, is this workflow's floor. The leg count worth
+# revisiting next is therefore neither this job's nor the walkthrough shard
+# count: it is whether that one spec can be made cheaper or split. Measure any
+# leg the same way regardless — against the slowest leg of the OTHER jobs,
+# never against a sibling in its own matrix.
 #
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
@@ -223,30 +232,52 @@ jobs:
           # knowingly to buy back the tail; it is recorded here rather than
           # hidden so the next person revisiting leg counts has the real trade.
           #
-          # WHEN TO STOP SPLITTING. The rule this file already applies to
-          # e2e-mobile and e2e-parallel: measure a leg against the OTHER jobs'
-          # slowest leg, never against itself. Those are ~234s predicted for
-          # e2e-parallel's slowest shard and 244s measured for e2e-mobile's
-          # phones-small (this file's header carries both). Two of the three
-          # shards below should land under that, at which point they are no
-          # longer the workflow's wall clock and splitting them further buys
-          # nothing. The remaining question is only ever the tennis-mtb shard.
+          # WHEN TO STOP SPLITTING. The rule this file already applies: measure
+          # a leg against the slowest leg of the OTHER JOBS, never against
+          # itself. Note what that means here — these walkthrough shards are
+          # `e2e-parallel` legs, the same `strategy.matrix` as the three
+          # `parallel` ones above, so `e2e-parallel`'s own slowest shard is NOT
+          # a valid comparison for them. The jobs to measure against are
+          # `e2e-serial` and `e2e-mobile`, whose slowest leg is phones-small at
+          # 244s measured (run 32272599493). Two of the three shards below
+          # should land under that, at which point they are no longer the
+          # workflow's wall clock and splitting them further buys nothing. The
+          # remaining question is only ever the tennis-mtb shard — and by the
+          # arithmetic above (~307s + ~106s setup) that shard, not e2e-mobile,
+          # is this workflow's floor now. The file header is corrected to match.
           #
-          # `slug` must stay unique across the WHOLE matrix and carry no "/":
-          # upload-artifact@v4 rejects the slash and FAILS THE JOB on a
-          # duplicate name. `group` is the human label and may contain it, as
+          # CONVENTION, NOT A GUARANTEE: `slug` is kept unique across the whole
+          # matrix and free of "/", because upload-artifact@v4 rejects the slash
+          # and FAILS THE JOB on a duplicate name. Nothing enforces it —
+          # `e2e-ci-wiring.test.ts` pins the shard args and the project name but
+          # does not parse slugs — so a fourth shard added by hand is unguarded
+          # and the next duplicate is found by a failed upload, not by a test.
+          # `group` is the human label and may contain the slash, as
           # `parallel 1/2` above already does.
           #
-          # One consequence worth knowing before reading a red: every shard has
-          # `project: walkthrough`, so all three satisfy the `matrix.project ==
-          # 'walkthrough'` conditions below and all three start their own
-          # `stripe listen` forwarder against the same Stripe test account. Each
-          # forwards to its own server with its own minted secret, so the shard
-          # holding a money spec is served correctly; the other two additionally
-          # receive events for rows that exist only in a sibling shard's
-          # database. That is noise in their logs, not a failure — but it is new
-          # with this split and it is where to look first if a money spec goes
-          # red in a way that names an id nothing in its own DB owns.
+          # THREE THINGS THAT WENT FROM 1x TO 3x with this split, because every
+          # shard carries `project: walkthrough` and the conditions below key on
+          # that. Read these before diagnosing a red as a product defect:
+          #
+          #   * `stripe:sync` now runs three times concurrently against one
+          #     Stripe test account. It MUST — the step writes price ids into
+          #     each shard's own Postgres — and its own comment below traces
+          #     what the concurrency does and what is left unverified.
+          #   * three `stripe listen` forwarders run against that same account.
+          #     Each posts to its own server with its own minted secret, so the
+          #     shard holding a money spec is served correctly; the other two
+          #     also receive that shard's events and post them to a server whose
+          #     database has none of those rows. Noise, not a failure — but it is
+          #     where to look first if a money spec reds naming an id nothing in
+          #     its own DB owns.
+          #   * the "Connect walkthrough not configured" `::warning::` is now
+          #     emitted up to three times for one missing secret. Cosmetic; do
+          #     not read three warnings as three problems.
+          #
+          # The Event Pass money-path check below was BROKEN by this split and
+          # is repaired in the same commit — see its own comment. It is the
+          # pattern to look for when adding a fourth shard: any step that reads
+          # the Playwright JSON report sees only ITS OWN shard's tests.
           - group: walkthrough 1/3
             slug: walkthrough-1
             project: walkthrough
@@ -408,8 +439,8 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
-      # Only the walkthrough leg carries a real STRIPE_SECRET_KEY (see env
-      # block above) and only it needs live price ids. Every other leg keeps
+      # Only the walkthrough legs carry a real STRIPE_SECRET_KEY (see env
+      # block above) and only they need live price ids. Every other leg keeps
       # the dummy key and would just burn a wasted Stripe call here. This
       # job's Postgres is a FRESH container per run — `stripe:sync` run
       # against any other environment (a laptop, staging) never reaches it,
@@ -417,6 +448,43 @@ jobs:
       # THIS JOB. Mirrors ci.yml's "Live-Stripe integration tests" step,
       # which syncs then runs against its own ephemeral Postgres for the
       # identical reason.
+      #
+      # RUNS ON ALL THREE WALKTHROUGH SHARDS, DELIBERATELY (2026-09-22 split).
+      # Review asked for it to be gated to one shard. It must not be: the
+      # script's second half is a WRITE TO THIS JOB'S OWN DATABASE —
+      # `applyPlanPrices` sets `plans.stripe_price_id_monthly/annual`
+      # (scripts/stripe-sync.ts), and `services:` are per matrix leg, so each
+      # shard has its own Postgres with its own empty `plans`. Gating the step
+      # to shard 1 would leave shards 2 and 3 with NULL price ids and red the
+      # money specs deterministically — trading a probabilistic hazard for a
+      # certain break. There is no ordering primitive that helps either: the
+      # three shards are sibling matrix legs with no `needs:` between them.
+      #
+      # What the concurrency actually costs, traced through the script rather
+      # than assumed. In the STEADY state (`scripts/stripe-sync.ts:3` "a price
+      # is matched by its stable lookup_key, so re-running never duplicates")
+      # all three find the same price and write the same id: no writes to
+      # Stripe at all. On a DRIFT run — someone edited stripe-plans.json — the
+      # script mints a replacement price carrying the lookup key and archives
+      # the price it read. Three racers that all read the pre-drift price each
+      # mint their own replacement and each archive that same predecessor, so
+      # each shard stores a DISTINCT but ACTIVE, correctly-priced id;
+      # `transfer_lookup_key` moves the key, it does not archive, and nothing
+      # archives a sibling's replacement. The residue is orphaned active prices
+      # in the test account, not a shard holding an archived one. A staggered
+      # race is quieter still: the second reader finds the replacement, sees no
+      # drift, and creates nothing.
+      #
+      # The one LOUD failure mode left is two `transfer_lookup_key` creates
+      # landing on the same key at the same instant; if Stripe rejects one this
+      # step fails, which names Stripe in the setup phase rather than surfacing
+      # as a money spec that looks like a product defect. UNVERIFIED — it needs
+      # a real drift run on `main` to observe, and this is CI config with no
+      # local proof. If it bites, the fix is not a gate: it is to reconcile
+      # Stripe ONCE in a prior job the shards `needs:`, leaving each shard's own
+      # sync as the DB-write no-op it already is in the steady state. That adds
+      # a job and serializes the leg behind it, so it is an owner call, not a
+      # silent inheritance.
       - name: Sync Stripe prices for the walkthrough leg
         if: matrix.project == 'walkthrough'
         run: npm run stripe:sync
@@ -675,6 +743,28 @@ jobs:
       # from "U1 and U16 were skipped", and only the skip count can. Runs even
       # when the test step above failed, so it reports the real cause instead
       # of being skipped itself and reading as "not applicable".
+      #
+      # SHARD-AWARE since the walkthrough leg was split three ways
+      # (2026-09-22). This step's `if:` is on `matrix.project`, so it now runs
+      # on all THREE shards — but `event-pass.spec.ts` lands in exactly one of
+      # them, and Playwright's JSON report only ever contains that shard's own
+      # tests. Written as it was, the two shards without the file would hit the
+      # `seen.length !== want.length` branch and FAIL THE JOB with "money-path
+      # tests not found in the report" on every push to `main`. That is not a
+      # hazard, it is a deterministic red, and it is the shape of defect this
+      # split introduced rather than inherited.
+      #
+      # The repair keys on the FILE, not on the titles: if this shard ran no
+      # `event-pass` test at all, the file is a sibling's and there is nothing
+      # here to check. If it ran any, the two named titles must be among them —
+      # so a RENAME of U1/U16 is still caught, in the one shard that can see it.
+      # Deliberately NOT relaxed to "titles missing is fine": that would go
+      # vacuous the moment somebody renamed them, which is the failure this
+      # whole step exists to prevent. The remaining hole — the spec FILE being
+      # deleted outright, after which all three shards go quiet — is closed
+      # elsewhere: `event-pass.spec.ts` is named in `WALKTHROUGH_SPECS`
+      # (apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts), a pure unit test
+      # that runs in every job and reds on a deletion.
       - name: Event Pass money path must have RUN, not skipped
         if: always() && matrix.project == 'walkthrough'
         run: |
@@ -687,8 +777,10 @@ jobs:
             const r = require(require("path").resolve(process.env.REPORT));
             const want = ["U1 ·", "U16 ·"];
             const titles = [];
+            const files = [];
             const walk = (s) => {
               for (const spec of s.specs ?? []) {
+                if (spec.file) files.push(spec.file);
                 for (const t of spec.tests ?? []) {
                   titles.push([spec.title, t.results?.[0]?.status ?? "unknown"]);
                 }
@@ -696,6 +788,15 @@ jobs:
               for (const c of s.suites ?? []) walk(c);
             };
             for (const s of r.suites ?? []) walk(s);
+            // Sharded leg: event-pass.spec.ts belongs to exactly one shard.
+            // Absent from THIS report means a sibling ran it, not that the
+            // money path vanished — see the step comment for why this keys on
+            // the file rather than on the titles.
+            if (!files.some((f) => f.includes("event-pass"))) {
+              console.log("::notice::event-pass.spec.ts did not land in this shard — " +
+                "its money-path check runs in the shard that holds it");
+              process.exit(0);
+            }
             const bad = want.flatMap((w) =>
               titles.filter(([t]) => t.includes(w))
                     .filter(([, st]) => st === "skipped" || st === "pending")
