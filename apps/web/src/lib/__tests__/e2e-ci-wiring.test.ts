@@ -315,6 +315,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // trustworthy together — each one alone is satisfied by a product that
   // simply deleted her.
   "withdrawn-entrant-organiser.spec.ts",
+  // Device-link write path W1 — the realtime propagation flows §6b of the
+  // design surveyed and found uncovered: a courtside device's goal reaching
+  // the organiser's SCREEN, and the organiser's goal reaching a device pad
+  // that is already mounted. It is the only walkthrough that holds two pads
+  // open on one fixture at once, and the only one anywhere that asserts a
+  // propagation arrived FASTER than the pad's polling fallback — without that
+  // clause every such test is satisfied by the 15-second poll.
+  "console-device-live-sync.spec.ts",
 ];
 
 afterEach(() => {
