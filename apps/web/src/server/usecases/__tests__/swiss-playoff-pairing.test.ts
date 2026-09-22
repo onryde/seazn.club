@@ -449,7 +449,12 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     expect(got).not.toEqual(expectedRoundOne(10, "rank_adjacent")); // differential
   });
 
-  it("ODD field: round 1 defaults to fold, and after Unpair a Neighbours pick still works (the bye is 'forfeited' at seat time)", async () => {
+  // Unpair clears the bye row as well (`clearSwissFixtureSeats` resets it to
+  // `scheduled`, outcome null), so no forfeited row is left at the override
+  // press. This case proves the default and the override on an odd field. It
+  // does NOT tell the round-number rule apart from a "decided board exists"
+  // rule; the next case does.
+  it("ODD field: round 1 defaults to fold, and an override after Unpair pairs seed neighbours", async () => {
     const { auth, nameOf, stageId } = await newSwiss(7, { pairing: "rank_adjacent" });
     await generateStageFixtures(auth, stageId);
     const real = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
@@ -458,6 +463,26 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" }); // must not 422
     const again = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
     expect(again.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(7, "rank_adjacent"));
+  });
+
+  it("refuses an override once round 1 is paired, even with NO result anywhere (the gate is the round number)", async () => {
+    // Even field: no bye row, so nothing is decided anywhere. A rule of "a
+    // seated decided board exists" would let this through to the round-2
+    // readiness check (STAGE_NOT_READY); the round-number rule refuses it as
+    // a round-1-only override.
+    const { auth, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
+    await generateStageFixtures(auth, stageId); // round 1 paired, nothing played
+    const [{ n: decided }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures
+      where stage_id = ${stageId} and status in ('decided', 'finalized', 'forfeited')`;
+    expect(decided).toBe(0);
+    await expect(generateStageFixtures(auth, stageId, { pairing: "fold" })).rejects.toMatchObject({
+      status: 422,
+      code: "SWISS_PAIRING_ROUND_ONE_ONLY",
+    });
+    const r2 = await fixturesOfRound(stageId, 2);
+    expect(r2.length).toBeGreaterThan(0);
+    expect(r2.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
   });
 
   it("a round-1 override of rank_adjacent pairs seed neighbours, and leaves config untouched", async () => {
@@ -471,10 +496,24 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
   });
 
   it("round 2 after a fold round 1 still pairs by the stored rank_adjacent cascade", async () => {
-    const { auth, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
+    const { auth, nameOf, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
     await generateStageFixtures(auth, stageId); // round 1: fold (default)
+    expect((await fixturesOfRound(stageId, 1)).map((f) => pairOf(f, nameOf)).sort()).toEqual(
+      expectedRoundOne(8, "fold"),
+    );
     await playRoundHomeWins(auth.orgId, stageId, 1);
     await generateStageFixtures(auth, stageId); // round 2: stored mode
+
+    // The SEATS, not only the ledger: a round 2 paired by fold would still
+    // write `pairing: "rank_adjacent"` if only the label were right. Every
+    // round-1 winner took it 2-0 on the same scores, so the cascade ties and
+    // falls back to seed order within each score group.
+    const round2 = (await fixturesOfRound(stageId, 2)).map((f) => pairOf(f, nameOf)).sort();
+    // rank-adjacent within each group: neighbours
+    expect(round2).toEqual(["E1|E2", "E3|E4", "E5|E6", "E7|E8"]);
+    // what fold within each group would have seated: top half v bottom half
+    expect(round2).not.toEqual(["E1|E3", "E2|E4", "E5|E7", "E6|E8"]);
+
     const [ev] = await sql<{ payload: Record<string, unknown> }[]>`
       select payload from division_events where type = 'fixtures_generated'
         and payload->>'stage_id' = ${stageId} and (payload->>'round')::int = 2`;
