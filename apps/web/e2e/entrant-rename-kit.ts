@@ -85,14 +85,14 @@ export async function stagePartnerSwap(page: Page, out: string, incoming: string
   await roster
     .locator("div", { has: page.getByText(out, { exact: true }) })
     .last()
-    .getByRole("button", { name: "remove" })
+    .getByRole("button", { name: uiEn["entrants.roster.remove"] })
     .click();
-  await roster.getByPlaceholder("Find player…").fill(incoming);
+  await roster.getByPlaceholder(uiEn["entrants.roster.findPlayer"]).fill(incoming);
   await roster.getByRole("button", { name: `+ ${incoming}` }).click();
 }
 
 export const saveRoster = (page: Page) =>
-  page.getByTestId("entrant-roster").getByRole("button", { name: "Save roster" });
+  page.getByTestId("entrant-roster").getByRole("button", { name: uiEn["entrants.roster.save"] });
 
 /** Stage the swap, then save the roster. */
 export async function swapPartner(page: Page, out: string, incoming: string): Promise<void> {

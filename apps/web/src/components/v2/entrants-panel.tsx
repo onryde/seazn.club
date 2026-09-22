@@ -1871,7 +1871,7 @@ export function RosterEditor({
               }}
               className="text-red-500 hover:underline"
             >
-              remove
+              {msg("entrants.roster.remove")}
             </button>
           )}
         </div>
@@ -1889,7 +1889,7 @@ export function RosterEditor({
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Find player…"
+              placeholder={msg("entrants.roster.findPlayer")}
               className="input min-h-11 w-44 px-2 py-1 text-xs"
             />
           )}
@@ -1946,7 +1946,7 @@ export function RosterEditor({
             onClick={() => onSave(members)}
             className="btn btn-primary px-3 py-1 text-xs"
           >
-            Save roster
+            {msg("entrants.roster.save")}
           </button>
         </div>
       )}
