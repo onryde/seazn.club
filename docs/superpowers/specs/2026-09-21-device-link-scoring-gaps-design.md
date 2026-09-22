@@ -128,8 +128,54 @@ hypothesis until each row is re-pinned against the tree.
 
 Move `rateLimit()` (`scoring.ts:92`) to run **after** the idempotency
 replay check (`:94-97`), so a replay that performs no write costs no
-slot. This is not a new denial-of-service surface: the replay check is a
-Redis GET, the same cost class as the limiter's own INCR.
+**write** slot. That move is right and stands.
+
+~~This is not a new denial-of-service surface: the replay check is a
+Redis GET, the same cost class as the limiter's own INCR.~~
+**Wrong — struck 2026-09-21 in W1 round-1 review, kept here rather than
+deleted because the mistake is the instructive part.** The sentence
+reasons about the cost of *one* request and silently concludes something
+about *how many* may be sent. Those are different claims. Bounded cost
+times an unbounded count is unbounded, and after the move a replay
+passed no limiter at all — so a caller holding one already-answered
+idempotency key could repeat it forever. That is reachable by anyone
+with a leaked `dl_` URL, because a device link is a shareable address,
+not a secret a single device holds.
+
+What replaced it: a **second bucket on the replay branch only**
+(`REPLAY_LIMIT`, keyed `scorereplayv1:<fixtureId>` like the write
+bucket). Three properties, each pinned by a test that dies without it:
+
+- **An abuse ceiling, never a pacing control.** Its max derives from
+  `SCORING_LIMIT.max` rather than being typed beside it, so the two move
+  together and cannot silently invert. It sits well above the write
+  cadence — a real replay storm (a queue drained after a tab death, or
+  several devices on one fixture retrying at once) is tens of requests,
+  not hundreds, so this must never fire for a real pad.
+- **Fail-open**, exactly like the write limiter: a Redis outage must
+  never stop a scorer recording a match.
+- **The write path is untouched** — same order, same limit: replay check,
+  then the write limiter, then entitlement, then the undo guard.
+
+**What this ceiling does NOT do, recorded so it is not over-claimed later.**
+The finding it answers was phrased as "unbounded billed Redis GETs". It does
+not close that. `cacheGet` necessarily runs BEFORE the limiter — you cannot
+know a request is a replay until you have looked — so a caller hammering one
+known key still costs one GET plus one INCR per request, and the limiter adds
+an op rather than removing one. What it genuinely bounds is the RATE at which
+replayed answers are served, not Redis command volume.
+
+The limiter cannot be moved earlier: limiting before the lookup would charge
+cache-MISS requests too, which is precisely the self-amplifying bug the
+reordering above removed. Request volume is an edge concern, not an
+application one — and verified 2026-09-22, the Cloudflare zone has no
+`http_ratelimit` ruleset at all, so nothing bounds it today. That is the real
+control if this ever matters commercially; see
+`docs/superpowers/reviews/2026-09-22-cloudflare-edge-exposure-scoring-realtime.md`.
+
+Generalisable, and the reason this is written out at length: "cheap per
+call" is not an answer to "how many calls". A rate limit removed from a
+path is not replaced by the path being inexpensive.
 
 ### 4.3 Transport classification
 
@@ -138,8 +184,12 @@ Redis GET, the same cost class as the limiter's own INCR.
 - `SEQ_CONFLICT`, **or an absent code** → `kind: "conflict"`.
   Renegotiable; path unchanged. Defaulting an absent code to today's
   behaviour means an un-migrated server cannot wedge a new client.
-- `UNDO_NOOP` | `UNDO_TARGET_MISSING` | `UNDO_ALREADY_VOIDED` →
-  `kind: "rejected"`.
+- `UNDO_NOOP` | `UNDO_TARGET_MISSING` | `UNDO_ALREADY_VOIDED` |
+  `UNDO_NOT_UNDOABLE` → `kind: "rejected"`. All **four**, matching
+  §4.1's list — this section listed three until 2026-09-21, and the
+  omitted one is exactly the refusal the staging wedge was built on.
+  A code missing here does not fail loudly: it falls through to the
+  renegotiable default above and silently restores the wedge.
 
 No pipeline change is needed for this case. `pipeline.ts:280-283`
 already drops the event and surfaces it, and
@@ -322,6 +372,135 @@ realtime seam.**
 
 Greenfield schema (`RULES.md:30-34`): a new column and index are cheap
 and expected; no contortion to avoid the migration.
+
+### The shape of the fix (owner ruling 2026-09-21)
+
+**A cache is the right home for rate limiting and the wrong home for
+idempotency.** The two look alike and get opposite answers:
+
+- *Rate limiting* is a fixed-window counter, inherently ephemeral. When
+  it is lost it fails open to "allow", which is the safe direction for a
+  scorer: someone goes unthrottled, and nobody's score is wrong. Redis
+  is correct here and stays.
+- *Idempotency* is a correctness guarantee. Fail-open means "write it
+  twice". This is not only about outages — `IDEM_TTL_SECONDS` is 24h, so
+  a retry past that window double-writes **by design**, and Upstash
+  evicts under memory pressure besides. The ledger's protection against
+  double-recording a rally currently rests on a store that is expected
+  to forget.
+
+So: `score_events` gets an `idempotency_key` column and a **unique index
+on `(fixture_id, idempotency_key)`**. The database becomes the arbiter —
+a duplicate insert raises a constraint violation, which the handler
+translates into "return the original outcome". That is a true idempotent
+replay with no cache in the correctness path. Redis may stay in front as
+a fast path; it simply stops being load-bearing.
+
+Secondary benefit that decides the testing story: `REDIS_URL` is **not
+set locally** (confirmed 2026-09-21 — `cache.ts:35-36` gates everything
+on it), so today neither the limiter nor the idempotency path executes in
+dev or e2e at all. W1 Task 1 had to build an injection seam to test the
+limiter. Moving idempotency into Postgres makes it exercised by the
+existing suite for free, instead of needing a second such seam.
+
+Evidence note: Redis IS live on staging — the owner's `RATE_LIMITED`
+envelope proves the limiter fired. "Available on staging today" is not
+the same claim as "never misses", and only the second would justify
+leaving a correctness guarantee in a cache.
+
+## 6b. Realtime propagation has almost no coverage (surveyed 2026-09-21)
+
+Surveyed after the owner asked whether the realtime flows could be
+proven in both the e2e suite and the walkthrough suite. Four propagation
+flows exist; three have **no coverage at all**.
+
+| Flow | Status |
+|---|---|
+| (a) device-link pad writes → organiser console **screen** reflects it | **none** |
+| (b) console writes → device-link pad reflects it | **none** |
+| (c) device chrome's own write → the **inner** v3 pad reflects it | **none** |
+| (d) any write → public / spectator surface | covered |
+
+- **(a)** `walkthrough/scorepad-v3-r7-console-chrome.spec.ts:214` and
+  `scorepad-v3-cricket.spec.ts:496` both hold the console page open while
+  a device writes — and then poll only `ledger(page.request, …)`. The
+  console's DOM is never re-read after the device's tap, so the thing a
+  person would notice is the one thing not asserted.
+- **(b)** In r7 the console's `core.start` is recorded at `:230`, BEFORE
+  the link is minted and the device opened at `:257`. What the device
+  displays therefore arrived on initial load. No spec anywhere writes
+  from the console with a device pad already mounted.
+- **(c)** This is the owner's reported symptom, and it is already
+  *documented and worked around* rather than tested:
+  `scoring.spec.ts:532-542` states the console's `events` "is seeded once
+  from server props and only ever refreshed by fixture-console's OWN
+  send() calls — never by the pad's independent submission", and then
+  calls `page.reload()` at `:553` to move past it.
+- **(d)** Covered by `walkthrough/spectator-hub.spec.ts:448-466`,
+  `hub-knockout.spec.ts:1325-1398`, `stream-overlay.spec.ts:794-878`.
+
+### The clause that separates realtime from "eventually"
+
+`stream-overlay.spec.ts:794-878` is the only test in the repo that proves
+realtime rather than mere convergence: it asserts the score moves AND
+that `elapsed < POLL_MS`. Without that second clause a propagation test
+passes on the 15-second poll — which means it would have gone on passing
+throughout the entire defect this wave exists to fix. **Every propagation
+test added here carries that clause.**
+
+Two corrections to this section, found when it was built (2026-09-22) — the
+survey above was a hypothesis and these two rows did not survive the tree:
+
+- **`POLL_MS` does not live in `use-pad-pipeline.ts` and is exported from
+  nowhere.** It is `const POLL_MS = 15_000` at `use-fixture-stream.ts:21`.
+  `usePadPipeline` only forwards a test-only `streamPollMs`. The new tests
+  re-derive it by reading that source, the same idiom `enterprise-gate.spec.ts`
+  uses, so moving the constant moves the tests with it.
+- **The §6b(c) citation of `scoring.spec.ts:532-542` looks stale.** That
+  comment claims the console's `events` are "only ever refreshed by
+  fixture-console's OWN send() calls — never by the pad's independent
+  submission". But `fixture-console.tsx:442`'s `handlePadEvents` is wired as
+  `onEvents` at `:905`, and `pad-host.tsx:1575-1577` fires `onEvents` on any
+  pipeline ledger change including a foreign-write merge. Read, not run —
+  recorded as suspect rather than corrected.
+
+And the clause has an environmental limit worth stating: CI builds against a
+stub Supabase host and never subscribes, so the timing assertion degrades
+there exactly as `stream-overlay.spec.ts:823-847`'s does. The two assertions
+that are NOT environmental — the pad asked at the realtime-token door, and the
+door answered 200 — fire in every branch. A prod-target run should set
+`E2E_REQUIRE_REALTIME=1`, which turns the degradation into a hard red.
+
+### A walkthrough that passes for the wrong reason
+
+`walkthrough/scorepad-v3-r7-console-chrome.spec.ts:257` builds its
+"courtside device" with a bare `context.browser()!.newContext()`, under
+the comment *"its OWN browser context, no session cookie."* A bare
+`newContext()` **inherits `use.storageState`** from `playwright.config.ts`
+— measured directly in `api-keys.spec.ts:13-18`, where such a context came
+back holding `seazn_session` and an unauthenticated API call answered
+200. So that "device" is signed in as the organiser, and the spec's
+void-authority assertions at `:284-296` may be satisfied for a reason
+that has nothing to do with device links.
+
+The correct idiom is documented at `device-links.spec.ts:36-39`; for a
+context that will be DRIVEN, use `consentedAnonymousState()`
+(`scorepad-a11y-kit.ts:346`), which is empty state plus a seeded
+cookie-consent so the banner cannot race the pad.
+
+### Mechanics any new spec owes
+
+- `device-links.spec.ts` is in `SERIAL_SPECS` (`playwright.config.ts:31-32`)
+  and therefore runs ONLY in the `serial` project
+  (`--project=serial --workers=1`). It carries no `describe.configure`;
+  its serial-ness comes from the project.
+- The walkthrough project is selected by PATH alone
+  (`playwright.config.ts:119,168-173`) and runs as a matrix leg of
+  `e2e-parallel`.
+- A new walkthrough spec MUST be named in `WALKTHROUGH_SPECS`
+  (`src/lib/__tests__/e2e-ci-wiring.test.ts:159`) — the test at `:399-409`
+  red-fails in every CI leg otherwise. Append at the END in wave order;
+  the list is grouped by programme, never alphabetical.
 
 ## 7. Open questions for the owner
 

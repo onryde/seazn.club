@@ -149,7 +149,7 @@ Today `rate-limit.ts:42-48` returns "allow" whenever Redis is unconfigured, so l
 - Consumes: nothing.
 - Produces: `__setRateLimitCounterForTests(fn: ((key: string, windowSeconds: number) => Promise<number | null>) | null): void` — test-only injection point. Task 3 uses it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/src/lib/__tests__/rate-limit.test.ts
@@ -205,7 +205,7 @@ it("HttpError from the limiter carries no explicit code, so http.ts maps 429", a
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r1.json src/lib/__tests__/rate-limit.test.ts
@@ -214,7 +214,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: FAIL — `__setRateLimitCounterForTests` is not exported.
 
-- [ ] **Step 3: Add the injection point**
+- [x] **Step 3: Add the injection point**
 
 In `apps/web/src/lib/rate-limit.ts`, above `rateLimit`:
 
@@ -241,7 +241,7 @@ Then change the first line of `rateLimit`'s body:
 
 Leave every other line, including the `failClosed` branch, untouched.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r1.json src/lib/__tests__/rate-limit.test.ts
@@ -271,7 +271,7 @@ All four currently fall through `http.ts:83`'s generic status→code map and arr
 - Consumes: nothing.
 - Produces: the wire codes `UNDO_NOOP`, `UNDO_TARGET_MISSING`, `UNDO_ALREADY_VOIDED`, `UNDO_NOT_UNDOABLE`. Task 4 classifies on exactly these four strings; Task 5 gives each one copy.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/src/server/usecases/__tests__/scoring-undo-codes.test.ts
@@ -303,7 +303,7 @@ describe("assertUndoTarget wire codes", () => {
 
 The three DB-backed cases (`UNDO_TARGET_MISSING`, `UNDO_ALREADY_VOIDED`, `UNDO_NOT_UNDOABLE`) need a fixture row and belong with the DB-backed suites; they are covered end-to-end by Task 9's regression test. Do not fake them with a mocked `withTenant` — a mock here would assert the mock.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r2.json src/server/usecases/__tests__/scoring-undo-codes.test.ts
@@ -312,7 +312,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: FAIL — `__assertUndoTargetForTests` is not exported, then once exported, FAIL on `code` being `undefined`.
 
-- [ ] **Step 3: Add the codes and the test export**
+- [x] **Step 3: Add the codes and the test export**
 
 In `apps/web/src/server/usecases/scoring.ts`, replace the four throws:
 
@@ -361,7 +361,7 @@ Update the comment at `:264-266` — it currently explains the 409 choice withou
 // and copy, or it falls back to CONFLICT and reintroduces the wedge.
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r2.json src/server/usecases/__tests__/scoring-undo-codes.test.ts
@@ -391,7 +391,7 @@ git commit -m "fix(scoring): terminal undo refusals carry their own wire codes"
 - Consumes: `__setRateLimitCounterForTests` from Task 1.
 - Produces: nothing downstream.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // apps/web/src/server/usecases/__tests__/scoring-replay-is-free.test.ts
@@ -446,7 +446,7 @@ describe("scoreEvent limiter placement", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r3.json src/server/usecases/__tests__/scoring-replay-is-free.test.ts
@@ -455,7 +455,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: FAIL on the first test — `seen` is `["rl:scorev1:…"]` because the limiter runs first.
 
-- [ ] **Step 3: Move the limiter below the replay check**
+- [x] **Step 3: Move the limiter below the replay check**
 
 In `apps/web/src/server/usecases/scoring.ts`, replace lines 92-98 with:
 
@@ -474,7 +474,7 @@ In `apps/web/src/server/usecases/scoring.ts`, replace lines 92-98 with:
   await rateLimit(`scorev1:${fixtureId}`, SCORING_LIMIT);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r3.json src/server/usecases/__tests__/scoring-replay-is-free.test.ts
@@ -483,7 +483,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: `total: 2, passed: 2, failed: 0`.
 
-- [ ] **Step 5: Verify no neighbouring suite regressed**
+- [x] **Step 5: Verify no neighbouring suite regressed**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r3b.json src/server/usecases/__tests__/
@@ -517,7 +517,7 @@ Copy is in the same task, not a later one: `refusal-copy.test.ts` pins `REFUSAL_
 - Consumes: the four wire codes from Task 2.
 - Produces: `TERMINAL_CONFLICT_CODES: ReadonlySet<string>` exported from `transport.ts`. No later task imports it — it is exported so its paired test can pin it against the server's list. Task 5's ceiling deliberately does **not** consult it: a terminal code already returns `rejected` here and never reaches the conflict path, so a ceiling check against it would be unreachable code.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/components/v2/scorepad/__tests__/transport.test.ts`:
 
@@ -571,7 +571,7 @@ describe("409 classification", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r4.json src/components/v2/scorepad/__tests__/transport.test.ts
@@ -580,7 +580,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: the four `it.each` cases FAIL with `kind` `"conflict"`; both positive-pair cases already pass.
 
-- [ ] **Step 3: Split the 409 on its code**
+- [x] **Step 3: Split the 409 on its code**
 
 In `apps/web/src/components/v2/scorepad/transport.ts`, above `isPermanentRefusal`:
 
@@ -630,7 +630,7 @@ Then replace the 409 branch at `:236-241`:
 
 Leave `isPermanentRefusal` unchanged — it is reached only for non-409 statuses, and its `409 → false` line stays correct for the renegotiable case.
 
-- [ ] **Step 4: Give each refusal words**
+- [x] **Step 4: Give each refusal words**
 
 In `apps/web/src/components/v2/scorepad/refusal-copy.ts`, extend the map:
 
@@ -672,7 +672,7 @@ Translate the same four keys into `es`, `fr` and `nl` `ui.json`. Then:
 cd apps/web && npm run i18n:gen-keys && npm run i18n:check
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r4.json \
@@ -683,7 +683,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: `failed: 0`, and `total` has risen by exactly 6.
 
-- [ ] **Step 6: Mutation-check the branch you just added**
+- [x] **Step 6: Mutation-check the branch you just added**
 
 Back up the file with `cp` — never `git checkout`, which would revert your own work:
 
@@ -729,7 +729,7 @@ Task 4 fixes the four refusals we know about. This is the backstop for the ones 
 - Consumes: `attempts` on `PendingEvent` (already persisted, `pipeline.ts:258`).
 - Produces: wire code `QUEUE_STALLED` on a `{kind:"rejected"}` outcome. No new `SendOutcome` kind — this deliberately reuses the proven drop-and-surface path (`pipeline.ts:280-283`, `use-pad-pipeline.ts:1393-1398`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `apps/web/src/components/v2/scorepad/__tests__/pipeline.test.ts`:
 
@@ -796,7 +796,7 @@ describe("conflict ceiling", () => {
 
 If `makeMemoryStore` / `identity` helpers are not already present in this suite, reuse the ones the existing tests in this file build — do not introduce a second store fake.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r5.json src/components/v2/scorepad/__tests__/pipeline.test.ts
@@ -805,7 +805,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: the first case FAILS (`stayed-queued`, head still queued). Cases 2 and 3 already pass — they pin today's correct behaviour, which must survive.
 
-- [ ] **Step 3: Add the ceiling**
+- [x] **Step 3: Add the ceiling**
 
 In `apps/web/src/components/v2/scorepad/pipeline.ts`, above `sendOne`:
 
@@ -850,7 +850,7 @@ Replace the tail of `sendOne` (`:325-333`):
   return { kind: "stayed-queued", ...base, reason: second.kind === "conflict" ? "conflict-again" : "network" };
 ```
 
-- [ ] **Step 4: Give it words**
+- [x] **Step 4: Give it words**
 
 `refusal-copy.ts`, add to `REFUSAL_KEY`:
 
@@ -866,7 +866,7 @@ Replace the tail of `sendOne` (`:325-333`):
 
 Translate into `es`, `fr`, `nl`. Then `npm run i18n:gen-keys && npm run i18n:check`.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r5.json \
@@ -877,7 +877,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: `failed: 0`, `total` up by exactly 3.
 
-- [ ] **Step 6: Mutation-check the network exemption**
+- [x] **Step 6: Mutation-check the network exemption**
 
 `cp` the file aside, then change the ceiling condition from `second.kind === "conflict" && …` to `…` alone, so network failures are dead-lettered too. Re-run. The third test MUST go red. Restore from the `cp` backup. This is the mutant that matters: it is the one whose survival would mean lost rallies.
 
@@ -911,7 +911,7 @@ git commit -m "fix(scorepad): bound the conflict retry so the queue always progr
 - Consumes: nothing.
 - Produces: `AppendCallResult` gains `{ kind: "throttled"; message: string }`; `SendOutcome`'s `stayed-queued` gains `reason: "throttled"`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `transport.test.ts`:
 
@@ -962,7 +962,7 @@ it("a throttled send stays queued WITHOUT claiming the pad is offline", async ()
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r6.json \
@@ -973,7 +973,7 @@ jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/r
 
 Expected: the two new cases FAIL; the positive pair passes already.
 
-- [ ] **Step 3: Add the kind**
+- [x] **Step 3: Add the kind**
 
 `pipeline.ts`, in the `AppendCallResult` union:
 
@@ -999,7 +999,7 @@ Add the mapping in `sendOne`, beside the `network-error` branch at `:284-287`:
 
 TypeScript's exhaustiveness check will now point at every other consumer that must handle the new kind. Handle each one rather than widening a default branch.
 
-- [ ] **Step 4: Return it from the transport**
+- [x] **Step 4: Return it from the transport**
 
 `transport.ts`, before the `isPermanentRefusal` call at `:242`:
 
@@ -1009,7 +1009,7 @@ TypeScript's exhaustiveness check will now point at every other consumer that mu
       }
 ```
 
-- [ ] **Step 5: Stop the chip lying**
+- [x] **Step 5: Stop the chip lying**
 
 `use-pad-pipeline.ts:1402` currently reads `setOffline(outcome.reason === "network")`, which is already correct for the new reason — it will not raise the offline chip. Add the throttled state beside it so the chip can say something true:
 
@@ -1031,7 +1031,7 @@ Declare `throttled` alongside the existing `offline` state and return it from th
 
 Add that key to all four dictionaries, then `npm run i18n:gen-keys && npm run i18n:check`.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 ```bash
 cd apps/web && rtk proxy npx vitest run --reporter=json --outputFile=/tmp/r6.json src/components/v2/scorepad/__tests__/
