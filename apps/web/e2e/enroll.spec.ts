@@ -155,7 +155,11 @@ test("empty-squad enroll warns, then Sync from team squad pulls late players", a
 
   // Expand the row → Sync from team squad → confirm → the late player appears.
   await cell.getByRole("button", { name: new RegExp(teamName) }).click();
-  await page.getByRole("button", { name: "Sync from team squad" }).click();
+  // By TESTID: the label is `entrants.row.syncSquad` in all four catalogues as
+  // of 2026-09-22, so the English literal this used to match is no longer a
+  // stable handle. (The row's own disclosure above still matches on the TEAM
+  // NAME, which is data, not copy, and is locale-independent.)
+  await page.getByTestId("entrant-row-sync-squad").click();
   await page.getByRole("button", { name: "Sync roster" }).click();
   await expect(page.getByText(`Late Joiner ${TAG}`)).toBeVisible();
 });
