@@ -173,6 +173,13 @@ async function placeFixture(
   return fixture!.id;
 }
 
+/** One legally-placed fixture between the division's first two entrants — the
+ *  cheapest board that clears both candidate rules: `setup`, and NOT empty. */
+async function placeOne(comp: Comp, div: Div, hhmm: string, court: string): Promise<string> {
+  const [home, away] = div.entrantIds as [string, string];
+  return placeFixture(comp.auth, div, 0, { home, away, hhmm, court });
+}
+
 async function divisionStatus(divisionId: string): Promise<string> {
   const [row] = await sql<{ status: string }[]>`
     select status from divisions where id = ${divisionId}`;
@@ -262,10 +269,17 @@ describe.skipIf(!HAS_DB)("publishCompetitionSchedule", () => {
 
   it("a division that is not at `setup` is not a candidate at all", async () => {
     const comp = await seedCompetition();
+    // ALL THREE get a fixture, deliberately. If the excluded two had empty
+    // boards the fixture rule would exclude them on its own and this test
+    // would stay green with the STATUS filter deleted — it would be proving
+    // the wrong thing.
     const candidate = await seedDivision(comp, "Still setup", [comp.courts[0]]);
+    await placeOne(comp, candidate, "09:00", comp.courts[0]);
     const released = await seedDivision(comp, "Already scheduled", [comp.courts[1]]);
+    await placeOne(comp, released, "09:00", comp.courts[1]);
     await sql`update divisions set status = 'scheduled' where id = ${released.divisionId}`;
     const active = await seedDivision(comp, "Already active", [comp.courts[2]]);
+    await placeOne(comp, active, "09:00", comp.courts[2]);
     await sql`update divisions set status = 'active' where id = ${active.divisionId}`;
 
     const out = await publishCompetitionSchedule(comp.auth, comp.competitionId);
@@ -277,6 +291,30 @@ describe.skipIf(!HAS_DB)("publishCompetitionSchedule", () => {
     expect(out.published).toBe(1);
     expect(await divisionStatus(released.divisionId)).toBe("scheduled");
     expect(await divisionStatus(active.divisionId)).toBe("active");
+  }, 180_000);
+
+  it("a `setup` division with NO fixtures is not a candidate either, while its built sibling publishes", async () => {
+    // OWNER RULING. Publishing is irreversible in the way that matters: once a
+    // division leaves `setup`, `public_fixtures_v` stops redacting it FOREVER,
+    // so every fixture added afterwards goes public the moment it is placed,
+    // with no second publish to consent to. The per-division button makes that
+    // an explicit act; a bulk button must not make it a side effect on a
+    // division the organiser has not built yet.
+    const comp = await seedCompetition();
+    const built = await seedDivision(comp, "Built", [comp.courts[0]]);
+    await placeOne(comp, built, "09:00", comp.courts[0]);
+    const draft = await seedDivision(comp, "Draft", [comp.courts[1]]);
+
+    const out = await publishCompetitionSchedule(comp.auth, comp.competitionId);
+
+    // BOTH halves, in one call. Asserting only the exclusion would be
+    // satisfied by a candidate query that returns nothing at all.
+    expect(out.results.map((r) => r.division_id)).toEqual([built.divisionId]);
+    expect(out.published).toBe(1);
+    expect(await divisionStatus(built.divisionId)).toBe("scheduled");
+    // ABSENT from the report, not `published: false` — the same convention a
+    // non-`setup` division already follows — and untouched in the database.
+    expect(await divisionStatus(draft.divisionId)).toBe("setup");
   }, 180_000);
 
   it("a non-422 failure aborts the whole run instead of reporting a partial result", async () => {
@@ -329,10 +367,12 @@ describe.skipIf(!HAS_DB)("publishCompetitionSchedule", () => {
     // sequence rather than asserting over a stubbed callee.
     const comp = await seedCompetition();
     const a = await seedDivision(comp, "First", [comp.courts[0]]);
+    await placeOne(comp, a, "09:00", comp.courts[0]);
     const b = await seedDivision(comp, "Second", [comp.courts[1]]);
-    // Neither division is given fixtures: an empty board yields no assignments
-    // and therefore no conflicts, so BOTH would publish cleanly and the only
-    // thing that can stop the second one is the status change below.
+    await placeOne(comp, b, "09:00", comp.courts[1]);
+    // One legally-placed card each, on a court of its own: both are CANDIDATES
+    // (setup, non-empty) and both boards are clean, so the only thing that can
+    // stop the second one is the status change the trigger makes below.
     //
     // The loop runs in division-id order, so the trigger must hang off
     // whichever id sorts FIRST and target the other.

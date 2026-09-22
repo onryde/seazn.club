@@ -5,7 +5,7 @@ import "server-only";
 // eight trips to eight division pages to press Publish eight times, and the
 // only thing standing between the entrants and the timetable is that errand.
 //
-// THREE DECISIONS SHAPE THIS MODULE, and none of them is derivable from the
+// FOUR DECISIONS SHAPE THIS MODULE, and none of them is derivable from the
 // code alone:
 //
 //  1. BEST EFFORT, NOT ATOMIC. Unlike `competition-schedule-apply.ts` — the
@@ -23,7 +23,18 @@ import "server-only";
 //     is passed straight through to every division. The organiser is shown the
 //     warnings of every division that has them and confirms once.
 //
-//  3. NO ENTITLEMENT GATE. `applyCompetitionSchedule` charges
+//  3. A FIXTURE-LESS DIVISION IS NEVER A CANDIDATE (owner ruling). Publishing
+//     is irreversible in the way that matters: once a division leaves `setup`,
+//     `public_fixtures_v` stops redacting it FOREVER, so every fixture added to
+//     it afterwards goes public the instant it is placed, with no second
+//     publish to consent to. The per-division button makes that an explicit act
+//     by the organiser; a BULK button would make it a side effect on divisions
+//     they have not built yet. So the candidate set is `status = 'setup'` AND
+//     at least one fixture. An empty division is absent from `results`
+//     entirely — the same convention a non-`setup` division follows, not a
+//     second "skipped" shape for the console to learn.
+//
+//  4. NO ENTITLEMENT GATE. `applyCompetitionSchedule` charges
 //     `scheduling.multi_division` because it takes client-supplied assignments
 //     and writes N boards. This takes no board at all: it is a loop over an
 //     action the organiser can already perform, for free, N times by hand.
@@ -94,7 +105,7 @@ function refusalOf(err: unknown): CompetitionPublishDivision["refusal"] | null {
 }
 
 /**
- * Publish every division of `competitionId` whose schedule is still unreleased.
+ * Publish every division of `competitionId` that is unreleased AND built.
  *
  * "Unreleased" is `status = 'setup'`, and that is a DATA fact, not a taste:
  * `public_fixtures_v` redacts `scheduled_at`, `venue`, `court_label`,
@@ -103,6 +114,10 @@ function refusalOf(err: unknown): CompetitionPublishDivision["refusal"] | null {
  * other status has already released its times, so it is not a candidate and
  * does not appear in `results` at all — publishing it again would be a ledger
  * event about nothing.
+ *
+ * "Built" is at least one fixture, per decision 3 in the header: an empty
+ * division is excluded for the same reason and in the same way — absent from
+ * `results`, untouched in the database.
  *
  * Order is by division id so the result is deterministic. Nothing downstream
  * depends on the order, but a best-effort report that shuffles between two
@@ -129,10 +144,14 @@ export async function publishCompetitionSchedule(
     const [competition] = await tx<{ id: string }[]>`
       select id from competitions where id = ${competitionId}`;
     if (!competition) throw new HttpError(404, "competition not found");
+    // ONE query. Reading the divisions and then asking "does this one have
+    // fixtures?" per division would be N+1 round trips for what one `exists`
+    // answers, inside a transaction this function wants to close quickly.
     return tx<{ id: string; name: string }[]>`
-      select id, name from divisions
-      where competition_id = ${competitionId} and status = 'setup'
-      order by id`;
+      select d.id, d.name from divisions d
+      where d.competition_id = ${competitionId} and d.status = 'setup'
+        and exists (select 1 from fixtures f where f.division_id = d.id)
+      order by d.id`;
   });
 
   const results: CompetitionPublishDivision[] = [];
