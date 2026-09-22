@@ -47,6 +47,23 @@ const idemKey = (fixtureId: string, key: string) => `idemv1:${fixtureId}:${key}`
 // One scorer's cadence (doc 08 §6).
 const SCORING_LIMIT = { max: 10, windowSeconds: 1 };
 
+/** The replay path's abuse CEILING — not a pacing control (2026-09-21, W1
+ *  round 2). A replay performs no write, so nothing about a real pad's rhythm
+ *  should ever approach this: a queue drained after a tab death is a handful of
+ *  requests, and even several devices on one fixture retrying at once are tens,
+ *  not hundreds. It exists only to bound a caller hammering ONE known
+ *  idempotency key, which a leaked `dl_` URL makes reachable — see the note on
+ *  the replay branch below.
+ *
+ *  Derived from `SCORING_LIMIT`, never typed beside it, so raising the scoring
+ *  cadence raises this with it and the two cannot silently invert. Deliberately
+ *  fail-OPEN (no `failClosed`), exactly like the write limiter: a Redis outage
+ *  must never stop a scorer recording a match. */
+const REPLAY_LIMIT = {
+  max: SCORING_LIMIT.max * 6,
+  windowSeconds: SCORING_LIMIT.windowSeconds,
+};
+
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
 const ENGINE_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -90,14 +107,26 @@ export async function scoreEvent(
   input: AppendEventRequest,
 ): Promise<ScoreOutcome> {
   // The replay check runs FIRST (2026-09-21, W1). A retry carrying a key we
-  // have already answered performs no write, so charging it a limiter slot made
+  // have already answered performs no write, so charging it a WRITE slot made
   // retries self-amplifying against a bucket that is PER FIXTURE — every device
-  // scoring the same match shares it. Not a new DoS surface: the check is one
-  // Redis GET, the same cost class as the limiter's own INCR.
+  // scoring the same match shares it.
+  //
+  // That ordering is right and stays. What it left behind (found in review, W1
+  // round 2) is that a replay then passed NO limiter at all. The first version
+  // of this comment argued it was not a new surface because the check is one
+  // Redis GET, "the same cost class as the limiter's own INCR" — which is true
+  // about the cost of one request and says nothing about how many may be sent.
+  // Bounded cost times unbounded count is unbounded, and a `dl_` secret is a
+  // shareable URL, so anyone holding a leaked link could replay one known key
+  // forever. Hence a SECOND, far more generous ceiling on the replay branch
+  // only; the write path below is untouched.
   const cacheKey = input.idempotency_key ? idemKey(fixtureId, input.idempotency_key) : null;
   if (cacheKey) {
     const replay = await cacheGet<ScoreOutcome>(cacheKey);
-    if (replay) return replay; // retried request: same answer, no double write
+    if (replay) {
+      await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
+      return replay; // retried request: same answer, no double write
+    }
   }
 
   await rateLimit(`scorev1:${fixtureId}`, SCORING_LIMIT);

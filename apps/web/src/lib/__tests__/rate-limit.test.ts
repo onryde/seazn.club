@@ -128,27 +128,45 @@ describe("rateLimit (injected counter)", () => {
     await expect(rateLimit("t:b", { max: 3, windowSeconds: 1 })).resolves.toBeUndefined();
   });
 
-  // Defeats the guard: with the injector absent the limiter is inert, so a
-  // test that never injects proves nothing. This asserts the inert path is
-  // reachable AND distinguishable, so a future change that makes the real
-  // path inert cannot hide behind a green suite.
+  // A null count from the INJECTED counter must obey the same failClosed
+  // policy as a null from incrWindow — nothing else pins that the injector
+  // branch of `rate-limit.ts:51-53` is not special-cased on null, which is the
+  // one thing the two incrWindow-backed null cases above cannot see.
   //
-  // NOT a duplicate of "is inert — allows even a failClosed limit" above: that
-  // one pins the PRODUCTION inert path (cacheEnabled() false, failClosed true).
-  // This one pins the fail-open default when a configured counter yields no
-  // count. The two `count === null` routes are told apart only by
-  // cacheEnabled(), so both need their own case.
-  it("is inert when no counter is configured", async () => {
+  // `failClosed: true` is load-bearing, and its absence is what made the
+  // earlier version of this case decoration: with failClosed omitted, `:60`'s
+  // `failClosed && cacheEnabled()` short-circuits at `failClosed` and
+  // cacheEnabled() is never evaluated, so that version pinned nothing the
+  // "fails open by default" case above did not already pin, under a title
+  // ("is inert when no counter is configured") that described a counter it
+  // was in fact configuring.
+  it("a null count from the injected counter still obeys failClosed", async () => {
     __setRateLimitCounterForTests(async () => null);
-    for (let i = 0; i < 50; i++) {
-      await expect(rateLimit("t:c", { max: 1, windowSeconds: 1 })).resolves.toBeUndefined();
-    }
+
+    // Redis configured but yielding no count → the failClosed policy denies.
+    cacheMock.cacheEnabled.mockReturnValue(true);
+    await expect(
+      rateLimit("t:c", { max: 1, windowSeconds: 1, failClosed: true }),
+    ).rejects.toMatchObject({ status: 429 });
+
+    // Redis not configured at all → inert, even for a failClosed limit.
+    cacheMock.cacheEnabled.mockReturnValue(false);
+    await expect(
+      rateLimit("t:c", { max: 1, windowSeconds: 1, failClosed: true }),
+    ).resolves.toBeUndefined();
   });
 });
 
-it("HttpError from the limiter carries no explicit code, so http.ts maps 429", async () => {
+// `http.ts:239` builds the envelope code as `err.code ?? statusCode(err.status)`,
+// and `statusCode` (http.ts:75) is module-private to a `server-only` module, so
+// what this suite can pin is the two INPUTS that decide it: no explicit code,
+// and a 429. Together they are what makes the wire read RATE_LIMITED
+// (http.ts:83) rather than a code the pad would have to learn. The earlier
+// version asserted only the first of the two and named the second in its title.
+it("the limiter's HttpError is a bare 429, so the envelope code is RATE_LIMITED", async () => {
   __setRateLimitCounterForTests(async () => 99);
   const err = await rateLimit("t:d", { max: 1, windowSeconds: 1 }).catch((e) => e);
   expect(err).toBeInstanceOf(HttpError);
+  expect((err as HttpError).status).toBe(429);
   expect((err as HttpError).code).toBeUndefined();
 });
