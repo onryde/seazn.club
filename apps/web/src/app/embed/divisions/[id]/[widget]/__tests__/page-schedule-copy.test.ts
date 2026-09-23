@@ -68,7 +68,18 @@ const entrant = (id: string, name: string, seed: number): PublicEntrant => ({
 type StageKind = EmbedPayload["stages"][number]["kind"];
 
 type Stage = EmbedPayload["stages"][number];
-const oneStage = (kind: StageKind): Stage[] => [{ id: "st", division_id: "d1", seq: 1, kind, name: "Finals", status: "active" }];
+/** V414 — no qualification cut on any hand-built stage in this file. */
+const NO_CUT = {
+  qualify_count: null,
+  qualify_per_group: false,
+  next_stage_name: null,
+  swiss_rounds: null,
+  points_rule: null,
+  has_rank_overrides: false,
+} satisfies Partial<Stage>;
+const oneStage = (kind: StageKind): Stage[] => [
+  { id: "st", division_id: "d1", seq: 1, kind, name: "Finals", status: "active", ...NO_CUT },
+];
 
 const payload = (locale: string, stages: Stage[], fixtures: PublicFixture[]): EmbedPayload => ({
   org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: locale },
@@ -240,8 +251,8 @@ describe("embed schedule widget — rounds by name, phrases in the org's locale 
   // fixtures by round_no alone interleaved a league with the knockout it feeds.
   it("en league (seq 1) then knockout (seq 2), nothing timed (round view): every league round, then Semi-finals, then Final (N1e e1)", async () => {
     const stages: Stage[] = [
-      { id: "ko", division_id: "d1", seq: 2, kind: "knockout", name: "Knockout", status: "active" },
-      { id: "lg", division_id: "d1", seq: 1, kind: "league", name: "League", status: "complete" },
+      { id: "ko", division_id: "d1", seq: 2, kind: "knockout", name: "Knockout", status: "active", ...NO_CUT },
+      { id: "lg", division_id: "d1", seq: 1, kind: "league", name: "League", status: "complete", ...NO_CUT },
     ];
     const league = [1, 2, 3].flatMap((round) => [
       F({ id: `lg-${round}-1`, stage_id: "lg", round_no: round, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
@@ -272,8 +283,8 @@ describe("embed schedule widget — rounds by name, phrases in the org's locale 
   // Schedule, not a fixture on both ends.
   it("en two knockout stages, both ending in a Final: every shared heading names its stage (N1f f2)", async () => {
     const stages: Stage[] = [
-      { id: "main", division_id: "d1", seq: 1, kind: "knockout", name: "Main draw", status: "active" },
-      { id: "plate", division_id: "d1", seq: 2, kind: "knockout", name: "Plate", status: "active" },
+      { id: "main", division_id: "d1", seq: 1, kind: "knockout", name: "Main draw", status: "active", ...NO_CUT },
+      { id: "plate", division_id: "d1", seq: 2, kind: "knockout", name: "Plate", status: "active", ...NO_CUT },
     ];
     const fixtures = [
       ...knockout(null, null).map((f) => ({ ...f, id: `main-${f.id}`, stage_id: "main" })),

@@ -621,6 +621,13 @@ const STAGE: PublicStage = {
   kind: "league",
   name: "League",
   status: "active",
+  // V414 — no qualification cut on this hand-built stage.
+  qualify_count: null,
+  qualify_per_group: false,
+  next_stage_name: null,
+  swiss_rounds: null,
+  points_rule: null,
+  has_rank_overrides: false,
 };
 
 const ENTRANTS: PublicEntrant[] = [

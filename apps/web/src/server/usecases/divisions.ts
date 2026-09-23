@@ -966,7 +966,7 @@ export async function patchDivision(
     //
     // The division tag EXPIRES here, not 'max' (final review I2): the public
     // Redis documents below are dropped, and a route rebuilding one reads
-    // `pub-div-v2`. A merely stale entry is served to a route handler while it
+    // `pub-div-v3`. A merely stale entry is served to a route handler while it
     // refreshes in the background, which would bake the old names straight
     // back into Redis for another TTL. `fireScoreRevalidate` is exactly that
     // pair — competition 'max', then division expiry — and the org expiry

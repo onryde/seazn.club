@@ -62,7 +62,10 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
            -- RS008 review fix #5: public_divisions_v does not expose these
            -- (see PublicDivision's own doc comment, public-site/data.ts) —
            -- a cheap primary-key join rather than widening that view.
-           dv.youth, dv.player_name_display
+           -- config (V414): the standings forecast's points bounds are
+           -- derived from it, as on the division page (data.ts). (No
+           -- backticks in here: this is inside a tagged template.)
+           dv.youth, dv.player_name_display, dv.config
     from public_divisions_v d
     left join sports s on s.key = d.sport_key
     join divisions dv on dv.id = d.id
@@ -91,7 +94,9 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
 
   const [stages, pools, fixtures, standings, entrants, ssRows] = await Promise.all([
     sql<PublicStage[]>`
-      select id, division_id, seq, kind, name, status
+      select id, division_id, seq, kind, name, status,
+             qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
+             has_rank_overrides
       from public_stages_v where division_id = ${divisionId} order by seq`,
     sql<{ id: string; stage_id: string; key: string; name: string }[]>`
       select p.id, p.stage_id, p.key, p.name
