@@ -17,9 +17,17 @@
 // other three need help. Its pair is the SAME scene with no cut (V414 gave
 // `qualify_count` null): no view, and no qualification markup at all.
 //
+// The second scene is the competition hub's Task 6 two-pool stage (one
+// through from each pool, `qualify_per_group`): the page draws one table per
+// pool, and each must get the view of ITS OWN pool — the pools differ in every
+// line a swap would move (rounds left on the cut line, statuses).
+//
 // Mutants killed: the page not passing `qualification` (→ both cut tests);
 // the page passing the wrong stage meta (`qualify_count` read as null → the
-// cut test), or the wrong pool (a pool id on an overall table → null).
+// cut test); the table's pool dropped (`poolId: null` in
+// `divisionQualification` → the two-pool test: a per-group cut on no pool is
+// no view); and one pool's view handed to the other's table (→ the two-pool
+// test).
 import { describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -36,7 +44,10 @@ import type { PublicEntrant, PublicFixture, PublicStage } from "@/server/public-
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import DivisionHomePage from "../page";
 
-const NAMES: Record<string, string> = { A: "Ada Swiss", B: "Bo Swiss", C: "Cy Swiss", D: "Di Swiss" };
+const NAMES: Record<string, string> = {
+  A: "Ada Swiss", B: "Bo Swiss", C: "Cy Swiss", D: "Di Swiss",
+  e1: "Red Rovers", e2: "Blue Jays", e3: "Green Giants", e4: "Gold Geese", e5: "Silver Swans", e6: "Bronze Bears",
+};
 
 const entrant = (id: string, seed: number): PublicEntrant =>
   ({
@@ -168,18 +179,68 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
   return out;
 }
 
-async function renderPage(qualifyCount: number | null) {
-  getPublicDivision.mockResolvedValue(divisionData(qualifyCount));
+/** Two pools of three under one group stage with a per-group cut of one —
+ *  the hub's Task 6 scene. Pool A: r1 e1>e2; e1–e3, e2–e3 to play (two
+ *  rounds left). Pool B: e4 beat e5 and e6; e5–e6 to play (one left). */
+function twoPoolData() {
+  const base = divisionData(1);
+  const stage: PublicStage = {
+    ...base.stages[0]!,
+    id: "gr",
+    kind: "group",
+    name: "Groups",
+    qualify_count: 1,
+    qualify_per_group: true,
+    next_stage_name: "Finals",
+    swiss_rounds: null,
+  };
+  const inPool = (f: PublicFixture, pool: string): PublicFixture => ({ ...f, stage_id: "gr", pool_id: pool });
+  const prow = (entrantId: string, rank: number, won: number, played: number) => ({
+    ...row(entrantId, rank, won, [won, played - won]),
+    played,
+    lost: played - won,
+  });
+  return {
+    ...base,
+    stages: [stage],
+    pools: [
+      { id: "pA", stage_id: "gr", key: "A", name: "Pool A" },
+      { id: "pB", stage_id: "gr", key: "B", name: "Pool B" },
+    ],
+    fixtures: [
+      inPool(fx("a1", 1, "e1", "e2", "e1"), "pA"),
+      inPool(fx("a2", 2, "e1", "e3"), "pA"),
+      inPool(fx("a3", 3, "e2", "e3"), "pA"),
+      inPool(fx("b1", 1, "e4", "e5", "e4"), "pB"),
+      inPool(fx("b2", 2, "e4", "e6", "e4"), "pB"),
+      inPool(fx("b3", 3, "e5", "e6"), "pB"),
+    ],
+    // Pool B's snapshot first: the page's order must not be the input's.
+    standings: [
+      { stage_id: "gr", pool_id: "pB", updated_at: "2026-09-23T00:00:00.000Z", rows: [prow("e4", 1, 2, 2), prow("e5", 2, 0, 1), prow("e6", 3, 0, 1)] },
+      { stage_id: "gr", pool_id: "pA", updated_at: "2026-09-23T00:00:00.000Z", rows: [prow("e1", 1, 1, 1), prow("e2", 2, 0, 1), prow("e3", 3, 0, 0)] },
+    ],
+    entrants: ["e1", "e2", "e3", "e4", "e5", "e6"].map((id, i) => entrant(id, i + 1)),
+  };
+}
+
+async function renderTables(data: unknown) {
+  getPublicDivision.mockResolvedValue(data);
   const root = await DivisionHomePage({
     params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
   });
-  const tables = elements(root).filter((el) => el.type === StandingsTable);
+  return elements(root)
+    .filter((el) => el.type === StandingsTable)
+    .map((table) => {
+      const props = table.props as { qualification?: QualificationView | null; rows: { entrantId: string }[]; caption?: string };
+      return { qualification: props.qualification, rowIds: props.rows.map((r) => r.entrantId), caption: props.caption, html: renderToStaticMarkup(table) };
+    });
+}
+
+async function renderPage(qualifyCount: number | null) {
+  const tables = await renderTables(divisionData(qualifyCount));
   expect(tables, "the page builds one StandingsTable for its one Swiss stage").toHaveLength(1);
-  const table = tables[0]!;
-  return {
-    qualification: (table.props as { qualification?: QualificationView | null }).qualification,
-    html: renderToStaticMarkup(table),
-  };
+  return tables[0]!;
 }
 
 describe("public division page — the standings table gets its qualification view", () => {
@@ -218,5 +279,30 @@ describe("public division page — the standings table gets its qualification vi
     }
     // The table is still there, ranks and all.
     expect(html).toContain(">Ada Swiss<");
+  });
+
+  it("two pools with a per-group cut: each pool's table gets ITS OWN pool's view, line and statuses", async () => {
+    const tables = await renderTables(twoPoolData());
+    expect(tables.map((x) => x.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    for (const { qualification, rowIds, caption } of tables) {
+      expect(qualification, `${caption}: no view for a pool with a per-group cut`).toBeTruthy();
+      // The view covers exactly the entrants this table draws — not the other pool's.
+      expect(Object.keys(qualification!.rows).sort(), caption).toEqual([...rowIds].sort());
+    }
+    const [a, b] = tables as [(typeof tables)[0], (typeof tables)[0]];
+    expect(a.qualification!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
+    expect(b.qualification!.table.label).toBe("Top 1 go through to Finals · 1 round left");
+    expect(Object.fromEntries(Object.entries(b.qualification!.rows).map(([id, r]) => [id, r.status]))).toEqual({
+      e4: "through",
+      e5: "out",
+      e6: "out",
+    });
+    // …and each table DRAWS its own: the line, and rank 1's trigger name.
+    expect(a.html).toContain("Top 1 go through to Finals · 2 rounds left");
+    expect(a.html).not.toContain("1 round left");
+    expect(b.html).toContain("Top 1 go through to Finals · 1 round left");
+    expect(/<button[^>]*data-testid="standings-rank-e4"[^>]*>/.exec(b.html)?.[0] ?? "").toContain(
+      'aria-label="Rank 1, Through, show details"',
+    );
   });
 });
