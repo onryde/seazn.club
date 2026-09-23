@@ -32,7 +32,13 @@ import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { getPublicDivision } from "../data";
-import { buildQualificationView, divisionPointsBounds, stageQualMeta, type QualificationView } from "../qualification-view";
+import {
+  buildQualificationView,
+  divisionAwardAddsToLedger,
+  divisionPointsBounds,
+  stageQualMeta,
+  type QualificationView,
+} from "../qualification-view";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -164,6 +170,7 @@ async function load(
     fixtures: data.fixtures,
     entrantStatuses: statuses,
     bounds: divisionPointsBounds(module_, data.division.config),
+    awardAddsToLedger: divisionAwardAddsToLedger(module_, data.division.config),
     cascade: data.division.tiebreakers ?? module_!.defaultTiebreakers,
     entrantNames: Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name])),
     msg: (k: TKey, v?: Record<string, string | number>) => t(en, k, v),

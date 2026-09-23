@@ -91,6 +91,20 @@ export function divisionPointsBounds(
   return parsed.success ? module_.matchPointsBounds(parsed.data) : null;
 }
 
+/** Does a walkover in this division's PINNED module add goals to the ledger?
+ *  True exactly when its config declares a forfeit score (`awardScore`):
+ *  football's and the period kernel's `core.forfeit` score `cfg.awardScore`
+ *  as the match's goals, and `standingsDelta` folds them into gf/ga like any
+ *  other match. Every other sport's award leaves the ledger alone. A cfg that
+ *  does not parse gives false (and no bounds, so no status either). */
+export function divisionAwardAddsToLedger(module_: AnySportModule | null | undefined, cfg: unknown): boolean {
+  if (!module_) return false;
+  const parsed = module_.configSchema.safeParse(cfg ?? {});
+  if (!parsed.success || parsed.data === null || typeof parsed.data !== "object") return false;
+  const award = (parsed.data as { awardScore?: { goals?: unknown } | null }).awardScore;
+  return typeof award?.goals === "number" && award.goals > 0;
+}
+
 export interface QualificationView {
   table: QualTableT;
   /** A plain object, never a Map: the hub caches it through `unstable_cache`,
@@ -109,6 +123,10 @@ export interface QualificationViewInput {
   /** entrant id → entrants.status, for every entrant in the division. */
   entrantStatuses: Readonly<Record<string, string>>;
   bounds: MatchPointsBounds | null;
+  /** The division's walkover writes goals into the ledger
+   *  (`divisionAwardAddsToLedger`) — then a two-sided award counts toward the
+   *  what-if's average match. A one-sided bye never does. */
+  awardAddsToLedger: boolean;
   cascade: readonly string[];
   entrantNames: Readonly<Record<string, string>>;
   msg: (key: TKey, vars?: Record<string, string | number>) => string;
@@ -129,12 +147,17 @@ function counted(f: QualFixture): boolean {
   return f.outcome !== null && f.outcome !== undefined && f.home_entrant_id !== null && f.away_entrant_id !== null;
 }
 
-/** A counted match that adds nothing to the goal/set ledger (T3-⚠3): an award
- *  (a bye or a walkover — `core.forfeit` writes one for both) or a no-result.
- *  The what-if's average match leaves these out. */
-function ledgerless(f: QualFixture): boolean {
+/** A counted match that adds nothing to the goal/set ledger (T3-⚠3): a
+ *  no-result; a one-sided bye (the adapter folds it from a fresh 0–0 state);
+ *  or a two-sided award — a walkover — in a sport whose forfeit writes no
+ *  score (`awardAddsToLedger` false; ice hockey's writes `awardScore` goals,
+ *  so its walkover is an ordinary match here). The what-if's average match
+ *  leaves these out. */
+function ledgerless(f: QualFixture, awardAddsToLedger: boolean): boolean {
   const kind = outcomeKind(f);
-  return kind === "award" || kind === "no_result";
+  if (kind === "no_result") return true;
+  if (kind !== "award") return false;
+  return isOneSidedAwardBye(f) || !awardAddsToLedger;
 }
 
 function statusLabel(s: QualStatus, i: QualificationViewInput): string {
@@ -308,7 +331,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     const rival = rivalId === null ? undefined : byId.get(rivalId);
     if (!rival) return null;
     // The average match counts only matches with a ledger (T3-⚠3).
-    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f)).length;
+    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger)).length;
     const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;

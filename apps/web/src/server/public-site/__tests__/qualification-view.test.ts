@@ -60,6 +60,7 @@ import nl from "@/dictionaries/nl/public.json";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
 import {
   buildQualificationView,
+  divisionAwardAddsToLedger,
   divisionPointsBounds,
   stageQualMeta,
   type QualFixture,
@@ -75,6 +76,7 @@ const moduleOf = (key: string) => {
 };
 const GENERIC = moduleOf("generic");
 const BADMINTON = moduleOf("badminton");
+const ICEHOCKEY = moduleOf("icehockey");
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 const BOUNDS = divisionPointsBounds(GENERIC, CFG)!;
 const W = BOUNDS.winFloor;
@@ -188,6 +190,8 @@ function input(scene: Scene, over: Partial<QualificationViewInput> = {}, dict: D
     fixtures: scene.fixtures,
     entrantStatuses: { ...Object.fromEntries([...ids].map((id) => [id, "confirmed"])), ...scene.statuses },
     bounds: BOUNDS,
+    // The generic module declares no forfeit score: an award adds no goals.
+    awardAddsToLedger: divisionAwardAddsToLedger(GENERIC, CFG),
     cascade: CASCADE,
     entrantNames: NAMES,
     msg: (k: TKey, v?: Record<string, string | number>) => {
@@ -331,6 +335,21 @@ describe("stageQualMeta / divisionPointsBounds", () => {
     expect(divisionPointsBounds(null, CFG)).toBeNull();
     expect(divisionPointsBounds(undefined, CFG)).toBeNull();
     expect(divisionPointsBounds(GENERIC, { resultMode: "nonsense" })).toBeNull();
+  });
+  it("divisionAwardAddsToLedger: exactly the modules whose config declares a forfeit score (awardScore)", () => {
+    // Premise, read off the engine: ice hockey's walkover scores cfg.awardScore.
+    expect(ICEHOCKEY.configSchema.parse({})).toMatchObject({ awardScore: { goals: 5 } });
+    // Membership pinned, not derived: a sport that starts (or stops) writing a
+    // forfeit score into its ledger is a deliberate edit here.
+    const adds = builtinModules.filter((m) => divisionAwardAddsToLedger(m, {})).map((m) => m.key).sort();
+    expect(adds).toEqual(["football", "hockey", "icehockey"]);
+    expect(divisionAwardAddsToLedger(GENERIC, CFG)).toBe(false);
+    expect(divisionAwardAddsToLedger(BADMINTON, {})).toBe(false);
+    // No module, or a cfg that does not parse: false (the builder has no
+    // bounds then either, so it shows no status at all).
+    expect(divisionAwardAddsToLedger(null, {})).toBe(false);
+    expect(divisionAwardAddsToLedger(undefined, {})).toBe(false);
+    expect(divisionAwardAddsToLedger(ICEHOCKEY, { awardScore: { goals: "five" } })).toBe(false);
   });
 });
 
@@ -813,6 +832,25 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), noResult, open(3, "A", "B"), open(3, "C", "D")];
     const d = must(view({ ...o, fixtures })).rows.D!;
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
+  });
+  it("an ice-hockey walkover writes its forfeit score into the ledger, so it COUNTS toward the average; a generic one does not", () => {
+    // The walkover scene above, in a sport whose core.forfeit records
+    // cfg.awardScore (5–0) as the match's goals (period kernel `applyForfeit`,
+    // folded by `standingsDelta`). D's 14 goals then came from TWO matches — an
+    // average of 7 — and a win by 8 fits in no single one: rule and values.
+    const o = open4({ D: [6, 8], B: [7, 2] });
+    const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const ice = must(view({ ...o, fixtures }, { awardAddsToLedger: divisionAwardAddsToLedger(ICEHOCKEY, {}) })).rows.D!;
+    expect(ice.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
+    expect(ice.whatIfAssumption).toBeNull();
+    // Its pair, the same table in the generic module: the award adds nothing,
+    // D's 14 goals are one match's, and the target stands.
+    const generic = must(view({ ...o, fixtures }, { awardAddsToLedger: divisionAwardAddsToLedger(GENERIC, CFG) })).rows.D!;
+    expect(generic.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
+  });
+  it("…but a one-sided bye adds no goals even there (the adapter folds it from a fresh 0–0 state): still out of the average", () => {
+    const d = must(view(swiss5(), { awardAddsToLedger: divisionAwardAddsToLedger(ICEHOCKEY, {}) })).rows.D!;
+    expect(d.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides: win your next match by 4 or more to finish ahead.`);
   });
   it("winsOnly from the bounds IN FORCE: badminton skips `wins` for set ratio", () => {
     const bb = divisionPointsBounds(BADMINTON, {})!;
