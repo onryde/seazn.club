@@ -299,6 +299,7 @@ describe("buildTableView", () => {
   const HEADER_IDENTICAL_BY_DESIGN: Readonly<Record<string, readonly string[]>> = {
     "table.abbr.gf": ["es"], // goles a favor — GF
     "table.col.ratio": ["es", "fr"],
+    "table.abbr.ratio": ["es", "fr"],
   };
 
   it("every header key is authored in all four locales, the English value IS the engine's label, and every locale translates every word", () => {
@@ -330,7 +331,7 @@ describe("buildTableView", () => {
     // One key, two words: tennis's sets and badminton's games.
     expect(columnHeader({ key: "sets_won", label: "Sets won" }, msg)).toEqual({ abbr: "table.col.setsWon", title: "table.col.setsWon" });
     expect(columnHeader({ key: "sets_won", label: "Games won" }, msg)).toEqual({ abbr: "table.col.gamesWon", title: "table.col.gamesWon" });
-    expect(columnHeader({ key: "set_ratio", label: "Ratio" }, msg)).toEqual({ abbr: "table.col.ratio", title: "table.col.ratio" });
+    expect(columnHeader({ key: "set_ratio", label: "Ratio" }, msg)).toEqual({ abbr: "table.abbr.ratio", title: "table.col.ratio" });
     expect(columnHeader({ key: "nrr", label: "NRR" }, msg)).toEqual({ abbr: "NRR", title: "NRR" });
     // A label no module declares for that key is not guessed at.
     expect(columnHeader({ key: "sets_won", label: "Frames won" }, msg)).toEqual({ abbr: "Frames won", title: "Frames won" });

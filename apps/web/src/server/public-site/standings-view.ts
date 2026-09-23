@@ -122,10 +122,12 @@ export const METRIC_HEADER_KEYS: Readonly<Record<string, Readonly<Record<string,
   for: { For: word("table.col.for") },
   against: { Against: word("table.col.against") },
   diff: { Difference: word("table.col.difference") },
-  // derived cascade columns (`DERIVED_METRICS`)
-  set_ratio: { Ratio: word("table.col.ratio") },
-  board_ratio: { "Board ratio": word("table.col.boardRatio") },
-  point_ratio: { "Pts ratio": word("table.col.pointRatio") },
+  // derived cascade columns (`DERIVED_METRICS`). Their own short headers
+  // because Dutch spells a ratio "verhouding": carrom's three whole-word
+  // ratio columns needed an 828px table at md+, past the 734px hub card.
+  set_ratio: { Ratio: { abbr: "table.abbr.ratio", title: "table.col.ratio" } },
+  board_ratio: { "Board ratio": { abbr: "table.abbr.boardRatio", title: "table.col.boardRatio" } },
+  point_ratio: { "Pts ratio": { abbr: "table.abbr.pointRatio", title: "table.col.pointRatio" } },
 };
 
 /** The columns whose header is the sport's own NOTATION, printed as the engine

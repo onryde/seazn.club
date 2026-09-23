@@ -146,8 +146,9 @@ const COLUMN_SIZES = [
  *  is wider than that: "DIFFERENCE" paints 72.9px, and in the 64px column the
  *  count gave it (60px of content) it spilled LEFT into its neighbour, so the
  *  generic table's header read "AGAINST DIFFERENCE PTS" as one run. Dutch
- *  "PUNTENVERHOUDING" paints 125.4px. Literal class names, 8px apart, for the
- *  same scanner reason as above. */
+ *  "OVERWINNINGEN" paints 100px (the ratio columns carry short headers of
+ *  their own, `table.abbr.*Ratio`, so the md+ table fits its card). Literal
+ *  class names, 8px apart, for the same scanner reason as above. */
 const HEADER_SIZES = [
   { cls: "w-18", px: 72 },
   { cls: "w-20", px: 80 },

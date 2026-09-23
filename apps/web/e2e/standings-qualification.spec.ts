@@ -690,6 +690,15 @@ for (const width of [1280, 768, 320] as const) {
     ).toEqual(width < 768 ? COMPACT : EVERY_COLUMN);
     expectHeadersApart(closed, `${width}`);
     await expectNoHorizontalScroll(page);
+    if (width >= 768) {
+      // From md up the table folds nothing, so it must fit its card: a region
+      // that scrolls sideways here is a floor past the card (the unit budget in
+      // `standings-table-view-headers.test.tsx` sums every sport × locale).
+      const region = await section
+        .locator('[role="region"]')
+        .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(region.scroll, `${width}: the table scrolls sideways inside its card`).toBeLessThanOrEqual(region.client);
+    }
 
     if (width < 768) {
       const more = section.getByTestId(`mh-table-${scene.swiss.slug}-${scene.swiss.table.stageId}-overall-more`);

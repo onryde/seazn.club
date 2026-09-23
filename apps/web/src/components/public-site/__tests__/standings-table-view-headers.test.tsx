@@ -30,16 +30,19 @@ import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import {
+  buildTableView,
   columnHeader,
   METRIC_HEADER_KEYS,
   NOTATION_HEADERS,
   STRUCTURAL_KEYS,
 } from "@/server/public-site/standings-view";
+import { builtinModules } from "@seazn/engine/sports";
+import { RATIO_LEDGERS, type StandingsRow } from "@seazn/engine/competition";
 import { StandingsTableView } from "../standings-table-view";
 
 /** Painted width (px) of each header word, measured in Chromium — see above. */
 const MEASURED: Readonly<Record<string, number>> = {
-  "Puntenverhouding": 125.4, "Bordverhouding": 111.4, "Overwinningen": 100, "Verhouding": 78.2,
+  "Overwinningen": 100,
   "Difference": 72.9, "Différence": 72.9, "Diferencia": 70.6, "Gewonnen": 69.2, "Buchholz": 64,
   "Victorias": 63.2, "Verloren": 63, "Victoires": 62.5, "tableros": 60.8, "perdidos": 60.2,
   "plateaux": 59.9, "Verschil": 58.7, "ganados": 58.6, "Against": 51.2, "contra": 49.1,
@@ -47,7 +50,7 @@ const MEASURED: Readonly<Record<string, number>> = {
   "Games": 42.1, "games": 42.1, "Board": 41.1, "Tegen": 38.6, "favor": 38.4, "Ratio": 34.6,
   "ratio": 34.6, "Voor": 34, "Cut-1": 33.5, "Pour": 33.2, "Wins": 31.3, "Jeux": 30.7, "lost": 29.9,
   "Sets": 29.7, "sets": 29.7, "won": 28.8, "Diff": 26.1, "Emp": 25.4, "NRR": 24.9, "For": 24.3,
-  "Ptn": 23.4, "Gel": 22.9, "Pts": 22.3,
+  "Verh.": 34.9, "verh.": 34.9, "Bord": 33.6, "Ptn": 23.4, "Gel": 22.9, "Pts": 22.3,
   "GC": 17, "GA": 16.9, "GD": 16.9, "DG": 16.9, "GU": 16.8, "NR": 16.7, "BC": 16.6, "GS": 16.4,
   "DS": 16.3, "SB": 16.2, "DV": 16.2, "SR": 16.1, "En": 16, "BP": 16, "Ég": 15.9, "de": 15.8,
   "GF": 15.7, "DT": 14.9, "PJ": 14.3, "W": 11.5, "N": 8.8, "G": 8.5, "A": 8.4, "V": 8.4, "D": 8.3,
@@ -125,7 +128,7 @@ describe("hub table: every header word fits its own column", () => {
     const all = everyHeader();
     expect(new Set(all.map((h) => h.locale))).toEqual(new Set(["en", "es", "fr", "nl"]));
     const seen = new Set(all.flatMap((h) => words(h.abbr)));
-    for (const w of ["Difference", "Against", "Puntenverhouding", "Buchholz", "Victorias"]) expect(seen).toContain(w);
+    for (const w of ["Difference", "Against", "Overwinningen", "Buchholz", "Victorias", "verh."]) expect(seen).toContain(w);
   });
 
   it("every word a header can print has a measured width (new copy cannot arrive unmeasured)", () => {
@@ -209,5 +212,81 @@ describe("hub table: every header word fits its own column", () => {
     );
     // 48 rank + 96 name + P 32 + Pts 44 below md (Difference folds); + 96 from md.
     expect(markup).toContain('style="--sv-min:220px;--sv-min-md:316px"');
+  });
+});
+
+// ── The md+ budget ────────────────────────────────────────────────────────
+//
+// Widening a column for its header costs the table width. From `md` up a full
+// table folds nothing, so its `md:` floor (`--sv-min-md`) is every column at
+// once — and a table whose floor exceeds its card scrolls sideways inside its
+// region at 768/834 (review m2: Dutch carrom's three ratio columns needed
+// 828px). The hub card at 768 is 768 − 2×16 gutter − 2×1 border = 734px wide,
+// measured: `e2e/standings-qualification.spec.ts` logs the header row running
+// from x 17 to x 751 at 768, and asserts the region does not scroll there.
+const MD_CARD_PX = 768 - 2 * 16 - 2;
+
+/** Every built-in sport's table at its WIDEST: its default cascade's columns,
+ *  every displayed metric recorded, a draw so `D` shows, three-digit totals
+ *  and a ratio in every derived cell. */
+function widestView(sport: (typeof builtinModules)[number], dict: Dict): TableViewT {
+  const ledgers = new Set<string>([...sport.metrics.map((m) => m.key), ...Object.values(RATIO_LEDGERS).flat()]);
+  const metrics = Object.fromEntries([...ledgers].map((k) => [k, /lost|against/.test(k) ? 45 : 123]));
+  const row = (id: string, rank: number): StandingsRow => ({
+    entrantId: id,
+    rank,
+    played: 12,
+    won: 10,
+    drawn: 1,
+    lost: 1,
+    points: 123,
+    metrics: { ...metrics, balls_faced_eff: 600, balls_bowled_eff: 600, buchholz: 12.5, buchholz_cut1: 10.5, sberger: 45.25 },
+  });
+  return buildTableView({
+    id: "t",
+    division: { id: "d1", slug: "div", name: "Div" },
+    caption: "League",
+    fullHref: "/x",
+    metricSpecs: sport.metrics,
+    cascade: sport.defaultTiebreakers,
+    rows: [row("a", 1), row("b", 2)],
+    entrantNames: { a: "Alpha", b: "Beta" },
+    entrantLogos: {},
+    entrantColours: {},
+    championId: null,
+    updatedAt: "2026-09-24T10:00:00Z",
+    msg: (k, v) => t(dict, k, v),
+  });
+}
+
+const mdFloor = (markup: string): number => {
+  const m = markup.match(/--sv-min-md:(\d+)px/);
+  expect(m, "the md floor").not.toBeNull();
+  return Number(m![1]);
+};
+
+describe("hub table: from md up no sport's table in any locale is wider than its card", () => {
+  it("premise: the sweep reaches every built-in sport and every locale, and draws their ratio columns", () => {
+    expect(builtinModules.length).toBeGreaterThan(10);
+    const carrom = builtinModules.find((m) => m.key === "carrom")!;
+    const cols = widestView(carrom, nl as unknown as Dict).columns.map((c) => c.key);
+    expect(cols).toEqual(expect.arrayContaining(["set_ratio", "board_ratio", "point_ratio"]));
+  });
+
+  it(`every locale × every built-in sport: the md floor fits the ${MD_CARD_PX}px card`, () => {
+    const over: string[] = [];
+    let widest = { px: 0, at: "" };
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const sport of builtinModules) {
+        const markup = renderToStaticMarkup(
+          <StandingsTableView view={widestView(sport, dict)} dict={dict} testid={TESTID} />,
+        );
+        const px = mdFloor(markup);
+        if (px > widest.px) widest = { px, at: `${locale} ${sport.key}` };
+        if (px > MD_CARD_PX) over.push(`${locale} ${sport.key}: ${px}px`);
+      }
+    }
+    console.log(`WIDEST md floor: ${widest.px}px (${widest.at})`);
+    expect(over.join("; ")).toBe("");
   });
 });
