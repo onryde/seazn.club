@@ -48,7 +48,8 @@ function metric(row: StandingsRow, key: string): number {
   return row.metrics[key] ?? 0;
 }
 
-function ratioText(won: number, lost: number, decimals: number): string {
+/** won/lost as a ratio column prints it: ∞ when unbeaten, — with no ledger. */
+export function ratioText(won: number, lost: number, decimals: number): string {
   if (lost === 0) return won > 0 ? "∞" : "—";
   return (won / lost).toFixed(decimals);
 }

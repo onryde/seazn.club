@@ -233,8 +233,11 @@ const sgn = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
 
 // Ledger key aliases: the abstract `diff`/`for` tiebreaks map to whatever the
 // sport calls goal/run difference and goals/runs for (spec 04 per-sport).
-const DIFF_KEYS = ["gd", "diff", "run_diff"] as const;
-const FOR_KEYS = ["gf", "for", "runs_for"] as const;
+export const DIFF_KEYS = ["gd", "diff", "run_diff"] as const;
+export const FOR_KEYS = ["gf", "for", "runs_for"] as const;
+/** The "against" twin of FOR_KEYS, index for index — the what-if's average
+ *  match size is for + against (tie-what-if.ts). No comparator reads it. */
+export const AGAINST_KEYS = ["ga", "against", "runs_against"] as const;
 
 const FAIR_PLAY_KEYS = ["fair_play"] as const;
 
@@ -249,7 +252,7 @@ const FAIR_PLAY_KEYS = ["fair_play"] as const;
 // for every signed metric (a −5 GD is worse than no GD, not better) and blocks
 // any future rate metric outright, where no attempts is not the same as 0%.
 // Callers now state their own answer rather than inheriting a silent one.
-function metricOf(row: StandingsRow, keys: readonly string[]): number | undefined {
+export function metricOf(row: StandingsRow, keys: readonly string[]): number | undefined {
   for (const key of keys) {
     const value = row.metrics[key];
     if (value !== undefined) return value;
@@ -262,7 +265,7 @@ function metricOf(row: StandingsRow, keys: readonly string[]): number | undefine
 // the identity the fold would have summed to, with `compareRatio` already
 // giving 0/0 its own "no data" branch. Named so the default is a decision at
 // the call site rather than a fallback hidden inside the lookup.
-function ledgerOf(row: StandingsRow, keys: readonly string[]): number {
+export function ledgerOf(row: StandingsRow, keys: readonly string[]): number {
   return metricOf(row, keys) ?? 0;
 }
 

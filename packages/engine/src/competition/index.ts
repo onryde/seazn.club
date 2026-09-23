@@ -8,3 +8,4 @@ export * from "./display.ts";
 export * from "./points.ts";
 export * from "./round-role.ts";
 export * from "./qualification.ts";
+export * from "./tie-what-if.ts";
