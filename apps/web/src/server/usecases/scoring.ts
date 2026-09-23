@@ -49,7 +49,13 @@ export interface ScoreOutcome {
 }
 
 const IDEM_TTL_SECONDS = 24 * 60 * 60; // doc 08 §4
-const idemKey = (fixtureId: string, key: string) => `idemv1:${fixtureId}:${key}`;
+/** The prefix is the cached answer's SHAPE version. v2 = `ScoreOutcome` with
+ *  `event_id`: an answer cached under v1 lacks it and outlives a deploy by up
+ *  to `IDEM_TTL_SECONDS`, so serving it would ack a pad with no row id — the
+ *  shape device-void-mine's Fix A exists to end. A v2 miss falls through to
+ *  the durable replay, which carries the id. Bump it again whenever
+ *  `ScoreOutcome` gains a field a reader relies on. */
+const idemKey = (fixtureId: string, key: string) => `idemv2:${fixtureId}:${key}`;
 
 // One scorer's cadence (doc 08 §6).
 const SCORING_LIMIT = { max: 10, windowSeconds: 1 };
