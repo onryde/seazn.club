@@ -3102,6 +3102,29 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
     await vi.advanceTimersByTimeAsync(0);
   }
 
+  it("REPRODUCTION + MUTATION TARGET (Fix B): an ack with NO id, then a poll that delivers ONLY the void — the pad re-reads once and the fold reverts, no rejection", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+    });
+    // The precondition that makes this the defect: the pad holds seq 1 under
+    // an id the server never assigned (acks without an id keep the fabricated
+    // fallback).
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).not.toBe(REAL_ID);
+
+    await nextTick();
+
+    // What the scorer sees: the undo took, and no false refusal.
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad), "the inner pad still shows the pre-void score").toBeUndefined();
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_ID);
+    // The stream asked from the COUNT (1), so it could never re-deliver the
+    // target; exactly ONE whole-ledger read (0) healed it.
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0]);
+  });
+
   it("MUTATION TARGET (Fix A): an ack that names its row stamps the server's id at ack time — the void then resolves with no heal read at all", async () => {
     const serverLedger: LedgerSlotEvent[] = [];
     const { rig, pad } = await scoreThenServer({
@@ -3120,5 +3143,148 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
     expect(running(pad)).toBeUndefined();
     // Nothing was dangling, so Fix B never fired: the only read is the poll.
     expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1]);
+  });
+
+  it("MUTATION TARGET (Fix B, no loop): a void whose target the server read does NOT hold is re-read exactly once, never again on later batches", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, "ghost-id-no-row-has")],
+    });
+
+    await nextTick(); // delivers the void; one heal read finds nothing to adopt
+    serverLedger.push(laterRow(3));
+    await nextTick(); // a later batch still carries the dangling void in the ledger
+    await nextTick(); // and an empty tick
+
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 2, 3]);
+    // Honest, not hidden: a void naming nothing real is still refused.
+    expect(pad.current.lastRejection).not.toBeNull();
+  });
+
+  it("MUTATION TARGET (Fix B, retry): a heal read that FAILS is retried on the next batch that arrives — not given up on, and not looped", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    let healFailures = 0;
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+      transport: (base) => ({
+        ...base,
+        async listEventsSince(fixtureId, sinceSeq) {
+          const rows = await base.listEventsSince(fixtureId, sinceSeq);
+          if (sinceSeq === 0 && healFailures === 0) {
+            healFailures += 1;
+            throw new Error("courtside wifi dropped the heal read");
+          }
+          return rows;
+        },
+      }),
+    });
+
+    await nextTick(); // the void lands; the heal read fails
+    expect(running(pad), "a failed read cannot heal anything").toEqual({ home: 2, away: 0 });
+    serverLedger.push(laterRow(3));
+    await nextTick(); // the next batch retries the heal, and it succeeds
+
+    expect(healFailures).toBe(1);
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 2, 0]);
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_ID);
+    // Home's 2 is undone; only the later away point stands.
+    expect(running(pad)).toEqual({ home: 0, away: 1 });
+  });
+
+  it("MUTATION TARGET (Fix B, ordering): a batch that arrives WHILE the heal read is in flight waits for it — it never commits the dangling void on its own", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const heal = deferred<void>();
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+      transport: (base) => ({
+        ...base,
+        async listEventsSince(fixtureId, sinceSeq) {
+          // Recorded first, THEN held — so the call list shows the heal
+          // read was made even while it hangs.
+          const rows = await base.listEventsSince(fixtureId, sinceSeq);
+          if (sinceSeq === 0) await heal.promise;
+          return rows;
+        },
+      }),
+    });
+
+    await nextTick(); // the void lands; the heal read hangs
+    await nextTick(); // a second tick re-delivers the void from the same cursor
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 1]);
+    // Neither batch has committed the dangling void: no false refusal yet.
+    expect(pad.current.lastRejection).toBeNull();
+
+    heal.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad)).toBeUndefined();
+    expect(pad.current.events.map((e) => e.seq)).toEqual([1, 2]);
+  });
+  it("MUTATION TARGET (Fix B, fresh base): a tap acked WHILE the heal read is out survives the heal's commit", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const heal = deferred<void>();
+    const rig = fakeTransport({ appendResults: [ackWithoutId(1), ackWithoutId(3)], serverLedger });
+    const transport: PadTransport = {
+      ...rig.transport,
+      async listEventsSince(fixtureId, sinceSeq) {
+        const rows = await rig.transport.listEventsSince(fixtureId, sinceSeq);
+        if (sinceSeq === 0) await heal.promise;
+        return rows;
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }));
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    serverLedger.push(scoredRow(REAL_ID), voidRow(2, REAL_ID));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await nextTick(); // the void lands; the heal read hangs
+    // The scorer taps again while it is out, and that tap is acked.
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    expect(pad.current.events.map((e) => e.seq)).toEqual([1, 3]);
+
+    heal.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Healed over the ledger as it stands NOW, not the one the read started
+    // from — which would silently drop the tap acked in between.
+    expect(pad.current.events.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(running(pad)).toEqual({ home: 0, away: 1 });
+  });
+  it("MUTATION TARGET (Fix B, narrow): the heal adopts ONLY the row the void names — the pad's other events keep the id it knows them as mine by", async () => {
+    // Why narrow: on a device link "is this mine" is `ownEventIds.has(id)`
+    // (`v3/activity.tsx`), and `ownEventIds` holds the ids this pad minted.
+    // Adopting the wire id for EVERY row the read returned would relabel the
+    // pad's other own events and quietly take their undo/amend away.
+    const serverLedger: LedgerSlotEvent[] = [];
+    const rig = fakeTransport({ appendResults: [ackWithoutId(1), ackWithoutId(2)], serverLedger });
+    const pad = mountPipeline(
+      baseParams({ transport: rig.transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
+    );
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    const firstMinted = pad.current.events.find((e) => e.seq === 1)!.id;
+    expect(pad.current.ownEventIds.has(firstMinted)).toBe(true);
+    serverLedger.push(
+      scoredRow("server-real-id-first"),
+      { ...laterRow(2), id: "server-real-id-second", recorded_by: "user-1" },
+      voidRow(3, "server-real-id-second"),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    await nextTick();
+
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([2, 0]);
+    expect(pad.current.events.find((e) => e.seq === 2)?.id).toBe("server-real-id-second");
+    // The row nobody voided is untouched, and still the pad's own.
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(firstMinted);
+    expect(pad.current.ownEventIds.has(firstMinted)).toBe(true);
+    expect(running(pad)).toEqual({ home: 2, away: 0 });
   });
 });

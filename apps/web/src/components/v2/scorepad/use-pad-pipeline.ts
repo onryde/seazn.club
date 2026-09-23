@@ -287,6 +287,26 @@
 // `incomingWins: true` ack append (pass F) is untouched by this branch, so
 // its own "the just-acked copy always wins outright" guarantee still holds
 // byte-for-byte — see that call site's own comment.
+//
+// SCOPE BOUNDARY, device-void-mine UPDATE (owner-reported, 2026-09-23). R5's
+// id heal above only works when the TARGET row is re-delivered, and on the
+// poll path it never is: the read cursor is the COUNT and `listEvents` is
+// strict, so once this pad has acked its own event, `seq > count` never asks
+// for that seq again. The device chrome's "Void my last entry"
+// (`device-score-pad.tsx`) names the server's row id — the only id it has —
+// so only the void arrived, naming an id this ledger did not hold, and the
+// pad froze on the undone score while the chrome's header was right. R5's own
+// poll test missed it because its transport returned both rows for any
+// cursor. Two owner-approved fixes, each sufficient on its own:
+//  - Fix A: the ack now carries the row's id (`AppendSuccess.event_id`) and
+//    `runDrain` stamps it, so the pad holds its own events under the server's
+//    ids from the moment they land. The "AppendSuccess carries no row id"
+//    premise in the passes above still describes an ack WITHOUT one (an older
+//    server, an "already-applied" outcome), and every fallback they built for
+//    it stays.
+//  - Fix B: `onStreamEvents` re-reads the ledger ONCE for any void a batch
+//    leaves dangling and merges just the rows it names — see
+//    `danglingVoidTargets` for the reasoning.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -770,6 +790,32 @@ function mergeLedgerEvents(
   return mergeEnvelopesIntoLedger(current, widened);
 }
 
+/**
+ * device-void-mine, Fix B — the targets named by a `core.void` in `ledger` that
+ * no row in `ledger` holds. Each is a void the engine's `resolveVoids` will
+ * refuse, freezing the fold on the last good state.
+ *
+ * Two ways one arises, and the stream can heal neither by itself: this pad
+ * holds the target under an id the server never assigned (an ack with no
+ * `event_id`, see the file header), or it never held the target row at all
+ * (the oldest row of a gap, which `> count` never asks for). The poll will
+ * not help, because the cursor is past the target by construction; the fix is
+ * one whole-ledger read. From 0, not from the target's seq: the only thing a
+ * dangling void says about its target is an id this ledger does not hold, so
+ * its position is exactly what is unknown.
+ *
+ * Only a `voids` this hook actually carries is judged — a void with no target
+ * at all is a different defect (R5's wire half) with nothing to look up.
+ */
+function danglingVoidTargets(ledger: readonly EventEnvelope[]): string[] {
+  const held = new Set(ledger.map((e) => e.id));
+  const dangling = new Set<string>();
+  for (const e of ledger) {
+    if (e.type === "core.void" && e.voids !== undefined && !held.has(e.voids)) dangling.add(e.voids);
+  }
+  return [...dangling];
+}
+
 /** S12/#421 pass G — see the file header's own PASS G UPDATE for the full
  *  trace this fixes. Every `core.void` a caller ever submits names its
  *  target by whatever `.id` the timeline showed it, and that id came from
@@ -1200,14 +1246,69 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // GENUINE divergence rather than on this pad simply having been behind.
   // An empty batch (every tick reports one, per use-fixture-stream.ts's own
   // `fetchOnce`) is still a no-op, not a wasted merge/fetchState round trip.
+  //
+  // device-void-mine, Fix B — a batch that leaves a void dangling
+  // (`danglingVoidTargets`) is NOT committed as-is. The ledger is re-read from
+  // 0, the rows the void names are merged in by the SAME default-direction
+  // merge (which adopts the wire's id for a row this pad holds under its own
+  // key — R5), and only then is anything committed. Committing first would
+  // flash a refusal: `foldedState` would throw on the dangling void and set a
+  // `lastRejection` that nothing clears but the scorer's next tap.
+  //
+  // ONCE per dangling target (`healAttemptedRef`), never a loop: a void naming
+  // a row the server does not hold stays refused, and later batches do not
+  // re-read for it. A read that FAILS un-marks its targets, so the next batch
+  // that arrives retries — courtside wifi is the normal case here, and giving
+  // up on one dropped read would strand the pad until a reload. A failed read
+  // still commits the batch: holding it back would stall every later row.
+  //
+  // Batches that arrive while a heal read is in flight wait for it
+  // (`healInFlightRef`), in order. Merged ahead of it they would commit the
+  // same dangling void the heal is about to fix.
+  const healAttemptedRef = useRef<Set<string>>(new Set());
+  const healInFlightRef = useRef<Promise<void> | null>(null);
   const onStreamEvents = useCallback(
     (events: LedgerSlotEvent[]) => {
-      if (events.length === 0) return;
-      const merged = mergeLedgerEvents(fixtureId, ledgerEventsRef.current, events);
-      commitLedgerEvents(merged);
-      void reconcileAfterAck(merged);
+      const apply = (batch: LedgerSlotEvent[]): void => {
+        if (batch.length === 0) return;
+        const inFlight = healInFlightRef.current;
+        if (inFlight !== null) {
+          void inFlight.then(() => apply(batch));
+          return;
+        }
+        const merged = mergeLedgerEvents(fixtureId, ledgerEventsRef.current, batch);
+        const dangling = danglingVoidTargets(merged).filter((id) => !healAttemptedRef.current.has(id));
+        if (dangling.length === 0) {
+          commitLedgerEvents(merged);
+          void reconcileAfterAck(merged);
+          return;
+        }
+        for (const id of dangling) healAttemptedRef.current.add(id);
+        healInFlightRef.current = (async () => {
+          let targets: LedgerSlotEvent[] = [];
+          try {
+            const wanted = new Set(dangling);
+            const rows = await transport.listEventsSince(fixtureId, 0);
+            targets = rows.filter((row) => row.id !== undefined && wanted.has(row.id));
+          } catch {
+            for (const id of dangling) healAttemptedRef.current.delete(id);
+          }
+          // Over the CURRENT ledger, not `merged`: an ack may have landed
+          // while the read was out.
+          const healed = mergeLedgerEvents(
+            fixtureId,
+            mergeLedgerEvents(fixtureId, ledgerEventsRef.current, batch),
+            targets,
+          );
+          commitLedgerEvents(healed);
+          void reconcileAfterAck(healed);
+        })().finally(() => {
+          healInFlightRef.current = null;
+        });
+      };
+      apply(events);
     },
-    [fixtureId, commitLedgerEvents, reconcileAfterAck],
+    [fixtureId, transport, commitLedgerEvents, reconcileAfterAck],
   );
   const skipPollWhileDraining = useCallback(() => drainInFlight.current !== null, []);
   useFixtureStream({
