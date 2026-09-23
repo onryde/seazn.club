@@ -12,7 +12,7 @@ import { seedOrg } from "./_seed";
 import { decide, deviceFor, fixturesOf, pairNextSwissRound, seedStage, voidEvent } from "./_sheets-rig";
 import { addFixture, unpairSwissRound } from "../stages";
 import { scoreEvent } from "../scoring";
-import { resultCarriedForward } from "../carried-forward";
+import { carriedForwardFacts, isCarriedForward, resultCarriedForward } from "../carried-forward";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -49,6 +49,69 @@ describe.skipIf(!HAS_DB)("device-link refusal once a result is carried forward (
     await expect(voidEvent(device, sf1.id, own)).rejects.toMatchObject(CARRIED);
     // The organiser's session is unaffected (§4.3 last paragraph).
     await expect(voidEvent(auth, sf1.id, own)).resolves.toBeDefined();
+  });
+
+  // Owner decision (rebase onto main with #856, knockout void un-fill): the
+  // refusal is evaluated LIVE, so it lifts when the organiser takes the result
+  // back. A device decides an SF — the final's seat fills, the SF is carried,
+  // the device's own void is refused. The organiser voids that result; #856
+  // empties the final's seat inside the void's own transaction; the device's
+  // NEXT write is accepted — here the corrected result the OTHER way, which
+  // the ordinary fill seats in the emptied seat, carrying the SF again.
+  //
+  // "Carried forward is false again" has TWO causes after the void, witnessed
+  // apart so neither covers for the other: the void takes the SF back to
+  // `in_play` (the scoring block only reads the facts for a settled status),
+  // and #856 empties the seat (the FACTS themselves stop saying carried). The
+  // status alone would let the write through; the facts, and the NEW winner
+  // landing in the final, are what only the un-fill makes true.
+  //
+  // Server side only: the chrome's View-only is sticky (device-score-pad.tsx),
+  // so on the phone the umpire rescans the sheet to get a pad back.
+  it("knockout: an organiser void of a carried SF empties the final's seat (#856), and the device link's next write is ACCEPTED", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf1 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const [sides] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${sf1.id}`;
+    const seat = async (): Promise<string | null> => {
+      const [t] = await sql<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+        select home_entrant_id, away_entrant_id from fixtures where id = ${sf1.winner_to_fixture}`;
+      return sf1.winner_to_slot === 1 ? t!.home_entrant_id : t!.away_entrant_id;
+    };
+    const tip = async (): Promise<number> => {
+      const [{ seq }] = await sql<{ seq: number }[]>`
+        select coalesce(max(seq), 0)::int as seq from score_events where fixture_id = ${sf1.id}`;
+      return seq;
+    };
+
+    const device = await deviceFor(auth, sf1.id);
+    const own = await decide(device, sf1.id); // 2–1: the home side wins
+    expect(await seat(), "premise: the device's result seated its winner in the final").toBe(sides!.home_entrant_id);
+    await expect(voidEvent(device, sf1.id, own), "premise: carried — the device may not undo it").rejects.toMatchObject(
+      CARRIED,
+    );
+
+    await voidEvent(auth, sf1.id, own);
+    expect(await seat(), "#856: the organiser's void emptied the final's seat").toBeNull();
+    const after = (await withTenant(auth.orgId, (tx) => carriedForwardFacts(tx, sf1.id)))!;
+    expect(after.status, "the void took the SF back to in play").toBe("in_play");
+    expect(isCarriedForward(after.facts), "the FACTS no longer say carried: the un-fill, not just the status").toBe(false);
+    expect(await withTenant(auth.orgId, (tx) => resultCarriedForward(tx, sf1.id))).toBe(false);
+
+    // The device link's next write — the corrected result, the other way — is
+    // accepted through the real door, and lands in the ledger as the next row.
+    const seq = await tip();
+    const accepted = await scoreEvent(device, sf1.id, {
+      expected_seq: seq,
+      type: "generic.result",
+      payload: { p1Score: 1, p2Score: 2 },
+    });
+    expect(accepted, "the device's next write is ACCEPTED").toMatchObject({ seq: seq + 1, status: "decided" });
+    expect(await seat(), "the ordinary fill seats the NEW winner in the emptied seat").toBe(sides!.away_entrant_id);
+
+    // …and the rule re-arms: the corrected result is carried forward in turn.
+    await expect(voidEvent(device, sf1.id, accepted.event_id), "carried again").rejects.toMatchObject(CARRIED);
   });
 
   it("loser feed: carried the INSTANT it is decided (onDecided seats the loser, P5/Q2); slot mapping witnessed both ways", async () => {
