@@ -332,7 +332,7 @@
   "table.tieBreak.point_ratio": "puntenratio",
   "table.tieBreak.h2h_points": "punten onderling duel",
   "table.tieBreak.h2h_diff": "verschil onderling duel",
-  "table.tieBreak.h2h_for": "doelpunten/runs onderling duel",
+  "table.tieBreak.h2h_for": "gescoord totaal onderling duel",
   "table.tieBreak.direct": "onderling duel",
   "table.tieBreak.buchholz": "Buchholz",
   "table.tieBreak.buchholz_cut1": "Buchholz Cut-1",

@@ -36,6 +36,7 @@ import { StandingsTable } from "@/components/public-site/standings-table";
 import {
   LEDGER_ALIAS_FAMILY,
   LEDGER_RULE_MSG_KEYS,
+  TIE_BREAK_MSG_KEYS,
   buildTableView,
   sportLedgerFamily,
   tieBreakRule,
@@ -332,5 +333,19 @@ describe("the console caption's diff/for word (sportLedgerFamily)", () => {
         }
       }
     }
+  });
+});
+
+// Fix round 1: `table.tieBreak.h2h_for` still read "goles/carreras …" /
+// "buts/points …" / "doelpunten/runs …" in es/fr/nl after P6 retired the
+// slashed catch-all everywhere else.
+describe("no public tie-break phrase is a slashed catch-all", () => {
+  it("every table.tieBreak.* phrase the tables print, in every locale", () => {
+    const keys = [...Object.values(TIE_BREAK_MSG_KEYS), ...Object.values(LEDGER_RULE_MSG_KEYS).flatMap((f) => Object.values(f))];
+    expect(keys, "premise: the sweep reaches h2h_for").toContain("table.tieBreak.h2h_for");
+    const slashed = Object.entries(LOCALES).flatMap(([locale, dict]) =>
+      keys.map((k) => [locale, k, t(dict, k)] as const).filter(([, , w]) => w.includes("/")),
+    );
+    expect(slashed.map(([l, k, w]) => `${l} ${k}: ${w}`)).toEqual([]);
   });
 });
