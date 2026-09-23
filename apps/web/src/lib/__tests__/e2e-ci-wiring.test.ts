@@ -334,6 +334,12 @@ const WALKTHROUGH_SPECS: string[] = [
   // the field the organiser now has, rather than for the one that was there
   // when the shells were minted.
   "swiss-pre-start-field-change.spec.ts",
+  // Swiss round-1 pairing — a Swiss Knockout (stored as Neighbours) paired
+  // from the desk's split button: a plain Pair next seats top-vs-bottom, Unpair,
+  // the ▾ Neighbours pick seats neighbours for that one press, the round-2 menu
+  // is read-only, and round 2 pairs off the table. It is the only test that
+  // proves the pick reaches the POST body — the unit suite cannot press it.
+  "swiss-round-one-pairing.spec.ts",
 
   // Device-link write path W1 — the realtime propagation flows §6b of the
   // design surveyed and found uncovered: a courtside device's goal reaching
