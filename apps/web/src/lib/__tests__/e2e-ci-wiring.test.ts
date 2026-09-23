@@ -357,6 +357,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // cases beside it (`e2e/scoring-idempotency.spec.ts`) mint their own keys and
   // so cannot witness that seam at all.
   "scoring-idempotency-retry.spec.ts",
+  // Device-link write path W3 — the console's own refresh floor. Drives the
+  // console with its pad's realtime door aborted AND its 15s poll fallback
+  // aborted, so the chrome is proven to refresh WITHOUT the pad's pipeline
+  // rather than merely alongside it. No unit test can see any of this:
+  // apps/web vitest is environment "node", so there is no document, no
+  // visibilitychange, and no way to observe the listener at all.
+  "console-stalled-pipeline.spec.ts",
 
   // Entrant rename (2026-09-22, reported from production: a pair swapped a
   // partner and kept the old partner's name). One organiser renames one pair

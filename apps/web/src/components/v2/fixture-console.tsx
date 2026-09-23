@@ -493,6 +493,46 @@ export function FixtureConsole({
     [fixture.id, live.last_seq, resync, router],
   );
 
+  // W3 (design §5) — the console's own freshness floor.
+  //
+  // Every other refresh path here is downstream of the embedded pad's
+  // pipeline: `handlePadEvents`, and this component's own `send()`/`resync()`.
+  // So a stalled pipeline — a 403 from the token door on a Community plan, a
+  // websocket that joined and died, a wedged drain — leaves the chrome serving
+  // stale state with NO upper bound. There is no independent floor.
+  //
+  // Deliberately not an interval: a second timer on the same fixture doubles
+  // the request rate for every console in the product, and W1's standing
+  // constraint warns against that multiplication. A human returning to the tab
+  // is both the cheapest trigger and the moment staleness is actually visible.
+  //
+  // The `visibilityState` guard is load-bearing, not a micro-optimisation:
+  // `visibilitychange` fires on the HIDE as well as the show, and refreshing a
+  // tab the operator just left is the request this design exists not to make.
+  // `console-stalled-pipeline.spec.ts` asserts the hidden case fetches nothing.
+  //
+  // `resync` is already a `useCallback` keyed on `fixture.id` alone (above), so
+  // its identity is stable for the life of this fixture and this effect
+  // subscribes ONCE. That matters: an unstable `resync` would tear this
+  // listener down and re-add it on every `setBusy`/`setLive` — the same
+  // identity hazard `SESSION_AUTH` exists to avoid for the realtime channel
+  // (see this file's import comment). No memoisation needed here.
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      // Swallowed for the same reason `handlePadEvents` swallows: nothing the
+      // operator directly did should surface as an error, and the next trigger
+      // catches up.
+      void resync().catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    window.addEventListener("focus", refreshIfVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+      window.removeEventListener("focus", refreshIfVisible);
+    };
+  }, [resync]);
+
   // `detail` added (R3.5/Task G) alongside the pre-existing `headline` cast —
   // `shootoutScoreFromDetail` reads it to put a number in the decided
   // sentence below when the method is a shoot-out.
