@@ -19,6 +19,10 @@
 //    away). The panel is focusable but not tabbable (`tabIndex={-1}`), so a
 //    tap on its own text moves focus INTO it rather than to `<body>`, which
 //    would read as leaving;
+//  * closes when a scroll or resize leaves no part of its trigger on screen,
+//    or inside the scroll box that clips it, so a panel never floats on
+//    explaining a row the reader can no longer see. Focus follows the Esc
+//    rule, and handing it back never scrolls the page to the button;
 //  * a 40px tap target both ways: `min-w-10` here, and each host stretches
 //    the button over its cell's `py-2.5` with `-my-2.5 py-2.5`.
 //
@@ -66,11 +70,16 @@
 //    cannot move it away from its trigger. The e2e probe also asserts that no
 //    such ancestor exists on any mount.
 //
-// The panel is `z-20`, above the sticky rank cells' `z-10`. Inside a sticky
-// cell that number is local to the cell, and the raise above does the work.
-// In a plain cell (a ratio column) it is what stops a panel that hangs left
-// over the frozen rank column from being painted under it. `fixed` does not
-// change which stacking context the panel paints in.
+// PAINT ORDER. An open panel is lifted into the browser's TOP LAYER (the
+// Popover API, as a `manual` popover, with the attribute added only while
+// open, so the markup is its SSR). Only there is it painted over the sticky
+// site header (`z-40`) and tab rail (`z-30`). A z-index could not do it on the
+// division page: there the panel sits in the sticky rank cell, a stacking
+// context raised only to `z-30`, so a `z-45` panel still painted under the
+// header (measured with `elementFromPoint`). The top layer also paints it over
+// a neighbouring sticky cell, so it no longer depends on the cell's raise. A
+// browser without the Popover API paints it where it sits, with the classes'
+// `z-20`, which is how every panel painted before.
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 /** Fired on `document` with the opener's id when a popover opens, so every
@@ -115,6 +124,44 @@ const GAP_PX = 4;
  *  the screen width less 32px). */
 const GUTTER_PX = 16;
 
+/** Lifts an open panel into the top layer (see PAINT ORDER). `manual`: no
+ *  light dismiss and no Esc of its own, because this component owns both. */
+function raise(panel: HTMLElement): void {
+  if (typeof panel.showPopover !== "function") return;
+  panel.setAttribute("popover", "manual");
+  if (!panel.matches(":popover-open")) panel.showPopover();
+}
+
+/** Undoes `raise`, so a closed panel's DOM is its SSR again. */
+function lower(panel: HTMLElement): void {
+  if (!panel.hasAttribute("popover")) return;
+  if (panel.matches(":popover-open")) panel.hidePopover();
+  panel.removeAttribute("popover");
+}
+
+/** True once no part of the trigger root's box is left on screen, or inside
+ *  any ancestor that clips it (the table's `overflow-x-auto` box, which
+ *  computes `overflow-y: auto` too). The clip is each box's padding box, the
+ *  part its content shows through. */
+function triggerGone(root: HTMLElement): boolean {
+  const view = document.documentElement;
+  let top = 0;
+  let left = 0;
+  let bottom = view.clientHeight;
+  let right = view.clientWidth;
+  for (let a = root.parentElement; a && a !== document.body && a !== view; a = a.parentElement) {
+    const cs = getComputedStyle(a);
+    if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+    const b = a.getBoundingClientRect();
+    top = Math.max(top, b.top + a.clientTop);
+    left = Math.max(left, b.left + a.clientLeft);
+    bottom = Math.min(bottom, b.top + a.clientTop + a.clientHeight);
+    right = Math.min(right, b.left + a.clientLeft + a.clientWidth);
+  }
+  const r = root.getBoundingClientRect();
+  return r.bottom <= top || r.top >= bottom || r.right <= left || r.left >= right;
+}
+
 /** Places an OPEN panel: `position: fixed`, from the trigger root's box,
  *  inside the viewport's gutters. Written straight to the node (React renders
  *  no `style` or `data-side` on the panel, so it never overwrites them), and
@@ -134,7 +181,9 @@ function placePanel(panel: HTMLElement, root: HTMLElement, align: "start" | "end
   s.translate = "";
   s.maxWidth = `${vw - 2 * GUTTER_PX}px`;
   s.maxHeight = "";
-  s.overflowY = "";
+  // Not a scroll container unless capped below: the top layer's UA style
+  // gives a popover `overflow: auto`.
+  s.overflow = "visible";
   const size = panel.getBoundingClientRect();
   const anchor = root.getBoundingClientRect();
 
@@ -200,8 +249,10 @@ export function StandingsPopover({
     const panel = panelRef.current;
     const root = rootRef.current;
     if (!open || !panel || !root) return;
+    raise(panel);
     placePanel(panel, root, align);
     return () => {
+      lower(panel);
       panel.removeAttribute("style");
       delete panel.dataset.side;
     };
@@ -211,13 +262,21 @@ export function StandingsPopover({
   // event does not bubble, so only the CAPTURE phase hears the table's own box
   // as well as the page. The panel's OWN scroll (an over-tall one reading its
   // text) is ignored: re-placing it resets `overflow`, and with it the
-  // reader's place.
+  // reader's place. Once the trigger is gone from view, it closes instead.
   useEffect(() => {
     const panel = panelRef.current;
     const root = rootRef.current;
     if (!open || !panel || !root) return;
     const follow = (e: Event) => {
       if (e.target instanceof Node && panel.contains(e.target)) return;
+      if (triggerGone(root)) {
+        // The Esc rule: focus goes back to the button only if it was on the
+        // button or in the panel. `preventScroll`, or handing it back would
+        // scroll the page to the very button the reader scrolled away from.
+        if (root.contains(document.activeElement)) buttonRef.current?.focus({ preventScroll: true });
+        setOpen(false);
+        return;
+      }
       placePanel(panel, root, align);
     };
     window.addEventListener("scroll", follow, { capture: true, passive: true });

@@ -655,3 +655,164 @@ test("an open panel follows its trigger: when the page scrolls, when the table's
     .toBeLessThanOrEqual(shorter - 16 + 0.5);
   await expectWholeOnScreen(panel, "hub 320, after the viewport shrank");
 });
+
+/** Scroll room past the page's end: the hub ends close under its table, so
+ *  without it a trigger cannot be scrolled far enough up the screen. */
+const SCROLL_ROOM = 'body::after { content: ""; display: block; height: 100vh; }';
+
+test("an open panel closes once its trigger has left the screen or the table's box, stays open while any of it shows, and never moves the reader's focus or scroll (hub, 320)", async ({
+  browser,
+}) => {
+  const page = await spectator(browser, { width: 320, height: 640 });
+  await openWithCut(page, `${seed.hubPath}?tab=table`);
+  await page.addStyleTag({ content: SCROLL_ROOM });
+  const table = hubTable(page, "mh-table-");
+  const region = table.locator('[role="region"]');
+  const tied = table.locator('button[data-testid*="-tie-"]').first();
+  const testid = await tied.getAttribute("data-testid");
+  const panel = page.locator(`[id="${await tied.getAttribute("aria-controls")}"]`);
+  // The popover root — the box the panel is placed from.
+  const rootRect = () =>
+    tied.locator("xpath=..").evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+    });
+  const focused = () => page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName ?? null);
+  const scrollY = () => page.evaluate(() => window.scrollY);
+
+  // 1. The page. Opened by a tap that focuses nothing (iOS Safari does not
+  //    focus a tapped button), so focus is on <body> throughout.
+  await tied.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await tied.evaluate((el) => (el as HTMLElement).click());
+  await expect(panel).toBeVisible();
+  expect(await focused(), "premise: a tap that focuses nothing").toBe("BODY");
+  // Scrolled up until only 2px of the trigger are left on screen: still open.
+  await page.evaluate((dy) => window.scrollBy(0, dy), Math.round((await rootRect()).bottom) - 2);
+  await expect.poll(async () => (await rootRect()).bottom, { message: "premise: a sliver of the trigger is on screen" }).toBeGreaterThan(0);
+  expect((await rootRect()).bottom, "premise: only a sliver").toBeLessThanOrEqual(3);
+  await expect(panel, "it closed while its trigger still showed").toBeVisible();
+  // 4px more puts the whole trigger above the screen: closed.
+  const y1 = await scrollY();
+  await page.evaluate(() => window.scrollBy(0, 4));
+  await expect.poll(async () => (await rootRect()).bottom, { message: "premise: the trigger is wholly above the screen" }).toBeLessThanOrEqual(0);
+  await expect(panel, "the panel outlived its trigger (page scroll)").toBeHidden();
+  await expect(tied).toHaveAttribute("aria-expanded", "false");
+  expect(await focused(), "the close moved focus that was never in the popover").toBe("BODY");
+  expect(await scrollY(), "the close scrolled the page").toBe(y1 + 4);
+
+  // 2. Focus IN the panel (a tap on its text): the close hands it back to the
+  //    button, as Esc does — without scrolling the page back to the button.
+  await tied.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await tied.click();
+  await expect(panel).toBeVisible();
+  await panel.click({ position: { x: 8, y: 8 } });
+  expect(await focused(), "premise: focus is in the panel").toBe(`${testid}-panel`);
+  const y2 = await scrollY();
+  const lift = Math.ceil((await rootRect()).bottom) + 1;
+  // Read in the same task as the scroll, before its scroll event runs: a
+  // hand-back that scrolls to the button would undo it, and a later read would
+  // report that as a failed premise instead of the defect it is.
+  const moved = await tied.locator("xpath=..").evaluate((el, dy) => {
+    window.scrollBy(0, dy);
+    return { y: window.scrollY, bottom: el.getBoundingClientRect().bottom };
+  }, lift);
+  expect(moved.bottom, "premise: the trigger is wholly above the screen").toBeLessThanOrEqual(0);
+  expect(moved.y, "premise: the page scrolled").toBe(y2 + lift);
+  await expect(panel, "the panel outlived its trigger (focus inside)").toBeHidden();
+  expect(await focused(), "focus was in the panel, so it goes back to the button").toBe(testid);
+  expect(await scrollY(), "handing focus back scrolled the page to the button").toBe(moved.y);
+
+  // 3. The table's own box, sideways. Widened so its rank column can be
+  //    scrolled out past the box's left edge while part of the trigger is
+  //    still inside the SCREEN (x 0–16): only the box rule can close it.
+  await page.addStyleTag({ content: 'section[data-testid^="mh-table-"] table { min-width: 720px; }' });
+  await tied.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await region.evaluate((el) => {
+    el.scrollLeft = 0;
+  });
+  const box = await region.evaluate((el) => el.getBoundingClientRect().left + el.clientLeft);
+  const right0 = (await rootRect()).right;
+  const range = await region.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(range, "premise: the box scrolls the trigger clear of its left edge").toBeGreaterThan(right0 - box + 2);
+  await tied.click();
+  await expect(panel).toBeVisible();
+  // 2px of the trigger left inside the box: still open.
+  await region.evaluate((el, by) => {
+    el.scrollLeft = by;
+  }, Math.floor(right0 - box - 2));
+  await expect.poll(async () => (await rootRect()).right, { message: "premise: a sliver of the trigger inside the box" }).toBeLessThan(box + 3);
+  expect((await rootRect()).right, "premise: a sliver, not none").toBeGreaterThan(box);
+  await expect(panel, "it closed while its trigger still showed in the box").toBeVisible();
+  // 4px more: none of it inside the box, though some is still on screen.
+  await region.evaluate((el) => {
+    el.scrollLeft += 4;
+  });
+  await expect.poll(async () => (await rootRect()).right, { message: "premise: the trigger is wholly out of the box" }).toBeLessThanOrEqual(box);
+  expect((await rootRect()).right, "premise: but part of it is still on screen").toBeGreaterThan(0);
+  await expect(panel, "the panel outlived its trigger (the box scrolled it away)").toBeHidden();
+  await expect(tied).toHaveAttribute("aria-expanded", "false");
+});
+
+/** At the open panel's top and bottom edges (3px in, on its centre line):
+ *  whether a hit-test lands in the panel, what it hit, and which sticky page
+ *  chrome (the site header, the tab rail — sticky with a `top`) has a box at
+ *  that point at all. The last is the premise: without chrome there, a green
+ *  proves nothing. */
+async function chromeHits(panel: Locator) {
+  return panel.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const name = (n: Element | null) => (n ? `${n.tagName.toLowerCase()}.${[...n.classList].slice(0, 5).join(".")}` : "nothing");
+    const chromeOf = (n: Element): Element | null => {
+      for (let a: Element | null = n; a; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        if (cs.position === "sticky" && cs.top !== "auto") return a;
+      }
+      return null;
+    };
+    return [r.top + 3, r.bottom - 3].map((y) => {
+      const hit = document.elementFromPoint(x, y);
+      const chrome = document
+        .elementsFromPoint(x, y)
+        .filter((n) => n !== el && !el.contains(n))
+        .map(chromeOf)
+        .find((c) => c !== null);
+      return { y: Math.round(y), inPanel: hit !== null && el.contains(hit), hit: name(hit), chrome: chrome ? name(chrome) : null };
+    });
+  });
+}
+
+for (const [where, width] of [
+  ["division", 320],
+  ["division", 1280],
+  ["hub", 320],
+  ["hub", 1280],
+] as const) {
+  test(`${where} at ${width}: an upward panel pushed up under the sticky header and tab rail is painted OVER them`, async ({ browser }, testInfo) => {
+    const page = await spectator(browser, { width, height: 900 });
+    await openWithCut(page, where === "hub" ? `${seed.hubPath}?tab=table` : seed.divisionPath);
+    await page.addStyleTag({ content: SCROLL_ROOM });
+    const scope = where === "hub" ? hubTable(page, "mh-table-") : page.locator("#panel-standings");
+    const lastRow = scope.getByRole("button", { name: /^Rank \d+,/ }).last();
+    await frame(scope);
+    const panel = await open(page, lastRow);
+    await expect(panel, "premise: the last row's panel opens upward").toHaveAttribute("data-side", "up");
+    // The page scrolled until the panel's top is 24px down the screen — under
+    // the 52px site header — with its trigger still on screen, so it stays open.
+    const top0 = await panel.evaluate((el) => el.getBoundingClientRect().top);
+    await page.evaluate((dy) => window.scrollBy(0, dy), Math.round(top0 - 24));
+    await expect
+      .poll(() => panel.evaluate((el) => el.getBoundingClientRect().top), { message: "premise: the panel followed its trigger up under the header" })
+      .toBeLessThan(30);
+    await expect(panel, "premise: still open (its trigger is on screen)").toBeVisible();
+    await expect(panel, "premise: still upward").toHaveAttribute("data-side", "up");
+    const hits = await chromeHits(panel);
+    expect(hits[0]!.chrome, `premise: the sticky header is at the panel's top edge (y ${hits[0]!.y})`).not.toBeNull();
+    for (const h of hits) {
+      expect(h.inPanel, `y ${h.y}: ${h.hit} is painted over the panel (sticky chrome there: ${h.chrome})`).toBe(true);
+    }
+    console.log(`CHROME ${where} ${width} ${JSON.stringify(hits)}`);
+    const bottom = await panel.evaluate((el) => el.getBoundingClientRect().bottom);
+    await page.screenshot({ path: testInfo.outputPath(`chrome-${where}-${width}.png`), clip: { x: 0, y: 0, width, height: Math.ceil(bottom) + 48 } });
+  });
+}
