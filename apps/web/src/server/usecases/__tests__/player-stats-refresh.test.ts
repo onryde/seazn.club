@@ -793,12 +793,17 @@ describe.skipIf(!HAS_DB)("a result refreshes player stats after the response", (
 });
 
 describe.skipIf(!HAS_DB)("writes that change a fold's input without a result (review m3/m4)", () => {
+  // Abandoned, not live: history refuses to delete a fixture that is in play,
+  // decided or finalized (history.ts PLAYED_STATUSES). An abandoned match's
+  // events are still folded, and still cascade away with its row.
   it("a history undo that deletes a scored fixture queues a refresh that takes its goals off", async () => {
     const s = await scene();
-    const live = match(s, s.fixture("Reds", "Blues").id);
-    await live.start();
-    await live.goal(s.ada, s.reds);
-    // A stats read folded the live goal in.
+    const abandoned = match(s, s.fixture("Reds", "Blues").id);
+    await abandoned.start();
+    await abandoned.goal(s.ada, s.reds);
+    await abandoned.abandon();
+    await runAfterResponse();
+    // A stats read folded the abandoned match's goal in.
     await withTenant(s.auth.orgId, (tx) => recomputePlayerStats(tx, s.divisionId));
     expect(await goalsOf(s.divisionId, s.ada)).toBe(1);
 
@@ -818,10 +823,12 @@ describe.skipIf(!HAS_DB)("writes that change a fold's input without a result (re
 
   it("a scored fixture deleted and as many events recorded elsewhere is NOT current: the refresh folds", async () => {
     const s = await scene();
-    const live = match(s, s.fixture("Reds", "Blues").id);
-    await live.start();
-    await live.goal(s.ada, s.reds);
-    await live.half();
+    // Abandoned so history may delete it (see the undo case above).
+    const abandoned = match(s, s.fixture("Reds", "Blues").id);
+    await abandoned.start();
+    await abandoned.goal(s.ada, s.reds);
+    await abandoned.abandon();
+    await runAfterResponse();
     // A stats read folded three events, Ada's goal among them.
     await withTenant(s.auth.orgId, (tx) => recomputePlayerStats(tx, s.divisionId));
     expect(await goalsOf(s.divisionId, s.ada)).toBe(1);
