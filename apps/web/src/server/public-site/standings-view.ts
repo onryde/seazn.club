@@ -279,6 +279,18 @@ function ledgerFamily(
   return "plain";
 }
 
+/** The family a SPORT's declared ledger speaks (`module.metrics`), for a
+ *  surface with no row to read: the organiser console's cascade caption names
+ *  the rules before any tie exists. The same alias order as `ledgerAlias` —
+ *  the rule's own aliases, then the other ledger's, then against — so cricket,
+ *  which declares `runs_for` but no run difference, still reads "runs". */
+export function sportLedgerFamily(metrics: readonly { key: string }[], rule: "diff" | "for"): LedgerFamily {
+  const declared = new Set(metrics.map((m) => m.key));
+  const [own, other] = rule === "diff" ? [DIFF_KEYS, FOR_KEYS] : [FOR_KEYS, DIFF_KEYS];
+  const alias = [...own, ...other, ...AGAINST_KEYS].find((k) => declared.has(k));
+  return alias === undefined ? "plain" : (LEDGER_ALIAS_FAMILY[alias] ?? "plain");
+}
+
 /** The rule a tie was split on, in the page's language — the dictionary's
  *  phrase where `TIE_BREAK_MSG_KEYS` has one, the engine's otherwise; `diff`
  *  and `for` in the word of the ledger they were compared on (`ledgerFamily`).

@@ -25,7 +25,7 @@
 // per-group cut on no pool is no view); the ORG's or English words used
 // instead of the viewer's locale (→ the French case); the entrant names not
 // handed to the builder (→ the cut test's what-if lines, which name the rival).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
@@ -113,6 +113,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import DivisionPage from "../page";
+import { resolveModule } from "@/server/engine-db";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import type { StageQualMetaRow } from "@/server/usecases/stage-qualification";
@@ -397,5 +398,60 @@ describe("organiser console — the standings tables get the same qualification 
     qual.listStageQualificationMeta.mockResolvedValue(new Map());
     await renderTables("entrants");
     expect(qual.listStageQualificationMeta).not.toHaveBeenCalled();
+  });
+});
+
+// The cascade caption under the tables names each tie-break rule. `diff` and
+// `for` used to read "goal/run difference" / "goals/runs scored" in every
+// sport; they now say the division's own word, as the public tables do —
+// resolved from the module's declared ledger (`sportLedgerFamily`).
+describe("organiser console — the tie-break cascade caption says the sport's word", () => {
+  const GENERIC = builtinModules.find((m) => m.key === "generic")!;
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    qual.listStageQualificationMeta.mockReset().mockResolvedValue(new Map());
+    scene.locale = "en";
+    vi.mocked(resolveModule).mockImplementation(() => GENERIC);
+  });
+  afterEach(() => {
+    vi.mocked(resolveModule).mockImplementation(() => GENERIC);
+  });
+
+  async function cascadeCaption(): Promise<string[]> {
+    const root = await DivisionPage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
+      searchParams: Promise.resolve({ tab: "standings" }),
+    });
+    const caption = elements(root).find(
+      (el) => el.type === "p" && String((el.props as { className?: string }).className).includes("border-slate-100 pt-3"),
+    );
+    expect(caption, "the cascade caption").toBeDefined();
+    return elements((caption!.props as { children: unknown }).children)
+      .filter((el) => el.type === "span" && (el.props as { className?: string }).className === "text-slate-500")
+      .map((el) => String((el.props as { children: unknown }).children));
+  }
+
+  it("generic: plain 'difference' and 'total scored', never the goal/run catch-all", async () => {
+    swissScene();
+    expect(GENERIC.defaultTiebreakers, "premise: generic splits on diff then for").toEqual(
+      expect.arrayContaining(["diff", "for"]),
+    );
+    expect(await cascadeCaption()).toEqual(["points", "difference", "total scored", "head-to-head", "drawing of lots"]);
+  });
+
+  it("hockey: 'goal difference' and 'goals scored'", async () => {
+    swissScene();
+    const hockey = builtinModules.find((m) => m.key === "hockey")!;
+    vi.mocked(resolveModule).mockImplementation(() => hockey);
+    expect(await cascadeCaption()).toEqual(["points", "goal difference", "goals scored", "head-to-head", "seeding"]);
+  });
+
+  it("a French viewer of a hockey division reads the French sport word", async () => {
+    swissScene();
+    scene.locale = "fr";
+    const hockey = builtinModules.find((m) => m.key === "hockey")!;
+    vi.mocked(resolveModule).mockImplementation(() => hockey);
+    const caption = await cascadeCaption();
+    expect(caption.slice(1, 3)).toEqual(["différence de buts", "buts marqués"]);
   });
 });

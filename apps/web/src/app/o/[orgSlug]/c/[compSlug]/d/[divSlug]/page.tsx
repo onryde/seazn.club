@@ -73,6 +73,7 @@ import { PaymentRequiredError } from "@/lib/errors";
 import type { StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
+import { sportLedgerFamily } from "@/server/public-site/standings-view";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
 // v8: editors get a Settings tab (general/format/sharing/danger).
@@ -885,7 +886,13 @@ export default async function DivisionPage({
                   {cascade.map((key, i) => (
                     <span key={key}>
                       {i > 0 && " → "}
-                      <span className="text-slate-500">{localizedTieBreakLabel(dict, key)}</span>
+                      <span className="text-slate-500">
+                        {localizedTieBreakLabel(
+                          dict,
+                          key,
+                          key === "diff" || key === "for" ? sportLedgerFamily(sportModule.metrics, key) : undefined,
+                        )}
+                      </span>
                     </span>
                   ))}
                   {" "}

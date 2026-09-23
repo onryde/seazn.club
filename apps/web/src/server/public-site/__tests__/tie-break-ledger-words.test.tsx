@@ -33,7 +33,18 @@ import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { t, type TKey } from "@/lib/i18n-runtime";
 import { StandingsTable } from "@/components/public-site/standings-table";
-import { LEDGER_ALIAS_FAMILY, LEDGER_RULE_MSG_KEYS, buildTableView, tieBreakRule } from "../standings-view";
+import {
+  LEDGER_ALIAS_FAMILY,
+  LEDGER_RULE_MSG_KEYS,
+  buildTableView,
+  sportLedgerFamily,
+  tieBreakRule,
+} from "../standings-view";
+import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
+import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 
 const LOCALES = { en, es, fr, nl } as unknown as Record<string, Dict>;
 
@@ -270,5 +281,56 @@ describe("a tied row with no ledger reads its partners' word", () => {
     // …and with no partner that records anything, the table's first ledger.
     const lone = { ...E, tieBreak: { key: "diff", with: ["nobody"] } };
     expect(tieBreakRule("diff", msg, lone, [X, P, E])).toBe("goal difference");
+  });
+});
+
+// The organiser console's cascade caption names `diff`/`for` before any tie
+// exists, so it has no row to read: it takes the family from the module's
+// declared ledger (`sportLedgerFamily`) and must say what the public tables say.
+describe("the console caption's diff/for word (sportLedgerFamily)", () => {
+  const RULES = ["diff", "for"] as const;
+
+  it("football, hockey, ice hockey: goals; cricket (runs_for, no run difference): runs; generic and the ratio sports: plain", () => {
+    const fam = (sport: string) => RULES.map((r) => sportLedgerFamily(moduleOf(sport).metrics, r));
+    expect(fam("football")).toEqual(["goals", "goals"]);
+    expect(fam("hockey")).toEqual(["goals", "goals"]);
+    expect(fam("icehockey")).toEqual(["goals", "goals"]);
+    expect(fam("cricket")).toEqual(["runs", "runs"]);
+    expect(fam("generic")).toEqual(["plain", "plain"]);
+    expect(fam("carrom")).toEqual(["plain", "plain"]);
+  });
+
+  it("every built-in sport: the module's family is the one a row folding its declared ledger reads", () => {
+    const key = (k: TKey) => k;
+    for (const sport of builtinModules) {
+      const row: StandingsRow = {
+        entrantId: "r",
+        rank: 1,
+        played: 1,
+        won: 1,
+        drawn: 0,
+        lost: 0,
+        points: 3,
+        metrics: Object.fromEntries(sport.metrics.map((m) => [m.key, 0])),
+      };
+      for (const rule of RULES) {
+        expect(LEDGER_RULE_MSG_KEYS[rule][sportLedgerFamily(sport.metrics, rule)], `${sport.key} ${rule}`).toBe(
+          tieBreakRule(rule, key, row, [row]),
+        );
+      }
+    }
+  });
+
+  it("the console's word IS the public tables' phrase, in every locale and family", () => {
+    const UI = { en: enUi, es: esUi, fr: frUi, nl: nlUi } as unknown as Record<string, Dict>;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const rule of RULES) {
+        for (const family of ["goals", "runs", "plain"] as const) {
+          expect(localizedTieBreakLabel(UI[locale]!, rule, family), `${locale} ${rule} ${family}`).toBe(
+            t(dict, LEDGER_RULE_MSG_KEYS[rule][family]),
+          );
+        }
+      }
+    }
   });
 });
