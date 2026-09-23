@@ -3390,7 +3390,7 @@
   "divset.news.saved": "News setting saved",
   "divset.publicPage.title": "Public page",
   "divset.publicPage.seedsToggle": "Show seed numbers on the public page",
-  "divset.publicPage.seedsHelp": "When this is off, spectators see no seed numbers anywhere on the public site, and entrants are listed alphabetically instead of in seed order. You still see seeds here.",
+  "divset.publicPage.seedsHelp": "When this is off, spectators see no seed numbers on the public site, and entrants are listed alphabetically. Seeding still breaks ties in the standings, and a seeded draw (a knockout, or Swiss round 1) still shows who was seeded through who plays whom. You still see seeds here.",
   "divset.publicPage.seedsShown": "Seeds shown",
   "divset.publicPage.seedsHidden": "Seeds hidden",
   "divset.publicPage.saved": "Public page setting saved",

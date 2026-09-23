@@ -3390,7 +3390,7 @@
   "divset.news.saved": "Ajuste de noticias guardado",
   "divset.publicPage.title": "Página pública",
   "divset.publicPage.seedsToggle": "Mostrar los números de cabeza de serie en la página pública",
-  "divset.publicPage.seedsHelp": "Si está desactivado, el público no ve ningún número de cabeza de serie en el sitio público y los participantes aparecen por orden alfabético en lugar de por cabeza de serie. Tú sigues viendo las cabezas de serie aquí.",
+  "divset.publicPage.seedsHelp": "Si está desactivado, el público no ve ningún número de cabeza de serie en el sitio público y los participantes aparecen por orden alfabético. La clasificación sigue usando la cabeza de serie para desempatar, y en un cuadro con cabezas de serie (eliminatoria, o 1.ª ronda del suizo) los emparejamientos siguen mostrando quién era cabeza de serie. Tú sigues viendo las cabezas de serie aquí.",
   "divset.publicPage.seedsShown": "Cabezas de serie visibles",
   "divset.publicPage.seedsHidden": "Cabezas de serie ocultas",
   "divset.publicPage.saved": "Ajuste de la página pública guardado",

@@ -3390,7 +3390,7 @@
   "divset.news.saved": "Réglage d'actualités enregistré",
   "divset.publicPage.title": "Page publique",
   "divset.publicPage.seedsToggle": "Afficher les numéros de tête de série sur la page publique",
-  "divset.publicPage.seedsHelp": "Lorsque cette option est désactivée, les spectateurs ne voient aucun numéro de tête de série sur le site public, et les participants sont classés par ordre alphabétique plutôt que par tête de série. Vous continuez à voir les têtes de série ici.",
+  "divset.publicPage.seedsHelp": "Lorsque cette option est désactivée, les spectateurs ne voient aucun numéro de tête de série sur le site public, et les participants sont classés par ordre alphabétique. Le classement départage toujours les égalités par tête de série, et dans un tirage par têtes de série (élimination directe, ou 1er tour du système suisse) les rencontres montrent toujours qui était tête de série. Vous continuez à voir les têtes de série ici.",
   "divset.publicPage.seedsShown": "Têtes de série affichées",
   "divset.publicPage.seedsHidden": "Têtes de série masquées",
   "divset.publicPage.saved": "Réglage de la page publique enregistré",

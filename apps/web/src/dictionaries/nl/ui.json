@@ -3390,7 +3390,7 @@
   "divset.news.saved": "Nieuwsinstelling opgeslagen",
   "divset.publicPage.title": "Openbare pagina",
   "divset.publicPage.seedsToggle": "Reekshoofdnummers tonen op de openbare pagina",
-  "divset.publicPage.seedsHelp": "Staat dit uit, dan zien toeschouwers nergens op de openbare site reekshoofdnummers, en staan deelnemers op alfabetische volgorde in plaats van op plaatsing. Jij ziet de reekshoofden hier nog steeds.",
+  "divset.publicPage.seedsHelp": "Staat dit uit, dan zien toeschouwers geen reekshoofdnummers op de openbare site, en staan deelnemers op alfabetische volgorde. De stand gebruikt de reekshoofdplaatsing nog steeds om bij gelijke stand de doorslag te geven, en bij een geplaatste loting (knock-out, of Zwitserse ronde 1) laten de wedstrijden nog steeds zien wie reekshoofd was. Jij ziet de reekshoofden hier nog steeds.",
   "divset.publicPage.seedsShown": "Reekshoofden zichtbaar",
   "divset.publicPage.seedsHidden": "Reekshoofden verborgen",
   "divset.publicPage.saved": "Instelling openbare pagina opgeslagen",
