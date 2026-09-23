@@ -12,12 +12,13 @@
 // the create sites use — never typed, so the test moves with the source of
 // truth. And every rename case asserts the stale name is gone as well as the
 // new one present: the stale name is exactly what the defect served.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
 import { withTenant } from "@/lib/db";
+import { log } from "@/server/logger";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 
 // The public-page refresh is asserted by spying on the two helpers an ENTRANT
@@ -506,6 +507,89 @@ describe.skipIf(!HAS_DB)("the other entrant writes refresh the public pages too"
     clearRefreshSpies();
     await expect(syncEntrantRosterFromSquad(auth, entrant!.id)).rejects.toMatchObject({ status: 422 });
     expectNoPublicRefresh();
+  });
+});
+
+// The refresh runs AFTER the write commits. If it throws, the organiser must
+// still get the write back: an error response for a rename that did happen
+// would make them retry it, and every retry would succeed silently too. Each
+// test breaks a different step of the refresh, so no step can throw past it.
+describe.skipIf(!HAS_DB)("a public refresh that throws never turns a committed write into an error", () => {
+  const REFRESH_FAILED = "entrants: public cache invalidation failed (the write stands)";
+  const boom = () => {
+    throw new Error("refresh down");
+  };
+  let logError: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    logError = vi.spyOn(log, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    logError.mockRestore();
+  });
+
+  it("patchEntrant: the rename is returned and stored", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const [entrant] = await createEntrants(auth, division.id, [
+      { kind: "individual", display_name: "Before", members: [] },
+    ]);
+    fireScoreRevalidate.mockImplementationOnce(boom);
+
+    const out = await patchEntrant(auth, entrant!.id, { display_name: "After" });
+
+    expect(out.display_name).toBe("After");
+    expect(await storedName(entrant!.id)).toBe("After");
+    expect(logError).toHaveBeenCalledWith(expect.objectContaining({ entrantId: entrant!.id }), REFRESH_FAILED);
+  });
+
+  it("createEntrants: the entrant is returned and stored", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    retireCompetitionPlayerMatches.mockImplementationOnce(boom);
+
+    const [created] = await createEntrants(auth, division.id, [
+      { kind: "individual", display_name: "Created Anyway", members: [] },
+    ]);
+
+    expect(created!.display_name).toBe("Created Anyway");
+    expect(await storedName(created!.id)).toBe("Created Anyway");
+    expect(logError).toHaveBeenCalledWith(expect.objectContaining({ division: division.id }), REFRESH_FAILED);
+  });
+
+  it("deleteEntrant: the delete resolves and the row is gone", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const [entrant] = await createEntrants(auth, division.id, [
+      { kind: "individual", display_name: "Going", members: [] },
+    ]);
+    dropNamedPublicDocuments.mockImplementationOnce(boom);
+
+    await expect(deleteEntrant(auth, entrant!.id)).resolves.not.toThrow();
+
+    const rows = await sql`select 1 from entrants where id = ${entrant!.id}`;
+    expect(rows).toHaveLength(0);
+    expect(logError).toHaveBeenCalledWith(expect.objectContaining({ entrantId: entrant!.id }), REFRESH_FAILED);
+  });
+
+  it("syncEntrantRosterFromSquad: the synced roster is returned and stored", async () => {
+    const { auth } = await sharedSeedOrg("pro");
+    const { division } = await seedDivision(auth);
+    const a = await seedPerson(auth, "Sync A");
+    const b = await seedPerson(auth, "Sync B");
+    const team = await createTeam(auth, { name: "Sync Rovers " + randomUUID().slice(0, 6) });
+    await setTeamSquad(auth, team.id, roster(a));
+    const [entrant] = await createEntrants(auth, division.id, [
+      { kind: "team", team_id: team.id, members: roster(a) } as never,
+    ]);
+    await setTeamSquad(auth, team.id, roster(a, b));
+    fireScoreRevalidate.mockImplementationOnce(boom);
+
+    await syncEntrantRosterFromSquad(auth, entrant!.id);
+
+    const members = await sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${entrant!.id}`;
+    expect(members.map((m) => m.person_id).sort()).toEqual([a.id, b.id].sort());
+    expect(logError).toHaveBeenCalledWith(expect.objectContaining({ entrantId: entrant!.id }), REFRESH_FAILED);
   });
 });
 

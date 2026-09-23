@@ -34,6 +34,7 @@ import { markFieldChangeSeedProposalsStale, unseatSwissRoundsSeatingEntrant } fr
 import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
+import { log } from "@/server/logger";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -680,16 +681,24 @@ async function entrantPublicScope(
  *   opponent (`retireCompetitionPlayerMatches`).
  * Without these drops, a poll would bake the old name straight back in for
  * their 15–30s TTL.
+ *
+ * It never throws. The write has already committed, so an error here would
+ * report a failure for a change that happened, and the organiser's retry
+ * would write it again. A failure is logged; the pages catch up at their TTL.
  */
 function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<string, unknown>): void {
   if (!scope.competitionId) return;
-  retireCompetitionPlayerMatches(scope.competitionId, context);
-  const peersExpired = fireScoreRevalidate(scope.divisionId, scope.competitionId);
-  dropNamedPublicDocuments(
-    { competitionIds: [scope.competitionId], divisionIds: [scope.divisionId], fixtureIds: scope.fixtureIds },
-    context,
-    peersExpired,
-  );
+  try {
+    retireCompetitionPlayerMatches(scope.competitionId, context);
+    const peersExpired = fireScoreRevalidate(scope.divisionId, scope.competitionId);
+    dropNamedPublicDocuments(
+      { competitionIds: [scope.competitionId], divisionIds: [scope.divisionId], fixtureIds: scope.fixtureIds },
+      context,
+      peersExpired,
+    );
+  } catch (err) {
+    log.error({ err, ...context }, "entrants: public cache invalidation failed (the write stands)");
+  }
 }
 
 export async function patchEntrant(
