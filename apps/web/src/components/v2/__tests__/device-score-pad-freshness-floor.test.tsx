@@ -49,6 +49,9 @@ const api = vi.hoisted(() => ({
    *  at the root now (`client-v1.test.ts`); this keeps the pad's own
    *  `throwIfAborted` honest against any transport that still resolves. */
   resolveUndefinedOnAbort: false,
+  /** Every refresh GET is REFUSED with this envelope error — the shape
+   *  `apiV1` throws for a revoked/expired link (a real `ApiV1Error`). */
+  refuse: null as { code: string; status: number; message: string } | null,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -58,6 +61,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     apiV1: vi.fn((url: string, options?: { method?: string; json?: unknown; signal?: AbortSignal }) => {
       api.calls.push({ url, options });
       if (options?.method === "POST") return Promise.resolve({});
+      if (api.refuse !== null) {
+        const { code, status, message } = api.refuse;
+        return Promise.reject(new actual.ApiV1Error(message, status, code));
+      }
       if (api.hang || api.resolveUndefinedOnAbort) {
         return new Promise((resolve, reject) => {
           const signal = options?.signal;
@@ -213,6 +220,7 @@ beforeEach(() => {
   api.headline = null;
   api.hang = false;
   api.resolveUndefinedOnAbort = false;
+  api.refuse = null;
 });
 
 afterEach(() => {
@@ -446,6 +454,94 @@ describe("DeviceScorePad — the tab-return freshness floor (G1)", () => {
 
     expect(count(doc, "visibilitychange"), "visibilitychange left registered").toBe(0);
     expect(count(win, "focus"), "focus left registered").toBe(0);
+  });
+});
+
+// Review round 1, item 5 (owner-approved) — A LINK THAT DIES WHILE THE SCORER
+// IS AWAY.
+//
+// The organiser revokes the link, or it expires, while the phone is in a
+// pocket. The scorer comes back: the tab-return refresh is the FIRST request
+// to learn the link is dead. It used to be swallowed like any other failed
+// refresh, so the pad kept its live controls — every tap then failed — and
+// every later return spent four more requests on a link that can never answer.
+// It now lands on the same dead-link screen `send()` shows, and a dead pad
+// stops listening. Anything else a refresh can fail with stays swallowed.
+describe("DeviceScorePad — a tab-return refresh that finds the link dead", () => {
+  // The two codes the server throws for a link that died mid-day
+  // (`server/usecases/device-links.ts`); message verbatim from there.
+  const REVOKED = {
+    code: "LINK_REVOKED",
+    status: 401,
+    message: "This device link was revoked — ask the organiser",
+  };
+  const EXPIRED = {
+    code: "LINK_EXPIRED",
+    status: 401,
+    message: "This device link has expired — ask the organiser",
+  };
+
+  it.each([REVOKED, EXPIRED])("$code lands on the dead-link screen, as a refused send does", async (refusal) => {
+    const doc = stubDocument("visible");
+    stubWindow();
+    const island = renderIsland(DeviceScorePad, baseProps());
+    // Positive baseline: a live pad with its controls, not the dead screen.
+    expect(island.text()).not.toContain(refusal.message);
+    expect(propsOf(voidMine(island.tree())).disabled).toBe(false);
+
+    api.refuse = refusal;
+    fire(doc, "visibilitychange");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(island.text(), "the scorer must be told the link is dead").toContain(refusal.message);
+    expect(
+      island.tree().some((e) => e.type === "button"),
+      "a dead link keeps no controls — every tap on them would fail",
+    ).toBe(false);
+  });
+
+  it("once dead, a return costs nothing: no listener fires a request", async () => {
+    const doc = stubDocument("visible");
+    const win = stubWindow();
+    const island = renderIsland(DeviceScorePad, baseProps());
+
+    api.refuse = REVOKED;
+    fire(doc, "visibilitychange");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(island.text(), "precondition: the pad is on the dead-link screen").toContain(REVOKED.message);
+    expect(refreshCalls(), "precondition: the refresh that found it dead did fetch").toHaveLength(2);
+
+    api.calls.length = 0;
+    fire(doc, "visibilitychange");
+    fire(win, "focus");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(refreshCalls(), "a dead link must not be asked again on every return").toHaveLength(0);
+  });
+
+  it("any other refusal is still swallowed: live controls, and the next return still refreshes", async () => {
+    const doc = stubDocument("visible");
+    stubWindow();
+    const island = renderIsland(DeviceScorePad, baseProps());
+
+    const outage = { code: "INTERNAL_ERROR", status: 500, message: "Something went wrong" };
+    api.refuse = outage;
+    fire(doc, "visibilitychange");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(island.text(), "a passing outage is not a dead link").not.toContain(outage.message);
+    expect(propsOf(voidMine(island.tree())).disabled, "controls stay live — and ungated").toBe(false);
+
+    // And still listening: once the outage clears, the next return refreshes.
+    api.refuse = null;
+    api.events = [OWN, FOREIGN];
+    api.headline = ARRIVED;
+    api.calls.length = 0;
+    fire(doc, "visibilitychange");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(refreshCalls()).toHaveLength(2);
+    expect(island.text()).toContain(ARRIVED);
   });
 });
 

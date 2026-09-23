@@ -168,7 +168,12 @@ export function DeviceScorePad({
    *  learns the server's real row id, so the raw event list this fires with
    *  is deliberately unused; only a real `resync()` (the same one `send()`
    *  already trusts) can tell this component the real id `lastOwnVoidable`
-   *  needs. A failed opportunistic resync is swallowed.
+   *  needs. A failed opportunistic resync is swallowed — with ONE exception:
+   *  a dead link (G1 review round 1, owner-approved). The tab-return listener
+   *  below is often the first request after the organiser revoked the link or
+   *  it expired, and swallowing that left the scorer on live controls that
+   *  could only fail, re-asking a dead link on every return. It lands on the
+   *  same dead-link screen `send()` shows, and the listener stops (see there).
    *
    *  BOUNDED (G1): the only clear of `padSyncing` is this `finally`, and the
    *  tab-return listener below now fires this too. See
@@ -176,7 +181,9 @@ export function DeviceScorePad({
   const handlePadEvents = useCallback(() => {
     setPadSyncing(true);
     void resync({ timeoutMs: OPPORTUNISTIC_RESYNC_MS })
-      .catch(() => undefined)
+      .catch((err: unknown) => {
+        if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) setDead(err.message);
+      })
       .finally(() => setPadSyncing(false));
   }, [resync]);
 
@@ -282,6 +289,12 @@ export function DeviceScorePad({
     // shape it forgot. `device-score-pad-freshness-floor.test.tsx` mounts each
     // partial DOM, so each clause has its own witness.
     if (typeof document === "undefined" || typeof window === "undefined") return;
+    // A dead link never answers again, so a dead pad stops listening: the
+    // cleanup below removes both listeners the moment `dead` flips, and
+    // nothing re-adds them. Without this, every later return would spend four
+    // requests on a link that can only refuse them. Same truthiness as the
+    // dead-screen `if (dead)` below, so "listening" and "live screen" agree.
+    if (dead) return;
     const refreshIfVisible = () => {
       if (document.visibilityState !== "visible") return;
       handlePadEvents();
@@ -292,7 +305,7 @@ export function DeviceScorePad({
       document.removeEventListener("visibilitychange", refreshIfVisible);
       window.removeEventListener("focus", refreshIfVisible);
     };
-  }, [handlePadEvents]);
+  }, [handlePadEvents, dead]);
 
   // Owner ruling 17 (2026-09-06) — the SAME predicate fixture-console.tsx
   // shares (this file already imports plain types from there — `SportInfo`,
