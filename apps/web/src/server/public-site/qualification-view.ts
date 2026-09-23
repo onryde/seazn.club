@@ -215,11 +215,24 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
 
   // F2: the table's members are its snapshot rows AND everyone seated in its
   // fixtures. A seated member the snapshot never folded has unknown points
-  // (a carry-over opening is folded only with results), so no status.
+  // (a carry-over opening is folded only with results), so no status — except
+  // one who departed having counted nothing (every fixture void): a pooled
+  // snapshot folds only members with a counted result, so it is absent by
+  // design. It is seated as a departed row frozen at 0. A frozen 0 is sound
+  // only where no row can finish below 0 (negative points are legal): it
+  // would otherwise out-rank a row whose best is below 0 — a false Out.
   const byId = new Map(i.rows.map((r) => [r.entrantId, r]));
+  const departedUnfolded = new Set<string>();
   for (const f of tableFx) {
-    for (const id of [f.home_entrant_id, f.away_entrant_id]) if (id !== null && !byId.has(id)) return null;
+    for (const id of [f.home_entrant_id, f.away_entrant_id]) {
+      if (id === null || byId.has(id)) continue;
+      const status = i.entrantStatuses[id];
+      if (status === undefined || inTheField({ status })) return null;
+      if (tableFx.some((g) => seats(g, id) && counted(g))) return null;
+      departedUnfolded.add(id);
+    }
   }
+  if (departedUnfolded.size > 0 && (perMatch.min < 0 || i.rows.some((r) => r.points < 0))) return null;
   // Snapshot lag: standings recompute after the scoring write commits, so a
   // row can trail its own fixtures. A row that has played fewer matches than
   // the table's fixtures say reads stale points. (More is fine: a "full"
@@ -259,7 +272,10 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     ...(f.pool_id ? { poolId: f.pool_id } : {}),
   }));
   const engine: QualificationInput = {
-    rows: ordered.map((r) => ({ entrantId: r.entrantId, points: r.points, active: active.get(r.entrantId) === true })),
+    rows: [
+      ...ordered.map((r) => ({ entrantId: r.entrantId, points: r.points, active: active.get(r.entrantId) === true })),
+      ...[...departedUnfolded].map((entrantId) => ({ entrantId, points: 0, active: false })),
+    ],
     remaining: new Map(ordered.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
     perMatch,
     cut,
@@ -297,7 +313,9 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   };
 
   function whatIf(r: StandingsRow, status: QualStatus, ifYouLose: QualStatus | null): { text: string; assumption: string | null } | null {
-    const rivalId = tieRival(engine, orderedIds, r.entrantId);
+    // A rival still playing (review fix 1): a departed row across the line is
+    // skipped, and when only departed rows are in reach there is no what-if.
+    const rivalId = tieRival({ ...engine, rows: engine.rows.filter((x) => x.active) }, orderedIds, r.entrantId);
     const rival = rivalId === null ? undefined : byId.get(rivalId);
     if (!rival) return null;
     // The average match counts only matches with a ledger (T3-⚠3).
@@ -319,6 +337,10 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
       };
     };
     if (w.kind === "rule") return rule();
+    // Every reading below is ONE match's worth (the average match, one heavy
+    // defeat). With two or more left the tying result is no single match, so
+    // the rule and today's values only (review fix 1).
+    if (engine.remaining.get(r.entrantId) !== 1) return rule();
     // The target assumes the rival's figures stay put — false when the two
     // meet next, so only the rule and today's values.
     const meetNext = tableFx.some((f) => !settled(f) && seats(f, r.entrantId) && seats(f, rival.entrantId));
@@ -326,9 +348,10 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     if (w.kind === "safe") return { text: i.msg("table.qual.whatIf.safe", vars), assumption };
     // Which result leaves the two level on points: a win-and-in row ties only
     // by losing; a row a loss puts out ties only by winning. Otherwise unknown.
+    // (With one match left, the gate above, a Win k row is always k = 1.)
     const scenario = nextIsBye(r.entrantId)
       ? null
-      : status.kind === "win_k" && status.k === 1
+      : status.kind === "win_k"
         ? "loss"
         : status.kind === "needs_help" && ifYouLose?.kind === "out"
           ? "win"

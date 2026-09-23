@@ -34,11 +34,20 @@
 //   lose / scenario / latest seat), what-if on closed rows, if-you-lose
 //   labelled with the current status, rounds left over departed rows, no
 //   cutNoRounds, aria from position, headline `{n}`.
+//   Review fix round 1 (14 more) — the one-match gate deleted / `>= 1` /
+//   `=== 2` / placed after `safe`; rival read over departed rows; F2 reverted
+//   / unknown status accepted / in-field accepted / counted result accepted;
+//   the negative-points guard off / always / without `min` / without rows.
 //   EQUIVALENT (unkillable, kept as the readable empty case): `qualifyCount
 //   < 1` (the engine refuses cut < 1 itself) and `rows.length === 0` (F3
-//   refuses it: a cut ≥ 0 active rows). The DB-backed twin
-//   (qualification-view-db.test.ts) kills F1, F2, lag-void, Swiss-seated,
-//   pool-filter and the forfeited mapping on real reads as well.
+//   refuses it: a cut ≥ 0 active rows). Also equivalent: omitting the frozen-0
+//   seat for a departed, never-folded member — once the negative-points guard
+//   holds, a frozen 0 changes no verdict (F3 already leaves ≥ cut rivals at a
+//   best ≥ 0), so it is seated only to keep the engine's membership whole. The
+//   gate made `k === 1` in the loss scenario redundant (k ≤ matches left), so
+//   it went. The DB-backed twin (qualification-view-db.test.ts) kills F1, F2
+//   (both directions), lag-void, Swiss-seated, pool-filter, the forfeited
+//   mapping and the ledgerless reading of a real walkover on real reads too.
 import { describe, expect, it } from "vitest";
 import {
   PointsRule,
@@ -276,6 +285,26 @@ function rr4(played: 1 | 2): Scene {
   };
 }
 
+/** The reviewer's probe (fix round 1): league of four after three rounds —
+ *  r1 A>B, C>D; r2 A>C, B>D; r3 A>D, B>C; r4 A–B, C–D open, and with
+ *  `left` 2 also r5 A–D, B–C. A 9 (+3), B 6 (+1), C 3 (+1), D 0 (−5). */
+function after3(left: 1 | 2, m: Partial<Record<"A" | "B" | "C" | "D", [number, number]>> = {}): Scene {
+  return {
+    kind: "league",
+    rows: [
+      row("A", 1, 3, 3, m.A ?? [5, 2]),
+      row("B", 2, 2, 3, m.B ?? [4, 3]),
+      row("C", 3, 1, 3, m.C ?? [4, 3]),
+      row("D", 4, 0, 3, m.D ?? [1, 6]),
+    ],
+    fixtures: [
+      won(1, "A", "B"), won(1, "C", "D"), won(2, "A", "C"), won(2, "B", "D"), won(3, "A", "D"), won(3, "B", "C"),
+      open(4, "A", "B"), open(4, "C", "D"),
+      ...(left === 2 ? [open(5, "A", "D"), open(5, "B", "C")] : []),
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 describe("stageQualMeta / divisionPointsBounds", () => {
   it("maps the V414 columns, defaulting a null per-group flag to false", () => {
@@ -446,6 +475,44 @@ describe("no status — stated first, each with its positive pair", () => {
     const s = open4();
     expect(view({ ...s, fixtures: [...s.fixtures, open(4, "A", "E")] })).toBeNull();
     expect(view({ ...s, rows: [...s.rows, row("E", 5, 0, 0)], fixtures: [...s.fixtures, open(4, "A", "E")] })).not.toBeNull();
+  });
+  it("F2: a member who withdrew having played nothing (every fixture void) is no unknown — the table still shows", () => {
+    // Review fix round 1: a pooled snapshot folds only members with a counted
+    // result, so E (withdrawn, both fixtures voided) is absent from it. E is
+    // seated as a departed row frozen at 0; the pool keeps its status.
+    const s = open4();
+    const eVoid = [voided(open(1, "E", "B")), voided(open(4, "A", "E"))];
+    const v = must(view({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "withdrawn" } }));
+    expect(v.rows.E).toBeUndefined();
+    expect(Object.keys(v.rows).sort()).toEqual(["A", "B", "C", "D"]);
+    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "disqualified" } })).not.toBeNull();
+    // Pairs — each is still an unknown: E in the field; E departed but with a
+    // counted result the snapshot should hold; E's status unreadable.
+    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid] })).toBeNull();
+    // (A bye, so no snapshot row's own count moves and lag stays quiet.)
+    const eCounted = [bye(1, "E"), voided(open(4, "A", "E"))];
+    expect(view({ ...s, fixtures: [...s.fixtures, ...eCounted], statuses: { E: "withdrawn" } })).toBeNull();
+    const statuses = input({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "withdrawn" } }).entrantStatuses;
+    const noE: Record<string, string> = { ...statuses };
+    delete noE.E;
+    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid] }, { entrantStatuses: noE })).toBeNull();
+  });
+  it("F2: a frozen 0 is only safe where no row can finish below 0 — negative points fail closed", () => {
+    // Negative points are legal (points.ts). A departed never-played member
+    // frozen at 0 would out-rank a row whose best is below 0 and print a false
+    // Out — so a negative-paying rule, or a row already below 0, gives none.
+    const s = open4();
+    const eVoid = [voided(open(1, "E", "B")), voided(open(4, "A", "E"))];
+    const departed = { fixtures: [...s.fixtures, ...eVoid], statuses: { E: "withdrawn" } };
+    const negRule = { base: { win: W, draw: 1, loss: -1 }, bonuses: [] };
+    const zeroRule = { base: { win: W, draw: 1, loss: 0 }, bonuses: [] };
+    expect(view({ ...s, ...departed, meta: { pointsRule: negRule } })).toBeNull();
+    expect(view({ ...s, ...departed, meta: { pointsRule: zeroRule } })).not.toBeNull();
+    // Pair: the same negative rule with nobody frozen at 0 shows.
+    expect(view({ ...s, meta: { pointsRule: negRule } })).not.toBeNull();
+    const below = s.rows.map((r) => (r.entrantId === "D" ? { ...r, points: -1 } : r));
+    expect(view({ ...s, ...departed, rows: below })).toBeNull();
+    expect(view({ ...s, rows: below })).not.toBeNull();
   });
   it("snapshot lag: a row that has played FEWER matches than its settled fixtures → no status; equal or more shows", () => {
     const s = open4();
@@ -689,6 +756,45 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(a.label).toBe("Win 2 and in");
     expect(a.whatIf).toBe(`If you finish level on points with Cy, ${RULE} decides. Now: you +2, Cy 0.`);
     expect(a.whatIfAssumption).toBeNull();
+  });
+  it("two or more left: the tying result is no single match — rule and values, never a target or safe", () => {
+    // Review fix round 1 (the reviewer's probe): after three rounds A 9 (+3),
+    // B 6, C 3 (+1), D 0 (−5), cut 2, rounds 4–5 to play. The one-match
+    // target ("lose by no more than 1") is false with two matches left.
+    const two = must(view(after3(2))).rows;
+    expect(two.A!.label).toBe("Win and in");
+    expect(two.A!.whatIf).toBe(`If you finish level on points with Cy, ${RULE} decides. Now: you +3, Cy +1.`);
+    expect(two.A!.whatIfAssumption).toBeNull();
+    // D: a loss is Out (the win scenario), still two left.
+    expect(two.D!.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(two.D!.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -5, Bo +1.`);
+    expect(two.D!.whatIfAssumption).toBeNull();
+    // …and the safe reading, which is one heavy defeat, not two.
+    const safe = must(view(after3(2, { C: [0, 3] }))).rows.A!;
+    expect(safe.whatIf).toBe(`If you finish level on points with Cy, ${RULE} decides. Now: you +3, Cy -3.`);
+    expect(safe.whatIfAssumption).toBeNull();
+  });
+  it("…its pair: the same table with ONE left does carry the target", () => {
+    const one = must(view(after3(1))).rows;
+    expect(one.A!.status).toBe("through");
+    expect(one.C!.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(one.C!.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 1 or more to finish ahead.`);
+    expect(one.C!.whatIfAssumption).toBe("Assumes Bo's figures stay the same and your next match is an average one.");
+  });
+  it("prefers a rival still playing: a withdrawn (frozen) row across the line is skipped, and no active rival means no what-if", () => {
+    // open4 with B withdrawn after 2 of 3 (award mode, so F1 passes) and
+    // frozen at 3. C's nearest across the line is B; the active A (6, one
+    // left) is still reachable, so C is told about A. D can reach only B.
+    const s = open4();
+    const v = must(view({ ...s, statuses: { B: "withdrawn" } }));
+    expect(v.rows.B).toBeUndefined();
+    expect(v.rows.C!.whatIf).toContain("level on points with Ada,");
+    expect(v.rows.D!.whatIf).toBeNull();
+    expect(v.rows.D!.whatIfAssumption).toBeNull();
+    // With B in the field both are told about B.
+    const inField = must(view(s));
+    expect(inField.rows.C!.whatIf).toContain("level on points with Bo,");
+    expect(inField.rows.D!.whatIf).toContain("level on points with Bo,");
   });
   it("a key with no per-row value: the rule alone", () => {
     const d = must(view(open4(), { cascade: ["points", "h2h_points", "diff"] })).rows.D!;

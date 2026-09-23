@@ -189,8 +189,9 @@ function entrantsOfPool(
     }
     if (fixture.awardDelta !== undefined) ids.add(fixture.awardDelta.entrantId);
   }
-  // Include declared entrants that happen to sit in this pool but have no
-  // counted result yet (e.g. all their games void) via the allEntrants order.
+  // Membership is read from COUNTED results only: a declared entrant seated in
+  // this pool with no counted result yet (e.g. all its games void) is NOT a
+  // member here and drops out. Filtering allEntrants only restores its order.
   return allEntrants.filter((id) => ids.has(id));
 }
 

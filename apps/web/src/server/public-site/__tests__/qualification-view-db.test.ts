@@ -108,13 +108,22 @@ const fixturesOf = (r: Rig) => sql<Row[]>`
   where stage_id = ${r.stageId} order by round_no, seq_in_round`;
 
 /** Decide every seated, unplayed board of `round` (optionally only the first
- *  `limit` of them); the higher seed (earlier in `names`) wins. */
-async function playRound(r: Rig, round: number, names: string[], limit = Infinity, poolId?: string): Promise<void> {
+ *  `limit` of them, only `poolId`'s, none seating `sitOut`); the higher seed
+ *  (earlier in `names`) wins. */
+async function playRound(
+  r: Rig,
+  round: number,
+  names: string[],
+  limit = Infinity,
+  poolId?: string,
+  sitOut?: string,
+): Promise<void> {
   const order = names.map((n) => r.id[n]!);
   let played = 0;
   for (const f of await fixturesOf(r)) {
     if (f.round_no !== round || f.status !== "scheduled" || !f.home_entrant_id || !f.away_entrant_id) continue;
     if (poolId !== undefined && f.pool_id !== poolId) continue;
+    if (sitOut !== undefined && (f.home_entrant_id === sitOut || f.away_entrant_id === sitOut)) continue;
     if (played++ >= limit) break;
     const homeWins = order.indexOf(f.home_entrant_id) < order.indexOf(f.away_entrant_id);
     await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
@@ -126,10 +135,22 @@ async function playRound(r: Rig, round: number, names: string[], limit = Infinit
   }
 }
 
+/** A real walkover: `loser` forfeits its round-`round` match (core.forfeit). */
+async function forfeitRound(r: Rig, round: number, loser: string): Promise<void> {
+  const id = r.id[loser]!;
+  const f = (await fixturesOf(r)).find((x) => x.round_no === round && (x.home_entrant_id === id || x.away_entrant_id === id))!;
+  await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+  await scoreEvent(r.auth, f.id, { expected_seq: 1, type: "core.forfeit", payload: { by: id, reason: "no-show" } });
+}
+
 async function load(
   r: Rig,
   poolId: string | null = null,
-): Promise<{ view: QualificationView | null; rows: { entrantId: string; points: number }[]; statuses: Record<string, string> }> {
+): Promise<{
+  view: QualificationView | null;
+  rows: { entrantId: string; points: number; played: number; metrics: Record<string, number> }[];
+  statuses: Record<string, string>;
+}> {
   const data = (await getPublicDivision(...r.slugs))!;
   expect(data).not.toBeNull();
   const stage = data.stages.find((s) => s.id === r.stageId)!;
@@ -211,6 +232,43 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expectSameStatuses(view!, await engineStatuses(r, rows, statuses, leagueLeft));
   });
 
+  it("league with two REAL walkovers: the what-if reads the snapshot's own metric keys and leaves walkovers out of the average match", async () => {
+    // Review fix round 1. r1: Ann and Cat forfeit (core.forfeit) to Dan and
+    // Ben; r2: Dan beats Ben 3–1, Cat beats Ann 3–1. Dan 6 (+2), Cat 3 (+2),
+    // Ben 3 (−2), Ann 0 (−2); r3 Ann–Ben, Cat–Dan to play.
+    const r = await rig("league", FOUR);
+    await forfeitRound(r, 1, "Ann");
+    await forfeitRound(r, 1, "Cat");
+    await playRound(r, 2, ["Dan", "Cat", "Ben", "Ann"]);
+    // The premise: a real walkover is `forfeited` with an `award` outcome and
+    // pays its points on NO ledger — Dan's goals are one match's worth.
+    const wo = await sql<{ status: string; kind: string }[]>`
+      select status, outcome->>'kind' as kind from fixtures where stage_id = ${r.stageId} and round_no = 1`;
+    expect(wo).toEqual([
+      { status: "forfeited", kind: "award" },
+      { status: "forfeited", kind: "award" },
+    ]);
+    const { view, rows, statuses } = await load(r);
+    const dan = rows.find((x) => x.entrantId === r.id.Dan!)!;
+    expect(dan.played).toBe(2);
+    expect(dan.metrics).toMatchObject({ for: 3, against: 1, diff: 2 });
+    expect(view).not.toBeNull();
+    expectSameStatuses(view!, await engineStatuses(r, rows, statuses, leagueLeft));
+    // Dan is Win and in; a loss ties Ben (−2) on points. Margin −3 over ONE
+    // real match of 4 goals is a target; with the walkover counted as a
+    // second match the average halves and it would read "safe" instead.
+    const d = view!.rows[r.id.Dan!]!;
+    expect(d.label).toBe("Win and in");
+    expect(d.ifYouLose).toBe("If you lose your next match: Needs help.");
+    expect(d.whatIf).toBe(
+      "If you finish level on points with Ben, goal/run difference decides: lose your next match by no more than 3 to finish ahead.",
+    );
+    expect(d.whatIfAssumption).toBe("Assumes Ben's figures stay the same and your next match is an average one.");
+    // Real `diff` values, as the table prints them.
+    expect(view!.rows[r.id.Cat!]!.whatIf).toBe("If you finish level on points with Ben, goal/run difference decides. Now: you +2, Ben -2.");
+    expect(view!.rows[r.id.Ann!]!.ifYouLose).toBe("If you lose your next match: Out.");
+  });
+
   it("Swiss of five: round 1's real bye counts as the bye entrant's round (two left for everyone)", async () => {
     const FIVE = [...FOUR, "Eve"];
     const r = await rig("swiss", FIVE, 3);
@@ -261,6 +319,50 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(full.view).not.toBeNull();
     expect(full.view!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
     expectSameStatuses(full.view!, await engineStatuses(r, full.rows, full.statuses, leagueLeft, 1));
+  });
+
+  it("F2 on a real pooled stage: a member who withdrew before playing never hides the pool — cascade run or status only", async () => {
+    // Review fix round 1. Two real ways a pool member leaves before playing:
+    const EIGHT = [...FOUR, "Eve", "Fay", "Gus", "Hal"];
+    const scene = async () => {
+      const r = await rig("group", EIGHT);
+      const pool = [...new Set((await fixturesOf(r)).map((f) => f.pool_id))].filter((p): p is string => p !== null).sort()[0]!;
+      const seated = [...new Set((await fixturesOf(r)).filter((f) => f.pool_id === pool).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]))];
+      const leaver = seated.filter((id): id is string => id !== null)[0]!;
+      return { r, pool, leaver, others: seated.filter((id): id is string => id !== null && id !== leaver).sort() };
+    };
+
+    // (a) the organiser's withdrawal (withdrawEntrantCascade): nothing played,
+    // so expunge. It voids every leaver fixture as `abandoned` WITH a
+    // no_result outcome, so the pooled snapshot DOES fold the leaver, at 0.
+    const a = await scene();
+    expect((await withdrawEntrantCascade(a.r.auth, a.leaver)).policy).toBe("expunge");
+    await playRound(a.r, 1, EIGHT, Infinity, a.pool);
+    await playRound(a.r, 2, EIGHT, Infinity, a.pool);
+    const cascaded = await load(a.r, a.pool);
+    const leaverFx = (await fixturesOf(a.r)).filter((f) => f.home_entrant_id === a.leaver || f.away_entrant_id === a.leaver);
+    expect(leaverFx.map((f) => f.status)).toEqual(["abandoned", "abandoned", "abandoned"]);
+    expect(cascaded.rows.map((x) => x.entrantId).sort()).toEqual([...a.others, a.leaver].sort());
+    expect(cascaded.view).not.toBeNull();
+    expect(cascaded.view!.rows[a.leaver]).toBeUndefined();
+    expect(cascaded.view!.table.label).toBe("Top 1 go through to Finals · 1 round left");
+    expectSameStatuses(cascaded.view!, await engineStatuses(a.r, cascaded.rows, cascaded.statuses, leagueLeft, 1));
+
+    // (b) a registrant's self-cancel (registrations.ts) moves ONLY the entrant
+    // status: the leaver's fixtures stay scheduled with no result, so the
+    // pooled snapshot never folds it — the case F2 used to hide the pool for.
+    const b = await scene();
+    await sql`update entrants set status = 'withdrawn' where id = ${b.leaver}`;
+    await playRound(b.r, 1, EIGHT, Infinity, b.pool, b.leaver);
+    await playRound(b.r, 2, EIGHT, Infinity, b.pool, b.leaver);
+    const selfCancel = await load(b.r, b.pool);
+    expect(selfCancel.statuses[b.leaver]).toBe("withdrawn");
+    expect(selfCancel.rows.map((x) => x.entrantId).sort()).toEqual(b.others);
+    expect(selfCancel.view).not.toBeNull();
+    expect(selfCancel.view!.rows[b.leaver]).toBeUndefined();
+    // The leaver's open boards still count as matches left for its opponents.
+    expect(selfCancel.view!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
+    expectSameStatuses(selfCancel.view!, await engineStatuses(b.r, selfCancel.rows, selfCancel.statuses, leagueLeft, 1));
   });
 
   it("F1 award mode through the real cascade: the leaver gets no status, the rest do, walkovers counted", async () => {
