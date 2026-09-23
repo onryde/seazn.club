@@ -12,7 +12,7 @@ import QRCode from "qrcode";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { liveCopy } from "@/components/v2/device-link-copy";
+import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
 interface ActiveLink {
@@ -50,16 +50,8 @@ export function DeviceLinkPanel({
   const [busy, setBusy] = useState(false);
   const [confirmReissue, setConfirmReissue] = useState(false);
   const fmtDate = (iso: string) => new Date(iso).toLocaleString();
-
-  /** A refusal as the organiser reads it. A server without its key answers
-   *  503 DEVICE_LINK_KEK_MISSING with an English sentence naming an env var;
-   *  that is ours to fix, so it gets localised copy (controller ruling). */
-  const failure = (err: unknown) =>
-    err instanceof ApiV1Error && err.code === "DEVICE_LINK_KEK_MISSING"
-      ? msg("dlink.kekMissing")
-      : err instanceof Error
-        ? err.message
-        : msg("dlink.failed");
+  // Every refusal below is shown as `msg(failureKey(err))` — localised by code
+  // and status, never the server's English (T3 review finding 3).
 
   const refresh = useCallback(async () => {
     try {
@@ -94,7 +86,7 @@ export function DeviceLinkPanel({
       await refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
-      else setError(failure(err));
+      else setError(msg(failureKey(err)));
     } finally {
       setBusy(false);
     }
@@ -115,7 +107,7 @@ export function DeviceLinkPanel({
       await refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
-      else setError(failure(err));
+      else setError(msg(failureKey(err)));
     } finally {
       setBusy(false);
     }
@@ -130,7 +122,7 @@ export function DeviceLinkPanel({
       setConfirmReissue(false);
       await refresh();
     } catch (err) {
-      setError(failure(err));
+      setError(msg(failureKey(err)));
     } finally {
       setBusy(false);
     }

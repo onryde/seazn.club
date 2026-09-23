@@ -31,6 +31,8 @@ const api = vi.hoisted(() => ({
   afterDelete: null as Link | null,
   /** When set, every POST rejects with this ApiV1Error. */
   refuse: null as { message: string; status: number; code: string } | null,
+  /** When set, every DELETE rejects with this ApiV1Error. */
+  refuseDelete: null as { message: string; status: number; code: string } | null,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -47,6 +49,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
       }
       if (options?.method === "DELETE") {
         api.deletes.push(url);
+        if (api.refuseDelete !== null) {
+          const { message, status, code } = api.refuseDelete;
+          throw new actual.ApiV1Error(message, status, code);
+        }
         api.active = api.afterDelete;
         return {};
       }
@@ -83,6 +89,7 @@ beforeEach(() => {
   api.active = SEALED;
   api.afterDelete = null;
   api.refuse = null;
+  api.refuseDelete = null;
   vi.stubGlobal("window", { location: { origin: ORIGIN } });
 });
 afterEach(() => {
@@ -255,13 +262,63 @@ describe("device-link panel — a server with no DEVICE_LINK_KEK (owner ruling Q
     },
   );
 
-  it("any other refusal still shows its own message (the negative pair — the mapping is by code, not blanket)", async () => {
-    api.refuse = { message: "fixture is finalized", status: 422, code: "FIXTURE_FINALIZED" };
+});
+
+// Review finding 3 (T3 fix round 1): NO refusal renders the server's English.
+// Each case is the real wire shape the device-link routes send (see
+// `failureKey`'s table test in device-link-copy.test.ts); the organiser reads
+// the localised sentence for it, and the mapping is per case, not blanket —
+// every case expects a DIFFERENT key, so collapsing them to one line reds.
+const REFUSALS = [
+  { label: "a finalized/cancelled fixture (422)", err: { status: 422, code: "ERROR", message: "fixture is finalized — nothing left to score" }, key: "dlink.error.matchOver" },
+  { label: "the mint budget (429)", err: { status: 429, code: "RATE_LIMITED", message: "Too many requests — slow down and try again." }, key: "dlink.error.rateLimited" },
+  { label: "a fixture that is gone (404)", err: { status: 404, code: "NOT_FOUND", message: "fixture not found" }, key: "dlink.error.notFound" },
+  { label: "no permission (403)", err: { status: 403, code: "FORBIDDEN", message: "Device links can only be managed with a session login" }, key: "dlink.error.forbidden" },
+  { label: "anything unmapped (500) — the generic fallback", err: { status: 500, code: "INTERNAL", message: "relation \"device_links\" does not exist" }, key: "dlink.failed" },
+] as const;
+
+describe("device-link panel — every refusal is localised, never the server's English (review finding 3)", () => {
+  it.each(REFUSALS)("Show QR: $label", async ({ err, key }) => {
+    api.refuse = { ...err };
     const island = renderIsland(DeviceLinkPanel, PROPS);
     await flush();
     click(byTestId(island.tree(), "device-link-show"));
     await flush();
-    expect(island.text()).toContain("fixture is finalized");
-    expect(island.text()).not.toContain(t("dlink.kekMissing"));
+    expect(island.text()).toContain(t(key));
+    expect(island.text()).not.toContain(err.message);
+  });
+
+  it.each(REFUSALS)("the reissue confirm: $label", async ({ err, key }) => {
+    api.refuse = { ...err };
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-reissue"));
+    click(byTestId(island.tree(), "device-link-reissue-confirm"));
+    await flush();
+    expect(api.posts).toEqual(["/api/v1/fixtures/f1/device-links/reissue"]);
+    expect(island.text()).toContain(t(key));
+    expect(island.text()).not.toContain(err.message);
+  });
+
+  it("Revoke's refusal is localised too (a link already gone: 404)", async () => {
+    api.refuseDelete = { status: 404, code: "NOT_FOUND", message: "device link not found" };
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(buttons(island.tree()).find((el) => textOf(el).trim() === t("dlink.revoke")));
+    await flush();
+    expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
+    expect(island.text()).toContain(t("dlink.error.notFound"));
+    expect(island.text()).not.toContain("device link not found");
+  });
+
+  it("a dropped connection (fetch TypeError) gets the generic line, not the browser's English", async () => {
+    const { apiV1 } = await import("@/lib/client-v1");
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    vi.mocked(apiV1).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    click(byTestId(island.tree(), "device-link-show"));
+    await flush();
+    expect(island.text()).toContain(t("dlink.failed"));
+    expect(island.text()).not.toContain("Failed to fetch");
   });
 });
