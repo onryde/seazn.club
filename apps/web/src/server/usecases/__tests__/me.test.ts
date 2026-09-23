@@ -21,9 +21,14 @@ import {
   setMyConsent,
 } from "../me";
 
+// Every export an entrant write fires after commit is stubbed too
+// (`refreshEntrantPublicPages`): the seed below creates entrants, and a stub
+// missing one of them breaks that seed, not the test.
 vi.mock("@/server/public-site/revalidate", () => ({
   fireDivisionRevalidate: vi.fn(),
   firePersonRevalidate: vi.fn(async () => {}),
+  fireScoreRevalidate: vi.fn(async () => {}),
+  dropNamedPublicDocuments: vi.fn(),
 }));
 import { firePersonRevalidate } from "@/server/public-site/revalidate";
 

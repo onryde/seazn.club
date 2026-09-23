@@ -113,7 +113,7 @@ describe("RosterEditor — kind/model-aware roster", () => {
     });
     expect(html).not.toContain("captain");
     expect(html).not.toContain('placeholder="No."');
-    expect(html).not.toContain("Find player…");
+    expect(html).not.toContain(testMsg("entrants.roster.findPlayer"));
   });
 
   it("team roster with captain disabled by config hides the checkbox", () => {
@@ -124,7 +124,7 @@ describe("RosterEditor — kind/model-aware roster", () => {
       allowSquadNumbers: false,
     });
     expect(html).not.toContain("captain");
-    expect(html).toContain("Find player…");
+    expect(html).toContain(testMsg("entrants.roster.findPlayer"));
   });
 
   it("pair picker caps at 2 — a full pair hides the add picker but keeps Save reachable", () => {
@@ -138,8 +138,8 @@ describe("RosterEditor — kind/model-aware roster", () => {
       allowCaptain: false,
       allowSquadNumbers: false,
     });
-    expect(html).not.toContain("Find player…");
-    expect(html).toContain("Save roster");
+    expect(html).not.toContain(testMsg("entrants.roster.findPlayer"));
+    expect(html).toContain(testMsg("entrants.roster.save"));
   });
 
   it("individual at cap (1/1) also keeps Save reachable", () => {
@@ -149,8 +149,8 @@ describe("RosterEditor — kind/model-aware roster", () => {
       allowCaptain: true,
       allowSquadNumbers: true,
     });
-    expect(html).not.toContain("Find player…");
-    expect(html).toContain("Save roster");
+    expect(html).not.toContain(testMsg("entrants.roster.findPlayer"));
+    expect(html).toContain(testMsg("entrants.roster.save"));
   });
 });
 

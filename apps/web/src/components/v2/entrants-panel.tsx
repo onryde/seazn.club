@@ -8,6 +8,8 @@ import { entrantKindCap } from "@seazn/engine/sport";
 import type { EffectiveEntrantModel, EntrantKind } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
+import { ENTRANT_NAME_MAX, rosterDerivedName } from "@/lib/entrant-roster-name";
+import { nameFieldCommit, nameFieldEnterCommits } from "@/lib/inline-name-edit";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -273,6 +275,22 @@ export function EntrantsPanel({
       setError(err instanceof Error ? err.message : "Failed");
     }
   }, []);
+
+  /** The Name field's save. Deliberately NOT `run`: that puts the whole panel
+   *  busy, and the field saves on blur, which fires on the MOUSEDOWN of
+   *  whatever the organiser clicks next. Save roster, "remove" or "+ person"
+   *  were then disabled before their mouseup, and the click was silently lost
+   *  (review 2026-09-22, item 3). The field shows its own pending state
+   *  instead. A name-only patch carries no roster, so the eligibility gate
+   *  (`runGated`) cannot fire here. */
+  async function saveName(entrantId: string, display_name: string): Promise<void> {
+    try {
+      await apiV1(`/api/v1/entrants/${entrantId}`, { method: "PATCH", json: { display_name } });
+      router.refresh();
+    } catch (err) {
+      fail(err);
+    }
+  }
 
   async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
     setError(null);
@@ -554,6 +572,7 @@ export function EntrantsPanel({
                 suspensions={suspensions[e.id]}
                 otherTeamsFor={otherTeamsFor}
                 deletable={divisionStatus === "setup"}
+                onRename={(display_name) => saveName(e.id, display_name)}
                 onPatch={(patch) =>
                   runGated((override) =>
                     apiV1(`/api/v1/entrants/${e.id}`, {
@@ -956,7 +975,9 @@ export function NewEntrantFields({
       .map((id) => persons.find((p) => p.id === id)?.full_name)
       .filter((n): n is string => Boolean(n));
     if (isIndividual) return picked[0] ?? "";
-    if (kind === "pair") return picked.join(" & ");
+    // The shared create-time join: a later roster edit recognises (and
+    // follows) only a name built by it — see lib/entrant-roster-name.ts.
+    if (kind === "pair") return rosterDerivedName(picked);
     return "";
   }, [isIndividual, kind, memberIds, persons]);
 
@@ -1312,6 +1333,70 @@ export function EntrantBadgeControl({
   );
 }
 
+/** The entrant's name, editable in place at the top of an expanded card
+ *  (2026-09-22 — `display_name` was set once at create and no screen could
+ *  change it). Saves on blur, or Enter; the row header follows through the
+ *  panel's `router.refresh()`. Nothing for a read-only viewer. Exported for the
+ *  markup test.
+ *
+ *  Uncontrolled, and remounted by the caller on `key={name}`: a rename made
+ *  ELSEWHERE — the roster editor's save renaming a pair whose name was derived
+ *  from its people (`patchEntrant`) — must land in this field too, not leave it
+ *  holding the old name for the next blur to write straight back. */
+export function EntrantNameField({
+  name,
+  canEdit,
+  onRename,
+}: {
+  name: string;
+  canEdit: boolean;
+  onRename: (next: string) => Promise<void> | void;
+}) {
+  const msg = useMsg();
+  // The field's OWN pending state, never the panel's (see `saveName`). Read-only
+  // while its save is in flight, so nothing typed meanwhile is lost when the
+  // saved name arrives and remounts the field.
+  const [saving, setSaving] = useState(false);
+  if (!canEdit) return null;
+  return (
+    // The cell this sits in spans the whole entrants table, which is wider than
+    // a phone and scrolls inside its card. `max-w-sm` alone let the field run
+    // 384px wide off a 320px screen; the viewport term keeps it inside the
+    // card's visible box (page gutter + card border + cell padding, both sides).
+    <label className="mb-3 block min-w-0 max-w-[min(24rem,calc(100vw-4.5rem))]">
+      <span className="label">{msg("entrants.row.name")}</span>
+      <input
+        type="text"
+        defaultValue={name}
+        maxLength={ENTRANT_NAME_MAX}
+        autoComplete="off"
+        readOnly={saving}
+        aria-busy={saving}
+        onBlur={async (e) => {
+          const next = nameFieldCommit(e.currentTarget.value, name);
+          if (next === null) {
+            e.currentTarget.value = name;
+            return;
+          }
+          setSaving(true);
+          try {
+            await onRename(next);
+          } finally {
+            setSaving(false);
+          }
+        }}
+        onKeyDown={(e) => {
+          if (nameFieldEnterCommits(e.key, e.nativeEvent.isComposing, e.nativeEvent.keyCode)) {
+            e.currentTarget.blur();
+          }
+        }}
+        className="input min-h-11 w-full text-sm"
+        data-testid="entrant-name-field"
+      />
+    </label>
+  );
+}
+
 /** Exported for tests only — nothing else imports it. The row's EXPANDED half
  *  (Sync from team squad, the roster's loading line) sits behind `open`, a
  *  `useState` this row owns, so `renderToStaticMarkup` can never reach it: it
@@ -1332,6 +1417,7 @@ export function EntrantTableRow({
   suspensions,
   otherTeamsFor,
   deletable,
+  onRename,
   onPatch,
   onWithdraw,
   onBadge,
@@ -1354,6 +1440,8 @@ export function EntrantTableRow({
    *  `deleteEntrant`, entrants.ts). Once the division has started, Withdraw
    *  is the only removal path. */
   deletable: boolean;
+  /** The Name field's save: its own request, never the panel-wide busy. */
+  onRename: (next: string) => Promise<void>;
   onPatch: (patch: Record<string, unknown>) => void;
   /** Withdraw with fixture surgery (spec 05 §5) — confirm handled upstream. */
   onWithdraw: () => void;
@@ -1509,6 +1597,12 @@ export function EntrantTableRow({
       {open && (
         <tr>
           <td colSpan={canEdit ? 5 : 4} className="bg-slate-50 px-4 py-3">
+            <EntrantNameField
+              key={entrant.display_name}
+              name={entrant.display_name}
+              canEdit={canEdit}
+              onRename={onRename}
+            />
             <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
               <EntrantBadgeControl
                 entrant={entrant}
@@ -1777,7 +1871,7 @@ export function RosterEditor({
               }}
               className="text-red-500 hover:underline"
             >
-              remove
+              {msg("entrants.roster.remove")}
             </button>
           )}
         </div>
@@ -1795,7 +1889,7 @@ export function RosterEditor({
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Find player…"
+              placeholder={msg("entrants.roster.findPlayer")}
               className="input min-h-11 w-44 px-2 py-1 text-xs"
             />
           )}
@@ -1852,7 +1946,7 @@ export function RosterEditor({
             onClick={() => onSave(members)}
             className="btn btn-primary px-3 py-1 text-xs"
           >
-            Save roster
+            {msg("entrants.roster.save")}
           </button>
         </div>
       )}

@@ -1,13 +1,16 @@
 "use client";
 
-// Players directory: add/edit players, consent toggles, merge duplicates.
-import { useMemo, useRef, useState } from "react";
+// Players directory: add/edit players, rename in place, consent toggles, merge
+// duplicates.
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { InviteClaim } from "@/components/v2/invite-claim";
 import { MergeConfirmDialog } from "@/components/v2/duplicates-panel";
 import { Tip } from "@/components/ui/tip";
+import { nameFieldCommit, nameFieldEnterCommits, nameFieldEscapeCancels } from "@/lib/inline-name-edit";
+import { PERSON_NAME_MAX } from "@/lib/person-name";
 import {
   ResponsiveTable,
   type ResponsiveColumn,
@@ -53,6 +56,8 @@ export function PersonsPanel({
     return persons.filter((p) => p.full_name.toLowerCase().includes(q));
   }, [persons, filter]);
 
+  const fail = (err: unknown) => setError(err instanceof Error ? err.message : "Failed");
+
   async function run(fn: () => Promise<unknown>) {
     setError(null);
     setBusy(true);
@@ -60,9 +65,26 @@ export function PersonsPanel({
       await fn();
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed");
+      fail(err);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** A player's rename from the ✎. Deliberately NOT through `run`: its
+   *  panel-wide `busy` disables every control while the save is out, and the
+   *  field saves on BLUR, which fires on the mousedown of whatever the
+   *  organiser clicks next. That control would be disabled before its mouseup
+   *  and the click silently dropped. True when the name was saved. */
+  async function saveName(personId: string, full_name: string): Promise<boolean> {
+    setError(null);
+    try {
+      await apiV1(`/api/v1/persons/${personId}`, { method: "PATCH", json: { full_name } });
+      router.refresh();
+      return true;
+    } catch (err) {
+      fail(err);
+      return false;
     }
   }
 
@@ -136,14 +158,12 @@ export function PersonsPanel({
                 {p.full_name.charAt(0).toUpperCase()}
               </span>
             )}
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-medium text-slate-800">
-                {p.full_name}
-              </span>
-              <span className="block text-xs text-slate-400">
-                {[p.dob, p.gender, p.external_ref].filter(Boolean).join(" · ") || "—"}
-              </span>
-            </span>
+            <PersonNameCell
+              name={p.full_name}
+              meta={[p.dob, p.gender, p.external_ref].filter(Boolean).join(" · ") || "—"}
+              canEdit={canEdit}
+              onRename={(next) => saveName(p.id, next)}
+            />
           </span>
         );
 
@@ -308,6 +328,162 @@ export function PersonsPanel({
         />
       )}
     </div>
+  );
+}
+
+/** A player's name and the line under it (dob · gender · ref), with a ✎
+ *  beside the name that renames the player in place (owner design A,
+ *  2026-09-22 — before this, a player's name was set once when they were added
+ *  and no screen could change it). Editors only. The ✎ lays a field over both
+ *  lines (`PersonNameInput`); a derived pair name built from the old name
+ *  follows on the server (`patchPerson`).
+ *
+ *  The field goes OVER the two lines, which stay in the layout, invisible. So
+ *  opening and closing it moves nothing: the row keeps its height, the column
+ *  its width. That matters because the field closes on blur, which fires on
+ *  the mousedown of the organiser's next click. Had the row reflowed, the
+ *  control they were clicking would slide out from under the pointer before
+ *  the mouseup, and the click would be lost. The e2e pins the no-move.
+ *
+ *  `ResponsiveTable` renders every row twice, as a table row and as a phone
+ *  card, one of them hidden, so each copy keeps its own editing state.
+ *  Exported for the markup test. */
+export function PersonNameCell({
+  name,
+  meta,
+  canEdit,
+  onRename,
+}: {
+  name: string;
+  meta: string;
+  canEdit: boolean;
+  onRename: (next: string) => Promise<boolean>;
+}) {
+  const msg = useMsg();
+  const [editing, setEditing] = useState(false);
+  // A saved rename, shown until the refreshed list brings the new name, so the
+  // row does not flash the old one. Dropped as soon as `name` moves.
+  const [saved, setSaved] = useState<string | null>(null);
+  const [seen, setSeen] = useState(name);
+  if (seen !== name) {
+    setSeen(name);
+    setSaved(null);
+  }
+  const shown = saved ?? name;
+  // A keyboard user who pressed Enter or Escape gets focus back on the ✎,
+  // rather than dropped onto the page body.
+  const pencil = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    refocus.current = false;
+    pencil.current?.focus();
+  }, [editing]);
+
+  const open = canEdit && editing;
+  return (
+    <span className="relative block min-w-0 flex-1">
+      {/* `invisible` while the field is open: out of sight and out of the
+          accessibility tree, but still holding the row's height and the
+          column's width. The field is positioned over them and takes no
+          layout of its own. */}
+      <span className={`block min-w-0${open ? " invisible" : ""}`}>
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="block truncate text-sm font-medium text-slate-800">{shown}</span>
+          {canEdit && (
+            <button
+              ref={pencil}
+              type="button"
+              aria-label={msg("persons.rename", { name: shown })}
+              title={msg("persons.rename", { name: shown })}
+              onClick={() => setEditing(true)}
+              // 44px to tap, 20px of layout: the negative margin keeps the
+              // row as tall as the name line. slate-500, not 400: the glyph is
+              // the control's only mark, and 400 on white is 2.56:1, under
+              // the 3:1 a control needs (WCAG 1.4.11).
+              className="-my-3 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+            >
+              <span aria-hidden="true">✎</span>
+            </button>
+          )}
+        </span>
+        <span className="block text-xs text-slate-400">{meta}</span>
+      </span>
+      {open && (
+        <PersonNameInput
+          name={shown}
+          onSave={async (next) => {
+            if (await onRename(next)) setSaved(next);
+          }}
+          onClose={(byKey) => {
+            refocus.current = byKey;
+            setEditing(false);
+          }}
+        />
+      )}
+    </span>
+  );
+}
+
+/** The field the ✎ opens: seeded with the player's current name, focused with
+ *  the name selected, so typing replaces it. Blur or Enter saves a real change;
+ *  an emptied or unchanged name saves nothing and the name comes back
+ *  (`nameFieldCommit`); Escape abandons the edit. It stays open, read-only,
+ *  while its save is out, so the row does not move under the organiser's next
+ *  click. Exported for the markup test. */
+export function PersonNameInput({
+  name,
+  onSave,
+  onClose,
+}: {
+  name: string;
+  onSave: (next: string) => Promise<void>;
+  /** The edit is over. `byKey`: it ended on Enter or Escape, not a click away. */
+  onClose: (byKey: boolean) => void;
+}) {
+  const msg = useMsg();
+  const [saving, setSaving] = useState(false);
+  const byKey = useRef(false);
+  return (
+    <input
+      type="text"
+      autoFocus
+      defaultValue={name}
+      maxLength={PERSON_NAME_MAX}
+      autoComplete="off"
+      aria-label={msg("persons.rename.label")}
+      readOnly={saving}
+      aria-busy={saving}
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={async (e) => {
+        const next = nameFieldCommit(e.currentTarget.value, name);
+        if (next !== null) {
+          setSaving(true);
+          try {
+            await onSave(next);
+          } finally {
+            setSaving(false);
+          }
+        }
+        onClose(byKey.current);
+      }}
+      onKeyDown={(e) => {
+        const { isComposing, keyCode } = e.nativeEvent;
+        const cancel = nameFieldEscapeCancels(e.key, isComposing, keyCode);
+        if (!cancel && !nameFieldEnterCommits(e.key, isComposing, keyCode)) return;
+        // Focus goes back to the ✎ as the field closes, and without this the
+        // SAME Enter's keypress lands on it and opens the field again.
+        e.preventDefault();
+        byKey.current = true;
+        if (cancel) e.currentTarget.value = name;
+        e.currentTarget.blur();
+      }}
+      // Laid over the two lines it replaces (`PersonNameCell`), centred on
+      // them, and out of the flow: the row and the column size exactly as
+      // they do idle. 44px tall to touch.
+      className="input absolute inset-x-0 top-1/2 h-11 w-full min-w-0 -translate-y-1/2 text-sm"
+      data-testid="person-name-field"
+    />
   );
 }
 

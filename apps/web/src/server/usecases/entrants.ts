@@ -31,6 +31,10 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
 import { markFieldChangeSeedProposalsStale, unseatSwissRoundsSeatingEntrant } from "./stages";
+import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
+import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
+import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
+import { log } from "@/server/logger";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -287,7 +291,7 @@ export async function createEntrants(
     "entrants.per_division.max",
     ref?.competition_id,
   );
-  return withTenant(auth.orgId, async (tx) => {
+  const { rows, competitionId } = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<
       { status: string; competition_id: string; sport_key: string; module_version: string }[]
     >`select status, competition_id, sport_key, module_version
@@ -413,8 +417,14 @@ export async function createEntrants(
         ...(warnings.length > 0 ? { eligibility_warnings: warnings } : {}),
       });
     }
-    return rows;
+    return { rows, competitionId: division.competition_id };
   });
+  // A new entrant sits in no fixture yet; its name joins the division's lists.
+  refreshEntrantPublicPages(
+    { divisionId, competitionId, fixtureIds: [] },
+    { division: divisionId, created: rows.length },
+  );
+  return rows;
 }
 
 export interface DivisionRosterRow {
@@ -470,7 +480,7 @@ export async function getEntrant(auth: AuthCtx, id: string): Promise<EntrantWith
  *  seat is filled), and once the seats are cleared the FK below has nothing
  *  left to null. */
 export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
-  return withTenant(auth.orgId, async (tx) => {
+  const refresh = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     if (!row) throw new HttpError(404, "entrant not found");
     // This is now a FIXTURE write as well as a roster one, so it takes the
@@ -493,8 +503,13 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
       );
     }
     await unseatSwissRoundsSeatingEntrant(tx, id);
+    // Read BEFORE the delete: `on delete set null` leaves nothing to find the
+    // fixtures this entrant sat in by afterwards.
+    const where = await entrantPublicScope(tx, row);
     await tx`delete from entrants where id = ${id}`;
+    return where;
   });
+  refreshEntrantPublicPages(refresh, { entrantId: id, deleted: true });
 }
 
 /** `entrants.status` values that mean "no longer in the field" — the
@@ -509,12 +524,189 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
  *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
 export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
 
+/** An ad-hoc entrant's name and roster, read BEFORE a write that changes who
+ *  its people are or what they are called. */
+export interface PendingRosterName {
+  readonly id: string;
+  readonly display_name: string;
+  readonly prior: readonly RosterNamePerson[];
+}
+
+/** An entrant whose derived name a person write moved, from what to what. */
+export interface FollowedRosterName {
+  readonly id: string;
+  readonly before: string;
+  readonly after: string;
+}
+
+/**
+ * Step one of a person write that a derived entrant name must follow. The
+ * two writes are:
+ * - `patchPerson` renaming a player (owner ruling 2026-09-22, review item 10);
+ * - `mergePersons` moving an absorbed record's roster seats onto the
+ *   survivor (review item 13).
+ *
+ * This step reads every AD-HOC entrant this person is rostered on, with its
+ * whole roster under the names it has now, before anything moves. A
+ * team-linked entrant carries its team's name, never one derived from a
+ * roster, so it is not read (`createEntrants`).
+ *
+ * It LOCKS what it reads, until the caller commits (review 2, R2-2). Two
+ * renames of the two players of one pair used to read the pair at the same
+ * moment. The second then derived from the first player's OLD name, its
+ * guarded write found the name already moved, and the pair kept a name that
+ * named nobody's current name, for good. Locked, the second waits here and
+ * reads the pair, and its roster's names, only once the first has committed.
+ *
+ * The lock order is persons, then entrants in id order, the order
+ * `mergePersons` takes them (its `persons ... for update` comes first). A
+ * rename that took the entrants first could hold a pair while a merge of one
+ * of its players held that player and wanted the pair. The person lock is
+ * `for no key update`, what the `update persons` that follows would take
+ * anyway, so it never blocks a roster insert's foreign-key check
+ * (`for key share`) on this person.
+ */
+export async function entrantNamesFollowing(tx: Tx, personId: string): Promise<PendingRosterName[]> {
+  await tx`select id from persons where id = ${personId} for no key update`;
+  const entrants = await tx<{ id: string; display_name: string }[]>`
+    select e.id, e.display_name
+    from entrants e join entrant_members em on em.entrant_id = e.id
+    where em.person_id = ${personId} and e.team_id is null
+    order by e.id
+    for update of e`;
+  if (entrants.length === 0) return [];
+  const members = await rosterNamesOf(tx, entrants.map((e) => e.id));
+  return entrants.map((e) => ({
+    id: e.id,
+    display_name: e.display_name,
+    prior: members.filter((m) => m.entrant_id === e.id),
+  }));
+}
+
+/**
+ * Step two, after the write, in the same transaction. For each entrant read in
+ * step one, its roster is re-read and the name is followed with
+ * `followRosterEdit`, the roster editor's own rule. So:
+ * - a renamed player's token changes in its own seat;
+ * - a merged-away record's token becomes the survivor's in the same seat;
+ * - when both records were on one roster, the absorbed record's seat goes.
+ *
+ * A custom name is never touched. Each rename is guarded on the name step one
+ * read, like `patchEntrant`'s. Step one's lock already stops anything moving
+ * the name in between for the two callers here; the guard keeps the promise
+ * for a caller whose read was not held, so an explicit rename that landed
+ * after the read stands. Returns what moved, so a merge can record it for its
+ * undo.
+ *
+ * Refreshing the public pages after the commit is the caller's job.
+ * `firePersonRevalidate`, which both callers already fire, expires every
+ * division the person is rostered in, and that covers every entrant renamed
+ * here.
+ */
+export async function followRosterNames(
+  tx: Tx,
+  pending: readonly PendingRosterName[],
+): Promise<FollowedRosterName[]> {
+  if (pending.length === 0) return [];
+  const members = await rosterNamesOf(tx, pending.map((e) => e.id));
+  const moved: FollowedRosterName[] = [];
+  for (const entrant of pending) {
+    const next = members.filter((m) => m.entrant_id === entrant.id);
+    const renamed = followRosterEdit(entrant.display_name, entrant.prior, next);
+    if (renamed === null) continue;
+    const [updated] = await tx<{ id: string }[]>`
+      update entrants set display_name = ${renamed}
+      where id = ${entrant.id} and display_name = ${entrant.display_name}
+      returning id`;
+    if (updated) moved.push({ id: entrant.id, before: entrant.display_name, after: renamed });
+  }
+  return moved;
+}
+
+async function rosterNamesOf(
+  tx: Tx,
+  entrantIds: readonly string[],
+): Promise<(RosterNamePerson & { entrant_id: string })[]> {
+  return tx<(RosterNamePerson & { entrant_id: string })[]>`
+    select em.entrant_id, em.person_id, p.full_name
+    from entrant_members em join persons p on p.id = em.person_id
+    where em.entrant_id in ${tx(entrantIds as string[])}`;
+}
+
+
+/** Where an entrant write's public refresh must reach: its division, that
+ *  division's competition, and every fixture the entrant plays (whose
+ *  match-centre documents print its name). Read inside the write's own
+ *  transaction, so a delete can read it before the rows go. */
+interface EntrantPublicScope {
+  divisionId: string;
+  competitionId: string | null;
+  fixtureIds: readonly string[];
+}
+
+async function entrantPublicScope(
+  tx: Tx,
+  row: Pick<EntrantRow, "id" | "division_id">,
+): Promise<EntrantPublicScope> {
+  const [division] = await tx<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${row.division_id}`;
+  const fixtures = await tx<{ id: string }[]>`
+    select id from fixtures where home_entrant_id = ${row.id} or away_entrant_id = ${row.id}`;
+  return {
+    divisionId: row.division_id,
+    competitionId: division?.competition_id ?? null,
+    fixtureIds: fixtures.map((f) => f.id),
+  };
+}
+
+/**
+ * After an entrant write COMMITS, bring its public pages up to date. Used by
+ * every entrant write: create, patch, delete, and squad sync.
+ *
+ * Call it synchronously inside the request, never behind a `void`. Next
+ * flushes a request's revalidations once, when the handler resolves, and
+ * silently drops any that arrive later.
+ *
+ * It follows the NAME-change pattern that `patchDivision` uses for a
+ * name-policy change, not `fireDivisionRevalidate`:
+ * - `fireDivisionRevalidate` marks the division 'max' (stale-while-
+ *   revalidate), so the organiser's first look at the public page after a
+ *   rename would still show the OLD name.
+ * - `fireScoreRevalidate` EXPIRES the division tag; the competition stays
+ *   'max'.
+ * - The public Redis documents that print the name are dropped: the hub, the
+ *   division's schedule, standings and entrants, and the entrant's own
+ *   match-centre documents.
+ * - So is the player page's poll document, which prints the entrant as an
+ *   opponent (`retireCompetitionPlayerMatches`).
+ * Without these drops, a poll would bake the old name straight back in for
+ * their 15–30s TTL.
+ *
+ * It never throws. The write has already committed, so an error here would
+ * report a failure for a change that happened, and the organiser's retry
+ * would write it again. A failure is logged; the pages catch up at their TTL.
+ */
+function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<string, unknown>): void {
+  if (!scope.competitionId) return;
+  try {
+    retireCompetitionPlayerMatches(scope.competitionId, context);
+    const peersExpired = fireScoreRevalidate(scope.divisionId, scope.competitionId);
+    dropNamedPublicDocuments(
+      { competitionIds: [scope.competitionId], divisionIds: [scope.divisionId], fixtureIds: scope.fixtureIds },
+      context,
+      peersExpired,
+    );
+  } catch (err) {
+    log.error({ err, ...context }, "entrants: public cache invalidation failed (the write stands)");
+  }
+}
+
 export async function patchEntrant(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
 ): Promise<EntrantWithMembers> {
-  const { out, fieldChanged, divisionId } = await withTenant(auth.orgId, async (tx) => {
+  const { out, fieldChanged, refresh } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
     // it never reaches the `update entrants set ...` below.
@@ -545,6 +737,20 @@ export async function patchEntrant(
       // (kind itself isn't patchable, so only the roster is being written).
       const eff = await loadEntrantShape(tx, row.division_id);
       assertRosterFits(eff, row.kind, members.length);
+      // The name follows the roster (2026-09-22, reported from production:
+      // "Sankar & Ritwik" kept that name after Ritwik was swapped out) — but
+      // only an AD-HOC entrant's, and only when this patch does not name it
+      // itself. A team-linked entrant's name is the team's snapshot, which
+      // must never be rewritten from a roster (createEntrants above). The
+      // people the name was derived from are read HERE, before the delete
+      // below takes them away.
+      const followName = fields.display_name === undefined && row.team_id === null;
+      const priorPeople = followName
+        ? await tx<RosterNamePerson[]>`
+            select em.person_id, p.full_name
+            from entrant_members em join persons p on p.id = em.person_id
+            where em.entrant_id = ${id}`
+        : [];
       await tx`delete from entrant_members where entrant_id = ${id}`;
       await insertMembers(tx, id, members, {
         divisionId: row.division_id,
@@ -552,9 +758,46 @@ export async function patchEntrant(
         actorId: auth.userId,
         context: "patch_entrant",
       });
+      if (followName) {
+        // `insertMembers` has already proved every id visible and distinct. An
+        // emptied roster reads no one, and `followRosterEdit` then keeps the
+        // name rather than empty it.
+        const people = await tx<RosterNamePerson[]>`
+          select id as person_id, full_name from persons
+          where id in ${tx(members.map((m) => m.person_id))}`;
+        const byId = new Map(people.map((p) => [p.person_id, p]));
+        // SUBMITTED order — newcomers take vacated seats in the order given.
+        const next = members.flatMap((m) => byId.get(m.person_id) ?? []);
+        const renamed = followRosterEdit(row.display_name, priorPeople, next);
+        if (renamed !== null) {
+          // Only over the name this patch READ. `row` was read without a lock,
+          // so an explicit rename (the console's Name field, sent alongside a
+          // roster save) can commit in between; under READ COMMITTED this
+          // update then re-checks the row it waited on and matches nothing,
+          // and the organiser's own name stands.
+          const [updated] = await tx<EntrantRow[]>`
+            update entrants set display_name = ${renamed}
+            where id = ${id} and display_name = ${row.display_name}
+            returning ${tx(COLS)}`;
+          if (updated) {
+            row = updated;
+          } else {
+            const [current] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
+            if (current) row = current;
+          }
+        }
+      }
     }
-    return { out: await withMembers(tx, row), fieldChanged, divisionId: row.division_id };
+    return {
+      out: await withMembers(tx, row),
+      fieldChanged,
+      refresh: await entrantPublicScope(tx, row),
+    };
   });
+  // Before this, an entrant patch refreshed nothing, so a rename (or a roster,
+  // seed, status or badge edit) reached the public pages only when their 30s
+  // cache ran out.
+  refreshEntrantPublicPages(refresh, { entrantId: id });
   // AFTER the transaction commits: the recompute opens its own transaction
   // and takes the division advisory lock, which would deadlock against the
   // one above. Best-effort — a proposal that cannot be recomputed is left
@@ -567,7 +810,7 @@ export async function patchEntrant(
     // The cost of swallowing it is an un-staled draft — the behaviour before
     // this hook existed, not a new hazard.
     try {
-      await markFieldChangeSeedProposalsStale(auth.orgId, divisionId);
+      await markFieldChangeSeedProposalsStale(auth.orgId, refresh.divisionId);
     } catch {
       // see above
     }
@@ -585,7 +828,7 @@ export async function syncEntrantRosterFromSquad(
   id: string,
   override?: EligibilityOverride | null,
 ): Promise<CreatedEntrant & { members: unknown[] }> {
-  return withTenant(auth.orgId, async (tx) => {
+  const { out, refresh } = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     if (!row) throw new HttpError(404, "entrant not found");
     if (!row.team_id) {
@@ -609,13 +852,18 @@ export async function syncEntrantRosterFromSquad(
       actorId: auth.userId,
       context: "roster_sync",
     });
-    const out = await withMembers(tx, row);
+    const synced = await withMembers(tx, row);
     return {
-      ...out,
-      ...(dropped > 0 ? { roster_keys_dropped: dropped } : {}),
-      ...(warnings.length > 0 ? { eligibility_warnings: warnings } : {}),
+      out: {
+        ...synced,
+        ...(dropped > 0 ? { roster_keys_dropped: dropped } : {}),
+        ...(warnings.length > 0 ? { eligibility_warnings: warnings } : {}),
+      },
+      refresh: await entrantPublicScope(tx, row),
     };
   });
+  refreshEntrantPublicPages(refresh, { entrantId: id, synced: true });
+  return out;
 }
 
 // ---------------------------------------------------------------------------

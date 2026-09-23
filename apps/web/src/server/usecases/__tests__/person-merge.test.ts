@@ -483,6 +483,9 @@ describe.skipIf(!HAS_DB)("#404 mergePersons", () => {
     expect(Object.keys(row!.snapshot).sort()).toEqual(
       [
         "entrant_members",
+        // Not a table: the derived entrant names the merge moved, for the undo
+        // to put back (review item 13). Always present, empty when none moved.
+        "entrant_names",
         "fixture_availability",
         "lineups",
         "officials",

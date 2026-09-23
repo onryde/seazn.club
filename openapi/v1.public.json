@@ -8341,7 +8341,7 @@
         ]
       },
       "patch": {
-        "summary": "Set status, seed or edit members (no fixture surgery — see /withdraw)",
+        "summary": "Set status, seed, name or members (no fixture surgery — see /withdraw). A members-only patch also renames an ad-hoc entrant whose name was derived from its people (e.g. 'A & B' − B + C → 'A & C'); a custom name, a team-linked entrant or an explicit display_name in the same patch is never renamed",
         "tags": [
           "entrants"
         ],

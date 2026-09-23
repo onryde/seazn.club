@@ -1,0 +1,423 @@
+import { test, expect, type APIRequestContext } from "@playwright/test";
+import { TAG, apiJson, divisionPath, expectNoHorizontalScroll } from "./helpers";
+import { closeOpenContexts } from "./spectator-public-helpers";
+import { dismissConsent, freshOrg, waitForHydration } from "./directory-kit";
+import { activeOrgSlug, division, leagueFixtures, publicCompetition } from "./spectator-w2-kit";
+import {
+  GENERIC,
+  PUBLIC_DIVISION_TTL_MS,
+  derivedFrom,
+  personPencil,
+  publicDivision,
+  rowToggle,
+  saveRoster,
+  seedPair,
+  seedPlayer,
+  shown,
+  stagePartnerSwap,
+  storedMembers,
+  storedName,
+  swapPartner,
+  uiEn,
+} from "./entrant-rename-kit";
+
+// An entrant's name, after it was created (reported from production
+// 2026-09-22): pair "Sankar & Ritwik" swapped Ritwik for Venkatesh and kept the
+// name "Sankar & Ritwik" — `display_name` was derived once at create, the
+// roster save never touched it, and no screen could rename it.
+//
+// Two fixes, both driven here through the real console:
+//   - the Name field at the top of an expanded entrant card (rename by hand);
+//   - a roster save that renames a pair whose name was derived from its people.
+// Each is proven across a RELOAD, so what is asserted is what the server
+// stored, not what the page optimistically kept on screen. One test follows
+// both through to where a spectator reads the name: the division's fixtures tab
+// and the public division page, whose cached copy the write must expire.
+
+const NAME_LABEL = uiEn["entrants.row.name"]!;
+
+async function seedDivision(request: APIRequestContext, label: string): Promise<string> {
+  const comp = (await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `${label} ${TAG}`,
+    visibility: "private",
+  })).data!;
+  const div = (await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+    name: "Doubles",
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC,
+  })).data!;
+  return div.id;
+}
+
+// Spectator contexts are closed here, never in a `finally` (a timeout skips it).
+test.afterEach(async () => {
+  await closeOpenContexts();
+});
+
+test("rename a pair from its expanded card: the name persists across a reload", async ({ page }) => {
+  const divisionId = await seedDivision(page.request, "Rename");
+  const sankar = await seedPlayer(page.request, "Sankar");
+  const ritwik = await seedPlayer(page.request, "Ritwik");
+  const oldName = derivedFrom(sankar, ritwik);
+  const newName = `Court Kings ${TAG}`;
+  const pairId = await seedPair(page.request, divisionId, [sankar, ritwik]);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  await rowToggle(page, oldName).click();
+
+  const field = page.getByTestId("entrant-name-field");
+  // The field OPENS AT the current name — a blank or stale seed would be one
+  // blur away from a bad rename.
+  await expect(field).toHaveValue(oldName);
+  // Labelled, so a screen reader announces what it edits.
+  await expect(field).toHaveAccessibleName(NAME_LABEL);
+
+  await field.fill(newName);
+  await field.press("Enter");
+
+  // The row header follows the save (router.refresh), without a reload…
+  await expect(rowToggle(page, newName)).toBeVisible();
+  await expect.poll(() => storedName(page.request, pairId)).toBe(newName);
+
+  // …and it is what the server stored: after a reload the old name is gone.
+  await page.reload();
+  await expect(rowToggle(page, newName)).toBeVisible();
+  await expect(page.getByRole("cell", { name: oldName })).toHaveCount(0);
+});
+
+test("an emptied Name field puts the name back and saves nothing", async ({ page }) => {
+  const divisionId = await seedDivision(page.request, "Rename Empty");
+  const a = await seedPlayer(page.request, "Asha");
+  const b = await seedPlayer(page.request, "Bilal");
+  const name = derivedFrom(a, b);
+  const pairId = await seedPair(page.request, divisionId, [a, b]);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  await rowToggle(page, name).click();
+  const field = page.getByTestId("entrant-name-field");
+  await expect(field).toHaveValue(name);
+
+  const patches: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "PATCH" && r.url().includes(`/api/v1/entrants/${pairId}`)) patches.push(r.url());
+  });
+  await field.fill("   ");
+  await field.blur();
+
+  await expect(field).toHaveValue(name);
+  expect(patches).toHaveLength(0);
+  expect(await storedName(page.request, pairId)).toBe(name);
+  // Positive pair for the "nothing saved" claim: the same listener DOES see a
+  // real rename go out, so an empty `patches` above is not a deaf listener.
+  await field.fill(`${name} Renamed`);
+  await field.blur();
+  await expect.poll(() => patches.length).toBe(1);
+  await expect.poll(() => storedName(page.request, pairId)).toBe(`${name} Renamed`);
+});
+
+test("swapping a pair's partner in the roster editor renames the pair to match", async ({ page }) => {
+  const divisionId = await seedDivision(page.request, "Roster Rename");
+  const sankar = await seedPlayer(page.request, "Sankar");
+  const ritwik = await seedPlayer(page.request, "Ritwik");
+  const venkatesh = await seedPlayer(page.request, "Venkatesh");
+  const oldName = derivedFrom(sankar, ritwik);
+  // Sankar stays in his seat; Venkatesh takes Ritwik's.
+  const expected = derivedFrom(sankar, venkatesh);
+  const pairId = await seedPair(page.request, divisionId, [sankar, ritwik]);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  await rowToggle(page, oldName).click();
+  // Remove Ritwik, add Venkatesh, save.
+  await swapPartner(page, ritwik.name, venkatesh.name);
+
+  // The header renames itself, and the Name field follows (it must not keep
+  // the old name for the next blur to write straight back).
+  await expect(rowToggle(page, expected)).toBeVisible();
+  await expect(page.getByTestId("entrant-name-field")).toHaveValue(expected);
+  await expect.poll(() => storedName(page.request, pairId)).toBe(expected);
+
+  await page.reload();
+  await expect(rowToggle(page, expected)).toBeVisible();
+  await expect(page.getByRole("cell", { name: oldName })).toHaveCount(0);
+});
+
+test("a custom pair name survives a roster swap untouched", async ({ page }) => {
+  const divisionId = await seedDivision(page.request, "Custom Name");
+  const a = await seedPlayer(page.request, "Asha");
+  const b = await seedPlayer(page.request, "Bilal");
+  const c = await seedPlayer(page.request, "Chen");
+  const custom = `Smash Bros ${TAG}`;
+  const pairId = await seedPair(page.request, divisionId, [a, b], custom);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  await rowToggle(page, custom).click();
+  await swapPartner(page, b.name, c.name);
+  // The roster save landed — read off the server, not the editor's own state…
+  await expect.poll(() => storedMembers(page.request, pairId)).toBe([a.id, c.id].sort().join(","));
+  // …and the organiser's own name was left alone.
+  expect(await storedName(page.request, pairId)).toBe(custom);
+  await page.reload();
+  await expect(rowToggle(page, custom)).toBeVisible();
+});
+
+test("a name typed and then Save roster clicked straight away: both are saved", async ({ page }) => {
+  // The Name field saves on blur, and the blur fires on the mousedown of
+  // whatever is clicked next. That save used to put the WHOLE panel busy, which
+  // disabled Save roster before its mouseup, so the click the organiser made
+  // was silently dropped and the roster edit lost.
+  const divisionId = await seedDivision(page.request, "Name And Roster");
+  const sankar = await seedPlayer(page.request, "Sankar");
+  const ritwik = await seedPlayer(page.request, "Ritwik");
+  const venkatesh = await seedPlayer(page.request, "Venkatesh");
+  const typed = `Court Kings ${TAG}`;
+  const pairId = await seedPair(page.request, divisionId, [sankar, ritwik]);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  await rowToggle(page, derivedFrom(sankar, ritwik)).click();
+  await stagePartnerSwap(page, ritwik.name, venkatesh.name);
+  const field = page.getByTestId("entrant-name-field");
+  await field.fill(typed);
+  // No blur first: the click itself is what moves focus off the field.
+  await saveRoster(page).click();
+
+  await expect.poll(() => storedMembers(page.request, pairId)).toBe([sankar.id, venkatesh.id].sort().join(","));
+  // The typed name is the organiser's, so the roster save must not derive over it.
+  await expect.poll(() => storedName(page.request, pairId)).toBe(typed);
+  await page.reload();
+  await expect(rowToggle(page, typed)).toBeVisible();
+});
+
+// A player renamed from the directory's ✎ (owner design A, 2026-09-22), and
+// what the organiser then sees on the entrants tab.
+//
+// A FRESH org, deliberately. The Players tab lists only an org's OLDEST 200
+// people (directory-kit's `freshOrg` explains), and the shared PRO org has far
+// more than that, so a player created here would never be on the page.
+test.describe("a player renamed from the directory", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const pencil = personPencil;
+
+  test("renaming a player renames the pair named after them, and only that pair", async ({ page }) => {
+    await freshOrg(page, "rename");
+    await dismissConsent(page);
+    const divisionId = await seedDivision(page.request, "Player Rename");
+    const sankar = await seedPlayer(page.request, "Sankar");
+    const ritwik = await seedPlayer(page.request, "Ritwik");
+    const asha = await seedPlayer(page.request, "Asha");
+    const custom = `Smash Bros ${TAG}`;
+    await seedPair(page.request, divisionId, [sankar, ritwik]);
+    await seedPair(page.request, divisionId, [asha, sankar], custom);
+
+    const patches: string[] = [];
+    page.on("request", (r) => {
+      if (r.method() === "PATCH" && r.url().includes("/api/v1/persons/")) patches.push(r.postData() ?? "");
+    });
+    const storedPerson = async () =>
+      (await apiJson<{ full_name: string; consent: { public_name?: boolean } }>(
+        page.request,
+        `/api/v1/persons/${sankar.id}`,
+      )).data!;
+
+    await page.goto("/directory?tab=players");
+    await waitForHydration(pencil(page, sankar.name));
+    const field = page.getByTestId("person-name-field");
+
+    // The ✎ opens a field AT the player's name, focused, ready to type over.
+    await pencil(page, sankar.name).click();
+    await expect(field).toHaveValue(sankar.name);
+    await expect(field).toBeFocused();
+
+    // Emptied, then Enter: nothing is saved and the name comes back.
+    await field.fill("   ");
+    await field.press("Enter");
+    await expect(field).toHaveCount(0);
+    // A keyboard user is handed back to the ✎, and that same Enter did not
+    // land on it and open the field again (it once did).
+    await expect(pencil(page, sankar.name)).toBeFocused();
+
+    // Left as it was, then blurred: nothing is saved.
+    await pencil(page, sankar.name).click();
+    await field.blur();
+    await expect(field).toHaveCount(0);
+
+    // Typed over, then Escape: the edit is abandoned, nothing is saved.
+    await pencil(page, sankar.name).click();
+    await field.fill(`Someone Else ${TAG}`);
+    await field.press("Escape");
+    await expect(field).toHaveCount(0);
+    await expect(pencil(page, sankar.name)).toBeVisible();
+    expect(patches).toEqual([]);
+    expect((await storedPerson()).full_name).toBe(sankar.name);
+
+    // A real rename, and the organiser's very next click lands on the same
+    // row's public-name toggle WITHOUT blurring the field first. The field's
+    // blur fires on that click's mousedown; a save that disabled the panel
+    // would swallow the click. Both are saved.
+    const renamed = { ...sankar, name: `Sankar Krishnan ${TAG}` };
+    await pencil(page, sankar.name).click();
+    await field.fill(renamed.name);
+    const row = page.getByRole("row").filter({ has: field });
+    const publicName = row.getByRole("button", { name: uiEn["persons.consent.name"]!, exact: true });
+    await expect(publicName).toHaveAttribute("aria-pressed", "false");
+    await publicName.click();
+
+    await expect(pencil(page, renamed.name)).toBeVisible();
+    await expect.poll(async () => (await storedPerson()).full_name).toBe(renamed.name);
+    await expect.poll(async () => (await storedPerson()).consent.public_name).toBe(true);
+    // Positive pair for the "nothing saved" claims above: the same listener
+    // DID see this rename go out, so the empty list was not a deaf listener.
+    expect(patches.some((body) => body.includes(renamed.name))).toBe(true);
+    await page.reload();
+    await expect(pencil(page, renamed.name)).toBeVisible();
+
+    await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+    // Sankar keeps his seat: first, under his new name.
+    await expect(rowToggle(page, derivedFrom(renamed, ritwik))).toBeVisible();
+    await expect(page.getByRole("cell", { name: derivedFrom(sankar, ritwik) })).toHaveCount(0);
+    // The organiser's own name for the other pair is untouched.
+    await expect(rowToggle(page, custom)).toBeVisible();
+  });
+});
+
+/** A raw write behind the app's back — the control below needs one that fires
+ *  no revalidation. The shape of helpers' private `withDb`. */
+async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL required");
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(url, { connection: { search_path: "seazn_club" }, ssl: false });
+  try {
+    return await fn(sql);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+test("a renamed pair reads the same on the fixtures tab and the public page, straight away", async ({
+  page,
+  browser,
+}) => {
+  test.slow();
+  // A public league with fixtures, so the name has somewhere downstream to go.
+  const org = await activeOrgSlug(page.request);
+  const comp = await publicCompetition(page.request, { name: `Rename Walk ${TAG}`, orgId: org.id });
+  const div = await division(page.request, comp.id, {
+    name: "Doubles",
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC,
+  });
+  const sankar = await seedPlayer(page.request, "Sankar");
+  const ritwik = await seedPlayer(page.request, "Ritwik");
+  const venkatesh = await seedPlayer(page.request, "Venkatesh");
+  const derived = derivedFrom(sankar, ritwik);
+  const followed = derivedFrom(sankar, venkatesh);
+  const renamed = `Court Kings ${TAG}`;
+  const pairId = await seedPair(page.request, div.id, [sankar, ritwik]);
+  const controlId = await seedPair(page.request, div.id, [], `Control Pair ${TAG}`);
+  await seedPair(page.request, div.id, [], `Third Pair ${TAG}`);
+  const fixtures = await leagueFixtures(page.request, div.id);
+  expect(
+    fixtures.filter((f) => f.home_entrant_id === pairId || f.away_entrant_id === pairId).length,
+    "the pair plays at least one fixture",
+  ).toBeGreaterThan(0);
+  const publicPath = `/shared/${org.slug}/${comp.slug}/${div.slug}`;
+  const consoleEntrants = await divisionPath(page.request, div.id, "?tab=entrants");
+  const consoleFixtures = await divisionPath(page.request, div.id, "?tab=fixtures");
+
+  // Step 1 is STAGED in the console first (Ritwik out, Venkatesh in, not yet
+  // saved), so the cache-lifetime bound below spans only a fresh fill, the
+  // save and one public load, never console navigation (which made a flat 30s
+  // bound flaky on a slow machine).
+  await page.goto(consoleEntrants);
+  await rowToggle(page, derived).click();
+  await stagePartnerSwap(page, ritwik.name, venkatesh.name);
+
+  // Warm the public page: its FIRST load fills the cache under the created
+  // name. The clock starts before that load, so the bound errs long.
+  const warmedAt = Date.now();
+  const warm = await publicDivision(browser, publicPath);
+  await expect(shown(warm.locator("#panel-schedule"), derived)).toBeVisible();
+
+  // Control — the page really is cached: a write that fires no revalidation is
+  // NOT on the next load. Without this, a page that never cached would pass
+  // every "straight away" assertion below vacuously.
+  await withDb((sql) => sql`update entrants set display_name = ${`Control Moved ${TAG}`} where id = ${controlId}`);
+  const control = await publicDivision(browser, publicPath);
+  await expect(shown(control.locator("#panel-schedule"), `Control Pair ${TAG}`)).toBeVisible();
+  await expect(control.getByText(`Control Moved ${TAG}`)).toHaveCount(0);
+
+  // Step 1 — save the staged swap, by hand.
+  await saveRoster(page).click();
+  await expect(rowToggle(page, followed)).toBeVisible();
+
+  // The public page names the pair anew on its very next load…
+  const swapSeenAt = Date.now();
+  const afterSwap = await publicDivision(browser, publicPath);
+  await expect(shown(afterSwap.locator("#panel-schedule"), followed)).toBeVisible();
+  await expect(afterSwap.getByText(derived)).toHaveCount(0);
+  // …because the whole division entry was expired and REFILLED, not one row
+  // patched: the control pair's raw write surfaces with it. That refill, at or
+  // after `swapSeenAt`, is also what step 2's bound is measured from.
+  await expect(shown(afterSwap.locator("#panel-schedule"), `Control Moved ${TAG}`)).toBeVisible();
+  expect(Date.now() - warmedAt, "the swap reached the public page inside its cache lifetime").toBeLessThan(
+    PUBLIC_DIVISION_TTL_MS,
+  );
+  // …and so does the organiser's fixtures tab.
+  await page.goto(consoleFixtures);
+  await expect(shown(page, followed)).toBeVisible();
+  await expect(page.getByText(derived)).toHaveCount(0);
+
+  // Step 2 — the Name field, by hand.
+  await page.goto(consoleEntrants);
+  await rowToggle(page, followed).click();
+  const field = page.getByTestId("entrant-name-field");
+  await expect(field).toHaveValue(followed);
+  await field.fill(renamed);
+  await field.press("Enter");
+  await expect(rowToggle(page, renamed)).toBeVisible();
+
+  const afterRename = await publicDivision(browser, publicPath);
+  await expect(shown(afterRename.locator("#panel-schedule"), renamed)).toBeVisible();
+  await expect(afterRename.getByText(followed)).toHaveCount(0);
+  expect(Date.now() - swapSeenAt, "the rename reached the public page inside its cache lifetime").toBeLessThan(
+    PUBLIC_DIVISION_TTL_MS,
+  );
+  await page.goto(consoleFixtures);
+  await expect(shown(page, renamed)).toBeVisible();
+  await expect(page.getByText(followed)).toHaveCount(0);
+  expect(await storedName(page.request, pairId)).toBe(renamed);
+});
+
+test("the expanded card with its Name field never scrolls the page sideways at 320px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  const divisionId = await seedDivision(page.request, "Narrow");
+  // A realistic long pair name — the shape that finds a missing min-w-0.
+  const a = await seedPlayer(page.request, "Venkatasubramanian");
+  const b = await seedPlayer(page.request, "Chandrasekharan");
+  const name = derivedFrom(a, b);
+  await seedPair(page.request, divisionId, [a, b]);
+
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=entrants"));
+  await rowToggle(page, name).click();
+  const field = page.getByTestId("entrant-name-field");
+  await expect(field).toHaveValue(name);
+  await expectNoHorizontalScroll(page);
+  // The field is reachable and usable at this width, not merely present.
+  const box = await field.boundingBox();
+  expect(box, "the Name field has no box at 320px").not.toBeNull();
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+  // …and whole on screen. The expanded cell spans the entrants table, which is
+  // wider than a phone and scrolls inside its card — so the page never scrolls
+  // sideways, yet an uncapped field ran 384px wide off the card's right edge,
+  // its end reachable only by swiping the table. Its right edge must sit
+  // inside the card's visible box.
+  const card = await page.locator("section.card").filter({ has: field }).boundingBox();
+  expect(card, "the entrants card has no box at 320px").not.toBeNull();
+  expect(box!.x + box!.width, "the Name field runs off the card's right edge").toBeLessThanOrEqual(
+    card!.x + card!.width,
+  );
+});

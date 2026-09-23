@@ -19,6 +19,7 @@ import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
+import { rosterDerivedName } from "@/lib/entrant-roster-name";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { log } from "@/server/logger";
 import {
@@ -379,9 +380,9 @@ function entryDisplayName(
     // degrades to the old name instead of to `contact.name`; its own test
     // pins the 422 that makes it unreachable.
     const partnerFromRoster = players[1]?.full_name?.trim();
-    const composed = [players[0]?.full_name, partnerFromRoster || entry.partner_name]
-      .filter(Boolean)
-      .join(" & ");
+    // The shared create-time join (`lib/entrant-roster-name.ts`): a roster
+    // edit later recognises — and follows — only a name built by it.
+    const composed = rosterDerivedName([players[0]?.full_name, partnerFromRoster || entry.partner_name]);
     return composed || contact.name;
   }
   return players[0]?.full_name?.trim() || contact.name;

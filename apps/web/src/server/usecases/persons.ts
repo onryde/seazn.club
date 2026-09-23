@@ -11,6 +11,7 @@ import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import type { CreatePerson, PatchPerson, PutProfile } from "@/server/api-v1/schemas";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { firePersonRevalidate } from "@/server/public-site/revalidate";
+import { entrantNamesFollowing, followRosterNames } from "./entrants";
 
 export interface PersonRow {
   id: string;
@@ -142,12 +143,20 @@ const PUBLIC_IDENTITY_FIELDS: readonly string[] = ["consent", "full_name", "dob"
 
 export async function patchPerson(auth: AuthCtx, id: string, patch: PatchPerson): Promise<PersonRow> {
   const updated = await withTenant(auth.orgId, async (tx) => {
+    // The entrants whose names may be derived from this player's name, read
+    // under the name they have BEFORE this write; they follow it below.
+    const pending = patch.full_name === undefined ? [] : await entrantNamesFollowing(tx, id);
     const cols = Object.keys(patch);
     const values = { ...patch, ...(patch.consent ? { consent: tx.json(patch.consent as never) } : {}) };
     const [row] = await tx<PersonRow[]>`
       update persons set ${tx(values as never, ...(cols as never[]))}
       where id = ${id} and merged_into is null returning ${tx(COLS)}`;
     if (!row) throw new HttpError(404, "person not found");
+    // A derived pair name follows its player's rename, in this transaction
+    // (owner ruling 2026-09-22). An unchanged name rebuilds to itself and
+    // moves nothing. The refresh below already reaches every division the
+    // player is rostered in.
+    await followRosterNames(tx, pending);
     return row;
   });
   // W2 Task 14 — after commit: a document rebuilt before it would put the old
