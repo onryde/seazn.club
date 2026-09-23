@@ -1663,9 +1663,10 @@ export async function getPublicPlayer(
 
 /**
  * Player profile — upcoming matches across the org (spec 2026-09-23). Takes
- * the GATE's result (`publicPlayerGate`, or `getPublicPlayer`'s, which is built
- * on it), not loose ids: there is no way to call it for a person or a
- * competition the gate has not passed, so every refusal is still the gate's.
+ * the GATE's result, not loose ids. The type is structural, not branded, so the
+ * compiler cannot prove where the value came from: callers must pass the value
+ * `publicPlayerGate` (or `getPublicPlayer`, built on it) returned, which keeps
+ * every refusal the gate's. The page does, and its test pins that identity.
  * Only fixture data is read (already public on each fixture's own page), never
  * another competition's card, so no other competition's entitlement is asked
  * (spec §4).

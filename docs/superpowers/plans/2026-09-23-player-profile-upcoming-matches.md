@@ -16,7 +16,7 @@
 
 **Tech Stack:** Next 16.2 (App Router, ISR), React server components, postgres.js, Tailwind v4, vitest (node env, real Postgres for DB tests), Playwright, `scripts/smoke.ts`.
 
-**Spec:** `docs/superpowers/specs/2026-09-23-player-profile-upcoming-matches-design.md` (the spec header says "awaiting owner review". Get the owner's sign-off on it and on the plan-level decisions below before Task 1).
+**Spec:** `docs/superpowers/specs/2026-09-23-player-profile-upcoming-matches-design.md` (approved by the owner 2026-09-23, with the plan-level decisions below; see its "Amendments after approval" section).
 
 **Worktree:** `/Users/ashokhein/github/seazn.club-player-upcoming`, branch `feat/player-upcoming-matches`. Start **every** shell call with `cd /Users/ashokhein/github/seazn.club-player-upcoming &&`, because the cwd resets to the main checkout between calls, and a run from there tests `main`.
 

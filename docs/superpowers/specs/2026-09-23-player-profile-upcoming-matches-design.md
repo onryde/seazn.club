@@ -9,14 +9,16 @@ differ, the amendment wins.
 A visitor on a player's public card
 (`/shared/{orgSlug}/{competitionSlug}/players/{personId}`) sees that player's
 next matches across **every division and competition of the same org** — not
-only the competition they arrived from.
+only the competition they arrived from. *Amended* (see "Amendments after
+approval"): when the player's card is name-masked (youth policy), only the
+card's own competition is listed.
 
 ## Owner rulings (not derivable from code)
 
 | # | Question | Ruling |
 |---|----------|--------|
 | R1 | How wide is "across"? | **Same org only.** Cross-org (via `persons.user_id` from claims) is out of scope — it is a new public disclosure needing its own consent design. |
-| R2 | Which other competitions may appear? | **`public` competitions, plus the current competition whatever its visibility.** An `unlisted` competition never appears on another competition's page (that would publish its link). `private` never appears. |
+| R2 | Which other competitions may appear? | **`public` competitions, plus the current competition whatever its visibility.** An `unlisted` competition never appears on another competition's page (that would publish its link). `private` never appears. *Amended:* a name-masked (youth) player's card lists the card's own competition only (amended: see "Amendments after approval"). |
 | R3 | Which fixtures, how many? | `status = 'scheduled'` only. Dated fixtures first (ascending), then undated rows labelled **"Time TBD"** (amended from "Time TBC", to match the hub). Show **5**, then a "Show N more" / "Show less" toggle. `in_play` is excluded — the existing Matches section already shows it. |
 | R4 | Layout | **Option A**: its own "Upcoming" section **above** Matches, one chronological list, each row names its competition › division; on a row from another competition that whole line is in the accent colour (amended: this replaced the "Other event" chip). |
 
@@ -30,7 +32,7 @@ only the competition they arrived from.
 
 ## Design
 
-### 1. Loader — `readPlayerUpcomingSeeds`
+### 1. Loader — `readPlayerUpcoming`
 
 New function in `apps/web/src/server/public-site/public-player-matches.ts`
 (beside `readPlayerMatchSeeds`, same idioms).
@@ -40,7 +42,8 @@ Input: `orgId`, `personId`, `currentCompetitionId`, `now`.
 Rules:
 - Membership: person is an `entrant_members` member of the fixture's home **or** away entrant; entrant status `registered` or `confirmed`.
 - Source: `public_fixtures_v` joined to its division and competition; `org_id = orgId`.
-- Visibility (R2): `competition.visibility = 'public' OR competition.id = currentCompetitionId`. Since the view already excludes `private`, this predicate is what excludes a foreign `unlisted`.
+- Visibility (R2): `competition.visibility = 'public' OR competition.id = currentCompetitionId`. Since the view already excludes `private`, this predicate is what excludes a foreign `unlisted`. *Amended:* when the card is name-masked (`playerCardNameMask`, youth policy), only `competition.id = currentCompetitionId` (amended: see "Amendments after approval").
+- Finished places *(amended, D1)*: a competition with status `completed` or `archived`, or a division with status `completed`, contributes no rows.
 - Status: `f.status = 'scheduled'`.
 - Staleness: exclude `scheduled_at < now - 3 hours` (a scheduled fixture whose slot long passed without scoring is not "upcoming"). `scheduled_at IS NULL` rows are kept.
 - Order: `scheduled_at ASC NULLS LAST`, then `round_no`, `seq_in_round`, `id` (stable).
