@@ -38453,7 +38453,7 @@
     },
     "/api/v1/fixtures/{id}/events": {
       "post": {
-        "summary": "Append a score event (THE scoring endpoint)",
+        "summary": "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer",
         "tags": [
           "scoring"
         ],
@@ -38626,6 +38626,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
