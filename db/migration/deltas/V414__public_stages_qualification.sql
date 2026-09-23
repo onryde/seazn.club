@@ -19,7 +19,13 @@
 --     that both name this stage) send the top four through, not two;
 --   * every rule is a well-formed `rankRange` or `topNPerGroup`. `bestNth`,
 --     `picks` and `roundLosers` move who qualifies in ways a points bound
---     cannot see, and anything malformed is doubt.
+--     cannot see, and anything malformed is doubt;
+--   * the stage sends nobody on by RESULT: a non-empty `config.cross_feeds`
+--     (Jul3/08 §9) wires a fixture's winner or loser into a destination slot
+--     whatever the table says. StageConfig (api-v1/schemas.ts) accepts it on
+--     any stage kind, and every generated fixture carries the ext_key that
+--     wireCrossFeeds (usecases/stages.ts) matches on, so a table stage can
+--     carry one.
 -- `"previous"` means the same-division stage with the largest seq below the
 -- destination's (usecases/stage-seeding.ts resolveProgressionSource).
 --
@@ -28,19 +34,29 @@
 -- malformed rule: the view feeds three public pages, and one bad value must
 -- cost that stage its cut, not 500 all three (spec-review F4).
 --
--- SECURITY DEFINER with a pinned search_path, like org_has_feature (V344): a
--- function called from a view runs as the CALLER, `stages` is FORCE row-level
--- secured, and the public read path has no tenant set — as the caller, the
--- function would see no destination and report "no cut" everywhere. It
--- returns only derived facts; raw `progression` and the rest of `config` stay
--- private. Execute is revoked from PUBLIC and granted to app_user, the role
--- V239 grants the public views to.
+-- SECURITY DEFINER with a pinned search_path, like org_has_feature (V344). A
+-- function called from a view runs as the CALLER. The public pages read
+-- through the pooled `sql` client, which connects as the owning role
+-- (apps/web/src/lib/db.ts), so for them DEFINER changes nothing. It matters
+-- for `app_user` callers — withTenant transactions, such as the organiser
+-- console (Task 9): `stages` is FORCE row-level secured, so a caller-rights
+-- function would see only the caller tenant's rows (none with no tenant set)
+-- and report "no cut" instead of failing. It returns only derived facts; raw
+-- `progression` and the rest of `config` stay private. Execute is revoked
+-- from PUBLIC and granted to app_user, the role V239 grants the public views
+-- to.
 --
 -- `swiss_rounds` and `points_rule` ride along so both readers get every input
--- from one row. `points_rule` is the stage's own PointsRule (`config.points`,
--- not sensitive: the table already prints the points it produces). Without it
--- a custom-points stage would be forecast with the sport's points and could be
--- wrong (plan P4).
+-- from one row. Without `points_rule` a custom-points stage would be forecast
+-- with the sport's points and could be wrong (plan P4). It is the stage's own
+-- PointsRule (`config.points`), REBUILT from only the keys PointsRule reads —
+-- base.{win,draw,loss}, bonuses[].{when,param,points} and
+-- forfeit.{winnerPoints,loserPoints,awardScore}. createStages stores the raw
+-- config (it parses only to validate), and PointsRule is a non-strict
+-- z.object at every level, so an organiser's stray keys can sit beside it and
+-- must not reach a public page. A key that is absent stays absent
+-- (jsonb_strip_nulls): PointsRule rejects `param: null`. The values themselves
+-- are not sensitive, since the table already prints the points they produce.
 --
 -- `has_rank_overrides` (controller ruling M1): the engine sets `rankLocked` on
 -- EVERY tie it settles by lots (competition/tiebreakers.ts), so a status guard
@@ -61,7 +77,10 @@ returns table (
   language sql stable security definer
   set search_path = ${flyway:defaultSchema}, pg_temp as $$
   with src as (
-    select s.id, s.division_id, s.seq, s.kind, s.config from stages s where s.id = p_stage_id
+    select s.id, s.division_id, s.seq, s.kind, s.config,
+           coalesce(jsonb_typeof(s.config -> 'cross_feeds') = 'array'
+                    and s.config -> 'cross_feeds' <> '[]'::jsonb, false) as feeds_by_result
+    from stages s where s.id = p_stage_id
   ),
   rules as (
     select d.id as dest_id,
@@ -111,14 +130,25 @@ returns table (
                    and jsonb_typeof(src.config -> 'rounds') = 'number'
                    and (src.config ->> 'rounds') ~ '^[0-9]{1,6}$'
               then (src.config ->> 'rounds')::int end,
-         src.config -> 'points',
+         case when jsonb_typeof(src.config -> 'points') = 'object' then jsonb_strip_nulls(jsonb_build_object(
+           'base', case when jsonb_typeof(src.config #> '{points,base}') = 'object' then jsonb_build_object(
+                     'win',  src.config #> '{points,base,win}',
+                     'draw', src.config #> '{points,base,draw}',
+                     'loss', src.config #> '{points,base,loss}') end,
+           'bonuses', case when jsonb_typeof(src.config #> '{points,bonuses}') = 'array' then (
+                     select coalesce(jsonb_agg(jsonb_build_object(
+                              'when',   b.value -> 'when',
+                              'param',  b.value -> 'param',
+                              'points', b.value -> 'points') order by b.ord), '[]'::jsonb)
+                     from jsonb_array_elements(src.config #> '{points,bonuses}') with ordinality as b(value, ord)) end,
+           'forfeit', case when jsonb_typeof(src.config #> '{points,forfeit}') = 'object' then jsonb_build_object(
+                     'winnerPoints', src.config #> '{points,forfeit,winnerPoints}',
+                     'loserPoints',  src.config #> '{points,forfeit,loserPoints}',
+                     'awardScore',   src.config #> '{points,forfeit,awardScore}') end)) end,
          coalesce(jsonb_typeof(src.config -> 'rank_overrides') = 'array'
-                  and jsonb_array_length(
-                        case when jsonb_typeof(src.config -> 'rank_overrides') = 'array'
-                             then src.config -> 'rank_overrides' else '[]'::jsonb end) > 0,
-                  false)
+                  and src.config -> 'rank_overrides' <> '[]'::jsonb, false)
   from src
-  left join forecast f on true
+  left join forecast f on not src.feeds_by_result
 $$;
 
 revoke all on function stage_qualification_meta(uuid) from public;

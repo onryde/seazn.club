@@ -157,6 +157,23 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     ]);
   });
 
+  // Review Focus 5 (plan-owed): an OVERALL rankRange out of a POOLED stage is
+  // a cut across pools, not per pool. The column must say so (`false`), so
+  // the builder (Task 5), which refuses an overall cut on a pooled stage,
+  // shows no status. Read `true` here and each pool's table would draw its
+  // own top-4 line, which is not who goes through.
+  it("groups (2 pools) → KO rankRange 1..4: an overall cut on a pooled stage is NOT per group", async () => {
+    const d = await division();
+    await createStages(d.auth, d.divisionId, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 4 }]) },
+    ] as never);
+    expect(await cuts(d.divisionId)).toEqual([
+      ["Groups", 4, false, "KO"],
+      ["KO", null, false, null],
+    ]);
+  });
+
   it("a bestNth beside the cut in the same take → no cut (unforecastable)", async () => {
     const d = await division();
     await createStages(d.auth, d.divisionId, [
@@ -320,9 +337,16 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     ]);
   });
 
-  it("swiss rounds and the stage points rule are published as-is; rounds only for a swiss stage", async () => {
+  it("swiss rounds and the stage points rule are published; rounds only for a swiss stage", async () => {
     const d = await division();
-    const points = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [{ when: "win_margin_gte", param: 3, points: 1 }] };
+    const points = {
+      base: { win: 3, draw: 1, loss: 0 },
+      bonuses: [
+        { when: "win_margin_gte", param: 3, points: 1 },
+        { when: "draw", points: 0.5 },
+      ],
+      forfeit: { winnerPoints: 3, loserPoints: -1, awardScore: [3, 0] },
+    };
     await createStages(d.auth, d.divisionId, [
       { seq: 1, kind: "league", name: "League", config: { rounds: 2 } },
       { seq: 2, kind: "swiss", name: "Swiss", config: { rounds: 5, points } },
@@ -330,7 +354,58 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     const [league, swiss] = await view(d.divisionId);
     expect(league).toMatchObject({ name: "League", swiss_rounds: null, points_rule: null });
     expect(swiss).toMatchObject({ name: "Swiss", swiss_rounds: 5 });
-    expect(swiss!.points_rule).toMatchObject(points);
+    // toEqual, not toMatchObject: an extra key must fail here. The bonus with
+    // no `param` stays without one (PointsRule rejects `param: null`).
+    expect(swiss!.points_rule).toEqual(points);
+  });
+
+  // `PointsRule` is a non-strict z.object at every level and createStages
+  // stores the RAW config it was given (it parses only to validate), so an
+  // organiser's stray keys sit in `config.points`. Only what PointsRule reads
+  // may reach a public page.
+  it("points_rule publishes only the keys PointsRule reads, at every level", async () => {
+    const d = await division();
+    const clean = {
+      base: { win: 3, draw: 1, loss: 0 },
+      bonuses: [{ when: "win_margin_gte", param: 3, points: 1 }],
+      forfeit: { winnerPoints: 3, loserPoints: 0 },
+    };
+    const withJunk = {
+      base: { ...clean.base, note: "base junk" },
+      bonuses: [{ ...clean.bonuses[0], memo: "bonus junk" }],
+      forfeit: { ...clean.forfeit, secret: "forfeit junk" },
+      internal: { owner: "top-level junk" },
+    };
+    await createStages(d.auth, d.divisionId, [
+      { seq: 1, kind: "league", name: "League", config: { points: withJunk } },
+    ] as never);
+    const [stored] = await sql<{ points: unknown }[]>`
+      select config -> 'points' as points from stages where division_id = ${d.divisionId}`;
+    expect(stored!.points, "premise: the raw junk is stored").toEqual(withJunk);
+    expect((await view(d.divisionId))[0]!.points_rule).toEqual(clean);
+  });
+
+  // Cross-stage feeds (Jul3/08 §9) wire a source FIXTURE's winner or loser
+  // into a destination slot by result, whatever the table says. StageConfig
+  // accepts `cross_feeds` on any kind, and the shared generator gives every
+  // fixture an ext_key that wireCrossFeeds matches on, so a table stage can
+  // send an entrant through by a result. A rank cut there is not a forecast.
+  it("a source stage with cross_feeds has no cut; an empty cross_feeds list changes nothing", async () => {
+    const feed = { from_ext_key: "r1-m1", side: "winner", to_stage_seq: 2, to_ext_key: "r1-m1", slot: 1 };
+    for (const [feeds, expected] of [
+      [[feed], ["League", null, false, null]],
+      [[], ["League", 4, false, "KO"]],
+    ] as const) {
+      const d = await division();
+      await createStages(d.auth, d.divisionId, [
+        { seq: 1, kind: "league", name: "League", config: { cross_feeds: feeds } },
+        { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 4 }]) },
+      ] as never);
+      expect(await cuts(d.divisionId), `cross_feeds ${JSON.stringify(feeds)}`).toEqual([
+        expected,
+        ["KO", null, false, null],
+      ]);
+    }
   });
 
   it("a private competition publishes nothing (the visibility gate is untouched)", async () => {
@@ -453,10 +528,13 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     ]);
   });
 
-  // The public read path runs as `app_user` with no tenant set, and `stages`
-  // is FORCE row-level secured. The function is SECURITY DEFINER precisely so
-  // that the cut does not silently read as "none" there, and EXECUTE is
-  // granted to app_user so the view does not refuse it outright.
+  // The public pages read through the pooled `sql` client, which connects as
+  // the owning role (lib/db.ts), so they are not what this proves. An
+  // `app_user` caller is: a withTenant transaction (the Task 9 console) reads
+  // under FORCE row-level security on `stages`, and a caller-rights function
+  // sees only that tenant's rows (none with no tenant set) and reports "no cut"
+  // instead of failing. SECURITY DEFINER makes the cut independent of the
+  // caller's RLS context, and EXECUTE is granted so app_user may call it.
   it("reads the same cut as app_user with no tenant context (definer + grant)", async () => {
     const d = await division();
     await createStages(d.auth, d.divisionId, [
