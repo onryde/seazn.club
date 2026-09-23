@@ -30,8 +30,10 @@ import { appendEvent } from "@/server/engine-db/append-event";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
+import { patchFixture } from "@/server/usecases/fixtures";
 import { startDivision } from "@/server/usecases/schedule";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { createCourt, createVenue } from "@/server/usecases/venues";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { getPublicPlayerUpcoming, maskPublicEntrantNames, type PublicCompetition, type PublicOrg } from "../data";
 import { readPlayerUpcoming, UPCOMING_STALE_AFTER_MS, type PlayerUpcomingRow } from "../public-player-matches";
@@ -203,6 +205,11 @@ async function seed(): Promise<Scene> {
     "public", "public", "unlisted", "private", "public",
   ]);
 
+  // ---- The org's venue and courts, made the way the organiser makes them --------
+  const hall = await createVenue(auth, { name: "Riverside Hall", sort: 0 });
+  const court3 = await createCourt(auth, hall.id, { name: "Court 3", sort: 0, tags: [] });
+  const court9 = await createCourt(auth, hall.id, { name: "Court 9", sort: 1, tags: [] });
+
   // ---- CUR singles: Ada v six opponents, one per rule --------------------------
   const singles = await league(auth, cur.id, "singles", [
     adaSide(),
@@ -210,7 +217,10 @@ async function seed(): Promise<Scene> {
   ]);
   const [bo, cy, di, hal, ian, jo] = [1, 2, 3, 4, 5, 6].map((n) => vs(singles, 0, n)) as [string, string, string, string, string, string];
   await at(bo, inHours(48));
-  await sql`update fixtures set court_label = 'Court 3', venue = 'Riverside Hall' where id = ${bo}`;
+  // P9: a court is assigned by id through the organiser's PATCH /fixtures/{id}
+  // (`patchFixture`), which also stamps the court's venue. The legacy
+  // `court_label`/`venue` text stays NULL, as it does for every fixture since.
+  await patchFixture(auth, bo, { court_id: court3.id });
   // Ada AWAY here. Every other listed row of hers seats her at HOME (measured: a
   // home-only membership mutant survived the suite without this swap), so this
   // is the one row that proves her side is read per fixture.
@@ -255,7 +265,7 @@ async function seed(): Promise<Scene> {
   const setupL = await league(auth, cur.id, "setup", [adaSide(), await opponent("Quin Rowe")], false);
   const setup = vs(setupL, 0, 1);
   await at(setup, inHours(12));
-  await sql`update fixtures set court_label = 'Court 9' where id = ${setup}`;
+  await patchFixture(auth, setup, { court_id: court9.id });
 
   // ---- CUR withdrawn: Ada's entrant withdrew, the fixture was left scheduled ----
   const wd = await league(auth, cur.id, "withdrawn", [adaSide(), await opponent("Kim Knox")]);
@@ -272,6 +282,8 @@ async function seed(): Promise<Scene> {
   const sibL = await league(auth, sib.id, "sib-open", [adaSide(), await opponent("Ned North")]);
   const ned = vs(sibL, 0, 1);
   await at(ned, inHours(26));
+  // A pre-P9 row: the retired free-text location, and no court/venue ids.
+  await sql`update fixtures set court_label = 'Old Court 1', venue = 'Old Pavilion' where id = ${ned}`;
   // A CONFIRMED entrant: every other entrant keeps the 'registered' default.
   await sql`update entrants set status = 'confirmed' where id = ${sibL.entrantIds[0]!}`;
   await sql`
@@ -486,9 +498,44 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
     expect(ids(await read(scene.cur.id, { now: later }))).not.toContain(scene.f.di);
   });
 
+  /** The base row's location columns: the P9 ids, and the frozen text beside them. */
+  async function location(fixtureId: string) {
+    const [row] = await sql<
+      { court_id: string | null; venue_id: string | null; court_label: string | null; venue: string | null }[]
+    >`select court_id, venue_id, court_label, venue from fixtures where id = ${fixtureId}`;
+    if (!row) throw new Error(`fixture ${fixtureId} not found`);
+    return row;
+  }
+
+  it("court and venue are the NAMES behind the fixture's court_id / venue_id (P9), never the frozen text columns", async () => {
+    // Premise: the organiser's PATCH set the ids (the court's venue with it) and
+    // left the retired text columns empty.
+    const [court] = await sql<{ id: string; name: string; venue_id: string; venue_name: string }[]>`
+      select c.id, c.name, c.venue_id, v.name as venue_name
+      from courts c join venues v on v.id = c.venue_id
+      where c.id = (select court_id from fixtures where id = ${scene.f.bo})`;
+    expect(court, "premise: bo has a court").toBeDefined();
+    expect(await location(scene.f.bo)).toEqual({
+      court_id: court!.id,
+      venue_id: court!.venue_id,
+      court_label: null,
+      venue: null,
+    });
+    const rows = await read(scene.cur.id);
+    expect(byId(rows, scene.f.bo)).toMatchObject({ courtLabel: court!.name, venue: court!.venue_name });
+    // A pre-P9 row: frozen text, no ids. Every public surface shows nothing for
+    // it (the hub, the match centre, the calendar), so the card does not either.
+    expect(await location(scene.f.ned)).toMatchObject({ court_id: null, venue_id: null, court_label: "Old Court 1", venue: "Old Pavilion" });
+    expect(byId(rows, scene.f.ned)).toMatchObject({ courtLabel: null, venue: null });
+  });
+
   it("a division still in SETUP: time and court withheld, and the row sorts after every dated one", async () => {
     const p = await premise(scene.f.setup);
     expect(p.scheduled_at).not.toBeNull(); // the BASE row is dated; the view withholds it
+    // …and has a real court (and so a venue), withheld the same way.
+    const where = await location(scene.f.setup);
+    expect(where.court_id).not.toBeNull();
+    expect(where.venue_id).not.toBeNull();
     const rows = await read(scene.cur.id);
     expect(byId(rows, scene.f.setup)).toMatchObject({ scheduledAt: null, courtLabel: null, venue: null });
     expect(rows.at(-1)!.fixtureId).toBe(scene.f.setup);

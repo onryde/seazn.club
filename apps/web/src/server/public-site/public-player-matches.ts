@@ -67,7 +67,7 @@ import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
 import { COMPLETED_FIXTURE_STATUSES } from "@/server/usecases/player-stats";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { maskPublicEntrantNames } from "./data";
+import { maskPublicEntrantNames, withCourtVenueNames } from "./data";
 import { publicRoundNamer, type NamedFixture } from "./feeder-slot-label";
 
 export type Sql = ReturnType<typeof postgres>;
@@ -695,6 +695,13 @@ async function maskedOpponentNames(sql: Sql, rows: readonly OpponentPolicyRow[])
 // entrant): a future fixture is nobody's by lineup yet. V412 moved the status
 // filter out of `public_entrants_v`, so it is applied to `entrants` here.
 //
+// Court and venue are the NAMES behind `court_id`/`venue_id`, through
+// `withCourtVenueNames` (data.ts) — the one derivation the hub, the match
+// centre, the calendar and the embeds share, with its org-wide "Name (Venue)"
+// disambiguation and its setup redaction. The view's `court_label`/`venue` are
+// the retired free-text columns, frozen since the P9 cutover: nothing writes
+// them, so reading them showed no court for any fixture placed since.
+//
 // Plain JSON and folds nothing. The caller (`getPublicPlayerUpcoming`) holds no
 // cache of it: see plan D3.
 // ---------------------------------------------------------------------------
@@ -708,7 +715,10 @@ export interface PlayerUpcomingRow {
   scheduledAt: string | null;
   /** The VENUE zone (`resolveVenueTz`), for formatting `scheduledAt`. */
   tz: string;
+  /** The venue's NAME (from `venue_id`); null when unassigned or its division is in setup. */
   venue: string | null;
+  /** The court's display label (from `court_id`, venue-qualified only when its
+   *  bare name is ambiguous in the org); null when unassigned or in setup. */
   courtLabel: string | null;
   /** The other side: its masked public name, else its seat's public label, else the localised TBD. */
   opponentLabel: string;
@@ -752,8 +762,6 @@ interface UpcomingDbRow {
   id: string;
   stage_id: string;
   scheduled_at: unknown;
-  venue: string | null;
-  court_label: string | null;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   home_slot_label: SlotLabel | null;
@@ -784,7 +792,7 @@ export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<
       where em.person_id = ${personId}
         and e.status in ('registered','confirmed')
     )
-    select f.id, f.stage_id, f.scheduled_at, f.venue, f.court_label,
+    select f.id, f.stage_id, f.scheduled_at,
            f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
            d.id as division_id, d.name as division_name, d.slug as division_slug,
            dv.youth, dv.player_name_display,
@@ -813,7 +821,9 @@ export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<
 
   const names = await maskedOpponentNames(sql, rows);
   const seatOf = await opponentSeatNamer(sql, rows, locale);
-  return rows.map((r) => {
+  // P9: names from `court_id`/`venue_id`, null while the division is in setup.
+  const located = await withCourtVenueNames(rows);
+  return located.map((r) => {
     const mineHome = r.my_entrant_id === r.home_entrant_id;
     const opponentId = mineHome ? r.away_entrant_id : r.home_entrant_id;
     const named = opponentId !== null ? names.get(opponentId) : undefined;
@@ -822,8 +832,8 @@ export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<
       href: routes.sharedFixture(orgSlug, r.competition_slug, r.division_slug, r.id),
       scheduledAt: isoDateTime(r.scheduled_at),
       tz: resolveVenueTz(r.division_tz, r.org_tz),
-      venue: r.venue,
-      courtLabel: r.court_label,
+      venue: r.venue_name,
+      courtLabel: r.court_name,
       opponentLabel: named ?? seatOf(r, mineHome ? "away" : "home"),
       competitionName: r.competition_name,
       competitionSlug: r.competition_slug,
