@@ -27,6 +27,7 @@ import es from "@/dictionaries/es/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { playerMatchesDict } from "@/lib/player-matches-dict";
 import type { PlayerMatchLineT } from "@/server/public-site/player-matches-schema";
+import type { getPublicPlayerUpcoming } from "@/server/public-site/data";
 import type { PlayerUpcomingRow } from "@/server/public-site/public-player-matches";
 
 // The upcoming stub carries a default (no rows): `clearAllMocks` keeps
@@ -34,7 +35,7 @@ import type { PlayerUpcomingRow } from "@/server/public-site/public-player-match
 // test set. `getPublicPlayer` needs none — every test that renders sets it.
 const stub = vi.hoisted(() => ({
   getPublicPlayer: vi.fn(),
-  getPublicPlayerUpcoming: vi.fn(async (): Promise<PlayerUpcomingRow[]> => []),
+  getPublicPlayerUpcoming: vi.fn<typeof getPublicPlayerUpcoming>(async (): Promise<PlayerUpcomingRow[]> => []),
 }));
 vi.mock("@/server/public-site/data", () => ({
   getPublicPlayer: stub.getPublicPlayer,
@@ -465,7 +466,7 @@ const upcomingRow = (fixtureId: string, over: Partial<PlayerUpcomingRow> = {}): 
 });
 
 describe("player page — Upcoming", () => {
-  it("EMPTY: no rows, no section — and the read was for THIS card's org, competition and player", async () => {
+  it("EMPTY: no rows, no section — and the read was handed THIS card's gate result (org, competition, player)", async () => {
     const { tree, html } = await renderPage({ upcoming: [] });
     expect(html).not.toContain('data-testid="mh-player-upcoming"');
     // Matches still sits INSIDE the 7-span cell with nothing above it.
@@ -473,11 +474,16 @@ describe("player page — Upcoming", () => {
     expect(mainColumnIds(tree)).not.toContain("mh-player-upcoming");
     // No orphan heading either (the positive pair is the next test).
     expect(html).not.toContain(`>${esc(en["player.upcoming"])}<`);
+    // The gate's result itself — the object `getPublicPlayer` resolved to —
+    // not ids copied out of it.
+    const card: unknown = await stub.getPublicPlayer.mock.results[0]!.value;
+    expect(stub.getPublicPlayerUpcoming).toHaveBeenCalledTimes(1);
+    expect(stub.getPublicPlayerUpcoming.mock.calls[0]![0]).toBe(card);
     expect(stub.getPublicPlayerUpcoming).toHaveBeenCalledWith(
       expect.objectContaining({
         org: expect.objectContaining({ id: "o1", slug: "riverside" }),
         competition: expect.objectContaining({ id: "c1" }),
-        personId: PERSON,
+        player: expect.objectContaining({ id: PERSON }),
       }),
     );
   });

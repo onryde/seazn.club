@@ -35,7 +35,7 @@ import { startDivision } from "@/server/usecases/schedule";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { createCourt, createVenue } from "@/server/usecases/venues";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { getPublicPlayerUpcoming, maskPublicEntrantNames, playerCardNameMask, type PublicCompetition, type PublicOrg } from "../data";
+import { getPublicPlayerUpcoming, maskPublicEntrantNames, playerCardNameMask, publicPlayerGate } from "../data";
 import { readPlayerUpcoming, UPCOMING_STALE_AFTER_MS, type PlayerUpcomingRow } from "../public-player-matches";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -754,14 +754,12 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
     expect(byId(rows, scene.f.pair).tz).toBe(resolveVenueTz(ss?.tz ?? null, "Europe/London"));
   });
 
-  it("getPublicPlayerUpcoming reads for the CARD's org and competition", async () => {
-    const org = { id: scene.orgId, slug: scene.orgSlug, default_locale: "en" } as PublicOrg;
-    const onSib = await getPublicPlayerUpcoming({
-      org,
-      competition: { id: scene.sib.id } as PublicCompetition,
-      personId: scene.ada,
-      now: scene.now,
-    });
+  it("getPublicPlayerUpcoming reads for the GATE's org, competition and player", async () => {
+    // A real gate result: the wrapper takes nothing else, so it cannot be
+    // called for a person or a competition the gate has not passed.
+    const gate = await publicPlayerGate(scene.orgSlug, scene.sib.slug, scene.ada);
+    expect(gate, "premise: Ada passes SIB's gate").not.toBeNull();
+    const onSib = await getPublicPlayerUpcoming(gate!, { now: scene.now });
     // From SIB's card, Ned is home and the CUR rows are the other events.
     expect(byId(onSib, scene.f.ned).isOtherCompetition).toBe(false);
     expect(byId(onSib, scene.f.bo).isOtherCompetition).toBe(true);

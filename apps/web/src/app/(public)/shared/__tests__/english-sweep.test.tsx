@@ -51,7 +51,7 @@ const stub = vi.hoisted(() => ({
   getPublicDivision: vi.fn(),
   getPublicFixture: vi.fn(),
   getPublicPlayer: vi.fn(),
-  getPublicPlayerUpcoming: vi.fn(),
+  getPublicPlayerUpcoming: vi.fn<typeof getPublicPlayerUpcoming>(),
   readEntrantMemberRefs: vi.fn(),
   readLeaderRows: vi.fn(),
   publicRegistrationInfo: vi.fn(),
@@ -200,6 +200,7 @@ import { buildMatchCentre } from "@/server/public-site/match-centre";
 import type { MatchCentreDocT, SideT } from "@/server/public-site/match-centre-schema";
 import type { PublicPerson } from "@/server/public-site/public-lineups";
 import { composePlayerMatchLines, type PlayerMatchSeed, type PlayerUpcomingRow } from "@/server/public-site/public-player-matches";
+import type { getPublicPlayerUpcoming } from "@/server/public-site/data";
 import { PlayerUpcoming } from "@/components/public-site/player-upcoming";
 import { UpcomingReveal } from "@/components/public-site/player-upcoming-reveal";
 import { groupCareerStatsBySport, labelPlayerStats } from "@/server/player-stats";

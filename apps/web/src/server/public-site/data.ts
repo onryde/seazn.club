@@ -1662,11 +1662,13 @@ export async function getPublicPlayer(
 }
 
 /**
- * Player profile — upcoming matches across the org (spec 2026-09-23). The page
- * calls this only AFTER `getPublicPlayer` passed the gate, so every refusal is
- * still `publicPlayerGate`'s. Only fixture data is read (already public on each
- * fixture's own page), never another competition's card, so no other
- * competition's entitlement is asked (spec §4).
+ * Player profile — upcoming matches across the org (spec 2026-09-23). Takes
+ * the GATE's result (`publicPlayerGate`, or `getPublicPlayer`'s, which is built
+ * on it), not loose ids: there is no way to call it for a person or a
+ * competition the gate has not passed, so every refusal is still the gate's.
+ * Only fixture data is read (already public on each fixture's own page), never
+ * another competition's card, so no other competition's entitlement is asked
+ * (spec §4).
  *
  * UNCACHED on purpose (plan D3): a schedule write in ANOTHER competition fires
  * that competition's tags, none of which this card carries, so a tagged entry
@@ -1676,20 +1678,18 @@ export async function getPublicPlayer(
  * Imported lazily for the same reason as the Matches reader in
  * `getPublicPlayer`: it takes `maskPublicEntrantNames` from THIS file.
  */
-export async function getPublicPlayerUpcoming(args: {
-  org: PublicOrg;
-  competition: PublicCompetition;
-  personId: string;
-  now?: Date;
-}): Promise<PlayerUpcomingRow[]> {
+export async function getPublicPlayerUpcoming(
+  gate: PublicPlayerGate,
+  opts: { now?: Date } = {},
+): Promise<PlayerUpcomingRow[]> {
   const { readPlayerUpcoming } = await import("./public-player-matches");
   return readPlayerUpcoming(sql, {
-    orgId: args.org.id,
-    orgSlug: args.org.slug,
-    personId: args.personId,
-    currentCompetitionId: args.competition.id,
-    locale: toLocale(args.org.default_locale),
-    now: args.now ?? new Date(),
+    orgId: gate.org.id,
+    orgSlug: gate.org.slug,
+    personId: gate.player.id,
+    currentCompetitionId: gate.competition.id,
+    locale: toLocale(gate.org.default_locale),
+    now: opts.now ?? new Date(),
   });
 }
 

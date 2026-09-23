@@ -67,11 +67,9 @@ export default async function PlayerCardPage({ params }: Props) {
   // Both only after the gate above has passed (`getPublicPlayer`'s notFound),
   // and independent of each other, so they run together. Upcoming is the
   // player's next scheduled matches across the org (spec 2026-09-23), uncached
-  // (plan D3): the page's own ISR bounds it.
-  const [dict, upcoming] = await Promise.all([
-    getDictionary(locale, "public"),
-    getPublicPlayerUpcoming({ org, competition, personId: player.id }),
-  ]);
+  // (plan D3): the page's own ISR bounds it. It takes the gate's result itself
+  // (`data` is a `PublicPlayerGate`), never loose ids.
+  const [dict, upcoming] = await Promise.all([getDictionary(locale, "public"), getPublicPlayerUpcoming(data)]);
   const hub = routes.shared(org.slug, competition.slug);
 
   return (
