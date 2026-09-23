@@ -42,6 +42,10 @@
 //   (`remainingOf` → 0 when inactive: M7, both I1 loss cases, Swiss) or in the
 //   builder (departed remaining → 0: the same four); a departed Swiss row read
 //   through the rounds formula (the Swiss I1 case).
+//   Final review COPY — the cut key pluralised on the rounds left (the bug),
+//   the Out headline on a fixed `other`, the rounds count joined at 0, the
+//   rounds key pluralised on the cut. Final review M4a — tieDecidingKey asked
+//   with winsOnly false (the wins-only scored-rule scene).
 //   EQUIVALENT (unkillable, kept as the readable empty case): `qualifyCount
 //   < 1` (the engine refuses cut < 1 itself) and `rows.length === 0` (F3
 //   refuses it: a cut ≥ 0 active rows). The gate made `k === 1` in the loss
@@ -1154,6 +1158,20 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const winsOnly = { base: { win: W, draw: 0, loss: 0 }, bonuses: [] };
     const ruled = must(view({ ...open4(), meta: { pointsRule: winsOnly } }, { cascade })).rows.D!;
     expect(ruled.whatIf).toContain(`${RULE} decides`);
+  });
+  it("…and the key the rule's walkover is weighed against: past `wins` to `diff`, so the walkover counts (final review M4a)", () => {
+    // The walkover scene under a wins-only rule that scores its forfeits 3–0.
+    // `wins` cannot split a points tie here, so `diff` decides — and the
+    // builder must ask tieDecidingKey with the same winsOnly, or it weighs the
+    // walkover against `wins`, drops it from the average, and prints the
+    // unscored rule's "win by 8" (the scene above) for a scored one.
+    const o = open4({ D: [6, 8], B: [7, 2] });
+    const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const rule = { ...scoredRule([3, 0]), base: { win: W, draw: 0, loss: 0 } };
+    expect(pointsRuleBounds(PointsRule.parse(rule)).winsOnly).toBe(true); // precondition, off the rule
+    const d = must(view({ ...o, fixtures, meta: { pointsRule: rule } }, { cascade: ["points", "wins", "diff"] })).rows.D!;
+    expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
+    expect(d.whatIfAssumption).toBeNull();
   });
 });
 

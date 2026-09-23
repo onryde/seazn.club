@@ -341,6 +341,16 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     roundNo: f.round_no,
     ...(f.pool_id ? { poolId: f.pool_id } : {}),
   }));
+  // Departed rows stay in `rows` as rivals (active: false), so the engine's
+  // Out counts them among the entrants already beyond a row (final review
+  // M3). That rests on a product rule decided elsewhere: a departed qualifier
+  // still takes her place above the line — her seat is left empty and nobody
+  // below is promoted into it (usecases/stages.ts computeSeedProposal, the
+  // "owner decision pending" comment on the departed filter). If that changes
+  // and the next entrant is promoted, a departed row above the line no longer
+  // takes a place, and Out must stop counting departed rows or it prints a
+  // false Out. (Through stays sound either way: an extra rival only makes it
+  // more cautious.)
   const engine: QualificationInput = {
     rows: ordered.map((r) => ({ entrantId: r.entrantId, points: r.points, active: active.get(r.entrantId) === true })),
     remaining: new Map(ordered.map((r) => [r.entrantId, remainingOf(r.entrantId)])),

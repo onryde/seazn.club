@@ -19,6 +19,7 @@ import { EngineError } from "../core/errors.ts";
 import { shuffle } from "../core/rng.ts";
 import type { EntrantId, MetricSpec, StandingsDelta } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
+import { RATIO_LEDGERS, type RatioKey } from "./display.ts";
 import {
   foldResults,
   resultsAmong,
@@ -315,6 +316,16 @@ function nrrFraction(row: StandingsRow): { n: number; d: number } {
   return { n: rf * bb - ra * bf, d: bf * bb };
 }
 
+// A ratio key compares its integer won/lost pair, cross-multiplied, never
+// divided. The pair is RATIO_LEDGERS' (display.ts) — the ONE declaration the
+// ratio column, the breakdown popover and the qualification what-if also read,
+// so the cascade cannot rank on a pair the table does not print (final review
+// M2: these four were literal copies before).
+function ratioComparator(key: RatioKey): Comparator {
+  const [won, lost] = RATIO_LEDGERS[key];
+  return (a, b) => compareRatio(ledgerOf(a, [won]), ledgerOf(a, [lost]), ledgerOf(b, [won]), ledgerOf(b, [lost]));
+}
+
 // spec 05 §4.1 — one comparator per non-structural TiebreakerKey. h2h_* /
 // direct / lots are handled by the refinement driver (they need the tie-group
 // context, not a pairwise value).
@@ -329,37 +340,13 @@ const COMPARATORS: Partial<Record<TiebreakerKey, Comparator>> = {
     const nb = nrrFraction(b);
     return compareRatio(na.n, na.d, nb.n, nb.d);
   },
-  set_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["sets_won"]),
-      ledgerOf(a, ["sets_lost"]),
-      ledgerOf(b, ["sets_won"]),
-      ledgerOf(b, ["sets_lost"]),
-    ),
+  set_ratio: ratioComparator("set_ratio"),
   // Tennis games won/lost (v6/00 §2) — same cross-multiplied form as
   // set_ratio, one level down the nested ledger.
-  game_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["games_won"]),
-      ledgerOf(a, ["games_lost"]),
-      ledgerOf(b, ["games_won"]),
-      ledgerOf(b, ["games_lost"]),
-    ),
+  game_ratio: ratioComparator("game_ratio"),
   // Carrom boards won/lost (carrom.md §4) — same cross-multiplied form.
-  board_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["boards_won"]),
-      ledgerOf(a, ["boards_lost"]),
-      ledgerOf(b, ["boards_won"]),
-      ledgerOf(b, ["boards_lost"]),
-    ),
-  point_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["points_won"]),
-      ledgerOf(a, ["points_lost"]),
-      ledgerOf(b, ["points_won"]),
-      ledgerOf(b, ["points_lost"]),
-    ),
+  board_ratio: ratioComparator("board_ratio"),
+  point_ratio: ratioComparator("point_ratio"),
   // Swiss cascade-time metrics — read the assembled ledger (spec 05 §4.1).
   buchholz: (a, b, ctx) =>
     ctx.swiss ? sgn(buchholz(ctx.swiss, a.entrantId) - buchholz(ctx.swiss, b.entrantId)) : 0,

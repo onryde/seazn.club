@@ -33,11 +33,12 @@ export const DERIVED_METRICS: readonly DerivedMetricSpec[] = [
 /**
  * The integer won/lost pair each ratio key divides. Declared ONCE: the ratio
  * text below reads it, so does the standings table's breakdown popover, which
- * prints these two totals beside the ratio, and so does the qualification
- * what-if (`tie-what-if.ts`) — two copies of the pair would let the popover
- * explain a number the cell did not compute. `game_ratio` has no column
- * (`DERIVED_METRICS`); it is here because a tie decided on it still prints
- * both sides' values and a target.
+ * prints these two totals beside the ratio, the qualification what-if
+ * (`tie-what-if.ts`), and the cascade's own comparators (`tiebreakers.ts`
+ * `ratioComparator`) — two copies of the pair would let the popover explain a
+ * number the cell did not compute, or the table rank on a pair it never
+ * shows. `game_ratio` has no column (`DERIVED_METRICS`); it is here because a
+ * tie decided on it still prints both sides' values and a target.
  */
 export const RATIO_LEDGERS = {
   set_ratio: ["sets_won", "sets_lost"],
