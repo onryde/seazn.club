@@ -1,0 +1,293 @@
+// buildQualificationView through its REAL producer (AGENTS.md #1, the inert
+// seam): the snapshot, fixtures, stage meta and entrant statuses come from
+// `getPublicDivision` on a real Postgres after real scoring writes and real
+// withdrawals — not hand fixtures on both ends. Every scene cross-checks the
+// builder's statuses against the engine run on a remaining count read
+// INDEPENDENTLY from the `fixtures` table, and asserts a view exists at all,
+// because the guards (snapshot lag, F1, F2) all fail closed: a real shape they
+// misread shows up here as a null, never as a wrong status. Skipped without
+// DATABASE_URL (same convention as public-stages-qualification-db.test.ts).
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+// `unstable_cache` is a Next server-runtime API with no incrementalCache
+// outside a real request — passthrough, never a memoising double.
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+}));
+
+import { qualificationStatus, type QualStatus } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
+import en from "@/dictionaries/en/public.json";
+import { sql } from "@/lib/db";
+import { plural, t, type TKey } from "@/lib/i18n-runtime";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { createCompetition } from "@/server/usecases/competitions";
+import { createDivision } from "@/server/usecases/divisions";
+import { createEntrants } from "@/server/usecases/entrants";
+import { startDivision } from "@/server/usecases/schedule";
+import { scoreEvent } from "@/server/usecases/scoring";
+import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
+import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
+import { getPublicDivision } from "../data";
+import { buildQualificationView, divisionPointsBounds, stageQualMeta, type QualificationView } from "../qualification-view";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+interface Rig {
+  auth: AuthCtx;
+  divisionId: string;
+  stageId: string;
+  slugs: [string, string, string];
+  /** display name → entrant id */
+  id: Record<string, string>;
+}
+
+async function rig(kind: "league" | "swiss" | "group", names: string[], rounds?: number): Promise<Rig> {
+  const { auth } = await seedOrg("pro");
+  const suffix = randomUUID().slice(0, 8);
+  // Created private and then moved: `createCompetition` silently writes a
+  // public competition over the plan cap as PRIVATE.
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `QV ${suffix}`, visibility: "private", branding: {} });
+  await sql`update competitions set visibility = 'public' where id = ${comp.id}`;
+  const divSlug = `open-${suffix}`;
+  const div = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: divSlug,
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  const entrants = await createEntrants(
+    auth,
+    div.id,
+    names.map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+  );
+  // Groups send ONE per pool: with two, a half-folded pool of four would be
+  // refused by F3 (cut ≥ rows) before F2 is ever asked.
+  const take = kind === "group" ? { kind: "topNPerGroup", n: 1 } : { kind: "rankRange", from: 1, to: 2 };
+  const [table] = await createStages(auth, div.id, [
+    { seq: 1, kind, name: "Table", config: kind === "swiss" ? { rounds } : kind === "group" ? { pools: { count: 2 } } : {} },
+    {
+      seq: 2,
+      kind: "knockout",
+      name: "Finals",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [take] }], placement: "rank_order", timing: "on_complete" },
+    },
+  ] as never);
+  if (kind !== "swiss") {
+    await generateStageFixtures(auth, table!.id);
+    await startDivision(auth, div.id);
+  } else {
+    await startDivision(auth, div.id);
+    await generateStageFixtures(auth, table!.id); // seats round 1
+  }
+  const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
+  return {
+    auth,
+    divisionId: div.id,
+    stageId: table!.id,
+    slugs: [orgSlug, comp.slug, divSlug],
+    id: Object.fromEntries(entrants.map((e, i) => [names[i]!, e.id])),
+  };
+}
+
+type Row = {
+  id: string;
+  pool_id: string | null;
+  round_no: number;
+  status: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+};
+const fixturesOf = (r: Rig) => sql<Row[]>`
+  select id, pool_id, round_no, status, home_entrant_id, away_entrant_id from fixtures
+  where stage_id = ${r.stageId} order by round_no, seq_in_round`;
+
+/** Decide every seated, unplayed board of `round` (optionally only the first
+ *  `limit` of them); the higher seed (earlier in `names`) wins. */
+async function playRound(r: Rig, round: number, names: string[], limit = Infinity, poolId?: string): Promise<void> {
+  const order = names.map((n) => r.id[n]!);
+  let played = 0;
+  for (const f of await fixturesOf(r)) {
+    if (f.round_no !== round || f.status !== "scheduled" || !f.home_entrant_id || !f.away_entrant_id) continue;
+    if (poolId !== undefined && f.pool_id !== poolId) continue;
+    if (played++ >= limit) break;
+    const homeWins = order.indexOf(f.home_entrant_id) < order.indexOf(f.away_entrant_id);
+    await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.auth, f.id, {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: homeWins ? { p1Score: 3, p2Score: 1 } : { p1Score: 1, p2Score: 3 },
+    });
+  }
+}
+
+async function load(
+  r: Rig,
+  poolId: string | null = null,
+): Promise<{ view: QualificationView | null; rows: { entrantId: string; points: number }[]; statuses: Record<string, string> }> {
+  const data = (await getPublicDivision(...r.slugs))!;
+  expect(data).not.toBeNull();
+  const stage = data.stages.find((s) => s.id === r.stageId)!;
+  const snap = data.standings.find((s) => s.stage_id === r.stageId && s.pool_id === poolId);
+  const module_ = builtinModules.find((m) => m.key === data.division.sport_key);
+  const statuses = Object.fromEntries(data.entrants.map((e) => [e.id, e.status]));
+  const view = buildQualificationView({
+    stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
+    poolId,
+    rows: snap?.rows ?? [],
+    fixtures: data.fixtures,
+    entrantStatuses: statuses,
+    bounds: divisionPointsBounds(module_, data.division.config),
+    cascade: data.division.tiebreakers ?? module_!.defaultTiebreakers,
+    entrantNames: Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name])),
+    msg: (k: TKey, v?: Record<string, string | number>) => t(en, k, v),
+    plural: (k: string, n: number, v?: Record<string, string | number>) => plural(en, k, n, "en", v),
+  });
+  return { view, rows: snap?.rows ?? [], statuses };
+}
+
+/** The engine on the same snapshot, with remaining read straight from the
+ *  fixtures table — NOT through the builder's own derivation. */
+async function engineStatuses(
+  r: Rig,
+  rows: { entrantId: string; points: number }[],
+  statuses: Record<string, string>,
+  remaining: (id: string, fixtures: Row[]) => number,
+  cut = 2,
+): Promise<Map<string, QualStatus | null>> {
+  const fixtures = await fixturesOf(r);
+  expect(rows.length).toBeGreaterThan(0);
+  const active = (id: string) => statuses[id] === "registered" || statuses[id] === "confirmed";
+  const res = qualificationStatus({
+    rows: rows.map((x) => ({ entrantId: x.entrantId, points: x.points, active: active(x.entrantId) })),
+    remaining: new Map(rows.map((x) => [x.entrantId, remaining(x.entrantId, fixtures)])),
+    perMatch: divisionPointsBounds(builtinModules.find((m) => m.key === "generic"), GENERIC_CONFIG)!,
+    cut,
+    anyPlayed: true,
+    complete: false,
+  })!;
+  return new Map(rows.map((x) => [x.entrantId, res.get(x.entrantId)?.status ?? null]));
+}
+const leagueLeft = (id: string, fx: Row[]) =>
+  fx.filter((f) => (f.status === "scheduled" || f.status === "in_play") && (f.home_entrant_id === id || f.away_entrant_id === id)).length;
+
+function expectSameStatuses(view: QualificationView, engine: Map<string, QualStatus | null>): void {
+  for (const [id, s] of engine) {
+    if (s === null) expect(view.rows[id], id).toBeUndefined();
+    else expect(view.rows[id]?.status, id).toBe(s.kind);
+  }
+}
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const c = g._sql;
+  g._sql = undefined;
+  await c?.end();
+});
+
+const FOUR = ["Ann", "Ben", "Cat", "Dan"];
+
+describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivision)", () => {
+  it("empty case first: a started league with nothing played shows no status", async () => {
+    const r = await rig("league", FOUR);
+    expect((await load(r)).view).toBeNull();
+  });
+
+  it("league → Finals (top 2), two rounds of three played: a view, and the engine's statuses", async () => {
+    const r = await rig("league", FOUR);
+    await playRound(r, 1, FOUR);
+    await playRound(r, 2, FOUR);
+    const { view, rows, statuses } = await load(r);
+    expect(view).not.toBeNull();
+    expect(view!.table.cutIndex).toBe(2);
+    expect(view!.table.label).toBe("Top 2 go through to Finals · 1 round left");
+    expect(Object.keys(view!.rows).sort()).toEqual(Object.values(r.id).sort());
+    expectSameStatuses(view!, await engineStatuses(r, rows, statuses, leagueLeft));
+  });
+
+  it("Swiss of five: round 1's real bye counts as the bye entrant's round (two left for everyone)", async () => {
+    const FIVE = [...FOUR, "Eve"];
+    const r = await rig("swiss", FIVE, 3);
+    const fx = await fixturesOf(r);
+    const byeRow = fx.find((f) => f.round_no === 1 && (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+    expect(byeRow?.status).toBe("forfeited");
+    await playRound(r, 1, FIVE);
+    const { view, rows, statuses } = await load(r);
+    expect(view).not.toBeNull();
+    // Rounds left = 3 − 1 for all five, the bye entrant included.
+    expectSameStatuses(view!, await engineStatuses(r, rows, statuses, () => 2));
+    expect(view!.table.label).toBe("Top 2 go through to Finals · 2 rounds left");
+
+    // P2: seat round 2 (pairings out, nothing played). Seated is not played:
+    // still two rounds left for everyone.
+    await generateStageFixtures(r.auth, r.stageId);
+    const seated = await fixturesOf(r);
+    expect(seated.filter((f) => f.round_no === 2 && f.home_entrant_id !== null && f.away_entrant_id !== null).length).toBe(2);
+    const after = await load(r);
+    expect(after.view).not.toBeNull();
+    expectSameStatuses(after.view!, await engineStatuses(r, after.rows, after.statuses, () => 2));
+    expect(after.view!.table.label).toBe("Top 2 go through to Finals · 2 rounds left");
+  });
+
+  it("F2 on a real pooled stage: a pool member the snapshot has not folded yet hides that pool's status", async () => {
+    const EIGHT = [...FOUR, "Eve", "Fay", "Gus", "Hal"];
+    const r = await rig("group", EIGHT);
+    const pools = [...new Set((await fixturesOf(r)).map((f) => f.pool_id))].filter((p): p is string => p !== null).sort();
+    expect(pools.length).toBe(2);
+    const pool = pools[0]!;
+    // One match in the pool: two members have results, two have none yet.
+    await playRound(r, 1, EIGHT, 1, pool);
+    const partial = await load(r, pool);
+    const members = new Set(
+      (await fixturesOf(r)).filter((f) => f.pool_id === pool).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]),
+    );
+    members.delete(null);
+    expect(members.size).toBe(4);
+    // The premise the guard exists for: the pooled snapshot folds only
+    // members with results.
+    expect(partial.rows.length).toBeLessThan(members.size);
+    expect(partial.view).toBeNull();
+    // The rest of the round: every member has a result, the snapshot has all
+    // four, and the pool shows — with the engine's statuses on two left each.
+    await playRound(r, 1, EIGHT, Infinity, pool);
+    const full = await load(r, pool);
+    expect(full.rows.length).toBe(4);
+    expect(full.view).not.toBeNull();
+    expect(full.view!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
+    expectSameStatuses(full.view!, await engineStatuses(r, full.rows, full.statuses, leagueLeft, 1));
+  });
+
+  it("F1 award mode through the real cascade: the leaver gets no status, the rest do, walkovers counted", async () => {
+    const r = await rig("league", FOUR);
+    await playRound(r, 1, FOUR);
+    await playRound(r, 2, FOUR);
+    const out = await withdrawEntrantCascade(r.auth, r.id.Ann!);
+    expect(out.policy).toBe("walkover");
+    const { view, rows, statuses } = await load(r);
+    expect(view).not.toBeNull();
+    expect(view!.rows[r.id.Ann!]).toBeUndefined();
+    expectSameStatuses(view!, await engineStatuses(r, rows, statuses, leagueLeft));
+  });
+
+  it("F1 expunge: a status flip under 50% played hides the table; the real expunge cascade (nothing left to void) does not", async () => {
+    const flip = await rig("league", FOUR);
+    await playRound(flip, 1, FOUR);
+    await sql`update entrants set status = 'withdrawn' where id = ${flip.id.Ann!}`;
+    expect((await load(flip)).view).toBeNull();
+
+    const cascade = await rig("league", FOUR);
+    await playRound(cascade, 1, FOUR);
+    const out = await withdrawEntrantCascade(cascade.auth, cascade.id.Ann!);
+    expect(out.policy).toBe("expunge");
+    const { view, rows, statuses } = await load(cascade);
+    expect(view).not.toBeNull();
+    expect(view!.rows[cascade.id.Ann!]).toBeUndefined();
+    expectSameStatuses(view!, await engineStatuses(cascade, rows, statuses, leagueLeft));
+  });
+});
