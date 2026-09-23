@@ -31,13 +31,17 @@ export const DERIVED_METRICS: readonly DerivedMetricSpec[] = [
 ];
 
 /**
- * The integer won/lost pair each ratio column divides. Declared ONCE: the
- * ratio text below reads it, and so does the standings table's breakdown
- * popover, which prints these two totals beside the ratio — two copies of
- * the pair would let the popover explain a number the cell did not compute.
+ * The integer won/lost pair each ratio key divides. Declared ONCE: the ratio
+ * text below reads it, so does the standings table's breakdown popover, which
+ * prints these two totals beside the ratio, and so does the qualification
+ * what-if (`tie-what-if.ts`) — two copies of the pair would let the popover
+ * explain a number the cell did not compute. `game_ratio` has no column
+ * (`DERIVED_METRICS`); it is here because a tie decided on it still prints
+ * both sides' values and a target.
  */
 export const RATIO_LEDGERS = {
   set_ratio: ["sets_won", "sets_lost"],
+  game_ratio: ["games_won", "games_lost"],
   board_ratio: ["boards_won", "boards_lost"],
   point_ratio: ["points_won", "points_lost"],
 } as const satisfies Partial<Record<TiebreakerKey, readonly [string, string]>>;
@@ -69,6 +73,7 @@ export function derivedMetricText(row: StandingsRow, key: TiebreakerKey): string
       return nrr > 0 ? `+${text}` : text;
     }
     case "set_ratio":
+    case "game_ratio":
     case "board_ratio":
     case "point_ratio": {
       const [won, lost] = RATIO_LEDGERS[key];

@@ -8,7 +8,7 @@
 // ((won + lost) / played, in the key's units). It is always shown with that
 // assumption (R5); this module returns data, the copy lives in the web app.
 import type { TiebreakerKey } from "../sport/module.ts";
-import { derivedMetricText, ratioText } from "./display.ts";
+import { derivedMetricText, RATIO_LEDGERS } from "./display.ts";
 import type { StandingsRow } from "./standings.ts";
 import { AGAINST_KEYS, DIFF_KEYS, FOR_KEYS, ledgerOf, metricOf } from "./tiebreakers.ts";
 
@@ -38,16 +38,11 @@ export interface TieWhatIfOpts {
   winsOnly: boolean;
 }
 
-// The integer won/lost pair each ratio key compares (tiebreakers.ts
-// COMPARATORS reads the same pairs).
-// TODO(T7): dedupe with RATIO_LEDGERS after rebase onto feat/standings-popovers
-// (it has no game_ratio pair yet — add it there, then import this from it).
-const RATIO_LEDGER = {
-  point_ratio: ["points_won", "points_lost"],
-  set_ratio: ["sets_won", "sets_lost"],
-  game_ratio: ["games_won", "games_lost"],
-  board_ratio: ["boards_won", "boards_lost"],
-} as const satisfies Record<Exclude<WhatIfKey, "diff" | "for">, readonly [string, string]>;
+// The integer won/lost pair each ratio key compares: the engine's one
+// declaration (display.ts; tiebreakers.ts COMPARATORS reads the same pairs).
+// Typed against the what-if's ratio keys, so a key added to WHAT_IF_KEYS
+// without a pair there fails to compile rather than reading `undefined`.
+const RATIO_LEDGER: Record<Exclude<WhatIfKey, "diff" | "for">, readonly [string, string]> = RATIO_LEDGERS;
 
 const floorDiv = (a: number, b: number) => Math.floor(a / b);
 const isWhatIfKey = (key: TiebreakerKey): key is WhatIfKey => (WHAT_IF_KEYS as readonly string[]).includes(key);
@@ -79,11 +74,6 @@ export function tieKeyValue(row: StandingsRow, key: TiebreakerKey): string | nul
     }
     case "wins":
       return `${row.won}`;
-    case "game_ratio": {
-      // derivedMetricText has no game_ratio case (no standings column).
-      const [won, lost] = RATIO_LEDGER.game_ratio;
-      return ratioText(ledgerOf(row, [won]), ledgerOf(row, [lost]), 2);
-    }
     default:
       return derivedMetricText(row, key);
   }

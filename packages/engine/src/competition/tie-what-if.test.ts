@@ -305,7 +305,7 @@ describe("tieKeyValue", () => {
     expect(tieKeyValue(row("me", 2, { buchholz: 5.5 }), "buchholz")).toBe("5½");
     expect(tieKeyValue(row("me", 2, {}), "h2h_points")).toBeNull();
   });
-  it("game ratio has its own text (derivedMetricText has no game_ratio case)", () => {
+  it("game ratio prints off the games pair (RATIO_LEDGERS), like every other ratio", () => {
     expect(tieKeyValue(row("me", 2, { games_won: 20, games_lost: 14 }), "game_ratio")).toBe("1.43");
     expect(tieKeyValue(row("me", 2, { games_won: 6, games_lost: 0 }), "game_ratio")).toBe("∞");
   });

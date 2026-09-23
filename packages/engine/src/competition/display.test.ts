@@ -40,10 +40,13 @@ describe("derivedMetricText (doc 09 §2)", () => {
     // Every pair differs, so a ratio reading a neighbour's ledger (the point
     // ratio off the sets, say) prints a different number rather than passing
     // by coincidence. The standings popover shows these same two totals
-    // beside the ratio, so the pair is declared once and read by both.
+    // beside the ratio, and the qualification what-if (tie-what-if.ts) reads
+    // the same pairs, so each pair is declared once and read by all of them.
     const r = row({
       sets_won: 4,
       sets_lost: 2,
+      games_won: 20,
+      games_lost: 14,
       boards_won: 7,
       boards_lost: 3,
       points_won: 150,
@@ -52,8 +55,13 @@ describe("derivedMetricText (doc 09 §2)", () => {
     expect(derivedMetricText(r, "set_ratio")).toBe("2.00");
     expect(derivedMetricText(r, "board_ratio")).toBe("2.33");
     expect(derivedMetricText(r, "point_ratio")).toBe("0.94");
+    // game_ratio has no standings column, but a tie decided on it still
+    // prints both sides' values in the what-if — off the games pair, not a
+    // neighbour's (the sets pair would print 2.00).
+    expect(derivedMetricText(r, "game_ratio")).toBe("1.43");
     expect(RATIO_LEDGERS).toEqual({
       set_ratio: ["sets_won", "sets_lost"],
+      game_ratio: ["games_won", "games_lost"],
       board_ratio: ["boards_won", "boards_lost"],
       point_ratio: ["points_won", "points_lost"],
     });
@@ -64,7 +72,9 @@ describe("derivedMetricText (doc 09 §2)", () => {
     }
   });
 
-  it("point and board ratio share set ratio's edges: unbeaten is ∞, no ledger is —", () => {
+  it("point, game and board ratio share set ratio's edges: unbeaten is ∞, no ledger is —", () => {
+    expect(derivedMetricText(row({ games_won: 6, games_lost: 0 }), "game_ratio")).toBe("∞");
+    expect(derivedMetricText(row({}), "game_ratio")).toBe("—");
     expect(derivedMetricText(row({ points_won: 50, points_lost: 0 }), "point_ratio")).toBe("∞");
     expect(derivedMetricText(row({}), "point_ratio")).toBe("—");
     expect(derivedMetricText(row({ points_won: 0, points_lost: 42 }), "point_ratio")).toBe("0.00");
