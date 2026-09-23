@@ -339,6 +339,134 @@ Cross-pad lag is the **measurement** W1 and W2 must move (worst case
 today ≈ `HOLD_MS` 10s + `POLL_MS` 15s), not a separate fix. Re-measure
 after; do not design against the number.
 
+### As built (2026-09-23) — and the bullet above whose conclusion was false
+
+Shipped as three tasks on `worktree-w3-realtime-seam`; the review record
+is `docs/superpowers/reviews/2026-09-22-w3-round-1.md`. Every line number
+below was re-pinned against the branch tip on 2026-09-23 — the ones in
+the bullets above predate W1 and no longer resolve.
+
+**1. "`auth` is never forwarded" — was true, is FIXED, and by W1 alone.**
+Pulled forward under the §7b ruling and shipped in #823 (squashed
+`df892fac2`). `git log -S` over every member of the chain names that one
+commit and no other, so the natural reading — that a seam this wave
+inherited got finished off somewhere along the way — is wrong: W2 (#825,
+`ae94280cb`) touched none of these files. The chain is continuous:
+
+`device-score-pad.tsx:229` (`padAuth`) → `:370` → `registry.tsx:205,296`
+→ `pad-host.tsx:1528,1566` → `use-pad-pipeline.ts:396,1199`
+(`params.auth ?? SESSION_AUTH`) → `use-fixture-stream.ts:74,166`, where
+`authHeadersFor` (`transport.ts:85-87`) puts the `Bearer dl_` on the
+realtime-token request that the route's bypass at
+`realtime-token/route.ts:46` requires before it will mint anything.
+
+`padAuth` being a `useMemo` is load-bearing rather than tidy: `auth` is a
+dependency of the subscribe effect (`use-fixture-stream.ts:217`), so an
+inline literal tore the channel down and re-handshook it on every render
+— and restarted the polling interval with it, so while the component was
+re-rendering NEITHER transport delivered. That is constant while someone
+is scoring. Measured both ways against a real prod build and a real
+Supabase project; `device-score-pad.tsx:208-229` carries the result.
+
+**2. "One-way resync" — the clause is TRUE, the CONCLUSION is false, and
+the false half pointed two waves at the wrong component.**
+`device-score-pad.tsx:119` does still resync only after this component's
+own send (`:171`) or its own pad's ledger change (`:135`). What the
+bullet then assumed *about* "its own pad's ledger change" is the error:
+`handlePadEvents` is wired as `onEvents` at `:373`, `registry.tsx:299`
+forwards it, and `pad-host.tsx:1575-1578` fires it on ANY change to
+`pipeline.events` — including a foreign write merged in by the poll or
+the socket. A score entered on the console therefore does reach the
+device-link header with nobody tapping anything, provided the pad's own
+stream is delivering.
+
+This is the exact twin of the §6b correction already recorded for
+`fixture-console.tsx`, and both have one shape: a component's resync
+triggers were read, and the `onEvents` edge leading out of it was not
+followed. What actually kept a console score from landing was upstream of
+this file in both directions — the unauthenticated stream (bullet 1) and
+the cursor (bullet 4). Neither lives in `device-score-pad.tsx`. A premise
+that names the wrong file survives review precisely because every
+sentence in it is true.
+
+**3. "No independent refresh" — true, and closed.** The console now has a
+freshness floor of its own at `fixture-console.tsx:543-580`: on
+`visibilitychange` → visible and on `window.focus`, routed through
+`handlePadEvents` (`:446`) and **not** `resync` (`:422`). Only the former
+raises `padSyncing`, and a refresh that bypassed it would leave
+Undo/Void/Forfeit clickable over a half-refreshed ledger — a stale
+`expected_seq` and a 409 on what should have been a clean undo — at
+exactly the moment the operator is back at the keyboard, which is the
+most reachable moment that window has. Deliberately not an interval, for
+the reasons at `:504-508`. Proven in a browser by
+`e2e/walkthrough/console-stalled-pipeline.spec.ts:118`, which stalls the
+pad pipeline by blocking its cursor specifically.
+
+Two things to know before editing it. A real tab return fires BOTH
+events, so the handler runs twice and costs four requests, not one;
+deduping is wrong because the two do not always co-occur, and coalescing
+on the existing in-flight state is queued rather than built. And the
+effect sits on the always-mounted root, so it must keep its `typeof
+document` / `typeof window` guard at `:565`: without it, three
+node-environment suites crash at mount. See the review record — that one
+escaped every gate this wave ran.
+
+**4. "`sinceSeq` is an array count — unverified" — now VERIFIED, the
+defect is CONFIRMED, and there were THREE cursors, not one.** Reproduced
+red before the fix (`expected 3 to be 4` over a sparse ledger), so this
+is a measured defect rather than a reasoned one. `ledgerTipSeq`
+(`use-pad-pipeline.ts:732`) replaces the count at all three sites: the
+stream cursor at `:1203` that this bullet names, and the `expected_seq`
+derivations in `submit` (`:1608`) and `submitHeld` (`:1717`). The design
+named one, the plan named two, and `submitHeld` is the copy every real v3
+tap routes through — so a literal reading of either would have left the
+compounding-409 half of the defect live on the only path a scorer
+actually hits.
+
+The sparseness is driven through its real producer rather than seeded: a
+pad holding `{1,2}` submits at `expected_seq 2`, the organiser commits
+seq 3 after the pad's last poll, the 409 renegotiates, the ack lands at
+4 — observed `expected_seq` `[2, 3]` and the ledger at exactly `[1,2,4]`
+with seq 3 absent.
+
+**Residual — an owner decision, owed in writing, and not a defect.** The
+fix PREVENTS new gaps; it does not HEAL an existing one. Over `{1,2,4}`
+the poll now asks for `seq > 4` where it used to ask `seq > 3`; either
+way seq 3 is never re-requested, and an `initialEvents` re-seed remains
+the only thing that closes a hole already in the ledger. Healing would
+mean polling from the first MISSING seq, which changes the poll contract
+and needs its own design. Ruled out of W3's scope deliberately. The
+regression test PINS the stranded seq as expected: correct under that
+ruling, and **not** to be read as sign-off on the residual.
+
+**Realtime works, and the number is now a gate rather than a
+measurement.** Measured both ways on 2026-09-23, same build and same
+database — §6b carries the table. With the channel joined, the two
+realtime-bearing specs pass in ~14s legs (8 + 3 tests, exit 0). Without
+it nothing fails on its own: the value still arrives, at 12,955ms and
+13,774ms against a 15s `POLL_MS`, by poll. That is precisely why a
+realtime regression here reads as a green suite and a shrug.
+
+The local cause is one variable. The env script passes only
+`apps/web/.env.local`, and a key-name diff of the two files shows exactly
+one difference — `SUPABASE_JWT_PRIVATE_KEY`, present in the ROOT
+`.env.local` and absent from `apps/web`'s. Without it the server falls
+back to HS256, the token door still answers 200 (so the device-link token
+specs pass), and live Supabase then refuses the join. Start the gate's
+server with **both** `--env-file` flags.
+
+So §5's closing note is satisfied, with one qualification that matters
+more than the number did. `scripts/realtime-gate.sh` (§6b) replaces
+"re-measure after" with a pass/fail, which is strictly better than a
+figure nobody re-reads. But it is a LOCAL gate: CI cannot join a channel
+by construction (§6b; §7 item 4 is the open owner question). A green CI
+run says nothing whatever about realtime, so this wave's realtime
+evidence must be QUOTED from a local gate run and never inferred from CI.
+
+W1's inherited constraint held: W3 adds no drain retry timer, and the
+console's new floor is event-driven rather than a second interval partly
+for that reason.
+
 ## 6. W2 — durable idempotency (design level)
 
 Answers the owner question at `_INDEX.md:1808-13`, asked 2026-08-12 and
