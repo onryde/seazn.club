@@ -2691,7 +2691,7 @@
   "dlink.reissue": "Intrekken en opnieuw uitgeven",
   "dlink.reissueWarn": "De QR die al is uitgedeeld of geprint voor deze wedstrijd werkt dan niet meer.",
   "dlink.reissueConfirm": "Ja, opnieuw uitgeven",
-  "dlink.revokeWarn": "De QR die al is uitgedeeld of geprint voor deze wedstrijd werkt dan niet meer, en er komt geen nieuwe.",
+  "dlink.revokeWarn": "De QR die al is uitgedeeld of geprint voor deze wedstrijd werkt dan niet meer. Er komt geen vervanging — gebruik Intrekken en opnieuw uitgeven als je een nieuwe nodig hebt.",
   "dlink.revokeConfirm": "Ja, intrekken",
   "dlink.keep": "Deze QR houden",
   "dlink.create": "Scorelink aanmaken",

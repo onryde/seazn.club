@@ -48,6 +48,28 @@ describe("dlink.desc says how long a device link lives (no expiry since Task 2)"
   });
 });
 
+// Owner ruling (2026-09-23): the plain-Revoke warning says NO replacement is
+// made and points at Revoke & reissue by ITS ON-SCREEN LABEL in that locale —
+// read from the same dictionary, so a relabel moves this test with it. Its first
+// sentence is the reissue warning's, word for word: both doors kill the QR.
+const DICTS = { en, es, fr, nl } as Record<string, Record<string, string>>;
+
+describe("dlink.revokeWarn: no replacement, and the way to get one (owner ruling 2026-09-23)", () => {
+  it("en is the owner's sentence, verbatim", () => {
+    expect(en["dlink.revokeWarn"]).toBe(
+      "The QR already handed out or printed for this match will stop working. No replacement is made — use Revoke & reissue if you need a new one.",
+    );
+  });
+
+  it.each(Object.keys(DICTS))("%s: opens with the reissue warning and names that locale's Revoke & reissue control", (locale) => {
+    const d = DICTS[locale]!;
+    const warn = d["dlink.revokeWarn"]!;
+    expect(warn.startsWith(d["dlink.reissueWarn"]!), warn).toBe(true);
+    expect(warn).toContain(d["dlink.reissue"]!);
+    expect(warn.length, "a second sentence follows the shared one").toBeGreaterThan(d["dlink.reissueWarn"]!.length + 20);
+  });
+});
+
 // Review finding 3 (T3 fix round 1): every refusal the hand-over routes send
 // (ensure, reissue, revoke) reaches the organiser as a LOCALISED sentence,
 // chosen by code, then status — never the server's English. The table below is

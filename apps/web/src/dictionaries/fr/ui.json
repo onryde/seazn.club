@@ -2736,7 +2736,7 @@
   "dlink.reissue": "Révoquer et réémettre",
   "dlink.reissueWarn": "Le QR déjà remis ou imprimé pour ce match ne fonctionnera plus.",
   "dlink.reissueConfirm": "Oui, réémettre",
-  "dlink.revokeWarn": "Le QR déjà remis ou imprimé pour ce match ne fonctionnera plus, et aucun nouveau ne sera créé.",
+  "dlink.revokeWarn": "Le QR déjà remis ou imprimé pour ce match ne fonctionnera plus. Aucun remplacement n'est créé — utilisez Révoquer et réémettre s'il vous en faut un nouveau.",
   "dlink.revokeConfirm": "Oui, révoquer",
   "dlink.keep": "Garder ce QR",
   "dlink.create": "Créer un lien de score",
