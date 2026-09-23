@@ -24,8 +24,9 @@ export { SETTLED as SETTLED_FIXTURE_STATUSES };
 const COUNTS_FOR_STANDINGS: ReadonlySet<FixtureStatus> = new Set(["decided", "walkover"]);
 
 // A league/group/swiss fixture as the stage sees it: a status and, once
-// decided, the sport module's [home, away] delta pair (void fixtures carry no
-// result and never reach the standings fold).
+// decided, the sport module's [home, away] delta pair. Void fixtures never
+// reach the standings fold (the adapter may still attach a result, which
+// counts only for pool membership).
 //
 // `awardDelta` is the one-sided sit-out path (Swiss odd-field bye, KO seeded
 // bye): forfeited + `outcome.kind === "award"` with the other seat null, so
