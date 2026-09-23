@@ -50,6 +50,10 @@ const probe = vi.hoisted(() => ({
    *  while the ones before it stay committed. */
   failAtLock: null as number | null,
   locks: 0,
+  /** When set, the first statement whose SQL text contains it throws
+   *  `injected` — for a failure INSIDE a post-commit hook that takes no
+   *  advisory lock of its own (e.g. `onDecided`'s read on a knockout void). */
+  failOnSql: null as string | null,
   injected: new Error("injected: a later transaction of this write failed"),
   /** M2 r1: when set, `fireScoreRevalidate` throws it. That is one of the two
    *  points at which `invalidatePublicCache` itself can reject (the other is
@@ -95,12 +99,21 @@ vi.mock("@/lib/db", async (importOriginal) => {
         // that takes a division's advisory lock throws, and the transaction
         // that sent it rolls back. Every other call, and every other case,
         // gets the real `tx`.
-        const handed = probe.failAtLock === null ? tx : new Proxy(tx, {
+        const handed = probe.failAtLock === null && probe.failOnSql === null ? tx : new Proxy(tx, {
           apply(target, thisArg, args: unknown[]) {
             const strings = args[0];
             if (Array.isArray(strings) && "raw" in strings && strings.join("").includes("pg_advisory_xact_lock")) {
               probe.locks += 1;
               if (probe.locks === probe.failAtLock) throw probe.injected;
+            }
+            if (
+              probe.failOnSql !== null &&
+              Array.isArray(strings) &&
+              "raw" in strings &&
+              strings.join("").includes(probe.failOnSql)
+            ) {
+              probe.failOnSql = null;
+              throw probe.injected;
             }
             return Reflect.apply(target, thisArg, args);
           },
@@ -206,6 +219,7 @@ const orgLiveKey = (orgId: string) => `pub:v1:org-live:${orgId}`;
 async function quiesce(): Promise<void> {
   probe.hold = false;
   probe.failAtLock = null;
+  probe.failOnSql = null;
   probe.failRevalidate = null;
   probe.locks = 0;
   for (const release of probe.gates.splice(0)) release();
@@ -1296,6 +1310,37 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
       [semi!.winner_to, "schedule"],
     ]);
     expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
+  }, 120_000);
+
+  // The emptied fixture is known from the APPEND, before any post-commit hook
+  // runs — so a hook that throws after the void committed (R10 M3's shape)
+  // must still publish it. `onDecided` itself is made to throw, on its first
+  // read (the one statement carrying `s.config as stage_config`), which is
+  // the throw that would skip every assignment after it.
+  it("a hook that throws AFTER the void committed still publishes the fixture the void emptied", async () => {
+    const rig = await bracketRig();
+    const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
+    expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
+    await start(rig, semi!.id);
+    await decide(rig, semi!.id, 1);
+    const [decider] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${semi!.id} and type = 'generic.result'`;
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    probe.failOnSql = "s.config as stage_config, s.division_id";
+    await expect(
+      scoreEvent(rig.auth, semi!.id, { expected_seq: decider!.seq, type: "core.void", payload: { event_id: decider!.id } }),
+      "the hook's own error reaches the caller",
+    ).rejects.toBe(probe.injected);
+    expect(probe.failOnSql, "the injection fired (it disarms itself)").toBeNull();
+    expect(diff(before, await lineups(rig.divisionId)).moved, "the void committed and emptied the seat").toEqual([
+      semi!.winner_to,
+    ]);
+    await sleep(20);
+    expect(probe.dels, "the emptied fixture still rides the one DEL").toEqual([
+      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId), fixtureKey(semi!.winner_to!)],
+    ]);
   }, 120_000);
 
   it("re-deciding the other way after the void advances the NEW winner, published like any first decision", async () => {

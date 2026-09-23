@@ -143,6 +143,40 @@ async function scoredThenCorrected(): Promise<Seed> {
   return s;
 }
 
+const TENNIS_BEST_OF_3 = {
+  bestOf: 3,
+  set: { gamesTo: 6, winBy: 2, tiebreakAt: 6, tiebreakTo: 7 },
+  finalSet: "same",
+  game: { noAd: false },
+  tiebreak: { winBy: 2 },
+  points: { win: 2, loss: 0 },
+} as const;
+
+/** A knockout line decided in two straight sets whose winner already sits in
+ *  the final, then the division corrected to best of five — a re-snapshot
+ *  that UN-decides the line and so takes the winner back out of the final
+ *  (owner ruling 2026-09-23, `engine-db/fed-seats.ts`). */
+async function knockoutLineThenUndecided(): Promise<Seed & { finalId: string }> {
+  const s = await seed();
+  await sql`update divisions set sport_key = 'tennis', config = ${sql.json(TENNIS_BEST_OF_3)}
+            where id = ${s.divisionId}`;
+  const [line] = await sql<{ stage_id: string; home_entrant_id: string }[]>`
+    select stage_id, home_entrant_id from fixtures where id = ${s.fixtureId}`;
+  await sql`update stages set kind = 'knockout' where id = ${line!.stage_id}`;
+  const [{ id: finalId }] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id)
+    values (${line!.stage_id}, ${s.divisionId}, 2, 1, ${line!.home_entrant_id})
+    returning id`;
+  await sql`update fixtures set winner_to_fixture = ${finalId}, winner_to_slot = 1 where id = ${s.fixtureId}`;
+  await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+  await appendEvent(s.orgId, s.fixtureId, 1, { type: "tennis.set_summary", payload: { home: 6, away: 4 } });
+  await appendEvent(s.orgId, s.fixtureId, 2, { type: "tennis.set_summary", payload: { home: 6, away: 3 } });
+  await sql`update divisions set config = ${sql.json({ ...TENNIS_BEST_OF_3, bestOf: 5 })} where id = ${s.divisionId}`;
+  cacheDel.mockClear();
+  fireScoreRevalidate.mockClear();
+  return { ...s, finalId };
+}
+
 const deleted = () => cacheDel.mock.calls.flat();
 
 beforeEach(() => {
@@ -183,6 +217,19 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot — the public caches th
     expect(cacheDelPattern).not.toHaveBeenCalled();
     // …and the ISR tag for the same division and competition.
     expect(fireScoreRevalidate).toHaveBeenCalledWith(s.divisionId, s.competitionId);
+  });
+
+  it("a re-snapshot that un-decides a knockout line also drops the fixture it took the winner back out of — in the same one DEL", async () => {
+    const s = await knockoutLineThenUndecided();
+    await resnapshotFixtureConfig(s.actorId, s.fixtureId, "the cup is best of five");
+
+    const [final] = await sql<{ home_entrant_id: string | null }[]>`
+      select home_entrant_id from fixtures where id = ${s.finalId}`;
+    expect(final!.home_entrant_id, "premise: the winner was taken back out of the final").toBeNull();
+    expect(deleted()).toEqual(
+      expect.arrayContaining([`pub:v1:fixture:v2:${s.fixtureId}`, `pub:v1:fixture:v2:${s.finalId}`]),
+    );
+    expect(cacheDel).toHaveBeenCalledTimes(1);
   });
 
   it("a standings recompute that throws still drops them: the rewrite has already committed", async () => {

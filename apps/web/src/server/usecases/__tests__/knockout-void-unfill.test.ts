@@ -197,7 +197,10 @@ async function refusal(p: Promise<unknown>): Promise<HttpError> {
 describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name it advanced", () => {
   it("empties the seat the winner was advanced into, and restores the label the GENERATOR stamped there", async () => {
     const rig = await knockout();
-    const line = rig.r1[0]!;
+    // R1·2, not R1·1: its round and seq DIFFER, so a label restored with the
+    // two swapped (or with the target's own ref) cannot pass by coincidence.
+    const line = rig.r1[1]!;
+    expect(line.round_no, "premise: round and seq differ").not.toBe(line.seq_in_round);
     const slot = line.winner_to_slot;
     // The label is read off generation, not typed here: "restore" means the
     // SAME value the draw wrote, whatever shape that is.
@@ -391,6 +394,99 @@ describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name 
     expect(seat(finalAfter, line.winner_to_slot), "the winner stays seated").toBe(seat(finalBefore, line.winner_to_slot));
   });
 
+  // The status clause on its own. Nothing in the product writes 'cancelled'
+  // (stages.ts `feederIsDead` says so), but it is a valid value an import can
+  // carry, so the only way to reach it is raw SQL — the point of the test, not
+  // a shortcut. A cancelled next match has no outcome and no events: only the
+  // `status !== 'scheduled'` clause sees it.
+  it("refuses when the next match is 'cancelled' (import-only state, written by raw SQL): the STATUS alone says it is not waiting", async () => {
+    const rig = await knockout();
+    const line = rig.r1[0]!;
+    const decider = await decide(rig.auth, line.id);
+    await sql`update fixtures set status = 'cancelled' where id = ${rig.final.id}`;
+    const final = await row(rig.final.id);
+    expect([final.outcome, await eventCount(rig.final.id)], "premise: no outcome, no events").toEqual([null, 0]);
+
+    const err = await refusal(voidEvent(rig.auth, line.id, decider));
+    expect(err.code).toBe("NEXT_MATCH_STARTED");
+    expect(seat(await row(rig.final.id), line.winner_to_slot)).toBe(line.home_entrant_id);
+  });
+
+  // A next match the SYSTEM settled: its other feeder is dead, so deciding
+  // this line hands the final to its winner as a walkover — a real outcome with
+  // no score event behind it. The ruling reads that as started (it carries an
+  // outcome), so the void is refused; see the report's concern about what the
+  // organiser can do next.
+  it("refuses when the next match was settled as a WALKOVER for this line's winner — an outcome with no events", async () => {
+    const rig = await knockout();
+    const [line, other] = rig.r1 as [Row, Row];
+    // The dead sibling feeder, written the way `dead-feeder-cascade.test.ts`
+    // writes it: raw SQL is the only road to a 'cancelled' line.
+    await sql`update fixtures set status = 'cancelled', outcome = null,
+                home_entrant_id = null, away_entrant_id = null
+              where id = ${other.id}`;
+    const decider = await decide(rig.auth, line.id);
+    const final = await row(rig.final.id);
+    expect(final.status, "premise: the final was walked over to this line's winner").toBe("forfeited");
+    expect(final.outcome?.winner).toBe(line.home_entrant_id);
+    expect(await eventCount(rig.final.id), "…with no score event behind it").toBe(0);
+
+    const err = await refusal(voidEvent(rig.auth, line.id, decider));
+    expect(err.code).toBe("NEXT_MATCH_STARTED");
+    const after = await row(rig.final.id);
+    expect(seat(after, line.winner_to_slot), "the winner stays seated").toBe(line.home_entrant_id);
+    expect(after.outcome, "and the walkover stands").toEqual(final.outcome);
+  });
+
+  // The next match's OWN append lock. An append to the final that is already
+  // in flight holds `fixture:<final>` and writes at commit; without the lock
+  // the void reads "not started" before that write lands and then empties the
+  // seat of a match already under way. The holder here stands in for that
+  // append: it takes the same lock and moves the final to in_play at commit.
+  it("waits on the next match's own append lock: a start committing during the check is SEEN, and the void refused", async () => {
+    const rig = await knockout();
+    const [line, other] = rig.r1 as [Row, Row];
+    const decider = await decide(rig.auth, line.id);
+    await decide(rig.auth, other.id);
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let holderPid = 0;
+    const holder = sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + rig.final.id}))`;
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      holderPid = pid;
+      await gate;
+      await tx`update fixtures set status = 'in_play' where id = ${rig.final.id}`;
+    });
+    for (let i = 0; holderPid === 0 && i < 200; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(holderPid, "the stand-in append holds the final's lock").not.toBe(0);
+
+    let settled = false;
+    const voiding = voidEvent(rig.auth, line.id, decider).then(
+      () => { settled = true; return null; },
+      (e: unknown) => { settled = true; return e; },
+    );
+    // Until the void is queued behind the holder — or, on a build without the
+    // lock, until it has already gone through.
+    for (let i = 0; !settled && i < 500; i++) {
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_locks
+        where locktype = 'advisory' and not granted and ${holderPid} = any(pg_blocking_pids(pid))`;
+      if (n > 0) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    release();
+    await holder;
+    const err = await voiding;
+
+    expect(err, "the void saw the start that committed while it waited").toBeInstanceOf(HttpError);
+    expect((err as HttpError).code).toBe("NEXT_MATCH_STARTED");
+    expect(seat(await row(rig.final.id), line.winner_to_slot), "a match under way keeps its player").toBe(
+      line.home_entrant_id,
+    );
+  });
+
   it("does NOT count a start that was itself voided: the next match is back to not-started, so the void goes through", async () => {
     const rig = await knockout();
     const [line, other] = rig.r1 as [Row, Row];
@@ -561,6 +657,21 @@ describe.skipIf(!HAS_DB)("the staff re-snapshot that un-decides a line takes the
     const final = await row(rig.final.id);
     expect(seat(final, line.winner_to_slot), "the old winner is taken back").toBeNull();
     expect(seatLabel(final, line.winner_to_slot)).toEqual(drawn);
+  });
+
+  it("a re-snapshot that KEEPS the decision leaves the next match alone, even one under way", async () => {
+    const rig = await tennis();
+    const [line, other] = rig.r1 as [Row, Row];
+    await twoSets(rig.auth, line.id);
+    await twoSets(rig.auth, other.id);
+    await append(rig.auth, rig.final.id, "core.start", {});
+
+    // A correction that changes the table, not who won.
+    await sql`update divisions set config = ${sql.json({ ...TENNIS_BEST_OF_3, points: { win: 3, loss: 0 } } as never)} where id = ${rig.divisionId}`;
+    await resnapshotFixtureConfig(await superadmin(), line.id, "a win is worth three");
+
+    expect((await row(line.id)).outcome, "still decided").not.toBeNull();
+    expect(seat(await row(rig.final.id), line.winner_to_slot), "the winner stays").toBe(line.home_entrant_id);
   });
 
   it("refuses the re-snapshot when the next match has started, and rewrites NOTHING — not the config, not the audit trail", async () => {
