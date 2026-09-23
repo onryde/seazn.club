@@ -1289,6 +1289,40 @@ export async function publicPlayerGate(
   return { org: shell.org, competition: shell.competition, player };
 }
 
+/** One roster division's naming policy, with the person's consent: what `playerCardNameMask` decides from. */
+export interface NameMaskPolicy {
+  youth: boolean;
+  player_name_display: string | null;
+  consent: { public_name?: boolean } | null;
+}
+
+/**
+ * The player card's name-mask DECISION (privacy hotfix 2026-09-16, explained
+ * where `getPublicPlayer` applies it): every division the person is rostered in
+ * across the ORG is asked, and the first policy under which
+ * `isPersonNameMasked` holds wins. Null = the card shows the full name.
+ *
+ * One decision, two readers: the card masks its name and photo by it, and the
+ * Upcoming list (`readPlayerUpcoming`) lists a masked person's own competition
+ * only (owner 2026-09-23). Uncached here; the card caches it in its own entry.
+ */
+export async function playerCardNameMask(personId: string, orgId: string): Promise<NameMaskPolicy | null> {
+  const rosterPolicies = await sql<NameMaskPolicy[]>`
+    select d.youth, d.player_name_display, p.consent
+    from entrant_members em
+    join entrants e  on e.id = em.entrant_id
+    join divisions d on d.id = e.division_id
+    join persons p   on p.id = em.person_id
+    where em.person_id = ${personId} and d.org_id = ${orgId}`;
+  // Fails CLOSED. `public_players_v` only matches a person with a roster
+  // row, so an empty read here means this query could not see it (a
+  // database role that RLS filters, or a roster removed between the two
+  // reads). With no policy to go on, mask. A read that throws serves no
+  // card at all.
+  if (rosterPolicies.length === 0) return { youth: false, player_name_display: "first_initial", consent: null };
+  return rosterPolicies.find((r) => isPersonNameMasked(r.consent, r.player_name_display, r.youth)) ?? null;
+}
+
 /**
  * Player card. Every refusal is `publicPlayerGate`'s, evaluated first and per
  * call, and the card adds none of its own. Two gates, in two places,
@@ -1418,25 +1452,8 @@ export async function getPublicPlayer(
       // hit. That stale entry predates the roster, so it only shows a name
       // that was already public. Competition visibility is not an input: this
       // query reads every roster in the org, whatever the visibility.
-      const rosterPolicies = await sql<
-        { youth: boolean; player_name_display: string | null; consent: { public_name?: boolean } | null }[]
-      >`
-        select d.youth, d.player_name_display, p.consent
-        from entrant_members em
-        join entrants e  on e.id = em.entrant_id
-        join divisions d on d.id = e.division_id
-        join persons p   on p.id = em.person_id
-        where em.person_id = ${personId} and d.org_id = ${shell.org.id}`;
-      // Fails CLOSED. `public_players_v` only matches a person with a roster
-      // row, so an empty read here means this query could not see it (a
-      // database role that RLS filters, or a roster removed between the two
-      // reads). With no policy to go on, mask. A read that throws serves no
-      // card at all.
-      const strictest =
-        rosterPolicies.length === 0
-          ? { youth: false, player_name_display: "first_initial", consent: null }
-          : rosterPolicies.find((r) => isPersonNameMasked(r.consent, r.player_name_display, r.youth));
-      const nameMask = strictest ?? null;
+      const strictest = await playerCardNameMask(personId, shell.org.id);
+      const nameMask = strictest;
 
       // Memberships within THIS competition, via the consent-filtered members
       // payload (person_id present only with consent — same gate as the card).

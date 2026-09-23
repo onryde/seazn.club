@@ -35,7 +35,7 @@ import { startDivision } from "@/server/usecases/schedule";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { createCourt, createVenue } from "@/server/usecases/venues";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { getPublicPlayerUpcoming, maskPublicEntrantNames, type PublicCompetition, type PublicOrg } from "../data";
+import { getPublicPlayerUpcoming, maskPublicEntrantNames, playerCardNameMask, type PublicCompetition, type PublicOrg } from "../data";
 import { readPlayerUpcoming, UPCOMING_STALE_AFTER_MS, type PlayerUpcomingRow } from "../public-player-matches";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -75,10 +75,13 @@ interface Scene {
   slugs: { singles: string; sib: string };
   doublesDivisionId: string;
   pairOpponent: { id: string; raw: string };
+  /** A player whose card is name-masked (a youth division), and her youth-division opponent. */
+  yara: string;
+  yaraOpponent: { id: string; raw: string; divisionId: string };
   f: Record<
     | "di" | "bo" | "cy" | "hal" | "ian" | "jo" | "pair" | "seatNamed" | "seatTbd" | "setup"
     | "withdrawn" | "doneDivision" | "ned" | "archived" | "oli" | "pat" | "oldComp" | "foreign"
-    | "koFinal" | "koBye" | "koFlipBye" | "koFlipFinal",
+    | "koFinal" | "koBye" | "koFlipBye" | "koFlipFinal" | "yaraCur" | "yaraSib",
     string
   >;
 }
@@ -238,14 +241,18 @@ async function seed(): Promise<Scene> {
     insert into schedule_settings (division_id, org_id, tz) values (${singles.divisionId}, ${orgId}, 'America/New_York')
     on conflict (division_id) do update set tz = excluded.tz`;
 
-  // ---- CUR doubles: a PAIR membership, in a YOUTH division ---------------------
+  // ---- CUR doubles: a PAIR membership, in an ADULT division ---------------------
+  // Adult on purpose: a youth (name-masking) division would put Ada's own card
+  // under the masked-name policy, which lists the card's competition only
+  // (owner ruling 2026-09-23, Yara below). The opponent pair is masked by the
+  // CONSENT axis instead: Fiona opted out of public naming.
   const [ed, fi, gus] = [await seedPerson(orgId, "Ed Ennis"), await seedPerson(orgId, "Fiona Grant"), await seedPerson(orgId, "Gus Hale")];
+  await sql`update persons set consent = ${sql.json({ public_name: false })} where id = ${fi}`;
   const pairRaw = "Fiona Grant & Gus Hale";
   const doubles = await league(auth, cur.id, "doubles", [
     { kind: "pair", name: "Ada Quill & Ed Ennis", members: [ada, ed] },
     { kind: "pair", name: pairRaw, members: [fi, gus] },
   ]);
-  await sql`update divisions set youth = true, player_name_display = 'first_initial' where id = ${doubles.divisionId}`;
   const pair = vs(doubles, 0, 1);
   await at(pair, inHours(72));
 
@@ -304,6 +311,19 @@ async function seed(): Promise<Scene> {
   const oldL = await league(auth, old.id, "old-open", [adaSide(), await opponent("Rae Reed")]);
   const oldComp = vs(oldL, 0, 1); // undated leftover
   await sql`update competitions set status = 'completed' where id = ${old.id}`;
+
+  // ---- YARA: a player whose CARD is name-masked (a youth division in CUR), who
+  // also plays in the public sibling competition (an adult division there). The
+  // owner's rule: a masked card lists the card's own competition only.
+  const yara = await seedPerson(orgId, "Yara Young");
+  const yaraSide = (): Side => ({ kind: "individual", name: "Yara Young", members: [yara] });
+  const youthL = await league(auth, cur.id, "youth-open", [yaraSide(), await opponent("Zed Quinn")]);
+  await sql`update divisions set youth = true where id = ${youthL.divisionId}`;
+  const yaraCur = vs(youthL, 0, 1);
+  await at(yaraCur, inHours(50));
+  const yaraSibL = await league(auth, sib.id, "sib-yara", [yaraSide(), await opponent("Pip Rook")]);
+  const yaraSib = vs(yaraSibL, 0, 1);
+  await at(yaraSib, inHours(27));
 
   // ---- KO: a knockout in its OWN unlisted competition, read as that card, so no
   // other card's list moves. Three entrants in a four-draw (match-centre-load-
@@ -386,9 +406,11 @@ async function seed(): Promise<Scene> {
     slugs: { singles: singles.slug, sib: sibL.slug },
     doublesDivisionId: doubles.divisionId,
     pairOpponent: { id: doubles.entrantIds[1]!, raw: pairRaw },
+    yara,
+    yaraOpponent: { id: youthL.entrantIds[1]!, raw: "Zed Quinn", divisionId: youthL.divisionId },
     f: {
       di, bo, cy, hal, ian, jo, pair, seatNamed, seatTbd, setup, withdrawn, doneDivision, ned, archived, oli, pat, oldComp, foreign,
-      koFinal, koBye, koFlipBye: flipBye.id, koFlipFinal: flipFinal.id,
+      koFinal, koBye, koFlipBye: flipBye.id, koFlipFinal: flipFinal.id, yaraCur, yaraSib,
     },
   };
 }
@@ -571,6 +593,42 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
     expect(ids(await read(scene.cur.id))).not.toContain(scene.f.foreign);
   });
 
+  it("a NAME-MASKED card (the card's own youth rule) lists its own competition only; an adult card is unchanged", async () => {
+    // Premises: Yara has a dated, scheduled fixture in CUR and another in the
+    // PUBLIC sibling, and the card's own decision masks her (a youth division).
+    const where = await sql<{ id: string; status: string; competition_id: string; visibility: string; mine: boolean }[]>`
+      select f.id, f.status, c.id as competition_id, c.visibility,
+             exists (select 1 from entrant_members em
+                     where em.person_id = ${scene.yara}
+                       and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)) as mine
+      from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+      where f.id in ${sql([scene.f.yaraCur, scene.f.yaraSib])}`;
+    const cur = where.find((r) => r.id === scene.f.yaraCur)!;
+    const sib = where.find((r) => r.id === scene.f.yaraSib)!;
+    expect(cur).toMatchObject({ status: "scheduled", competition_id: scene.cur.id, mine: true });
+    expect(sib).toMatchObject({ status: "scheduled", competition_id: scene.sib.id, visibility: "public", mine: true });
+    expect(await playerCardNameMask(scene.yara, scene.orgId), "premise: Yara's card is masked").not.toBeNull();
+    expect(await playerCardNameMask(scene.ada, scene.orgId), "premise: Ada's card is not").toBeNull();
+
+    // From CUR's card: CUR's row only.
+    expect(ids(await read(scene.cur.id, { personId: scene.yara }))).toEqual([scene.f.yaraCur]);
+    // From SIB's card: SIB's row only — the rule follows the CARD, not a fixed competition.
+    expect(ids(await read(scene.sib.id, { personId: scene.yara }))).toEqual([scene.f.yaraSib]);
+    // Her opponent in the youth division reads masked, as on the division page.
+    const [youthPolicy] = await sql<{ youth: boolean; player_name_display: string | null }[]>`
+      select youth, player_name_display from divisions where id = ${scene.yaraOpponent.divisionId}`;
+    const [zed] = await maskPublicEntrantNames(
+      [{ id: scene.yaraOpponent.id, kind: "individual", display_name: scene.yaraOpponent.raw }],
+      youthPolicy!,
+    );
+    expect(zed!.display_name, "premise: the youth policy changes the name").not.toBe(scene.yaraOpponent.raw);
+    expect(byId(await read(scene.cur.id, { personId: scene.yara }), scene.f.yaraCur).opponentLabel).toBe(zed!.display_name);
+
+    // Adult control: Ada's card on CUR still lists SIB's public row.
+    const ada = await read(scene.cur.id);
+    expect(byId(ada, scene.f.ned)).toMatchObject({ isOtherCompetition: true });
+  });
+
   it("finished and archived places are not upcoming: an archived division, a completed division, a completed competition", async () => {
     const gone = [scene.f.archived, scene.f.doneDivision, scene.f.oldComp];
     for (const id of gone) expect(await premise(id), id).toMatchObject({ status: "scheduled", ada_side: true });
@@ -581,11 +639,15 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
   it("opponent: the masked entrant name, else the seat's public label, else the localised TBD", async () => {
     const rows = await read(scene.cur.id);
     expect(byId(rows, scene.f.bo).opponentLabel).toBe("Bo Birch");
+    // The pair's division is ADULT; a member's opted-out consent is what masks it.
+    const [policy] = await sql<{ youth: boolean; player_name_display: string | null }[]>`
+      select youth, player_name_display from divisions where id = ${scene.doublesDivisionId}`;
+    expect(policy!.youth, "premise: an adult division").toBe(false);
     const [masked] = await maskPublicEntrantNames(
       [{ id: scene.pairOpponent.id, kind: "pair", display_name: scene.pairOpponent.raw }],
-      { youth: true, player_name_display: "first_initial" },
+      policy!,
     );
-    expect(masked!.display_name, "premise: this division's policy changes the name").not.toBe(scene.pairOpponent.raw);
+    expect(masked!.display_name, "premise: a member's consent changes the name").not.toBe(scene.pairOpponent.raw);
     expect(byId(rows, scene.f.pair).opponentLabel).toBe(masked!.display_name);
     expect(byId(rows, scene.f.seatNamed).opponentLabel).toBe(enUi["slot.winner_group"].replace("{g}", "A"));
     expect(byId(rows, scene.f.seatTbd).opponentLabel).toBe(enUi["schedule.tbd"]);

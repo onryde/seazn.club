@@ -67,7 +67,7 @@ import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
 import { COMPLETED_FIXTURE_STATUSES } from "@/server/usecases/player-stats";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { maskPublicEntrantNames, withCourtVenueNames } from "./data";
+import { maskPublicEntrantNames, playerCardNameMask, withCourtVenueNames } from "./data";
 import { publicRoundNamer, type NamedFixture } from "./feeder-slot-label";
 
 export type Sql = ReturnType<typeof postgres>;
@@ -689,7 +689,9 @@ async function maskedOpponentNames(sql: Sql, rows: readonly OpponentPolicyRow[])
 // above: `public_fixtures_v` AND `public_divisions_v` (the fixture view alone
 // keeps an archived division). A finished place is not upcoming (plan D1): a
 // completed/archived competition or a completed division contributes nothing,
-// or its undated leftovers would read "Time TBD" forever.
+// or its undated leftovers would read "Time TBD" forever. A person whose card
+// is NAME-MASKED (youth policy, `playerCardNameMask`) gets the card's own
+// competition only (owner 2026-09-23).
 //
 // Membership is the ROSTER (`entrant_members` of a registered/confirmed
 // entrant): a future fixture is nobody's by lineup yet. V412 moved the status
@@ -784,6 +786,12 @@ interface UpcomingDbRow {
 export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<PlayerUpcomingRow[]> {
   const { orgId, orgSlug, personId, currentCompetitionId, locale, now } = args;
   const cutoff = new Date(now.getTime() - UPCOMING_STALE_AFTER_MS);
+  // Owner 2026-09-23: a person whose CARD is name-masked is listed on this
+  // card's competition only — no other competition's rows at all, so a young
+  // player's card is not an itinerary across the org. The decision is the
+  // card's own (`playerCardNameMask`: any youth or name-display policy across
+  // the org's rosters), never a second rule. Adults are unchanged.
+  const ownOnly = (await playerCardNameMask(personId, orgId)) !== null;
   const rows = await sql<UpcomingDbRow[]>`
     with mine as (
       select e.id
@@ -809,6 +817,7 @@ export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<
     where (f.home_entrant_id in (select id from mine) or f.away_entrant_id in (select id from mine))
       and c.org_id = ${orgId}
       and (c.visibility = 'public' or c.id = ${currentCompetitionId})
+      and (not ${ownOnly}::boolean or c.id = ${currentCompetitionId})
       and c.status not in ('completed','archived')
       and d.status <> 'completed'
       and f.status = 'scheduled'
