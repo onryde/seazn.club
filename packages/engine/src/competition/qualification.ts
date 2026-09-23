@@ -17,13 +17,20 @@ export interface QualRow {
   entrantId: EntrantId;
   /** The table's match points (carry-over included). */
   points: number;
-  /** false for a withdrawn/disqualified entrant: still a rival, frozen at `points`. */
+  /** false for a withdrawn/disqualified entrant: no status of its own, but
+   *  still a rival — and NOT frozen at `points`. A status-only departure (a DQ
+   *  by PATCH, a registrant's self-cancel) leaves its fixtures scheduled, and a
+   *  later forfeit pays it the loser's points, which can be above 0 or below
+   *  it; so its `remaining` (its unplayed fixtures) is read like any row's,
+   *  bounded by the full per-match [min, max] (final review I1). */
   active: boolean;
 }
 
 export interface QualificationInput {
   rows: readonly QualRow[];
-  /** entrant → matches left in THIS table (Swiss: rounds not yet settled). */
+  /** entrant → matches left in THIS table (Swiss: rounds not yet settled). A
+   *  departed row's too: its unplayed fixtures here (0 once they are voided or
+   *  walked over). Every row needs one; a missing count fails closed. */
   remaining: ReadonlyMap<EntrantId, number>;
   perMatch: MatchPointsBounds;
   /** Places that go through from this table (a pool's quota under topNPerGroup). */
@@ -39,7 +46,7 @@ export interface QualRowResult {
 }
 
 function remainingOf(input: QualificationInput, row: QualRow): number {
-  return row.active ? Math.max(0, input.remaining.get(row.entrantId) ?? 0) : 0;
+  return Math.max(0, input.remaining.get(row.entrantId) ?? 0);
 }
 export function bestCase(input: QualificationInput, row: QualRow): number {
   return row.points + remainingOf(input, row) * input.perMatch.max;
@@ -70,12 +77,12 @@ function statusFor(input: QualificationInput, entrantId: EntrantId, own: Own): Q
 /** Malformed input fails CLOSED (review fix 1, controller ruling). Read
  *  leniently, each of these prints a false status: a missing count reads as
  *  "final", NaN as "never reaches" (every comparison false), a negative count
- *  as points taken away. A withdrawn row's count is never read (it is frozen),
- *  but its points are — it is still a rival. */
+ *  as points taken away. A departed row's count is read too — it is a rival
+ *  whose unplayed fixtures can still pay it points (final review I1) — so a
+ *  missing one would be the old frozen guess. */
 function wellFormed(input: QualificationInput): boolean {
   return input.rows.every((row) => {
     if (!Number.isFinite(row.points)) return false;
-    if (!row.active) return true;
     const r = input.remaining.get(row.entrantId) ?? Number.NaN; // missing → not a count
     return Number.isInteger(r) && r >= 0;
   });

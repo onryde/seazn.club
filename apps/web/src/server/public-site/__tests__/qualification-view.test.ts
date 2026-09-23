@@ -38,6 +38,10 @@
 //   placed after `safe`; rival read over departed rows; the round-1 seat of a
 //   departed, never-folded member restored (a frozen 0 in place of fail-closed
 //   F2) / restored for any departed member whatever its results.
+//   Final review I1 — a departed row frozen again, in the engine
+//   (`remainingOf` → 0 when inactive: M7, both I1 loss cases, Swiss) or in the
+//   builder (departed remaining → 0: the same four); a departed Swiss row read
+//   through the rounds formula (the Swiss I1 case).
 //   EQUIVALENT (unkillable, kept as the readable empty case): `qualifyCount
 //   < 1` (the engine refuses cut < 1 itself) and `rows.length === 0` (F3
 //   refuses it: a cut ≥ 0 active rows). The gate made `k === 1` in the loss
@@ -577,13 +581,28 @@ describe("statuses equal the engine's on the derived input", () => {
     expect(d.status).toBe("needs_help");
     expect(d.ifYouLose).toBe("If you lose your next match: Out.");
   });
-  it("M7: a withdrawn row gets no status, and its frozen points DECIDE a rival's verdict", () => {
-    // rr4 after two rounds, cut 1: A (6, withdrawn, award mode) and B (6, one
-    // left). With A frozen at 6, B's loss could leave them level: Win and in.
+  it("M7: a withdrawn row gets no status, and its points AND its unplayed fixture decide a rival's verdict", () => {
+    // rr4 after two rounds, cut 1: A (6, withdrawn, award mode) and B (6) meet
+    // in round 3, still scheduled — a status-only departure moves no fixture.
+    // A is not frozen (final review I1): that fixture can still pay A, up to a
+    // win, so A's best is 9 and B's one win only draws level: Needs help.
     const s = rr4(2);
     const v = must(view({ ...s, statuses: { A: "withdrawn" } }));
     expect(v.rows.A).toBeUndefined();
-    expect(v.rows.B!.status).toBe("win_k");
+    expect(v.rows.B!.status).toBe("needs_help");
+    // The engine on the same table: A's one unplayed fixture is what moves B —
+    // the old frozen reading (A: nothing left) said Win and in.
+    const bWith = (aLeft: number) =>
+      qualificationStatus({
+        rows: s.rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: r.entrantId !== "A" })),
+        remaining: new Map([["A", aLeft], ["B", 1], ["C", 1], ["D", 1]]),
+        perMatch: BOUNDS,
+        cut: 1,
+        anyPlayed: true,
+        complete: false,
+      })!.get("B")!.status.kind;
+    expect(bWith(1)).toBe("needs_help");
+    expect(bWith(0)).toBe("win_k");
     // …whereas the same table without A puts B through — so A is what decides.
     const withoutA = qualificationStatus({
       rows: s.rows.filter((r) => r.entrantId !== "A").map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
@@ -625,6 +644,104 @@ describe("statuses equal the engine's on the derived input", () => {
     const v = must(view({ ...s, rows: shared }));
     expect(v.rows.B!.ariaLabel).toBe("Rank 2, Needs help, show details");
     expect(v.rows.C!.ariaLabel).toBe("Rank 2, Needs help, show details");
+  });
+});
+
+// Final review I1 (controller ruling): a departed row is NOT frozen. A
+// status-only departure — a DQ by PATCH with no cascade (usecases/entrants.ts),
+// a registrant's self-cancel — leaves its fixtures scheduled, and when the
+// organiser later forfeits them the departed side takes the LOSER's walkover
+// points: above 0 where a loss pays, below 0 under `forfeit.loserPoints`. Its
+// row still gets no status, but its remaining is its unplayed fixtures in this
+// table, bounded with the full per-match [min, max]. Points below are carried
+// (a "full" carry-over opening): the builder reads the snapshot, not the sums.
+describe("a departed row's unplayed fixtures (final review I1)", () => {
+  /** League of four, cut 1: r1 B>A, D>C; r2 B>C, A–D (`ad`); r3 B>D, A–C to
+   *  play. B finished on 10; D, disqualified, on 9 — 2 of 3 played, so award
+   *  mode and F1 passes. A (1) and C (2) cannot reach 10 by themselves. */
+  function dqScene(ad: QualFixture, dPlayed: number, aPoints: number): Scene {
+    return {
+      kind: "league",
+      meta: { qualifyCount: 1 },
+      rows: [
+        row("B", 1, 3, 3, undefined, { points: 10 }),
+        row("D", 2, 1, dPlayed, undefined, { points: 9 }),
+        row("C", 3, 0, 2, undefined, { points: 2 }),
+        row("A", 4, 0, dPlayed === 3 ? 2 : 1, undefined, { points: aPoints }),
+      ],
+      fixtures: [won(1, "B", "A"), won(1, "D", "C"), won(2, "B", "C"), ad, won(3, "B", "D"), open(3, "A", "C")],
+      statuses: { D: "disqualified" },
+    };
+  }
+  /** Generic with a loss that pays 1 — read from the module, never typed. */
+  const PAYS_CFG = { ...CFG, points: { w: 3, d: 1, l: 1 } };
+  const PAYS = divisionPointsBounds(GENERIC, PAYS_CFG)!;
+
+  it("a loss that PAYS: B finished on 10, D DQ'd on 9 with one unplayed → B is NOT Through", () => {
+    expect(PAYS.lossCeil).toBe(1); // precondition: D's forfeit loss alone lifts it level with B
+    const v = must(view(dqScene(open(2, "A", "D"), 2, 1), { bounds: PAYS }));
+    expect(v.rows.D).toBeUndefined();
+    expect(v.rows.B).toMatchObject({ status: "needs_help", label: "Needs help" });
+  });
+  it("…its pair: D with nothing unplayed (A–D already played, D's 9 final) → B Through", () => {
+    const v = must(view(dqScene(won(2, "A", "D"), 3, 4), { bounds: PAYS }));
+    expect(v.rows.D).toBeUndefined();
+    expect(v.rows.B).toMatchObject({ status: "through", label: "Through" });
+  });
+  it("a departed row whose unplayed fixture was cascaded to void or to a no-result counts nothing left, as before", () => {
+    // The expunge cascade voids (`cancelled`, no outcome) or abandons keeping
+    // a `no_result`; either is settled, so D is final on 9 and B is Through.
+    const cancelled = voided(open(2, "A", "D"));
+    const abandoned = { ...open(2, "A", "D"), status: "abandoned", outcome: { kind: "no_result" } };
+    for (const ad of [cancelled, abandoned]) {
+      const v = must(view(dqScene(ad, 2, 1), { bounds: PAYS }));
+      expect(v.rows.B!.status, ad.status).toBe("through");
+    }
+  });
+  it("a loss that COSTS (a stage rule's forfeit.loserPoints −1): D DQ'd on 10 with two unplayed, B's best 9 → B is NOT Out", () => {
+    // League of five: r1 D>A, C>B; r2 D>C, B>A; r3 B>E; D–B, D–E, A–C, A–E,
+    // C–E to play. D (10, 2 of 4 played: award mode) can still be forfeited
+    // twice, to 8 — below B's best (6 + 3 = 9).
+    const rule = { base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: -1 } };
+    expect(pointsRuleBounds(PointsRule.parse(rule)).min).toBe(-1); // precondition, off the rule
+    const scene = (db: QualFixture, de: QualFixture, bPts: number, bPlayed: number): Scene => ({
+      kind: "league",
+      meta: { qualifyCount: 1, pointsRule: rule },
+      rows: [
+        row("D", 1, 2, bPlayed === 4 ? 4 : 2, undefined, { points: 10 }),
+        row("B", 2, 2, bPlayed, undefined, { points: bPts }),
+        row("C", 3, 1, 2, undefined, { points: 3 }),
+        row("A", 4, 0, 2, undefined, { points: 0 }),
+        row("E", 5, 0, bPlayed === 4 ? 2 : 1, undefined, { points: 0 }),
+      ],
+      fixtures: [
+        won(1, "D", "A"), won(1, "C", "B"), won(2, "D", "C"), won(2, "B", "A"), won(3, "B", "E"),
+        db, de, open(4, "A", "C"), open(5, "A", "E"), open(5, "C", "E"),
+      ],
+      statuses: { D: "disqualified" },
+    });
+    const open2 = must(view(scene(open(3, "D", "B"), open(4, "D", "E"), 6, 3)));
+    expect(open2.rows.D).toBeUndefined();
+    expect(open2.rows.B).toMatchObject({ status: "needs_help", label: "Needs help" });
+    // Pair: D's two matches already played (B beat D, D beat E) — D final on
+    // 10, B final on 9: B is Out.
+    const done = must(view(scene(won(3, "B", "D"), won(4, "D", "E"), 9, 4)));
+    expect(done.rows.B).toMatchObject({ status: "out", label: "Out" });
+  });
+  it("Swiss: a departed entrant's remaining is the boards it is seated on, never the rounds formula", () => {
+    // swiss4 with B withdrawn after two rounds (award mode). Swiss pairs only
+    // the field (generateStageFixturesWrite's `active` read), so B is in no
+    // round-3 board: nothing left, final on 3. A (6) is then Through (only C
+    // reaches 6), and C's one win clears everyone but A: Win and in.
+    const s = swiss4();
+    const unseated = must(view({ ...s, statuses: { B: "withdrawn" } }));
+    expect(unseated.rows.B).toBeUndefined();
+    expect([unseated.rows.A!.status, unseated.rows.C!.status]).toEqual(["through", "win_k"]);
+    // Pair: B departed AFTER round 3 was paired, still seated against D — one
+    // unplayed board, best 6: A only Wins and in, C needs help.
+    const early = s.fixtures.filter((f) => f.round_no < 3);
+    const seated = must(view({ ...s, fixtures: [...early, open(3, "A", "C"), open(3, "B", "D")], statuses: { B: "withdrawn" } }));
+    expect([seated.rows.A!.status, seated.rows.C!.status]).toEqual(["win_k", "needs_help"]);
   });
 });
 
@@ -784,10 +901,11 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(one.C!.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 1 or more to finish ahead.`);
     expect(one.C!.whatIfAssumption).toBe("Assumes Bo's figures stay the same and your next match is an average one.");
   });
-  it("prefers a rival still playing: a withdrawn (frozen) row across the line is skipped, and no active rival means no what-if", () => {
-    // open4 with B withdrawn after 2 of 3 (award mode, so F1 passes) and
-    // frozen at 3. C's nearest across the line is B; the active A (6, one
-    // left) is still reachable, so C is told about A. D can reach only B.
+  it("prefers a rival still playing: a departed row across the line is skipped, and no active rival means no what-if", () => {
+    // open4 with B withdrawn after 2 of 3 (award mode, so F1 passes), on 3
+    // with A–B still scheduled. C's nearest across the line is B; the active
+    // A (6, one left) is still reachable, so C is told about A. D can reach
+    // only B.
     const s = open4();
     const v = must(view({ ...s, statuses: { B: "withdrawn" } }));
     expect(v.rows.B).toBeUndefined();

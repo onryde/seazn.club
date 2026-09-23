@@ -236,8 +236,11 @@ function boundsInForce(i: QualificationViewInput): MatchPointsBounds | null {
 /** F1 — would this departed entrant's table withdrawal VOID results the table
  *  counts? The policy (usecases/withdrawal.ts) expunges an entrant under 50%
  *  played; applied now or later it rewrites every rival's points, so no status
- *  can be trusted. Award mode only walks pending matches over (within bounds);
- *  an expunge with nothing played left to void changes nothing. */
+ *  can be trusted. Award mode only walks pending matches over: each is one of
+ *  the departed row's unplayed fixtures, which its `remaining` already bounds
+ *  with the per-match [min, max] (and each rival's likewise), so the walkover
+ *  moves nobody outside their bounds. An expunge with nothing played left to
+ *  void changes nothing. */
 function withdrawalVoidsResults(stageId: string, kind: string, entrantId: string, fixtures: readonly QualFixture[]): boolean {
   const mine = fixtures.filter((f) => f.stage_id === stageId && seats(f, entrantId));
   const { played, pending } = tableWithdrawalInputs(entrantId, mine);
@@ -311,10 +314,22 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // P2: Swiss remaining = rounds declared − rounds with a SETTLED fixture
   // seating the entrant (a bye is one); seated-but-unplayed rounds are not
   // played. League/group: the unsettled fixtures seating the entrant.
+  //
+  // A DEPARTED entrant is not frozen (final review I1): a status-only
+  // departure (a DQ by PATCH with no cascade, a registrant's self-cancel)
+  // leaves its fixtures scheduled, and a later forfeit pays it the loser's
+  // points — above 0 where a loss pays, below 0 under `forfeit.loserPoints`.
+  // So its remaining is its unplayed fixtures here, which the engine bounds
+  // with the full per-match [min, max] like any row's (the organiser may also
+  // score them). Once they are walked over or voided it is 0. In Swiss that is
+  // the boards it already sits on, never the rounds formula: pairing seats
+  // only the field (usecases/stages.ts generateStageFixturesWrite's `active`
+  // read), so no later round will seat it.
+  const unplayed = (id: string): number => tableFx.filter((f) => !settled(f) && seats(f, id)).length;
   const remainingOf = (id: string): number =>
-    isSwiss
+    isSwiss && active.get(id) === true
       ? Math.max(0, meta.swissRounds! - new Set(tableFx.filter((f) => settled(f) && seats(f, id)).map((f) => f.round_no)).size)
-      : tableFx.filter((f) => !settled(f) && seats(f, id)).length;
+      : unplayed(id);
 
   const ordered = [...i.rows].sort(
     (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),

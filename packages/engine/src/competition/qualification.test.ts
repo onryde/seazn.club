@@ -43,15 +43,21 @@
 //  match left…" · +needs_help not open — "a Needs-help row gets one too…" (and
 //  the brute force's if-you-lose floor) · +integer-cut guard — "a cut that is
 //  not a whole number…" · +each malformed-input clause (missing / non-finite /
-//  negative / fractional count, non-finite points, withdrawn rows' count unread,
-//  their points read) — its own no-status test · +inactive row keeps its
-//  remaining — "a withdrawn rival is frozen even when…" · +helper clamp and
+//  negative / fractional count, non-finite points, a departed row's count and
+//  points read too) — its own no-status test · +helper clamp and
 //  `?? 0` — "a missing or negative count reads as no match left" · tieRival: no
 //  reverse / `i <= cut` — "below the line…"; +touching ranges `<` — "ranges
 //  that meet at one score…"; +missing-entrant guards — "null for an entrant
 //  missing…"; +overlap from the wrong end — "a rival whose range spans yours…".
 // The brute force's own generator: the old overflowing LCG (912 distinct
 // tables) reds the distinct-table floor on its own.
+// Final review I1 (2026-09-23), each alone against this file: a departed row
+// frozen again (`remainingOf` → 0 when inactive) — "a departed rival's listed
+// matches COUNT…", "a loss that PAYS…", "a loss that COSTS…"; its count
+// unvalidated again (`if (!row.active) return true` in wellFormed) — "any row
+// with no remaining count…", "a departed row's count must be…". The brute
+// force cannot see either: it seats only active rows, so every departed row
+// there has 0 left.
 import { describe, expect, it } from "vitest";
 import { generic } from "../sports/generic/index.ts";
 import { icehockey } from "../sports/icehockey/index.ts";
@@ -116,19 +122,25 @@ describe("no-status cases (stated first — an empty answer must not read as a s
   // cut 1), which does. Read leniently, each of these could print a false
   // status: a missing count reads as "final", NaN as "never reaches", −1 as
   // points taken away (B final on W with −1 left: best W − W = 0 < A's W).
-  it("an active row with no remaining count → null; a withdrawn row needs none", () => {
+  it("any row with no remaining count → null — a departed row's included", () => {
     const input = table({ A: 3 * W, B: 0 }, { cut: 1 });
     const remaining = new Map(input.remaining);
     remaining.delete("B");
     expect(qualificationStatus({ ...input, remaining })).toBeNull();
-    // Positive pair: B withdrawn is frozen at its points, so its count is not read.
-    const withdrawn = table({ A: 3 * W, B: 0 }, { cut: 1, inactive: ["B"] });
-    const noCount = new Map(withdrawn.remaining);
+    // Final review I1: a departed row is NOT frozen — its unplayed fixtures can
+    // still be forfeited and pay it points — so its count is read, and a
+    // missing one is no count (read as 0 it would be the old frozen guess).
+    const departed = table({ A: 3 * W, B: 0 }, { cut: 1, inactive: ["B"] });
+    const noCount = new Map(departed.remaining);
     noCount.delete("B");
-    expect(qualificationStatus({ ...withdrawn, remaining: noCount })?.get("A")).toEqual({
-      status: { kind: "through" },
-      ifYouLose: null,
-    });
+    expect(qualificationStatus({ ...departed, remaining: noCount })).toBeNull();
+    // Positive pair: the same departed row WITH its count shows.
+    expect(qualificationStatus(departed)?.get("A")).toEqual({ status: { kind: "through" }, ifYouLose: null });
+  });
+  it("a departed row's count must be a whole, finite, non-negative number too", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0.5]) {
+      expect(qualificationStatus(table({ A: 3 * W, B: 0 }, { cut: 1, inactive: ["B"], r: { A: 1, B: bad } }))).toBeNull();
+    }
   });
   it("a non-finite remaining count on an active row → null", () => {
     for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
@@ -172,8 +184,9 @@ describe("statuses on hand-built tables (generic 3/1/0, derived)", () => {
   it("needs help when even winning out is matched by N rivals", () => {
     expect(statusOf(table({ A: W, B: W, C: 0, D: 0 }, { cut: 2, r: 2 }), "C")).toEqual({ kind: "needs_help" });
   });
-  it("a withdrawn rival still counts, frozen at its points", () => {
-    // E (withdrawn, 3W) sits above A for good; with cut 2 only one place is left for A.
+  it("a withdrawn rival still counts, at its points and its matches left", () => {
+    // E (withdrawn, 3W, one left) can finish no lower than 3W, level with A's
+    // best: with cut 2 only one place is left for A.
     const input = table({ A: 2 * W, B: W, E: 3 * W }, { cut: 2, inactive: ["E"] });
     expect(statusOf(input, "A")).toEqual({ kind: "win_k", k: 1 });
     // Positive pair: without E, A is through (B's best 2W ≥ 2W is one rival < 2).
@@ -186,10 +199,48 @@ describe("statuses on hand-built tables (generic 3/1/0, derived)", () => {
     // Positive pair: once C cannot reach (C on 0, best W < 2W), A is Through.
     expect(statusOf(table({ A: 2 * W, B: 2 * W, C: 0 }, { cut: 2, r: { A: 0, B: 0, C: 1 } }), "A")).toEqual({ kind: "through" });
   });
-  it("a withdrawn rival is frozen even when the remaining map still lists a match for it", () => {
-    // cut 1: E (withdrawn, W) cannot reach A's final 2W. Counting E's listed
-    // match would lift E's best to W + W = 2W, level with A, and block Through.
-    expect(statusOf(table({ A: 2 * W, E: W }, { cut: 1, inactive: ["E"], r: { A: 0, E: 1 } }), "A")).toEqual({ kind: "through" });
+  it("a departed rival's listed matches COUNT: it is not frozen at its points (final review I1)", () => {
+    // cut 1: E (departed, W) still has one fixture listed — a status-only
+    // departure leaves it scheduled, and the organiser may forfeit it or score
+    // it. E's best is W + W = 2W, level with A's final 2W: not Through (R4),
+    // nobody is beyond, and A has no match left, so Needs help.
+    expect(statusOf(table({ A: 2 * W, E: W }, { cut: 1, inactive: ["E"], r: { A: 0, E: 1 } }), "A")).toEqual({ kind: "needs_help" });
+    // Positive pair: with nothing left to play E is final on W, and A is Through.
+    expect(statusOf(table({ A: 2 * W, E: W }, { cut: 1, inactive: ["E"], r: { A: 0, E: 0 } }), "A")).toEqual({ kind: "through" });
+  });
+});
+
+// Final review I1 (controller ruling): a departed row still gets no status, but
+// it is NOT frozen. A status-only departure — a DQ by PATCH with no cascade, a
+// registrant's self-cancel — leaves its fixtures scheduled; when the organiser
+// later forfeits them the departed side takes the LOSER's walkover points,
+// which can be above 0 (a loss that pays, a forfeit_loss bonus) or below it
+// (`forfeit.loserPoints`). Its unplayed fixtures are bounded with the full
+// per-match [min, max] like any row's. Every bound below is derived from the
+// module's or the rule's own declaration.
+describe("a departed row's unplayed fixtures move its points both ways", () => {
+  it("a loss that PAYS: B finished on 10, D departed on 9 with one unplayed → B is not Through", () => {
+    const pays = generic.matchPointsBounds(
+      generic.configSchema.parse({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 1 }, progressScore: false }),
+    );
+    expect(pays.lossCeil).toBeGreaterThan(0); // precondition: D's forfeit loss alone lifts it
+    expect(9 + pays.lossCeil).toBeGreaterThanOrEqual(10); // …level with B, so Through would be false
+    const scene = (dLeft: number) => table({ B: 10, D: 9, A: 3 }, { cut: 1, inactive: ["D"], r: { B: 0, D: dLeft, A: 1 }, perMatch: pays });
+    expect(statusOf(scene(1), "B")).toEqual({ kind: "needs_help" });
+    // Pair: D with nothing unplayed is final on 9 < 10, and B is Through.
+    expect(statusOf(scene(0), "B")).toEqual({ kind: "through" });
+  });
+  it("a loss that COSTS (forfeit.loserPoints −1): D departed on 10 with two unplayed, B's best 9 → B is not Out", () => {
+    const neg = pointsRuleBounds(
+      PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: -1 } }),
+    );
+    expect(neg.min).toBe(-1); // precondition, read off the rule
+    const scene = (dLeft: number) => table({ D: 10, B: 6, A: 0 }, { cut: 1, inactive: ["D"], r: { D: dLeft, B: 1, A: 1 }, perMatch: neg });
+    expect(6 + neg.max).toBe(9); // B's best
+    // D's two forfeit losses can take it to 8, below B's best 9: B is still open.
+    expect(statusOf(scene(2), "B")).toEqual({ kind: "needs_help" });
+    // Pair: D with nothing unplayed stays on 10, beyond B's best: Out.
+    expect(statusOf(scene(0), "B")).toEqual({ kind: "out" });
   });
 });
 

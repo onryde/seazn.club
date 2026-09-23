@@ -44,7 +44,10 @@ database or UI dependencies.
   - **Swiss:** `stage.config.rounds` minus the rounds the entrant has been
     seated in. A bye counts as a round played.
   - **League or pools:** the entrant's unplayed fixtures in that table.
-  - Withdrawn or disqualified entrants: `0`.
+  - Withdrawn or disqualified entrants: their unplayed fixtures in that
+    table, like a league row (amended 2026-09-23, final review I1 — originally
+    `0`). A status-only departure leaves its fixtures scheduled, and a later
+    forfeit pays it the loser's points, which can be above or below 0.
 - `perMatch`: `{ max, min }`. `max` = points for a win (a bye scores as a win,
   `awardByeDelta`). `min` = points for a loss. Both come from the stage's
   `PointsRule` (a stage override, else the division/sport points). A draw's
@@ -79,7 +82,9 @@ it can be too cautious, which R3 accepts.
 - The cut-off can't be forecast: `picks`, `bestNth`, `roundLosers`, or a
   `rankRange` that doesn't start at 1.
 - Per row, `null` for a withdrawn or disqualified entrant. That entrant still
-  counts as a rival that can gain no more points.
+  counts as a rival, bounded by its unplayed fixtures like any other
+  (amended 2026-09-23, final review I1 — it was "a rival that can gain no more
+  points", which a later forfeit can falsify).
 
 `topNPerGroup` runs the function once per pool, with `N` = that pool's quota.
 
