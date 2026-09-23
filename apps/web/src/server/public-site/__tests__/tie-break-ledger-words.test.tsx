@@ -16,7 +16,15 @@
 // football, cricket and generic cases for that surface).
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AGAINST_KEYS, DIFF_KEYS, FOR_KEYS, type StandingsRow } from "@seazn/engine/competition";
+import {
+  AGAINST_KEYS,
+  DIFF_KEYS,
+  FOR_KEYS,
+  foldResults,
+  rankStandings,
+  type FixtureResult,
+  type StandingsRow,
+} from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -90,17 +98,17 @@ describe("the ledger family of a diff/for tie-break", () => {
   it("tieBreakRule reads the row's own ledger: football, hockey, ice hockey, cricket, generic", () => {
     const msg = (k: TKey) => t(en as unknown as Dict, k);
     for (const [sport, rule, phrase] of CASES) {
-      expect(tieBreakRule(rule, msg, ledgerRow(sport, "a")), `${sport} ${rule}`).toBe(phrase);
+      expect(tieBreakRule(rule, msg, ledgerRow(sport, "a"), []), `${sport} ${rule}`).toBe(phrase);
     }
   });
 
-  it("a row with no ledger at all falls to the plain phrase, and every other rule is untouched", () => {
+  it("a table with no ledger anywhere falls to the plain phrase, and every other rule is untouched", () => {
     const msg = (k: TKey) => t(en as unknown as Dict, k);
     const bare = { ...ledgerRow("generic", "a"), metrics: {} };
-    expect(tieBreakRule("diff", msg, bare)).toBe("difference");
-    expect(tieBreakRule("for", msg, bare)).toBe("total scored");
-    expect(tieBreakRule("h2h_points", msg, ledgerRow("football", "a"))).toBe("head-to-head");
-    expect(tieBreakRule("nrr", msg, ledgerRow("cricket", "a"))).toBe("net run rate");
+    expect(tieBreakRule("diff", msg, bare, [bare])).toBe("difference");
+    expect(tieBreakRule("for", msg, bare, [bare])).toBe("total scored");
+    expect(tieBreakRule("h2h_points", msg, ledgerRow("football", "a"), [])).toBe("head-to-head");
+    expect(tieBreakRule("nrr", msg, ledgerRow("cricket", "a"), [])).toBe("net run rate");
   });
 
   it("the key the engine COMPARES decides: a cricket row a rule forfeit gave a plain `diff` reads plain", () => {
@@ -111,17 +119,17 @@ describe("the ledger family of a diff/for tie-break", () => {
     const msg = (k: TKey) => t(en as unknown as Dict, k);
     const forfeited = ledgerRow("cricket", "a");
     forfeited.metrics = { ...forfeited.metrics, for: 10, against: 0, diff: 10 };
-    expect(tieBreakRule("diff", msg, forfeited)).toBe("difference");
+    expect(tieBreakRule("diff", msg, forfeited, [])).toBe("difference");
     // Same for `for`: FOR_KEYS lists `for` before `runs_for`, so the engine
     // compares the forfeit's `for`, and the note names that. (The alias-order
     // proposal in this branch's report would reorder FOR_KEYS; this pin flips
     // with it, to "runs scored".)
-    expect(tieBreakRule("for", msg, forfeited)).toBe("total scored");
+    expect(tieBreakRule("for", msg, forfeited, [])).toBe("total scored");
     // Each rule reads ITS OWN alias first, then the others: a row whose `for`
     // resolves to runs but whose difference is the plain key names each.
     const split = { ...ledgerRow("cricket", "a"), metrics: { runs_for: 7, runs_against: 3, diff: 4 } };
-    expect(tieBreakRule("diff", msg, split)).toBe("difference");
-    expect(tieBreakRule("for", msg, split)).toBe("runs scored");
+    expect(tieBreakRule("diff", msg, split, [])).toBe("difference");
+    expect(tieBreakRule("for", msg, split, [])).toBe("runs scored");
   });
 });
 
@@ -172,5 +180,95 @@ describe("the tie note says the sport's word — on the hub and on the division 
       expect(hubNote("football", "diff", dict), locale).toBe(frame(d[LEDGER_RULE_MSG_KEYS.diff.goals]!));
       expect(hubNote("cricket", "for", dict), locale).toBe(frame(d[LEDGER_RULE_MSG_KEYS.for.runs]!));
     }
+  });
+});
+
+// ── A row with no ledger of its own (review m1) ────────────────────────────
+//
+// An entrant yet to play records NO ledger key (`zeroRow` folds from `{}`),
+// so its own row cannot say which sport's word the tie was split on. Hockey,
+// round 1 of five: A 2–1 B, C 3–1 D, E sits out. B, D and E all have 0
+// points and the default cascade splits them on `diff` — B −1, D −2, E none
+// (an absent value ranks below a recorded one). E's partners were compared on
+// `gd`, so E's note says "goal difference" like theirs. (The review named it
+// "a bye row"; a real award bye folds `gd: 0` and 3 points through the
+// module's own delta, so the ledgerless row is the entrant with no fixture.)
+describe("a tied row with no ledger reads its partners' word", () => {
+  const HOCKEY = moduleOf("hockey");
+  /** One side of a result, carrying every ledger key hockey's delta writes. */
+  const side = (entrantId: string, gf: number, ga: number): FixtureResult[number] => ({
+    entrantId,
+    played: 1,
+    won: gf > ga ? 1 : 0,
+    drawn: 0,
+    lost: gf < ga ? 1 : 0,
+    points: gf > ga ? 3 : 0,
+    metrics: { ...Object.fromEntries(HOCKEY.metrics.map((m) => [m.key, 0])), gf, ga, gd: gf - ga },
+  });
+  const RESULTS: FixtureResult[] = [
+    [side("A", 2, 1), side("B", 1, 2)],
+    [side("C", 3, 1), side("D", 1, 3)],
+  ];
+  const ranked = () =>
+    rankStandings(foldResults(["A", "B", "C", "D", "E"], RESULTS), {
+      cascade: HOCKEY.defaultTiebreakers,
+      results: RESULTS,
+    }).rows;
+
+  it("premise: the real fold and ranking leave E ledgerless, split from B and D on diff", () => {
+    const rows = ranked();
+    const e = rows.find((r) => r.entrantId === "E")!;
+    expect(e.metrics).toEqual({});
+    expect(e.points).toBe(0);
+    expect(e.tieBreak?.key).toBe("diff");
+    expect(e.tieBreak?.with).toEqual(expect.arrayContaining(["B", "D"]));
+    expect(rows.map((r) => r.entrantId)).toEqual(["C", "A", "B", "D", "E"]);
+  });
+
+  it("hub and division page: E's note says goal difference, like B's and D's", () => {
+    const rows = ranked();
+    const names = { A: "Ash", B: "Birch", C: "Cedar", D: "Dogwood", E: "Elm" };
+    const hub = buildTableView({
+      id: "t",
+      division: { id: "d1", slug: "div", name: "Div" },
+      caption: "League",
+      fullHref: "/x",
+      metricSpecs: HOCKEY.metrics,
+      cascade: HOCKEY.defaultTiebreakers,
+      rows,
+      entrantNames: names,
+      entrantLogos: {},
+      entrantColours: {},
+      championId: null,
+      updatedAt: "2026-09-24T10:00:00Z",
+      msg: (k, v) => t(en as unknown as Dict, k, v),
+    });
+    const notes = Object.fromEntries(hub.rows.map((r) => [r.entrantId, r.tieBreakText]));
+    for (const id of ["B", "D", "E"]) expect(notes[id], id).toMatch(/split on goal difference$/);
+    const html = renderToStaticMarkup(
+      <StandingsTable
+        rows={rows}
+        metricSpecs={HOCKEY.metrics}
+        cascade={HOCKEY.defaultTiebreakers}
+        entrantNames={names}
+        dict={en as unknown as Dict}
+      />,
+    );
+    expect(html).not.toMatch(/split on difference</);
+    expect(html).toContain(">Tied with Birch, Dogwood — split on goal difference</span>");
+  });
+
+  it("the partner decides before the rest of the table: a partner on the plain ledger reads plain", () => {
+    // A football table where P's only result was a stage rule's scored
+    // walkover (`for`/`against`/`diff` only) and E has played nothing: the
+    // engine compared P's plain `diff` with E's absent one.
+    const msg = (k: TKey) => t(en as unknown as Dict, k);
+    const X = ledgerRow("football", "X");
+    const P = { ...ledgerRow("football", "P"), metrics: { for: 0, against: 3, diff: -3 } };
+    const E = { ...ledgerRow("football", "E"), metrics: {}, tieBreak: { key: "diff", with: ["P"] } };
+    expect(tieBreakRule("diff", msg, E, [X, P, E])).toBe("difference");
+    // …and with no partner that records anything, the table's first ledger.
+    const lone = { ...E, tieBreak: { key: "diff", with: ["nobody"] } };
+    expect(tieBreakRule("diff", msg, lone, [X, P, E])).toBe("goal difference");
   });
 });

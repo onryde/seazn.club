@@ -161,7 +161,7 @@ export function StandingsTable({
     row.tieBreak
       ? msg("table.tieBreak", {
           with: row.tieBreak.with.map((id) => entrantNames[id] ?? "—").join(", "),
-          rule: tieBreakRule(row.tieBreak.key, msg, row),
+          rule: tieBreakRule(row.tieBreak.key, msg, row, rows),
         })
       : null;
 
