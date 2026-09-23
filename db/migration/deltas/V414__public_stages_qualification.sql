@@ -37,7 +37,10 @@
 -- Every jsonb number is read through a guard (`jsonb_typeof = 'number'` plus a
 -- digits-only match) inside CASE, and a `take` that is not an array reads as a
 -- malformed rule: the view feeds three public pages, and one bad value must
--- cost that stage its cut, not 500 all three (spec-review F4).
+-- cost that stage its cut, not 500 all three (spec-review F4). A `sources`
+-- that is not an array (final review M1) is read as no sources: which stage
+-- it names cannot be read, so it can add no rule, and the engine cannot parse
+-- that progression either, so its destination seeds nobody from it.
 --
 -- SECURITY DEFINER with a pinned search_path, like org_has_feature (V344). A
 -- function called from a view runs as the CALLER. The public pages read
@@ -101,7 +104,10 @@ returns table (
            count(*) over (partition by d.id) as dest_rules
     from src
     join stages d on d.division_id = src.division_id and d.progression is not null
-    cross join lateral jsonb_array_elements(d.progression -> 'sources') as so(value)
+    cross join lateral jsonb_array_elements(
+      case when jsonb_typeof(d.progression -> 'sources') = 'array' then d.progression -> 'sources'
+           else '[]'::jsonb end
+    ) as so(value)
     cross join lateral jsonb_array_elements(
       case when jsonb_typeof(so.value -> 'take') = 'array' then so.value -> 'take'
            else '[null]'::jsonb end

@@ -535,6 +535,84 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     }
   });
 
+  // Final review M1: `jsonb_array_elements` raises on an object or a scalar,
+  // and the view is read by the division page, the hub and the embed alike —
+  // an unguarded `sources` would 500 all three. Today that shape cannot be
+  // stored: `stages_progression_shape_chk` (V371/V373) refuses any `sources`
+  // that is not a non-empty array, so V414's guard is defence in depth for the
+  // day that CHECK changes. The first case pins that premise; the second
+  // stores the shape anyway, with the CHECK dropped inside a transaction that
+  // is rolled back, and proves the function reads it as no sources.
+  it("a non-array `sources` never reaches the view — the progression CHECK refuses it", async () => {
+    const d = await division();
+    await createStages(d.auth, d.divisionId, [
+      { seq: 1, kind: "league", name: "League", config: {} },
+      { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 4 }]) },
+    ] as never);
+    const bad: unknown[] = [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }, 4, "previous"];
+    for (const sources of bad) {
+      await expect(
+        sql`update stages set progression = jsonb_set(progression, '{sources}', ${sql.json(sources as never)})
+            where division_id = ${d.divisionId} and seq = 2`,
+        JSON.stringify(sources),
+      ).rejects.toMatchObject({ code: "23514", constraint_name: "stages_progression_shape_chk" });
+    }
+    // What the CHECK does let through — an array whose items are not source
+    // objects — names no stage: no cut, and no error.
+    for (const sources of [[1], ["previous"], [null]]) {
+      await sql`update stages set progression = jsonb_set(progression, '{sources}', ${sql.json(sources as never)})
+                where division_id = ${d.divisionId} and seq = 2`;
+      expect(await cuts(d.divisionId), JSON.stringify(sources)).toEqual([
+        ["League", null, false, null],
+        ["KO", null, false, null],
+      ]);
+    }
+  });
+
+  it("…and were one stored (CHECK dropped in a rolled-back transaction), the view reads it as no sources: no cut, never an error", async () => {
+    const d = await division();
+    await createStages(d.auth, d.divisionId, [
+      { seq: 1, kind: "league", name: "League", config: {} },
+      { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 4 }]) },
+    ] as never);
+    expect(await cuts(d.divisionId), "positive control").toEqual([
+      ["League", 4, false, "KO"],
+      ["KO", null, false, null],
+    ]);
+    const ROLLBACK = new Error("rollback: the CHECK stays");
+    const seen: unknown[] = [];
+    const badSources: [unknown, string][] = [
+      [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }, "object"],
+      [4, "number"],
+      ["previous", "string"],
+    ];
+    await expect(
+      sql.begin(async (tx) => {
+        // Fail fast rather than queue behind a sibling suite's lock on stages.
+        await tx`set local lock_timeout = '5s'`;
+        await tx`alter table stages drop constraint stages_progression_shape_chk`;
+        for (const [sources, type] of badSources) {
+          await tx`update stages set progression = jsonb_set(progression, '{sources}', ${tx.json(sources as never)})
+                   where division_id = ${d.divisionId} and seq = 2`;
+          const [stored] = await tx<{ t: string }[]>`
+            select jsonb_typeof(progression -> 'sources') as t from stages where division_id = ${d.divisionId} and seq = 2`;
+          const rows = await tx<{ name: string; qualify_count: number | null; next_stage_name: string | null }[]>`
+            select name, qualify_count, next_stage_name from public_stages_v where division_id = ${d.divisionId} order by seq`;
+          seen.push([stored!.t, rows.map((r) => [r.name, r.qualify_count, r.next_stage_name])]);
+          expect(stored!.t, "premise: the value landed as written").toBe(type);
+        }
+        throw ROLLBACK;
+      }),
+    ).rejects.toBe(ROLLBACK);
+    const none = [["League", null, null], ["KO", null, null]];
+    expect(seen).toEqual(badSources.map(([, type]) => [type, none]));
+    // The rollback restored the CHECK: the same write is refused again.
+    await expect(
+      sql`update stages set progression = jsonb_set(progression, '{sources}', ${sql.json({ stage: "previous" } as never)})
+          where division_id = ${d.divisionId} and seq = 2`,
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
   // A take that is not an array is doubt, not "takes nobody": the engine
   // would throw on it, so it must not quietly leave a neighbour's clean cut
   // standing as the only rule.
