@@ -5,13 +5,15 @@
 # WHY THIS EXISTS: `E2E_REQUIRE_REALTIME=1` has always been honoured
 # (apps/web/e2e/realtime-propagation-kit.ts) and has never been set by
 # anything — `grep -rn E2E_REQUIRE_REALTIME .github/` returns nothing, still
-# true 2026-09-23. CI cannot help: it builds against a stub Supabase host
-# (`NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"`, e2e.yml) and mints
-# realtime tokens with a "CI-only dummy keypair (kid e2e-ci-dummy-es256) —
-# generated for this workflow, never imported into a real Supabase JWKS"
-# (e2e.yml, in all three e2e jobs). So without this script nothing anywhere
-# can tell a working channel from a 15-second poll, and a realtime regression
-# reads as green.
+# true 2026-09-23. CI cannot help: all three e2e jobs build against a stub
+# Supabase host (`NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"`, three
+# occurrences in e2e.yml) and all three sign with the same "CI-only dummy
+# keypair (kid e2e-ci-dummy-es256)" (three occurrences). Only the first spells
+# out why it can never work — "generated for this workflow, never imported
+# into a real Supabase JWKS" — so that sentence appears ONCE even though the
+# condition it describes holds for every job. So without this script nothing
+# anywhere can tell a working channel from a 15-second poll, and a realtime
+# regression reads as green.
 #
 # THE ONE THING EVERY HAND-ROLLED VERSION GETS WRONG: the server must be
 # started with the ROOT .env.local as well. seazn-env.sh passes only
