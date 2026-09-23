@@ -25,10 +25,17 @@
 //
 // Cropped screenshots of the standings panel with a popover open are written
 // to this test's own output directory (`testInfo.outputPath`).
+//
+// Plan Task 8 adds the competition hub: the Table tab at the same three widths
+// (the same four measurements, plus the cut row's own geometry — under the hub
+// table's `table-fixed`, a cut cell spanning more columns than the header
+// shows crushes the name column, so the row must span exactly the table at
+// each width, folded and unfolded), and the Overview's preview at 320, which
+// keeps the markers and the line but drops the legend (controller ruling OQ3).
 import { expect, test, type APIRequestContext, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { TAG, addEntrantsViaApi, apiJson, expectNoHorizontalScroll, scoreFixture } from "./helpers";
 import { closeOpenContexts } from "./spectator-public-helpers";
-import { API_CALL_MS, FLOOR_MS, activeOrgSlug, dictString, division, publicCompetition, spectator } from "./spectator-w2-kit";
+import { API_CALL_MS, FLOOR_MS, activeOrgSlug, dictString, division, publicCompetition, scheduleFixture, spectator } from "./spectator-w2-kit";
 
 test.describe.configure({ mode: "serial" });
 
@@ -54,14 +61,16 @@ interface FixtureRow {
 interface Seed {
   divisionPath: string;
   embedPath: string;
+  hubPath: string;
 }
 let seed: Seed;
 let seedContext: BrowserContext | undefined;
 
 test.beforeAll(async ({ browser }) => {
   // org, competition, division + read, two stages, entrants, generate, start,
-  // list = 10; twelve results at two calls each; a few standings polls.
-  test.setTimeout(Math.max(FLOOR_MS, (10 + 12 * 2 + 6) * API_CALL_MS));
+  // list = 10; twelve results at two calls each; one kick-off; a few
+  // standings polls.
+  test.setTimeout(Math.max(FLOOR_MS, (10 + 12 * 2 + 1 + 6) * API_CALL_MS));
   seedContext = await browser.newContext();
   const request: APIRequestContext = seedContext.request;
   const org = await activeOrgSlug(request);
@@ -115,6 +124,10 @@ test.beforeAll(async ({ browser }) => {
     const margin = Math.abs(home - away);
     await scoreFixture(request, f.id, home > away ? 1 + margin : 1, home > away ? 1 : 1 + margin);
   }
+  // One last-round match gets a kick-off a week out. The hub's Overview
+  // previews its tables only once something is NEXT UP: with nothing
+  // scheduled it sits on its dates rung, which shows no tables at all.
+  await scheduleFixture(request, last[0]!.id, new Date(Date.now() + 7 * 86_400_000).toISOString());
   // The standings fold runs after each result commits; the public page reads
   // the snapshot, and a snapshot that trails its fixtures shows no status.
   await expect
@@ -130,6 +143,7 @@ test.beforeAll(async ({ browser }) => {
   seed = {
     divisionPath: `/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`,
     embedPath: `/embed/divisions/${div.id}/standings`,
+    hubPath: `/shared/${org.slug}/${competition.slug}`,
   };
 });
 
@@ -329,4 +343,191 @@ test("the embedded standings widget at 320: cut line, markers and an open popove
   await expect(panel.getByTestId("qual-headline")).toBeVisible();
   await cropped(page, testInfo.outputPath("embed-standings-qual-320.png"), [block, panel]);
   console.log(`MEASURED ${JSON.stringify({ embed: 320, ...widths, hit })}`);
+});
+
+// ── The competition hub (plan Task 8) ─────────────────────────────────────
+
+/** The hub standings table that carries the cut — one division, one league
+ *  stage, so exactly one on either tab. */
+const hubTable = (page: Page, prefix: string) =>
+  page.locator(`section[data-testid^="${prefix}"]`).filter({ has: page.getByTestId("qual-cut") });
+
+const r1 = (n: number) => Math.round(n * 10) / 10;
+
+/** The cut row against the table it sits in: how many columns its VISIBLE
+ *  cells span against how many the header shows, the horizontal extent of
+ *  those cells against the table's own box, and the name column's width. */
+async function cutGeometry(table: Locator) {
+  return table.locator("table").evaluate((t) => {
+    const shown = (el: Element) => getComputedStyle(el).display !== "none";
+    const cut = t.querySelector('[data-testid="qual-cut"]')!;
+    const cells = [...cut.children].filter(shown) as HTMLTableCellElement[];
+    const rects = cells.map((c) => c.getBoundingClientRect());
+    const box = t.getBoundingClientRect();
+    return {
+      headerCols: [...t.querySelectorAll("thead th")].filter(shown).length,
+      cutCols: cells.reduce((n, c) => n + c.colSpan, 0),
+      table: [box.left, box.right],
+      cut: [Math.min(...rects.map((r) => r.left)), Math.max(...rects.map((r) => r.right))],
+      name: t.querySelector("thead th:nth-child(2)")!.getBoundingClientRect().width,
+    };
+  });
+}
+
+/** A cut cell spanning more columns than the header shows makes grid
+ *  columns the header never sized, and `table-fixed` shares the remainder
+ *  with them — the name column went 88px → 29px in Chromium at 320. */
+function expectCutSpansTable(g: Awaited<ReturnType<typeof cutGeometry>>) {
+  expect(g.cutCols, "the cut row spans a different number of columns than the header shows").toBe(g.headerCols);
+  expect(Math.abs(g.cut[0]! - g.table[0]!), "the cut row starts inside the table").toBeLessThanOrEqual(1);
+  expect(Math.abs(g.cut[1]! - g.table[1]!), "the cut row stops short of the table's end").toBeLessThanOrEqual(1);
+  expect(g.name, "the name column fell below its 96px floor").toBeGreaterThanOrEqual(96);
+}
+
+const hubShots: Record<number, string[]> = {};
+
+for (const width of [1280, 768, 320] as const) {
+  test(`hub Table tab at ${width}: markers, cut line and legend fit, the cut row spans the table, the rank is a 40px target`, async ({ browser }, testInfo) => {
+    const page = await spectator(browser, { width, height: 900 });
+    await openWithCut(page, `${seed.hubPath}?tab=table`);
+    await expect(page.getByTestId("mh-tab-panel-table"), "?tab=table opened a different tab").toBeVisible();
+    const table = hubTable(page, "mh-table-");
+    await expect(table).toHaveCount(1);
+    const region = table.locator('[role="region"]');
+    await expect(table.getByTestId("qual-legend")).toContainText(dictString("en", "table.qual.legend.open"));
+
+    // Premise: every marker kind, as on the division page.
+    const kinds = await table.locator("tbody [data-qual-marker]").evaluateAll((els) =>
+      [...new Set(els.map((e) => e.getAttribute("data-qual-marker")))].sort(),
+    );
+    expect(kinds).toEqual(["needs_help", "out", "through", "win_k"]);
+
+    // 1. No sideways page scroll; the cut row spans exactly the table.
+    const widths = await pageWidths(page);
+    await expectNoHorizontalScroll(page);
+    const geometry = [await cutGeometry(table)];
+    expectCutSpansTable(geometry[0]!);
+
+    // 2. Every rank trigger is a 40px target (±19.5 at a phone width).
+    const triggers = table.getByRole("button", { name: /^Rank \d+,/ });
+    await expect(triggers).toHaveCount(6);
+    const hits = [];
+    for (const button of await triggers.all()) {
+      const hit = await hitTest(button, width < 768 ? 19.5 : 0);
+      hits.push(hit);
+      expect(hit.inside, `${hit.label}: a tap there misses the trigger (${hit.width}×${hit.height})`).toEqual(
+        hit.inside.map(() => true),
+      );
+    }
+
+    // The tied row's ONE popover: status, tie note, inside the scroll box.
+    const tied = table.locator('button[data-testid*="-tie-"]').first();
+    await expect(tied).toBeVisible();
+    await expect(tied, "the tied row's trigger is the qualification one").toHaveAttribute("aria-label", /^Rank \d+,/);
+    await tied.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    const tiedPanel = await open(page, tied);
+    await expect(tiedPanel.getByTestId("qual-headline")).toBeVisible();
+    await expect(tiedPanel.getByTestId("qual-tie-note")).toBeVisible();
+    const [box0, pop0] = await Promise.all([region.boundingBox(), tiedPanel.boundingBox()]);
+    // Recorded, not asserted: a panel with room on neither side of its row is
+    // clamped to the roomier one and scrolls inside itself (the shared
+    // popover's rule). The hub's caption sits OUTSIDE its scroll box, so a
+    // short table leaves a middle row less room than the division page does.
+    const tiedFit = await tiedPanel.evaluate((el) => ({
+      side: el.dataset.side ?? "down",
+      height: Math.round(el.clientHeight),
+      content: el.scrollHeight,
+      clamped: el.scrollHeight > el.clientHeight + 1,
+    }));
+    expect(pop0!.y, "the panel is clipped at the top of the box").toBeGreaterThanOrEqual(box0!.y - 0.5);
+    expect(pop0!.y + pop0!.height, "the panel is clipped at the bottom of the box").toBeLessThanOrEqual(box0!.y + box0!.height + 0.5);
+    expect(pop0!.x + pop0!.width, "the panel runs out of the box on the right").toBeLessThanOrEqual(box0!.x + box0!.width + 0.5);
+    await cropped(page, testInfo.outputPath(`hub-table-${width}.png`), [table, tiedPanel]);
+    await page.keyboard.press("Escape");
+    await expect(tiedPanel).toBeHidden();
+
+    // 3. The last row opens UPWARD, inside the box.
+    const lastRow = triggers.last();
+    await lastRow.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    const lastPanel = await open(page, lastRow);
+    const [box, pop, btn] = await Promise.all([
+      region.boundingBox(),
+      lastPanel.boundingBox(),
+      lastRow.locator("xpath=..").boundingBox(),
+    ]);
+    expect(pop!.y + pop!.height, "the last row's panel hangs below its trigger").toBeLessThanOrEqual(btn!.y + 0.5);
+    expect(pop!.y, "the last row's panel is clipped at the top of the box").toBeGreaterThanOrEqual(box!.y - 0.5);
+    await cropped(page, testInfo.outputPath(`hub-table-${width}-last-row.png`), [table, lastPanel]);
+    await page.keyboard.press("Escape");
+
+    // A phone folds the long tail; unfolded, the cut row must follow it.
+    if (width < 768) {
+      const more = table.locator('[data-testid$="-more"]');
+      await expect(more, "premise: the table has a long tail to unfold").toBeVisible();
+      await more.click();
+      await expect(more).toHaveAttribute("aria-expanded", "true");
+      const unfolded = await cutGeometry(table);
+      expect(unfolded.headerCols, "premise: unfolding shows more columns").toBeGreaterThan(geometry[0]!.headerCols);
+      expectCutSpansTable(unfolded);
+      geometry.push(unfolded);
+      await expectNoHorizontalScroll(page);
+      await more.click();
+      await expect(more).toHaveAttribute("aria-expanded", "false");
+    }
+
+    hubShots[width] = await controlSet(table);
+    const measured = {
+      hub: width,
+      ...widths,
+      hits,
+      geometry: geometry.map((g) => ({ ...g, table: g.table.map(r1), cut: g.cut.map(r1), name: r1(g.name) })),
+      lastPanel: { panel: pop, trigger: btn, box },
+      tiedFit,
+      controls: hubShots[width],
+    };
+    await testInfo.attach(`hub-measurements-${width}.json`, { body: JSON.stringify(measured, null, 1), contentType: "application/json" });
+    console.log(`MEASURED ${JSON.stringify(measured)}`);
+  });
+}
+
+test("the hub's phone shows the same controls as its desktop: markers, cut line, trigger names and legend", () => {
+  expect(hubShots[320], "the 320 leg did not run").toBeDefined();
+  expect(hubShots[1280], "the 1280 leg did not run").toBeDefined();
+  expect(hubShots[320]).toEqual(hubShots[1280]);
+  expect(hubShots[768]).toEqual(hubShots[1280]);
+});
+
+test("the hub Overview's preview at 320: markers and the cut line, NO legend, no sideways scroll", async ({ browser }, testInfo) => {
+  const page = await spectator(browser, { width: 320, height: 900 });
+  await openWithCut(page, seed.hubPath);
+  const preview = hubTable(page, "mh-table-preview-");
+  await expect(preview).toHaveCount(1);
+  // OQ3: the teaser keeps its markers and its line; the key to them is one
+  // tap away on the Table tab.
+  await expect(page.getByTestId("qual-legend")).toHaveCount(0);
+  const rows = preview.locator("tbody tr[data-qual]");
+  await expect(rows).toHaveCount(3);
+  await expect(preview.locator("tbody [data-qual-marker]")).toHaveCount(3);
+
+  const widths = await pageWidths(page);
+  await expectNoHorizontalScroll(page);
+  const geometry = await cutGeometry(preview);
+  expectCutSpansTable(geometry);
+
+  const triggers = preview.getByRole("button", { name: /^Rank \d+,/ });
+  await expect(triggers).toHaveCount(3);
+  const hits = [];
+  for (const button of await triggers.all()) {
+    const hit = await hitTest(button, 19.5);
+    hits.push(hit);
+    expect(hit.inside, `${hit.label}: a tap there misses the trigger (${hit.width}×${hit.height})`).toEqual(
+      hit.inside.map(() => true),
+    );
+  }
+  const first = triggers.first();
+  await first.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  const panel = await open(page, first);
+  await expect(panel.getByTestId("qual-headline")).toBeVisible();
+  await cropped(page, testInfo.outputPath("hub-overview-320.png"), [preview, panel]);
+  console.log(`MEASURED ${JSON.stringify({ overview: 320, ...widths, hits, geometry: { ...geometry, table: geometry.table.map(r1), cut: geometry.cut.map(r1), name: r1(geometry.name) } })}`);
 });
