@@ -62,12 +62,14 @@ export interface RoundPlacement {
 }
 
 /**
- * Role -> the schedule board's SHORT round code ("QF", "R16", "WB2", "3rd"),
- * via `bracket.roundShort.*` so a locale can abbreviate its own way; or `null`
- * for a role the board keeps as its plain `R{round_no}` chip (round-robin
- * ordinals, stepladder rungs, and the page-playoff roles, which are a
- * follow-up — the board payload carries no `ext_key`, and Qualifier 1 and the
- * Eliminator are told apart by nothing else).
+ * Role -> the schedule board's SHORT round code ("QF", "R16", "WB2", "3rd",
+ * "Q1", "E", "E2"), via `bracket.roundShort.*` so a locale can abbreviate its
+ * own way; or `null` for a role the board keeps as its plain `R{round_no}` chip
+ * (a round-robin ordinal).
+ *
+ * Page playoff (2026-09-23, owner-approved): Qualifier 1, the Eliminator and
+ * Qualifier 2 read Q1 / E / Q2, its final the shared F. A stepladder's rung n
+ * reads E{n} — the role's own `n`, the engine's rung number — and its final F.
  *
  * Exhaustive over `RoundRole`: a new role kind fails typecheck here until it
  * is given a code or an explicit `null`.
@@ -107,9 +109,13 @@ export function roundRoleShort(msg: Msg, role: RoundRole, at: RoundPlacement): s
     case "third_place":
       return msg("bracket.roundShort.thirdPlace");
     case "qualifier1":
+      return msg("bracket.roundShort.qualifier1");
     case "eliminator":
+      return msg("bracket.roundShort.eliminator");
     case "qualifier2":
+      return msg("bracket.roundShort.qualifier2");
     case "rung":
+      return msg("bracket.roundShort.rung", { n: role.n });
     case "plain_round":
       return null;
   }
@@ -122,9 +128,16 @@ export function roundRoleShort(msg: Msg, role: RoundRole, at: RoundPlacement): s
  * round is "Winners' round {n}" (its final "Winners' final"), never the
  * single-elimination "Quarter-finals"/"Semi-finals" `roundRole()` hands it —
  * the chip already says WB2 because the winners' semi is not the tournament's,
- * and the name beside it must not say otherwise. Every other role — single
- * elimination, the losers' lane, the grand final — is `roundRoleLabel`'s,
- * verbatim, which is what every other bracket surface prints.
+ * and the name beside it must not say otherwise.
+ *
+ * A stepladder rung is "Eliminator {n}" here (board playoff codes, 2026-09-23):
+ * its chip reads E{n}, and "E2 Rung 2" would explain the code with a word it
+ * does not abbreviate. Board-only — `bracket.round.rung` ("Rung {n}") is still
+ * what the bracket view and the public site print.
+ *
+ * Every other role — single elimination, the page playoff, the losers' lane,
+ * the grand final — is `roundRoleLabel`'s, verbatim, which is what every other
+ * bracket surface prints.
  */
 export function roundRoleBoardLabel(msg: Msg, role: RoundRole, at: RoundPlacement): string {
   if (at.lane === "WB" && role.kind !== "third_place") {
@@ -132,6 +145,7 @@ export function roundRoleBoardLabel(msg: Msg, role: RoundRole, at: RoundPlacemen
       ? msg("bracket.round.winnersFinal")
       : msg("bracket.round.winnersRound", { n: at.roundInLane + 1 });
   }
+  if (role.kind === "rung") return msg("bracket.round.eliminatorN", { n: role.n });
   return roundRoleLabel(msg, role);
 }
 

@@ -196,16 +196,34 @@ describe("roundRoleShort", () => {
     expect(codeAt(league, 3, null, "league")).toBeNull(); // NOT "F" — a league's last round is no final
   });
 
-  it("page-playoff, stepladder-rung and plain roles are out of scope: null", () => {
-    for (const role of [
-      ONE_OF_EACH.qualifier1,
-      ONE_OF_EACH.eliminator,
-      ONE_OF_EACH.qualifier2,
-      ONE_OF_EACH.rung,
-      ONE_OF_EACH.plain_round,
-    ]) {
-      expect(roundRoleShort(en, role, { lane: null, roundInLane: 0 }), role.kind).toBeNull();
-    }
+  // Board playoff codes (2026-09-23, owner-approved): the page playoff reads
+  // Q1 / E / Q2 (its final is the shared F), a stepladder's rung n reads E{n}.
+  it("page-playoff roles read Q1, E, Q2 — each from its own dictionary key", () => {
+    expect(roundRoleShort(en, ONE_OF_EACH.qualifier1, { lane: null, roundInLane: 0 })).toBe(
+      en("bracket.roundShort.qualifier1"),
+    );
+    expect(roundRoleShort(en, ONE_OF_EACH.eliminator, { lane: null, roundInLane: 0 })).toBe(
+      en("bracket.roundShort.eliminator"),
+    );
+    expect(roundRoleShort(en, ONE_OF_EACH.qualifier2, { lane: null, roundInLane: 1 })).toBe(
+      en("bracket.roundShort.qualifier2"),
+    );
+    expect(["Q1", "E", "Q2"]).toEqual([
+      en("bracket.roundShort.qualifier1"),
+      en("bracket.roundShort.eliminator"),
+      en("bracket.roundShort.qualifier2"),
+    ]);
+  });
+
+  it("a stepladder rung reads E{n} off the ROLE's own n — never its roundInLane", () => {
+    // The placement's roundInLane is deliberately a different number: the code
+    // must carry the rung the engine named, not a rank the caller passed.
+    expect(roundRoleShort(en, { kind: "rung", n: 3 }, { lane: null, roundInLane: 7 })).toBe("E3");
+    expect(roundRoleShort(en, { kind: "rung", n: 1 }, { lane: null, roundInLane: 0 })).toBe("E1");
+  });
+
+  it("a round-robin ordinal stays uncoded: null", () => {
+    expect(roundRoleShort(en, ONE_OF_EACH.plain_round, { lane: null, roundInLane: 0 })).toBeNull();
   });
 
   for (const locale of LOCALES) {
@@ -309,6 +327,26 @@ describe("roundRoleBoardLabel", () => {
     expect(labelAt(ko8, 3, null, "knockout", { third_place: true }).label).toBe(en("bracket.round.thirdPlace"));
   });
 
+  // Board playoff codes (2026-09-23): a stepladder rung's chip reads E{n}, so the
+  // name beside it on the BOARD is "Eliminator {n}" — while every other bracket
+  // surface keeps roundRoleLabel's "Rung {n}" (bracket.round.rung is untouched).
+  it("stepladder: a rung is 'Eliminator {n}' on the board, and still 'Rung {n}' everywhere else", () => {
+    const ladder = [1, 2, 3].map((round_no) => ({ round_no, lane: null }));
+    const rung2 = labelAt(ladder, 2, null, "stepladder");
+    expect(rung2.role).toEqual({ kind: "rung", n: 2 });
+    expect(rung2.label).toBe(en("bracket.round.eliminatorN", { n: 2 }));
+    expect(rung2.label).toBe("Eliminator 2");
+    // The wrong answer this replaces, and the other surfaces' unchanged name.
+    expect(roundRoleLabel(en, rung2.role)).toBe("Rung 2");
+    expect(labelAt(ladder, 3, null, "stepladder").label).toBe(en("bracket.round.final"));
+  });
+
+  it("page playoff: the long names are roundRoleLabel's — Qualifier 1, Eliminator, Qualifier 2", () => {
+    for (const kind of ["qualifier1", "eliminator", "qualifier2"] as const) {
+      expect(roundRoleBoardLabel(en, { kind }, { lane: null, roundInLane: 0 })).toBe(roundRoleLabel(en, { kind }));
+    }
+  });
+
   for (const locale of LOCALES) {
     it(`${locale}: every role in every lane resolves to a real dictionary string`, () => {
       const lookup = (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars);
@@ -323,6 +361,10 @@ describe("roundRoleBoardLabel", () => {
         { kind: "grand_final" },
         { kind: "grand_final_reset" },
         { kind: "third_place" },
+        { kind: "qualifier1" },
+        { kind: "eliminator" },
+        { kind: "qualifier2" },
+        { kind: "rung", n: 2 },
       ];
       for (const role of roles) {
         for (const lane of [null, "WB", "LB", "GF"] as const) {

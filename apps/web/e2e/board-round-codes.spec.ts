@@ -59,7 +59,7 @@ async function addDivision(
   request: APIRequestContext,
   competitionId: string,
   name: string,
-  stage: { kind: "knockout" | "league"; name: string; config?: Record<string, unknown> },
+  stage: { kind: "knockout" | "league" | "page_playoff" | "stepladder"; name: string; config?: Record<string, unknown> },
   names: string[],
   courtIds: string[],
 ): Promise<{ divisionId: string; fixtures: ListedFixture[] }> {
@@ -358,5 +358,140 @@ test.describe("schedule board — knockout codes beside a round-robin division",
     );
     await expectNoHorizontalScroll(page);
     await shootBoard(page, testInfo.outputPath("v2-division-1280.png"), 760);
+  });
+});
+
+test.describe("schedule board — page playoff and stepladder codes beside a knockout", () => {
+  // Board playoff codes (2026-09-23, owner-approved): a page playoff reads
+  // Q1 / E / Q2 / F and a stepladder E1 / E2 / F, on ONE competition board with
+  // a knockout (SF / F) — the page playoff's codes ride the one new column on
+  // the board read (`ext_key`, page-playoff rows only), so this is the seam
+  // proven end to end. The legend lists each format's rounds as one run, then
+  // the shared F once.
+  test("competition board: Q1/E/Q2/F and E1/E2/F chips, playoff placeholders, one legend in bracket order", async ({
+    page,
+  }, testInfo) => {
+    const request = page.request;
+    const competitionId = await createCompetition(request);
+    const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B", "Court C"]);
+    const courtIds = courts.map((c) => c.id);
+    const pp = await addDivision(
+      request,
+      competitionId,
+      "Page Playoff",
+      { kind: "page_playoff", name: "Playoffs" },
+      ["Ash", "Brook", "Clay", "Dune"],
+      courtIds,
+    );
+    const sl = await addDivision(
+      request,
+      competitionId,
+      "Stepladder",
+      { kind: "stepladder", name: "Ladder" },
+      ["Elm", "Fern", "Glen", "Heath"],
+      courtIds,
+    );
+    const ko = await addDivision(
+      request,
+      competitionId,
+      "Knockout",
+      { kind: "knockout", name: "Knockout" },
+      ["Iris", "Juno", "Kira", "Lune"],
+      courtIds,
+    );
+    // The generators' shapes: a page playoff is Q1 (1·1) and the Eliminator
+    // (1·2) sharing round 1, then Q2, then the final; a 4-stepladder is three
+    // single-match rounds; a 4-knockout two semis and a final.
+    expect(pp.fixtures).toHaveLength(4);
+    expect(sl.fixtures).toHaveLength(3);
+    expect(ko.fixtures).toHaveLength(3);
+    const q1 = find(pp.fixtures, 1, 1);
+    const elim = find(pp.fixtures, 1, 2);
+    const q2 = find(pp.fixtures, 2, 1);
+    const ppFinal = find(pp.fixtures, 3, 1);
+    const rung1 = find(sl.fixtures, 1, 1);
+    const rung2 = find(sl.fixtures, 2, 1);
+    const slFinal = find(sl.fixtures, 3, 1);
+    const sf1 = find(ko.fixtures, 1, 1);
+    const koFinal = find(ko.fixtures, 2, 1);
+    // Court A the page playoff, Court B the stepladder, Court C the knockout.
+    for (const [i, f] of [q1, elim, q2, ppFinal].entries()) await place(request, f.id, at(i * 30), courtIds[0]!);
+    for (const [i, f] of [rung1, rung2, slFinal].entries()) await place(request, f.id, at(i * 30), courtIds[1]!);
+    for (const [i, f] of [sf1, find(ko.fixtures, 1, 2), koFinal].entries()) {
+      await place(request, f.id, at(i * 30), courtIds[2]!);
+    }
+
+    const compBoard = (await divisionPath(request, pp.divisionId, "/schedule")).replace(
+      /\/d\/[^/]+\/schedule$/,
+      "/schedule",
+    );
+    const code = {
+      q1: fill("bracket.roundShort.qualifier1"),
+      e: fill("bracket.roundShort.eliminator"),
+      q2: fill("bracket.roundShort.qualifier2"),
+      f: fill("bracket.roundShort.final"),
+      e1: fill("bracket.roundShort.rung", { n: 1 }),
+      e2: fill("bracket.roundShort.rung", { n: 2 }),
+      sf: fill("bracket.roundShort.semi"),
+    };
+    const refTo = (c: string) => fill("slot.match_ref_code", { code: c, seq: 1 });
+
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(compBoard);
+      // Every chip, each on its own division's card, all the heavier variant.
+      for (const [f, text] of [
+        [q1, code.q1],
+        [elim, code.e],
+        [q2, code.q2],
+        [ppFinal, code.f],
+        [rung1, code.e1],
+        [rung2, code.e2],
+        [slFinal, code.f],
+        [sf1, code.sf],
+        [koFinal, code.f],
+      ] as const) {
+        await expect(chip(page, f.id), `${width}px ${f.id}`).toHaveText(text);
+        await expect(chip(page, f.id)).toHaveAttribute("data-round-code-chip", "knockout");
+      }
+      // The long names, on the chip's title: the page playoff's own, and the
+      // stepladder's board-only "Eliminator {n}" (never "Rung {n}").
+      await expect(chip(page, elim.id)).toHaveAttribute("title", fill("bracket.round.eliminator"));
+      await expect(chip(page, q1.id)).toHaveAttribute("title", fill("bracket.round.qualifier1"));
+      await expect(chip(page, rung2.id)).toHaveAttribute("title", fill("bracket.round.eliminatorN", { n: 2 }));
+      await expect(chip(page, rung2.id)).not.toHaveAttribute("title", fill("bracket.round.rung", { n: 2 }));
+      // Placeholders name their feeders by code — the Eliminator as E·1, the
+      // only Eliminator, though it is the second match of its round.
+      const card = (id: string) => page.locator(`[data-fixture-id="${id}"]`);
+      await expect(card(q2.id)).toContainText(fill("slot.loser_match", { ext: refTo(code.q1) }));
+      await expect(card(q2.id)).toContainText(fill("slot.winner_match", { ext: refTo(code.e) }));
+      await expect(card(q2.id)).not.toContainText(fill("slot.match_ref_code", { code: code.e, seq: 2 }));
+      await expect(card(ppFinal.id)).toContainText(fill("slot.winner_match", { ext: refTo(code.q1) }));
+      await expect(card(ppFinal.id)).toContainText(fill("slot.winner_match", { ext: refTo(code.q2) }));
+      await expect(card(rung2.id)).toContainText(fill("slot.winner_match", { ext: refTo(code.e1) }));
+      await expect(card(slFinal.id)).toContainText(fill("slot.winner_match", { ext: refTo(code.e2) }));
+      // Screen-reader label: the long round name.
+      await expect(card(elim.id).locator("button[aria-pressed]")).toHaveAttribute(
+        "aria-label",
+        new RegExp(`— ${fill("bracket.round.eliminator")}\\.`),
+      );
+      // Legend: each format's rounds as one run, the shared final once, last;
+      // the page playoff's E and the stepladder's E1 both explained.
+      const legend = page.getByTestId("board-legend-rounds");
+      await expect(legend.getByRole("listitem")).toHaveText([
+        `${code.sf} ${fill("bracket.round.semi")}`,
+        `${code.q1} ${fill("bracket.round.qualifier1")}`,
+        `${code.e} ${fill("bracket.round.eliminator")}`,
+        `${code.q2} ${fill("bracket.round.qualifier2")}`,
+        `${code.e1} ${fill("bracket.round.eliminatorN", { n: 1 })}`,
+        `${code.e2} ${fill("bracket.round.eliminatorN", { n: 2 })}`,
+        `${code.f} ${fill("bracket.round.final")}`,
+      ]);
+      const box = (await legend.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      await expectNoHorizontalScroll(page);
+      await shootBoard(page, testInfo.outputPath(`v3-comp-${width}.png`), width === 320 ? 1100 : 760);
+    }
   });
 });

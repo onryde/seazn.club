@@ -128,6 +128,34 @@ describe("BoardRoundLegend", () => {
     expect(items).toEqual(["QF Quarter-finals", "SF Semi-finals", "F Final", "3rd Third place"]);
   });
 
+  // Board playoff codes (2026-09-23): a page playoff and a stepladder on one
+  // board — each reads as its own run, the shared final once, last.
+  it("a page playoff beside a stepladder: 'Q1 … E … Q2', then 'E1 … E2', then F once", () => {
+    const pp = [
+      { ...fx("q2", "pp", 2, 1), ext_key: "pp-q2" },
+      { ...fx("pf", "pp", 3, 1, { is_final: true }), ext_key: "pp-final" },
+      { ...fx("q1", "pp", 1, 1), ext_key: "pp-q1" },
+      { ...fx("el", "pp", 1, 2), ext_key: "pp-elim" },
+    ];
+    const sl = [fx("g2", "sl", 3, 1, { is_final: true }), fx("g1", "sl", 2, 1), fx("g0", "sl", 1, 1)];
+    const codes = boardRoundCodes([...pp, ...sl], [
+      { id: "pp", kind: "page_playoff" },
+      { id: "sl", kind: "stepladder" },
+    ], en);
+    const html = renderToStaticMarkup(<BoardRoundLegend fixtures={[...sl, ...pp]} tray={[]} codes={codes} />);
+    const items = [...html.matchAll(/<li[^>]*>(.*?)<\/li>/g)].map((m) => m[1]!.replace(/<[^>]+>/g, ""));
+    expect(items).toEqual([
+      "Q1 Qualifier 1",
+      "E Eliminator",
+      "Q2 Qualifier 2",
+      "E1 Eliminator 1",
+      "E2 Eliminator 2",
+      "F Final",
+    ]);
+    // Every entry is the heavier (bracket-role) chip.
+    expect(html.match(/data-round-code-chip="knockout"/g)).toHaveLength(6);
+  });
+
   it("renders NOTHING when no shown card carries a code (a round-robin board)", () => {
     const codes = boardRoundCodes([...knockout, ...league], stages, en);
     expect(renderToStaticMarkup(<BoardRoundLegend fixtures={league} tray={[]} codes={codes} />)).toBe("");

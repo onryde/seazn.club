@@ -352,6 +352,47 @@ describe("anti-drift: board card ref code vs feed label {ext} (P7/F1, required)"
     });
   }
 
+  // Board playoff codes (2026-09-23): the Eliminator is the SECOND match of the
+  // page playoff's round 1 (beside Qualifier 1) and its only Eliminator. Its
+  // own console code and the Qualifier 2 seat it feeds must both read "E·1" —
+  // numbered by its round it would be "E·2", a second Eliminator that does not
+  // exist.
+  for (const locale of LOCALES) {
+    it(`${locale}: page playoff — the Eliminator's console code and Qualifier 2's seat both read E·1`, () => {
+      const lookup: SlotLabelLookup = (k, vars) => msgFor(locale, k, vars);
+      const pp = (id: string, round_no: number, seq_in_round: number, ext: Partial<BoardFixture> = {}): BoardFixture => ({
+        ...boardFixture(id, round_no, seq_in_round),
+        ext_key: `pp-${id}`,
+        ...ext,
+      });
+      const board = [
+        pp("q1", 1, 1),
+        pp("elim", 1, 2),
+        pp("q2", 2, 1, { home_entrant_id: null, away_entrant_id: null }),
+        pp("final", 3, 1, { is_final: true, home_entrant_id: null, away_entrant_id: null }),
+      ];
+      const codes = boardRoundCodes(board, [{ id: "st-1", kind: "page_playoff" }], lookup);
+      const rows: FeedRow[] = board.map((f) => ({
+        id: f.id,
+        round_no: f.round_no,
+        seq_in_round: f.seq_in_round,
+        winner_to_fixture: f.id === "elim" ? "q2" : null,
+        winner_to_slot: f.id === "elim" ? 2 : null,
+        loser_to_fixture: null,
+        loser_to_slot: null,
+      }));
+      const feeds = withRoundCodeRefs(board, feedLabels(rows), codes);
+      const byId = new Map(consoleFixtures(board, {}, feeds, lookup, codes).map((r) => [r.id, r]));
+      const eCode = msgFor(locale, "bracket.roundShort.eliminator");
+      expect(byId.get("elim")!.code).toBe(matchRef(1, 1, lookup, eCode));
+      expect(byId.get("elim")!.code).not.toBe(matchRef(1, 2, lookup, eCode));
+      expect(byId.get("q2")!.matchup).toContain(byId.get("elim")!.code);
+      expect(cardTitle(board[2]!, {}, feeds, lookup)).toContain(byId.get("elim")!.code);
+      // Qualifier 1 keeps its own first place: Q1·1.
+      expect(byId.get("q1")!.code).toBe(matchRef(1, 1, lookup, msgFor(locale, "bracket.roundShort.qualifier1")));
+    });
+  }
+
   it("a league fixture's console code is untouched by the round-code map (R{round}·{seq})", () => {
     const lookup: SlotLabelLookup = (k, vars) => msgFor("en", k, vars);
     const board = [boardFixture("l1", 2, 3)];

@@ -191,7 +191,13 @@ export const FIXTURE_COLS = [
  *  only when true — one key per bracket). `roundRole()` never reads it; it is
  *  the presence test for all four V368 columns. A stage generated before V368
  *  has every row at the defaults, so a coded stage with no `is_final` row is a
- *  legacy one and keeps its plain R{n} rather than a guessed code. */
+ *  legacy one and keeps its plain R{n} rather than a guessed code.
+ *
+ *  Board playoff codes (same day, owner-approved): `ext_key` came back last,
+ *  on the narrowest terms — sent only when it is a page-playoff key (`pp-*`),
+ *  four per page playoff, because it is the only thing that tells Qualifier 1
+ *  from the Eliminator. Every other row's generator id stays off the board;
+ *  the capacity precheck (board/settings-panel.tsx) still reads none. */
 /** P9: what the BOARD actually receives — identity, no derived names and no
  *  frozen legacy text. The board resolves display names client-side from the
  *  venues prop; sending them per row duplicated ~330 rows' worth of bytes.
@@ -207,7 +213,7 @@ export const BOARD_FIXTURE_COLS = [
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
   "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
-  "lane", "is_final", "third_place", "conditional",
+  "ext_key", "lane", "is_final", "third_place", "conditional",
 ] as const;
 
 export interface FixtureRow {

@@ -157,9 +157,8 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
 
 /** The schedule board's fixture read (F1 follow-up, payload budget "gap
  *  15" — board-v3.spec.ts). Same query as listDivisionFixtures above, but
- *  projected onto BOARD_FIXTURE_COLS: the board never reads `ext_key`, so it
- *  is not selected at all. Callers that need it (the division page's
- *  bracket/stages panel) keep using listDivisionFixtures.
+ *  projected onto BOARD_FIXTURE_COLS. Callers that need every row's `ext_key`
+ *  (the division page's bracket/stages panel) keep using listDivisionFixtures.
  *
  *  `lane`/`is_final`/`third_place`/`conditional` ARE read now — the card's
  *  knockout round code is computed from them (board/round-codes.ts,
@@ -171,7 +170,13 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
  *  a single-elimination bracket pays for its final's flag and its bronze
  *  match's, a double elimination for its lanes and its grand-final flags.
  *  Absent means default — `BoardFixture` declares all four optional for
- *  exactly that reading. */
+ *  exactly that reading.
+ *
+ *  `ext_key` is sent on the same terms, narrower (board playoff codes,
+ *  2026-09-23): only when it is a page-playoff key (`pp-*` —
+ *  `generatePagePlayoff`'s ids), the one thing that tells Qualifier 1 from the
+ *  Eliminator. Four keys per page playoff; every other row's generator id
+ *  ("r1-m1", "sl-g0", …) stays off, so no other board pays a byte for it. */
 export async function listDivisionFixturesForBoard(
   auth: AuthCtx,
   divisionId: string,
@@ -193,6 +198,7 @@ export async function listDivisionFixturesForBoard(
     // 10,681 fixtures has it null — it was pure weight on every row.
     const rows = await tx<
       (BoardFixtureRow & {
+        ext_key: string | null;
         lane: "WB" | "LB" | "GF" | null;
         is_final: boolean;
         third_place: boolean;
@@ -203,15 +209,16 @@ export async function listDivisionFixturesForBoard(
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
              f.scheduled_at, f.court_id,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.lane, f.is_final, f.third_place, f.conditional
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
     // Omitted, not nulled: the RSC flight serialises an undefined value as
     // "$undefined" and a null/false as the key plus its value — only a key
     // that is not there costs nothing.
-    return rows.map(({ lane, is_final, third_place, conditional, ...row }) => ({
+    return rows.map(({ ext_key, lane, is_final, third_place, conditional, ...row }) => ({
       ...row,
+      ...(ext_key !== null && ext_key.startsWith("pp-") ? { ext_key } : {}),
       ...(lane !== null ? { lane } : {}),
       ...(is_final ? { is_final } : {}),
       ...(third_place ? { third_place } : {}),
