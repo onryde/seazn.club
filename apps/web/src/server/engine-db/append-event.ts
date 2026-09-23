@@ -13,6 +13,7 @@ import {
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
+import { releaseFedSeats } from "./fed-seats";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
@@ -44,6 +45,12 @@ export interface AppendResult {
   summary: ScoreSummary;
   outcome: MatchOutcome | null;
   status: string;
+  /** The fixtures whose seat this write EMPTIED because it erased a knockout
+   *  decision (`releaseFedSeats`, owner ruling 2026-09-23) — from the update's
+   *  own `returning id`. Empty for every write that erased nothing. Their
+   *  public documents changed (a name became a "Winner of …" seat), so
+   *  `scoreEvent` publishes them with the fixtures a decision advanced into. */
+  released: string[];
   /** F9 (R3.5 review) — carried through so `appendEvent` can log an accepted
    *  event AFTER `withTenant` has committed, instead of `appendEventInTx`
    *  logging it itself before the fixtures update, the pg_notify, and the
@@ -332,6 +339,17 @@ export async function appendEventInTx(
     );
   }
 
+  // Owner ruling 2026-09-23: a write that ERASES a decision (a void, whatever
+  // it voided) takes back the names that decision advanced into the next
+  // fixture — or is refused, 409 NEXT_MATCH_STARTED, when that fixture has
+  // already started. Here, after the fold has proved the decision is gone and
+  // BEFORE the first write, so a refusal leaves nothing behind. Keyed on the
+  // stored outcome going to null, never on the event type: every path that
+  // appends goes through this one function, so none can erase a decision
+  // around it. See fed-seats.ts for the rules.
+  const released =
+    fixture.outcome !== null && outcome === null ? await releaseFedSeats(tx, fixtureId) : [];
+
   // Same transaction as the event that made it necessary: a crash between the
   // two can never leave a fixture with history and no frozen cfg.
   if (freezeSnapshot) {
@@ -398,6 +416,7 @@ export async function appendEventInTx(
       summary,
       outcome,
       status,
+      released,
       sportKey: division.sport_key,
     },
     firstResult,

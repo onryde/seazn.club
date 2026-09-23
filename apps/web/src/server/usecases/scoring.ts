@@ -262,11 +262,17 @@ export async function scoreEvent(
     );
   }
 
-  let advanced: readonly string[] = [];
+  // Owner ruling 2026-09-23: a write that erased a knockout decision has
+  // ALREADY emptied the seats that decision filled, inside the append's own
+  // transaction (`result.released`). Those fixtures changed exactly the way an
+  // advanced-into fixture does — a name became "Winner of …" — so they seed
+  // the same list, and ride the same DEL and push, even if a hook below throws.
+  let advanced: readonly string[] = result.released;
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
     if (result.outcome !== null || input.type === "core.void") {
-      advanced = await onDecided(auth, fixtureId, result.outcome);
+      const filled = await onDecided(auth, fixtureId, result.outcome);
+      advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       await refreshDiscipline(auth, fixtureId);
       await refreshNews(auth, fixtureId);
     }
