@@ -485,6 +485,29 @@ describe("player page — Upcoming", () => {
     expect(upcoming).not.toContain(`>${esc(month("en-GB"))}<`);
   });
 
+  it("more than five: ONE list of the first five, then a collapsed Show-more BUTTON below it — no <details> (owner request 2026-09-23)", async () => {
+    const rows = ["u1", "u2", "u3", "u4", "u5", "u6", "u7"].map((id) => upcomingRow(id));
+    const upcoming = section((await renderPage({ upcoming: rows })).html, "mh-player-upcoming");
+    expect([...upcoming.matchAll(/data-testid="mh-player-upcoming-row-([^"]+)"/g)].map((m) => m[1])).toEqual([
+      "u1",
+      "u2",
+      "u3",
+      "u4",
+      "u5",
+    ]);
+    expect(upcoming.match(/<ul\b/g)).toHaveLength(1);
+    expect(upcoming).not.toMatch(/<details\b|<summary\b/);
+    const listId = upcoming.match(/<ul id="([^"]+)"/)?.[1];
+    expect(listId, "the list carries the id the button controls").toBeTruthy();
+    const toggle = upcoming.match(/<button [^>]*data-testid="mh-player-upcoming-more"[^>]*>([^<]*)<\/button>/);
+    expect(toggle, "the toggle is a real <button>").not.toBeNull();
+    expect(toggle![0]).toContain('type="button"');
+    expect(toggle![0]).toContain('aria-expanded="false"');
+    expect(toggle![0]).toContain(`aria-controls="${listId}"`);
+    expect(toggle![1]).toBe(esc(en["player.upcoming.showMore"].replace("{count}", "2")));
+    expect(upcoming.indexOf("<button")).toBeGreaterThan(upcoming.indexOf("</ul>"));
+  });
+
   it("a refused card reads nothing: notFound fires before the upcoming read", async () => {
     stub.getPublicPlayer.mockResolvedValue(null);
     await expect(Page({ params })).rejects.toThrow("CALLED_NOT_FOUND");

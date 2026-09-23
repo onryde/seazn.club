@@ -4,11 +4,12 @@
 // re-sorts. Each row names its competition › division; a row from another
 // competition carries the Other event chip.
 //
-// "Show N more" is a native <details> (plan D2): no JS and no dictionary
-// slice sent to the client. Open, its summary reads "Show less" (a CSS label
-// swap on `group-open:`) rather than disappearing. `player-matches-dict.ts`
-// exists because an island's props are serialised; a server component's are
-// not.
+// "Show N more" is the one client piece (owner request 2026-09-23,
+// superseding plan D2's <details>): `UpcomingReveal` in
+// `player-upcoming-reveal.tsx`. Every row is still rendered HERE, on the
+// server, and handed to it as ready <li> nodes with both labels resolved — no
+// dictionary slice, date code or server module goes to the client. As served
+// it is collapsed: the first five rows and the button, in ONE list.
 //
 // Every subpart is a plain function called inline (the `player-matches.tsx`
 // convention), so a static-markup test sees every word.
@@ -22,8 +23,9 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 import type { PlayerUpcomingRow } from "@/server/public-site/public-player-matches";
+import { UpcomingReveal } from "./player-upcoming-reveal";
 
-/** R3: shown before the reveal. */
+/** R3: shown before the toggle. */
 export const UPCOMING_VISIBLE = 5;
 
 export interface PlayerUpcomingProps {
@@ -33,8 +35,6 @@ export interface PlayerUpcomingProps {
   /** The ORG's locale, the page's own (ISR: never the viewer's). */
   locale: Locale;
 }
-
-const LIST = "min-w-0 divide-y divide-zinc-100 rounded-xl border border-zinc-200/80 bg-surface";
 
 function upcomingRow(row: PlayerUpcomingRow, dict: Dict, locale: Locale) {
   const day = formatPublicInstant(locale, row.tz, row.scheduledAt, { day: "numeric" });
@@ -108,25 +108,15 @@ function upcomingRow(row: PlayerUpcomingRow, dict: Dict, locale: Locale) {
 export function PlayerUpcoming({ rows, dict, locale }: PlayerUpcomingProps) {
   // The empty case first: no rows, nothing at all (the page renders no section).
   if (rows.length === 0) return null;
-  const shown = rows.slice(0, UPCOMING_VISIBLE);
   const rest = rows.slice(UPCOMING_VISIBLE);
   return (
     <div className="min-w-0 space-y-2">
-      <ul className={LIST}>{shown.map((r) => upcomingRow(r, dict, locale))}</ul>
-      {rest.length > 0 ? (
-        <details data-testid="mh-player-upcoming-rest" className="group min-w-0 space-y-2">
-          <summary
-            data-testid="mh-player-upcoming-more"
-            className="flex min-h-11 cursor-pointer list-none items-center justify-center rounded-xl text-sm font-semibold text-accent-strong hover:underline [&::-webkit-details-marker]:hidden"
-          >
-            {/* The summary stays visible when open: it holds keyboard focus, and
-                hiding it would drop focus to <body>. Its LABEL swaps instead. */}
-            <span className="group-open:hidden">{t(dict, "player.upcoming.showMore", { count: rest.length })}</span>
-            <span className="hidden group-open:inline">{t(dict, "player.upcoming.showLess")}</span>
-          </summary>
-          <ul className={LIST}>{rest.map((r) => upcomingRow(r, dict, locale))}</ul>
-        </details>
-      ) : null}
+      <UpcomingReveal
+        head={rows.slice(0, UPCOMING_VISIBLE).map((r) => upcomingRow(r, dict, locale))}
+        rest={rest.map((r) => upcomingRow(r, dict, locale))}
+        moreLabel={t(dict, "player.upcoming.showMore", { count: rest.length })}
+        lessLabel={t(dict, "player.upcoming.showLess")}
+      />
     </div>
   );
 }
