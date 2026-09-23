@@ -159,6 +159,22 @@ function expectedRoundOne(n: number, pairing: SwissPairingMode): string[] {
     .sort();
 }
 
+/** The seed the engine sits out in round 1 of an ODD field: the one seed that
+ *  `roundOnePairs` (pairRound itself) leaves off every board. Derived, never
+ *  typed, so a change in pairRound's bye rule moves the expectation with it. */
+function roundOneByeSeed(n: number, pairing: SwissPairingMode): number {
+  const paired = new Set(roundOnePairs(n, pairing).flat());
+  const out = Array.from({ length: n }, (_, i) => i + 1).filter((seed) => !paired.has(seed));
+  expect(out, `round 1 of ${n} (${pairing}) does not sit exactly one seed out`).toHaveLength(1);
+  return out[0]!;
+}
+
+/** Who holds the bye row(s) of a seated round: every row with no away side,
+ *  named by its home entrant ("?" for an unseated one). */
+function byeHoldersOf(rows: FixtureRow[], nameOf: Map<string, string>): string[] {
+  return rows.filter((f) => f.away_entrant_id === null).map((f) => nameOf.get(f.home_entrant_id ?? "") ?? "?");
+}
+
 /** A started Swiss stage over N seeded badminton entrants: the shells exist
  *  and nobody is seated, so the next Generate pairs round 1. */
 async function newSwiss(count: number, config: Record<string, unknown>) {
@@ -454,15 +470,31 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
   // press. This case proves the default and the override on an odd field. It
   // does NOT tell the round-number rule apart from a "decided board exists"
   // rule; the next case does.
-  it("ODD field: round 1 defaults to fold, and an override after Unpair pairs seed neighbours", async () => {
-    const { auth, nameOf, stageId } = await newSwiss(7, { pairing: "rank_adjacent" });
+  it("ODD field: round 1 defaults to fold with the bottom seed on the bye, and an override after Unpair pairs seed neighbours, bye unchanged", async () => {
+    const N = 7;
+    const { auth, nameOf, stageId } = await newSwiss(N, { pairing: "rank_adjacent" });
+    // The spec's bullet: the BOTTOM seed sits out. Read off the engine, then
+    // held to the spec, so the DB assertions below compare against pairRound's
+    // own answer and that answer is the one the spec names.
+    const foldBye = roundOneByeSeed(N, "fold");
+    const adjacentBye = roundOneByeSeed(N, "rank_adjacent");
+    expect(foldBye, "pairRound's round-1 bye is not the bottom seed").toBe(N);
+    expect(adjacentBye, "pairRound's round-1 bye is not the bottom seed").toBe(N);
+
     await generateStageFixtures(auth, stageId);
-    const real = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
-    expect(real.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(7, "fold"));
+    const round1 = await fixturesOfRound(stageId, 1);
+    const real = round1.filter((f) => f.away_entrant_id !== null);
+    expect(real.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(N, "fold"));
+    // The bye ROW exists and names the bottom seed — not "whoever is left",
+    // which a missing bye row or a bye handed to a board seat would also leave.
+    expect(byeHoldersOf(round1, nameOf), "the default press's bye row").toEqual([`E${foldBye}`]);
+
     await unpairSwissRound(auth, stageId);
     await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" }); // must not 422
-    const again = (await fixturesOfRound(stageId, 1)).filter((f) => f.away_entrant_id !== null);
-    expect(again.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(7, "rank_adjacent"));
+    const round1Again = await fixturesOfRound(stageId, 1);
+    const again = round1Again.filter((f) => f.away_entrant_id !== null);
+    expect(again.map((f) => pairOf(f, nameOf)).sort()).toEqual(expectedRoundOne(N, "rank_adjacent"));
+    expect(byeHoldersOf(round1Again, nameOf), "the override press's bye row").toEqual([`E${adjacentBye}`]);
   });
 
   it("refuses an override once round 1 is paired, even with NO result anywhere (the gate is the round number)", async () => {
@@ -592,20 +624,40 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     });
   });
 
-  it("records the round, mode, override and seated ids — and Undo deletes no shell", async () => {
-    const { auth, divisionId, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
-    const [{ n: shellsBefore }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+  it("records the round, mode, override and seated ids", async () => {
+    const { auth, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
     await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" }); // differs from round-1 default
     const payload = await lastGeneratedEvent(stageId);
     const seatedIds = (await fixturesOfRound(stageId, 1)).map((f) => f.id).sort();
     expect(payload).toMatchObject({ round: 1, pairing: "rank_adjacent", override: true, fixture_ids: [] });
     expect([...(payload.seated_fixture_ids as string[])].sort()).toEqual(seatedIds);
+  });
 
-    await undoDivision(auth, divisionId);
-    const [{ n: shellsAfter }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from fixtures where stage_id = ${stageId}`;
-    expect(shellsAfter).toBe(shellsBefore);
+  // Its own case, asserting nothing about the ledger's shape: folded into the
+  // case above, a Pair next that put its seated ids into `fixture_ids` (the
+  // Undo DELETE list) went red at the `fixture_ids: []` match before Undo ever
+  // ran, so this half had never been seen to kill anything (final review M3).
+  it("Undo of Pair next deletes no fixture (shell count unchanged)", async () => {
+    const { auth, divisionId, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
+    const shellCount = async () => {
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+      return n;
+    };
+    const shellsBefore = await shellCount();
+    expect(shellsBefore, "Start minted no shells — nothing below could shrink").toBeGreaterThan(0);
+    await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" });
+    expect(
+      (await fixturesOfRound(stageId, 1)).every((f) => f.home_entrant_id !== null),
+      "Pair next seated nobody — an Undo that deletes the seated rows would have nothing to delete",
+    ).toBe(true);
+
+    // The positive half: this Undo inverted the Pair next (its fixtures_generated
+    // is the ledger's top event), so an unchanged count is Undo deleting nothing,
+    // not Undo never running.
+    const undone = await undoDivision(auth, divisionId);
+    expect(undone.applied.type).toBe("fixtures_cleared");
+    expect(await shellCount()).toBe(shellsBefore);
   });
 
   it("records override=false when the body names the default", async () => {
