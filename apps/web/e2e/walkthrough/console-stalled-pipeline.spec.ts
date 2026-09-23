@@ -178,6 +178,10 @@ test("a console whose pad stream is dead still refreshes when the operator retur
 
   // The console is now at rest: whatever it did at mount, it is finished.
   // Everything counted from here is attributable to this test's own actions.
+  // Flat window for the same reason as the hidden case below: this drains
+  // mount-time churn, whose cost is a round trip, and a full `POLL_MS` cycle
+  // has ALREADY elapsed above (that is what the blocked poll we just waited on
+  // means), so the slow path is spanned before this line is reached.
   const resyncsAtRest = consoleResyncs;
   await page.waitForTimeout(2_500);
   expect(consoleResyncs, `the console is still churning at rest (resyncs: ${resyncPhases.join(",")})`).toBe(
@@ -187,6 +191,7 @@ test("a console whose pad stream is dead still refreshes when the operator retur
 
   phase = "after-rally";
   const padBefore = await padScoreText(page);
+  const pollsAtRally = padPollsBlocked.length;
 
   // ---- a score arrives from somewhere else entirely -----------------------
   //
@@ -215,7 +220,26 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   // `resync()` — so the chrome is stale with no upper bound. If this ever
   // fails, some OTHER path is refreshing the console and the seam below is not
   // what is being measured.
-  await page.waitForTimeout(2_500);
+  //
+  // WAITS FOR AN OBSERVED POLL, NOT A FLAT WINDOW. This negative assertion
+  // claims "no independent path refreshes this console", and the slowest such
+  // path in the file is the pad's stream tick — `use-fixture-stream.ts`'s
+  // `POLL_MS`, 15s. A flat 2.5s window would not span it, so it would report
+  // "nothing refreshed" having never given the thing it is proving absent a
+  // chance to fire (AGENTS.md failure class 20: a flat budget beside a derived
+  // cost). `POLL_MS` is module-private and cannot be imported, so the wait is
+  // pinned to the REAL EVENT instead of to a copy of the constant: block until
+  // a fresh pad poll lands after the rally. That is one full cycle of the
+  // interval, measured rather than modelled, and it moves automatically if
+  // `POLL_MS` ever does.
+  // Measured at 12 894ms in practice — one `POLL_MS` cycle less the settle
+  // window already spent above, exactly as intended.
+  await expect
+    .poll(() => padPollsBlocked.length, {
+      timeout: 45_000,
+      message: "no pad poll fired after the rally, so the stale window was never actually spanned",
+    })
+    .toBeGreaterThan(pollsAtRally);
   expect(
     consoleResyncs,
     `nothing should have resynced the console after the rally (resyncs: ${resyncPhases.join(",")})`,
@@ -233,6 +257,16 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   // drops the `visibilityState !== "visible"` early return: with that guard
   // gone the listener resyncs on the hide too, and `consoleResyncs` is 1 here.
   // Counted rather than timed — an observed request, not a slept-through window.
+  //
+  // A FLAT window is correct HERE, unlike the precondition above. What this
+  // proves absent is a listener's SYNCHRONOUS answer to an event dispatched on
+  // the line before — its cost is one `resync()` round trip (~100-300ms against
+  // a local server), not a poll interval, so 2.5s is an order of magnitude of
+  // headroom over the thing being excluded. Stretching it to `POLL_MS` would
+  // not make it stricter, it would just misdescribe the mechanism. And it is
+  // bracketed by a positive control: if the listener were simply dead, the
+  // `visible` assertion that follows would fail, so this cannot pass by the
+  // listener never working at all.
   await page.waitForTimeout(2_500);
   expect(consoleResyncs, `a hidden tab must not fetch (resyncs: ${resyncPhases.join(",")})`).toBe(resyncsAtRest);
   await expect(headline(page), "a hidden tab must not refresh the chrome").toHaveText(before);
