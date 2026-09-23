@@ -5,50 +5,53 @@
 // The EMPTY and no-status cases are stated first. The R4 case is one where the
 // wrong constant (`>` instead of `≥`) prints "Through" and the right one does not.
 //
-// Mutants killed — each applied ALONE and run against this file (re-run
-// 2026-09-23 after review fix 1). Killers are test titles; "BF n" = the brute
-// force red with n violations. Fix 1 added two negative-payout systems and a
-// Fisher–Yates pairing, so these counts differ from the pre-flight port's.
+// Mutants killed — each applied ALONE and run against this file (re-swept
+// 2026-09-23 after review fix 2: 32-bit LCG, brute force trimmed to 5 000
+// trials). Killers are test titles; "BF n" = the brute force red with n
+// violations. Every mutant below also has a hand-case killer, so none depends on
+// the brute force's size.
 //  (a) through `≥` → `>`          — "R4: a rival who can only DRAW LEVEL…", "a
 //      withdrawn rival still counts…", "r = 0 while…", "is null for an open row
-//      with no match left…", "a forfeit loss can drop you level…", BF 14 316
+//      with no match left…", "a forfeit loss can drop you level…", BF 4 073
 //  (b) out `>` → `≥`              — "Out after a loss needs lossCeil…", "a
-//      Needs-help row gets one too…", "a forfeit loss can drop you level…", BF 18 719
+//      Needs-help row gets one too…", "a forfeit loss can drop you level…", BF 4 222
 //  (c) win_k `≥` → `>`            — "win_k for k > 1", "is computed for open rows
-//      only…", "a Needs-help row gets one too…", "Win-k counts a forfeit loss…",
-//      BF 11 123. NOT the R4 test: its k = 1 target (3W) no rival reaches.
-//  (d) win_k target uses max, not winFloor — "Win-k counts a forfeit loss…",
-//      BF 634 (only systems with winFloor < max can see it)
+//      only…", "a Needs-help row gets one too…", "Win-k after a loss counts from
+//      the loss's FLOOR…", "Win-k counts a forfeit loss…", BF 2 253. NOT the R4
+//      test: its k = 1 target (3W) no rival reaches.
+//  (d) win_k target uses max, not winFloor — "Win-k after a loss counts from the
+//      loss's FLOOR…", "Win-k counts a forfeit loss…", BF 881
 //  (e) through counts rivals' WORST, not best — "R4…", "win_k for k > 1", "a
 //      withdrawn rival still counts…", "r = 0…", "is computed for open rows
-//      only…", "is null for an open row…", BF 319 368. NOT "through when no rival
+//      only…", "is null for an open row…", BF 199 361. NOT "through when no rival
 //      can reach": every rival's best AND worst sit below A's worst there.
-//  (f) inactive rival not counted — "a withdrawn rival still counts…", BF 54 189
-//  (g) ifYouLose `hi` uses min    — "Out after a loss needs lossCeil…", BF 525
+//  (f) inactive rival not counted — "a withdrawn rival still counts…", BF 13 226
+//  (g) ifYouLose `hi` uses min    — "Out after a loss needs lossCeil…", BF 194
 //  (h) anyPlayed/complete guard dropped — each half alone reds its own test.
-// The four `min` terms (review fix 1 — all four SURVIVED before it, since every
-// hand table ran at min = 0 and the brute force at min ≥ 0):
-//  worstCase's min — "a forfeit loss can drop you level…", BF 1 389 · myWorst's
-//  min — same test, BF 236 · win_k's (r−k)·min — "Win-k counts a forfeit
-//  loss…", BF 83 · ifYouLose `lo`'s min — "a forfeit loss can drop you
-//  level…", BF 104.
-// Beyond the brief's list (+ = a killer was ADDED for it):
-//  through fully swapped BF 4 395 595 · through on own best BF 380 162 · out on
-//  rival best vs own worst BF 3 218 531 · ifYouLose `lo` uses lossCeil BF 5 519
-//  · win_k's non-wins at max BF 52 198 · myWorst from hi BF 5 519 · myBest from
-//  lo BF 525 (each also by hand tests) · +win_k target from hi — "Win-k after a
-//  loss counts from the loss's FLOOR…" (BF 937 before fix 1, 0 after it) ·
-//  +ifYouLose with r = 0 — "is null for an open row with no match left…" ·
-//  +needs_help not open — "a Needs-help row gets one too…" · +integer-cut guard
-//  — "a cut that is not a whole number…" · +each malformed-input clause
-//  (missing / non-finite / negative / fractional count, non-finite points,
-//  withdrawn rows' count unread, their points read) — its own no-status test ·
-//  +inactive row keeps its remaining — "a withdrawn rival is frozen even
-//  when…" · +helper clamp and `?? 0` — "a missing or negative count reads as no
-//  match left" · tieRival: no reverse / `i <= cut` — "below the line…";
-//  +touching ranges `<` — "ranges that meet at one score…"; +missing-entrant
-//  guards — "null for an entrant missing…"; +overlap from the wrong end —
-//  "a rival whose range spans yours…".
+// The four `min` terms (all four SURVIVED before review fix 1: every hand table
+// ran at min = 0 and the brute force at min ≥ 0):
+//  worstCase's min — "a forfeit loss can drop you level…", BF 224 · myWorst's
+//  min — same test, BF 184 · win_k's (r−k)·min — "Win-k counts a forfeit
+//  loss…", BF 66 · ifYouLose `lo`'s min — "a forfeit loss can drop you
+//  level…", BF 85.
+// Beyond the brief's list (+ = a killer was ADDED for it; all also hand-killed):
+//  through fully swapped BF 1 398 013 · through on own best BF 215 262 · out on
+//  rival best vs own worst BF 1 406 111 · ifYouLose `lo` uses lossCeil BF 2 142 ·
+//  win_k's non-wins at max BF 23 916 · myWorst from hi BF 2 031 · myBest from lo
+//  BF 194 · +win_k target from hi — "Win-k after a loss counts from the loss's
+//  FLOOR…", BF 111 · +ifYouLose with r = 0 — "is null for an open row with no
+//  match left…" · +needs_help not open — "a Needs-help row gets one too…" (and
+//  the brute force's if-you-lose floor) · +integer-cut guard — "a cut that is
+//  not a whole number…" · +each malformed-input clause (missing / non-finite /
+//  negative / fractional count, non-finite points, withdrawn rows' count unread,
+//  their points read) — its own no-status test · +inactive row keeps its
+//  remaining — "a withdrawn rival is frozen even when…" · +helper clamp and
+//  `?? 0` — "a missing or negative count reads as no match left" · tieRival: no
+//  reverse / `i <= cut` — "below the line…"; +touching ranges `<` — "ranges
+//  that meet at one score…"; +missing-entrant guards — "null for an entrant
+//  missing…"; +overlap from the wrong end — "a rival whose range spans yours…".
+// The brute force's own generator: the old overflowing LCG (912 distinct
+// tables) reds the distinct-table floor on its own.
 import { describe, expect, it } from "vitest";
 import { generic } from "../sports/generic/index.ts";
 import { icehockey } from "../sports/icehockey/index.ts";
@@ -219,9 +222,11 @@ describe("if you lose", () => {
     expect(res?.get("B")).toEqual({ status: { kind: "needs_help" }, ifYouLose: { kind: "out" } });
   });
   it("Win-k after a loss counts from the loss's FLOOR (min), not its ceiling (lossCeil)", () => {
-    // Review fix 1: the brute force stopped reaching this case once its PRNG
-    // sequence changed, so it is pinned here. Ice hockey: a regulation loss pays
-    // min, an OT loss lossCeil. cut 1. A on 0 with two left; B final on exactly
+    // An explicit pin for this path, with no brute force needed. In fix 1 the
+    // brute force lost this kill because its old LCG overflowed 2^53 and cycled
+    // every 10 466 draws: "20 000 tables" were ~912 distinct ones. Fixed in
+    // round 2 (the brute force kills it again); the case stays. Ice hockey: a
+    // regulation loss pays min, an OT loss lossCeil. cut 1. A on 0 with two left; B final on exactly
     // A + min + winFloor — A after a regulation loss and then an OT win.
     const hockey = icehockey.matchPointsBounds(icehockey.configSchema.parse({}));
     expect(hockey.lossCeil).toBeGreaterThan(hockey.min); // precondition: the loss is not one number
@@ -345,13 +350,18 @@ describe("brute force — statuses hold over every real outcome", () => {
     { dec: [[3, -1]], draw: 1, bye: 3 },
     { dec: [[3, 0], [2, -1]], draw: null, bye: 3 },
   ];
-  // Measured 2026-09-23 (fix round 1, 8 systems, Fisher–Yates pairing): seed
-  // 12345 × 20 000 trials enumerates exactly 8 677 941 (row, outcome) checks, of
-  // which 3 349 014 also check the row's if-you-lose status. The seed is fixed
-  // and nothing here depends on the engine's sort, so both counts are exact; any
-  // drop means the enumeration shrank. Change the generator and re-measure both.
-  const CHECKED_FLOOR = 8_677_941;
-  const CHECKED_IF_LOSE_FLOOR = 3_349_014;
+  // Measured 2026-09-23 (fix round 2: 8 systems, Fisher–Yates pairing, 32-bit
+  // LCG, trimmed to 5 000 trials by owner decision for suite time): seed 12345
+  // builds 4 719 DISTINCT tables and enumerates exactly 3 017 478 (row, outcome)
+  // checks, 1 182 295 of which also check the row's if-you-lose status. The seed
+  // is fixed and nothing depends on the engine's sort, so all three are exact. A
+  // drop means coverage shrank — the distinct count is the one that catches a
+  // PRNG that cycles (the old generator gave 912 distinct at 20 000 trials).
+  // Change the generator or the trial count and re-measure all three. Every
+  // mutant in the header still dies at this size (re-swept after the trim).
+  const CHECKED_FLOOR = 3_017_478;
+  const CHECKED_IF_LOSE_FLOOR = 1_182_295;
+  const DISTINCT_FLOOR = 4_719;
   const boundsOf = (s: Sys): MatchPointsBounds => {
     const all = [...s.dec.flat(), ...(s.draw === null ? [] : [s.draw]), s.bye];
     return {
@@ -361,24 +371,32 @@ describe("brute force — statuses hold over every real outcome", () => {
       lossCeil: Math.max(...s.dec.map((d) => d[1])),
     };
   };
-  it("20 000 random tables", () => {
+  it("5 000 random tables", () => {
+    // A true 32-bit LCG (review fix 2). The old `seed * 1103515245` overflowed
+    // 2^53 as a double, lost its low bits and cycled every 10 466 draws, so the
+    // "20 000 tables" were ~912 distinct ones. `Math.imul` keeps the product
+    // exact mod 2^32; dividing by 2^32 keeps rnd() < 1 (the old ÷ 0x7fffffff
+    // could return exactly 1, and ri(n) then n).
     let seed = 12345;
-    const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 0x1_0000_0000;
     const ri = (n: number) => Math.floor(rnd() * n);
+    const distinct = new Set<string>();
     let checked = 0;
     let checkedIfLose = 0;
-    // Violations are counted, not thrown: an `expect` per check (5.5M of them)
-    // ran ~31 s against ~7 s counted. The first few are kept for the red message.
+    // Violations are counted, not thrown: an `expect` per check (5.5M of them,
+    // at 20 000 trials) ran ~31 s against ~7 s counted. The first few are kept
+    // for the red message.
     let violations = 0;
     const sample: string[] = [];
     const fail = (what: string) => {
       violations++;
       if (sample.length < 5) sample.push(what);
     };
-    for (let trial = 0; trial < 20_000; trial++) {
+    for (let trial = 0; trial < 5_000; trial++) {
       const n = 2 + ri(5);
       const ids = Array.from({ length: n }, (_, k) => `e${k}`);
-      const sys = SYSTEMS[ri(SYSTEMS.length)]!;
+      const si = ri(SYSTEMS.length);
+      const sys = SYSTEMS[si]!;
       const b = boundsOf(sys);
       const cut = 1 + ri(n - 1);
       const pts = new Map(ids.map((id) => [id, ri(3) * b.max + ri(2) * (sys.draw ?? 0)]));
@@ -401,6 +419,7 @@ describe("brute force — statuses hold over every real outcome", () => {
         remaining: new Map(ids.map((id) => [id, matches.filter((m) => m.a === id || m.b === id).length])),
         perMatch: b, cut, anyPlayed: true, complete: false,
       };
+      distinct.add(JSON.stringify([si, cut, input.rows, matches]));
       const res = qualificationStatus(input)!;
       // enumerate outcomes: final points, wins, and "lost its first real match"
       type O = { p: Map<string, number>; w: Map<string, number>; lostFirst: Set<string> };
@@ -457,5 +476,6 @@ describe("brute force — statuses hold over every real outcome", () => {
     expect(violations, `first violations: ${sample.join(" | ")}`).toBe(0);
     expect(checked).toBeGreaterThanOrEqual(CHECKED_FLOOR); // the enumeration actually ran
     expect(checkedIfLose).toBeGreaterThanOrEqual(CHECKED_IF_LOSE_FLOOR); // …and reached if-you-lose
-  }, 60_000);
+    expect(distinct.size).toBeGreaterThanOrEqual(DISTINCT_FLOOR); // …over tables that are really different
+  }, 30_000);
 });
