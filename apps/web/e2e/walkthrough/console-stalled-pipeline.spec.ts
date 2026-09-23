@@ -54,6 +54,18 @@
 // therefore self-guarding rather than assumed.
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, TAG } from "../helpers";
+import { padPollMs } from "../realtime-propagation-kit";
+
+/** The pad's stream tick, read from `use-fixture-stream.ts`'s own declaration.
+ *  Every "the console stayed stale" window below is measured against it. */
+const POLL_MS = padPollMs();
+
+/** This spec waits out TWO full poll cycles (one to prove the pad is polling
+ *  and blocked, one to span a stale window after the rally), plus seeding, a
+ *  page load and a handful of round trips. Derived so that moving `POLL_MS`
+ *  moves the budget with it instead of leaving a flat literal that reds in a
+ *  way whose obvious repair is to delete it (AGENTS.md failure class 20). */
+const BUDGET_MS = Math.max(180_000, 90_000 + 2 * POLL_MS);
 
 /** The console's OWN running score. `header p.font-mono` is this repo's
  *  established locator for it (`scorepad-v3-period-pair.spec.ts`,
@@ -69,6 +81,14 @@ const headline = (page: Page) => page.locator("header p.font-mono");
  *  pad stayed dark while the console refreshed. */
 const padScorebug = (page: Page) =>
   page.locator('[data-testid="score-pad"] [data-role="v3-scorebug"]').first();
+
+/** Forfeit — one of the controls `padSyncing` gates (`fixture-console.tsx`
+ *  passes `busy || padSyncing` into `ForfeitButton`'s `disabled`). Chosen over
+ *  a ledger row's Void because it renders unconditionally on a live fixture,
+ *  where Void is gated on `canVoid`. `busy` is false throughout the window
+ *  below — no send of ours is in flight — so `padSyncing` is the only thing
+ *  that can disable it, which is what makes it a clean probe for the flag. */
+const forfeit = (page: Page) => page.locator('[data-testid="score-forfeit"]');
 
 async function padScoreText(page: Page): Promise<string> {
   const text = await padScorebug(page).innerText().catch(() => "");
@@ -98,7 +118,7 @@ async function lastSeq(request: APIRequestContext, fixtureId: string): Promise<n
 test("a console whose pad stream is dead still refreshes when the operator returns", async ({
   page,
 }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(BUDGET_MS);
 
   const fx = await seedRosteredFixture(page.request, {
     label: `W3 Console Stall ${TAG}`,
@@ -128,14 +148,18 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   let consoleResyncs = 0;
   let phase = "mount";
   const resyncPhases: string[] = [];
+  // Held open for the `padSyncing` check near the end — 0 for the rest of the
+  // run, so nothing before it pays the cost.
+  let resyncHoldMs = 0;
   await page.route(
     (url) => url.pathname.endsWith("/events") && url.searchParams.has("since_seq"),
-    (route, request) => {
+    async (route, request) => {
       const since = new URL(request.url()).searchParams.get("since_seq");
       if (since === "0") {
         // The console's own `resync()`. Reachable for the whole test.
         consoleResyncs += 1;
         resyncPhases.push(phase);
+        if (resyncHoldMs > 0) await new Promise((r) => setTimeout(r, resyncHoldMs));
         return route.continue();
       }
       // The pad's stream poll. Dead for the whole test.
@@ -171,7 +195,9 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   // delivered" could equally mean the pad was never polling in the first place.
   await expect
     .poll(() => padPollsBlocked.length, {
-      timeout: 45_000,
+      // Poll-bound: it waits for the FIRST tick of `POLL_MS`, so the budget is
+      // that interval plus slack for a loaded machine — never a flat literal.
+      timeout: POLL_MS * 2 + 15_000,
       message: "the pad's stream poll never fired, so this test never simulated a stalled pipeline",
     })
     .toBeGreaterThan(0);
@@ -189,9 +215,13 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   );
   await expect(headline(page), "the console should still show the pre-rally headline").toHaveText(before);
 
-  phase = "after-rally";
+  // The pad scorebug must RESOLVE before its text is used as a baseline.
+  // `padScoreText` swallows a locator miss to "", so without this a moved
+  // `[data-role="v3-scorebug"]` would make `padBefore === "" === after` and the
+  // "the pad must still be dark" assertion at the end would pass vacuously —
+  // the same anti-vacuity guard the headline locator gets above.
+  await expect(padScorebug(page), "the pad scorebug locator must match exactly one element").toHaveCount(1);
   const padBefore = await padScoreText(page);
-  const pollsAtRally = padPollsBlocked.length;
 
   // ---- a score arrives from somewhere else entirely -----------------------
   //
@@ -204,6 +234,13 @@ test("a console whose pad stream is dead still refreshes when the operator retur
     payload: { wonBy: fx.homeEntrantId },
   });
   expect(post.status, `the foreign rally was refused: ${JSON.stringify(post.error)}`).toBeLessThan(300);
+  // Label and baseline both move HERE, after the write has actually landed.
+  // Captured any earlier and a poll arriving during the `lastSeq` GET or the
+  // POST itself (~100-200ms) would satisfy the "a poll fired after the rally"
+  // wait below without a single cycle having elapsed — and the phase label,
+  // which is what makes M7's kill attributable, would name the wrong step.
+  phase = "after-rally";
+  const pollsAtRally = padPollsBlocked.length;
 
   const after = await serverHeadline(page.request, fx.fixtureId);
   // The differential this test exists to witness. If one rally did not move the
@@ -223,20 +260,21 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   //
   // WAITS FOR AN OBSERVED POLL, NOT A FLAT WINDOW. This negative assertion
   // claims "no independent path refreshes this console", and the slowest such
-  // path in the file is the pad's stream tick — `use-fixture-stream.ts`'s
-  // `POLL_MS`, 15s. A flat 2.5s window would not span it, so it would report
-  // "nothing refreshed" having never given the thing it is proving absent a
-  // chance to fire (AGENTS.md failure class 20: a flat budget beside a derived
-  // cost). `POLL_MS` is module-private and cannot be imported, so the wait is
-  // pinned to the REAL EVENT instead of to a copy of the constant: block until
-  // a fresh pad poll lands after the rally. That is one full cycle of the
-  // interval, measured rather than modelled, and it moves automatically if
-  // `POLL_MS` ever does.
-  // Measured at 12 894ms in practice — one `POLL_MS` cycle less the settle
-  // window already spent above, exactly as intended.
+  // path in the file is the pad's stream tick, `POLL_MS` (15s). A flat 2.5s
+  // window would not span it, so it would report "nothing refreshed" having
+  // never given the thing it is proving absent a chance to fire (AGENTS.md
+  // failure class 20: a flat budget beside a derived cost).
+  //
+  // Blocking on the OBSERVED poll rather than sleeping `POLL_MS` is deliberate
+  // even though the constant is readable (`padPollMs()`, above): a sleep
+  // assumes the pad is ticking, while waiting for the request PROVES it, and
+  // the two differ exactly when the pad is broken — which is the state this
+  // spec induces on purpose. Measured at 12 894ms in practice: one cycle less
+  // the settle window already spent above.
   await expect
     .poll(() => padPollsBlocked.length, {
-      timeout: 45_000,
+      // Poll-bound, same derivation as the first wait.
+      timeout: POLL_MS * 2 + 15_000,
       message: "no pad poll fired after the rally, so the stale window was never actually spanned",
     })
     .toBeGreaterThan(pollsAtRally);
@@ -272,11 +310,41 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   await expect(headline(page), "a hidden tab must not refresh the chrome").toHaveText(before);
 
   // ---- ...and comes back. This is the seam under test. --------------------
+  //
+  // The refresh must go through `handlePadEvents`, not `resync()` directly:
+  // only the former raises `padSyncing`, which gates Undo/Void/Forfeit and
+  // every ledger row while the ledger is half-refreshed. Acting inside that
+  // window sends a stale `expected_seq` and earns a 409 SEQ_CONFLICT on what
+  // should have been a clean undo (`padSyncing`'s own doc in
+  // fixture-console.tsx records the incident). This listener fires exactly
+  // when the operator is back at the keyboard, so it is the MOST reachable
+  // moment for that window, not the least.
+  //
+  // The resync is held open so the window is observable at all; without the
+  // hold it closes in one round trip and no assertion could catch it.
+  const HOLD_MS = 6_000;
+  resyncHoldMs = HOLD_MS;
+
+  // The positive pair: Forfeit is live BEFORE the return. Without this, a
+  // build that disabled Forfeit permanently would satisfy the disabled-check
+  // below while proving nothing (AGENTS.md: a negative assertion needs its
+  // positive).
+  await expect(forfeit(page), "Forfeit should be live before the operator returns").toBeEnabled();
+
   phase = "visible";
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));
   });
+
+  // `setPadSyncing(true)` runs synchronously in the handler, before the fetch,
+  // so this lands well inside the hold. A build that calls `resync()` directly
+  // never raises the flag and leaves Forfeit enabled — which is exactly the
+  // mutant this assertion exists to kill.
+  await expect(
+    forfeit(page),
+    "the controls were left live during a resync — the refresh bypassed `padSyncing`",
+  ).toBeDisabled({ timeout: HOLD_MS - 2_000 });
 
   await expect(
     headline(page),
@@ -285,6 +353,14 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   expect(consoleResyncs, "the refresh must have come from the console's own resync").toBeGreaterThan(
     resyncsAtRest,
   );
+
+  // ...and the gate REOPENS. `handlePadEvents` clears `padSyncing` in a
+  // `finally`, so a refresh that failed or never settled cannot leave the
+  // operator staring at permanently dead controls — which would be a worse
+  // defect than the staleness this task set out to fix.
+  await expect(forfeit(page), "the controls never came back after the resync settled").toBeEnabled({
+    timeout: 20_000,
+  });
 
   // ---- and it got there WITHOUT the pad ------------------------------------
   //

@@ -504,26 +504,50 @@ export function FixtureConsole({
   // Deliberately not an interval: a second timer on the same fixture doubles
   // the request rate for every console in the product, and W1's standing
   // constraint warns against that multiplication. A human returning to the tab
-  // is both the cheapest trigger and the moment staleness is actually visible.
+  // is the moment staleness is actually visible, and it is bounded by the
+  // operator rather than by a clock — a tab nobody returns to costs nothing.
+  //
+  // COST, precisely: a real tab return fires `visibilitychange` (-> visible)
+  // AND `window.focus`, so it runs this handler TWICE — two `resync()`s, which
+  // is FOUR requests (`resync` is a `Promise.all` of `/state` and
+  // `/events?since_seq=0`). Not the "one request" an earlier draft of this
+  // comment claimed. That is still bounded per return and still far below a
+  // poll, and deduping the pair is deliberately not done here: the two events
+  // do not always come together (a window-manager focus with no visibility
+  // transition fires only `focus`; a tab switch within a focused window fires
+  // only `visibilitychange`), so listening for one would miss real returns.
   //
   // The `visibilityState` guard is load-bearing, not a micro-optimisation:
   // `visibilitychange` fires on the HIDE as well as the show, and refreshing a
   // tab the operator just left is the request this design exists not to make.
-  // `console-stalled-pipeline.spec.ts` asserts the hidden case fetches nothing.
+  // `console-stalled-pipeline.spec.ts` asserts the hidden case fetches nothing,
+  // and a mutant that drops this line reds it (verified: M7).
   //
-  // `resync` is already a `useCallback` keyed on `fixture.id` alone (above), so
-  // its identity is stable for the life of this fixture and this effect
-  // subscribes ONCE. That matters: an unstable `resync` would tear this
-  // listener down and re-add it on every `setBusy`/`setLive` — the same
-  // identity hazard `SESSION_AUTH` exists to avoid for the realtime channel
-  // (see this file's import comment). No memoisation needed here.
+  // `handlePadEvents`, NOT `resync` directly. Every other resync path in this
+  // component goes through it, and it is the only one that raises `padSyncing`
+  // (see that flag's own doc above): while a resync is in flight, Undo/Void/
+  // Forfeit and every ledger row must be gated, because acting on a
+  // half-refreshed ledger sends a stale `expected_seq` and earns a 409
+  // SEQ_CONFLICT on what should have been a clean undo. This listener fires
+  // exactly when the operator is back at the keyboard, which is the MOST
+  // reachable moment for that window — so bypassing the gate here would be
+  // worse than anywhere else, not merely inconsistent. It is also already a
+  // stable `useCallback([resync])`, so nothing about the identity argument
+  // below changes.
+  //
+  // That identity matters: an unstable callback would tear this listener down
+  // and re-add it on every `setBusy`/`setLive` — the same hazard `SESSION_AUTH`
+  // exists to avoid for the realtime channel (see this file's import comment).
+  // `resync` is a `useCallback` keyed on `fixture.id` alone, `handlePadEvents`
+  // on `[resync]`, so this effect subscribes ONCE. No memoisation needed here.
   useEffect(() => {
     const refreshIfVisible = () => {
       if (document.visibilityState !== "visible") return;
-      // Swallowed for the same reason `handlePadEvents` swallows: nothing the
-      // operator directly did should surface as an error, and the next trigger
-      // catches up.
-      void resync().catch(() => undefined);
+      // `handlePadEvents` swallows its own failure: nothing the operator
+      // directly did should surface as an error, and the next trigger catches
+      // up. It also clears `padSyncing` in a `finally`, so a failed refresh
+      // cannot leave the controls permanently gated.
+      handlePadEvents();
     };
     document.addEventListener("visibilitychange", refreshIfVisible);
     window.addEventListener("focus", refreshIfVisible);
@@ -531,7 +555,7 @@ export function FixtureConsole({
       document.removeEventListener("visibilitychange", refreshIfVisible);
       window.removeEventListener("focus", refreshIfVisible);
     };
-  }, [resync]);
+  }, [handlePadEvents]);
 
   // `detail` added (R3.5/Task G) alongside the pre-existing `headline` cast —
   // `shootoutScoreFromDetail` reads it to put a number in the decided
