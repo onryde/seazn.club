@@ -8,6 +8,7 @@ import {
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
 import { interpolate } from "@/lib/i18n-runtime";
+import { matchRef } from "@/lib/slot-label";
 import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
 import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
@@ -1023,6 +1024,30 @@ describe("scoringErrorText keeps engine English off the scorer's screen", () => 
       expect(text).toBe(interpolate(dict["score.nextMatchStarted"]!, { ref }));
       expect(text).toContain(ref);
       if (locale !== "en") expect(text).not.toBe(english);
+    },
+  );
+
+  // Fix round 2 ruling: the refusal names the next match with the SAME label
+  // the schedule board shows. The board names a knockout match by its round's
+  // code — "QF·3", not "R1·3" (`matchRef` with the code `boardRoundCodes`
+  // gives it, schedule-board.tsx). The server sends that code as the
+  // dictionary key the board chose, so each reader renders it in their own
+  // language: QF, CF and KF are the same match.
+  it.each(Object.keys(LOCALES) as (keyof typeof LOCALES)[])(
+    "%s: a knockout match the board names by its round code is named by that code here too",
+    (locale) => {
+      const dict = LOCALES[locale];
+      const say: MsgFn = (k, vars) => interpolate(dict[k] ?? k, vars);
+      const english = "The next match (QF·3) has already started. Void that one first.";
+      const extra = {
+        next_match: { fixture_id: "fx-qf", round: 1, seq: 3, code: { key: "bracket.roundShort.quarter", params: {} } },
+      };
+      const text = scoringErrorText("NEXT_MATCH_STARTED", english, say, "score.failed", extra);
+      const board = matchRef(1, 3, say, say("bracket.roundShort.quarter"));
+      expect(text).toBe(interpolate(dict["score.nextMatchStarted"]!, { ref: board }));
+      expect(text, "never the plain round number the board does not print").not.toContain(
+        interpolate(dict["slot.match_ref"]!, { round: 1, seq: 3 }),
+      );
     },
   );
 

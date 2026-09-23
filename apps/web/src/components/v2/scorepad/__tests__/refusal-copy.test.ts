@@ -17,6 +17,7 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
+import { matchRef } from "@/lib/slot-label";
 import { REFUSAL_FALLBACK, REFUSAL_KEY, refusalText } from "../refusal-copy";
 import { isPermanentRefusal } from "../transport";
 
@@ -77,6 +78,17 @@ describe("NEXT_MATCH_STARTED names the match to void first, in the scorer's lang
     expect(text).toContain(ref);
     expect(text).not.toContain("{");
     if (locale !== "en") expect(text).not.toBe(english);
+  });
+
+  // Fix round 2 ruling: the SAME label the schedule board shows — a knockout
+  // match by its round's code ("QF·3"), rendered in the scorer's language.
+  it.each(Object.keys(LOCALES))("%s: a knockout match is named by the board's round code, in the scorer's language", (locale) => {
+    const dict = LOCALES[locale]!;
+    const coded = { ...nextMatch, round: 1, seq: 3, code: { key: "bracket.roundShort.quarter" as const, params: {} } };
+    const text = refusalText({ code: "NEXT_MATCH_STARTED", message: english, nextMatch: coded }, say(dict));
+    const board = matchRef(1, 3, say(dict), say(dict)("bracket.roundShort.quarter"));
+    expect(text).toBe(interpolate(dict["scorepad.refusal.nextMatchStartedRef"]!, { ref: board }));
+    expect(text).not.toContain(interpolate(dict["slot.match_ref"]!, { round: 1, seq: 3 }));
   });
 
   it("with no ref (an older server) it falls back to the plain sentence, never a hole", () => {

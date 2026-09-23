@@ -38,7 +38,7 @@ import { scriptLedger, type Delivery } from "@/server/public-site/__tests__/cric
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { getFixtureState } from "../fixtures";
+import { getFixtureState, listDivisionFixturesForBoard } from "../fixtures";
 import { onDecided, scoreEvent } from "../scoring";
 import { appendEvent } from "@/server/engine-db";
 import { releaseFedSeats } from "@/server/engine-db/fed-seats";
@@ -49,8 +49,14 @@ import {
   confirmSeedProposal,
   createStages,
   generateStageFixtures,
+  listStages,
   resolveBracketSeats,
 } from "../stages";
+import { boardRoundCodes } from "@/components/v2/board/round-codes";
+import { matchRef } from "@/lib/slot-label";
+import { msgFor } from "@/lib/messages-i18n";
+import type { MessageKey } from "@/lib/messages";
+import { nextMatchLabel, nextMatchRefOf, type NextMatchRef } from "@/lib/next-match-started";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { resnapshotFixtureConfig } from "../admin-fixture-config";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
@@ -203,6 +209,41 @@ async function refusal(p: Promise<unknown>): Promise<HttpError> {
   );
   expect(err, "the call was expected to be refused").toBeInstanceOf(HttpError);
   return err as HttpError;
+}
+
+const LOCALES = ["en", "fr", "es", "nl"] as const;
+type Locale = (typeof LOCALES)[number];
+const lookupIn = (locale: Locale) => (key: MessageKey, vars?: Record<string, string | number>) =>
+  msgFor(locale, key, vars);
+
+/** What the SCHEDULE BOARD calls `fixtureId` in `locale` — the expression
+ *  schedule-board.tsx builds each card's ref with (`matchRef` over the code
+ *  `boardRoundCodes` gives it), fed by the board's own read. Fix round 2
+ *  ruling: the refusal names the next match with exactly this. */
+async function boardRef(auth: AuthCtx, fixtureId: string, locale: Locale = "en"): Promise<string> {
+  const [{ division_id }] = await sql<{ division_id: string }[]>`select division_id from fixtures where id = ${fixtureId}`;
+  const [board, stages] = await Promise.all([
+    listDivisionFixturesForBoard(auth, division_id),
+    listStages(auth, division_id),
+  ]);
+  const f = board.find((x) => x.id === fixtureId)!;
+  const lookup = lookupIn(locale);
+  return matchRef(f.round_no, f.seq_in_round, lookup, boardRoundCodes(board, stages, lookup).get(f.id)?.code);
+}
+
+/** The refusal names `fixtureId` — by the board's label, in every language the
+ *  reader might read it in, and in the server's own English sentence. */
+async function expectNamesTheBoardsWay(auth: AuthCtx, err: HttpError, fixtureId: string): Promise<NextMatchRef> {
+  const ref = nextMatchRefOf(err.extra);
+  expect(ref, "the refusal carries a ref a reader accepts").not.toBeNull();
+  expect(ref!.fixture_id).toBe(fixtureId);
+  for (const locale of LOCALES) {
+    expect(nextMatchLabel(ref!, lookupIn(locale)), `${locale}: the label the board shows`).toBe(
+      await boardRef(auth, fixtureId, locale),
+    );
+  }
+  expect(err.message, "the server's own sentence names it the board's way").toContain(`(${await boardRef(auth, fixtureId)})`);
+  return ref!;
 }
 
 describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name it advanced", () => {
@@ -390,12 +431,15 @@ describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name 
     const err = await refusal(voidEvent(rig.auth, line.id, decider));
     expect(err.status).toBe(409);
     expect(err.code).toBe("NEXT_MATCH_STARTED");
-    expect(err.extra).toEqual({
-      next_match: { fixture_id: rig.final.id, round: rig.final.round_no, seq: rig.final.seq_in_round },
+    const ref = await expectNamesTheBoardsWay(rig.auth, err, rig.final.id);
+    expect(ref, "the pair every match ref is composed from").toMatchObject({
+      round: rig.final.round_no,
+      seq: rig.final.seq_in_round,
     });
-    expect(err.message, "the server's own sentence names the next match").toContain(
-      `R${rig.final.round_no}·${rig.final.seq_in_round}`,
-    );
+    // The board names a knockout final by its code ("F·1"), so the refusal
+    // never prints the round number the board does not show.
+    expect(ref.code, "a knockout final's round is coded").toBeDefined();
+    expect(err.message).not.toContain(`R${rig.final.round_no}·${rig.final.seq_in_round}`);
 
     expect(await eventCount(line.id), "no void was written").toBe(eventsBefore);
     const lineAfter = await row(line.id);
@@ -889,9 +933,8 @@ describe.skipIf(!HAS_DB)("fix round 1: a walkover the CASCADE awarded has not st
 
     const err = await refusal(voidEvent(d.auth, d.sibling.id, decider));
     expect(err.code).toBe("NEXT_MATCH_STARTED");
-    expect(err.extra, "it names the match that is actually under way").toEqual({
-      next_match: { fixture_id: d.final.id, round: d.final.round_no, seq: d.final.seq_in_round },
-    });
+    // It names the match that is actually under way — the board's way.
+    await expectNamesTheBoardsWay(d.auth, err, d.final.id);
     expect(await eventCount(d.sibling.id), "no void was written").toBe(eventsBefore);
     expect(await row(d.semi.id), "the walkover stands, untouched").toEqual(semiBefore);
     expect(await row(d.final.id), "the final keeps both players").toEqual(finalBefore);
@@ -1208,7 +1251,11 @@ describe.skipIf(!HAS_DB)("fix round 2: the un-fill's locks", () => {
     expect(released, "pp-q2's void went through — it was not the deadlock victim").toEqual([pp.final.id]);
     expect(q1Err, "pp-q1's void was refused, not killed").toBeInstanceOf(HttpError);
     expect((q1Err as HttpError).code, "…because pp-q2 has been played").toBe("NEXT_MATCH_STARTED");
-    expect((q1Err as HttpError).extra?.next_match, "…and it names pp-q2").toMatchObject({ fixture_id: pp.q2.id });
+    // …and it names pp-q2 the board's way. The board codes only knockout and
+    // double-elimination rounds, so a page playoff's match keeps "R2·1" there,
+    // and here.
+    const ref = await expectNamesTheBoardsWay(pp.auth, q1Err as HttpError, pp.q2.id);
+    expect(ref.code, "a round the board does not code carries no code").toBeUndefined();
     const after = await row(pp.final.id);
     expect(after.home_entrant_id, "pp-q1's winner keeps the final seat (its void rolled back)").toBe(before.home_entrant_id);
     expect(after.away_entrant_id, "pp-q2's winner was taken back").toBeNull();

@@ -1,11 +1,15 @@
 import "server-only";
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { msg } from "@/lib/messages";
 import {
   NEXT_MATCH_STARTED_CODE,
+  nextMatchLabel,
   nextMatchStartedMessage,
   type NextMatchRef,
+  type RoundCodeRef,
 } from "@/lib/next-match-started";
+import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
 
 // OWNER RULING 2026-09-23 — a write that takes back a knockout decision takes
 // back the names that decision advanced.
@@ -182,6 +186,24 @@ async function reachable(tx: Tx, src: Node, moved: Record<Side, boolean>, out: M
   }
 }
 
+/** The next match as the SCHEDULE BOARD names it (fix round 2, controller
+ *  ruling 2026-09-23): the board's own `boardRoundCodes` over the rows of its
+ *  stage — the columns the board reads — with a lookup that RECORDS the
+ *  dictionary key it chose instead of rendering it. The code goes out as that
+ *  key, so each reader renders it in their own language
+ *  (lib/next-match-started.ts); a round the board does not code carries none,
+ *  and reads "R2·1" there and here alike. Read only on the way to a refusal. */
+async function boardRef(tx: Tx, t: Node): Promise<NextMatchRef> {
+  const [stage] = await tx<{ id: string; kind: string }[]>`select id, kind from stages where id = ${t.stage_id}`;
+  const rows = await tx<RoundCodeFixture[]>`
+    select id, stage_id, round_no, seq_in_round, ext_key, lane, is_final, third_place, conditional
+    from fixtures where stage_id = ${t.stage_id}`;
+  const recordKey = (key: string, vars?: Record<string, string | number>) => JSON.stringify({ key, params: vars ?? {} });
+  const code = boardRoundCodes(rows, stage ? [stage] : [], recordKey).get(t.id)?.code;
+  const ref: NextMatchRef = { fixture_id: t.id, round: t.round_no, seq: t.seq_in_round };
+  return code === undefined ? ref : { ...ref, code: JSON.parse(code) as RoundCodeRef };
+}
+
 /** The SAME lock every append to that fixture takes (append-event.ts), held
  *  to commit. Without it the next match's first event could commit between
  *  the "not started" check and the write after it, and a match in play would
@@ -220,8 +242,8 @@ async function planRelease(
     if (occupant === null || !mine.has(occupant)) continue;
     const reset = isCascadeWalkover(t);
     if (!reset && hasStarted(t)) {
-      const ref: NextMatchRef = { fixture_id: t.id, round: t.round_no, seq: t.seq_in_round };
-      throw new HttpError(409, nextMatchStartedMessage(ref), NEXT_MATCH_STARTED_CODE, { next_match: ref });
+      const ref = await boardRef(tx, t);
+      throw new HttpError(409, nextMatchStartedMessage(nextMatchLabel(ref, msg)), NEXT_MATCH_STARTED_CODE, { next_match: ref });
     }
     plan.push({ target: t.id, slot: edge.slot, occupant, label: drawnLabel(src, edge.side), reset });
     if (reset) {

@@ -12,8 +12,10 @@
 //   - the void empties the seat the result filled and restores its
 //     "Winner of R1·1" label — while the next match has not started;
 //   - once it HAS started, the void is refused before anything is written,
-//     with a message naming the next match ("R2·1"), in the organiser's own
-//     language — the organiser voids that one first.
+//     with a message naming the next match in the organiser's own language —
+//     by the SAME label the schedule board shows it by (fix round 2 ruling):
+//     a knockout final is "F·1" there, never "R2·1" — and the organiser voids
+//     that one first.
 //
 // WHY A WALKTHROUGH. The server tests (`knockout-void-unfill.test.ts`) prove
 // every rule against the rows. What none of them can see is the organiser's
@@ -34,6 +36,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { TAG, addEntrantsViaApi, apiJson, expectNoHorizontalScroll, failOnNativeDialog, fixturePath, scoreFixture } from "../helpers";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import { nextMatchStartedMessage } from "../../src/lib/next-match-started";
+import { composeMatchRef } from "../../src/lib/match-ref";
+import { boardRoundCodes } from "../../src/components/v2/board/round-codes";
 
 /** The product's own words, from the dictionaries it renders — never retyped,
  *  so a copy change moves the assertion with it. */
@@ -53,6 +57,8 @@ const say = (dict: Dict, key: string, vars: Record<string, string | number> = {}
 };
 /** "R1·1", composed from `slot.match_ref` the way `matchRef` composes it. */
 const ref = (dict: Dict, round: number, seq: number) => say(dict, "slot.match_ref", { round, seq });
+/** `dict` as the lookup a component's `msg` is. */
+const lookup = (dict: Dict) => (key: string, vars?: Record<string, string | number>) => say(dict, key, vars);
 
 // ---- The budget, derived from the steps (AGENTS.md 20) ----------------------
 /** One full page load and the reads made on it. */
@@ -97,6 +103,11 @@ interface Fx {
   away_slot_label: { key: string; params: Record<string, unknown> } | null;
   status: string;
   outcome: { winner?: string } | null;
+  /** The round-role columns the schedule board names a round by. */
+  lane?: "WB" | "LB" | "GF" | null;
+  is_final?: boolean;
+  third_place?: boolean;
+  conditional?: boolean;
 }
 
 async function fixture(request: APIRequestContext, id: string): Promise<Fx> {
@@ -158,7 +169,7 @@ test("an organiser voids a decided knockout result, scores it the other way, and
   const added = await addEntrantsViaApi(request, divisionId, names);
   expect(added.status).toBe(201);
   const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
-  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+  const stage = await apiJson<{ id: string; kind: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
     seq: 1,
     kind: "knockout",
     name: "Cup",
@@ -256,16 +267,29 @@ test("an organiser voids a decided knockout result, scores it the other way, and
   expect(kickOff.status, `final core.start → ${JSON.stringify(kickOff.error)}`).toBeLessThan(300);
   const eventsBefore = await eventCount(request, line.id);
 
+  // The label the refusal must name the final by is the one the SCHEDULE BOARD
+  // shows it by (fix round 2 ruling) — read from the board's own source of
+  // truth, never retyped: `boardRoundCodes` over the draw as read back, and
+  // `matchRef`'s composition, in the organiser's dictionary.
+  const boardLabel = (dict: Dict) => {
+    const code = boardRoundCodes(drawn, [{ id: stage.data!.id, kind: stage.data!.kind }], lookup(dict)).get(final.id)?.code;
+    expect(code, "the board names a knockout final's round by its code").toBeDefined();
+    return composeMatchRef(final.round_no, final.seq_in_round, lookup(dict), code);
+  };
+  const finalFr = boardLabel(FR);
+  expect(finalFr, "…so it is never called by the round number the board does not print").not.toBe(
+    ref(FR, final.round_no, final.seq_in_round),
+  );
   await page.context().addCookies([{ name: "seazn_locale", value: "fr", url: new URL(page.url()).origin }]);
   await visit(line.id);
-  const refused = say(FR, "score.nextMatchStarted", { ref: ref(FR, final.round_no, final.seq_in_round) });
-  expect(refused, "the French sentence names the next match").toContain(ref(FR, final.round_no, final.seq_in_round));
+  const refused = say(FR, "score.nextMatchStarted", { ref: finalFr });
+  expect(refused, "the French sentence names the next match").toContain(finalFr);
   const voidLastFr = page.getByRole("button", { name: say(FR, "score.voidLast") });
   await expect(voidLastFr).toBeEnabled({ timeout: STEP_MS });
   await voidLastFr.click();
   await expect(page.getByText(refused, { exact: true })).toBeVisible({ timeout: STEP_MS });
   // Both directions: the server's own English must not be what the organiser reads.
-  await expect(page.getByText(nextMatchStartedMessage({ round: final.round_no, seq: final.seq_in_round }))).toHaveCount(0);
+  await expect(page.getByText(nextMatchStartedMessage(boardLabel(EN)))).toHaveCount(0);
 
   // …and nothing was written: no void row, the result stands, the final keeps its player.
   expect(await eventCount(request, line.id), "no void was recorded").toBe(eventsBefore);
