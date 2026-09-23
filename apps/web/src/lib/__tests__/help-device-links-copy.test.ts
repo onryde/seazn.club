@@ -97,3 +97,53 @@ describe("device-links.md never brings the retired claims back", () => {
     expect(offending).toEqual([]);
   });
 });
+
+// Scorer sheets §4.3 (Task 4, review I2). A device may undo its own entries only
+// until the result MOVES THE COMPETITION ON — in a knockout that is the instant
+// the result is entered (the winner is seated in the next match by the same
+// write), in Swiss when the next round is paired, anywhere when the stage
+// completes. After that every device-link write is 403 RESULT_CARRIED_FORWARD
+// and corrections are the organiser's. The article said "right up until the
+// match is finalized", which was the device's bound before Task 4 and is still
+// a SIGNED-IN SCORER's — so corrections.md, which states both, is held to the
+// same rule for its device-link sentence.
+const CORRECTIONS = readFileSync(join(process.cwd(), "content/help/scoring/corrections.md"), "utf8");
+const sentencesOf = (md: string) =>
+  md
+    .replace(/\*\*|__|`/g, "")
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+/** An undo bounded by finalization: "until/before … the match is finalized". */
+const UNDO_UNTIL_FINAL = (s: string) => /\bundo\b/i.test(s) && /\b(until|before)\b[^.;]*\bfinali[sz]ed\b/i.test(s);
+const MOVES_ON = /moves the competition on/i;
+
+describe("the device's undo window ends when the result moves the competition on (scorer sheets §4.3)", () => {
+  it("device-links.md: the undo sentence names the real bound, and each way a result moves on", () => {
+    const undo = SENTENCES.filter((s) => /\bundo\b/i.test(s) && /own entries/i.test(s));
+    expect(undo, "no sentence says what the holder can undo").not.toHaveLength(0);
+    expect(undo.every((s) => MOVES_ON.test(s)), undo.join(" | ")).toBe(true);
+    // Each clause of the predicate, in words a reader recognises.
+    expect(BODY).toMatch(/knockout[^.]*moment the result is entered[^.]*next match/i);
+    expect(BODY).toMatch(/Swiss[^.;]*next round is paired/i);
+    expect(BODY).toMatch(/stage is completed/i);
+    expect(SENTENCES.some((s) => /corrections are the organiser's/i.test(s))).toBe(true);
+  });
+
+  it("device-links.md: no sentence bounds a device's undo by finalization any more", () => {
+    expect(SENTENCES.filter(UNDO_UNTIL_FINAL)).toEqual([]);
+  });
+
+  it("corrections.md: the device-link sentence names the moved-on bound; only a signed-in scorer's undo runs to finalization", () => {
+    const sentences = sentencesOf(CORRECTIONS);
+    const device = sentences.filter((s) => /device link/i.test(s) && /\bundo\b/i.test(s));
+    expect(device, "corrections.md no longer says what a device link can undo").not.toHaveLength(0);
+    expect(device.some((s) => MOVES_ON.test(s)), device.join(" | ")).toBe(true);
+    // "Either way, undo only works before the match is finalized" covered BOTH
+    // actors; a finalization bound may now only speak for a signed-in scorer.
+    const offending = sentences.filter(
+      (s) => UNDO_UNTIL_FINAL(s) && (/device link/i.test(s) || !/signed-in scorer/i.test(s)),
+    );
+    expect(offending).toEqual([]);
+  });
+});
