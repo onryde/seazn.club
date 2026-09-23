@@ -24,6 +24,9 @@
 // The browser proof — a real page, a real pipeline stall, a real dispatch —
 // is `e2e/walkthrough/device-pad-stalled-pipeline.spec.ts`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { ReactElement } from "react";
 import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
 import { OPPORTUNISTIC_RESYNC_MS, type SideInfo, type SportInfo } from "@/components/v2/fixture-console";
@@ -52,6 +55,16 @@ const api = vi.hoisted(() => ({
   /** Every refresh GET is REFUSED with this envelope error — the shape
    *  `apiV1` throws for a revoked/expired link (a real `ApiV1Error`). */
   refuse: null as { code: string; status: number; message: string } | null,
+  /** A 200 that `apiV1` hands back WITHOUT a usable body (review round 2): a
+   *  connection dropped mid-body with no abort (undici `TypeError:
+   *  terminated`) fails the body parse, `apiV1` defaults it to `{}` and
+   *  resolves its `data` — `undefined`. `"state"` answers `/state` that way;
+   *  `"events"` answers the ledger with a non-array. The other GET is healthy. */
+  malformed: null as "state" | "events" | null,
+  /** Route every GET through the REAL `apiV1` (and whatever `fetch` the test
+   *  installs), recording how each call settled — the real-socket case. */
+  real: false,
+  realOutcomes: [] as { url: string; outcome: Promise<{ resolved: unknown } | { rejected: unknown }> }[],
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -61,6 +74,19 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     apiV1: vi.fn((url: string, options?: { method?: string; json?: unknown; signal?: AbortSignal }) => {
       api.calls.push({ url, options });
       if (options?.method === "POST") return Promise.resolve({});
+      if (api.real) {
+        const call = actual.apiV1(url, options);
+        api.realOutcomes.push({
+          url,
+          outcome: call.then(
+            (resolved) => ({ resolved }),
+            (rejected: unknown) => ({ rejected }),
+          ),
+        });
+        return call;
+      }
+      if (api.malformed === "state" && !url.includes("/events")) return Promise.resolve(undefined);
+      if (api.malformed === "events" && url.includes("/events")) return Promise.resolve({});
       if (api.refuse !== null) {
         const { code, status, message } = api.refuse;
         return Promise.reject(new actual.ApiV1Error(message, status, code));
@@ -221,6 +247,9 @@ beforeEach(() => {
   api.hang = false;
   api.resolveUndefinedOnAbort = false;
   api.refuse = null;
+  api.malformed = null;
+  api.real = false;
+  api.realOutcomes.length = 0;
 });
 
 afterEach(() => {
@@ -542,6 +571,134 @@ describe("DeviceScorePad — a tab-return refresh that finds the link dead", () 
 
     expect(refreshCalls()).toHaveLength(2);
     expect(island.text()).toContain(ARRIVED);
+  });
+});
+
+// Review round 2 — A 200 WHOSE BODY NEVER ARRIVED.
+//
+// A connection dropped mid-body with no abort (undici `TypeError:
+// terminated`; a phone switching cells, a proxy resetting) fails `apiV1`'s
+// body parse, which defaults to `{}` — deliberately, the v1 export routes
+// answer non-JSON 200s — so the call RESOLVES `undefined`. `resync` then wrote
+// that into `live` and the next render threw on `live.summary`. Present on
+// `main` via `send()`'s own resync, and newly reachable from every tab return.
+// `resync` now checks the SHAPE before either setter.
+const EN_UI = JSON.parse(readFileSync("src/dictionaries/en/ui.json", "utf8")) as Record<string, string>;
+
+describe("DeviceScorePad — a refresh whose 200 carried no usable body", () => {
+  /** A LATER entry by this same link. In the healthy half of each pair, so a
+   *  guard that let `setEvents` run would retarget "Void my last entry" from
+   *  seq 1 to seq 2 — the witness that the ledger was left untouched. */
+  const OWN_LATER: PadEventIn = { ...OWN, id: "ev-own-2", seq: 2, recorded_at: "2026-09-23T10:06:00.000Z" };
+
+  it.each([
+    { malformed: "state" as const, what: "/state resolved undefined" },
+    { malformed: "events" as const, what: "the ledger resolved a non-array" },
+  ])("$what: state untouched, nothing escapes render, the gate reopens", async ({ malformed }) => {
+    const doc = stubDocument("visible");
+    stubWindow();
+    const island = renderIsland(DeviceScorePad, baseProps());
+
+    // The HEALTHY half of the pair carries a new score, so a guard that let
+    // either setter run would move the header.
+    api.events = [OWN, OWN_LATER];
+    api.headline = ARRIVED;
+    api.malformed = malformed;
+    fire(doc, "visibilitychange");
+    expect(propsOf(voidMine(island.tree())).disabled, "the refresh really is in flight").toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // A FRESH render: one that throws leaves the harness's previous tree in
+    // place, so `island.tree()` alone cannot tell a crashed pad from a live one.
+    expect(() => island.rerender(baseProps()), "the pad crashed rendering a bodiless refresh").not.toThrow();
+    expect(island.text(), "live untouched — neither setter ran").not.toContain(ARRIVED);
+    const settled = voidMine(island.tree());
+    expect(propsOf(settled).title, "events untouched — still this link's own seq 1").toContain("seq 1");
+    expect(propsOf(settled).disabled, "padSyncing cleared by the finally").toBe(false);
+  });
+
+  it("send(): a write that lands but whose refresh comes back bodiless says so in the scorer's language", async () => {
+    // The path that was live on `main`. The POST succeeded; the resync after
+    // it did not. `send()` catches, and — because the guard's error carries no
+    // message of its own — shows the localized fallback rather than a
+    // developer string. Not a crash, and the controls come back.
+    const island = renderIsland(DeviceScorePad, baseProps());
+    api.malformed = "state";
+
+    (propsOf(voidMine(island.tree())).onClick as () => void)();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(api.calls.some((c) => c.options?.method === "POST"), "the write went out").toBe(true);
+    expect(() => island.rerender(baseProps()), "the pad crashed after a bodiless send-resync").not.toThrow();
+    expect(island.text()).toContain(EN_UI["device.failed"]);
+    expect(propsOf(voidMine(island.tree())).disabled, "busy cleared by send()'s finally").toBe(false);
+  });
+
+  it("the REAL path: node fetch, a socket destroyed mid-body with no abort", async () => {
+    // Not a double: the real `apiV1` over node's own `fetch`, against a local
+    // server that sends `/state`'s headers and half its body, then destroys the
+    // socket. The ledger answers whole. Real timers — undici's I/O does not run
+    // on vitest's fake clock.
+    vi.useRealTimers();
+    const held: { res: ServerResponse | null } = { res: null };
+    const server = createServer((req, res) => {
+      if ((req.url ?? "").includes("/events")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, data: [OWN, OWN_LATER] }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"ok":true,"data":{"status":"in_play","summary":{"headline":"0 — 0 (1–');
+      held.res = res;
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    // Destroy only once the client HAS the headers: a socket killed before them
+    // makes `fetch` itself reject, which never reaches the guard.
+    const realFetch = globalThis.fetch;
+    let stateHeadersIn!: () => void;
+    const headersIn = new Promise<void>((resolve) => (stateHeadersIn = resolve));
+    vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
+      const res = await realFetch(new URL(input, base), init);
+      if (!input.includes("/events")) stateHeadersIn();
+      return res;
+    });
+    try {
+      const doc = stubDocument("visible");
+      stubWindow();
+      const island = renderIsland(DeviceScorePad, baseProps());
+      api.real = true;
+
+      fire(doc, "visibilitychange");
+      await headersIn;
+      held.res?.socket?.destroy();
+
+      // Both real calls settle; then give `resync`'s continuation and
+      // `handlePadEvents`' `finally` a turn to run.
+      await vi.waitFor(() => expect(api.realOutcomes).toHaveLength(2), { timeout: 5_000 });
+      const [first, second] = await Promise.all(api.realOutcomes.map((o) => o.outcome));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Precondition: this really is the bodiless-200 path — the real `apiV1`
+      // RESOLVED `/state` with `undefined` rather than rejecting, and the
+      // ledger came home whole. Were `/state` to reject, the refresh would be
+      // swallowed upstream and this case would never reach the guard.
+      const byUrl = api.realOutcomes[0]!.url.includes("/events") ? { state: second, events: first } : { state: first, events: second };
+      expect(byUrl.state, "the dropped body must reach resync as a resolved undefined").toEqual({
+        resolved: undefined,
+      });
+      expect(byUrl.events).toMatchObject({ resolved: [{ id: OWN.id }, { id: OWN_LATER.id }] });
+
+      expect(() => island.rerender(baseProps()), "the pad crashed on a real dropped body").not.toThrow();
+      expect(island.text(), "live untouched").not.toContain(ARRIVED);
+      expect(propsOf(voidMine(island.tree())).title, "events untouched").toContain("seq 1");
+      expect(propsOf(voidMine(island.tree())).disabled, "the gate reopened").toBe(false);
+    } finally {
+      held.res?.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

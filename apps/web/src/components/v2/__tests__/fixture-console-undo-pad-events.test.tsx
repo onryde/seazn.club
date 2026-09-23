@@ -14,14 +14,15 @@
 // stores. This suite proves the OUTCOME: after a pad-driven submit, with NO
 // reload, "Undo last" targets the just-scored event's REAL server id.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
+import { readFileSync } from "node:fs";
+import type { ReactElement, ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { EventIn, SideInfo, SportInfo } from "@/components/v2/fixture-console";
 import { ScorePad } from "@/components/v2/scorepad/registry";
 import { ActivityPanel } from "@/components/v2/scorepad/v3/activity";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -39,6 +40,14 @@ const api = vi.hoisted(() => ({
    *  is precisely the unbounded case. So a test that drives this mode reds on
    *  the real defect rather than on a stubbed rejection. */
   hang: false,
+  /** Review round 2 (G1) — a 200 that `apiV1` hands back WITHOUT a usable
+   *  body: a connection dropped mid-body with no abort (undici `TypeError:
+   *  terminated`) fails the body parse, `apiV1` defaults it to `{}` and
+   *  resolves its `data` — `undefined`. `"state"` answers `/state` that way;
+   *  `"events"` answers the ledger with a non-array. The other GET is healthy.
+   *  The real-socket proof of that `apiV1` behaviour lives in
+   *  `device-score-pad-freshness-floor.test.tsx`. */
+  malformed: null as "state" | "events" | null,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -48,6 +57,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     apiV1: vi.fn((url: string, options?: { method?: string; json?: unknown; signal?: AbortSignal }) => {
       api.calls.push({ url, options });
       if (options?.method === "POST") return Promise.resolve({});
+      if (api.malformed === "state" && !url.includes("/events")) return Promise.resolve(undefined);
+      if (api.malformed === "events" && url.includes("/events")) return Promise.resolve({});
       if (api.hang) {
         return new Promise((_resolve, reject) => {
           const signal = options?.signal;
@@ -178,6 +189,7 @@ beforeEach(() => {
   api.calls.length = 0;
   api.events = [SEEDED];
   api.hang = false;
+  api.malformed = null;
 });
 
 afterEach(() => {
@@ -327,6 +339,80 @@ describe("FixtureConsole — Undo last after a pad-driven submit", () => {
       propsOf(findUndoLast(island.tree())).disabled,
       "a refresh that never answers must not gate the controls forever",
     ).toBe(false);
+  });
+});
+
+// Review round 2 (G1) — A 200 WHOSE BODY NEVER ARRIVED. `resync` wrote
+// `apiV1`'s `undefined` into `live` and the next render threw on
+// `live.summary` (a non-array ledger throws in the ledger panel instead).
+// Reachable from the pad's `onEvents`, the tab-return floor, and — on `main`
+// already — `send()`'s own resync. `resync` now checks both shapes before
+// either setter; each caller must then survive the throw.
+const EN_UI = JSON.parse(readFileSync("src/dictionaries/en/ui.json", "utf8")) as Record<string, string>;
+
+describe("FixtureConsole — a resync whose 200 carried no usable body", () => {
+  const padFired: EventEnvelope = {
+    id: "idem-client-fabricated",
+    fixtureId: "f1",
+    seq: 2,
+    type: "football.goal",
+    payload: {},
+    recordedAt: "2026-08-14T10:05:00.000Z",
+    recordedBy: null,
+  };
+
+  it.each([
+    { malformed: "state" as const, what: "/state resolved undefined" },
+    { malformed: "events" as const, what: "the ledger resolved a non-array" },
+  ])("$what: state untouched, nothing escapes render, the gate reopens", async ({ malformed }) => {
+    const island = renderIsland(FixtureConsole, baseProps());
+    const onEvents = propsOf(findScorePad(island.tree())).onEvents as (events: readonly EventEnvelope[]) => void;
+
+    // The HEALTHY half of the pair has moved on (seq 2), so a guard that let
+    // either setter run would show: `setEvents` retargets Void last to seq 2,
+    // `setLive` moves the `expected_seq` the next write carries to 2.
+    api.events = [SEEDED, PAD_SCORED];
+    api.malformed = malformed;
+    onEvents([padFired]);
+    expect(propsOf(findUndoLast(island.tree())).disabled, "the refresh really is in flight").toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // A FRESH render: one that throws leaves the harness's previous tree in
+    // place, so `island.tree()` alone cannot tell a crashed console from a live one.
+    expect(() => island.rerender(baseProps()), "the console crashed rendering a bodiless resync").not.toThrow();
+    const settled = findUndoLast(island.tree());
+    expect(propsOf(settled).disabled, "padSyncing cleared by the finally").toBe(false);
+    expect(propsOf(settled).title, "events untouched — still targeting seq 1").toContain("seq 1");
+
+    // `live` untouched: the next write still carries the pre-refresh tip.
+    api.malformed = null;
+    (propsOf(settled).onClick as () => void)();
+    await vi.advanceTimersByTimeAsync(1000);
+    const post = api.calls.find((c) => c.options?.method === "POST");
+    expect(post?.options?.json, "live untouched — expected_seq is still the bootstrap's").toMatchObject({
+      expected_seq: 1,
+    });
+  });
+
+  it("send(): a write that lands but whose resync comes back bodiless says so in the operator's language", async () => {
+    // The path live on `main`. The POST succeeds; the resync after it does
+    // not. `send()` catches — and because the guard's error carries no message
+    // of its own, shows the localized fallback, not a developer string.
+    const island = renderIsland(FixtureConsole, baseProps());
+    api.malformed = "state";
+
+    (propsOf(findUndoLast(island.tree())).onClick as () => void)();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(api.calls.some((c) => c.options?.method === "POST"), "the write went out").toBe(true);
+    expect(() => island.rerender(baseProps()), "the console crashed after a bodiless send-resync").not.toThrow();
+    const errorLine = island
+      .tree()
+      .find((e) => e.type === "p" && String(propsOf(e).className ?? "").includes("bg-red-50"));
+    expect(errorLine, "send() must surface the failure").toBeDefined();
+    expect(textOf(propsOf(errorLine!).children as ReactNode)).toBe(EN_UI["score.failed"]);
+    expect(propsOf(findUndoLast(island.tree())).disabled, "busy cleared by send()'s finally").toBe(false);
   });
 });
 

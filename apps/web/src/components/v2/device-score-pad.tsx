@@ -153,6 +153,19 @@ export function DeviceScorePad({
         // on `live.summary`. Checked here as well so no transport that answers
         // an abort by resolving can reach the setters.
         controller?.signal.throwIfAborted();
+        // Nor a 200 whose body never arrived (review round 2). A connection
+        // dropped mid-body WITHOUT an abort (undici `TypeError: terminated`)
+        // fails `apiV1`'s body parse, which defaults to `{}` — deliberately,
+        // the v1 export routes answer non-JSON 200s — so the call RESOLVES
+        // `undefined`. `setLive(undefined)` crashed the next render on
+        // `live.summary`; a non-array ledger crashes `[...events]`. So the
+        // shapes are checked here, before either setter. The error carries no
+        // message on purpose: `send()` renders `err.message` verbatim when it
+        // has one, and without one it shows the scorer the localized
+        // `device.failed` copy instead of a developer string.
+        if (state === null || typeof state !== "object" || !Array.isArray(all)) {
+          throw Object.assign(new Error(), { name: "ResyncShapeError" });
+        }
         setLive(state);
         setEvents(all);
       } finally {

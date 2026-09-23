@@ -467,6 +467,20 @@ export function FixtureConsole({
           apiV1<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
           apiV1<EventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`, { signal: controller?.signal }),
         ]);
+        // Never write a 200 whose body never arrived (G1 review round 2). A
+        // connection dropped mid-body WITHOUT an abort (undici `TypeError:
+        // terminated`) fails `apiV1`'s body parse, which defaults to `{}` —
+        // deliberately, the v1 export routes answer non-JSON 200s — so the
+        // call RESOLVES `undefined`. `setLive(undefined)` crashed the next
+        // render on `live.summary`; a non-array ledger crashes the ledger
+        // panel. So the shapes are checked here, before either setter. Every
+        // caller survives the throw: `handlePadEvents` swallows it and clears
+        // `padSyncing` in its `finally`; `send()` catches it, and because the
+        // error carries no message it shows the localized `score.failed` copy
+        // rather than a developer string.
+        if (state === null || typeof state !== "object" || !Array.isArray(all)) {
+          throw Object.assign(new Error(), { name: "ResyncShapeError" });
+        }
         setLive(state);
         setEvents(all);
       } finally {
