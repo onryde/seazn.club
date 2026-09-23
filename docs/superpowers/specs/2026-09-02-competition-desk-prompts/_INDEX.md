@@ -676,3 +676,25 @@ only what a future session cannot re-derive from the code.
      kinds from the engine's own `ImportOp` union
      (`import-wizard-op-badges.test.ts`), so the next op added moves the test
      with it.
+
+## Issue 850 — round-robin byes (OPEN, 2026-09-23)
+
+**Owner ruling (2026-09-23):** league/group round-robin byes become a REAL
+persisted row for each round, the same shape as the Swiss bye (one seat filled,
+forfeited, `award`). Unlike Swiss, the row awards **no points**: it is excluded
+from standings, qualification, player match counts and public player matches.
+Swiss and knockout bye scoring is unchanged. Chosen over two alternatives:
+"counted like Swiss", which gives league points for not playing and inflates
+every total, and "display-only / derived", which goes wrong once an organiser
+edits fixtures.
+
+**Owner rulings (2026-09-23, second round), chosen from options shown before building:**
+- Run sheet: reuse the Swiss ghost row, "Round N · X has a bye", inside its
+  round (and pool). Rejected: a round-header "sits out" note, because it would
+  be a second convention for the same thing.
+- A round-robin ghost row has NO outcome suffix. Swiss keeps "(won w/o)",
+  because a Swiss bye really is a win; a league bye scores nothing, so the
+  suffix would be false.
+- ICS drops one-sided bye rows for ALL stage kinds, including Swiss, which
+  previously emitted all-day "X vs Bye" events. A bye is not an event anyone
+  attends.
