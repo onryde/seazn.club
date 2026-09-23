@@ -35,6 +35,7 @@ import type { MessageKey } from "@/lib/messages";
 // renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 import { entrantDisplayName } from "@/lib/entrant-name";
+import { VIEW_ONLY_COPY, type ViewOnlyReason } from "@/lib/scan-screen";
 
 export type PadSideInfo = SideInfo;
 
@@ -76,6 +77,10 @@ interface Props {
    *  pad section then renders nothing rather than a fallback, since
    *  S13/#422 removed the v1 pad it used to fall back to. */
   scorePadV2?: ScorePadBootstrap | null;
+  /** Scorer sheets §4.5 — open on View-only (a final scoreboard, no controls)
+   *  for a reason the scan page already knows at load. `null`/absent opens
+   *  live; a refused write can still move a live screen here (`viewOnly`). */
+  initialViewOnly?: ViewOnlyReason | null;
 }
 
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
@@ -91,6 +96,7 @@ export function DeviceScorePad({
   initialState,
   initialEvents,
   scorePadV2 = null,
+  initialViewOnly = null,
 }: Props) {
   const msg = useMsg();
   const statusLabel = (s: string) => {
@@ -102,6 +108,12 @@ export function DeviceScorePad({
   const [events, setEvents] = useState<PadEventIn[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
   const [dead, setDead] = useState<string | null>(null);
+  /** Scorer sheets §4.5 — the link is alive but this fixture is over for it:
+   *  a final scoreboard, no controls. NOT `dead` (the link still resolves, so
+   *  `RESULT_CARRIED_FORWARD` is deliberately absent from `DEAD_CODES`). Two
+   *  ways in once mounted: this chrome's own `send()` refused, or the inner
+   *  pad's pipeline refused (`onTerminalRefusal`, via the registry). */
+  const [viewOnly, setViewOnly] = useState<ViewOnlyReason | null>(initialViewOnly);
   const [busy, setBusy] = useState(false);
   /** True while an opportunistic post-pad-event `resync()` is in flight.
    *  Separate from `busy` on purpose: `busy` means "a send of MINE is
@@ -201,6 +213,24 @@ export function DeviceScorePad({
       .finally(() => setPadSyncing(false));
   }, [resync]);
 
+  /** Scorer sheets §4.5 — entering View-only while this screen is live, from
+   *  either way in: this chrome's own `send()` refused, or the inner pad's
+   *  (`onTerminalRefusal`, via the registry, for `transport.ts`'s
+   *  CHROME_TERMINAL_CODES — whose one member is the carried-forward refusal).
+   *
+   *  A write was just refused because the result moved the competition on,
+   *  and nothing told this chrome the match had even ended — that is how a
+   *  write got tapped at all — so its header can still read "Live" over a
+   *  stale score. View-only keeps the header as the FINAL scoreboard (§4.5.3),
+   *  so it re-reads the server's settled state once, through
+   *  `handlePadEvents`: bounded, and a dead link still lands on the dead
+   *  screen. Stable for the life of the link, and above the `if (dead)`
+   *  return (Rules of Hooks). */
+  const enterCarriedForward = useCallback(() => {
+    setViewOnly("carried_forward");
+    handlePadEvents();
+  }, [handlePadEvents]);
+
   const send: SendEvent = useCallback(
     async (type, payload) => {
       setError(null);
@@ -235,6 +265,10 @@ export function DeviceScorePad({
       } catch (err) {
         if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) {
           setDead(err.message);
+        } else if (err instanceof ApiV1Error && err.code === "RESULT_CARRIED_FORWARD") {
+          // Scorer sheets §4.5 — the chrome's own write (Start, "Void my last
+          // entry") refused because the result moved the competition on.
+          enterCarriedForward();
         } else if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
           await resync().catch(() => undefined);
           setError(msg("device.seqConflict"));
@@ -254,7 +288,7 @@ export function DeviceScorePad({
         setBusy(false);
       }
     },
-    [authed, fixture.id, live.last_seq, resync],
+    [authed, fixture.id, live.last_seq, resync, enterCarriedForward],
   );
 
   // G1 — this pad's own freshness floor: the one W3 gave the console
@@ -372,6 +406,9 @@ export function DeviceScorePad({
   const started = live.status !== "scheduled";
   const scoring = live.status !== "finalized" && live.status !== "cancelled";
   const inPlay = live.status === "in_play";
+  // Scorer sheets §4.5.3 — View-only is "final scoreboard, no controls": the
+  // header stays, every control and the inner pad go.
+  const canAct = viewOnly === null;
 
   // Undo-own (doc 13 §7): only un-voided events THIS link recorded.
   const lastOwnVoidable = [...events]
@@ -441,13 +478,23 @@ export function DeviceScorePad({
         </p>
       </header>
 
+      {viewOnly !== null && (
+        <p
+          data-testid="scan-view-only"
+          role="status"
+          className="rounded-md border border-slate-700 bg-slate-900 px-3 py-3 text-center text-sm text-slate-200"
+        >
+          {msg(VIEW_ONLY_COPY[viewOnly])}
+        </p>
+      )}
+
       {error && (
         <p className="rounded-md border border-red-900/50 bg-red-950/60 px-3 py-2 text-sm text-red-300">
           {error}
         </p>
       )}
 
-      {scoring && home && away && (!started || lastOwnVoidable) && (
+      {canAct && scoring && home && away && (!started || lastOwnVoidable) && (
         <div className="flex flex-wrap gap-2">
           {!started && (
             <button
@@ -485,7 +532,7 @@ export function DeviceScorePad({
           narrower `!decided`): a decided fixture keeps the pad mounted iff
           its own `padSpec(cfg)` declares a post-phase panel, the same
           predicate `fixture-console.tsx` shares. */}
-      {scorePadV2 && scoring && shouldMountPad({ decided, padSpec: padSpecForMount }) && home && away && (
+      {canAct && scorePadV2 && scoring && shouldMountPad({ decided, padSpec: padSpecForMount }) && home && away && (
         <section className="card p-4">
           <ScoringErrorBoundary>
             <ScorePad
@@ -500,12 +547,13 @@ export function DeviceScorePad({
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
               onEvents={handlePadEvents}
+              onTerminalRefusal={enterCarriedForward}
             />
           </ScoringErrorBoundary>
         </section>
       )}
 
-      {decided && scoring && (
+      {canAct && decided && scoring && (
         <p className="rounded-md border border-emerald-900/50 bg-emerald-950/60 px-3 py-2 text-sm text-emerald-300">
           {msg("device.resultRecorded")}
         </p>

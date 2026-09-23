@@ -67,6 +67,11 @@ export const REFUSAL_KEY: Readonly<Record<string, MessageKey>> = {
   // `refusalText` names the match whenever the ref is there.
   NEXT_MATCH_STARTED: "scorepad.refusal.nextMatchStarted",
   QUEUE_STALLED: "scorepad.refusal.queueStalled",
+  // Scorer sheets §4.5 — a device link's write once the result has moved the
+  // competition on (`usecases/carried-forward.ts`). Terminal for the chrome
+  // too (`transport.ts`'s CHROME_TERMINAL_CODES), which leaves the pad; this
+  // is the pad's own banner for the moment before it does.
+  RESULT_CARRIED_FORWARD: "scorepad.refusal.carriedForward",
 };
 
 /** The one sentence that is true of every refusal, known code or not. */

@@ -257,6 +257,26 @@ export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Scorer sheets §4.5 — refusals that end what THIS SURFACE may do on the
+ * fixture, not only this one write. The transport already classifies them as
+ * `rejected` with their code (a 403 carrying our envelope, below); the
+ * pipeline drops the write like any rejection. What these add is a signal to
+ * the CHROME around the pad (`onTerminalRefusal`), which must change screens.
+ * Each member is pinned against the server source that sends it.
+ *
+ * A string literal, not an import: `@/server/**` is banned from this bundle
+ * (`__tests__/server-boundary.test.ts`), so `transport.test.ts` pins each
+ * member against `usecases/carried-forward.ts` read as text.
+ */
+export const CHROME_TERMINAL_CODES: ReadonlySet<string> = new Set(["RESULT_CARRIED_FORWARD"]);
+
+export function terminalRefusalOf(
+  rejection: { code: string; message: string } | null,
+): { code: string; message: string } | null {
+  return rejection !== null && CHROME_TERMINAL_CODES.has(rejection.code) ? rejection : null;
+}
+
+/**
  * Is this status the server permanently refusing THIS write?
  *
  * R6 FIX PASS 3, GAP 1 — the ship-blocker this predicate exists to kill.

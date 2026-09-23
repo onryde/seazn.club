@@ -409,6 +409,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // sheets only when the stage has device links. The panel's unit suite
   // drives a double and can see none of the wire.
   "scorer-sheets-handover-panel.spec.ts",
+  // Scorer sheets §4.5 — the carried-forward seam, driven from its real
+  // producer (a courtside INNER-pad tap) to its real consumer (the chrome's
+  // View-only screen). No unit test can see the pipeline → registry → chrome hop.
+  "device-pad-carried-forward.spec.ts",
 ];
 
 afterEach(() => {

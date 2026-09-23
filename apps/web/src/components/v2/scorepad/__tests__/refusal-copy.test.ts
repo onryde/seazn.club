@@ -19,7 +19,7 @@ import nl from "@/dictionaries/nl/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
 import { matchRef } from "@/lib/slot-label";
 import { REFUSAL_FALLBACK, REFUSAL_KEY, refusalText } from "../refusal-copy";
-import { isPermanentRefusal } from "../transport";
+import { CHROME_TERMINAL_CODES, isPermanentRefusal } from "../transport";
 
 const identityMsg = ((key: string) => key) as MsgFn;
 const dict = en as Record<string, string>;
@@ -38,6 +38,19 @@ describe("refusalText", () => {
   it("gives a known wire code the pad's own words", () => {
     expect(refusalText({ code: "PAYMENT_REQUIRED", message: "Plan upgrade required: x" }, identityMsg)).toBe(
       "scorepad.refusal.planLocked",
+    );
+  });
+
+  // Scorer sheets §4.5 — the pad's banner for a refusal that also ends the
+  // surface: its own words, never the generic fallback (the pad shows it for
+  // the moment before the chrome leaves).
+  it("gives every chrome-terminal refusal its own words, not the fallback", () => {
+    expect(CHROME_TERMINAL_CODES.size).toBeGreaterThan(0);
+    for (const code of CHROME_TERMINAL_CODES) {
+      expect(REFUSAL_KEY[code], `${code} has no copy of its own`).toBeDefined();
+    }
+    expect(refusalText({ code: "RESULT_CARRIED_FORWARD", message: "server prose" }, identityMsg)).toBe(
+      "scorepad.refusal.carriedForward",
     );
   });
 
@@ -152,10 +165,17 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
   // So the guard is "minted by a real producer", not "absent from one file" —
   // widened rather than weakened: a code belonging to no producer at all still
   // fails, which is the invention this test exists to catch.
+  //
+  // Scorer sheets §4.5 added a third server shape: `scoring.ts` throws
+  // `RESULT_CARRIED_FORWARD` by NAME, a constant `carried-forward.ts` declares
+  // (the scan page asks the same module). Both halves are required — the
+  // declaration AND the throw passing it as the code — so a constant nothing
+  // throws still counts as invented.
   it("does not invent codes: every entry is minted by a real producer", () => {
     const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
     const http = read("src/server/api-v1/http.ts");
     const scoring = read("src/server/usecases/scoring.ts");
+    const carried = read("src/server/usecases/carried-forward.ts");
     const pipeline = read("src/components/v2/scorepad/pipeline.ts");
     // fed-seats.ts throws under the shared constant from the import-free
     // `lib/next-match-started.ts`, so the literal lives there.
@@ -167,11 +187,13 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
         ? "http.ts statusCode()"
         : scoring.includes(`"${code}"`)
           ? "scoring.ts explicit refusal"
-          : pipeline.includes(`code: "${code}"`)
-            ? "pipeline.ts (client-minted)"
-            : nextMatch.includes(`NEXT_MATCH_STARTED_CODE = "${code}"`) && fedSeats.includes("NEXT_MATCH_STARTED_CODE,")
-              ? "fed-seats.ts next-match refusal"
-              : null;
+          : carried.includes(`export const ${code} = "${code}"`) && new RegExp(`HttpError\\([^)]*, ${code}\\)`).test(scoring)
+            ? "scoring.ts refusal by a carried-forward.ts constant"
+            : pipeline.includes(`code: "${code}"`)
+              ? "pipeline.ts (client-minted)"
+              : nextMatch.includes(`NEXT_MATCH_STARTED_CODE = "${code}"`) && fedSeats.includes("NEXT_MATCH_STARTED_CODE,")
+                ? "fed-seats.ts next-match refusal"
+                : null;
       expect(producer, `${code} is minted by nothing: no status map, no usecase throw, no client path`).not.toBeNull();
     }
   });
