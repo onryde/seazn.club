@@ -91,6 +91,7 @@ import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import { StandingsPopover } from "./standings-popover";
+import { QualCutRow, QualLegend, QualMarker, QualPopoverBody } from "./qualification-bits";
 
 export interface StandingsTableViewProps {
   view: TableViewT;
@@ -100,7 +101,10 @@ export interface StandingsTableViewProps {
    *  A division can publish an overall table AND one per pool on the same
    *  screen, so an entrant appears in two tables at once: a bare
    *  `mh-table-row-<id>` literal would emit duplicate ids. Nothing here is
-   *  allowed to name itself outside this prefix. */
+   *  allowed to name itself outside this prefix — except the two shared
+   *  qualification bits (`qual-cut`, `qual-legend`), whose fixed testids are
+   *  the same on every standings surface and are found INSIDE this section's
+   *  own testid, never page-wide. */
   testid: string;
   /** Render only the first N rows (the overview tab's teaser). Omitted =
    *  every row. */
@@ -140,8 +144,13 @@ function columnSize(chars: number): (typeof COLUMN_SIZES)[number] {
 }
 
 /** The rank column: `w-12` (48px) less `pl-2` (8px) = 40px of content box, for
- *  a three-digit chip (~25px) plus the gap and the tie-break marker (~6px)
- *  side by side. */
+ *  the chip plus the gap and whichever marker the row carries — the tie-break
+ *  `*` (~6px) or the 16px qualification marker (which takes the `*`'s place,
+ *  never sits beside it). Measured in Chromium on the built hub (Task 8), with
+ *  the digits injected into a real chip: one or two digits 20 + 1 + 16 = 37px,
+ *  three digits 21.9 + 1 + 16 = 38.9px — inside the box, at 320 and at 1280.
+ *  Only a four-digit rank (27.9px) overhangs, by 4.9px. So the marker costs
+ *  the column nothing, and `NAME_MIN_PX` and both floors are unchanged. */
 const RANK_PX = 48;
 
 /** The narrowest the name column may ever be. 96px holds the 20px crest, its
@@ -269,6 +278,16 @@ export function StandingsTableView({
     return "pr-0.5";
   };
 
+  // ── THE CUT LINE ──────────────────────────────────────────────────────────
+  // Its first cell spans rank, name and the columns shown at the narrowest
+  // width; each column that folds gets an empty cell carrying that column's
+  // OWN fold class, so the row spans exactly what the header shows at every
+  // width. One `colSpan` over every column crushed the name column under
+  // `table-fixed` (`QualCutRow` has the measurement).
+  const cut = view.qualification;
+  const shownCount = view.columns.filter(shown).length;
+  const cutFolds = view.columns.filter((c) => !shown(c)).map((c) => foldCls(c).trim());
+
   const rankChip = (rank: number | null) => (
     <span
       className={`inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-0.5 font-display text-[12px] font-bold ${
@@ -379,11 +398,18 @@ export function StandingsTableView({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {/* A FLAT list — each entrant's row, then the cut line after
+                    place N — not a Fragment per entrant: a Fragment moves every
+                    row one level down the tree and shifts every popover's
+                    `useId`, so the no-cut table would stop being byte-for-byte
+                    what it was (the division table's M9, and the goldens in
+                    `standings-table-view-qualification.test.tsx`). */}
+                {rows.flatMap((r, index) => [
                   <tr
                     key={r.entrantId}
                     data-testid={`${testid}-row-${r.entrantId}`}
                     data-champion={r.champion ? "true" : "false"}
+                    data-qual={r.qual?.status}
                     className={`border-b border-zinc-100 last:border-0 ${
                       r.rank === 1 ? "bg-amber-50/60" : ""
                     }`}
@@ -405,8 +431,31 @@ export function StandingsTableView({
                         tap target that stays inside its own row. At `py-2`
                         (a 36px row) two neighbouring rows' targets overlapped
                         and the lower one took the upper one's taps. */}
+                    {/* A row with a qualification status: its rank opens ONE
+                        popover — status headline, what a loss would do, the
+                        tie note when the row is tied, the what-if (spec §5, in
+                        that order). The builder names the button ("Rank 3,
+                        Needs help, show details") because the marker is
+                        aria-hidden and the chip alone says only "3". The marker
+                        takes the tie asterisk's place — the note is in the
+                        panel — and the tied row keeps its `-tie-` test id.
+                        Same hit area as the tie trigger below. */}
                     <td className="py-2.5 pl-2 align-middle tabular-nums">
-                      {r.tieBreakText ? (
+                      {r.qual ? (
+                        <StandingsPopover
+                          testid={`${testid}-${r.tieBreakText ? "tie" : "rank"}-${r.entrantId}`}
+                          ariaLabel={r.qual.ariaLabel}
+                          className="-my-2.5 flex items-center gap-px py-2.5"
+                          trigger={
+                            <>
+                              {rankChip(r.rank)}
+                              <QualMarker status={r.qual.status} />
+                            </>
+                          }
+                        >
+                          <QualPopoverBody qual={r.qual} tieNote={r.tieBreakText} />
+                        </StandingsPopover>
+                      ) : r.tieBreakText ? (
                         <StandingsPopover
                           testid={`${testid}-tie-${r.entrantId}`}
                           className="-my-2.5 flex items-center gap-px py-2.5"
@@ -442,8 +491,12 @@ export function StandingsTableView({
                             monogram. */}
                         <EntityLogo src={r.badgeUrl} name={r.name} colour={r.colour} size={20} />
                         {/* `truncate` needs `min-w-0` on the whole ancestor
-                            chain, not just this span. */}
-                        <span className="block min-w-0 truncate" title={r.name}>
+                            chain, not just this span. An Out row reads muted,
+                            as its marker does (spec §5). */}
+                        <span
+                          className={`block min-w-0 truncate${r.qual?.status === "out" ? " text-ink-muted" : ""}`}
+                          title={r.name}
+                        >
                           {r.name}
                         </span>
                       </span>
@@ -479,11 +532,26 @@ export function StandingsTableView({
                         </td>
                       );
                     })}
-                  </tr>
-                ))}
+                  </tr>,
+                  // After place N — never under the last row SHOWN, where it
+                  // says nothing and would take `tr:last-child` (the panel that
+                  // opens upward) from the last entrant. So a preview that
+                  // stops at or before the line draws no line.
+                  ...(cut && index === cut.cutIndex - 1 && index < rows.length - 1
+                    ? [<QualCutRow key="qual-cut" colSpan={2 + shownCount} label={cut.label} folds={cutFolds} />]
+                    : []),
+                ])}
               </tbody>
             </table>
           </div>
+
+          {/* Under the box, outside its sideways scroll, so it wraps to the
+              card's width. The full table only: the Overview's preview is a
+              teaser beside a "Full division" link, and keeps its markers and
+              line without the key to them (controller ruling OQ3). */}
+          {view.qualification && preview === undefined ? (
+            <QualLegend legend={view.qualification.legend} />
+          ) : null}
 
           {hasLongTail ? (
             <button
