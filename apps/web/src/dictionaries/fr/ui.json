@@ -2720,7 +2720,7 @@
   "dlink.failed": "Échec",
   "dlink.kekMissing": "Les liens de score ne sont pas disponibles sur ce serveur pour le moment. Contactez le support.",
   "dlink.title": "Passez cet appareil",
-  "dlink.desc": "La personne qui tient le téléphone marque cette rencontre en tant que {scorer} — aucun compte requis. Le lien fonctionne aujourd'hui seulement, pour cette rencontre uniquement ; elle ne peut pas finaliser.",
+  "dlink.desc": "La personne qui tient le téléphone marque cette rencontre en tant que {scorer} — aucun compte requis. Le lien fonctionne pour cette rencontre uniquement, jusqu'à ce qu'elle soit finalisée ou annulée ; elle ne peut pas finaliser.",
   "dlink.alt": "QR du lien de score",
   "dlink.sameQr": "Toujours le même QR — Révoquer et réémettre si une feuille est perdue.",
   "dlink.copy": "Copier le lien",

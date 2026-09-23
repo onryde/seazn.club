@@ -160,6 +160,14 @@ describe("device-link panel — what it says about a sealed link (null expiry)",
     expect(island.text()).not.toMatch(/19(69|70)/);
   });
 
+  it("the panel's description says the link lives until the match is finalized or cancelled — never 'today only'", async () => {
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    expect(island.text()).toContain(t("dlink.desc", { scorer: "umpire" }));
+    expect(island.text()).toContain("until it's finalized or cancelled");
+    expect(island.text()).not.toMatch(/\btoday\b/i);
+  });
+
   it("a dated row still gets the dated line (the positive pair of the case above)", async () => {
     api.active = { ...SEALED, expires_at: "2026-09-23T23:59:59.000Z" };
     const island = renderIsland(DeviceLinkPanel, PROPS);

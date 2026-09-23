@@ -2675,7 +2675,7 @@
   "dlink.failed": "Error",
   "dlink.kekMissing": "Los enlaces de anotación no están disponibles en este servidor ahora mismo. Contacta con soporte.",
   "dlink.title": "Entrega este dispositivo",
-  "dlink.desc": "Quien tenga el teléfono anota este partido como {scorer}, sin necesidad de cuenta. El enlace funciona solo hoy y solo para este partido; no puede finalizarlo.",
+  "dlink.desc": "Quien tenga el teléfono anota este partido como {scorer}, sin necesidad de cuenta. El enlace funciona solo para este partido, hasta que se finalice o se cancele; no puede finalizarlo.",
   "dlink.alt": "QR del enlace de anotación",
   "dlink.sameQr": "Siempre el mismo QR: revoca y vuelve a emitir si se pierde una hoja.",
   "dlink.copy": "Copiar enlace",

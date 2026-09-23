@@ -2720,7 +2720,7 @@
   "dlink.failed": "Failed",
   "dlink.kekMissing": "Scoring links aren't available on this server right now. Contact support.",
   "dlink.title": "Hand this device over",
-  "dlink.desc": "Whoever holds the phone scores this fixture as the {scorer} — no account needed. The link works today only, for this fixture only; they can't finalize.",
+  "dlink.desc": "Whoever holds the phone scores this fixture as the {scorer} — no account needed. The link works for this fixture only, until it's finalized or cancelled; they can't finalize.",
   "dlink.alt": "Scoring link QR",
   "dlink.sameQr": "Same QR every time — Revoke & reissue if a sheet is lost.",
   "dlink.copy": "Copy link",
