@@ -8,7 +8,8 @@
 // server-component-page-test memory: an async server component returns an
 // element TREE, so no renderToStaticMarkup is needed to read what it handed
 // a named child.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomBytes as kekBytes } from "node:crypto";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { sql } from "@/lib/db";
 import { createCompetition } from "@/server/usecases/competitions";
@@ -19,6 +20,11 @@ import { createDeviceLink } from "@/server/usecases/device-links";
 import { seedCourts, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { DeviceScorePad } from "@/components/v2/device-score-pad";
 import ScorePadPage from "../page";
+
+// Every mint seals now (scorer sheets §4.1). A throwaway key of this file's own,
+// never the developer's .env.local one: CI's unit job has no DEVICE_LINK_KEK at
+// all. Never printed; restored in afterAll.
+vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex"));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -78,6 +84,7 @@ async function seedScorableFixture(): Promise<{
 }
 
 afterAll(async () => {
+  vi.unstubAllEnvs();
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
   const client = globalForDb._sql;

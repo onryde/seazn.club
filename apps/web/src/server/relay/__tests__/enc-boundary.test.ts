@@ -1,12 +1,15 @@
 // design §6.2: every *_enc column is named only by its owner — server/relay/**
 // for the stream columns, device-links.ts for the device-link secret (scorer
-// sheets §4.1). Two claims, because an enumerating grep is only as good as its list:
+// sheets §4.1). Claims, because an enumerating grep is only as good as its list:
 //  1. every *_enc column ANY delta declares is owned (ENC_COLUMNS is derived
 //     from the migration files, never typed here — an encrypted column added
 //     later cannot walk past this test with the list still green);
 //  2. no stream column appears in any .ts/.tsx under apps/web/src outside
 //     server/relay/**. Mutant r3: reference `ingest_srt_key_enc` in a usecase
 //     → red.
+//  3. outside __tests__, device-links.ts is the ONLY file naming secret_enc —
+//     and it does (the positive half: an owner that stopped naming it would
+//     leave the column written by nobody, which an empty scan cannot see).
 // Pure (no DB); runs in every CI job. Same glob discipline as
 // redirect-origin.test.ts (a narrow glob was that review's finding).
 import { describe, expect, it } from "vitest";
@@ -65,6 +68,15 @@ describe("*_enc columns never leave their owners", () => {
       .filter((f) => new RegExp(`\\b(${STREAM_COLUMNS.join("|")})\\b`).test(readFileSync(f, "utf8")))
       .map((f) => relative(SRC, f));
     expect(inside).toEqual(["server/relay/secret-columns.ts"]);
+  });
+
+  it("outside __tests__, only device-links.ts names secret_enc — and it does", () => {
+    const pattern = new RegExp(`\\b(${DEVICE_LINK_COLUMNS.join("|")})\\b`);
+    const naming = walk(SRC)
+      .map((f) => relative(SRC, f))
+      .filter((f) => !f.split("/").includes("__tests__"))
+      .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
+    expect(naming).toEqual([DEVICE_LINK_OWNER]);
   });
 });
 

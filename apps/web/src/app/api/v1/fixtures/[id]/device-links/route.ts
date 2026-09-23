@@ -1,18 +1,19 @@
 import { v1, reply, parseBody } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
-import { rateLimit } from "@/lib/rate-limit";
+// Per-IP limit on the mint doors (doc 08 §6 pattern; PROMPT-21 item 5), shared
+// with …/reissue. Route files may export only handlers, so it lives in lib.
+import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { CreateDeviceLink } from "@/server/api-v1/schemas";
-import { createDeviceLink, getActiveDeviceLink } from "@/server/usecases/device-links";
+import { ensureDeviceLink, getActiveDeviceLink } from "@/server/usecases/device-links";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-// Per-IP limit on the mint route (doc 08 §6 pattern; PROMPT-21 item 5).
-const MINT_LIMIT = { max: 10, windowSeconds: 60 };
-
 /**
- * Mint a day-of device link (doc 13 §7): editor session only, secret shown
- * once, prior active links for the fixture are revoked (one live device).
- * 402 `scoring.device_links` for Community orgs.
+ * The fixture's device link (doc 13 §7; scorer sheets §4.2): editor session
+ * only. Re-shows the live sealed link unchanged (200) or mints one (201),
+ * replacing a legacy hash-only link. Never revokes a sealed link — Revoke &
+ * reissue is `POST …/device-links/reissue`. 402 `scoring.device_links` for
+ * Community without an Event Pass.
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
@@ -21,10 +22,11 @@ export async function POST(req: Request, { params }: Ctx) {
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
       req.headers.get("x-real-ip") ??
       "unknown";
-    await rateLimit(`dlmint:${ip}`, MINT_LIMIT);
+    await rateLimit(`dlmint:${ip}`, DEVICE_LINK_MINT_LIMIT);
     const body = await parseBody(req, CreateDeviceLink);
     const auth = await requireResourceAuth(req, "fixture", id, "write");
-    return reply(201, await createDeviceLink(auth, id, body.label ?? null));
+    const { row, secret, minted } = await ensureDeviceLink(auth, id, body.label ?? null);
+    return reply(minted ? 201 : 200, { ...row, secret });
   });
 }
 

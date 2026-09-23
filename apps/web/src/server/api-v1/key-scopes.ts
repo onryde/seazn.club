@@ -332,6 +332,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /fixtures/:id/device-links",
   "GET /fixtures/:id/device-links",
   "DELETE /fixtures/:id/device-links/:linkId",
+  "POST /fixtures/:id/device-links/reissue",
   "POST /registrations/:id/refund",
   // Destructive + money-adjacent (payments-hardening P0-1): deleting a
   // competition cascades registrations/passes; console has no button —

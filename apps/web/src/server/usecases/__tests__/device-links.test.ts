@@ -3,8 +3,8 @@
 // undo-own-only, finalize 403, expiry/revocation → 401 with distinct codes,
 // hash-chain integrity with device_link_id riding outside the canonical,
 // and the Community 402. Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { PaymentRequiredError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -22,10 +22,20 @@ import {
   getActiveDeviceLink,
   resolveDeviceLinkToken,
   endOfLocalDay,
+  ensureDeviceLink,
+  ensureDeviceLinks,
+  isLiveExpiry,
 } from "../device-links";
 import { eventRecorderNames } from "../fixtures";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+
+// Every mint seals now (scorer sheets §4.1). A throwaway key of this file's own,
+// never the developer's .env.local one: CI's unit job has no DEVICE_LINK_KEK at
+// all, so an ambient key would make a local run test something CI cannot. Never
+// printed; restored in afterAll.
+vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex"));
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const DIVISION_CONFIG = {
@@ -115,6 +125,7 @@ const dlRequest = (secret: string) =>
   });
 
 afterAll(async () => {
+  vi.unstubAllEnvs();
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
   const client = globalForDb._sql;
@@ -396,3 +407,321 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
     expect(scored.seq).toBe(1);
   });
 });
+
+describe("isLiveExpiry (pure)", () => {
+  it("null is 'until the fixture is over', never the epoch (P1)", () => {
+    expect(isLiveExpiry(null, Date.parse("2030-01-01T00:00:00Z"))).toBe(true);
+  });
+  it("a past instant is dead, a future one live", () => {
+    const now = Date.parse("2026-09-23T12:00:00Z");
+    expect(isLiveExpiry("2026-09-23T11:59:59Z", now)).toBe(false);
+    expect(isLiveExpiry("2026-09-23T12:00:01Z", now)).toBe(true);
+  });
+  it("the expiry instant itself is dead: the same edge as SQL's `expires_at > now()`", () => {
+    const now = Date.parse("2026-09-23T12:00:00Z");
+    expect(isLiveExpiry("2026-09-23T12:00:00Z", now)).toBe(false);
+  });
+});
+
+describe.skipIf(!HAS_DB)("ensureDeviceLink (scorer sheets §4.2)", () => {
+  it("a sealed link has no expiry and RESOLVES (a null expires_at is not LINK_EXPIRED)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const { row, secret, minted } = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(minted).toBe(true);
+    expect(row.expires_at).toBeNull();
+    await expect(resolveDeviceLinkToken(secret)).resolves.toMatchObject({ fixture_id: fixtures[0].id });
+    const active = await getActiveDeviceLink(owner, fixtures[0].id);
+    expect(active?.id).toBe(row.id);
+  });
+
+  it("twice returns the SAME secret and id, and the second call writes no row", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const a = await ensureDeviceLink(owner, fixtures[0].id);
+    const b = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(b.secret).toBe(a.secret);
+    expect(b.row.id).toBe(a.row.id);
+    expect(b.minted).toBe(false);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from device_links where fixture_id = ${fixtures[0].id}`;
+    expect(n).toBe(1);
+  });
+
+  it("replaces a legacy hash-only live link: fresh secret, the legacy one revoked", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const legacy = await createDeviceLink(owner, fixtures[0].id, null);
+    await sql`update device_links set secret_enc = null, expires_at = now() + interval '6 hours'
+              where id = ${legacy.id}`;
+    const ensured = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(ensured.minted).toBe(true);
+    expect(ensured.secret).not.toBe(legacy.secret);
+    await expect(resolveDeviceLinkToken(legacy.secret)).rejects.toMatchObject({ code: "LINK_REVOKED" });
+    await expect(resolveDeviceLinkToken(ensured.secret)).resolves.toMatchObject({ id: ensured.row.id });
+  });
+
+  it("after Revoke & reissue, ensure hands back the REISSUED secret", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const first = await ensureDeviceLink(owner, fixtures[0].id);
+    const reissued = await createDeviceLink(owner, fixtures[0].id, null);
+    const again = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(again.secret).toBe(reissued.secret);
+    expect(again.secret).not.toBe(first.secret);
+    await expect(resolveDeviceLinkToken(first.secret)).rejects.toMatchObject({ code: "LINK_REVOKED" });
+  });
+
+  it("allows a fixture with a TBD side — the link is bound to the fixture (D2)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    await sql`update fixtures set home_entrant_id = null where id = ${fixtures[0].id}`;
+    await expect(ensureDeviceLink(owner, fixtures[0].id)).resolves.toMatchObject({ minted: true });
+  });
+
+  it("refuses finalized and cancelled with 422 — and a scheduled sibling still mints", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    await sql`update fixtures set status = 'finalized' where id = ${fixtures[0].id}`;
+    await sql`update fixtures set status = 'cancelled' where id = ${fixtures[1].id}`;
+    await expect(ensureDeviceLink(owner, fixtures[0].id)).rejects.toMatchObject({ status: 422 });
+    await expect(ensureDeviceLink(owner, fixtures[1].id)).rejects.toMatchObject({ status: 422 });
+    // Reissue walks the same door: nothing left to score, nothing to hand over.
+    await expect(createDeviceLink(owner, fixtures[0].id, null)).rejects.toMatchObject({ status: 422 });
+    await expect(ensureDeviceLink(owner, fixtures[2].id)).resolves.toMatchObject({ minted: true });
+  });
+
+  it("refuses an API key: session editors only", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, fixtures } = await rig(owner);
+    const viaKey: AuthCtx = { ...owner, via: "api_key", keyId: randomUUID() } as AuthCtx;
+    await expect(ensureDeviceLink(viaKey, fixtures[0].id)).rejects.toMatchObject({ status: 403 });
+    // The print path and reissue refuse it too — the key keeps its userId, so
+    // nothing but the session check stands between it and a mint.
+    await expect(ensureDeviceLinks(viaKey, competition.id, [fixtures[0].id])).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(createDeviceLink(viaKey, fixtures[0].id, null)).rejects.toMatchObject({ status: 403 });
+    // The positive pair: the session DOES mint here, and it is the first link —
+    // none of the three refusals above wrote one.
+    await expect(ensureDeviceLink(owner, fixtures[0].id)).resolves.toMatchObject({ minted: true });
+  });
+
+  it("Community without a pass: 402 scoring.device_links", async () => {
+    const { orgId, ownerId } = await seedOrg("community");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    await expect(ensureDeviceLink(owner, fixtures[0].id)).rejects.toBeInstanceOf(PaymentRequiredError);
+  });
+
+  it("concurrent ensures on one fixture agree on ONE secret (Review Focus 1)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const results = await Promise.all(Array.from({ length: 6 }, () => ensureDeviceLink(owner, fixtures[0].id)));
+    expect(new Set(results.map((r) => r.secret)).size).toBe(1);
+    const [{ live }] = await sql<{ live: number }[]>`
+      select count(*)::int as live from device_links
+      where fixture_id = ${fixtures[0].id} and revoked_at is null`;
+    expect(live).toBe(1);
+  });
+
+  it("ensureDeviceLinks: one secret per fixture, stable across calls; a foreign fixture 404s", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, fixtures } = await rig(owner);
+    const other = await rig(owner);
+    const ids = [fixtures[1].id, fixtures[0].id];
+    const first = await ensureDeviceLinks(owner, competition.id, ids);
+    const second = await ensureDeviceLinks(owner, competition.id, ids);
+    for (const id of ids) expect(second.get(id)!.secret).toBe(first.get(id)!.secret);
+    expect(first.get(fixtures[0].id)!.secret).not.toBe(first.get(fixtures[1].id)!.secret);
+    await expect(ensureDeviceLinks(owner, competition.id, [other.fixtures[0].id])).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("fails CLOSED without a valid DEVICE_LINK_KEK: 503 DEVICE_LINK_KEK_MISSING, nothing revoked; resolving by hash still works (Q1)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const live = await ensureDeviceLink(owner, fixtures[0].id);
+    const keep = process.env.DEVICE_LINK_KEK;
+    const MISSING = { status: 503, code: "DEVICE_LINK_KEK_MISSING" };
+    try {
+      delete process.env.DEVICE_LINK_KEK;
+      await expect(ensureDeviceLink(owner, fixtures[1].id)).rejects.toMatchObject(MISSING); // mint path
+      await expect(ensureDeviceLink(owner, fixtures[0].id)).rejects.toMatchObject(MISSING); // re-show path
+      await expect(createDeviceLink(owner, fixtures[0].id, null)).rejects.toMatchObject(MISSING); // reissue
+      process.env.DEVICE_LINK_KEK = "abcd"; // malformed is the same refusal
+      await expect(ensureDeviceLink(owner, fixtures[1].id)).rejects.toMatchObject(MISSING);
+      delete process.env.DEVICE_LINK_KEK;
+      // The scoring door needs no key: a sheet already on court keeps working.
+      await expect(resolveDeviceLinkToken(live.secret)).resolves.toMatchObject({ fixture_id: fixtures[0].id });
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from device_links where fixture_id = ${fixtures[0].id} and revoked_at is null`;
+      expect(n, "the failed reissue revoked nothing").toBe(1);
+    } finally {
+      process.env.DEVICE_LINK_KEK = keep;
+    }
+  });
+
+  it("an unknown fixture is 404 on ensure and on reissue — never a 500", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const ghost = randomUUID();
+    await expect(ensureDeviceLink(owner, ghost)).rejects.toMatchObject({ status: 404 });
+    await expect(createDeviceLink(owner, ghost, null)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("after a plain Revoke, ensure mints afresh — it never re-shows a revoked link", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const first = await ensureDeviceLink(owner, fixtures[0].id);
+    await revokeDeviceLink(owner, fixtures[0].id, first.row.id);
+    const again = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(again.minted).toBe(true);
+    expect(again.secret).not.toBe(first.secret);
+    await expect(resolveDeviceLinkToken(again.secret)).resolves.toMatchObject({ id: again.row.id });
+  });
+
+  it("re-shows exactly what the resolver accepts: past its expiry → replaced, before it → re-shown", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+
+    const dead = await ensureDeviceLink(owner, fixtures[0].id);
+    await sql`update device_links set expires_at = now() - interval '1 minute' where id = ${dead.row.id}`;
+    // Premise: the resolver refuses it, so handing it out again would print a dead QR.
+    await expect(resolveDeviceLinkToken(dead.secret)).rejects.toMatchObject({ code: "LINK_EXPIRED" });
+    const fresh = await ensureDeviceLink(owner, fixtures[0].id);
+    expect(fresh.minted).toBe(true);
+    expect(fresh.secret).not.toBe(dead.secret);
+
+    const dated = await ensureDeviceLink(owner, fixtures[1].id);
+    await sql`update device_links set expires_at = now() + interval '1 hour' where id = ${dated.row.id}`;
+    // Premise: the resolver still accepts it, so replacing it would kill a working QR.
+    await expect(resolveDeviceLinkToken(dated.secret)).resolves.toMatchObject({ id: dated.row.id });
+    const same = await ensureDeviceLink(owner, fixtures[1].id);
+    expect(same.minted).toBe(false);
+    expect(same.secret).toBe(dated.secret);
+  });
+
+  // The three races below are DETERMINISTIC, where "concurrent ensures …" above
+  // is a lottery: every caller is parked at its INSERT behind a row lock this
+  // test holds (see raceBehindHeldFixtures), so the only thing that can order
+  // two callers is the use-case's own advisory lock — present, they queue;
+  // absent, both reach the insert blind.
+  it("two ensures, the first parked mid-mint, agree on ONE secret (lock witness)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const settled = await raceBehindHeldFixtures([fixtures[0].id], () => [
+      ensureDeviceLink(owner, fixtures[0].id),
+      ensureDeviceLink(owner, fixtures[0].id),
+    ]);
+    const [a, b] = fulfilled(settled);
+    expect(b.secret).toBe(a.secret);
+    expect([a.minted, b.minted].sort()).toEqual([false, true]); // one minted, one re-showed
+    const [{ live }] = await sql<{ live: number }[]>`
+      select count(*)::int as live from device_links
+      where fixture_id = ${fixtures[0].id} and revoked_at is null`;
+    expect(live).toBe(1);
+  });
+
+  it("two reissues, the first parked mid-mint, leave exactly ONE live link (lock witness)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const settled = await raceBehindHeldFixtures([fixtures[0].id], () => [
+      createDeviceLink(owner, fixtures[0].id, null),
+      createDeviceLink(owner, fixtures[0].id, null),
+    ]);
+    const results = fulfilled(settled);
+    const live = await sql<{ id: string }[]>`
+      select id from device_links where fixture_id = ${fixtures[0].id} and revoked_at is null`;
+    expect(live).toHaveLength(1);
+    expect(results.map((r) => r.id)).toContain(live[0].id);
+  });
+
+  it("two prints in OPPOSITE orders, both parked mid-mint, both complete and agree (sorted lock order)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, fixtures } = await rig(owner);
+    const ids = [fixtures[0].id, fixtures[1].id];
+    const settled = await raceBehindHeldFixtures(ids, () => [
+      ensureDeviceLinks(owner, competition.id, ids),
+      ensureDeviceLinks(owner, competition.id, [...ids].reverse()),
+    ]);
+    const [forward, backward] = fulfilled(settled);
+    for (const id of ids) expect(backward.get(id)!.secret).toBe(forward.get(id)!.secret);
+    const [{ live }] = await sql<{ live: number }[]>`
+      select count(*)::int as live from device_links
+      where fixture_id in ${sql(ids)} and revoked_at is null`;
+    expect(live).toBe(ids.length);
+  });
+});
+
+/** Every settled result's value, or the first rejection rethrown — so a race
+ *  loser (a deadlock victim, a 23505) fails the test with its own message. */
+function fulfilled<T>(settled: PromiseSettledResult<T>[]): T[] {
+  return settled.map((s) => {
+    if (s.status === "rejected") throw s.reason;
+    return s.value;
+  });
+}
+
+/**
+ * Hold `FOR UPDATE` on the fixture rows, start the callers, wait until every
+ * one of them is PARKED behind this holder (directly, or behind a caller that
+ * is), then release. A mint parks at its insert: the device_links → fixtures
+ * FK check takes FOR KEY SHARE, which waits behind FOR UPDATE, and nothing in
+ * ensure/reissue locks the fixture row itself. The park probe is positive
+ * evidence and THROWS on timeout — without it a slow start would let the
+ * callers run one after another and the race would pass for the wrong reason.
+ */
+async function raceBehindHeldFixtures<T>(
+  fixtureIds: readonly string[],
+  start: () => Promise<T>[],
+): Promise<PromiseSettledResult<T>[]> {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let announce!: (pid: number) => void;
+  const held = new Promise<number>((resolve) => (announce = resolve));
+  const holder = sql.begin(async (tx) => {
+    const [me] = await tx<{ pid: number }[]>`select pg_backend_pid()::int as pid`;
+    await tx`select id from fixtures where id in ${tx(fixtureIds)} for update`;
+    announce(me!.pid);
+    await gate;
+  });
+  const holderPid = await held;
+  const calls = start();
+  const settled = Promise.allSettled(calls);
+  try {
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      const [{ parked }] = await sql<{ parked: number }[]>`
+        with recursive behind(pid) as (
+          select pid from pg_stat_activity where ${holderPid}::int = any(pg_blocking_pids(pid))
+          union
+          select a.pid from pg_stat_activity a join behind b on b.pid = any(pg_blocking_pids(a.pid))
+        )
+        select count(*)::int as parked from behind`;
+      if (parked >= calls.length) break;
+      if (Date.now() > deadline) {
+        throw new Error(`only ${parked} of ${calls.length} callers parked behind the held fixture rows`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  } finally {
+    release();
+    await holder;
+  }
+  return settled;
+}
