@@ -130,6 +130,8 @@ const REST = [
   // with "p", so it belongs here rather than in C_GLOBBED; ninth wave running,
   // and again it reddened only this repo-root suite, in CI.
   "src/server/public-site/__tests__/public-entrants-show-seeds.test.ts",
+  // Player profile Upcoming (a player's same-org scheduled fixtures): begins with "p", so it belongs here.
+  "src/server/public-site/__tests__/public-player-upcoming.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
