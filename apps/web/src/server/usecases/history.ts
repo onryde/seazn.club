@@ -138,6 +138,15 @@ function resolveCourtWrite(value: unknown, context: Record<string, unknown>): Co
   return { write: false };
 }
 
+/** The venue a court sits in: the ONE rule every fixture write derives
+ *  `venue_id` by (schedule.ts `courtVenueIds`, moveFixture's "#5 fix") — a
+ *  court belongs to a venue, so a fixture's venue is its court's, and no court
+ *  means no venue. Every history write that sets `court_id` sets `venue_id`
+ *  from it in the same statement; one that left it alone kept a cross-venue
+ *  move's Undo in the venue it was moved to. */
+const venueOf = (tx: Tx, courtId: string | null) =>
+  tx`(select c.venue_id from courts c where c.id = ${courtId})`;
+
 // ---------------------------------------------------------------------------
 // Fixture snapshots (restore fidelity, 2026-09-23)
 //
@@ -279,9 +288,8 @@ async function restoreFixtures(
   for (const s of ordered) {
     const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType });
     const verdict = restoredVerdict(s);
-    // venue_id: derived from the court being restored, the one rule its only
-    // writer uses (schedule.ts moveFixture, "#5 fix") — never stored apart
-    // from the court it must agree with. No court, no venue.
+    // venue_id: derived from the court being restored (`venueOf`) — never
+    // stored apart from the court it must agree with.
     // fixture_no: its own number unless something took it since, in which
     // case null lets the insert trigger hand out the next free one.
     // ext_key: its own key unless a live row of the stage holds it now (see
@@ -297,7 +305,7 @@ async function restoreFixtures(
       values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
               ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
               ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null},
-              (select c.venue_id from courts c where c.id = ${court.write ? court.value : null}),
+              ${venueOf(tx, court.write ? court.value : null)},
               ${s.locked === true}, ${s.schedule_source ?? "none"},
               (select n.no from (select ${s.fixture_no ?? null}::int as no) n
                 where not exists (select 1 from fixtures t
@@ -373,7 +381,8 @@ async function execute(
       for (const m of moves) {
         const court = resolveCourtWrite(m.to.court, { divisionId, fixtureId: m.fixture, eventType: event.type });
         if (court.write) {
-          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${court.value}
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${court.value},
+                                                             venue_id = ${venueOf(tx, court.value)}
                    where id = ${m.fixture} and ${unplayed(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}
@@ -388,6 +397,7 @@ async function execute(
       if (court.write) {
         wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at}, court_id = ${court.value},
+                              venue_id = ${venueOf(tx, court.value)},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
           where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
       } else {
@@ -400,7 +410,7 @@ async function execute(
     }
     case "schedule_cleared": {
       for (const s of (p.cleared as FixtureSnapshot[]) ?? []) {
-        wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = null, court_id = null
+        wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = null, court_id = null, venue_id = null
                  where id = ${s.id} and ${unplayed(tx)} returning id`);
       }
       break;
@@ -409,7 +419,8 @@ async function execute(
       for (const s of (p.restored as FixtureSnapshot[]) ?? []) {
         const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
         if (court.write) {
-          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${court.value}
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${court.value},
+                                                             venue_id = ${venueOf(tx, court.value)}
                    where id = ${s.id} and ${unplayed(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}

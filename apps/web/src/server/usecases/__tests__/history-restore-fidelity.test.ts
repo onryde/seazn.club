@@ -40,7 +40,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures, listStages } from "../stages";
 import { listDivisionFixturesForBoard, patchFixture } from "../fixtures";
-import { startDivision } from "../schedule";
+import { applySchedule, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createCourt, createVenue } from "../venues";
 import {
@@ -675,5 +675,66 @@ describe.skipIf(!HAS_DB)("a fixture in play or finalized is never taken away by 
     const left = await sql<{ id: string; status: string }[]>`
       select id, status from fixtures where stage_id = ${mainId}`;
     expect(left).toEqual([{ id: racer!.id, status: "in_play" }]);
+  });
+});
+
+// G2 (gap hunt, #857). A fixture's venue is its court's — every forward writer
+// derives `venue_id` from `court_id` in the same statement. History's schedule
+// replays wrote the court alone, so undoing a move across venues put the
+// fixture back on its old court while every player-facing venue string (ICS
+// LOCATION, /my-matches, the public fixture page) still named the new venue,
+// and a schedule clear left a venue behind on a fixture with no court.
+describe.skipIf(!HAS_DB)("every history write keeps a fixture's venue its court's", () => {
+  async function twoVenues() {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const north = await createVenue(auth, { name: "North Hall", sort: 0 });
+    const south = await createVenue(auth, { name: "South Hall", sort: 1 });
+    const c1 = await createCourt(auth, north.id, { name: "N1", sort: 0, tags: [] });
+    const c2 = await createCourt(auth, south.id, { name: "S1", sort: 0, tags: [] });
+    const [f] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
+    const at = new Date(Date.UTC(2026, 6, 12, 9)).toISOString();
+    await patchFixture(auth, f!.id, { scheduled_at: at, court_id: c1.id });
+    const placement = async () => {
+      const [row] = await sql<{ court_id: string | null; venue_id: string | null }[]>`
+        select court_id, venue_id from fixtures where id = ${f!.id}`;
+      return row;
+    };
+    const onNorth = { court_id: c1.id, venue_id: north.id };
+    const onSouth = { court_id: c2.id, venue_id: south.id };
+    expect(await placement()).toEqual(onNorth);
+    return { auth, divisionId, mainId, fixtureId: f!.id, c2: c2.id, at, placement, onNorth, onSouth };
+  }
+
+  it.each([
+    { how: "a single move (schedule_edited)", event: "schedule_edited" },
+    { how: "a board apply (schedule_applied)", event: "schedule_applied" },
+  ])("undoing a move to another venue's court puts the venue back with the court — $how; redo moves both again", async ({ event }) => {
+    const { auth, divisionId, mainId, fixtureId, c2, at, placement, onNorth, onSouth } = await twoVenues();
+    if (event === "schedule_edited") {
+      await patchFixture(auth, fixtureId, { court_id: c2 });
+    } else {
+      await applySchedule(auth, mainId, {
+        assignments: [{ fixture_id: fixtureId, scheduled_at: at, court_id: c2 }],
+        source: "manual",
+      });
+    }
+    expect(await placement()).toEqual(onSouth);
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe(event);
+    expect(await placement()).toEqual(onNorth);
+
+    await redoDivision(auth, divisionId);
+    expect(await placement()).toEqual(onSouth);
+  });
+
+  it("clearing the schedule takes the venue with the court, and undoing the clear puts both back", async () => {
+    const { auth, divisionId, placement, onNorth } = await twoVenues();
+
+    await clearScheduleScoped(auth, { division_id: divisionId, scope: { excludeLocked: true }, confirm: true });
+    expect(await placement()).toEqual({ court_id: null, venue_id: null });
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("schedule_restored");
+    expect(await placement()).toEqual(onNorth);
   });
 });
