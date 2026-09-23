@@ -19,7 +19,7 @@
 // "$undefined", so a bare substring probe passes in both states).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { PlayerMatches } from "@/components/public-site/player-matches";
 import en from "@/dictionaries/en/public.json";
@@ -29,7 +29,13 @@ import { playerMatchesDict } from "@/lib/player-matches-dict";
 import type { PlayerMatchLineT } from "@/server/public-site/player-matches-schema";
 import type { PlayerUpcomingRow } from "@/server/public-site/public-player-matches";
 
-const stub = vi.hoisted(() => ({ getPublicPlayer: vi.fn(), getPublicPlayerUpcoming: vi.fn() }));
+// The upcoming stub carries a default (no rows): `clearAllMocks` keeps
+// implementations, so a bare vi.fn() would hand a test whatever the previous
+// test set. `getPublicPlayer` needs none — every test that renders sets it.
+const stub = vi.hoisted(() => ({
+  getPublicPlayer: vi.fn(),
+  getPublicPlayerUpcoming: vi.fn(async (): Promise<PlayerUpcomingRow[]> => []),
+}));
 vi.mock("@/server/public-site/data", () => ({
   getPublicPlayer: stub.getPublicPlayer,
   getPublicPlayerUpcoming: stub.getPublicPlayerUpcoming,
@@ -141,6 +147,17 @@ async function renderPage(over: DataOver = {}) {
 const slabId = (html: string) => html.match(/data-testid="mh-player-match-([^"]+)" data-slab="true"/)?.[1] ?? null;
 const rowIds = (html: string) =>
   [...html.matchAll(/data-testid="mh-player-match-([^"]+)"(?! data-slab)/g)].map((m) => m[1]);
+
+/** The testids INSIDE the one 7-span cell (plan D4) — nesting, not just
+ *  document order: an empty wrapper followed by the bare sections is in the
+ *  same order and must not pass. */
+const mainColumnIds = (tree: ReactElement) => {
+  const wrapper = walk(tree).find((el) => propsOf(el)["data-testid"] === "player-main-column");
+  expect(wrapper, "player-main-column rendered").toBeDefined();
+  return walk(propsOf(wrapper!).children as ReactNode)
+    .map((el) => propsOf(el)["data-testid"])
+    .filter((id): id is string => typeof id === "string");
+};
 
 /** One section's markup, from its opening tag to the next `</section>`. */
 const section = (html: string, testid: string) => {
@@ -281,8 +298,14 @@ describe("player page — composition", () => {
   });
 
   it("two columns from lg: Upcoming and Matches share the 7-span column, the rest stacks in 5 — one DOM", async () => {
-    const { html } = await renderPage({ matches: [line("f1")], upcoming: [upcomingRow("u1")] });
+    const { tree, html } = await renderPage({ matches: [line("f1")], upcoming: [upcomingRow("u1")] });
     const at = (id: string) => html.indexOf(`data-testid="${id}"`);
+    const inMain = mainColumnIds(tree);
+    expect(inMain).toContain("mh-player-upcoming");
+    expect(inMain).toContain("mh-player-matches");
+    // …and the 5-span blocks are NOT in it.
+    for (const id of ["player-stats", "player-squad"]) expect(inMain, id).not.toContain(id);
+    expect(at("player-stats"), "positive pair: stats rendered").toBeGreaterThan(-1);
     expect(html).toMatch(/class="[^"]*\blg:grid-cols-12\b/);
     expect(html).toMatch(/data-testid="player-main-column" class="[^"]*\blg:col-span-7\b/);
     expect(at("player-main-column")).toBeLessThan(at("mh-player-upcoming"));
@@ -443,8 +466,11 @@ const upcomingRow = (fixtureId: string, over: Partial<PlayerUpcomingRow> = {}): 
 
 describe("player page — Upcoming", () => {
   it("EMPTY: no rows, no section — and the read was for THIS card's org, competition and player", async () => {
-    const { html } = await renderPage({ upcoming: [] });
+    const { tree, html } = await renderPage({ upcoming: [] });
     expect(html).not.toContain('data-testid="mh-player-upcoming"');
+    // Matches still sits INSIDE the 7-span cell with nothing above it.
+    expect(mainColumnIds(tree)).toContain("mh-player-matches");
+    expect(mainColumnIds(tree)).not.toContain("mh-player-upcoming");
     // No orphan heading either (the positive pair is the next test).
     expect(html).not.toContain(`>${esc(en["player.upcoming"])}<`);
     expect(stub.getPublicPlayerUpcoming).toHaveBeenCalledWith(

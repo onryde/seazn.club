@@ -64,12 +64,15 @@ export default async function PlayerCardPage({ params }: Props) {
   if (!data) notFound();
   const { org, competition, player, memberships, stats, career, careerLabel, matches, generatedAt } = data;
   const locale = toLocale(org.default_locale);
-  const dict = await getDictionary(locale, "public");
+  // Both only after the gate above has passed (`getPublicPlayer`'s notFound),
+  // and independent of each other, so they run together. Upcoming is the
+  // player's next scheduled matches across the org (spec 2026-09-23), uncached
+  // (plan D3): the page's own ISR bounds it.
+  const [dict, upcoming] = await Promise.all([
+    getDictionary(locale, "public"),
+    getPublicPlayerUpcoming({ org, competition, personId: player.id }),
+  ]);
   const hub = routes.shared(org.slug, competition.slug);
-  // Spec 2026-09-23 — the player's next scheduled matches across the org. Read
-  // only after the gate above has passed (`getPublicPlayer`'s notFound), and
-  // uncached (plan D3): the page's own ISR bounds it.
-  const upcoming = await getPublicPlayerUpcoming({ org, competition, personId: player.id });
 
   return (
     <div className="min-w-0">
