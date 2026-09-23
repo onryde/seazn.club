@@ -53,11 +53,27 @@ async function loadLedger(tx: Tx, divisionId: string): Promise<LedgerEvent[]> {
   return rows.map((r) => ({ seq: Number(r.seq), type: r.type, payload: r.payload }));
 }
 
-async function decidedFixtureIds(tx: Tx, divisionId: string): Promise<Set<string>> {
+// The statuses history treats as PLAYED — the rows it never deletes, moves or
+// clears, the set `deleteStage` (stages.ts) already refuses on. It used to be
+// `'decided'` alone, so undoing a generation, and redoing or making a pool
+// clear, deleted an `in_play` or `finalized` fixture outright, its score events
+// cascading with it — the results-guard ("never silently discard a
+// scoresheet", engine history.ts) only ever saw half the scoresheets.
+// `forfeited` / `abandoned` are not here on purpose: a generation writes them
+// itself (a bye, a departed qualifier), with nothing played to lose.
+const PLAYED_STATUSES: readonly string[] = ["in_play", "decided", "finalized"];
+
+/** The engine's results-guard input: any undo/redo whose op touches one of
+ *  these is refused whole (`UNDO_BLOCKED_HAS_RESULTS`). */
+async function playedFixtureIds(tx: Tx, divisionId: string): Promise<Set<string>> {
   const rows = await tx<{ id: string }[]>`
-    select id from fixtures where division_id = ${divisionId} and status = 'decided'`;
+    select id from fixtures where division_id = ${divisionId} and status in ${tx(PLAYED_STATUSES)}`;
   return new Set(rows.map((r) => r.id));
 }
+
+/** The same rule at the row, for every write `execute()` makes: the engine
+ *  refuses first, and this still skips a row that started playing since. */
+const unplayed = (tx: Tx) => tx`status not in ${tx(PLAYED_STATUSES)}`;
 
 interface DivisionMeta {
   seq: number;
@@ -329,7 +345,7 @@ async function restoreFixtures(
 //
 // R10e: returns the ids of the fixtures its own statements wrote (each one
 // `returning id`), so a caller publishes exactly those, never the payload's
-// list — a row the `status <> 'decided'` filter skipped was not changed.
+// list — a row the `unplayed` filter skipped was not changed.
 async function execute(
   tx: Tx,
   divisionId: string,
@@ -358,10 +374,10 @@ async function execute(
         const court = resolveCourtWrite(m.to.court, { divisionId, fixtureId: m.fixture, eventType: event.type });
         if (court.write) {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${court.value}
-                   where id = ${m.fixture} and status <> 'decided' returning id`);
+                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}
-                   where id = ${m.fixture} and status <> 'decided' returning id`);
+                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
         }
       }
       break;
@@ -373,19 +389,19 @@ async function execute(
         wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at}, court_id = ${court.value},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and status <> 'decided' returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
       } else {
         wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and status <> 'decided' returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
       }
       break;
     }
     case "schedule_cleared": {
       for (const s of (p.cleared as FixtureSnapshot[]) ?? []) {
         wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = null, court_id = null
-                 where id = ${s.id} and status <> 'decided' returning id`);
+                 where id = ${s.id} and ${unplayed(tx)} returning id`);
       }
       break;
     }
@@ -394,10 +410,10 @@ async function execute(
         const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
         if (court.write) {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${court.value}
-                   where id = ${s.id} and status <> 'decided' returning id`);
+                   where id = ${s.id} and ${unplayed(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}
-                   where id = ${s.id} and status <> 'decided' returning id`);
+                   where id = ${s.id} and ${unplayed(tx)} returning id`);
         }
       }
       break;
@@ -415,7 +431,7 @@ async function execute(
         // caller refreshes the division's player stats when one did.
         const removed = await tx<{ id: string; scored: boolean }[]>`
           with gone as (
-            delete from fixtures where id in ${tx(ids)} and status <> 'decided' returning id
+            delete from fixtures where id in ${tx(ids)} and ${unplayed(tx)} returning id
           )
           select gone.id, exists (select 1 from score_events se where se.fixture_id = gone.id) as scored
           from gone`;
@@ -513,13 +529,13 @@ async function stepWrite(
       throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
     const ledger = await loadLedger(tx, divisionId);
-    const decided = await decidedFixtureIds(tx, divisionId);
+    const played = await playedFixtureIds(tx, divisionId);
     let result;
     try {
       result =
         direction === "undo"
-          ? engineUndo(ledger, meta.edit_watermark, decided)
-          : engineRedo(ledger, meta.edit_watermark, decided);
+          ? engineUndo(ledger, meta.edit_watermark, played)
+          : engineRedo(ledger, meta.edit_watermark, played);
     } catch (err) {
       toEngineError(err);
     }
@@ -1018,7 +1034,7 @@ async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableF
     court: f.court_id,
     at: f.scheduled_at,
     locked: f.schedule_locked,
-    decided: f.status === "decided",
+    decided: PLAYED_STATUSES.includes(f.status),
   }));
 }
 
@@ -1120,7 +1136,7 @@ export async function clearPoolEntrants(
           court: f.court,
           at: f.at,
           locked: f.locked,
-          decided: f.status === "decided",
+          decided: PLAYED_STATUSES.includes(f.status),
           snapshot: f,
         })),
         poolId,

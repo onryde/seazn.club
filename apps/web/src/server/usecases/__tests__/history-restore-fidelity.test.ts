@@ -43,7 +43,15 @@ import { listDivisionFixturesForBoard, patchFixture } from "../fixtures";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createCourt, createVenue } from "../venues";
-import { clearPoolEntrants, createCheckpoint, restoreCheckpoint, undoDivision } from "../history";
+import {
+  clearPoolEntrants,
+  clearScheduleScoped,
+  createCheckpoint,
+  redoDivision,
+  restoreCheckpoint,
+  undoDivision,
+} from "../history";
+import { EngineError } from "@seazn/engine/core";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -514,5 +522,158 @@ describe.skipIf(!HAS_DB)("snapshots the ledger already holds, and snapshots that
       select id, fixture_no from fixtures where id in ${sql([later.id, earlier.id])}`;
     const noOf = new Map(numbers.map((r) => [r.id, r.fixture_no]));
     expect([noOf.get(earlier.id), noOf.get(later.id)]).toEqual([top + 1, top + 2]);
+  });
+});
+
+// G1 (gap hunt, #857). History treated only `decided` as played, so undoing a
+// generation — or making or redoing a pool clear — deleted an `in_play` or
+// `finalized` fixture outright and its score events cascaded away with it. The
+// played set is now `deleteStage`'s: in_play, decided, finalized. One status per
+// case, so dropping either from the set reds its own case.
+type Played = "in_play" | "finalized";
+
+/** Drive a fixture to `to` through the real scoring path (the same events a
+ *  scorer's pad appends), after `startDivision`. */
+async function play(auth: AuthCtx, fixtureId: string, to: Played): Promise<void> {
+  await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+  if (to === "in_play") return;
+  await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+  await scoreEvent(auth, fixtureId, { expected_seq: 2, type: "core.finalize", payload: {} });
+}
+
+/** Every score event of every fixture in `column` = `id`, whole. */
+async function scoreEventsIn(column: "stage_id" | "pool_id", id: string): Promise<Row[]> {
+  return sql<Row[]>`
+    select se.* from score_events se join fixtures f on f.id = se.fixture_id
+    where f.${sql(column)} = ${id} order by se.fixture_id, se.seq`;
+}
+
+const refusedAsPlayed = (err: unknown) => EngineError.is(err, "ALREADY_DECIDED");
+
+describe.skipIf(!HAS_DB)("a fixture in play or finalized is never taken away by history", () => {
+  it.each(["in_play", "finalized"] as const)(
+    "undoing a generation is refused while one of its fixtures is %s — every row and every score event survives",
+    async (status) => {
+      const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+      await startDivision(auth, divisionId);
+      const [target] = await sql<{ id: string }[]>`
+        select id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
+      await play(auth, target!.id, status);
+      const rows = await wholeRows("stage_id", mainId);
+      expect(rows.find((r) => r.id === target!.id)?.status).toBe(status);
+      const events = await scoreEventsIn("stage_id", mainId);
+      expect(events.length).toBeGreaterThan(0);
+
+      await expect(undoDivision(auth, divisionId)).rejects.toSatisfy(refusedAsPlayed);
+
+      expect(await wholeRows("stage_id", mainId)).toEqual(rows);
+      expect(await scoreEventsIn("stage_id", mainId)).toEqual(events);
+    },
+  );
+
+  it.each(["in_play", "finalized"] as const)(
+    "a pool clear — redone, or made — is refused while one of the pool's fixtures is %s — every row and every score event survives",
+    async (status) => {
+      const { auth, divisionId } = await seedDivision(8);
+      const [stage] = await createStages(auth, divisionId, {
+        seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } },
+      });
+      await generateStageFixtures(auth, stage!.id);
+      await startDivision(auth, divisionId);
+      const [pool] = await sql<{ id: string }[]>`
+        select id from pools where stage_id = ${stage!.id} order by id limit 1`;
+      const poolId = pool!.id;
+
+      // Cleared, then put back — so the next Redo re-applies the clear.
+      await clearPoolEntrants(auth, poolId, true);
+      expect((await undoDivision(auth, divisionId)).applied.type).toBe("pool_entrants_restored");
+      const [target] = await sql<{ id: string }[]>`
+        select id from fixtures where pool_id = ${poolId} order by fixture_no limit 1`;
+      await play(auth, target!.id, status);
+      const rows = await wholeRows("pool_id", poolId);
+      expect(rows.find((r) => r.id === target!.id)?.status).toBe(status);
+      const events = await scoreEventsIn("pool_id", poolId);
+      expect(events.length).toBeGreaterThan(0);
+
+      await expect(redoDivision(auth, divisionId)).rejects.toSatisfy(refusedAsPlayed);
+      await expect(clearPoolEntrants(auth, poolId, true)).rejects.toSatisfy(refusedAsPlayed);
+
+      expect(await wholeRows("pool_id", poolId)).toEqual(rows);
+      expect(await scoreEventsIn("pool_id", poolId)).toEqual(events);
+    },
+  );
+
+  it("clearing the schedule skips an in-play and a finalized fixture, as it skips a decided one — both keep their slot", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const venue = await createVenue(auth, { name: "Hall", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+    const fixtures = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no`;
+    for (let i = 0; i < fixtures.length; i++) {
+      await patchFixture(auth, fixtures[i]!.id, {
+        scheduled_at: new Date(Date.UTC(2026, 6, 12, 9 + i)).toISOString(),
+        court_id: court.id,
+      });
+    }
+    await startDivision(auth, divisionId);
+    const [inPlay, finalized] = [fixtures[0]!.id, fixtures[1]!.id];
+    await play(auth, inPlay, "in_play");
+    await play(auth, finalized, "finalized");
+    const before = await wholeRows("stage_id", mainId);
+
+    const result = await clearScheduleScoped(auth, {
+      division_id: divisionId, scope: { excludeLocked: true }, confirm: true,
+    });
+
+    expect(result).toMatchObject({ cleared: fixtures.length - 2, skipped: { decided: 2 } });
+    const after = await wholeRows("stage_id", mainId);
+    for (const id of [inPlay, finalized]) {
+      expect(after.find((r) => r.id === id)).toEqual(before.find((r) => r.id === id));
+    }
+  });
+
+  // The row filter behind the engine's refusal: a fixture that starts playing
+  // AFTER the undo read the played set — the scorer's first tap racing the
+  // organiser's Undo. Parked on the row's own lock, so the order is forced.
+  it("a fixture that starts playing while an Undo is deleting its generation is skipped by the delete, not taken", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const [racer] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let announce!: (pid: number) => void;
+    const held = new Promise<number>((resolve) => (announce = resolve));
+    const holder = sql.begin(async (tx) => {
+      const [me] = await tx<{ pid: number }[]>`select pg_backend_pid()::int as pid`;
+      await tx`select id from fixtures where id = ${racer!.id} for update`;
+      announce(me!.pid);
+      await gate;
+      await tx`update fixtures set status = 'in_play' where id = ${racer!.id}`;
+    });
+    const holderPid = await held;
+
+    const undo = undoDivision(auth, divisionId).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
+    // Positive evidence the Undo is parked on the racer's row before it moves.
+    let parked = false;
+    for (let i = 0; i < 200 && !parked; i++) {
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity where ${holderPid} = any(pg_blocking_pids(pid))`;
+      parked = n > 0;
+      if (!parked) await new Promise((r) => setTimeout(r, 25));
+    }
+    release();
+    await holder;
+    expect(parked, "the Undo never waited on the racer's row lock").toBe(true);
+
+    const settled = await undo;
+    expect(settled.error).toBeUndefined();
+    expect(settled.value?.applied.type).toBe("fixtures_cleared");
+    const left = await sql<{ id: string; status: string }[]>`
+      select id, status from fixtures where stage_id = ${mainId}`;
+    expect(left).toEqual([{ id: racer!.id, status: "in_play" }]);
   });
 });
