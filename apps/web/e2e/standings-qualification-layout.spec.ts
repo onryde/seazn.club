@@ -6,7 +6,7 @@
 //  1. the page never scrolls sideways at 320, 768 or 1280 with the cut line,
 //     the legend and a realistic long entrant name in the table;
 //  2. every rank trigger is a 40px target — `elementFromPoint` at its centre
-//     and 19px either side of it, both ways, lands inside the button (not a
+//     and 19.5px either side of it, both ways, lands inside the button (not a
 //     `boundingBox()`, which measures paint, AGENTS.md #2);
 //  3. the LAST row's popover opens upward and stays inside the table's scroll
 //     box — the box clips a panel hanging below the final row, and the cut
@@ -253,13 +253,14 @@ for (const width of [1280, 768, 320] as const) {
     const widths = await pageWidths(page);
     await expectNoHorizontalScroll(page);
 
-    // 2. Every rank trigger is a 40px target (19px either side at a phone
-    //    width; the centre everywhere).
+    // 2. Every rank trigger is a 40px target: 19.5px either side of the
+    //    centre at a phone width (a 38px box passes ±19, so ±19.5 is what
+    //    proves the 40px floor); the centre everywhere.
     const triggers = panel.getByRole("button", { name: /^Rank \d+,/ });
     await expect(triggers).toHaveCount(6);
     const hits = [];
     for (const button of await triggers.all()) {
-      const hit = await hitTest(button, width < 768 ? 19 : 0);
+      const hit = await hitTest(button, width < 768 ? 19.5 : 0);
       hits.push(hit);
       expect(hit.inside, `${hit.label}: a tap there misses the trigger (${hit.width}×${hit.height})`).toEqual(
         hit.inside.map(() => true),
@@ -322,7 +323,7 @@ test("the embedded standings widget at 320: cut line, markers and an open popove
   await expect(legend).toBeVisible();
   const block = legend.locator("xpath=..");
   const rank2 = page.getByRole("button", { name: /^Rank 2,/ });
-  const hit = await hitTest(rank2, 19);
+  const hit = await hitTest(rank2, 19.5);
   expect(hit.inside).toEqual([true, true, true, true, true]);
   const panel = await open(page, rank2);
   await expect(panel.getByTestId("qual-headline")).toBeVisible();
