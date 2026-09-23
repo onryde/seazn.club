@@ -5,6 +5,7 @@
 // run's own test users + their orgs are purged afterwards (see cleanup). The DB
 // must be the same one the target server uses.
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import {
   startAiFixtureServer,
@@ -1068,6 +1069,11 @@ async function main() {
   // decided. Own fresh community org; keyless-safe.
   await hubKnockoutSuite();
 
+  // --- Schedule-board knockout round codes (2026-09-23): a knockout card on
+  // the division board renders its round-role chip (SF, F) and the legend
+  // names it — not the generic R{n}. Own fresh community org; keyless-safe.
+  await boardRoundCodesSuite();
+
   // --- Task 23: every grant an Event Pass actually delivers, asserted as a
   // passed-vs-sibling PAIR inside one fresh community org — allowed here,
   // refused there — so no assertion can be satisfied by a passless org. Own
@@ -1786,6 +1792,88 @@ async function p72Suite(): Promise<void> {
  * Own fresh community org (single-elimination knockout is a Community
  * format); keyless-safe.
  */
+/** Schedule-board knockout round codes (2026-09-23): the division board's
+ *  SERVER-RENDERED HTML for a freshly generated 4-entrant knockout carries the
+ *  round-role chip on its cards — SF for both semi-finals, F for the final,
+ *  each with the long round name as its title — and the legend row naming
+ *  them. Every expected string is read from the en dictionary on disk (this
+ *  runner cannot import the JSON-backed `@/lib/messages`), so a copy change
+ *  moves the check with it. */
+async function boardRoundCodesSuite(): Promise<void> {
+  const en = JSON.parse(
+    readFileSync(new URL("../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8"),
+  ) as Record<string, string>;
+  const owner = newSession();
+  const who = await signIn(owner, `delivered+brcodes_${tag}@resend.dev`);
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === who.org_id)?.slug ?? "";
+  const comp = await v1(owner, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Board Codes ${tag}`,
+    visibility: "private",
+  });
+  const compRow = v1data<{ id: string; slug: string }>(comp);
+  const div = await v1(owner, `/api/v1/competitions/${compRow.id}/divisions`, "POST", {
+    name: "Cup",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divRow = v1data<{ id: string; slug: string }>(div);
+  const entrants = await v1(
+    owner,
+    `/api/v1/divisions/${divRow.id}/entrants`,
+    "POST",
+    ["Codes One", "Codes Two", "Codes Three", "Codes Four"].map((name, i) => ({
+      kind: "individual",
+      display_name: name,
+      seed: i + 1,
+    })),
+  );
+  const stage = await v1(owner, `/api/v1/divisions/${divRow.id}/stages`, "POST", {
+    seq: 1,
+    kind: "knockout",
+    name: "Cup",
+  });
+  const generated = await v1(owner, `/api/v1/stages/${v1data<{ id: string }>(stage).id}/generate`, "POST");
+  check(
+    "board round codes: a generic division with 4 entrants and a generated knockout stage",
+    orgSlug !== "" &&
+      comp.status === 201 &&
+      div.status === 201 &&
+      entrants.status < 300 &&
+      stage.status < 300 &&
+      generated.status < 300,
+  );
+
+  const page = await html(owner, `/o/${orgSlug}/c/${compRow.slug}/d/${divRow.slug}/schedule?tab=board`);
+  // Anchored on `="` and the chip's own attribute order (round-code-chip.tsx):
+  // a knockout chip is the heavier variant, titled with the long round name.
+  const chips = (code: string, name: string) =>
+    page.body.match(
+      new RegExp(
+        `data-testid="board-round-code" data-round-code-chip="knockout" title="${name}" class="[^"]*">${code}<`,
+        "g",
+      ),
+    )?.length ?? 0;
+  const sf = chips(en["bracket.roundShort.semi"], en["bracket.round.semi"]);
+  const f = chips(en["bracket.roundShort.final"], en["bracket.round.final"]);
+  check(
+    `board round codes: the division board renders both semi-finals' chips as ${en["bracket.roundShort.semi"]} and the final's as ${en["bracket.roundShort.final"]} (got ${sf} and ${f})`,
+    page.status === 200 && sf === 2 && f === 1,
+  );
+  check(
+    "board round codes: no knockout card falls back to the generic R{n} chip",
+    page.status === 200 && !page.body.includes('data-round-code-chip="plain"'),
+  );
+  check(
+    "board round codes: the legend row is an explicit, named list of the codes in view",
+    new RegExp(
+      `data-testid="board-legend-rounds" role="list" aria-label="${en["board.roundLegend.aria"]}"`,
+    ).test(page.body),
+  );
+}
+
 async function hubKnockoutSuite(): Promise<void> {
   const owner = newSession();
   const who = await signIn(owner, `delivered+hubko_${tag}@resend.dev`);

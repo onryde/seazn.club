@@ -127,9 +127,9 @@ export default async function DivisionSchedulePage({
   ] = await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
-    // F1 follow-up (payload budget "gap 15"): the board never reads
-    // ext_key/lane/is_final/third_place/conditional — this projection
-    // drops them instead of shipping them across the RSC flight unread.
+    // F1 follow-up (payload budget "gap 15"): the board's own projection —
+    // no ext_key/is_final, and lane/third_place/conditional only where set
+    // (they drive the knockout round codes; see the function's comment).
     listDivisionFixturesForBoard(auth, id),
     listEntrants(auth, id),
     getScheduleSettings(auth, id),
@@ -164,9 +164,11 @@ export default async function DivisionSchedulePage({
   }));
 
   // Feed wiring for TBD card labels ("Winner of R1·2" — doc 12 §2).
+  // `stage_id` lets feedLabels() mark a CROSS-stage edge with its source
+  // stage, so the board's round codes resolve a feeder in the right stage.
   const feedRows = await withTenant(auth.orgId, (tx) =>
     tx<FeedRow[]>`
-      select id, round_no, seq_in_round, winner_to_fixture, winner_to_slot,
+      select id, stage_id, round_no, seq_in_round, winner_to_fixture, winner_to_slot,
              loser_to_fixture, loser_to_slot
       from fixtures where division_id = ${id}`,
   );

@@ -26,8 +26,9 @@ import { dayLabel, dayWeekday, dayDateShort, timeLabel } from "@/lib/day-label";
 import { BoardAgenda } from "./board/board-agenda";
 import { BoardGrid } from "./board/board-grid";
 import { BoardLanes } from "./board/board-lanes";
-import { BoardLegend } from "./board/board-legend";
+import { BoardLegend, BoardRoundLegend } from "./board/board-legend";
 import { BoardTray } from "./board/board-tray";
+import { boardRoundCodes, withRoundCodeRefs, type BoardRoundCode } from "./board/round-codes";
 import { AiConsole, useAiSchedulingEnabled, type AiBriefContext } from "./board/ai-console";
 import { AiCompetitionConsole, type JointDivision } from "./board/ai-competition-console";
 import { AiRepairBanner } from "./board/ai-repair-banner";
@@ -262,6 +263,13 @@ export function consoleFixtures(
   // English regardless of any org's locale) is unchanged. The real client
   // render site (below) passes the component's own useMsg()-bound `msg`.
   lookup?: SlotLabelLookup,
+  // Schedule-board knockout round codes (2026-09-23): the board's one
+  // `boardRoundCodes` map, so a knockout fixture's code reads "QF·3" — the
+  // same ref a "Winner of QF·3" card title uses for it (the caller passes the
+  // matching `withRoundCodeRefs` feed map). Optional and absent for every
+  // non-board caller (the demo-template capture/drift tests), which keep
+  // "R1·3" exactly as before.
+  roundCodes?: ReadonlyMap<string, BoardRoundCode>,
 ): AiConsoleFixture[] {
   const maxRoundOf = new Map<string, number>();
   for (const f of boardFixtures) {
@@ -295,7 +303,7 @@ export function consoleFixtures(
       // matchRef()'s own client-safe English default when undefined (see the
       // param comment above), identically to how it already does for
       // cardTitle()'s `matchup` on the next line.
-      code: matchRef(f.round_no, f.seq_in_round, lookup),
+      code: matchRef(f.round_no, f.seq_in_round, lookup, roundCodes?.get(f.id)?.code),
       matchup: cardTitle(f, entrantNames, feedLabels, lookup),
       isFinal: maxRound > 0 && f.round_no === maxRound && atMaxRound.get(f.division_id) === 1,
       isJunior: false,
@@ -487,7 +495,8 @@ export function ScheduleBoard({
   divisions,
   stages,
   // `fixtures` is DELIBERATELY NOT DESTRUCTURED — see `props.fixtures` at the
-  // `useBoardActions` call, its only use. Everything downstream must read
+  // `useBoardActions` call (and the round-code memo just above it, which reads
+  // identity fields only — see there). Everything downstream must read
   // `actions.board`, which layers the optimistic overrides a drag applies
   // before the RSC refresh lands, and that distinction now decides a credit
   // charge (the confirm card prices a scoped repair by narrowing on court and
@@ -495,7 +504,9 @@ export function ScheduleBoard({
   // consumer can reach for the wrong one by habit.
   entrantNames,
   activeEntrantCounts,
-  feedLabels,
+  // Renamed on the way in: every reader below takes the ROUND-CODED map
+  // (`feedLabels`, built next to `useBoardActions`), never this one.
+  feedLabels: rawFeedLabels,
   settings,
   canEdit,
   constraintsAllowed,
@@ -609,9 +620,30 @@ export function ScheduleBoard({
     [divisions],
   );
 
+  // ------------------------------------------------------- round codes
+  // Knockout round codes (2026-09-23, owner-approved): each knockout /
+  // double-elim fixture's short code ("QF", "WB2") and round name, computed
+  // ONCE per fixture list, plus the feed-label map with every knockout
+  // feeder's code stamped on ("Winner of QF·3"). Every card title on this
+  // board — cards, move panel, conflicts, announcements, the AI console —
+  // reads `feedLabels` below, so one map keeps them all saying the same thing.
+  //
+  // Read off `props.fixtures`, the second deliberate read of the raw list:
+  // `useBoardActions` needs the coded map, so it cannot come from
+  // `actions.board`, and it does not need to — a code depends only on
+  // stage/round/lane/flags, which no optimistic move ever touches.
+  const roundCodes = useMemo(
+    () => boardRoundCodes(props.fixtures, stages, msg),
+    [props.fixtures, stages, msg],
+  );
+  const feedLabels = useMemo(
+    () => withRoundCodeRefs(props.fixtures, rawFeedLabels, roundCodes),
+    [props.fixtures, rawFeedLabels, roundCodes],
+  );
+
   // ------------------------------------------------------------- actions
-  // The ONLY read of the raw server list, and it is spelled out in full so it
-  // reads as a deliberate act rather than a convenient local.
+  // The read of the raw server list that everything else is built on, spelled
+  // out in full so it reads as a deliberate act rather than a convenient local.
   const actions = useBoardActions(divisions, props.fixtures, entrantNames, feedLabels, canEdit);
 
   // Whole-division freeze toggle (Jul3/03 §4) — same endpoint the History
@@ -814,8 +846,8 @@ export function ScheduleBoard({
     // regardless of the org/viewer's own locale — feeding five AI-console
     // surfaces (ai-competition-console, ai-diff-panel, ai-officials-review,
     // ai-review-panel) and the board ghost block English-only.
-    () => consoleFixtures(single ? divBoardFixtures : actions.board, entrantNames, feedLabels, msg),
-    [single, divBoardFixtures, actions.board, entrantNames, feedLabels, msg],
+    () => consoleFixtures(single ? divBoardFixtures : actions.board, entrantNames, feedLabels, msg, roundCodes),
+    [single, divBoardFixtures, actions.board, entrantNames, feedLabels, msg, roundCodes],
   );
 
   // The joint console's per-division inputs. Derived here (not in the console)
@@ -1713,6 +1745,16 @@ export function ScheduleBoard({
         />
       )}
 
+      {/* Knockout round-code key (2026-09-23): the codes on the cards in view
+          — the day's cards plus the tray's. The week view's cards carry no
+          round chip, so there only the tray's codes are listed. Renders
+          nothing when nothing in view is coded. */}
+      <BoardRoundLegend
+        fixtures={density === "board" && view === "week" ? [] : dayFixtures}
+        tray={unscheduled}
+        codes={roundCodes}
+      />
+
       {/* Board + tray share the row on desktop; tray is a sheet on mobile. */}
       <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
@@ -1741,6 +1783,7 @@ export function ScheduleBoard({
               ghosts={dayGhosts}
               blackouts={cfg.blackouts}
               matchMinutes={matchMinutes}
+              roundCodes={roundCodes}
             />
           )}
 
@@ -1776,6 +1819,7 @@ export function ScheduleBoard({
               onTogglePin={(f) => void actions.togglePin(f)}
               highlightId={highlightId}
               courtNames={courtNamesById}
+              roundCodes={roundCodes}
             />
           )}
 
@@ -1794,6 +1838,7 @@ export function ScheduleBoard({
               onTogglePin={(f) => void actions.togglePin(f)}
               courtNames={courtNamesById}
               highlightId={highlightId}
+              roundCodes={roundCodes}
             />
           )}
         </div>
@@ -1809,6 +1854,7 @@ export function ScheduleBoard({
           pickedId={pickedId}
           onPick={pick}
           onTogglePin={(f) => void actions.togglePin(f)}
+          roundCodes={roundCodes}
         />
       </div>
 

@@ -20,6 +20,7 @@ const baseProps = {
   entrantNames: {},
   feedLabels: {},
   fixtureTitles: {},
+  roundCodes: new Map(),
   conflictsByFixture: {},
   canEdit: true,
   multi: false,

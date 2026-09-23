@@ -8,6 +8,7 @@ import { useState } from "react";
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import { FixtureBlock } from "./fixture-block";
 import type { BoardConflict, BoardDivision, BoardFixture } from "./types";
+import type { BoardRoundCode } from "./round-codes";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export function BoardTray({
@@ -21,6 +22,7 @@ export function BoardTray({
   pickedId,
   onPick,
   onTogglePin,
+  roundCodes,
 }: {
   unscheduled: BoardFixture[];
   divisions: BoardDivision[];
@@ -34,6 +36,8 @@ export function BoardTray({
   pickedId: string | null;
   onPick: (fixtureId: string) => void;
   onTogglePin: (f: BoardFixture) => void;
+  /** The board's one knockout round-code map (board/round-codes.ts). */
+  roundCodes: ReadonlyMap<string, BoardRoundCode>;
 }) {
   const msg = useMsg();
   const [openMobile, setOpenMobile] = useState(false);
@@ -78,6 +82,7 @@ export function BoardTray({
                 picked={pickedId === f.id}
                 onPick={() => onPick(f.id)}
                 onTogglePin={() => onTogglePin(f)}
+                roundCode={roundCodes.get(f.id)}
               />
             ))}
           </div>

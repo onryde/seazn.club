@@ -34,12 +34,20 @@ export type SlotLabelLookup = (
  *  labelled "R1·2" and a slot that says "Winner of R1·2" can't drift onto
  *  different formats the way a hand-built template on each side could.
  *  Defaults to the client-safe English `msg()`, same convention as
- *  board/types.ts's `cardTitle()`. */
+ *  board/types.ts's `cardTitle()`.
+ *
+ *  `code` (schedule-board knockout round codes, 2026-09-23): the round's
+ *  SHORT code ("QF") to print in place of the round number — "QF·3" via
+ *  `slot.match_ref_code`. Only the schedule board ever passes one
+ *  (board/round-codes.ts); omitted, this is byte-for-byte the "R3·3" every
+ *  other surface has always rendered. */
 export function matchRef(
   round: number,
   seq: number,
   lookup: SlotLabelLookup = msg,
+  code?: string,
 ): string {
+  if (code !== undefined) return lookup("slot.match_ref_code" as MessageKey, { code, seq });
   return lookup("slot.match_ref" as MessageKey, { round, seq });
 }
 
@@ -51,7 +59,13 @@ export function matchRef(
  *  persisted `params` are `{round, seq}` (numbers, never a rendered
  *  fragment — P7/F1), and `{ext}` is composed here via matchRef() rather
  *  than trusted from storage, so every renderer resolves the SAME ref text
- *  regardless of which surface reads the row. */
+ *  regardless of which surface reads the row.
+ *
+ *  A `code` param is the one exception, and it is never STORED: the schedule
+ *  board stamps the feeder's round code onto its own in-memory copy of the
+ *  label (board/round-codes.ts `withRoundCodeRefs`), so its cards read
+ *  "Winner of QF·3". Nothing writes `code` to a row, so every other surface
+ *  reading the same row still resolves "Winner of R3·3". */
 export function resolveSlotLabel(
   label: SlotLabel | null,
   lookup: SlotLabelLookup,
@@ -61,7 +75,8 @@ export function resolveSlotLabel(
   if (label.key === "slot.winner_match" || label.key === "slot.loser_match") {
     const round = Number(label.params.round);
     const seq = Number(label.params.seq);
-    return lookup(label.key as MessageKey, { ext: matchRef(round, seq, lookup) });
+    const code = typeof label.params.code === "string" ? label.params.code : undefined;
+    return lookup(label.key as MessageKey, { ext: matchRef(round, seq, lookup, code) });
   }
   const vars: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(label.params)) {

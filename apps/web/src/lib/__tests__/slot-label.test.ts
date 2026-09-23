@@ -138,3 +138,49 @@ describe("resolveSlotLabel — slot.match_ref composition (P7/F1)", () => {
     });
   }
 });
+
+// Schedule-board knockout round codes (2026-09-23): on the BOARD, a knockout
+// feeder is named by its round code — "Winner of QF·3" — instead of its round
+// number. The board stamps the code onto its own copy of the label
+// (board/round-codes.ts); nothing persists one, so every other surface keeps
+// reading "R3·3" from the same row.
+describe("matchRef / resolveSlotLabel — the board's round-code ref", () => {
+  it("en: a code replaces the round number, the seq stays — 'QF·3'", () => {
+    const lookup: SlotLabelLookup = (k, vars) => msgFor("en", k, vars);
+    expect(matchRef(1, 3, lookup, "QF")).toBe("QF·3");
+    expect(
+      resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 3, code: "QF" } }, lookup, "schedule.tbd"),
+    ).toBe("Winner of QF·3");
+    expect(
+      resolveSlotLabel({ key: "slot.loser_match", params: { round: 2, seq: 1, code: "SF" } }, lookup, "schedule.tbd"),
+    ).toBe("Loser of SF·1");
+  });
+
+  it("without a code nothing moves: the default every non-board surface takes is still R{round}·{seq}", () => {
+    const lookup: SlotLabelLookup = (k, vars) => msgFor("en", k, vars);
+    expect(matchRef(1, 3, lookup)).toBe("R1·3");
+    expect(matchRef(1, 3, lookup, undefined)).toBe("R1·3");
+    expect(
+      resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 3 } }, lookup, "schedule.tbd"),
+    ).toBe("Winner of R1·3");
+    // A non-string `code` is not a code — a malformed param never renders "undefined·3".
+    expect(
+      resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 3, code: 7 } }, lookup, "schedule.tbd"),
+    ).toBe("Winner of R1·3");
+  });
+
+  for (const locale of LOCALES) {
+    it(`${locale}: the coded ref resolves through slot.match_ref_code with every placeholder filled`, () => {
+      const lookup: SlotLabelLookup = (k, vars) => msgFor(locale, k, vars);
+      const ref = msgFor(locale, "slot.match_ref_code" as MessageKey, { code: "XX", seq: 4 });
+      expect(ref).not.toBe("slot.match_ref_code");
+      expect(ref).toContain("XX");
+      expect(ref).toContain("4");
+      expect(ref).not.toMatch(/\{[a-zA-Z]+\}/);
+      expect(matchRef(9, 4, lookup, "XX")).toBe(ref);
+      expect(
+        resolveSlotLabel({ key: "slot.winner_match", params: { round: 9, seq: 4, code: "XX" } }, lookup, "schedule.tbd"),
+      ).toBe(msgFor(locale, "slot.winner_match", { ext: ref }));
+    });
+  }
+});

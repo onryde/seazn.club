@@ -53,6 +53,88 @@ export function roundRoleLabel(msg: Msg, role: RoundRole): string {
   }
 }
 
+/** Where a round sits in its bracket: the two facts a double elimination's
+ *  SHORT code needs that the role itself does not carry. */
+export interface RoundPlacement {
+  lane: "WB" | "LB" | "GF" | null;
+  /** 0-based rank within the lane — `laneRoundRank(...).roundInLane`. */
+  roundInLane: number;
+}
+
+/**
+ * Role -> the schedule board's SHORT round code ("QF", "R16", "WB2", "3rd"),
+ * via `bracket.roundShort.*` so a locale can abbreviate its own way; or `null`
+ * for a role the board keeps as its plain `R{round_no}` chip (round-robin
+ * ordinals, stepladder rungs, and the page-playoff roles, which are a
+ * follow-up — the board payload carries no `ext_key`, and Qualifier 1 and the
+ * Eliminator are told apart by nothing else).
+ *
+ * Exhaustive over `RoundRole`: a new role kind fails typecheck here until it
+ * is given a code or an explicit `null`.
+ *
+ * A double elimination's WINNERS' lane is numbered, not named. Its rounds come
+ * back from `roundRole()` as the single-elimination names — `semi_final`,
+ * `quarter_final` — but the winners' semi-final is not the tournament's: the
+ * grand final is still two lanes away. So every WB round reads `WB{n}`, and the
+ * losers' lane `LB{n}` all the way through its final, one numbering per lane.
+ */
+export function roundRoleShort(msg: Msg, role: RoundRole, at: RoundPlacement): string | null {
+  // `third_place` first, as in `roundRole()` itself: the flag outranks lane.
+  if (at.lane === "WB" && role.kind !== "third_place") {
+    return msg("bracket.roundShort.winnersRound", { n: at.roundInLane + 1 });
+  }
+  switch (role.kind) {
+    case "round_of":
+      return msg("bracket.roundShort.roundOf", { n: role.entrants });
+    case "quarter_final":
+      return msg("bracket.roundShort.quarter");
+    case "semi_final":
+      return msg("bracket.roundShort.semi");
+    case "final":
+      return msg("bracket.roundShort.final");
+    case "winners_final":
+      // Only ever produced in the WB lane, which the guard above has already
+      // answered — kept so the switch stays exhaustive over the union.
+      return msg("bracket.roundShort.winnersRound", { n: at.roundInLane + 1 });
+    case "losers_round":
+      return msg("bracket.roundShort.losersRound", { n: role.n });
+    case "losers_final":
+      return msg("bracket.roundShort.losersRound", { n: at.roundInLane + 1 });
+    case "grand_final":
+      return msg("bracket.roundShort.grandFinal");
+    case "grand_final_reset":
+      return msg("bracket.roundShort.grandFinalReset");
+    case "third_place":
+      return msg("bracket.roundShort.thirdPlace");
+    case "qualifier1":
+    case "eliminator":
+    case "qualifier2":
+    case "rung":
+    case "plain_round":
+      return null;
+  }
+}
+
+/**
+ * Role -> the schedule board's LONG round name — the card's accessible name,
+ * its chip tooltip and the legend entry beside the short code. Lane-aware
+ * exactly where `roundRoleShort` is (review M1, 2026-09-23): a winners'-bracket
+ * round is "Winners' round {n}" (its final "Winners' final"), never the
+ * single-elimination "Quarter-finals"/"Semi-finals" `roundRole()` hands it —
+ * the chip already says WB2 because the winners' semi is not the tournament's,
+ * and the name beside it must not say otherwise. Every other role — single
+ * elimination, the losers' lane, the grand final — is `roundRoleLabel`'s,
+ * verbatim, which is what every other bracket surface prints.
+ */
+export function roundRoleBoardLabel(msg: Msg, role: RoundRole, at: RoundPlacement): string {
+  if (at.lane === "WB" && role.kind !== "third_place") {
+    return role.kind === "winners_final"
+      ? msg("bracket.round.winnersFinal")
+      : msg("bracket.round.winnersRound", { n: at.roundInLane + 1 });
+  }
+  return roundRoleLabel(msg, role);
+}
+
 /** Shape every bracket-fixture reader needs for `laneRoundRank` below —
  *  structural, so a `PublicFixture`/`FixtureRow`/`FixtureLike` row satisfies
  *  it without a cast. */

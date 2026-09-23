@@ -176,7 +176,22 @@ export const FIXTURE_COLS = [
  *  fetched fixture list never carries ext_key" as a design invariant for
  *  its capacity precheck; this restores that invariant rather than
  *  breaking new ground. Same as FIXTURE_COLS minus those five columns —
- *  keep the two in sync by hand if FIXTURE_COLS's other columns change. */
+ *  keep the two in sync by hand if FIXTURE_COLS's other columns change.
+ *
+ *  2026-09-23 (schedule-board knockout round codes): three of the five came
+ *  back — `lane`, `third_place`, `conditional` are what the card's round code
+ *  ("QF", "3rd", "WB2", "GF2") is computed from, and without `third_place` a
+ *  bronze match reads as a second final. They are NOT back at the old cost:
+ *  listDivisionFixturesForBoard puts each on a row only when it is not its
+ *  column default, so a round-robin row (the budget board's whole population)
+ *  carries none of them. `ext_key` stays out: it only serves page-playoff
+ *  roles, which the board does not code.
+ *
+ *  Review M2 (same day): `is_final` came back too, on the same terms (sent
+ *  only when true — one key per bracket). `roundRole()` never reads it; it is
+ *  the presence test for all four V368 columns. A stage generated before V368
+ *  has every row at the defaults, so a coded stage with no `is_final` row is a
+ *  legacy one and keeps its plain R{n} rather than a guessed code. */
 /** P9: what the BOARD actually receives — identity, no derived names and no
  *  frozen legacy text. The board resolves display names client-side from the
  *  venues prop; sending them per row duplicated ~330 rows' worth of bytes.
@@ -192,6 +207,7 @@ export const BOARD_FIXTURE_COLS = [
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
   "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
+  "lane", "is_final", "third_place", "conditional",
 ] as const;
 
 export interface FixtureRow {

@@ -7,6 +7,7 @@ import type { FeedLabelPair } from "@/lib/schedule-board";
 import { FixtureBlock } from "./fixture-block";
 import { timeLabel } from "@/lib/day-label";
 import { courtDisplayName, type BoardConflict, type BoardFixture } from "./types";
+import type { BoardRoundCode } from "./round-codes";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export function BoardAgenda({
@@ -24,6 +25,7 @@ export function BoardAgenda({
   onTogglePin,
   highlightId,
   courtNames,
+  roundCodes,
 }: {
   /** This day's scheduled fixtures, any court. */
   fixtures: BoardFixture[];
@@ -45,6 +47,8 @@ export function BoardAgenda({
    *  `courtNamesById`) — see `courtDisplayName`'s own doc comment. Optional,
    *  falling back to the fixture's own bare name when omitted. */
   courtNames?: Record<string, string>;
+  /** The board's one knockout round-code map (board/round-codes.ts). */
+  roundCodes: ReadonlyMap<string, BoardRoundCode>;
 }) {
   const msg = useMsg();
   const sorted = [...fixtures].sort(
@@ -96,6 +100,7 @@ export function BoardAgenda({
                   picked={pickedId === f.id}
                   onPick={() => onPick(f.id)}
                   onTogglePin={() => onTogglePin(f)}
+                  roundCode={roundCodes.get(f.id)}
                   // P9 pass 4a: resolved NAME first, the frozen label as a
                   // fallback — never court_id (a raw uuid). P9 pass 4d:
                   // venue-qualified via courtNames when the bare name is
