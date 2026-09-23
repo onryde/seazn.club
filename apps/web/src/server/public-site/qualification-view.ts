@@ -10,11 +10,14 @@ import "server-only";
 // a wrong one (R3). Every `return null` below names the fact it cannot trust;
 // each has its own test in __tests__/qualification-view.test.ts.
 import {
+  FOR_KEYS,
   PointsRule,
   SETTLED_FIXTURE_STATUSES,
   isTableStageComplete,
+  metricKeyOf,
   pointsRuleBounds,
   qualificationStatus,
+  tieDecidingKey,
   tieKeyValue,
   tieRival,
   tieWhatIf,
@@ -126,9 +129,11 @@ export interface QualificationViewInput {
   /** The division's walkover writes goals into the ledger
    *  (`divisionAwardAddsToLedger`) — then a two-sided award counts toward the
    *  what-if's average match. The SPORT's forfeit score never reaches a
-   *  one-sided bye; a stage PointsRule's `forfeit.awardScore` does, and scores
-   *  every walkover too — the builder reads that off `stage.meta.pointsRule`
-   *  itself, whatever this flag says. */
+   *  one-sided bye. A stage PointsRule's `forfeit.awardScore` scores every
+   *  walkover and bye, but only into `for`/`against`/`diff`: where the what-if
+   *  reads those, the builder counts the award whatever this flag says
+   *  (`ruleScoreInAverage`, read off `stage.meta.pointsRule`); elsewhere this
+   *  flag decides. */
   awardAddsToLedger: boolean;
   cascade: readonly string[];
   entrantNames: Readonly<Record<string, string>>;
@@ -150,25 +155,26 @@ function counted(f: QualFixture): boolean {
   return f.outcome !== null && f.outcome !== undefined && f.home_entrant_id !== null && f.away_entrant_id !== null;
 }
 
-/** A counted match that adds nothing to the goal/set ledger (T3-⚠3): a
- *  no-result; and, unless a stage rule scores forfeits (`ruleScoresForfeits`),
- *  a one-sided bye (the adapter folds it from a fresh 0–0 state) or a
- *  two-sided award — a walkover — in a sport whose forfeit writes no score
- *  (`awardAddsToLedger` false; ice hockey's writes `awardScore` goals, so its
- *  walkover is an ordinary match here). The what-if's average match leaves
- *  these out. */
-function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleScoresForfeits: boolean): boolean {
+/** A counted match that adds nothing to the ledger the what-if reads
+ *  (T3-⚠3): a no-result; and, unless a stage rule's forfeit score is in what
+ *  the average reads (`ruleInAverage`, from `ruleScoreInAverage`), a one-sided
+ *  bye (the adapter folds it from a fresh 0–0 state) or a two-sided award — a
+ *  walkover — in a sport whose forfeit writes no score (`awardAddsToLedger`
+ *  false; ice hockey's writes `awardScore` goals, so its walkover is an
+ *  ordinary match here). The what-if's average match leaves these out. */
+function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean): boolean {
   const kind = outcomeKind(f);
   if (kind === "no_result") return true;
   if (kind !== "award") return false;
-  if (ruleScoresForfeits) return false;
+  if (ruleInAverage) return false;
   return isOneSidedAwardBye(f) || !awardAddsToLedger;
 }
 
 /** A stage PointsRule with a non-zero `forfeit.awardScore`: `applyPointsRule`
  *  adds it to for/against/diff on every forfeit, and the adapter applies the
  *  rule to a one-sided bye's delta as well (engine-db/competition.ts
- *  `awardByeDelta`), so under it every award is a ledger match. Read here, not
+ *  `awardByeDelta`) — so every award carries it, though only where the what-if
+ *  reads those three keys does it count (`ruleScoreInAverage`). Read here, not
  *  by the caller: V414 publishes the rule as `meta.pointsRule`, and a caller
  *  cannot forget it. (A rule that does not parse never gets this far —
  *  `boundsInForce` refuses it.) */
@@ -177,6 +183,19 @@ function ruleScoresForfeits(meta: StageQualMeta): boolean {
   const parsed = PointsRule.safeParse(meta.pointsRule);
   const score = parsed.success ? parsed.data.forfeit?.awardScore : undefined;
   return score !== undefined && (score[0] !== 0 || score[1] !== 0);
+}
+
+/** Whether a rule-scored award is in the what-if's average match for `row`
+ *  (fix round 2): an award counts only if it changed the ledger the deciding
+ *  key reads. The rule writes `for`/`against`/`diff` alone, so (1) the key
+ *  must be `diff` or `for` — a ratio key reads its own won/lost counters —
+ *  and (2) the row's goals must resolve to the rule's `for`, not a sport's
+ *  own `gf` that `metricOf` reads first. For both keys the average match is
+ *  for + against (tie-what-if.ts `marginFor`); `diff` only sets the margin,
+ *  which `played` never touches — so (2) asks where FOR_KEYS lands. */
+function ruleScoreInAverage(row: StandingsRow, key: TiebreakerKey | null): boolean {
+  if (key !== "diff" && key !== "for") return false;
+  return metricKeyOf(row, FOR_KEYS) === "for";
 }
 
 function statusLabel(s: QualStatus, i: QualificationViewInput): string {
@@ -336,6 +355,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // table itself, since a carry-over opening pays points no match paid (the
   // carry mode is not public; `points = winFloor × won` on every row is).
   const winsOnly = perMatch.winsOnly && i.rows.every((r) => r.points === r.won * perMatch.winFloor);
+  const decidingKey = tieDecidingKey(cascade, { winsOnly });
 
   /** The entrant's next match has no opponent seat (T2-C1): a bye it cannot lose. */
   const nextIsBye = (id: string): boolean => {
@@ -351,7 +371,8 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     const rival = rivalId === null ? undefined : byId.get(rivalId);
     if (!rival) return null;
     // The average match counts only matches with a ledger (T3-⚠3).
-    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleScored)).length;
+    const ruleInAverage = ruleScored && ruleScoreInAverage(r, decidingKey);
+    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleInAverage)).length;
     const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;

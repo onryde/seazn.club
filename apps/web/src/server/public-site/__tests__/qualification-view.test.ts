@@ -77,6 +77,7 @@ const moduleOf = (key: string) => {
 const GENERIC = moduleOf("generic");
 const BADMINTON = moduleOf("badminton");
 const ICEHOCKEY = moduleOf("icehockey");
+const FOOTBALL = moduleOf("football");
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 const BOUNDS = divisionPointsBounds(GENERIC, CFG)!;
 const W = BOUNDS.winFloor;
@@ -857,8 +858,9 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   // meta.pointsRule): `applyPointsRule` adds it to for/against/diff on EVERY
   // forfeit, and the adapter applies the rule to a one-sided bye's delta too
   // (engine-db/competition.ts `awardByeDelta`). So under such a rule a walkover
-  // AND a bye are ledger matches — whatever the sport, and without the caller
-  // having to say so (the generic module's awardAddsToLedger stays false here).
+  // AND a bye are ledger matches wherever the deciding key reads those three
+  // keys — the generic module's `diff` and `for` here — without the caller
+  // having to say so (the generic module's awardAddsToLedger stays false).
   // Each pair is the same scene under the same rule minus its awardScore.
   const scoredRule = (awardScore?: [number, number]) => ({
     base: { win: W, draw: 1, loss: 0 },
@@ -896,6 +898,101 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(scored.whatIfAssumption).toBeNull();
     const unscored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule() } })).rows.D!;
     expect(unscored.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides: win your next match by 5 or more to finish ahead.`);
+  });
+  it("…and on `for` as on `diff`: the rule's score is in the goals the average reads", () => {
+    // The walkover scene, D's real match a 1–2 loss plus the walkover's 0–3:
+    // D 1–5, Bo 4 scored (its 3–0 inside). With the walkover a match (2), an
+    // average of 3 cannot hold the win by 4 `for` needs: rule and values. As
+    // no match (1), the whole 6 goals are one match's and a win by 1 is enough.
+    const o = open4({ D: [1, 5], B: [4, 2] });
+    const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const cascade = ["points", "for"];
+    const scored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, { cascade })).rows.D!;
+    expect(scored.whatIf).toBe("If you finish level on points with Bo, goals/runs scored decides. Now: you 1, Bo 4.");
+    const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } }, { cascade })).rows.D!;
+    expect(unscored.whatIf).toBe("If you finish level on points with Bo, goals/runs scored decides: win your next match by 1 or more to finish ahead.");
+  });
+
+  // Fix round 2: the rule's score counts only where the what-if READS it.
+  // `applyPointsRule` writes it to `for`/`against`/`diff` alone; `metricOf`
+  // reads a sport's own `gf`/`ga`/`gd` first, and a ratio key reads neither.
+  // Counting an award the average cannot see only shrinks the average — so
+  // each scene below prints what the same table prints with no rule at all.
+  /** A snapshot row carrying exactly `metrics` (row() always adds for/against/diff). */
+  const ledgerRow = (id: string, rank: number, won: number, played: number, points: number, metrics: Metrics): StandingsRow => ({
+    entrantId: id,
+    rank,
+    played,
+    won,
+    drawn: 0,
+    lost: played - won,
+    points,
+    metrics,
+  });
+  /** What `applyPointsRule` adds for a scored forfeit. */
+  const ruleAward = (mine: number, theirs: number): Metrics => ({ for: mine, against: theirs, diff: mine - theirs });
+
+  it("a football bye under the rule: `gf`/`gd` hide the rule's score, so the bye stays out of the average", () => {
+    // Swiss of five on points → diff → for: r1 A 3–0 B, C 2–0 E, D bye; r2
+    // A 2–0 C, D 4–0 E, B bye. Di (6, +4 from ONE real match of 4 goals) wins
+    // and is in; a loss leaves it level on points with Cy (0). m = 0 − 4 + 1 =
+    // −3, inside one 4-goal match: lose by no more than 3. Counting the bye
+    // halves the average to 2 and the −3 reads as `safe`.
+    const FB = divisionPointsBounds(FOOTBALL, {})!;
+    expect(FB.winFloor).toBe(W);
+    const fixtures = [
+      won(1, "A", "B"),
+      won(1, "C", "E"),
+      bye(1, "D"),
+      won(2, "A", "C"),
+      won(2, "D", "E"),
+      bye(2, "B"),
+      open(3, null, null),
+      open(3, null, null),
+      open(3, null, null),
+    ];
+    const goals = (gf: number, ga: number): Metrics => ({ gf, ga, gd: gf - ga });
+    const rows = (scored: boolean) => [
+      ledgerRow("A", 1, 2, 2, 2 * W, goals(5, 0)),
+      ledgerRow("D", 2, 2, 2, 2 * W, { ...goals(4, 0), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("C", 3, 1, 2, W, goals(2, 2)),
+      ledgerRow("B", 4, 1, 2, W, { ...goals(0, 3), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("E", 5, 0, 2, 0, goals(0, 6)),
+    ];
+    const over = { cascade: ["points", "diff", "for"], bounds: FB, awardAddsToLedger: divisionAwardAddsToLedger(FOOTBALL, {}) };
+    const target = `If you finish level on points with Cy, ${RULE} decides: lose your next match by no more than 3 to finish ahead.`;
+    const plain = must(view({ kind: "swiss", rows: rows(false), fixtures }, over)).rows.D!;
+    expect(plain.whatIf).toBe(target);
+    const scored = must(view({ kind: "swiss", rows: rows(true), fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
+    expect(scored.whatIf).toBe(target);
+  });
+  it("a badminton walkover under the rule: set ratio reads no goals, so the walkover stays out of the average", () => {
+    // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Di's
+    // sets (1–2) are ONE real match's; Bo is 3–3. A win by 2 fits one 3-set
+    // match (3.5/2.5 > 1); counted as two matches it does not, and the what-if
+    // falls back to the rule and values.
+    const BB = divisionPointsBounds(BADMINTON, {})!;
+    const bw = BB.winFloor;
+    // Wins only, as badminton's own bounds are — else `wins` decides, not set ratio.
+    const winsOnlyRule = {
+      base: { win: bw, draw: 0, loss: 0 },
+      bonuses: [],
+      forfeit: { winnerPoints: bw, loserPoints: 0, awardScore: [3, 0] as [number, number] },
+    };
+    const sets = (w: number, l: number): Metrics => ({ sets_won: w, sets_lost: l });
+    const rows = (scored: boolean) => [
+      ledgerRow("A", 1, 2, 2, 2 * bw, { ...sets(2, 0), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("B", 2, 1, 2, bw, sets(3, 3)),
+      ledgerRow("C", 3, 1, 2, bw, sets(2, 3)),
+      ledgerRow("D", 4, 0, 2, 0, { ...sets(1, 2), ...(scored ? ruleAward(0, 3) : {}) }),
+    ];
+    const fixtures = [walkover(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), won(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const over = { cascade: [...BADMINTON.defaultTiebreakers], bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
+    const target = "If you finish level on points with Bo, set ratio decides: win your next match by 2 or more to finish ahead.";
+    const plain = must(view({ kind: "league", rows: rows(false), fixtures }, over)).rows.D!;
+    expect(plain.whatIf).toBe(target);
+    const scored = must(view({ kind: "league", rows: rows(true), fixtures, meta: { pointsRule: winsOnlyRule } }, over)).rows.D!;
+    expect(scored.whatIf).toBe(target);
   });
   it("winsOnly from the bounds IN FORCE: badminton skips `wins` for set ratio", () => {
     const bb = divisionPointsBounds(BADMINTON, {})!;
