@@ -249,7 +249,7 @@ describe("matchPointsBounds — winsOnly per module (the fact, not supportsDraws
 // `awardByeDelta`, phantom opponent, init state) — the path replayed here, for
 // every module and variant that claims winsOnly.
 describe("matchPointsBounds — winsOnly holds on the bye path too (an award through standingsDelta)", () => {
-  let claimed = 0;
+  const claimed: string[] = [];
   for (const m of builtinModules) {
     const cfgs: [string, unknown][] = [
       ...(m.configSchema.safeParse({}).success ? [["default", {}] as [string, unknown]] : []),
@@ -259,7 +259,7 @@ describe("matchPointsBounds — winsOnly holds on the bye path too (an award thr
       const cfg = m.configSchema.parse(raw);
       const b = m.matchPointsBounds(cfg);
       if (!b.winsOnly) continue;
-      claimed++;
+      claimed.push(`${m.key} (${label})`);
       it(`${m.key} (${label}): a bye pays winFloor to the winner, 0 to the phantom`, () => {
         const state = m.init(cfg, { home: { entrantId: "W", slots: [] }, away: { entrantId: "BYE", slots: [] } });
         const pair = m.standingsDelta({ kind: "award", winner: "W" }, cfg, { kind: "swiss" }, state);
@@ -268,7 +268,24 @@ describe("matchPointsBounds — winsOnly holds on the bye path too (an award thr
       });
     }
   }
-  it("at least the set-based and tennis defaults claim winsOnly (the sweep is not empty)", () => {
-    expect(claimed).toBeGreaterThanOrEqual(3);
+  // Pinned exactly (task-3 review minor): a `>= 3` floor let the sweep lose
+  // ten of its thirteen cases and stay green. A module or variant that starts
+  // or stops claiming winsOnly must show up here as a deliberate edit.
+  it("the sweep covers exactly the 13 module/variant configs that claim winsOnly", () => {
+    expect(claimed).toEqual([
+      "volleyball (beach)",
+      "badminton (default)",
+      "badminton (bwf)",
+      "badminton (short)",
+      "tabletennis (default)",
+      "tabletennis (bo5)",
+      "tabletennis (bo7)",
+      "tabletennis (hardbat-21)",
+      "tennis (default)",
+      "tennis (tour)",
+      "tennis (grand-slam)",
+      "tennis (fast4)",
+      "tennis (doubles-noad-mtb10)",
+    ]);
   });
 });

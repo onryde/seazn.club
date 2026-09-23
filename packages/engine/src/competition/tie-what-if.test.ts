@@ -240,6 +240,15 @@ describe("tieWhatIf — diff and for", () => {
     expect(tieWhatIf(me, rv, ["points", "for"], ONLY_WINS)).toEqual({ kind: "target", key: "for", margin: -1 });
     expectTightTarget(me, rv, "for", -1);
   });
+  // Task-3 review minor: margin 0 — one goal of difference ahead of the rival
+  // (gd = rgd + 1), so a draw keeps the row ahead and a one-goal defeat does
+  // not. The web builder maps 0 to "any win" (win scenario) or no target.
+  it("margin 0: gd = rgd + 1 — a draw is enough, a one-goal defeat is not", () => {
+    const me = row("me", 3, { gf: 6, ga: 3, gd: 3 });
+    const rv = row("rv", 3, { gf: 5, ga: 3, gd: 2 });
+    expect(tieWhatIf(me, rv, ["points", "diff"], ONLY_WINS)).toEqual({ kind: "target", key: "diff", margin: 0 });
+    expectTightTarget(me, rv, "diff", 0);
+  });
   // M6 boundaries: margin·played lands EXACTLY on ± the match size.
   it("boundary: the margin is exactly one whole average match (2·2 = 4) → still a target", () => {
     const me = row("me", 2, { gf: 4, ga: 0, gd: 4 });
