@@ -5,7 +5,7 @@
 // undo OWN events, nothing else. Every call presents the dl_ token as a
 // Bearer header; the token stays in this tab (component prop), never storage.
 // Offline-tolerant: sends retry with the SAME idempotency key (doc 08 §4).
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import {
@@ -73,6 +73,27 @@ interface Props {
 
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
 
+/**
+ * G1 — the upper bound on an OPPORTUNISTIC refresh, in ms. The same bound, for
+ * the same reason, as `fixture-console.tsx`'s constant of the same name (not
+ * exported there, and this twin is deliberately not a shared hook — see
+ * `handlePadEvents` below).
+ *
+ * `apiV1` sets no timeout and passes no signal of its own, so a `fetch` that
+ * hangs hangs forever. `handlePadEvents`' `finally` is the only thing that
+ * lowers `padSyncing`, and `padSyncing` greys out Start and "Void my last
+ * entry" — so an unsettled refresh is a courtside pad whose controls never
+ * come back, with no error and no explanation. The tab-return listener below
+ * fires that refresh at exactly the moment a woken phone's half-open socket is
+ * most likely.
+ *
+ * Applied at the call site, never inside `apiV1` (shared by every v1 caller),
+ * and never on `send()`'s own resync, which reports its own failures: bounding
+ * it would turn a successful append followed by a slow read into a visible
+ * "score failed". Exported only so the unit test can pin the budget.
+ */
+export const OPPORTUNISTIC_RESYNC_MS = 10_000;
+
 export function DeviceScorePad({
   token,
   deviceLinkId,
@@ -116,14 +137,38 @@ export function DeviceScorePad({
     [token],
   );
 
-  const resync = useCallback(async () => {
-    const [state, all] = await Promise.all([
-      authed<LiveState>(`/api/v1/fixtures/${fixture.id}/state`),
-      authed<PadEventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`),
-    ]);
-    setLive(state);
-    setEvents(all);
-  }, [authed, fixture.id]);
+  /** Re-read `/state` and the full ledger. `timeoutMs` bounds the pair — see
+   *  `OPPORTUNISTIC_RESYNC_MS` for who passes one; `send()` deliberately does
+   *  not.
+   *
+   *  An explicit `AbortController` on the global `setTimeout`, NOT
+   *  `AbortSignal.timeout`: that helper runs on a timer node's fake timers do
+   *  not drive, so the bound would have no unit coverage at all (`apps/web`
+   *  vitest is `environment: "node"`) — the reasoning `fixture-console.tsx`'s
+   *  `resync` records. Clearing the timer on settle also leaves none armed. */
+  const resync = useCallback(
+    async (opts?: { timeoutMs?: number }) => {
+      const budget = opts?.timeoutMs;
+      const controller = budget === undefined ? null : new AbortController();
+      const timer =
+        controller === null
+          ? null
+          : setTimeout(() => controller.abort(new Error(`resync exceeded its ${budget}ms budget`)), budget);
+      try {
+        const [state, all] = await Promise.all([
+          authed<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
+          authed<PadEventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`, {
+            signal: controller?.signal,
+          }),
+        ]);
+        setLive(state);
+        setEvents(all);
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
+    },
+    [authed, fixture.id],
+  );
 
   /** Same seam and same reasoning as fixture-console.tsx's own
    *  `handlePadEvents` — see its comment. `<ScorePad/>`'s own pipeline
@@ -131,10 +176,14 @@ export function DeviceScorePad({
    *  learns the server's real row id, so the raw event list this fires with
    *  is deliberately unused; only a real `resync()` (the same one `send()`
    *  already trusts) can tell this component the real id `lastOwnVoidable`
-   *  needs. A failed opportunistic resync is swallowed. */
+   *  needs. A failed opportunistic resync is swallowed.
+   *
+   *  BOUNDED (G1): the only clear of `padSyncing` is this `finally`, and the
+   *  tab-return listener below now fires this too. See
+   *  `OPPORTUNISTIC_RESYNC_MS`. */
   const handlePadEvents = useCallback(() => {
     setPadSyncing(true);
-    void resync()
+    void resync({ timeoutMs: OPPORTUNISTIC_RESYNC_MS })
       .catch(() => undefined)
       .finally(() => setPadSyncing(false));
   }, [resync]);
@@ -193,6 +242,65 @@ export function DeviceScorePad({
     },
     [authed, fixture.id, live.last_seq, resync],
   );
+
+  // G1 — this pad's own freshness floor: the one W3 gave the console
+  // (`fixture-console.tsx`, its `visibilitychange`/`focus` effect), which this
+  // twin never got. Every other refresh here is this pad's own `send()` or its
+  // inner pad's ledger change (`handlePadEvents`), and the second is downstream
+  // of the very pipeline that stalls — a 403 at the realtime token door on a
+  // Community plan, a websocket that joined and died, a wedged drain. So a
+  // stalled pipeline left the SCORER's screen stale with no upper bound, while
+  // the watcher's screen had one.
+  //
+  // Deliberately not an interval: a second timer on the same fixture doubles
+  // the request rate of every courtside pad in the product. A human returning
+  // to the tab is the moment staleness is visible, and a tab nobody returns
+  // to costs nothing.
+  //
+  // BOTH events, because they do not always co-occur: a window-manager focus
+  // with no visibility transition fires only `focus`; a tab switch inside an
+  // already-focused window fires only `visibilitychange`. A real return fires
+  // both, so it costs two refreshes (four requests) — bounded per return, and
+  // the first to settle already applies fresh state.
+  //
+  // The `visibilityState` guard is load-bearing: `visibilitychange` fires on
+  // the HIDE as well as the show, and refreshing a tab the scorer just left is
+  // the request this exists not to make.
+  //
+  // `handlePadEvents`, NEVER `resync` directly: it is the only path that raises
+  // `padSyncing`, which greys Start and "Void my last entry" while the ledger
+  // is half-refreshed. Bypassing it leaves Void live with a stale
+  // `expected_seq` — a 409 SEQ_CONFLICT on what should be a clean undo — at the
+  // moment the scorer is back at the pad, the most reachable moment there is.
+  // It also clears the flag in a `finally` and is bounded
+  // (`OPPORTUNISTIC_RESYNC_MS`), so a refresh that fails or never answers
+  // cannot strand the scorer on dead controls.
+  //
+  // Identity: `resync` is keyed on `[authed, fixture.id]`, `authed` on
+  // `[token]`, `handlePadEvents` on `[resync]` — all stable for the life of the
+  // link, so this subscribes once.
+  useEffect(() => {
+    // No DOM underneath ⇒ no listener. React never runs an effect during SSR,
+    // so this is the effect's real server behaviour; it is also reachable in
+    // `apps/web` vitest (`environment: "node"`), where `_hook-harness.tsx`
+    // commits effects with no browser. W3 shipped the console's copy of this
+    // effect unguarded and crashed three existing suites at mount.
+    // BOTH clauses, and they are not redundant: a suite may stub `document`
+    // without `window`, or neither, and a one-clause guard crashes in whichever
+    // shape it forgot. `device-score-pad-freshness-floor.test.tsx` mounts each
+    // partial DOM, so each clause has its own witness.
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const refreshIfVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      handlePadEvents();
+    };
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    window.addEventListener("focus", refreshIfVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+      window.removeEventListener("focus", refreshIfVisible);
+    };
+  }, [handlePadEvents]);
 
   // Owner ruling 17 (2026-09-06) — the SAME predicate fixture-console.tsx
   // shares (this file already imports plain types from there — `SportInfo`,
@@ -335,6 +443,7 @@ export function DeviceScorePad({
           {lastOwnVoidable && (
             <button
               type="button"
+              data-testid="device-void-mine"
               disabled={busy || padSyncing}
               onClick={() => send("core.void", { event_id: lastOwnVoidable.id })}
               className="flex h-12 items-center justify-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-6 text-sm font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/20 active:scale-[0.98] disabled:opacity-50"
