@@ -6,7 +6,8 @@
 //   1. "Show QR" re-shows through ensure and NEVER through /reissue. A
 //      hand-over that revoked would kill the sheet already printed for the
 //      match, which is the whole defect the printable sheets exist to avoid.
-//   2. "Revoke & reissue" asks first; only its confirm posts /reissue.
+//   2. "Revoke & reissue" asks first; only its confirm posts /reissue. Plain
+//      "Revoke" and "Revoke now" ask first too; only their confirm DELETEs.
 //   3. What the panel SAYS: a sealed link is live "until it is over", never an
 //      epoch date (`new Date(null)` is 1 Jan 1970), and a missing server key is
 //      the localised `dlink.kekMissing`, never the server's English sentence.
@@ -135,18 +136,21 @@ describe("device-link panel — Show QR vs Revoke & reissue (scorer sheets §4.2
     expect(island.text()).not.toContain(t("dlink.reissueWarn"));
   });
 
-  it("revoking while the reissue question is open closes it — a link that is still live does not reappear under a question nobody asked", async () => {
+  it("revoking while the reissue question is open swaps the question, and a confirmed revoke closes it — a link that is still live does not reappear under a question nobody asked", async () => {
     // A co-organiser's hand-over landed in between: after this revoke the
     // refresh GET still finds a live link, so the live branch renders again.
     api.afterDelete = { ...SEALED, id: "l2" };
     const island = renderIsland(DeviceLinkPanel, PROPS);
     await flush();
     click(byTestId(island.tree(), "device-link-reissue"));
-    click(buttons(island.tree()).find((el) => textOf(el).trim() === t("dlink.revoke")));
+    click(byTestId(island.tree(), "device-link-revoke"));
+    expect(byTestId(island.tree(), "device-link-reissue-confirm"), "one question at a time").toBeUndefined();
+    click(byTestId(island.tree(), "device-link-revoke-confirm"));
     await flush();
     expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
     expect(byTestId(island.tree(), "device-link-show"), "the live branch is back, for l2").toBeDefined();
     expect(byTestId(island.tree(), "device-link-reissue-confirm")).toBeUndefined();
+    expect(byTestId(island.tree(), "device-link-revoke-confirm")).toBeUndefined();
     expect(api.posts).toEqual([]);
   });
 
@@ -156,6 +160,76 @@ describe("device-link panel — Show QR vs Revoke & reissue (scorer sheets §4.2
     const labels = buttons(island.tree()).map((el) => textOf(el).trim());
     expect(labels).toEqual([t("dlink.showQr"), t("dlink.revoke"), t("dlink.reissue")]);
     expect(byTestId(island.tree(), "device-link-mint")).toBeUndefined();
+  });
+});
+
+// Owner ruling (T3 fix round 2): plain Revoke kills a printed sheet exactly as
+// Revoke & reissue does, and sits 8px from Show QR — so it asks first too, on
+// screen, with the same shape. Both DELETE doors are covered: the live line's
+// "Revoke" and the shown QR's "Revoke now".
+describe("device-link panel — Revoke asks first, like Revoke & reissue (owner ruling)", () => {
+  const alertText = (tree: ReactElement[]) =>
+    tree.filter((el) => propsOf(el).role === "alert").map((el) => textOf(el)).join(" ");
+
+  it("the live line's Revoke sends NO DELETE on its own — it puts the question on screen", async () => {
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-revoke"));
+    await flush();
+    expect(api.deletes, "the tap alone revokes nothing").toEqual([]);
+    expect(alertText(island.tree())).toContain(t("dlink.revokeWarn"));
+    expect(byTestId(island.tree(), "device-link-revoke-confirm")).toBeDefined();
+  });
+
+  it("Keep backs out of the revoke question: no DELETE, question closed, link still live", async () => {
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-revoke"));
+    click(byTestId(island.tree(), "device-link-keep"));
+    await flush();
+    expect(api.deletes).toEqual([]);
+    expect(byTestId(island.tree(), "device-link-revoke-confirm")).toBeUndefined();
+    expect(island.text()).not.toContain(t("dlink.revokeWarn"));
+    expect(byTestId(island.tree(), "device-link-show"), "the live branch stays").toBeDefined();
+  });
+
+  it("the revoke confirm sends exactly one DELETE, for the live link", async () => {
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-revoke"));
+    click(byTestId(island.tree(), "device-link-revoke-confirm"));
+    await flush();
+    expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
+    expect(api.posts).toEqual([]);
+  });
+
+  it("the shown QR's 'Revoke now' asks first too; Keep backs out, the confirm revokes", async () => {
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-show"));
+    await flush();
+    click(byTestId(island.tree(), "device-link-revoke-now"));
+    await flush();
+    expect(api.deletes, "the tap alone revokes nothing").toEqual([]);
+    expect(alertText(island.tree())).toContain(t("dlink.revokeWarn"));
+    click(byTestId(island.tree(), "device-link-keep"));
+    expect(byTestId(island.tree(), "device-link-revoke-confirm")).toBeUndefined();
+    expect(byTestId(island.tree(), "device-link-url"), "the QR stays on screen").toBeDefined();
+    click(byTestId(island.tree(), "device-link-revoke-now"));
+    click(byTestId(island.tree(), "device-link-revoke-confirm"));
+    await flush();
+    expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
+  });
+
+  it("Show QR closes an open question — the reissue confirm never sits under a freshly shown QR", async () => {
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-reissue"));
+    click(byTestId(island.tree(), "device-link-show"));
+    await flush();
+    expect(byTestId(island.tree(), "device-link-url")).toBeDefined();
+    expect(byTestId(island.tree(), "device-link-reissue-confirm")).toBeUndefined();
+    expect(alertText(island.tree())).toBe("");
   });
 });
 
@@ -304,7 +378,8 @@ describe("device-link panel — every refusal is localised, never the server's E
     api.refuseDelete = { status: 404, code: "NOT_FOUND", message: "device link not found" };
     const island = renderIsland(DeviceLinkPanel, PROPS);
     await flush();
-    click(buttons(island.tree()).find((el) => textOf(el).trim() === t("dlink.revoke")));
+    click(byTestId(island.tree(), "device-link-revoke"));
+    click(byTestId(island.tree(), "device-link-revoke-confirm"));
     await flush();
     expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
     expect(island.text()).toContain(t("dlink.error.notFound"));

@@ -6,7 +6,10 @@
 // fixture is over, so "Show QR" goes through ENSURE (POST /device-links) and
 // re-shows the SAME secret every time — a hand-over never kills a sheet that
 // was already printed for this match. Only the explicit, confirmed "Revoke &
-// reissue" (POST /device-links/reissue) mints a new one.
+// reissue" (POST /device-links/reissue) mints a new one. Plain "Revoke" (and
+// "Revoke now" under a shown QR) kills a printed sheet just the same, so it
+// asks first too, with the same on-screen question (owner ruling, T3 fix
+// round 2). One question at a time.
 import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -48,7 +51,8 @@ export function DeviceLinkPanel({
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [confirmReissue, setConfirmReissue] = useState(false);
+  /** The open "this kills the QR" question, if any. */
+  const [confirm, setConfirm] = useState<"reissue" | "revoke" | null>(null);
   const fmtDate = (iso: string) => new Date(iso).toLocaleString();
   // Every refusal below is shown as `msg(failureKey(err))` — localised by code
   // and status, never the server's English (T3 review finding 3).
@@ -77,6 +81,7 @@ export function DeviceLinkPanel({
     setBusy(true);
     setError(null);
     setPaywall(false);
+    setConfirm(null);
     try {
       const link = await apiV1<ActiveLink & { secret: string }>(
         `/api/v1/fixtures/${fixtureId}/device-links`,
@@ -103,7 +108,7 @@ export function DeviceLinkPanel({
         { method: "POST", json: {} },
       );
       await showLink(link);
-      setConfirmReissue(false);
+      setConfirm(null);
       await refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
@@ -113,13 +118,15 @@ export function DeviceLinkPanel({
     }
   }
 
+  /** Revoke, only from the on-screen confirm: every QR already handed out or
+   *  printed for this match stops working, and no new one is made. */
   async function revoke(linkId: string) {
     setBusy(true);
     setError(null);
     try {
       await apiV1(`/api/v1/fixtures/${fixtureId}/device-links/${linkId}`, { method: "DELETE" });
       setMinted(null);
-      setConfirmReissue(false);
+      setConfirm(null);
       await refresh();
     } catch (err) {
       setError(msg(failureKey(err)));
@@ -130,6 +137,37 @@ export function DeviceLinkPanel({
 
   const padUrl = minted ? `${window.location.origin}/score/${minted.secret}` : null;
   const live = active ? liveCopy(active.expires_at, fmtDate) : null;
+
+  /** The on-screen question both destructive doors open — a native dialog
+   *  would be invisible to e2e and easy to dismiss by reflex. */
+  const question =
+    confirm && active ? (
+      <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-left">
+        <p role="alert" className="text-xs text-amber-800">
+          {msg(confirm === "revoke" ? "dlink.revokeWarn" : "dlink.reissueWarn")}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            data-testid={confirm === "revoke" ? "device-link-revoke-confirm" : "device-link-reissue-confirm"}
+            disabled={busy}
+            onClick={confirm === "revoke" ? () => revoke(active.id) : reissue}
+            className="btn btn-danger min-h-11 text-xs"
+          >
+            {msg(confirm === "revoke" ? "dlink.revokeConfirm" : "dlink.reissueConfirm")}
+          </button>
+          <button
+            type="button"
+            data-testid="device-link-keep"
+            disabled={busy}
+            onClick={() => setConfirm(null)}
+            className="btn btn-ghost min-h-11 text-xs"
+          >
+            {msg("dlink.keep")}
+          </button>
+        </div>
+      </div>
+    ) : null;
 
   return (
     <section
@@ -170,14 +208,16 @@ export function DeviceLinkPanel({
             {active && (
               <button
                 type="button"
+                data-testid="device-link-revoke-now"
                 disabled={busy}
-                onClick={() => revoke(active.id)}
+                onClick={() => setConfirm("revoke")}
                 className="btn btn-danger min-h-11 text-xs"
               >
                 {msg("dlink.revokeNow")}
               </button>
             )}
           </div>
+          {question}
         </div>
       ) : active && live ? (
         <div className="mt-3 space-y-2">
@@ -194,8 +234,9 @@ export function DeviceLinkPanel({
             </button>
             <button
               type="button"
+              data-testid="device-link-revoke"
               disabled={busy}
-              onClick={() => revoke(active.id)}
+              onClick={() => setConfirm("revoke")}
               className="btn btn-danger min-h-11 text-xs"
             >
               {msg("dlink.revoke")}
@@ -204,38 +245,13 @@ export function DeviceLinkPanel({
               type="button"
               data-testid="device-link-reissue"
               disabled={busy}
-              onClick={() => setConfirmReissue(true)}
+              onClick={() => setConfirm("reissue")}
               className="btn btn-ghost min-h-11 text-xs"
             >
               {msg("dlink.reissue")}
             </button>
           </div>
-          {confirmReissue && (
-            <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3">
-              <p role="alert" className="text-xs text-amber-800">
-                {msg("dlink.reissueWarn")}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  data-testid="device-link-reissue-confirm"
-                  disabled={busy}
-                  onClick={reissue}
-                  className="btn btn-danger min-h-11 text-xs"
-                >
-                  {msg("dlink.reissueConfirm")}
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setConfirmReissue(false)}
-                  className="btn btn-ghost min-h-11 text-xs"
-                >
-                  {msg("dlink.keep")}
-                </button>
-              </div>
-            </div>
-          )}
+          {question}
         </div>
       ) : (
         <button

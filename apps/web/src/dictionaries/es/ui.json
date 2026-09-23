@@ -2691,6 +2691,8 @@
   "dlink.reissue": "Revocar y volver a emitir",
   "dlink.reissueWarn": "El QR ya entregado o impreso para este partido dejará de funcionar.",
   "dlink.reissueConfirm": "Sí, volver a emitir",
+  "dlink.revokeWarn": "El QR ya entregado o impreso para este partido dejará de funcionar y no se creará uno nuevo.",
+  "dlink.revokeConfirm": "Sí, revocar",
   "dlink.keep": "Mantener este QR",
   "dlink.create": "Crear enlace de anotación",
   "americano.failedLoad": "Error al cargar",

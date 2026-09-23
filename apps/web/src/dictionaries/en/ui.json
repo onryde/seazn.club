@@ -2736,6 +2736,8 @@
   "dlink.reissue": "Revoke & reissue",
   "dlink.reissueWarn": "The QR already handed out or printed for this match will stop working.",
   "dlink.reissueConfirm": "Yes, reissue",
+  "dlink.revokeWarn": "The QR already handed out or printed for this match will stop working, and no new one is made.",
+  "dlink.revokeConfirm": "Yes, revoke",
   "dlink.keep": "Keep this QR",
   "dlink.create": "Create scoring link",
   "americano.failedLoad": "Failed to load",
