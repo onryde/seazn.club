@@ -143,14 +143,20 @@ const esc = (s: string) =>
 
 describe("StandingsPopover — the trigger's accessible name (controller ruling M2)", () => {
   it("without ariaLabel the button carries NO aria-label: its content names it, as before", () => {
-    const html = renderToStaticMarkup(createElement(StandingsPopover, { trigger: "7", testid: "p" }, "note"));
+    const html = renderToStaticMarkup(
+      <StandingsPopover trigger="7" testid="p">
+        note
+      </StandingsPopover>,
+    );
     const button = buttonIn(html);
     expect(button).toContain('data-testid="p"');
     expect(button).not.toContain("aria-label=");
   });
   it("with ariaLabel the button is named by it", () => {
     const html = renderToStaticMarkup(
-      createElement(StandingsPopover, { trigger: "7", testid: "p", ariaLabel: "Rank 7, Out, show details" }, "note"),
+      <StandingsPopover trigger="7" testid="p" ariaLabel="Rank 7, Out, show details">
+        note
+      </StandingsPopover>,
     );
     expect(buttonIn(html)).toContain('aria-label="Rank 7, Out, show details"');
   });
