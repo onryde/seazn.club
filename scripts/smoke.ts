@@ -2114,6 +2114,46 @@ async function hubKnockoutSuite(): Promise<void> {
     done?.knockouts?.[0]?.championFixtureId === finalId &&
       done?.knockouts?.[0]?.rounds?.[1]?.fixtureIds?.[0] === finalId,
   );
+
+  // V416 — `show_seeds`. This division was seeded 1..4 in the order the names
+  // were posted, and the name order is a different one, so the two reads below
+  // can tell a hidden seed from a merely re-sorted list. Both are anonymous
+  // and come straight after the organiser's PATCH: a hub or entrants document
+  // the PATCH failed to retire would still print the numbers.
+  const koNames = ["KO One", "KO Two", "KO Three", "KO Four"];
+  const byName = [...koNames].sort();
+  const divSlug = v1data<{ slug: string }>(div).slug;
+  const entrantsPath = `/api/v1/public/orgs/${orgSlug}/competitions/${compRow.slug}/divisions/${divSlug}/entrants`;
+  type SeedCard = { divisionId: string; name: string; seed: number | null };
+  const hubCards = async () =>
+    (v1data<{ teams?: SeedCard[] } | undefined>(await v1(newSession(), hubPath))?.teams ?? []).filter(
+      (t) => t.divisionId === divId,
+    );
+  const publicRows = async () =>
+    v1data<{ entrants?: { display_name: string; seed: number | null }[] } | undefined>(
+      await v1(newSession(), entrantsPath),
+    )?.entrants ?? [];
+  const shownCards = await hubCards();
+  check(
+    "show seeds: while ON, the hub's Teams cards carry every seed, in seed order",
+    JSON.stringify(shownCards.map((t) => [t.name, t.seed])) ===
+      JSON.stringify(koNames.map((n, i) => [n, i + 1])),
+  );
+  const off = await v1(owner, `/api/v1/divisions/${divId}`, "PATCH", { show_seeds: false });
+  check(
+    "show seeds: PATCH { show_seeds: false } is accepted and echoed",
+    off.status === 200 && v1data<{ show_seeds?: boolean }>(off)?.show_seeds === false,
+  );
+  const hiddenCards = await hubCards();
+  check(
+    "show seeds: after OFF, the next anonymous hub read carries NO seed, cards in name order",
+    JSON.stringify(hiddenCards.map((t) => [t.name, t.seed])) === JSON.stringify(byName.map((n) => [n, null])),
+  );
+  const hiddenRows = await publicRows();
+  check(
+    "show seeds: after OFF, the anonymous entrants document carries NO seed, in name order",
+    JSON.stringify(hiddenRows.map((e) => [e.display_name, e.seed])) === JSON.stringify(byName.map((n) => [n, null])),
+  );
 }
 
 /**
