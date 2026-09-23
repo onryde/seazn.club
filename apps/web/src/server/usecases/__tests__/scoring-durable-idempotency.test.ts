@@ -70,6 +70,39 @@ describe.skipIf(!HAS_DB)("scoreEvent — durable idempotency, with no cache at a
     expect(total).toBe(2);
   });
 
+  it("names the row it wrote in the ack, and a retry names the SAME row", async () => {
+    // Fix A (device-void-mine): a pad that is not told its row's id keeps the
+    // event under the key it minted, and a void written by ANYONE else — the
+    // device chrome's "Void my last entry", the console — names the server's
+    // id, which that pad can then never resolve. The expected value is read
+    // back from the ledger itself, never typed here.
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    const key = `idem-${randomUUID()}`;
+    await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    const first = await scoreEvent(auth, fixtureId, {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: RESULT,
+      idempotency_key: key,
+    });
+    const [row] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${fixtureId} and seq = ${first.seq}`;
+    expect(row, "the ack's seq must name a real row").toBeDefined();
+    expect(first.event_id).toBe(row!.id);
+
+    // The durable replay path (no cache in this suite): the retry must name
+    // the ORIGINAL row, not be silent about it — a pad whose first POST was
+    // lost mid-flight only ever sees this answer.
+    const retry = await scoreEvent(auth, fixtureId, {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: RESULT,
+      idempotency_key: key,
+    });
+    expect(retry.event_id).toBe(row!.id);
+  });
+
   it("does not make two DIFFERENT taps collide", async () => {
     const { auth } = await seedOrg();
     const { fixtureId } = await startedDivisionWithFixture(auth);

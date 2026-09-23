@@ -39,10 +39,23 @@ export interface ScoreOutcome {
   state_summary: unknown;
   outcome: unknown;
   status: string;
+  /** The id of the row this write created — or, on an idempotent replay, the
+   *  row the ORIGINAL write created. A pad that is not told it keeps the event
+   *  under the key it minted, and cannot then resolve a void that names the
+   *  server's id (the device chrome's "Void my last entry", the console's
+   *  undo, a second official's). Every answer this function returns carries
+   *  it, cached ones included: the Redis fast path stores this same object. */
+  event_id: string;
 }
 
 const IDEM_TTL_SECONDS = 24 * 60 * 60; // doc 08 §4
-const idemKey = (fixtureId: string, key: string) => `idemv1:${fixtureId}:${key}`;
+/** The prefix is the cached answer's SHAPE version. v2 = `ScoreOutcome` with
+ *  `event_id`: an answer cached under v1 lacks it and outlives a deploy by up
+ *  to `IDEM_TTL_SECONDS`, so serving it would ack a pad with no row id — the
+ *  shape device-void-mine's Fix A exists to end. A v2 miss falls through to
+ *  the durable replay, which carries the id. Bump it again whenever
+ *  `ScoreOutcome` gains a field a reader relies on. */
+const idemKey = (fixtureId: string, key: string) => `idemv2:${fixtureId}:${key}`;
 
 // One scorer's cadence (doc 08 §6).
 const SCORING_LIMIT = { max: 10, windowSeconds: 1 };
@@ -218,6 +231,7 @@ export async function scoreEvent(
     state_summary: result.summary,
     outcome: result.outcome,
     status: result.status,
+    event_id: result.event.id,
   };
 
   // R10 M3: everything from here on runs AFTER the event committed, so the

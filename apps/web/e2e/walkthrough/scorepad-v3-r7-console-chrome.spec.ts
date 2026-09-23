@@ -26,6 +26,7 @@
 //    both states.
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, TAG, type RosteredFixture } from "../helpers";
+import { waitForHydration } from "../directory-kit";
 
 const SHOTS = process.env.R7_SHOT_DIR ?? "/tmp/r7-shots";
 
@@ -54,6 +55,11 @@ async function openConsole(page: Page, fx: RosteredFixture): Promise<string> {
   const path = await fixturePath(page.request, fx.fixtureId);
   await page.goto(path);
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  // `goto` returns at `load`, before React hydrates, and the pad is
+  // server-rendered — so "visible" is true while every button is still inert.
+  // CI run 35867611673 (PR #848): "Start match" clicked in that window sent
+  // nothing, and the ledger poll then waited out 20s on `[]`.
+  await waitForHydration(pad(page));
   return path;
 }
 

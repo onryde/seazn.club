@@ -2992,3 +2992,573 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
     expect(rig.lastSinceSeq()).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// "Void my last entry" — a FOREIGN void that names the SERVER's id of an event
+// THIS pad scored, delivered by a poll that honours its own cursor.
+//
+// The device-link chrome (`device-score-pad.tsx`) and its inner pad are two
+// writers on one fixture. The chrome's `device-void-mine` sends
+// `core.void {event_id}` naming the row id it read from the SERVER — the only
+// id it has ever seen. The inner pad learns of that void only through its
+// stream, and until this fix it held the target under the CLIENT-fabricated
+// idempotency key it stamped at ack time (`AppendSuccess` carried no row id).
+//
+// R5's poll test (above) already covers a foreign void — but its transport
+// hands back BOTH rows on every call, whatever cursor it was given. A real
+// `/events?since_seq=` is strict (`seq > since_seq`) and the pad's read cursor
+// is the ledger COUNT, so after this pad's own ack the target's seq is never
+// asked for again: only the void arrives, naming an id the ledger does not
+// hold, and `resolveVoids` rejects every fold from there on. The pad froze on
+// the pre-void score behind a rejection banner while the chrome's header,
+// which re-reads the whole ledger, showed the right one. These cases use the
+// cursor-honest `serverLedger` for exactly that reason.
+//
+// Two owner-approved fixes, each with its own witness here:
+//  - Fix A: the POST ack carries the new row's id (`event_id`), and the ack
+//    stamps it — so the target's id is right from the moment it lands.
+//  - Fix B: when a streamed batch leaves a void naming an id the ledger does
+//    not hold, the pipeline re-reads the ledger ONCE for that void and merges
+//    the target row (the default merge direction adopts the wire id).
+// ---------------------------------------------------------------------------
+describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored event (device-void-mine)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const REAL_ID = "server-real-id-device-void-mine";
+  const POLL = 1_000;
+
+  const scoredRow = (id: string): LedgerSlotEvent => ({
+    id,
+    seq: 1,
+    type: "generic.score",
+    payload: { by: "H", points: 2 },
+    recorded_at: "2026-09-23T10:00:00.000Z",
+    recorded_by: "user-1",
+    device_link_id: null,
+    voids_event_id: null,
+  });
+  const voidRow = (seq: number, target: string): LedgerSlotEvent => ({
+    id: `chrome-void-${seq}`,
+    seq,
+    type: "core.void",
+    payload: {},
+    recorded_at: "2026-09-23T10:00:05.000Z",
+    recorded_by: "user-1",
+    device_link_id: null,
+    voids_event_id: target,
+  });
+  const laterRow = (seq: number): LedgerSlotEvent => ({
+    id: `later-${seq}`,
+    seq,
+    type: "generic.score",
+    payload: { by: "A", points: 1 },
+    recorded_at: "2026-09-23T10:00:09.000Z",
+    recorded_by: "someone-else",
+    device_link_id: null,
+    voids_event_id: null,
+  });
+  /** An ack exactly as the pre-fix server wrote it: no row id at all. */
+  const ackWithoutId = (seq: number): AppendCallResult => ({
+    kind: "ok",
+    data: { seq, state_summary: { seq }, outcome: null, status: "in_play" },
+  });
+  /** Fix A's ack: the server names the row it just wrote. */
+  const ackWithId = (seq: number, eventId: string): AppendCallResult => ({
+    kind: "ok",
+    data: { seq, state_summary: { seq }, outcome: null, status: "in_play", event_id: eventId },
+  });
+
+  const running = (pad: { current: UsePadPipelineResult }) =>
+    (pad.current.state as { running?: { home: number; away: number } }).running;
+
+  /** Score one event through the pad, then publish the server's truth. */
+  async function scoreThenServer(opts: {
+    ack: AppendCallResult;
+    serverLedger: LedgerSlotEvent[];
+    serverRows: LedgerSlotEvent[];
+    transport?: (base: PadTransport) => PadTransport;
+  }) {
+    const rig = fakeTransport({ appendResults: [opts.ack], serverLedger: opts.serverLedger });
+    const transport = opts.transport ? opts.transport(rig.transport) : rig.transport;
+    const pad = mountPipeline(
+      baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
+    );
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    expect(running(pad), "the pad's own score must fold before anything is undone").toEqual({ home: 2, away: 0 });
+    // The server's own ledger from here on: the row this pad scored under its
+    // REAL id, and whatever else the test says landed.
+    opts.serverLedger.push(...opts.serverRows);
+    await vi.advanceTimersByTimeAsync(0); // settle into polling
+    return { rig, pad };
+  }
+
+  async function nextTick() {
+    await vi.advanceTimersByTimeAsync(POLL);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("REPRODUCTION + MUTATION TARGET (Fix B): an ack with NO id, then a poll that delivers ONLY the void — the pad re-reads once and the fold reverts, no rejection", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+    });
+    // The precondition that makes this the defect: the pad holds seq 1 under
+    // an id the server never assigned (acks without an id keep the fabricated
+    // fallback).
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).not.toBe(REAL_ID);
+
+    await nextTick();
+
+    // What the scorer sees: the undo took, and no false refusal.
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad), "the inner pad still shows the pre-void score").toBeUndefined();
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_ID);
+    // The stream asked from the COUNT (1), so it could never re-deliver the
+    // target; exactly ONE whole-ledger read (0) healed it.
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0]);
+  });
+
+  it("MUTATION TARGET (Fix A): an ack that names its row stamps the server's id at ack time — the void then resolves with no heal read at all", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithId(1, REAL_ID),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+    });
+    // Before any stream read: the ack itself carried the id.
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_ID);
+    // "Is this mine" follows the id the ledger actually holds.
+    expect(pad.current.ownEventIds.has(REAL_ID)).toBe(true);
+
+    await nextTick();
+
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad)).toBeUndefined();
+    // Nothing was dangling, so Fix B never fired: the only read is the poll.
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1]);
+  });
+
+  it("MUTATION TARGET (Fix B, no loop): a void whose target the server read does NOT hold is re-read exactly once, never again on later batches", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, "ghost-id-no-row-has")],
+    });
+
+    await nextTick(); // delivers the void; one heal read finds nothing to adopt
+    serverLedger.push(laterRow(3));
+    await nextTick(); // a later batch still carries the dangling void in the ledger
+    await nextTick(); // and an empty tick
+
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 2, 3]);
+    // Honest, not hidden: a void naming nothing real is still refused.
+    expect(pad.current.lastRejection).not.toBeNull();
+  });
+
+  it("MUTATION TARGET (Fix B, retry): a heal read that FAILS is retried on the next batch that arrives — not given up on, and not looped", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    let healFailures = 0;
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+      transport: (base) => ({
+        ...base,
+        async listEventsSince(fixtureId, sinceSeq) {
+          const rows = await base.listEventsSince(fixtureId, sinceSeq);
+          if (sinceSeq === 0 && healFailures === 0) {
+            healFailures += 1;
+            throw new Error("courtside wifi dropped the heal read");
+          }
+          return rows;
+        },
+      }),
+    });
+
+    await nextTick(); // the void lands; the heal read fails
+    expect(running(pad), "a failed read cannot heal anything").toEqual({ home: 2, away: 0 });
+    serverLedger.push(laterRow(3));
+    await nextTick(); // the next batch retries the heal, and it succeeds
+
+    expect(healFailures).toBe(1);
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 2, 0]);
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_ID);
+    // Home's 2 is undone; only the later away point stands.
+    expect(running(pad)).toEqual({ home: 0, away: 1 });
+    // The failed read committed the dangling void, so the fold refused it and
+    // raised a banner. A heal that fixes the score must take that banner down
+    // too, or the scorer reads "refused" over a board that is right.
+    expect(pad.current.lastRejection, "a healed void must not leave its refusal on screen").toBeNull();
+  });
+
+  it("MUTATION TARGET (Fix B, retry on an EMPTY tick): a failed heal read is retried on the next poll even when that poll brings nothing — once, and then never again", async () => {
+    // Review round 1: the retry used to ride on the next NON-empty batch. On a
+    // quiet court there may not be one for minutes, and the pad sat on the
+    // undone score behind a refusal banner the whole time.
+    const serverLedger: LedgerSlotEvent[] = [];
+    let healFailures = 0;
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+      transport: (base) => ({
+        ...base,
+        async listEventsSince(fixtureId, sinceSeq) {
+          const rows = await base.listEventsSince(fixtureId, sinceSeq);
+          if (sinceSeq === 0 && healFailures === 0) {
+            healFailures += 1;
+            throw new Error("courtside wifi dropped the heal read");
+          }
+          return rows;
+        },
+      }),
+    });
+
+    await nextTick(); // the void lands; the heal read fails
+    expect(running(pad), "a failed read cannot heal anything").toEqual({ home: 2, away: 0 });
+    await nextTick(); // an EMPTY poll: nothing new, but the void is still dangling — retry
+    await nextTick(); // healed: empty polls from here on read nothing extra
+    await nextTick();
+
+    expect(healFailures).toBe(1);
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 2, 0, 2, 2]);
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_ID);
+    expect(running(pad)).toBeUndefined();
+    expect(pad.current.lastRejection, "a healed void must not leave its refusal on screen").toBeNull();
+  });
+
+  it("MUTATION TARGET (Fix B, one read per tick): empty ticks that arrive while a retry read is out are dropped, not queued behind it — and a failed retry commits nothing", async () => {
+    // Queued behind the read, those ticks would all replay the moment it
+    // failed: a burst of reads on exactly the connection that just dropped
+    // one, instead of the next tick's single try.
+    const serverLedger: LedgerSlotEvent[] = [];
+    let healReads = 0;
+    const secondRead = deferred<void>();
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+      transport: (base) => ({
+        ...base,
+        async listEventsSince(fixtureId, sinceSeq) {
+          const rows = await base.listEventsSince(fixtureId, sinceSeq);
+          if (sinceSeq === 0) {
+            healReads += 1;
+            if (healReads === 1) throw new Error("dropped");
+            if (healReads === 2) {
+              await secondRead.promise;
+              throw new Error("dropped again");
+            }
+          }
+          return rows;
+        },
+      }),
+    });
+
+    await nextTick(); // the void lands; read #1 fails; the batch is committed
+    await nextTick(); // an empty tick retries: read #2 hangs
+    await nextTick(); // two more empty ticks while it is out
+    await nextTick();
+    const reconcilesBefore = rig.fetchStateCalls.length;
+    secondRead.resolve(); // read #2 fails
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq), "nothing replays when the read fails").toEqual([
+      1, 0, 2, 0, 2, 2,
+    ]);
+    expect(rig.fetchStateCalls.length, "a failed retry off an empty tick has nothing to commit or reconcile").toBe(
+      reconcilesBefore,
+    );
+
+    await nextTick(); // the next tick's single retry succeeds
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 2, 0, 2, 2, 2, 0]);
+    expect(running(pad)).toBeUndefined();
+    expect(pad.current.lastRejection).toBeNull();
+  });
+
+  it("MUTATION TARGET (Fix B, refusal scope): a heal takes down ONLY the refusal its dangling void raised — a server's refusal of the scorer's own tap stays up", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const rig = fakeTransport({
+      appendResults: [ackWithoutId(1), { kind: "rejected", code: "WRONG_PHASE", message: "not now" }],
+      serverLedger,
+    });
+    const pad = mountPipeline(
+      baseParams({ transport: rig.transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
+    );
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    expect(pad.current.lastRejection?.code, "the server refused the second tap").toBe("WRONG_PHASE");
+    serverLedger.push(scoredRow(REAL_ID), voidRow(2, REAL_ID));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await nextTick(); // the void lands and the heal adopts its target
+
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0]);
+    expect(running(pad), "the heal itself worked").toBeUndefined();
+    expect(pad.current.lastRejection?.code, "and the scorer's own refusal is still on screen").toBe("WRONG_PHASE");
+  });
+
+  it("MUTATION TARGET (Fix B, ordering): a batch that arrives WHILE the heal read is in flight waits for it — it never commits the dangling void on its own", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const heal = deferred<void>();
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithoutId(1),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+      transport: (base) => ({
+        ...base,
+        async listEventsSince(fixtureId, sinceSeq) {
+          // Recorded first, THEN held — so the call list shows the heal
+          // read was made even while it hangs.
+          const rows = await base.listEventsSince(fixtureId, sinceSeq);
+          if (sinceSeq === 0) await heal.promise;
+          return rows;
+        },
+      }),
+    });
+
+    await nextTick(); // the void lands; the heal read hangs
+    await nextTick(); // a second tick re-delivers the void from the same cursor
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1, 0, 1]);
+    // Neither batch has committed the dangling void: no false refusal yet.
+    expect(pad.current.lastRejection).toBeNull();
+
+    heal.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad)).toBeUndefined();
+    expect(pad.current.events.map((e) => e.seq)).toEqual([1, 2]);
+  });
+  it("MUTATION TARGET (Fix B, fresh base): a tap acked WHILE the heal read is out survives the heal's commit", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const heal = deferred<void>();
+    const rig = fakeTransport({ appendResults: [ackWithoutId(1), ackWithoutId(3)], serverLedger });
+    const transport: PadTransport = {
+      ...rig.transport,
+      async listEventsSince(fixtureId, sinceSeq) {
+        const rows = await rig.transport.listEventsSince(fixtureId, sinceSeq);
+        if (sinceSeq === 0) await heal.promise;
+        return rows;
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }));
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    serverLedger.push(scoredRow(REAL_ID), voidRow(2, REAL_ID));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await nextTick(); // the void lands; the heal read hangs
+    // The scorer taps again while it is out, and that tap is acked.
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    expect(pad.current.events.map((e) => e.seq)).toEqual([1, 3]);
+
+    heal.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Healed over the ledger as it stands NOW, not the one the read started
+    // from — which would silently drop the tap acked in between.
+    expect(pad.current.events.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(running(pad)).toEqual({ home: 0, away: 1 });
+  });
+  it("MUTATION TARGET (Fix B, narrow): the heal adopts ONLY the row the void names — the pad's other events keep the id it knows them as mine by", async () => {
+    // Why narrow: on a device link "is this mine" is `ownEventIds.has(id)`
+    // (`v3/activity.tsx`), and `ownEventIds` holds the ids this pad minted.
+    // Adopting the wire id for EVERY row the read returned would relabel the
+    // pad's other own events and quietly take their undo/amend away.
+    const serverLedger: LedgerSlotEvent[] = [];
+    const rig = fakeTransport({ appendResults: [ackWithoutId(1), ackWithoutId(2)], serverLedger });
+    const pad = mountPipeline(
+      baseParams({ transport: rig.transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
+    );
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    const firstMinted = pad.current.events.find((e) => e.seq === 1)!.id;
+    expect(pad.current.ownEventIds.has(firstMinted)).toBe(true);
+    serverLedger.push(
+      scoredRow("server-real-id-first"),
+      { ...laterRow(2), id: "server-real-id-second", recorded_by: "user-1" },
+      voidRow(3, "server-real-id-second"),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    await nextTick();
+
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([2, 0]);
+    expect(pad.current.events.find((e) => e.seq === 2)?.id).toBe("server-real-id-second");
+    // The row nobody voided is untouched, and still the pad's own.
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(firstMinted);
+    expect(pad.current.ownEventIds.has(firstMinted)).toBe(true);
+    expect(running(pad)).toEqual({ home: 2, away: 0 });
+  });
+
+  // -------------------------------------------------------------------------
+  // Review round 1, CRITICAL — Fix A re-keys an acked event to the server's
+  // id. A void this pad queued BEFORE that ack names the event by the key it
+  // minted, and has no `voidTargetSeq` (the target was not in the ledger yet
+  // when it was submitted). So at its turn nothing in the ledger carries the
+  // key any more, while `ownEventIds` still says the key is ours — and the
+  // old verdict for that shape was "never landed": dropped, undo lost, and
+  // the server kept the rally. These tests read what crossed the WIRE and
+  // what the SERVER ended up holding, not the pad's opinion of itself.
+  // -------------------------------------------------------------------------
+
+  /** A server that keeps a real ledger: it assigns its OWN row ids
+   *  (`srv-<seq>`), names them in the ack (Fix A), refuses a void naming a row
+   *  it does not hold (as `assertUndoTarget` does), and is offline until the
+   *  test says otherwise. */
+  function ledgerServer() {
+    const rows: LedgerSlotEvent[] = [];
+    const appendCalls: AppendEventBody[] = [];
+    const seqMismatches: AppendEventBody[] = [];
+    let online = false;
+    let voidGate: Promise<void> | null = null;
+    let voidInFlight = false;
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (!online) return { kind: "network-error", message: "offline" };
+        const target = body.type === "core.void" ? ((body.payload as { event_id?: string }).event_id ?? null) : null;
+        if (body.type === "core.void") {
+          voidInFlight = true;
+          if (voidGate !== null) await voidGate;
+        }
+        if (body.expected_seq !== rows.length) {
+          seqMismatches.push(body);
+          return { kind: "rejected", code: "TEST_SEQ_MISMATCH", message: "" };
+        }
+        if (body.type === "core.void" && !rows.some((r) => r.id === target)) {
+          return { kind: "rejected", code: "NOTHING_TO_UNDO", message: "no such row" };
+        }
+        const seq = rows.length + 1;
+        const id = `srv-${seq}`;
+        rows.push({
+          id,
+          seq,
+          type: body.type,
+          payload: target === null ? body.payload : {},
+          recorded_at: "2026-09-23T10:00:00.000Z",
+          recorded_by: "user-1",
+          device_link_id: null,
+          voids_event_id: target,
+        });
+        return { kind: "ok", data: { seq, state_summary: { seq }, outcome: null, status: "in_play", event_id: id } };
+      },
+      async listEventsSince(_fixtureId, sinceSeq) {
+        return rows.filter((r) => r.seq > sinceSeq);
+      },
+      async getLastSeq() {
+        return rows.length;
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: rows.length, state: null, summary: null, outcome: null };
+      },
+    };
+    return {
+      rows,
+      appendCalls,
+      seqMismatches,
+      transport,
+      goOnline() {
+        online = true;
+      },
+      holdVoids() {
+        const gate = deferred<void>();
+        voidGate = gate.promise;
+        return gate;
+      },
+      voidInFlight: () => voidInFlight,
+    };
+  }
+
+  it("MUTATION TARGET (Fix A, undo before ack): a void queued behind its not-yet-acked target names the SERVER's id on the wire, and the server ends with the rally undone", async () => {
+    const server = ledgerServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Offline: the tap queues, and the scorer undoes it before it ever sends.
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    const mintedKey = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    await pad.current.submit("core.void", { event_id: mintedKey });
+    expect(pad.current.queueDepth, "both wait for the network").toBe(2);
+    expect(running(pad), "the optimistic fold already shows the undo").toBeUndefined();
+
+    // Back online. The void's own send is held open, so the moment BETWEEN
+    // the target's ack (which re-keys it to `srv-1`) and the void's ack can
+    // be read: the still-pending void must follow the re-key.
+    server.goOnline();
+    const gate = server.holdVoids();
+    const drained = pad.current.retryDrain();
+    for (let i = 0; i < 20 && !server.voidInFlight(); i += 1) await vi.advanceTimersByTimeAsync(0);
+    expect(server.voidInFlight(), "the void must reach the wire at all").toBe(true);
+    expect(pad.current.events.find((e) => e.type === "generic.score")?.id).toBe("srv-1");
+    expect(pad.current.lastRejection, "the pending void must not dangle once its target is re-keyed").toBeNull();
+    expect(running(pad)).toBeUndefined();
+
+    gate.resolve();
+    await drained;
+
+    const voidCalls = server.appendCalls.filter((c) => c.type === "core.void");
+    expect(voidCalls.map((c) => c.payload), "the wire must name the row the server wrote").toEqual([
+      { event_id: "srv-1" },
+    ]);
+    expect(server.seqMismatches).toEqual([]);
+    expect(
+      server.rows.map((r) => [r.type, r.voids_event_id]),
+      "the SERVER's ledger: the rally, then a void of it",
+    ).toEqual([
+      ["generic.score", null],
+      ["core.void", "srv-1"],
+    ]);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad)).toBeUndefined();
+  });
+
+  it("MUTATION TARGET (Fix A, amend a queued original): the amendment's void retires the original by its SERVER id — the corrected point is counted once", async () => {
+    const server = ledgerServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    const originalKey = pad.current.events.find((e) => e.type === "generic.score")!.id;
+
+    // The amendment, through the real `runAmend` over the real pipeline, while
+    // the original is still queued behind a dead network.
+    const heldId = await runAmend(
+      { voidId: originalKey, type: "generic.score", payload: { by: "H", points: 3 } },
+      {
+        submitHeld: (type, payload) =>
+          pad.current.submitHeld(type, payload, HOLD_MS, () => void pad.current.retryDrain()),
+        submit: (type, payload, opts) => pad.current.submit(type, payload, opts),
+      },
+    );
+    expect(heldId).not.toBeNull();
+    expect(pad.current.queueDepth).toBe(3);
+
+    server.goOnline();
+    await vi.advanceTimersByTimeAsync(HOLD_MS + 100); // the hold runs out and drains everything
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(server.seqMismatches).toEqual([]);
+    expect(server.appendCalls.filter((c) => c.type === "core.void").at(-1)?.payload).toEqual({ event_id: "srv-1" });
+    expect(
+      server.rows.map((r) => [r.type, r.voids_event_id]),
+      "the original, its replacement, and a void of the ORIGINAL",
+    ).toEqual([
+      ["generic.score", null],
+      ["generic.score", null],
+      ["core.void", "srv-1"],
+    ]);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad), "the replacement stands alone — not 2 + 3").toEqual({ home: 3, away: 0 });
+  });
+});

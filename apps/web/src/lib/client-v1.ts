@@ -25,7 +25,17 @@ export async function apiV1<T = unknown>(
     headers: { "Content-Type": "application/json", ...(rest.headers ?? {}) },
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   });
-  const payload = (await res.json().catch(() => ({}))) as {
+  // A body that is not JSON (a proxy's HTML 502) defaults to `{}` so the
+  // status check below still throws a typed `ApiV1Error`. An ABORT is not
+  // that: a signal that fires after the headers errors the body stream, and
+  // defaulting it made a 200 resolve with `undefined` — which a bounded
+  // refresh then wrote into its live state and crashed the next render on
+  // (G1 review round 1). So an aborted read rethrows its own abort, and a
+  // caller that tells "superseded" from "failed" by `AbortError` still can.
+  const payload = (await res.json().catch((err: unknown) => {
+    if (rest.signal?.aborted) throw err;
+    return {};
+  })) as {
     ok?: boolean;
     data?: T;
     error?: { code?: string; message?: string; [k: string]: unknown };

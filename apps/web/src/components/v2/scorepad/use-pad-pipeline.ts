@@ -55,9 +55,11 @@
 // decision log, "the pad's own undo silently does nothing for an event you
 // just scored"): pendingToEnvelope (below) stamps `id: pending.idempotencyKey`
 // on EVERY envelope this hook builds — pre-ack for the optimistic fold, and
-// (pass F) again at ack, forever, since AppendSuccess carries no row id at
-// all. So the row timeline.tsx renders for a pad-submitted event always
-// carried the client-fabricated idempotencyKey as its `.id`, and
+// (pass F) again at ack, forever, since an ack WITHOUT `event_id` carries no
+// row id (see the device-void-mine UPDATE below: an ack that names its row
+// now stamps that id instead). So the row timeline.tsx renders for a
+// pad-submitted event always carried the client-fabricated idempotencyKey as
+// its `.id`, and
 // append-event.ts always assigns a fresh server-random uuid as the REAL row
 // id — the two never coincide. handleVoid (pad-renderer.tsx) submits
 // `core.void {event_id: <that id>}` verbatim, so the request always named an
@@ -157,8 +159,9 @@
 // cause: `pendingToEnvelope`'s core.void envelope always read its `voids`
 // target off the ORIGINAL submitted payload, unconditionally. That is
 // correct WITHIN one mount — pass F's ack-merge keeps a pad-submitted
-// event's CLIENT-fabricated id in `ledgerEvents` forever, so the void's own
-// `voids` field, naming that same client id, always found a match — but
+// event's CLIENT-fabricated id in `ledgerEvents` forever (after an ack
+// WITHOUT `event_id`), so the void's own `voids` field, naming that same
+// client id, always found a match — but
 // wrong the moment a reload re-seeds `ledgerEvents` from `initialEvents`
 // (`ledgerSlotToEnvelope`'s own `id: row.id`): the LOCAL ledger then only
 // knows the target under the SERVER's real id, so the void's untranslated
@@ -236,8 +239,8 @@
 // undoes a match-deciding event a live pad JUST scored. Passes F/G above
 // already establish that a pad-submitted event keeps its CLIENT-fabricated
 // idempotency key as `ledgerEvents`' id for it FOREVER within a mount —
-// `AppendSuccess` carries no row id at all. When the console's undo lands, a
-// LATER `initialEvents` refresh (its own `router.refresh()`) or poll tick
+// an ack WITHOUT `event_id` carries no row id at all. When the console's
+// undo lands, a LATER `initialEvents` refresh (its own `router.refresh()`) or poll tick
 // hands this hook the SAME event's REAL server id at the SAME seq — but
 // `mergeEnvelopesIntoLedger`'s own "existing wins" default (below) discarded
 // it outright, exactly the protection pass F's own ack-append comment
@@ -287,6 +290,35 @@
 // `incomingWins: true` ack append (pass F) is untouched by this branch, so
 // its own "the just-acked copy always wins outright" guarantee still holds
 // byte-for-byte — see that call site's own comment.
+//
+// SCOPE BOUNDARY, device-void-mine UPDATE (owner-reported, 2026-09-23). R5's
+// id heal above only works when the TARGET row is re-delivered, and on the
+// poll path it never is: the read cursor is the COUNT and `listEvents` is
+// strict, so once this pad has acked its own event, `seq > count` never asks
+// for that seq again. The device chrome's "Void my last entry"
+// (`device-score-pad.tsx`) names the server's row id — the only id it has —
+// so only the void arrived, naming an id this ledger did not hold, and the
+// pad froze on the undone score while the chrome's header was right. R5's own
+// poll test missed it because its transport returned both rows for any
+// cursor. Two owner-approved fixes, each sufficient on its own:
+//  - Fix A: the ack now carries the row's id (`AppendSuccess.event_id`) and
+//    `runDrain` stamps it, so the pad holds its own events under the server's
+//    ids from the moment they land. The "AppendSuccess carries no row id"
+//    premise in the passes above still describes an ack WITHOUT one (an older
+//    server, an "already-applied" outcome), and every fallback they built for
+//    it stays.
+//  - Fix B: `onStreamEvents` re-reads the ledger ONCE for any void a batch
+//    leaves dangling and merges just the rows it names — see
+//    `danglingVoidTargets` for the reasoning.
+// Review round 1 found what re-keying at the ack costs: a void this pad
+// queued BEFORE its target's ack (an offline tap, then Undo; an amendment of
+// a still-queued original) names the minted key and carries no
+// `voidTargetSeq`, so once the ack re-keyed the target nothing in the ledger
+// answered to the key, and `resolveVoidTargetId` dropped the undo as "never
+// landed". The ack now records key -> server id (`voidTargetServerIdRef`)
+// for both resolvers to consult, and moves any such still-pending void onto
+// the new id in the same commit that retires the target from
+// `pendingEnvelopes` — see `runDrain`'s ack branch.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -569,16 +601,25 @@ function toEnvelopeFields(type: string, payload: unknown): { payload: unknown; v
  *  of how many renegotiations happened; the "already-applied" branch never
  *  renegotiates within its own call (pipeline.ts's resolveConflict decides
  *  it BEFORE any resend), so `pending.expectedSeq + 1` already is the
- *  confirmed value there and needs no override. */
+ *  confirmed value there and needs no override.
+ *
+ *  `confirmedId` (device-void-mine, Fix A) is the same idea for the row's ID:
+ *  the server's own `AppendSuccess.event_id`, passed on the "acked" branch.
+ *  When given it WINS over the idempotency key, so the ledger holds the event
+ *  under the id every other writer's void will name. Absent — a pre-ack
+ *  optimistic build, an "already-applied" outcome (no ack body at all), or a
+ *  server that predates the field — the key stays, exactly as before, and
+ *  `resolveVoidTargetId` below still translates it for this pad's own voids. */
 export function pendingToEnvelope(
   fixtureId: string,
   identity: OwnIdentity,
   pending: PendingEvent,
   confirmedSeq?: number,
+  confirmedId?: string,
 ): EventEnvelope {
   const { payload, voids } = toEnvelopeFields(pending.type, pending.payload);
   return {
-    id: pending.idempotencyKey,
+    id: confirmedId ?? pending.idempotencyKey,
     fixtureId,
     // append-event.ts: the accepted row lands at expected_seq + 1 — the best
     // guess pre-ack, and still correct post-ack UNLESS a renegotiation
@@ -662,9 +703,9 @@ function ledgerSlotToEnvelope(fixtureId: string, row: LedgerSlotEvent): EventEnv
  *
  * Both halves of the disagreement matter, and each fixes its own crash:
  *  - `.id` — a locally-scored event keeps its CLIENT-fabricated idempotency
- *    key as its ledger id for the life of the mount (`AppendSuccess` carries
- *    no row id), so a void naming the SERVER's real id could never resolve
- *    against it. Adopting the wire id can never lose anything: this hook's
+ *    key as its ledger id for the life of the mount after an ack WITHOUT
+ *    `event_id` (which carries no row id), so a void naming the SERVER's
+ *    real id could never resolve against it. Adopting the wire id can never lose anything: this hook's
  *    fabricated ids never appear in wire-sourced data.
  *  - `.voids` — the corollary. Once an id can be corrected under a seq, a
  *    void baked earlier against the OLD id has to be correctable too, or the
@@ -761,6 +802,32 @@ function mergeLedgerEvents(
   return mergeEnvelopesIntoLedger(current, widened);
 }
 
+/**
+ * device-void-mine, Fix B — the targets named by a `core.void` in `ledger` that
+ * no row in `ledger` holds. Each is a void the engine's `resolveVoids` will
+ * refuse, freezing the fold on the last good state.
+ *
+ * Two ways one arises, and the stream can heal neither by itself: this pad
+ * holds the target under an id the server never assigned (an ack with no
+ * `event_id`, see the file header), or it never held the target row at all
+ * (the oldest row of a gap, which `> count` never asks for). The poll will
+ * not help, because the cursor is past the target by construction; the fix is
+ * one whole-ledger read. From 0, not from the target's seq: the only thing a
+ * dangling void says about its target is an id this ledger does not hold, so
+ * its position is exactly what is unknown.
+ *
+ * Only a `voids` this hook actually carries is judged — a void with no target
+ * at all is a different defect (R5's wire half) with nothing to look up.
+ */
+function danglingVoidTargets(ledger: readonly EventEnvelope[]): string[] {
+  const held = new Set(ledger.map((e) => e.id));
+  const dangling = new Set<string>();
+  for (const e of ledger) {
+    if (e.type === "core.void" && e.voids !== undefined && !held.has(e.voids)) dangling.add(e.voids);
+  }
+  return [...dangling];
+}
+
 /** S12/#421 pass G — see the file header's own PASS G UPDATE for the full
  *  trace this fixes. Every `core.void` a caller ever submits names its
  *  target by whatever `.id` the timeline showed it, and that id came from
@@ -768,8 +835,9 @@ function mergeLedgerEvents(
  *   - `initialEvents`/a poll (`ledgerSlotToEnvelope`) — already the server's
  *     real row id, so `event_id` needs no translation at all.
  *   - THIS hook's own `pendingToEnvelope` — the client-fabricated
- *     idempotency key, which append-event.ts NEVER assigns as a persisted
- *     row's id (that is always a fresh `randomUUID()`, and scoring.ts never
+ *     idempotency key (pre-ack, or after an ack WITHOUT `event_id`; an ack
+ *     that names its row stamps the server's id instead — Fix A), which
+ *     append-event.ts NEVER assigns as a persisted row's id (that is always a fresh `randomUUID()`, and scoring.ts never
  *     forwards the client's own id — see the pass F comment on `runDrain`'s
  *     ack branch for the same fact, found independently while fixing a
  *     different bug). Submitting that id verbatim can never resolve.
@@ -865,8 +933,19 @@ export async function resolveVoidTargetId(
     // initialEvents/a poll never needed translation in the first place, and
     // costs no network round trip to confirm that.
     if (!ownEventIds.has(targetId)) return { kind: "same", eventId: targetId };
+    // device-void-mine, review round 1 — own, and nothing in the ledger
+    // carries this key any more: the usual reason now is that the target WAS
+    // acked, and its ack named the row (Fix A), so the ledger re-keyed it to
+    // the server's id. `runDrain` records that key -> id pair in `cache` at
+    // the ack, and it is the answer. A void queued BEFORE its target's ack
+    // (offline tap, then Undo; an amendment of a still-queued original) has
+    // no `voidTargetSeq` and reaches exactly this line — it used to be
+    // dropped here, losing the undo while the server kept the event.
+    const acked = cache.get(targetId);
+    if (acked !== undefined) return { kind: "resolved", eventId: acked };
     // Claimed as own (by this mount, or durably by a prior one) but no seq
-    // anywhere to resolve from — genuinely never landed.
+    // anywhere to resolve from, and no ack ever named it — genuinely never
+    // landed.
     return { kind: "unresolvable-permanent" };
   }
   const cached = cache.get(targetId);
@@ -954,9 +1033,9 @@ function voidTargetSeqAtSubmit(
  *  server truth beyond whatever this hook has already merged in. The two
  *  answers usually coincide (a foreign/history target's `ledgerEvents` id
  *  IS the server id) but diverge for exactly the case this pass fixes: a
- *  target THIS hook itself submitted and acked keeps its CLIENT-fabricated
- *  id in `ledgerEvents` forever, within the mount that acked it (pass F's
- *  `incomingWins: true`), and only starts showing the server id once a
+ *  target THIS hook itself submitted and acked WITHOUT an `event_id` keeps
+ *  its CLIENT-fabricated id in `ledgerEvents` forever, within the mount that
+ *  acked it (pass F's `incomingWins: true`), and only starts showing the server id once a
  *  reload re-seeds `ledgerEvents` from `initialEvents`
  *  (`ledgerSlotToEnvelope`'s own `id: row.id`).
  *
@@ -988,11 +1067,28 @@ function voidTargetSeqAtSubmit(
  *  THAT EXACT `targetId` in the first place, so at that one call site this
  *  would provably always be a no-op — see that call site's own comment
  *  (Q8) for why this is an assumption tied to `voidTargetSeqAtSubmit`'s
- *  CURRENT implementation, not a standing guarantee. */
-function pendingWithLocalVoidTarget(pending: PendingEvent, ledgerEvents: readonly EventEnvelope[]): PendingEvent {
-  if (pending.type !== "core.void" || pending.voidTargetSeq === undefined) return pending;
+ *  CURRENT implementation, not a standing guarantee.
+ *
+ *  device-void-mine, review round 1 — `serverIds` (the hook's key -> server
+ *  id map, `voidTargetServerIdRef`) answers first, for the one void the seq
+ *  lookup cannot: one queued BEFORE its target's ack, so it carries no
+ *  `voidTargetSeq`, whose target the ack then re-keyed (Fix A). Taken only
+ *  when the ledger really holds a row under the mapped id — the map is also
+ *  fed by `resolveVoidTargetId`'s network reads, and those name the server's
+ *  row whether or not this ledger has adopted that id yet. */
+function pendingWithLocalVoidTarget(
+  pending: PendingEvent,
+  ledgerEvents: readonly EventEnvelope[],
+  serverIds: ReadonlyMap<string, string>,
+): PendingEvent {
+  if (pending.type !== "core.void") return pending;
   const targetId = extractVoidEventId(pending.payload);
   if (targetId === null) return pending;
+  const mapped = serverIds.get(targetId);
+  if (mapped !== undefined && mapped !== targetId && ledgerEvents.some((e) => e.id === mapped)) {
+    return { ...pending, payload: { event_id: mapped } };
+  }
+  if (pending.voidTargetSeq === undefined) return pending;
   const localRow = ledgerEvents.find((e) => e.seq === pending.voidTargetSeq);
   if (localRow === undefined || localRow.id === targetId) return pending;
   return { ...pending, payload: { event_id: localRow.id } };
@@ -1068,6 +1164,8 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
 
   // S12/#421 pass G — local id -> server id, for a core.void whose target is
   // one of THIS hook's own submissions. See resolveVoidTargetId's own doc.
+  // Filled two ways: a resolution's network read, and (device-void-mine,
+  // review round 1) `runDrain`'s ack whenever the ledger re-keys the event.
   // A plain ref: purely internal bookkeeping, never read by a caller, and a
   // cache write must never itself trigger a render.
   const voidTargetServerIdRef = useRef<Map<string, string>>(new Map());
@@ -1191,14 +1289,101 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // GENUINE divergence rather than on this pad simply having been behind.
   // An empty batch (every tick reports one, per use-fixture-stream.ts's own
   // `fetchOnce`) is still a no-op, not a wasted merge/fetchState round trip.
+  //
+  // device-void-mine, Fix B — a batch that leaves a void dangling
+  // (`danglingVoidTargets`) is NOT committed as-is. The ledger is re-read from
+  // 0, the rows the void names are merged in by the SAME default-direction
+  // merge (which adopts the wire's id for a row this pad holds under its own
+  // key — R5), and only then is anything committed. Committing first would
+  // flash a refusal: `foldedState` would throw on the dangling void and set a
+  // `lastRejection` that nothing clears but the scorer's next tap.
+  //
+  // ONCE per dangling target (`healAttemptedRef`), never a loop: a void naming
+  // a row the server does not hold stays refused, and later batches do not
+  // re-read for it. A read that FAILS un-marks its targets, so the next tick
+  // retries — courtside wifi is the normal case here, and giving up on one
+  // dropped read would strand the pad until a reload. A failed read still
+  // commits the batch: holding it back would stall every later row.
+  //
+  // Review round 1: "the next tick" includes an EMPTY one. The retry used to
+  // ride on the next non-empty batch, and a quiet court may not produce one
+  // for minutes — the pad sat on the undone score behind a refusal banner
+  // the whole time. An empty tick now checks the ledger it already holds for
+  // an un-attempted dangling void (a cheap in-memory scan) and retries the
+  // read if it finds one: at most one read per tick, since a tick that
+  // arrives while a read is out is dropped rather than queued behind it. On
+  // realtime there are no empty ticks, so the retry there still waits for the
+  // next signal.
+  //
+  // Non-empty batches that arrive while a heal read is in flight wait for it
+  // (`healInFlightRef`), in order. Merged ahead of it they would commit the
+  // same dangling void the heal is about to fix.
+  //
+  // A heal that adopts a target also takes down the refusal that target's
+  // dangling void raised (a failed first read committed it, and the fold
+  // threw) — see `clearHealedRefusal`. Nothing else would: `lastRejection`
+  // is otherwise cleared only by the scorer's next tap.
+  const healAttemptedRef = useRef<Set<string>>(new Set());
+  const healInFlightRef = useRef<Promise<void> | null>(null);
+  /** A dangling void's refusal names its target in the engine's own words
+   *  (`resolveVoids`: `core.void targets unknown or non-prior event "<id>"`).
+   *  Only a refusal naming a target a heal just ADOPTED is cleared — any other
+   *  (a server's rejection of the scorer's own tap, a void whose target the
+   *  server does not hold either) stays up. Should the healed fold still
+   *  throw, `foldedState` raises it again on the next render. */
+  const clearHealedRefusal = useCallback((healedIds: readonly string[]) => {
+    setLastRejection((prev) =>
+      prev !== null && prev.code === "INVALID_EVENT" && healedIds.some((id) => prev.message.includes(`"${id}"`))
+        ? null
+        : prev,
+    );
+  }, []);
   const onStreamEvents = useCallback(
     (events: LedgerSlotEvent[]) => {
-      if (events.length === 0) return;
-      const merged = mergeLedgerEvents(fixtureId, ledgerEventsRef.current, events);
-      commitLedgerEvents(merged);
-      void reconcileAfterAck(merged);
+      const apply = (batch: LedgerSlotEvent[]): void => {
+        const inFlight = healInFlightRef.current;
+        if (inFlight !== null) {
+          if (batch.length > 0) void inFlight.then(() => apply(batch));
+          return;
+        }
+        const merged = batch.length === 0 ? ledgerEventsRef.current : mergeLedgerEvents(fixtureId, ledgerEventsRef.current, batch);
+        const dangling = danglingVoidTargets(merged).filter((id) => !healAttemptedRef.current.has(id));
+        if (dangling.length === 0) {
+          // An empty tick with nothing to heal is still a no-op.
+          if (batch.length === 0) return;
+          commitLedgerEvents(merged);
+          void reconcileAfterAck(merged);
+          return;
+        }
+        for (const id of dangling) healAttemptedRef.current.add(id);
+        healInFlightRef.current = (async () => {
+          let targets: LedgerSlotEvent[] = [];
+          try {
+            const wanted = new Set(dangling);
+            const rows = await transport.listEventsSince(fixtureId, 0);
+            targets = rows.filter((row) => row.id !== undefined && wanted.has(row.id));
+          } catch {
+            for (const id of dangling) healAttemptedRef.current.delete(id);
+          }
+          // A failed retry off an empty tick has nothing to commit.
+          if (batch.length === 0 && targets.length === 0) return;
+          // Over the CURRENT ledger, not `merged`: an ack may have landed
+          // while the read was out.
+          const healed = mergeLedgerEvents(
+            fixtureId,
+            mergeLedgerEvents(fixtureId, ledgerEventsRef.current, batch),
+            targets,
+          );
+          commitLedgerEvents(healed);
+          if (targets.length > 0) clearHealedRefusal(targets.map((row) => row.id as string));
+          void reconcileAfterAck(healed);
+        })().finally(() => {
+          healInFlightRef.current = null;
+        });
+      };
+      apply(events);
     },
-    [fixtureId, commitLedgerEvents, reconcileAfterAck],
+    [fixtureId, transport, commitLedgerEvents, reconcileAfterAck, clearHealedRefusal],
   );
   const skipPollWhileDraining = useCallback(() => drainInFlight.current !== null, []);
   useFixtureStream({
@@ -1394,9 +1579,12 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         if (outcome.kind === "acked" || outcome.kind === "already-applied") {
           setOffline(false);
           setThrottled(false);
-          const remaining = new Map(pendingEnvelopesRef.current);
-          remaining.delete(next.idempotencyKey);
-          commitPendingEnvelopes(remaining);
+          // device-void-mine, review round 1 — the event leaves
+          // `pendingEnvelopes` AFTER it lands in `ledgerEvents` (below), no
+          // longer before. Removed first, a void queued behind it folds for a
+          // moment against a ledger with no target at all; the engine throws,
+          // and the refusal that sets outlives the moment. React batches the
+          // two commits into one render, but the fold must not depend on it.
           // review finding 4: "acked" may have followed a mid-flight 409
           // renegotiation (sendOne resent with a NEW expected_seq) — the
           // server's own AppendSuccess.seq is the only value guaranteed
@@ -1405,13 +1593,26 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // so pendingToEnvelope's own expectedSeq+1 default is already
           // right there and needs no override.
           const confirmedSeq = outcome.kind === "acked" ? outcome.result.seq : undefined;
+          // device-void-mine, Fix A — the row's REAL id, from the same ack. A
+          // void written elsewhere (the device chrome's "Void my last entry",
+          // the console) names the server's id and nothing else, and this
+          // pad's stream never re-reads a row it already holds (its cursor is
+          // the COUNT, and `listEvents` is strict), so the ack is the one
+          // moment this pad can learn it. See `pendingToEnvelope`.
+          const confirmedId = outcome.kind === "acked" ? outcome.result.event_id : undefined;
           // S12/#421 pass I — `next` itself still never reassigned (pass G's
           // own invariant, unchanged); pendingWithLocalVoidTarget hands
           // pendingToEnvelope a COPY with only `payload` possibly rewritten,
           // exactly like `eventToSend` above does for the wire, but answering
           // the LOCAL question instead (see that helper's own doc, and the
           // file header's PASS I UPDATE, for why the two can differ).
-          const acked = pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(next, ledgerEventsRef.current), confirmedSeq);
+          const acked = pendingToEnvelope(
+            fixtureId,
+            identity,
+            pendingWithLocalVoidTarget(next, ledgerEventsRef.current, voidTargetServerIdRef.current),
+            confirmedSeq,
+            confirmedId,
+          );
           // S12/#421 pass F — was a raw spread
           // (`[...ledgerEventsRef.current, acked]`), never routed through
           // mergeEnvelopesIntoLedger like the other writers into
@@ -1481,6 +1682,26 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           const survivor = withAck.find((e) => e.seq === acked.seq);
           if (survivor !== undefined) markOwn(survivor.id);
           commitLedgerEvents(withAck);
+          // device-void-mine, review round 1 — when the ledger now holds this
+          // event under an id other than the key it was queued under (Fix A's
+          // `event_id`, or R5's already-applied adopting the server's copy),
+          // a void queued BEFORE this ack still names the key. Record the pair
+          // where `resolveVoidTargetId` (the wire) and
+          // `pendingWithLocalVoidTarget` (the local fold) both look, and move
+          // any such void's optimistic envelope onto the new id in the SAME
+          // commit that retires this event from `pendingEnvelopes` — so no
+          // fold ever sees the re-keyed target beside a void still naming the
+          // key.
+          const rekeyedTo = survivor !== undefined && survivor.id !== next.idempotencyKey ? survivor.id : null;
+          if (rekeyedTo !== null) voidTargetServerIdRef.current.set(next.idempotencyKey, rekeyedTo);
+          const remaining = new Map(pendingEnvelopesRef.current);
+          remaining.delete(next.idempotencyKey);
+          if (rekeyedTo !== null) {
+            for (const [key, env] of remaining) {
+              if (env.type === "core.void" && env.voids === next.idempotencyKey) remaining.set(key, { ...env, voids: rekeyedTo });
+            }
+          }
+          commitPendingEnvelopes(remaining);
           void reconcileAfterAck(withAck);
         } else if (outcome.kind === "rejected") {
           setOffline(false);
@@ -1538,7 +1759,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // entry here throws transiently and leaves a stale lastRejection,
           // even though the drain below eventually resolves and acks it
           // correctly.
-          seeded.set(p.idempotencyKey, pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(p, ledgerEventsRef.current)));
+          seeded.set(p.idempotencyKey, pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(p, ledgerEventsRef.current, voidTargetServerIdRef.current)));
           // S12/#421 — this device's own leftover queue (IndexedDB is
           // browser/device-local), so it was unquestionably submitted under
           // THIS `identity`, exactly like a fresh submit() below.

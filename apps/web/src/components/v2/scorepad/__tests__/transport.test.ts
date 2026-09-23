@@ -74,6 +74,39 @@ describe("appendEvent — outcome mapping", () => {
     expect(calls[0]!.init?.body).toBe(JSON.stringify(BODY));
   });
 
+  // Fix A (device-void-mine): the ack now names the row it wrote. The pad
+  // stamps that id on its ledger entry, so it must arrive intact — and a value
+  // that is not a usable id must never be stamped, because a ledger entry
+  // under a junk id is exactly as unresolvable as one under the pad's own key.
+  it("a 201 carrying event_id keeps it on the ok outcome", async () => {
+    const success = {
+      seq: 8,
+      state_summary: { headline: "1-0" },
+      outcome: null,
+      status: "in_play",
+      event_id: "0b6c1f4e-2d3a-4b5c-8d9e-0f1a2b3c4d5e",
+    };
+    const { fn } = fakeFetch(() => fakeResponse(201, { ok: true, data: success }));
+    const outcome = await deviceLinkTransport("dl_x", { fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome.kind).toBe("ok");
+    expect(outcome.kind === "ok" ? outcome.data.event_id : null).toBe(success.event_id);
+  });
+
+  it.each([
+    ["a number", 42],
+    ["an empty string", ""],
+    ["null", null],
+  ])("an event_id that is %s is dropped, never passed on to be stamped", async (_label, bad) => {
+    const success = { seq: 8, state_summary: null, outcome: null, status: "in_play", event_id: bad };
+    const { fn } = fakeFetch(() => fakeResponse(201, { ok: true, data: success }));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") return;
+    expect("event_id" in outcome.data).toBe(false);
+    // Everything else rides through untouched.
+    expect(outcome.data).toEqual({ seq: 8, state_summary: null, outcome: null, status: "in_play" });
+  });
+
   it("a 409 body's current_seq maps onto the conflict outcome's currentSeq", async () => {
     const { fn } = fakeFetch(() =>
       fakeResponse(409, { ok: false, error: { code: "SEQ_CONFLICT", message: "seq conflict", current_seq: 42 } }),

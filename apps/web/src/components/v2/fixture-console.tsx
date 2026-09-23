@@ -401,7 +401,7 @@ const STATUS_STYLE: Record<string, string> = {
  * and is unchanged — it reports its own failures, and bounding it would turn
  * a successful append followed by a slow read into a visible "score failed".
  */
-const OPPORTUNISTIC_RESYNC_MS = 10_000;
+export const OPPORTUNISTIC_RESYNC_MS = 10_000;
 
 export function FixtureConsole({
   fixture,
@@ -467,6 +467,20 @@ export function FixtureConsole({
           apiV1<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
           apiV1<EventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`, { signal: controller?.signal }),
         ]);
+        // Never write a 200 whose body never arrived (G1 review round 2). A
+        // connection dropped mid-body WITHOUT an abort (undici `TypeError:
+        // terminated`) fails `apiV1`'s body parse, which defaults to `{}` —
+        // deliberately, the v1 export routes answer non-JSON 200s — so the
+        // call RESOLVES `undefined`. `setLive(undefined)` crashed the next
+        // render on `live.summary`; a non-array ledger crashes the ledger
+        // panel. So the shapes are checked here, before either setter. Every
+        // caller survives the throw: `handlePadEvents` swallows it and clears
+        // `padSyncing` in its `finally`; `send()` catches it, and because the
+        // error carries no message it shows the localized `score.failed` copy
+        // rather than a developer string.
+        if (state === null || typeof state !== "object" || !Array.isArray(all)) {
+          throw Object.assign(new Error(), { name: "ResyncShapeError" });
+        }
         setLive(state);
         setEvents(all);
       } finally {
@@ -480,10 +494,11 @@ export function FixtureConsole({
    *  ledger changed (a new submit, an ack, or a foreign-write merge) — the
    *  RAW event list it hands over is deliberately unused here. That
    *  pipeline stamps a CLIENT-fabricated id (the idempotency key) on every
-   *  event it knows about and never learns the server's real row id —
-   *  `AppendSuccess` carries no row id at all, so the id survives forever
-   *  (`use-pad-pipeline.ts`'s own S12/#421 pass F/G history, fixed there via
-   *  a targeted re-read before the pad's OWN void send). Trusting the
+   *  event not yet acked, and keeps it forever for an event acked WITHOUT an
+   *  `event_id` (an ack that names its row gets the server's id — device-
+   *  void-mine, Fix A; `use-pad-pipeline.ts`'s own S12/#421 pass F/G history
+   *  covers the rest, fixed there via a targeted re-read before the pad's
+   *  OWN void send). Trusting the
    *  pad-supplied id here directly would reintroduce that exact bug one
    *  layer out: `send()` below has no id-resolution step, so it would void
    *  an id the server has never seen. A real `resync()` — the same one

@@ -38497,13 +38497,19 @@
                         },
                         "status": {
                           "type": "string"
+                        },
+                        "event_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         }
                       },
                       "required": [
                         "seq",
                         "state_summary",
                         "outcome",
-                        "status"
+                        "status",
+                        "event_id"
                       ],
                       "additionalProperties": false
                     },
@@ -38519,7 +38525,8 @@
                     "seq": -9007199254740991,
                     "state_summary": null,
                     "outcome": null,
-                    "status": "example"
+                    "status": "example",
+                    "event_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -39644,13 +39651,19 @@
                         },
                         "status": {
                           "type": "string"
+                        },
+                        "event_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         }
                       },
                       "required": [
                         "seq",
                         "state_summary",
                         "outcome",
-                        "status"
+                        "status",
+                        "event_id"
                       ],
                       "additionalProperties": false
                     },
@@ -39666,7 +39679,8 @@
                     "seq": -9007199254740991,
                     "state_summary": null,
                     "outcome": null,
-                    "status": "example"
+                    "status": "example",
+                    "event_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

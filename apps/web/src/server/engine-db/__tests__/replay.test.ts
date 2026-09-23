@@ -50,6 +50,11 @@ describe.skipIf(!HAS_DB)("replayOutcomeFor", () => {
     // into this test: a change to the summary shape moves both together.
     expect(replayed!.state_summary).toEqual(original.summary);
     expect(replayed!.outcome).toEqual(original.outcome);
+    // Fix A — and the row it wrote, so a retrying pad learns the id a void
+    // written elsewhere will name. The original append's own id, not a typed
+    // value; the void above proves a later row exists that it must not pick.
+    expect(replayed!.event_id).toBe(original.event.id);
+    expect(replayed!.event_id).not.toBe(undone.event.id);
   });
 
   it("reports `finalized` for a replayed core.finalize", async () => {
