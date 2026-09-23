@@ -611,13 +611,38 @@ async function stepWrite(
     } catch (err) {
       toEngineError(err);
     }
-    // Undoing a generation needs the row snapshots for redo — enrich before
-    // the delete so the appended event is self-contained. (A plain Redo right
-    // after never reads them: it re-runs the generator. They are re-inserted
-    // when a later undo walks back past this one — below.)
-    if (result.event.type === "fixtures_cleared" && result.event.payload.fixtures === undefined) {
+    // A delete-side event records the rows it deletes AS THEY STAND NOW —
+    // before the delete, so the appended event is self-contained. (A plain
+    // Redo of a generation never reads them: it re-runs the generator. They
+    // are re-inserted when a later undo walks back past this one — below.)
+    //
+    // ALWAYS a fresh read, never the snapshot the event inherited: an undo of
+    // a restore (`fixtures_generated` / `pool_entrants_restored` carrying
+    // rows) and a redo of a clear both hand back the payload of the event
+    // they invert or copy, whose snapshot is from BEFORE the restore. It used
+    // to be kept whenever present, so a change made outside the ledger since
+    // the restore — a seed fill (`confirmSeedProposal`), any writer that
+    // appends no division event — was deleted here and quietly reverted by
+    // the next restore.
+    if (result.event.type === "fixtures_cleared") {
       const ids = (result.event.payload.fixture_ids as string[]) ?? [];
       if (ids.length > 0) result.event.payload.fixtures = await snapshotFixtures(tx, { ids });
+    } else if (result.event.type === "pool_entrants_cleared") {
+      const ids = ((result.event.payload.fixtures as FixtureSnapshot[]) ?? []).map((f) => f.id);
+      result.event.payload.fixtures = await snapshotFixtures(tx, { ids });
+    }
+    // ...and the restore that follows a Redo restores THAT read. Undo after a
+    // Redo inverts the ORIGINAL clear, not the redo's copy — the engine's
+    // `redo` moves the watermark back onto the original — so its payload holds
+    // the snapshot from before the first Undo, and a change made while the
+    // rows were back would be reverted by the round trip. The rows as they
+    // were last deleted are in the newest redo copy of that clear (read fresh
+    // above when it was appended). Only a pool clear is ever redone: every
+    // `fixtures_cleared` is an undo's inverse, which Redo skips.
+    if (result.event.type === "pool_entrants_restored") {
+      const of = result.event.payload.__undo_of;
+      const copy = ledger.findLast((e) => e.payload.__redo_of === of);
+      if (copy?.payload.fixtures !== undefined) result.event.payload.fixtures = copy.payload.fixtures;
     }
     const effects = { scoredFixtureRemoved: false };
     const fixtureIds = await execute(tx, divisionId, result.event, effects);

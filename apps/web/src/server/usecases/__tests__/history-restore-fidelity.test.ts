@@ -30,6 +30,7 @@ import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
+import { appendEvent } from "@/server/engine-db";
 import { log } from "@/server/logger";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
@@ -38,7 +39,15 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
-import { createStages, deleteStage, generateStageFixtures, listStages } from "../stages";
+import {
+  completeStage,
+  computeSeedProposal,
+  confirmSeedProposal,
+  createStages,
+  deleteStage,
+  generateStageFixtures,
+  listStages,
+} from "../stages";
 import { listDivisionFixturesForBoard, patchFixture } from "../fixtures";
 import { applySchedule, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
@@ -881,5 +890,83 @@ describe.skipIf(!HAS_DB)("a restore respects what the roster lost since the snap
     await expect(undoDivision(auth, divisionId)).resolves.toBeDefined();
 
     expect(await sql`select pool_id from fixtures where id = ${fxId}`).toEqual([{ pool_id: null }]);
+  });
+});
+
+// G4 (gap hunt, #857). An undo of a restore, and a redo of a clear, hand back
+// the payload of the event they invert or copy — whose snapshot predates the
+// restore. The delete-side event kept it whenever one was there, so a change
+// made outside the ledger after the restore was deleted and the next restore
+// quietly put the OLD row back. Now every delete-side event re-reads the rows.
+describe.skipIf(!HAS_DB)("a change made outside the ledger after a restore survives the next round trip", () => {
+  it("a seed fill made after a knockout was restored: undoing that restore and restoring it again brings back the FILLED seats", async () => {
+    const { auth, divisionId } = await seedDivision(4);
+    const created = await createStages(auth, divisionId, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      {
+        seq: 2, kind: "knockout", name: "KO", config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      },
+      { seq: 3, kind: "league", name: "Later", config: {} },
+    ]);
+    const [group, ko, later] = [1, 2, 3].map((seq) => created.find((st) => st.seq === seq)!);
+    await generateStageFixtures(auth, group.id);
+    await generateStageFixtures(auth, ko.id); // TBD; completing the group needs it
+    const groupFixtures = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${group.id}`;
+    for (const f of groupFixtures) {
+      await appendEvent(auth.orgId, f.id, 0, { type: "core.start", payload: {} });
+      await appendEvent(auth.orgId, f.id, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    }
+    await completeStage(auth, group.id);
+    const undoes = async (...types: string[]) => {
+      for (const type of types) expect((await undoDivision(auth, divisionId)).applied.type).toBe(type);
+    };
+
+    // KO undone, a later edit, then walked back: the KO restored raw, TBD.
+    await undoes("fixtures_cleared");
+    await generateStageFixtures(auth, later.id);
+    await undoes("fixtures_cleared", "fixtures_generated");
+    expect((await wholeRows("stage_id", ko.id)).every((r) => r.home_entrant_id === null)).toBe(true);
+
+    // The seed fill — it appends no reversible event.
+    const proposal = await computeSeedProposal(auth, ko.id);
+    expect(await confirmSeedProposal(auth, ko.id, { proposalId: proposal.id })).toMatchObject({ filled: 2 });
+    const filled = await wholeRows("stage_id", ko.id);
+    expect(filled.every((r) => r.home_entrant_id !== null && r.away_entrant_id !== null)).toBe(true);
+
+    // Make that restore history; undo it (the KO goes again), then restore it.
+    await generateStageFixtures(auth, later.id);
+    await undoes("fixtures_cleared", "fixtures_cleared");
+    expect(await wholeRows("stage_id", ko.id)).toEqual([]);
+    await generateStageFixtures(auth, later.id);
+    await undoes("fixtures_cleared", "fixtures_generated");
+
+    expect(await wholeRows("stage_id", ko.id)).toEqual(filled);
+  });
+
+  // Any writer that appends no division event stands in here (the seed fill
+  // above is the real one): a direct UPDATE to a row the Undo put back.
+  it("a pool row changed outside the ledger after an Undo put it back: Redo clears it as it now stands, and the next Undo restores THAT", async () => {
+    const { auth, divisionId } = await seedDivision(8);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } },
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const [pool] = await sql<{ id: string }[]>`select id from pools where stage_id = ${stage!.id} order by id limit 1`;
+    await clearPoolEntrants(auth, pool!.id, true);
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("pool_entrants_restored");
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where pool_id = ${pool!.id} order by fixture_no limit 1`;
+    await sql`update fixtures set home_entrant_id = away_entrant_id, away_entrant_id = home_entrant_id where id = ${f!.id}`;
+    const changed = await wholeRows("pool_id", pool!.id);
+
+    expect((await redoDivision(auth, divisionId)).applied.type).toBe("pool_entrants_cleared");
+    expect(await wholeRows("pool_id", pool!.id)).toEqual([]);
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("pool_entrants_restored");
+
+    expect(await wholeRows("pool_id", pool!.id)).toEqual(changed);
   });
 });
