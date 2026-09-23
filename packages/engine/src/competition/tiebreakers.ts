@@ -253,11 +253,16 @@ const FAIR_PLAY_KEYS = ["fair_play"] as const;
 // any future rate metric outright, where no attempts is not the same as 0%.
 // Callers now state their own answer rather than inheriting a silent one.
 export function metricOf(row: StandingsRow, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const value = row.metrics[key];
-    if (value !== undefined) return value;
-  }
-  return undefined;
+  const key = metricKeyOf(row, keys);
+  return key === undefined ? undefined : row.metrics[key];
+}
+
+/** The alias `metricOf` reads: the first of `keys` this row records. Callers
+ *  that need to know WHICH ledger a row's `for`/`diff` resolve to (a stage
+ *  rule's forfeit score reaches `for`/`against`/`diff` only — points.ts
+ *  `applyPointsRule`) ask this rather than re-walking the alias order. */
+export function metricKeyOf<K extends string>(row: StandingsRow, keys: readonly K[]): K | undefined {
+  return keys.find((key) => row.metrics[key] !== undefined);
 }
 
 // Integer-ledger readers (the ratio metrics and NRR). An unrecorded count IS 0

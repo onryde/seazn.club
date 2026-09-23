@@ -7,9 +7,12 @@ import { EngineError } from "../core/errors.ts";
 import type { StandingsDelta } from "../core/types.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 import {
+  FOR_KEYS,
   buchholz,
   buildSwissTable,
   directEncounter,
+  metricKeyOf,
+  metricOf,
   pointsToText,
   rankStandings,
   validateCascade,
@@ -185,6 +188,23 @@ describe("an absent metric is no data, not a zero (#429)", () => {
       cascade: ["points", "fair_play"],
     });
     expect(fp.rows.map((entry) => entry.entrantId)).toEqual(["dirty", "nodata"]);
+  });
+});
+
+// `metricKeyOf` names the alias `metricOf` reads. The what-if needs the name,
+// not the value: a stage rule's forfeit score lands in `for`/`against`/`diff`
+// only, and a sport's own `gf`/`gd` are read first (web qualification-view).
+describe("metricKeyOf: the alias metricOf reads", () => {
+  it("is the first alias the row records, a recorded zero included; none recorded is undefined", () => {
+    expect(metricKeyOf(row("fb", 0, { for: 3, gf: 0 }), FOR_KEYS)).toBe("gf");
+    expect(metricKeyOf(row("cr", 0, { runs_for: 9, for: 3 }), FOR_KEYS)).toBe("for");
+    expect(metricKeyOf(row("none", 0, { against: 1 }), FOR_KEYS)).toBeUndefined();
+  });
+
+  it("is the key whose value metricOf returns", () => {
+    const fb = row("fb", 0, { for: 3, gf: 0 });
+    expect(metricOf(fb, FOR_KEYS)).toBe(fb.metrics[metricKeyOf(fb, FOR_KEYS)!]);
+    expect(metricOf(fb, FOR_KEYS)).toBe(0);
   });
 });
 
