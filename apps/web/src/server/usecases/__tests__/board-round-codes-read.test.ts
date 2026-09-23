@@ -89,8 +89,9 @@ async function readBoth(seed: Awaited<ReturnType<typeof seedGeneratedStage>>) {
   const kind = stages[0]!.kind;
   const laneRows = full.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
   // The expectation, from the FULL row through the engine — never a table
-  // typed in here. ext_key is passed too: the full read has it, the board
-  // does not, and the codes must still agree.
+  // typed in here. ext_key is passed too: the full read has it on every
+  // row, the board only on a page playoff's (`pp-*`), and the codes must
+  // still agree.
   const expected = new Map(
     full.map((f) => {
       const lane = f.lane ?? null;

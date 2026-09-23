@@ -36,11 +36,16 @@ export interface BoardRoundCode {
    *  legend. `roundRoleBoardLabel`'s: lane-aware wherever the code is. */
   label: string;
   /** The number after the code when a match is referred to — "QF·3",
-   *  "Winner of E·1": this fixture's place among its stage's matches carrying
-   *  the same code, in round/seq order. For a knockout or double elimination
-   *  that is its seq_in_round, as before; it differs only where two codes
-   *  share a round — the page playoff's Eliminator is the SECOND match of
-   *  round 1 (beside Qualifier 1) and the only Eliminator, so E·1, not E·2. */
+   *  "Winner of E·1": this fixture's place, in seq_in_round order, among its
+   *  stage's fixtures with the same round role — the same (lane, round_no,
+   *  third-place flag, reset flag, page-playoff ext_key), the key the role is
+   *  cached by, which is one code per stage in every generator's output. For
+   *  an ordinary knockout or double-elimination round that is its
+   *  seq_in_round, as before. It differs where two roles share a round: the
+   *  page playoff's Eliminator is the SECOND match of round 1 (beside
+   *  Qualifier 1) and the only Eliminator, so E·1, not E·2; and a bronze
+   *  match, second in its final's round, is 3rd·1 where #851 read 3rd·2 (only
+   *  the AI console's own code for it — nothing is fed from a bronze match). */
   refSeq: number;
   /** Legend order, compared left to right:
    *   1. group — each single-lane format's rounds before its final, one
@@ -48,9 +53,11 @@ export interface BoardRoundCode {
    *      and "E1 E2" each read as one run); then the finals they share (F,
    *      and the bronze match beside it); then a double elimination's lanes,
    *      WB, LB, GF;
-   *   2. position — distance from the final in a single lane (so a bigger
-   *      bracket's R32 precedes another's R16), round within the lane
-   *      otherwise;
+   *   2. position — a stepladder rung's own n (its code's number, counted
+   *      from the ladder's start, so a 4-ladder's and a 6-ladder's E1 are one
+   *      place); otherwise distance from the final in a single lane (so a
+   *      bigger bracket's R32 precedes another's R16), round within the lane
+   *      in a double elimination;
    *   3. the third-place match or bracket reset after the round it shares;
    *   4. the round's first seq_in_round — the generator's own emission order,
    *      which is what puts Qualifier 1 before the Eliminator in their shared
@@ -175,7 +182,10 @@ export function boardRoundCodes(
                   label: roundRoleBoardLabel(msg, role, { lane, roundInLane }),
                   order: [
                     group,
-                    lane === null ? roundInLane - lastRoundInLane : roundInLane,
+                    // A rung is placed by the n its code prints (E{n} counts
+                    // from the ladder's start): by distance from the final, a
+                    // 6-ladder's E3 would tie a 4-ladder's E1.
+                    role.kind === "rung" ? role.n : lane === null ? roundInLane - lastRoundInLane : roundInLane,
                     thirdPlace || conditional ? 1 : 0,
                     f.seq_in_round,
                   ],
@@ -212,7 +222,8 @@ const MATCH_REF_KEYS: ReadonlySet<string> = new Set(["slot.winner_match", "slot.
  * otherwise. A ref that names no coded fixture keeps its plain text.
  *
  * Returns the input object itself when nothing changes, so a league-only board
- * keeps a stable reference through its memo.
+ * keeps a stable reference through its memo. Idempotent: a label that already
+ * carries a `code` is skipped, so a second pass returns its input unchanged.
  */
 export function withRoundCodeRefs(
   fixtures: readonly BoardFixture[],
@@ -232,6 +243,10 @@ export function withRoundCodeRefs(
       const stored = side === "home" ? f.home_slot_label : f.away_slot_label;
       const label: SlotLabel | null = feeds[f.id]?.[side] ?? stored ?? null;
       if (label === null || !MATCH_REF_KEYS.has(label.key)) continue;
+      // Already stamped (only this function writes `code`): its `seq` is a
+      // refSeq now, and looking that up as a seq_in_round would rename the
+      // Eliminator's feeder "Q1·1".
+      if (typeof label.params.code === "string") continue;
       const stage = typeof label.params.stage === "string" ? label.params.stage : f.stage_id;
       const ref = at.get(`${stage}:${Number(label.params.round)}:${Number(label.params.seq)}`);
       const rc = ref === undefined ? undefined : codes.get(ref);
@@ -260,8 +275,9 @@ export interface RoundLegendEntry {
  * Ordered by `BoardRoundCode.order`: group (each single-lane format's early
  * rounds, one format at a time — so a knockout's, a page playoff's "Q1 E Q2"
  * and a stepladder's "E1 E2" each read as a run — then the shared F, then the
- * double-elimination lanes), then distance from the final in a single lane (so
- * a 16-knockout's R16 precedes an 8-knockout's QF on one competition board),
+ * double-elimination lanes), then a stepladder rung's own n (so a 4-ladder and
+ * a 6-ladder read E1 … E4 together) or distance from the final in a single lane
+ * (so a 16-knockout's R16 precedes an 8-knockout's QF on one competition board),
  * then the third-place match / bracket reset after the round it shares, then
  * the round's place in its generator's order (Qualifier 1 before the
  * Eliminator, which share round 1) — and only then by name, so a locale whose

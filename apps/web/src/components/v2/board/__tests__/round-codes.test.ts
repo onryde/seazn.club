@@ -651,6 +651,21 @@ describe("boardRoundCodes — page playoff", () => {
     expect(board.find((f) => f.ext_key === "pp-elim")!.seq_in_round).toBe(2);
     expect(title("pp-q2")).not.toContain(ref(E, 2));
   });
+
+  it("withRoundCodeRefs is idempotent: a stamped label is left alone, so the Eliminator never re-resolves as Q1·1", () => {
+    const bracket = generatePagePlayoff({ entrants: entrants(4) });
+    const board = asBoard("pp", bracket);
+    const codes = boardRoundCodes(board, PP_STAGE, en);
+    const once = withRoundCodeRefs(board, feedLabels(feedRowsOf(bracket, board)), codes);
+    const twice = withRoundCodeRefs(board, once, codes);
+    // Re-resolved, the Eliminator's restamped {round 1, seq 1} is Qualifier 1's
+    // place: "Loser of Q1·1 vs Winner of Q1·1".
+    const q2 = board.find((f) => f.ext_key === "pp-q2")!;
+    expect(cardTitle(q2, {}, twice, en)).toBe(
+      `${en("slot.loser_match", { ext: ref(Q1, 1) })} vs ${en("slot.winner_match", { ext: ref(E, 1) })}`,
+    );
+    expect(twice).toBe(once);
+  });
 });
 
 describe("boardRoundCodes — stepladder", () => {
@@ -727,6 +742,26 @@ describe("roundLegendEntries — page playoff and stepladder", () => {
       ...[1, 2, 3, 4].map((n) => entry(en("bracket.roundShort.rung", { n }), "bracket.round.eliminatorN", { n })),
       entry(F, "bracket.round.final"),
     ]);
+  });
+
+  it("a 4-ladder and a 6-ladder on one board list E1, E2, E3, E4, F — in either division order", () => {
+    // A rung's code counts from the ladder's START, so E1 is two games before
+    // a 4-ladder's final but four before a 6-ladder's. Ordered by distance
+    // from the final, whichever ladder's E1 the dedupe kept decided where E1
+    // sat: 6-ladder first read E1, E3, E2, E4, F.
+    const sl4 = asBoard("sl4", generateStepladder({ entrants: entrants(4) }));
+    const sl6 = asBoard("sl6", generateStepladder({ entrants: entrants(6) }));
+    const stages = [
+      { id: "sl4", kind: "stepladder" },
+      { id: "sl6", kind: "stepladder" },
+    ];
+    const expected = [
+      ...[1, 2, 3, 4].map((n) => entry(en("bracket.roundShort.rung", { n }), "bracket.round.eliminatorN", { n })),
+      entry(F, "bracket.round.final"),
+    ];
+    for (const board of [[...sl4, ...sl6], [...sl6, ...sl4]]) {
+      expect(roundLegendEntries(board, boardRoundCodes(board, stages, en))).toEqual(expected);
+    }
   });
 
   it("knockout + page playoff + stepladder on one board: each format's rounds as ONE run, the shared F once, last", () => {

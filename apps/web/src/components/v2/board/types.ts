@@ -74,9 +74,11 @@ export interface BoardFixture {
    *  added them with no backfill, so a stage generated before it has every row
    *  at the defaults — and every stage generated since flags its final (the
    *  single-elimination final, the grand-final games, a stepladder's last
-   *  game). A coded stage with no `is_final` row is therefore a legacy one,
-   *  and keeps its plain R{n} (review M2 — board/round-codes.ts). One key per
-   *  bracket, not per row. */
+   *  game). A knockout, double-elimination or stepladder stage with no
+   *  `is_final` row is therefore a legacy one, and keeps its plain R{n}
+   *  (review M2 — board/round-codes.ts `hasRoleMetadata`). A page playoff is
+   *  the exception: it is named by its `ext_key` alone and needs no
+   *  `is_final`. One key per bracket, not per row. */
   lane?: "WB" | "LB" | "GF" | null;
   is_final?: boolean;
   third_place?: boolean;
