@@ -34,6 +34,11 @@ import { swissRoundsForFieldSize } from "../apps/web/src/lib/swiss-rounds.ts";
 // The create-time entrant-name join — the entrant-rename suite derives every
 // expected name with it rather than typing one. Dependency-free, like the above.
 import { rosterDerivedName } from "../apps/web/src/lib/entrant-roster-name.ts";
+// Round-1 Swiss pairs by seed, from the engine's own `pairRound` — the same
+// derivation the desk's pairing hint prints. Its one value import is the engine's
+// dependency-free `scheduling/swiss` leaf (the rest are `import type`), so it
+// loads under this runner's `--experimental-strip-types` like the line above.
+import { roundOnePairs } from "../apps/web/src/lib/swiss-pairing.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://localhost:3000";
 
@@ -8187,7 +8192,7 @@ async function swissKnockoutSuite(): Promise<void> {
     }),
   );
   const names = ["Ann", "Bo", "Cy", "Di"];
-  const entrants = v1data<{ id: string; display_name: string }[]>(
+  const entrants = v1data<{ id: string; display_name: string; seed: number | null }[]>(
     await v1(
       free,
       `/api/v1/divisions/${div.id}/entrants`,
@@ -8292,6 +8297,37 @@ async function swissKnockoutSuite(): Promise<void> {
     pairR1.created === 2 &&
       afterPairR1.filter((f) => f.round_no === 1).every(isSeated) &&
       afterPairR1.filter((f) => f.round_no > 1).every((f) => !isSeated(f)),
+  );
+
+  // …and seated TOP-VS-BOTTOM, although this stage is stored as Neighbours
+  // (2026-09-22, Swiss round-1 pairing): before any result the only rank is the
+  // seed, so neighbours would send the top two seeds at each other in round
+  // one. Seated is not enough — the boards themselves are checked, by seed,
+  // against `roundOnePairs`, the derivation the desk's hint prints (the
+  // engine's own pairRound), never a typed table. The seeds are read back from
+  // the server and must be exactly 1..N first, or positions and seeds could
+  // differ and the comparison would be meaningless; and fold must differ from
+  // Neighbours for this field, or the check could not tell the two apart.
+  const seedOf = new Map(entrants.map((e) => [e.id, e.seed]));
+  const seedsOneToN =
+    JSON.stringify([...seedOf.values()].sort((a, b) => (a ?? 0) - (b ?? 0))) ===
+    JSON.stringify(names.map((_, i) => i + 1));
+  const bySeed = (pairs: Array<[number, number]>) =>
+    pairs
+      .map(([a, b]) => (a < b ? [a, b] : [b, a]))
+      .sort((x, y) => x[0] - y[0])
+      .map(([a, b]) => `${a}v${b}`);
+  const seatedR1BySeed = bySeed(
+    afterPairR1
+      .filter((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)
+      .map((f): [number, number] => [seedOf.get(f.home_entrant_id!) ?? 0, seedOf.get(f.away_entrant_id!) ?? 0]),
+  );
+  const foldR1 = bySeed(roundOnePairs(names.length, "fold"));
+  check(
+    "swiss knockout: round 1 is paired top-vs-bottom by seed (1v3, 2v4…) on a Neighbours stage — not seed 1 v seed 2",
+    seedsOneToN &&
+      JSON.stringify(foldR1) !== JSON.stringify(bySeed(roundOnePairs(names.length, "rank_adjacent"))) &&
+      JSON.stringify(seatedR1BySeed) === JSON.stringify(foldR1),
   );
 
   // Play every declared round out, Pair next between rounds, lower seed winning

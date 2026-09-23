@@ -66,6 +66,15 @@ import {
   SWISS_ROUNDS_REQUIRED_CODE,
   SWISS_ROUNDS_REQUIRED_MESSAGE,
 } from "@/lib/swiss-shell";
+import {
+  type SwissPairingMode,
+  storedSwissPairing,
+  effectiveSwissPairing,
+  SWISS_PAIRING_ROUND_ONE_ONLY_CODE,
+  SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE,
+  SWISS_PAIRING_NOT_SWISS_CODE,
+  SWISS_PAIRING_NOT_SWISS_MESSAGE,
+} from "@/lib/swiss-pairing";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -961,7 +970,21 @@ type SwissExistingFixture = {
   outcome: unknown;
 };
 
-type SwissGenResult = { gen: GenFixture[]; seatedCount: number; reshaped: SwissReshape };
+type SwissGenResult = {
+  gen: GenFixture[];
+  seatedCount: number;
+  reshaped: SwissReshape;
+  /** The mode this pass paired with, and the one it would have used with no
+   *  override — both null when the pass seated nothing. */
+  pairing: SwissPairingMode | null;
+  defaultPairing: SwissPairingMode | null;
+  /** The round this pass seated; null when it seated nothing. */
+  round: number | null;
+  /** The shell ids this pass seated (boards and the bye). An AUDIT list only:
+   *  seating UPDATEs shells that already existed, so these must never reach
+   *  the ledger's `fixture_ids`, which Undo deletes. */
+  seatedIds: string[];
+};
 
 // Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
 // every round the organiser declared in `config.rounds`; Pair next (a later
@@ -975,6 +998,9 @@ async function swissGen(
   cfg: Record<string, unknown>,
   entrants: ActiveEntrant[],
   existing: SwissExistingFixture[],
+  /** A round-1-only pairing override from the Generate body. Every refusal of
+   *  it below runs before this function's first write. */
+  override?: SwissPairingMode,
 ): Promise<SwissGenResult> {
   const rounds = cfg.rounds;
   if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
@@ -982,6 +1008,11 @@ async function swissGen(
   }
 
   if (existing.length === 0) {
+    // This press only mints empty shells and seats nobody, so an override
+    // could not take effect — refuse it rather than swallow it.
+    if (override !== undefined) {
+      throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
+    }
     return {
       gen: planSwissShells(rounds, entrants.length).map((shell) => ({
         extKey: shell.extKey,
@@ -992,12 +1023,35 @@ async function swissGen(
       })),
       seatedCount: 0,
       reshaped: NO_SWISS_RESHAPE,
+      pairing: null,
+      defaultPairing: null,
+      round: null,
+      seatedIds: [],
     };
   }
 
   const target = nextUnseatedSwissRound(existing);
   if (target === null) {
-    return { gen: [], seatedCount: 0, reshaped: NO_SWISS_RESHAPE };
+    if (override !== undefined) {
+      throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
+    }
+    return {
+      gen: [],
+      seatedCount: 0,
+      reshaped: NO_SWISS_RESHAPE,
+      pairing: null,
+      defaultPairing: null,
+      round: null,
+      seatedIds: [],
+    };
+  }
+
+  // The round NUMBER, never "a decided board exists": on an odd field the bye
+  // is minted `forfeited` with its award at seat time, and an ad-hoc fixture
+  // can sit at `maxRound + 1` fully seated — either would read as "round 1 is
+  // over" while round 1 is still the one being paired.
+  if (override !== undefined && target !== 1) {
+    throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
   }
 
   if (target > 1) {
@@ -1015,7 +1069,14 @@ async function swissGen(
     }
   }
 
-  const rankAdjacent = cfg.pairing === "rank_adjacent";
+  // Round 1 pairs top-vs-bottom unless overridden: before any result the only
+  // rank is the seed, so rank-adjacent would pair seed 1 with seed 2 (spec
+  // 2026-09-22). `effectiveSwissPairing` is the one authority, shared with the
+  // desk. `cascadeRank` below keys off the EFFECTIVE mode through `rankAdjacent`.
+  const stored = storedSwissPairing(cfg);
+  const defaultPairing = effectiveSwissPairing({ stored, round: target });
+  const pairing = effectiveSwissPairing({ override, stored, round: target });
+  const rankAdjacent = pairing === "rank_adjacent";
   const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
   const played = new Set<string>();
   const colours = new Map<string, Colour[]>();
@@ -1156,13 +1217,14 @@ async function swissGen(
   const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
 
   let seatedCount = 0;
+  const seatedIds: string[] = [];
   for (let i = 0; i < round.pairings.length; i++) {
     const p = round.pairings[i]!;
     const shell = boardShells[i];
     if (!shell) {
       throw new EngineError("CONFIG_INVALID", "swiss shell count mismatch for pairing", { stageId, target });
     }
-    await tx`
+    const seated = await tx<{ id: string }[]>`
       update fixtures set
         home_entrant_id = ${p.home},
         away_entrant_id = ${p.away},
@@ -1170,14 +1232,16 @@ async function swissGen(
         outcome = null,
         home_slot_label = null,
         away_slot_label = null
-      where id = ${shell.id}`;
+      where id = ${shell.id}
+      returning id`;
+    for (const row of seated) seatedIds.push(row.id);
     seatedCount++;
   }
   if (round.bye !== undefined) {
     if (!byeShell) {
       throw new EngineError("CONFIG_INVALID", "swiss bye shell missing for pairing", { stageId, target });
     }
-    await tx`
+    const seated = await tx<{ id: string }[]>`
       update fixtures set
         home_entrant_id = ${round.bye},
         away_entrant_id = null,
@@ -1185,11 +1249,13 @@ async function swissGen(
         outcome = ${tx.json({ kind: "award", winner: round.bye } as never)},
         home_slot_label = null,
         away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
-      where id = ${byeShell.id}`;
+      where id = ${byeShell.id}
+      returning id`;
+    for (const row of seated) seatedIds.push(row.id);
     seatedCount++;
   }
 
-  return { gen: [], seatedCount, reshaped };
+  return { gen: [], seatedCount, reshaped, pairing, defaultPairing, round: target, seatedIds };
 }
 
 /**
@@ -1844,6 +1910,15 @@ interface GenerateWrite {
   swissSeatedCount?: number;
 }
 
+/** What a Generate press may ask for beyond "generate". */
+export interface GenerateOptions {
+  /** Swiss only, round 1 only: pair this round with this mode instead of the
+   *  round-1 default. Never stored — `stages.config` is untouched; the
+   *  `fixtures_generated` ledger row records it. Refused (422) on any other
+   *  stage kind, round, or press. */
+  pairing?: SwissPairingMode;
+}
+
 /** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
  *  New fixtures change the hub (their kick-offs and courts), so the hub key
  *  drops in one DEL after the commit and the division push follows it
@@ -1858,8 +1933,12 @@ interface GenerateWrite {
  *  `completeStage` (R10g: it publishes the whole completion, the draw
  *  included, once in its own `finally`, unless scoring's auto-advance opts
  *  out because scoring's post-commit `finally` publishes). */
-export async function generateStageFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
-  const write = await generateStageFixturesWrite(auth, stageId);
+export async function generateStageFixtures(
+  auth: AuthCtx,
+  stageId: string,
+  opts: GenerateOptions = {},
+): Promise<GenerateOutcome> {
+  const write = await generateStageFixturesWrite(auth, stageId, opts);
   if (write.outcome.created > 0) {
     afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
   }
@@ -1869,7 +1948,7 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
 /** `generateStageFixtures` without its publish, for a caller that publishes
  *  the whole write itself (see above). */
 export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
-  return (await generateStageFixturesWrite(auth, stageId)).outcome;
+  return (await generateStageFixturesWrite(auth, stageId, {})).outcome;
 }
 
 /**
@@ -2095,7 +2174,11 @@ export async function unpairSwissRound(
   return { cleared: write.cleared, round: write.round };
 }
 
-async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promise<GenerateWrite> {
+async function generateStageFixturesWrite(
+  auth: AuthCtx,
+  stageId: string,
+  opts: GenerateOptions,
+): Promise<GenerateWrite> {
   // A qualification stage must draw from the previous stage's final table
   // (config.qualified), never from the whole entrant list. If it isn't seeded
   // yet: seed it now when the previous stage is complete (stage added after
@@ -2113,6 +2196,12 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       const [stage] = await tx<StageRow[]>`
         select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
       if (!stage) throw new HttpError(404, "stage not found");
+      // A pairing mode means nothing off a Swiss stage. Refused HERE, in the
+      // pre-flight, because both paths below that leave this block early
+      // (`timing: "setup"`, `seedNextStage`) write before the main transaction.
+      if (opts.pairing !== undefined && stage.kind !== "swiss") {
+        throw new HttpError(422, SWISS_PAIRING_NOT_SWISS_MESSAGE, SWISS_PAIRING_NOT_SWISS_CODE);
+      }
       // Generating a stage's fixtures IS writing the timetable — the widest
       // schedule write there is — so a frozen division refuses it.
       //
@@ -2267,12 +2356,25 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
 
     let swissSeatedCount = 0;
     let swissReshaped: SwissReshape | undefined;
+    // Rides on this pass's `fixtures_generated` row when it seated a round.
+    let swissAudit: Record<string, unknown> | undefined;
     let gen: GenFixture[];
     if (stage.kind === "swiss") {
-      const swiss = await swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing);
+      const swiss = await swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing, opts.pairing);
       gen = swiss.gen;
       swissSeatedCount = swiss.seatedCount;
       if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
+      // `override` is true only when the body named a mode OTHER than the one
+      // this round would have used anyway — picking the default is no override.
+      swissAudit =
+        swiss.seatedIds.length > 0
+          ? {
+              round: swiss.round,
+              pairing: swiss.pairing,
+              override: opts.pairing !== undefined && opts.pairing !== swiss.defaultPairing,
+              seated_fixture_ids: swiss.seatedIds,
+            }
+          : undefined;
     } else if (stage.kind === "americano") {
       gen = await americanoGen(tx, stage.division_id, stageId, stage.config, entrants);
     } else if (stage.kind === "ladder") {
@@ -2602,6 +2704,9 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
 
     // Undoable generation (Jul3/03 §3): the ledger records which fixtures this
     // pass created so undo can remove exactly them (results-guarded).
+    // `fixture_ids` IS that Undo contract — undo DELETEs every id in it — so a
+    // Swiss seat's ids (UPDATEd shells that already existed) ride separately
+    // in `seated_fixture_ids`, which no undo path reads.
     if (created > 0) {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events
@@ -2609,7 +2714,7 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
       await tx`
         insert into division_events (division_id, seq, type, payload)
         values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
-                ${tx.json({ stage_id: stageId, fixture_ids: createdIds } as never)})`;
+                ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}) } as never)})`;
       await tx`update divisions set seq = ${last + 1}, edit_watermark = null
                where id = ${stage.division_id}`;
     }

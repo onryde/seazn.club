@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { StageRail } from "../stage-rail";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import en from "@/dictionaries/en/ui.json";
+import type { SwissPairingMenu } from "@/lib/swiss-pairing-menu";
+import { StageRail, SwissPairingMenuPanel, type StageRailProps } from "../stage-rail";
 
 const stage = { id: "s1", name: "League", kind: "league", seq: 1, status: "active" } as never;
 
@@ -30,6 +33,9 @@ const NEUTRAL = {
   onToggleOpen: () => {},
   swissHasUnseated: false,
   canUnpairSwiss: false,
+  // Swiss round-1 pairing: `null` is "no menu" — every pre-existing test
+  // below keeps asserting exactly what it did.
+  swissPairingMenu: null,
 };
 const BADGE = <p data-testid="stage-unscheduled-count">3</p>;
 
@@ -37,7 +43,7 @@ describe("StageRail", () => {
   it("renders the three header controls with their testids", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
     );
     expect(html).toContain('data-testid="stage-generate"');
@@ -48,7 +54,7 @@ describe("StageRail", () => {
   it("renders nothing at all when the viewer cannot edit — even with a non-null badge slot", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit={false} busy={null} fixtureCount={4} deletable
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} unscheduledBadgeSlot={BADGE} />,
     );
     expect(html).toBe("");
@@ -75,7 +81,7 @@ describe("StageRail", () => {
       "closed, no unscheduled work",
       renderToStaticMarkup(
         <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-          onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
           adhoc courtTagsSlot={null} {...NEUTRAL} />,
       ),
     );
@@ -83,7 +89,7 @@ describe("StageRail", () => {
       "closed, with an unscheduled count — precisely when the CTA used to appear",
       renderToStaticMarkup(
         <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-          onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
           adhoc courtTagsSlot={null} {...NEUTRAL} unscheduledBadgeSlot={BADGE} />,
       ),
     );
@@ -91,7 +97,7 @@ describe("StageRail", () => {
       "phone sheet open, with an unscheduled count",
       renderToStaticMarkup(
         <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-          onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
           adhoc courtTagsSlot={null} {...NEUTRAL} open unscheduledBadgeSlot={BADGE} />,
       ),
     );
@@ -100,14 +106,14 @@ describe("StageRail", () => {
   it("renders the Add match control for an ad-hoc stage kind, and omits it for a kind not in ADHOC_STAGE_KINDS", () => {
     const adhocHtml = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc courtTagsSlot={null} {...NEUTRAL} />,
     );
     expect(adhocHtml).toContain('data-testid="stage-add-match"');
 
     const nonAdhocHtml = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
     );
     expect(nonAdhocHtml).not.toContain('data-testid="stage-add-match"');
@@ -116,7 +122,7 @@ describe("StageRail", () => {
   it("renders courtTagsSlot content where given", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={<i data-testid="ct-slot" />} {...NEUTRAL} />,
     );
     expect(html).toContain('data-testid="ct-slot"');
@@ -125,7 +131,7 @@ describe("StageRail", () => {
   it("renders no pinned section at all — no badge — when unscheduledBadgeSlot is null", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
     );
     expect(html).not.toContain('data-testid="stage-unscheduled-count"');
@@ -135,7 +141,7 @@ describe("StageRail", () => {
     const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
     const empty = renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={0} deletable={false}
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
     );
     expect(empty).toContain("Generate fixtures");
@@ -143,7 +149,7 @@ describe("StageRail", () => {
 
     const unseated = renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={8} deletable={false}
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated canUnpairSwiss={false} />,
     );
     expect(unseated).toContain("Pair next round");
@@ -154,14 +160,14 @@ describe("StageRail", () => {
     const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
     const withUnpair = renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={4} deletable={false}
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated={false} canUnpairSwiss />,
     );
     expect(withUnpair).toContain('data-testid="stage-unpair"');
 
     const without = renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={4} deletable={false}
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
     );
     expect(without).not.toContain('data-testid="stage-unpair"');
@@ -170,7 +176,7 @@ describe("StageRail", () => {
   it("renders whatever unscheduledBadgeSlot element it is given, verbatim — the rail builds no badge markup of its own", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL}
         unscheduledBadgeSlot={<p data-testid="stage-unscheduled-count" data-marker="from-panel">7</p>} />,
     );
@@ -209,7 +215,7 @@ describe("StageRail — which action holds the filled primary", () => {
   const rail = (over: Record<string, unknown>) =>
     renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={6} deletable={false}
-        onAct={() => {}} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} {...over} />,
     );
 
@@ -251,5 +257,263 @@ describe("StageRail — which action holds the filled primary", () => {
       generate: "ghost",
       complete: "primary",
     });
+  });
+});
+
+// Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI — option
+// A, split button"). Static markup only — this file has no DOM, so the OPEN
+// menu is rendered through `SwissPairingMenuPanel` directly (the rail mounts
+// exactly that component when its toggle is open), and the click/keyboard
+// behaviour is pinned as pure functions in `swiss-pairing-menu.test.ts`.
+describe("StageRail — the Pair next split button", () => {
+  const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", config: {} } as never;
+  const ROUND_ONE: SwissPairingMenu = {
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+  };
+  const rail = (over: Record<string, unknown>) =>
+    renderToStaticMarkup(
+      <StageRail stage={swiss} canEdit busy={null} fixtureCount={10} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated {...over} />,
+    );
+  const tag = (html: string, testid: string) =>
+    new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? null;
+
+  it("no menu ⇒ no toggle, and Generate keeps its own rounded corners", () => {
+    const html = rail({ swissPairingMenu: null });
+    expect(tag(html, "stage-generate")).not.toBeNull(); // positive pair first
+    expect(html).not.toContain('data-testid="stage-pairing-toggle"');
+    expect(tag(html, "stage-generate")).not.toMatch(/\brounded-r-none\b/);
+  });
+
+  it("a menu ⇒ a toggle that is a real disclosure: named, collapsed, pointing at the menu", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE });
+    const toggle = tag(html, "stage-pairing-toggle");
+    expect(toggle).not.toBeNull();
+    expect(toggle).toContain('aria-expanded="false"');
+    expect(toggle).toContain('aria-controls="pairing-menu-s1"');
+    expect(toggle).toContain(`aria-label="${en["schedule.pairing.toggle"]}"`);
+    // 44px tap floor on both axes — this control has no text to give it width.
+    expect(toggle).toMatch(/\bmin-h-11\b/);
+    expect(toggle).toMatch(/\bmin-w-11\b/);
+    // Closed until tapped: the menu is not in the markup at all.
+    expect(html).not.toContain('data-testid="stage-pairing-menu"');
+  });
+
+  it("the toggle sits flush against Generate, in ONE wrapper — a split button, not two buttons", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE });
+    expect(html).toMatch(
+      /<div class="flex[^"]*items-stretch[^"]*"><button[^>]*data-testid="stage-generate"[^>]*>[^<]*<\/button><button[^>]*data-testid="stage-pairing-toggle"/,
+    );
+    expect(tag(html, "stage-generate")).toMatch(/\brounded-r-none\b/);
+    expect(tag(html, "stage-pairing-toggle")).toMatch(/\brounded-l-none\b/);
+  });
+
+  it("Generate keeps its testid and its label logic (review ruling R5)", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE });
+    expect(html).toContain(">Pair next round</button>");
+  });
+
+  it("the toggle is disabled while any stage action is in flight, like its neighbours", () => {
+    expect(tag(rail({ swissPairingMenu: ROUND_ONE, busy: "s1" }), "stage-pairing-toggle")).toMatch(/\sdisabled=""/);
+    expect(tag(rail({ swissPairingMenu: ROUND_ONE, busy: null }), "stage-pairing-toggle")).not.toMatch(/\sdisabled=""/);
+  });
+
+  it("the toggle wears Generate's variant — the filled primary while pairing is next", () => {
+    expect(tag(rail({ swissPairingMenu: ROUND_ONE }), "stage-pairing-toggle")).toMatch(/\bbtn-primary\b/);
+  });
+
+  it("a completed stage renders no split button at all", () => {
+    const html = rail({ swissPairingMenu: ROUND_ONE, stage: { ...(swiss as object), status: "complete" } });
+    expect(html).not.toContain('data-testid="stage-generate"');
+    expect(html).not.toContain('data-testid="stage-pairing-toggle"');
+  });
+});
+
+describe("SwissPairingMenuPanel — the open menu", () => {
+  const ROUND_ONE: SwissPairingMenu = {
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+  };
+  const panel = (menu: SwissPairingMenu, pick: "fold" | "rank_adjacent" | null = null) =>
+    renderToStaticMarkup(
+      <SwissPairingMenuPanel stageId="s1" menu={menu} pick={pick} onPick={() => {}} onClose={() => {}} />,
+    );
+  const radios = (html: string) =>
+    [...html.matchAll(/<(?:button|p)[^>]*role="radio"[^>]*>/g)].map((m) => ({
+      testid: /data-testid="([^"]+)"/.exec(m[0])?.[1],
+      checked: /aria-checked="([^"]+)"/.exec(m[0])?.[1],
+      tabIndex: /tabindex="([^"]+)"/i.exec(m[0])?.[1],
+    }));
+
+  it("round 1 is a named radiogroup with the id the toggle controls", () => {
+    const html = panel(ROUND_ONE);
+    const group = /<div[^>]*role="radiogroup"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(group).toContain('id="pairing-menu-s1"');
+    expect(group).toContain('data-testid="stage-pairing-menu"');
+    expect(group).toContain('aria-label="Round 1 pairing"');
+    expect(group).not.toContain("aria-disabled");
+  });
+
+  it("offers both modes, the default checked, with a roving tab stop on the checked one", () => {
+    expect(radios(panel(ROUND_ONE))).toEqual([
+      { testid: "stage-pairing-fold", checked: "true", tabIndex: "0" },
+      { testid: "stage-pairing-rank_adjacent", checked: "false", tabIndex: "-1" },
+    ]);
+  });
+
+  it("a pick moves the check (and the tab stop) off the default", () => {
+    expect(radios(panel(ROUND_ONE, "rank_adjacent"))).toEqual([
+      { testid: "stage-pairing-fold", checked: "false", tabIndex: "-1" },
+      { testid: "stage-pairing-rank_adjacent", checked: "true", tabIndex: "0" },
+    ]);
+  });
+
+  it("each option names its mode, marks the default, and shows its seed hint", () => {
+    const html = panel(ROUND_ONE);
+    expect(html).toContain("Top vs bottom (default)");
+    expect(html).toContain("1v6, 2v7, 3v8…");
+    expect(html).toContain("Neighbours");
+    expect(html).toContain("1v2, 3v4, 5v6…");
+  });
+
+  it("R1: seeds that are not 1..N get the generic hints — no seed number anywhere", () => {
+    const html = panel({ ...ROUND_ONE, seedsNumbered: false });
+    expect(html).toContain(en["schedule.pairing.hintFoldGeneric"]);
+    expect(html).toContain(en["schedule.pairing.hintAdjacentGeneric"]);
+    expect(html).not.toMatch(/\d+v\d+/);
+  });
+
+  it("every option clears the 44px tap floor", () => {
+    const options = [...panel(ROUND_ONE).matchAll(/<button[^>]*role="radio"[^>]*>/g)].map((m) => m[0]);
+    expect(options).toHaveLength(2); // positive pair: an empty list would pass the loop vacuously
+    for (const option of options) expect(option).toMatch(/\bmin-h-11\b/);
+  });
+
+  describe("round 2+ opens read-only (spec ruling 3)", () => {
+    const LATER: SwissPairingMenu = {
+      round: 2, choosable: false, defaultPairing: "rank_adjacent", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+    };
+
+    it("the group is aria-disabled and named for the round", () => {
+      const group = /<div[^>]*role="radiogroup"[^>]*>/.exec(panel(LATER))?.[0] ?? "";
+      expect(group).toContain('aria-disabled="true"');
+      expect(group).toContain('aria-label="Round 2 pairing"');
+    });
+
+    it("shows the stage's mode checked and nothing checkable", () => {
+      const html = panel(LATER);
+      expect(radios(html)).toEqual([{ testid: "stage-pairing-readonly", checked: "true", tabIndex: undefined }]);
+      expect(html).not.toContain('aria-checked="false"');
+      expect(html).not.toMatch(/<button[^>]*role="radio"/);
+      expect(html).toMatch(/data-testid="stage-pairing-readonly"[^>]*aria-disabled="true"|aria-disabled="true"[^>]*data-testid="stage-pairing-readonly"/);
+    });
+
+    it("names the Hammes mode for a rank_adjacent stage, the fold mode otherwise", () => {
+      expect(panel(LATER)).toContain(en["schedule.pairing.laterAdjacent"]);
+      expect(panel(LATER)).not.toContain(en["schedule.pairing.laterFold"]);
+      const plain = panel({ ...LATER, defaultPairing: "fold", stored: "fold" });
+      expect(plain).toContain(en["schedule.pairing.laterFold"]);
+      expect(plain).not.toContain(en["schedule.pairing.laterAdjacent"]);
+    });
+
+    it("says why, in visible text — a phone has no hover", () => {
+      const html = panel(LATER);
+      expect(html).toMatch(/data-testid="stage-pairing-hint"[^>]*>Mode is chosen in round 1 only\.</);
+    });
+
+    it("prints no seed hint — the later rounds pair by standings, not seeds", () => {
+      expect(panel(LATER)).not.toMatch(/\d+v\d+/);
+    });
+  });
+});
+
+// Review M2 (Task 4): the pick used to be cleared the moment Pair next was
+// CLICKED, before the press settled — so a press that failed (a 5xx, a dropped
+// connection, a paywall) lost the organiser's round-1 choice, and the retry
+// quietly paired top-vs-bottom. The pick now outlives any press that does not
+// land, and is cleared only by one that does (spec: "resets after every
+// press" — every SUCCESSFUL one). `onAct` resolves true/false to say which.
+//
+// Driven through `renderIsland`, not static markup: this is a click, a pick,
+// and a promise settling between two clicks. `walk` never calls a child
+// component, so the open menu is `SwissPairingMenuPanel`'s ELEMENT and the pick
+// is made through the `onPick` the rail handed it — the same function the
+// radio's click calls.
+describe("StageRail — a press that does not land keeps the pick (review M2)", () => {
+  const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", config: {} } as never;
+  const ROUND_ONE: SwissPairingMenu = {
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+  };
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  function mount() {
+    const sent: unknown[] = [];
+    let settle: (landed: boolean) => void = () => {
+      throw new Error("no press in flight");
+    };
+    const props: StageRailProps = {
+      stage: swiss, canEdit: true, busy: null, fixtureCount: 10, deletable: false,
+      onAct: (_stageId, action, opts) => {
+        sent.push({ action, opts });
+        return new Promise<boolean>((resolve) => {
+          settle = resolve;
+        });
+      },
+      onDelete: () => {}, addingTo: null, onToggleAddMatch: () => {}, adhoc: false, courtTagsSlot: null,
+      ...NEUTRAL, swissHasUnseated: true, swissPairingMenu: ROUND_ONE,
+    };
+    const island = renderIsland(StageRail, props);
+    const byTestid = (testid: string) => {
+      const el = island.tree().find((e) => propsOf(e)["data-testid"] === testid);
+      if (!el) throw new Error(`no ${testid} in the rail`);
+      return el;
+    };
+    const menu = () => island.tree().find((e) => e.type === SwissPairingMenuPanel);
+    return {
+      sent,
+      settle: (landed: boolean) => settle(landed),
+      click: (testid: string) => (propsOf(byTestid(testid)).onClick as () => void)(),
+      pick: (mode: "fold" | "rank_adjacent") => {
+        const open = menu();
+        if (!open) throw new Error("the menu is not open");
+        (propsOf(open).onPick as (m: string) => void)(mode);
+      },
+      menu,
+    };
+  }
+
+  it("a failed press keeps the pick, so the retry sends it; the press that lands clears it", async () => {
+    const rail = mount();
+    rail.click("stage-pairing-toggle");
+    rail.pick("rank_adjacent");
+    expect(propsOf(rail.menu()!).pick).toBe("rank_adjacent"); // premise: the pick took
+
+    rail.click("stage-generate");
+    expect(rail.sent).toEqual([{ action: "generate", opts: { pairing: "rank_adjacent" } }]);
+    rail.settle(false);
+    await flush();
+    // Still on screen, still Neighbours — what the organiser last saw.
+    expect(rail.menu(), "a failed press closed the menu and dropped the pick").toBeDefined();
+    expect(propsOf(rail.menu()!).pick).toBe("rank_adjacent");
+
+    // The retry sends the SAME pick — not the default the old reset fell to.
+    rail.click("stage-generate");
+    expect(rail.sent[1]).toEqual({ action: "generate", opts: { pairing: "rank_adjacent" } });
+    rail.settle(true);
+    await flush();
+    // Landed: the pick was for that press only.
+    expect(rail.menu(), "a press that landed left the menu open").toBeUndefined();
+    rail.click("stage-pairing-toggle");
+    expect(propsOf(rail.menu()!).pick, "a press that landed kept the pick").toBeNull();
+  });
+
+  it("a pick is not cleared while the press is still in flight", () => {
+    // The old code cleared at CLICK time — this is the moment that bug lived in.
+    const rail = mount();
+    rail.click("stage-pairing-toggle");
+    rail.pick("rank_adjacent");
+    rail.click("stage-generate");
+    expect(rail.menu(), "the click closed the menu before the press settled").toBeDefined();
+    expect(propsOf(rail.menu()!).pick).toBe("rank_adjacent");
   });
 });

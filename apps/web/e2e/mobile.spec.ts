@@ -3554,6 +3554,101 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
   await expect(page.getByText("Nothing new to generate", { exact: false })).toBeVisible({ timeout: 10_000 });
 });
 
+// Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI — option
+// A, split button"): Pair next grows a ▾ toggle whenever a Swiss stage has a
+// round waiting, and the toggle opens an inline radiogroup. Every width
+// project owes the same three things of it (spec, "Tests" — the width matrix
+// covers the new control): the 44px floor on the toggle and on each option,
+// no horizontal page scroll with the menu open, axe clean.
+//
+// Plus one behaviour no unit test can reach, because vitest has no DOM:
+// Escape inside the menu closes the MENU, not the phone sheet around it. It
+// used to close both — the App Router hydrates React onto `document`, the same
+// node the sheet listens on, so `stopPropagation` in the menu's handler never
+// kept the key from the sheet — and focus went back to the "Stage tools"
+// trigger instead of the toggle. Below `md` that is the check that fails.
+test("swiss pairing split button: the toggle and the round-1 options hold the 44px floor, axe-clean, no horizontal scroll; Escape closes only the menu", async ({
+  page,
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Mobile Swiss pairing ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Swiss pairing",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const swissDivisionId = div.data!.id;
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${swissDivisionId}/stages`, "POST", {
+    seq: 1,
+    kind: "swiss",
+    name: "Swiss",
+    config: { rounds: 3, pairing: "rank_adjacent" },
+  });
+  expect(stage.status, "swiss stage create").toBe(201);
+  // Ten seeded 1..10 — the prod field that motivated the feature, and a size
+  // whose fold hint (1v6…) differs from the neighbours hint (1v2…).
+  await addEntrantsViaApi(
+    request,
+    swissDivisionId,
+    Array.from({ length: 10 }, (_, i) => `Swiss M${i + 1}`),
+  );
+  const started = await apiJson(request, `/api/v1/divisions/${swissDivisionId}/start`, "POST");
+  expect(started.status, "start mints the swiss shells").toBe(200);
+
+  await page.goto(await divisionPath(request, swissDivisionId, "?tab=fixtures"), { waitUntil: "load" });
+
+  // Below `md` the rail folds into the "Stage tools" sheet (AGENTS rule 22):
+  // OPEN it, gated on the trigger being visible — never on a width literal.
+  const railTrigger = page.getByTestId("stage-rail-trigger");
+  const folded = await railTrigger.isVisible();
+  if (folded) await railTrigger.click();
+  const railScope = page.getByTestId(folded ? "stage-rail-sheet" : "stage-rail");
+
+  const toggle = page.getByTestId("stage-pairing-toggle");
+  await expect(page.getByTestId("stage-generate")).toHaveText("Pair next round");
+  await assertTapFloor(toggle, "pairing toggle");
+  // The toggle is a glyph with no text to widen it — the floor is both axes.
+  expect((await toggle.boundingBox())!.width, "pairing toggle width").toBeGreaterThanOrEqual(44);
+
+  await toggle.click();
+  const menu = page.getByTestId("stage-pairing-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu).toHaveAttribute("role", "radiogroup");
+  const fold = page.getByTestId("stage-pairing-fold");
+  const adjacent = page.getByTestId("stage-pairing-rank_adjacent");
+  await expect(fold).toHaveAttribute("aria-checked", "true");
+  await expect(fold).toContainText("1v6, 2v7, 3v8…");
+  await assertTapFloor(fold, "pairing option: top vs bottom");
+  await assertTapFloor(adjacent, "pairing option: neighbours");
+  await expectNoHorizontalScroll(page);
+
+  const axe = await new AxeBuilder({ page })
+    .include(folded ? '[data-testid="stage-rail-sheet"]' : '[data-testid="stage-rail"]')
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  const blocking = axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(
+    blocking.map((v) => `${v.id} — ${v.nodes[0]?.html}`),
+    "axe serious/critical on the rail with the pairing menu open",
+  ).toEqual([]);
+
+  // Keyboard: arrows move AND select; Escape closes the menu and hands focus
+  // back to the toggle — and, below `md`, leaves the sheet open.
+  await fold.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(adjacent).toHaveAttribute("aria-checked", "true");
+  await expect(adjacent).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(railScope, "Escape in the pairing menu closed the rail around it").toBeVisible();
+  await expect(toggle).toBeFocused();
+});
+
 // ---------------------------------------------------------------------------
 // S13/#422 W11 followup — app-wide `.select`/`.input` density-pair sweep.
 //

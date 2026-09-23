@@ -76,6 +76,15 @@ import {
 // that module's header for why the match count is taken from the FIELD and
 // never from a count of the fixture rows.
 import { swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
+// Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
+// split button's menu. Client-safe leaves only: never the
+// `@seazn/engine/scheduling` barrel, which is server-only (grpc).
+import {
+  SWISS_PAIRING_NOT_SWISS_CODE,
+  SWISS_PAIRING_ROUND_ONE_ONLY_CODE,
+  type SwissPairingMode,
+} from "@/lib/swiss-pairing";
+import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -246,7 +255,8 @@ interface Props {
    *  the one place that vocabulary is spelled; the equivalence is pinned by
    *  `swiss-legend.test.ts`).
    *
-   *  Feeds the swiss shape legend, and NOTHING else. Ids rather than a bare
+   *  Feeds the swiss shape legend and the round-1 pairing menu's field size
+   *  and seed hint, and NOTHING else. Ids rather than a bare
    *  count because a swiss stage carrying `config.qualified` pairs only the
    *  qualifiers still in the field, which is an intersection, not a number —
    *  the same resolution `generateStageFixturesWrite` performs.
@@ -256,6 +266,12 @@ interface Props {
    *  ABSENT means "roster unknown" and renders NO legend — never a match count
    *  of zero dressed up as a fact. */
   activeEntrantIds?: string[];
+  /** Entrant id -> seed (`null` = unseeded), the whole roster. Feeds ONLY the
+   *  round-1 pairing hint's R1 check (`swissFieldSeedsNumbered`): the hint
+   *  prints "1v6, 2v7…" as seed numbers only when the field's seeds really
+   *  are 1..N in pairing order. Optional like `activeEntrantIds`; ABSENT means
+   *  "seeds unknown" and the hint falls back to its generic line. */
+  entrantSeeds?: Record<string, number | null>;
   /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
    *  the per-fixture court editor's picker and the venue-qualified display
    *  name (P9 pass 4d, item 1). Same prop shape schedule-board.tsx's own
@@ -437,7 +453,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -555,7 +571,16 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     }
   }
 
-  async function act(stageId: string, action: "generate" | "complete" | "delete" | "unpair") {
+  async function act(
+    stageId: string,
+    action: "generate" | "complete" | "delete" | "unpair",
+    // Swiss round 1 only: the organiser's split-button pick, already reduced
+    // to "the non-default mode, or nothing" by `swissPairingOverride`.
+    opts?: { pairing?: SwissPairingMode },
+  ): Promise<boolean> {
+    // Resolves whether the action LANDED — the rail's split button clears its
+    // round-1 pick only on `true` (review M2). A refused or failed action is
+    // caught and shown below, and resolves `false`.
     setError(null);
     setPaywallFeature(null);
     setNotice(null);
@@ -570,7 +595,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           created: number;
           existing: number;
           reshaped?: SwissReshapeWire;
-        }>(`/api/v1/stages/${stageId}/generate`, { method: "POST", json: {} });
+        }>(`/api/v1/stages/${stageId}/generate`, {
+          method: "POST",
+          // `{}` stays the body for every ordinary press — the server still
+          // accepts it and applies its own default.
+          json: opts?.pairing ? { pairing: opts.pairing } : {},
+        });
         setNotice(
           [
             out.created > 0
@@ -612,6 +642,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         );
       }
       router.refresh();
+      return true;
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
@@ -625,6 +656,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           if (classified.refresh) router.refresh();
         }
       }
+      return false;
     } finally {
       setBusy(null);
     }
@@ -910,6 +942,18 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           const latest = latestSwissRoundWithAnySeat(swissShellFixtures);
           return latest !== null && !swissRoundHasPlayedResult(swissShellFixtures, latest);
         })();
+        // Swiss round-1 pairing — the split button's menu, or null (not Swiss,
+        // no shells minted yet, or no round waiting: review ruling R3). The
+        // field is `activeEntrantIds` — the page's registered/confirmed set,
+        // the same one swissGen pairs (R2) — and the seeds feed the R1 check
+        // that decides whether the hint may print seed numbers at all.
+        const swissPairingMenu = swissPairingMenuFor({
+          kind: stage.kind,
+          config: stage.config,
+          fixtures: swissShellFixtures,
+          activeEntrantIds,
+          entrantSeeds,
+        });
         // The swiss shape legend (owner-approved 2026-09-22, option B) — the
         // one line under this stage's title. `null` for every non-swiss kind,
         // which is why nothing else on this card changes shape.
@@ -1309,9 +1353,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   busy={busy}
                   fixtureCount={stageFixtures.length}
                   deletable={deletable}
-                  onAct={(stageId, action) => {
-                    void act(stageId, action);
-                  }}
+                  onAct={(stageId, action, opts) => act(stageId, action, opts)}
                   onDelete={(s) => {
                     void (async () => {
                       const ok = await confirmDialog({
@@ -1330,6 +1372,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
                   swissHasUnseated={swissHasUnseated}
                   canUnpairSwiss={canUnpairSwiss}
+                  swissPairingMenu={swissPairingMenu}
                   // #622 — court tags editor moves onto the rail (Task 3). Stays
                   // constructed HERE, not inside StageRail: it reads
                   // `courtTagSuggestions` off this panel's own `venues` prop, and
@@ -1686,6 +1729,18 @@ export function classifyActError(
       text: msg("schedule.error.completedSeedingFailed", { reason: err.message }),
       refresh: true,
     };
+  }
+  // Swiss round-1 pairing, review ruling R4 — the server refused the pick
+  // (the round moved on under the desk, or the stage is not Swiss). Its
+  // `*_MESSAGE` is English wire text and must never reach the desk, so the
+  // CODE maps to a dictionary line. Amber and a refresh, the
+  // STAGE_COMPLETED_SEEDING_FAILED shape above: nothing failed server-side,
+  // but the board that offered the pick is stale.
+  if (
+    err instanceof ApiV1Error &&
+    (err.code === SWISS_PAIRING_ROUND_ONE_ONLY_CODE || err.code === SWISS_PAIRING_NOT_SWISS_CODE)
+  ) {
+    return { tone: "warning", text: msg("schedule.pairing.error.roundOneOnly"), refresh: true };
   }
   const precondition = generatePreconditionMessage(err, msg);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
