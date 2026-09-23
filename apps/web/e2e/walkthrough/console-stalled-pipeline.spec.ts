@@ -376,4 +376,74 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   expect(await padScoreText(page), "the pad must still be dark — the refresh did not come through it").toBe(
     padBefore,
   );
+
+  // ---- the SECOND listener: window focus ----------------------------------
+  //
+  // Appended rather than folded into the flips above, which are untouched: they
+  // are what kill M6, M7 and the `resync()`-direct bypass, and reshaping them to
+  // carry a second trigger would put all three verdicts back in question.
+  //
+  // WHY THE EVENT IS DISPATCHED RATHER THAN DRIVEN FROM THE OS, and why that is
+  // not a fixture proving a fixture. `focus` here is isolated ON PURPOSE: the
+  // production guard only refreshes when the tab reads visible, so a `focus`
+  // that arrives alongside a visibility transition cannot be told apart from
+  // the transition itself. A genuine tab return via `bringToFront()` fires
+  // `visibilitychange` AND `focus` together, so it would prove "a real return
+  // refreshes" — already proven above — while leaving the `focus` registration
+  // untested, which is exactly the gap this case exists to close. There is no
+  // way to make the browser fire a bare window focus with the tab already
+  // visible from inside this harness.
+  //
+  // What makes it honest anyway: only the TRIGGER is simulated. `focus` is a
+  // real event type the browser genuinely fires on `window`, the dispatch runs
+  // through the browser's own event system, and the CONSUMER is the untouched
+  // production `window.addEventListener("focus", ...)` in fixture-console.tsx.
+  // Neither end is a stand-in — which is the same standing this file's
+  // `visibilitychange` dispatch already has, and that one killed two mutants.
+  //
+  // What it does NOT prove, stated rather than implied: that a real OS-level
+  // window focus reaches the page. Nothing here can prove that, and M8's status
+  // should be read with that caveat.
+  phase = "focus";
+  const resyncsBeforeFocus = consoleResyncs;
+  resyncHoldMs = 0; // no gate window needed here; that seam is proven above
+
+  // A third score arrives while the operator is away from the window.
+  const post2 = await apiJson(page.request, `/api/v1/fixtures/${fx.fixtureId}/events`, "POST", {
+    expected_seq: await lastSeq(page.request, fx.fixtureId),
+    type: "badminton.rally",
+    payload: { wonBy: fx.homeEntrantId },
+  });
+  expect(post2.status, `the second rally was refused: ${JSON.stringify(post2.error)}`).toBeLessThan(300);
+
+  const after2 = await serverHeadline(page.request, fx.fixtureId);
+  expect(after2, "the second rally must move the headline again").not.toBe(after);
+
+  // Precondition, same shape as the first: still stale, nothing refreshed it.
+  // A flat window is right here — the pad's poll has been aborted for the whole
+  // run and proven so twice above, so the only live refresh paths are the two
+  // listeners, and both answer within a round trip.
+  await page.waitForTimeout(2_500);
+  expect(
+    consoleResyncs,
+    `nothing should have resynced the console before the focus (resyncs: ${resyncPhases.join(",")})`,
+  ).toBe(resyncsBeforeFocus);
+  await expect(headline(page), "the console must still be stale before the window is focused").toHaveText(
+    after,
+  );
+
+  // The operator clicks back into the window. No visibility transition — the
+  // tab was never hidden this time.
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("focus"));
+  });
+
+  await expect(
+    headline(page),
+    "the focus listener never refreshed the console — `window.addEventListener(\"focus\")` is inert",
+  ).toHaveText(after2, { timeout: 20_000 });
+  expect(
+    consoleResyncs,
+    `the focus refresh must have come from the console's own resync (resyncs: ${resyncPhases.join(",")})`,
+  ).toBeGreaterThan(resyncsBeforeFocus);
 });
