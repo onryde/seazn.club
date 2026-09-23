@@ -2682,7 +2682,7 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     const latest = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
     const e4 = latest.rows.find((r) => r.entrantId === "e4")!.qual!;
     expect(e4.whatIf).toBe(
-      "If you finish level on points with Red Rockets, goal/run difference decides. Now: you -2, Red Rockets +5.",
+      "If you finish level on points with Red Rockets, goal difference decides. Now: you -2, Red Rockets +5.",
     );
     expect(e4.whatIfAssumption).toBeNull();
     // Its pair: the SAME division pinned to the old version — same sport key,
@@ -2692,7 +2692,7 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     const pinned = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
     const p4 = pinned.rows.find((r) => r.entrantId === "e4")!.qual!;
     expect(p4.whatIf).toBe(
-      "If you finish level on points with Red Rockets, goal/run difference decides: win your next match by 8 or more to finish ahead.",
+      "If you finish level on points with Red Rockets, goal difference decides: win your next match by 8 or more to finish ahead.",
     );
     expect(p4.whatIfAssumption).toBe(
       "Assumes Red Rockets's figures stay the same and your next match is an average one.",

@@ -296,10 +296,10 @@ describe("organiser console — the standings tables get the same qualification 
     // The popover's what-if names the RIVAL by the page's entrant names — an
     // entrant id here means the page handed the builder no names.
     expect(qualification!.rows.A!.whatIf).toBe(
-      "If you finish level on points with Cy Swiss, you stay ahead on goal/run difference even after a heavy defeat.",
+      "If you finish level on points with Cy Swiss, you stay ahead on difference even after a heavy defeat.",
     );
     expect(qualification!.rows.C!.whatIf).toBe(
-      "If you finish level on points with Bo Swiss, goal/run difference decides. Now: you -1, Bo Swiss 0.",
+      "If you finish level on points with Bo Swiss, difference decides. Now: you -1, Bo Swiss 0.",
     );
     // …and the table draws it.
     expect(html).toContain('data-testid="qual-cut"');

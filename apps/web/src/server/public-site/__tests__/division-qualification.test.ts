@@ -191,7 +191,9 @@ describe("divisionQualification — the walkover's ledger is the pinned sport's"
     rows: [row("A", 1, 2, 2, [2, 0]), row("B", 2, 1, 2, [7, 2]), row("C", 3, 1, 2, [1, 1]), row("D", 4, 0, 2, [6, 8])],
   };
   const LEAGUE = stage();
-  const RULE = "goal/run difference";
+  // The snapshot rows fold the plain for/against/diff keys (`snap` above), so
+  // the rule reads as plain "difference" whatever module shapes the bounds.
+  const RULE = "difference";
 
   it("premise: ice hockey declares a forfeit score, the shaped module carries it, the generic sport does not", () => {
     expect(divisionAwardAddsToLedger(ICEHOCKEY, {})).toBe(true);

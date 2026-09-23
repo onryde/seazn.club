@@ -20,9 +20,13 @@ import "server-only";
 // words over the columns and in the tie note (`columnHeader`, `tieBreakRule`),
 // which that component now reads from here too.
 import {
+  AGAINST_KEYS,
   DERIVED_METRICS,
+  DIFF_KEYS,
+  FOR_KEYS,
   RATIO_LEDGERS,
   derivedMetricText,
+  metricKeyOf,
   tieBreakLabel,
   type RatioKey,
   type StandingsRow,
@@ -214,10 +218,53 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
  *  unranked one. */
 const UNRANKED = Number.MAX_SAFE_INTEGER;
 
+/** Which ledger a row's abstract `diff`/`for` resolves to, by the alias the
+ *  engine actually reads (`DIFF_KEYS`/`FOR_KEYS`/`AGAINST_KEYS`, first one the
+ *  row records — `metricKeyOf`). Keyed by ledger KEY, not by sport: football,
+ *  hockey and ice hockey fold `gf`/`ga`/`gd`, cricket `runs_for`/
+ *  `runs_against`, the generic module (and any stage PointsRule forfeit, which
+ *  writes `for`/`against`/`diff` into any sport's row) the plain keys.
+ *  `tie-break-ledger-words.test.tsx` pins it against the engine's three alias
+ *  lists exactly, so a new alias cannot arrive without a word. */
+export type LedgerFamily = "goals" | "runs" | "plain";
+export const LEDGER_ALIAS_FAMILY: Readonly<Record<string, LedgerFamily>> = {
+  gd: "goals",
+  gf: "goals",
+  ga: "goals",
+  run_diff: "runs",
+  runs_for: "runs",
+  runs_against: "runs",
+  diff: "plain",
+  for: "plain",
+  against: "plain",
+};
+
+/** The `diff` and `for` rules in the SPORT's word (owner copy fix,
+ *  2026-09-23): "goal difference" / "run difference" / plain "difference",
+ *  never the one catch-all "goal/run difference" every sport used to print.
+ *  The plain phrases keep the keys `TIE_BREAK_MSG_KEYS` already names, so the
+ *  registry there still routes both rules. Spelled out, like that map. */
+export const LEDGER_RULE_MSG_KEYS: Readonly<Record<"diff" | "for", Readonly<Record<LedgerFamily, TKey>>>> = {
+  diff: { goals: "table.tieBreak.diffGoals", runs: "table.tieBreak.diffRuns", plain: "table.tieBreak.diff" },
+  for: { goals: "table.tieBreak.forGoals", runs: "table.tieBreak.forRuns", plain: "table.tieBreak.for" },
+};
+
+/** The family of the ledger `rule` reads on `row`: the alias the engine
+ *  compares for that rule, else the row's other ledger aliases (a cricket row
+ *  records `runs_for` but no run difference), else plain. */
+function ledgerFamily(row: StandingsRow, rule: "diff" | "for"): LedgerFamily {
+  const [own, other] = rule === "diff" ? [DIFF_KEYS, FOR_KEYS] : [FOR_KEYS, DIFF_KEYS];
+  const alias = metricKeyOf(row, own) ?? metricKeyOf(row, other) ?? metricKeyOf(row, AGAINST_KEYS);
+  return (alias !== undefined ? LEDGER_ALIAS_FAMILY[alias] : undefined) ?? "plain";
+}
+
 /** The rule a tie was split on, in the page's language — the dictionary's
- *  phrase where `TIE_BREAK_MSG_KEYS` has one, the engine's otherwise. Shared by
- *  both standings tables, like `columnHeader`. */
-export function tieBreakRule(key: string, msg: (key: TKey) => string): string {
+ *  phrase where `TIE_BREAK_MSG_KEYS` has one, the engine's otherwise; `diff`
+ *  and `for` in the word of the ledger `row` records. Shared by both standings
+ *  tables and the what-if, like `columnHeader`. `row` is the tied row itself,
+ *  required so no caller can print the catch-all by leaving it out. */
+export function tieBreakRule(key: string, msg: (key: TKey) => string, row: StandingsRow): string {
+  if (key === "diff" || key === "for") return msg(LEDGER_RULE_MSG_KEYS[key][ledgerFamily(row, key)]);
   const dictKey = TIE_BREAK_MSG_KEYS[key];
   return dictKey === undefined ? tieBreakLabel(key) : msg(dictKey);
 }
@@ -336,7 +383,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       tieBreakText: r.tieBreak
         ? input.msg("table.tieBreak", {
             with: r.tieBreak.with.map(name).join(", "),
-            rule: tieBreakRule(r.tieBreak.key, input.msg),
+            rule: tieBreakRule(r.tieBreak.key, input.msg, r),
           })
         : null,
       // Keyed by entrant id, never by rank or position: a shared rank is two

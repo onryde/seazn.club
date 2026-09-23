@@ -434,7 +434,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;
-    const vars = { rival: name, rule: tieBreakRule(w.key, i.msg) };
+    const vars = { rival: name, rule: tieBreakRule(w.key, i.msg, r) };
     const assumption = i.msg("table.qual.whatIf.assumption", { rival: name });
     const rule = (): { text: string; assumption: null } => {
       const mine = tieKeyValue(r, w.key);

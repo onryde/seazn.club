@@ -915,15 +915,18 @@ describe("if you lose", () => {
     );
     const early = s.fixtures.filter((f) => f.round_no < 3);
     const real = must(view({ ...s, rows, fixtures: [...early, open(3, "A", "B"), open(3, "D", "C")] })).rows.D!;
-    expect(real.whatIf).toBe("If you finish level on points with Bo, goal/run difference decides: win your next match by 3 or more to finish ahead.");
+    expect(real.whatIf).toBe("If you finish level on points with Bo, difference decides: win your next match by 3 or more to finish ahead.");
     const bye = must(view({ ...s, rows, fixtures: [...early, open(3, "A", "B"), open(3, "D", null)] })).rows.D!;
-    expect(bye.whatIf).toBe("If you finish level on points with Bo, goal/run difference decides. Now: you -2, Bo 0.");
+    expect(bye.whatIf).toBe("If you finish level on points with Bo, difference decides. Now: you -2, Bo 0.");
     expect(bye.whatIfAssumption).toBeNull();
   });
 });
 
 describe("what-if (§3.4) — a target only when the tying result is known and the rival is not the next opponent", () => {
-  const RULE = "goal/run difference";
+  // The word of the ledger the rows record (`tieBreakRule`, owner copy fix
+  // 2026-09-23): `row()` folds the generic module's for/against/diff, so plain
+  // "difference" — the football and cricket cases below name their own.
+  const RULE = "difference";
   it("win scenario (a loss is Out): win by m", () => {
     // D −2 over 14 goals, B 0: a win by 3 lands D ahead of B.
     const d = must(view(open4({ D: [6, 8], B: [1, 1] }))).rows.D!;
@@ -1130,9 +1133,9 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
     const cascade = ["points", "for"];
     const scored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, { cascade })).rows.D!;
-    expect(scored.whatIf).toBe("If you finish level on points with Bo, goals/runs scored decides. Now: you 1, Bo 4.");
+    expect(scored.whatIf).toBe("If you finish level on points with Bo, total scored decides. Now: you 1, Bo 4.");
     const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } }, { cascade })).rows.D!;
-    expect(unscored.whatIf).toBe("If you finish level on points with Bo, goals/runs scored decides: win your next match by 1 or more to finish ahead.");
+    expect(unscored.whatIf).toBe("If you finish level on points with Bo, total scored decides: win your next match by 1 or more to finish ahead.");
   });
 
   // Fix round 2: the rule's score counts only where the what-if READS it.
@@ -1182,11 +1185,27 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       ledgerRow("E", 5, 0, 2, 0, goals(0, 6)),
     ];
     const over = { cascade: ["points", "diff", "for"], bounds: FB, awardAddsToLedger: divisionAwardAddsToLedger(FOOTBALL, {}) };
-    const target = `If you finish level on points with Cy, ${RULE} decides: lose your next match by no more than 3 to finish ahead.`;
+    const target = `If you finish level on points with Cy, goal difference decides: lose your next match by no more than 3 to finish ahead.`;
     const plain = must(view({ kind: "swiss", rows: rows(false), fixtures }, over)).rows.D!;
     expect(plain.whatIf).toBe(target);
     const scored = must(view({ kind: "swiss", rows: rows(true), fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
     expect(scored.whatIf).toBe(target);
+  });
+  it("a cricket ledger names runs: `for` reads `runs_for`, and the what-if says \"runs scored\"", () => {
+    // open4's table with cricket's own ledger keys (no goals, no run
+    // difference — cricket folds none) and `for` deciding: D 3 runs for, Bo 5.
+    const runs = (f: number, a: number): Metrics => ({ runs_for: f, runs_against: a, balls_faced_eff: 60, balls_bowled_eff: 60 });
+    const rows = [
+      ledgerRow("A", 1, 2, 2, 2 * W, runs(9, 2)),
+      ledgerRow("B", 2, 1, 2, W, runs(5, 5)),
+      ledgerRow("C", 3, 1, 2, W, runs(4, 5)),
+      ledgerRow("D", 4, 0, 2, 0, runs(3, 9)),
+    ];
+    const d = must(view({ ...open4(), rows }, { cascade: ["points", "for"] })).rows.D!;
+    expect(d.whatIf).toMatch(/^If you finish level on points with Bo, runs scored decides[.:]/);
+    // …and the same table on the generic ledger says the plain phrase (pair).
+    const g = must(view(open4({ D: [3, 9], B: [5, 5] }), { cascade: ["points", "for"] })).rows.D!;
+    expect(g.whatIf).toMatch(/^If you finish level on points with Bo, total scored decides[.:]/);
   });
   it("a badminton walkover under the rule: set ratio reads no goals, so the walkover stays out of the average", () => {
     // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Di's

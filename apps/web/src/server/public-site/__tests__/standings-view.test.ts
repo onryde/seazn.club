@@ -219,9 +219,10 @@ describe("buildTableView", () => {
     // `entrantLogos.b` is an explicit null — the initials fallback, not a badge.
     expect(v.rows[1]).toMatchObject({ rank: 2, name: "Beta", badgeUrl: null, champion: false });
     // The rule name is LOCALISED too — a whole English clause inside a
-    // translated sentence is a leak, unlike a bare notation (GD, NRR).
+    // translated sentence is a leak, unlike a bare notation (GD, NRR). And it
+    // is the ledger's word: these rows fold gf/ga/gd, so "goal difference".
     expect(v.rows[1]!.tieBreakText).toBe(
-      'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diff"}',
+      'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diffGoals"}',
     );
     expect(TableView.parse(v)).toEqual(v);
   });
@@ -515,7 +516,9 @@ describe("qualification (spec 2026-09-22)", () => {
           colour: null,
           cells: ["1", "0", "0", "1", "0", "1", "3"],
           cellNotes: [null, null, null, null, null, null, null],
-          tieBreakText: 'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diff"}',
+          // The one field the owner's copy fix moved (2026-09-23): a gd row
+          // names goal difference, not the old catch-all.
+          tieBreakText: 'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diffGoals"}',
           qual: null,
           champion: false,
         },
