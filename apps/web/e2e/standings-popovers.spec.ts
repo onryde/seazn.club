@@ -14,10 +14,14 @@
 // Why e2e: `apps/web` vitest is `environment: "node"`, so the unit suites see
 // the closed markup and nothing else. Closing on an outside tap, on Esc and
 // when another opens is behaviour; whether the open panel is painted ABOVE the
-// rows below it (the sticky rank cells are `z-10`) and INSIDE its
-// `overflow-x-auto` box (which clips) is geometry. Both are only settled by a
-// browser — the paint by `elementFromPoint`, never `boundingBox()`, which
-// measures where a box is, not whether it is the thing a finger lands on.
+// rows below it (the sticky rank cells are `z-10`) and WHOLE on screen is
+// geometry. Both are only settled by a browser — the paint by
+// `elementFromPoint`, never `boundingBox()`, which measures where a box is,
+// not whether it is the thing a finger lands on. (Task 8 fix round 1: an open
+// panel is `position: fixed` inside the viewport's 16px gutters, because its
+// table's `overflow-x-auto` box clipped it — the hub's four-part qualification
+// popover showed 157 of its 178px. The checks below were box-relative until
+// then.)
 //
 // THE SEED — a badminton round robin, scored through the real event route.
 // Badminton because its default cascade ranks on `point_ratio` (and
@@ -254,30 +258,28 @@ async function coveredPoints(panel: Locator): Promise<{ sampled: number; covered
   });
 }
 
-/** The panel sits wholly inside the table's scroll box. That box is
- *  `overflow-x-auto`, which computes `overflow-y: auto` too, so a panel
- *  hanging past its edge is CLIPPED — no z-index can paint what was cut. Both
- *  axes: a ratio panel hangs LEFT from its cell, and with the table scrolled
- *  right its left edge can fall in the part of the box scrolled out of view. */
-async function outsideScrollBox(panel: Locator): Promise<string | null> {
+/** The open panel is `fixed` and sits wholly inside the VIEWPORT's 16px
+ *  gutters (spec §5: at most the screen width less 32px) — the table's
+ *  `overflow-x-auto` box, which computes `overflow-y: auto` and clips, no
+ *  longer contains it. It must also never make that box scroll vertically:
+ *  a panel hanging out of an absolutely-positioned layout did exactly that. */
+async function outsideViewport(panel: Locator): Promise<string | null> {
   return panel.evaluate((el) => {
-    const box = el.closest('[role="region"]');
-    if (!box) return "no enclosing scroll region";
-    const p = el.getBoundingClientRect();
-    const b = box.getBoundingClientRect();
+    const gutter = 16;
     const slack = 0.5;
-    if (p.top < b.top - slack || p.bottom > b.bottom + slack) {
-      return `panel ${Math.round(p.top)}–${Math.round(p.bottom)} vs box ${Math.round(b.top)}–${Math.round(b.bottom)}`;
+    const position = getComputedStyle(el).position;
+    if (position !== "fixed") return `the open panel is ${position}, not fixed`;
+    const p = el.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    if (p.top < gutter - slack || p.bottom > vh - gutter + slack) {
+      return `panel ${Math.round(p.top)}–${Math.round(p.bottom)} vs viewport ${gutter}–${vh - gutter}`;
     }
-    const left = b.left + box.clientLeft;
-    const right = left + box.clientWidth;
-    if (p.left < left - slack || p.right > right + slack) {
-      return `panel x ${Math.round(p.left)}–${Math.round(p.right)} vs box x ${Math.round(left)}–${Math.round(right)}`;
+    if (p.left < gutter - slack || p.right > vw - gutter + slack) {
+      return `panel x ${Math.round(p.left)}–${Math.round(p.right)} vs viewport x ${gutter}–${vw - gutter}`;
     }
-    // The same clip seen from the box: a panel hanging past its bottom makes
-    // it vertically scrollable (`overflow-y` computes to auto). Caught even if
-    // something has scrolled the box to show the panel.
-    if (box.scrollHeight - box.clientHeight > 1) {
+    const box = el.closest('[role="region"]');
+    if (box && box.scrollHeight - box.clientHeight > 1) {
       return `the open panel made its box scroll vertically (${box.scrollHeight} > ${box.clientHeight})`;
     }
     return null;
@@ -503,60 +505,79 @@ for (const surface of [DIVISION, HUB]) {
       }
     });
 
-    test("a panel too tall for either side is clamped inside the table and scrolls — on the roomier side, and above on the last row", async ({
+    test("only a panel taller than the viewport scrolls; one that fits neither side of its row but fits the screen slides to stay whole", async ({
       browser,
     }) => {
       const page = await open(browser, surface, 1280);
-      // Make every note taller than the whole table: neither side can hold it.
-      await page.addStyleTag({ content: '[role="note"]::after { content: ""; display: block; height: 900px; }' });
-      // Rank order is a, b, d, c (see the seed). a: first row, more room below.
-      // d: a MIDDLE row with more room above than below — the only case where
-      // "the roomier side" and "the last-row rule" disagree with "below",
-      // so the only one that pins the roomier-side choice itself. c: last row.
-      for (const [who, row] of [["a", "first"], ["d", "middle"], ["c", "last"]] as const) {
+      // Rank order is a, b, d, c (see the seed): the first row, a middle row
+      // and the last row, each centred before it opens.
+      const rows = [["a", "first"], ["d", "middle"], ["c", "last"]] as const;
+      const measure = (panel: Locator) =>
+        panel.evaluate((el) => {
+          const anchor = el.parentElement!.getBoundingClientRect();
+          const r = el.getBoundingClientRect();
+          const vh = document.documentElement.clientHeight;
+          return {
+            scrolls: el.scrollHeight - el.clientHeight,
+            overflowY: getComputedStyle(el).overflowY,
+            top: r.top,
+            bottom: r.bottom,
+            height: r.height,
+            content: el.scrollHeight,
+            roomAbove: anchor.top - 4 - 16,
+            roomBelow: vh - 16 - (anchor.bottom + 4),
+            vh,
+          };
+        });
+
+      // Scroll room past the page's end, so scrollIntoView can really centre
+      // the last rows: the hub page ends close below its table, which left the
+      // middle row's trigger 690px down a 900px viewport and turned case 2's
+      // "fits neither side" premise into "fits above".
+      await page.addStyleTag({ content: 'body::after { content: ""; display: block; height: 100vh; }' });
+
+      // 1. Taller than the whole viewport: capped to it, scrolling its text.
+      const tall = await page.addStyleTag({ content: '[role="note"]::after { content: ""; display: block; height: 900px; }' });
+      for (const [who, row] of rows) {
         const trigger = surface.tie(page, who);
         const panel = await panelOf(trigger);
         await trigger.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
         await trigger.click();
         await expectOpen(trigger, panel);
-        expect(await outsideScrollBox(panel), `the ${row} row's over-tall panel is clipped by its box`).toBeNull();
-        const m = await panel.evaluate((el) => {
-          const anchor = el.parentElement!.getBoundingClientRect();
-          const box = el.closest('[role="region"]')!;
-          const top = box.getBoundingClientRect().top + box.clientTop;
-          return {
-            scrolls: el.scrollHeight - el.clientHeight,
-            overflowY: getComputedStyle(el).overflowY,
-            top: el.getBoundingClientRect().top,
-            bottom: el.getBoundingClientRect().bottom,
-            anchorTop: anchor.top,
-            anchorBottom: anchor.bottom,
-            roomAbove: anchor.top - top,
-            roomBelow: top + box.clientHeight - anchor.bottom,
-            lastRow: el.closest("tr")!.matches(":last-child"),
-          };
-        });
-        expect(m.scrolls, `the ${row} row's clamped panel does not scroll its own text`).toBeGreaterThan(0);
+        expect(await outsideViewport(panel), `the ${row} row's over-tall panel leaves the viewport`).toBeNull();
+        const m = await measure(panel);
+        expect(m.scrolls, `the ${row} row's over-tall panel does not scroll its own text`).toBeGreaterThan(0);
         expect(m.overflowY).toBe("auto");
-        if (row === "first") {
-          expect(m.roomBelow, "seed: the first row should have more room below").toBeGreaterThan(m.roomAbove);
-          expect(m.top, "the first row has more room below: the clamp should hang there").toBeGreaterThanOrEqual(m.anchorBottom - 0.5);
-        } else if (row === "middle") {
-          // The premise, so a reshaped table cannot turn this into a second
-          // "below" case or a second last-row case without saying so.
-          expect(m.lastRow, "seed: d should not be the last row").toBe(false);
-          expect(m.roomAbove, "seed: d should have more room above than below").toBeGreaterThan(m.roomBelow + 8);
-          expect(m.bottom, "a middle row with more room above: the clamp should sit above").toBeLessThanOrEqual(m.anchorTop + 0.5);
-        } else {
-          expect(m.bottom, "the last row has no room below: the clamp should sit above").toBeLessThanOrEqual(m.anchorTop + 0.5);
-        }
+        expect(m.top, "capped to the viewport's top gutter").toBeCloseTo(16, 0);
+        expect(m.bottom, "capped to the viewport's bottom gutter").toBeCloseTo(m.vh - 16, 0);
+        await page.keyboard.press("Escape");
+        await expectClosed(trigger, panel);
+      }
+      await tall.evaluate((el) => (el as Element).remove());
+
+      // 2. Fits the screen but neither side of its centred row: whole, and
+      //    NOT scrolling — the clamp is only for a panel the screen cannot hold.
+      await page.addStyleTag({ content: '[role="note"]::after { content: ""; display: block; height: 600px; }' });
+      for (const [who, row] of rows) {
+        const trigger = surface.tie(page, who);
+        const panel = await panelOf(trigger);
+        await trigger.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
+        await trigger.click();
+        await expectOpen(trigger, panel);
+        const m = await measure(panel);
+        // The premise, so a taller viewport cannot turn this into a "fits
+        // below" case without saying so.
+        expect(m.height, `seed: the ${row} row's panel should fit neither side`).toBeGreaterThan(Math.max(m.roomAbove, m.roomBelow));
+        expect(m.height, `seed: the ${row} row's panel should fit the screen`).toBeLessThanOrEqual(m.vh - 32);
+        expect(await outsideViewport(panel), `the ${row} row's panel leaves the viewport`).toBeNull();
+        expect(m.scrolls, `the ${row} row's panel scrolls although the screen holds it`).toBeLessThanOrEqual(1);
         await page.keyboard.press("Escape");
         await expectClosed(trigger, panel);
       }
     });
 
     for (const width of [1280, 768, 320]) {
-      test(`at ${width}: every row's open panel is painted on top and inside its box — first row down, last row up`, async ({ browser }) => {
+      test(`at ${width}: every row's open panel is painted on top and whole on screen — first row down, last row up`, async ({ browser }) => {
         const page = await open(browser, surface, width);
         // EVERY row, in rank order a, b, d, c (see the seed): a is the first
         // row, c the last. The two between are not decoration — on the hub the
@@ -598,7 +619,11 @@ for (const surface of [DIVISION, HUB]) {
             const { sampled, covered } = await coveredPoints(panel);
             expect(sampled, `${kind} panel on the ${row} row: too few points on screen to judge`).toBeGreaterThanOrEqual(4);
             expect(covered, `${kind} panel on the ${row} row is painted over`).toEqual([]);
-            expect(await outsideScrollBox(panel), `${kind} panel on the ${row} row is clipped by its box`).toBeNull();
+            expect(await outsideViewport(panel), `${kind} panel on the ${row} row leaves the viewport`).toBeNull();
+            expect(
+              await panel.evaluate((el) => el.scrollHeight - el.clientHeight),
+              `${kind} panel on the ${row} row is clamped although it fits`,
+            ).toBeLessThanOrEqual(1);
 
             // Measured against the popover ROOT, not the button: the button's
             // hit area is stretched over the cell's padding by negative
@@ -784,8 +809,8 @@ test.describe("carrom board ratio over the frozen rank column", () => {
     // And none of it is cut off: hung left from a cell near the box's right
     // edge, 224px wide, its left edge fell in the columns scrolled out of view
     // — "Boards won…" lost its first letter — until the popover shifted it back
-    // inside the box on open.
-    expect(await outsideScrollBox(panel), "the board-ratio panel is cut off by the table's box").toBeNull();
+    // on open. It is now held inside the viewport's gutters instead.
+    expect(await outsideViewport(panel), "the board-ratio panel is cut off").toBeNull();
     await expectNoHorizontalScroll(page);
   });
 });

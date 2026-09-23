@@ -32,6 +32,16 @@
 // shows crushes the name column, so the row must span exactly the table at
 // each width, folded and unfolded), and the Overview's preview at 320, which
 // keeps the markers and the line but drops the legend (controller ruling OQ3).
+//
+// Task 8 fix round 1: an open popover is `position: fixed`, placed from its
+// trigger inside the viewport's 16px gutters, because the table's scroll box
+// clipped it (the hub's four-part popover showed 157 of its 178px). So every
+// open panel here is asserted WHOLE ON SCREEN — fixed, inside the gutters, and
+// not scrolling its own text — against the viewport, not the table's box; no
+// ancestor may carry a transform or filter that would contain a fixed panel;
+// and an open panel must follow its trigger when the page or the table's own
+// box scrolls. Pictures are viewport-only: a `fullPage` capture paints a
+// fixed element at its viewport offset inside a much taller image.
 import { expect, test, type APIRequestContext, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { TAG, addEntrantsViaApi, apiJson, expectNoHorizontalScroll, scoreFixture } from "./helpers";
 import { closeOpenContexts } from "./spectator-public-helpers";
@@ -219,23 +229,94 @@ async function hitTest(button: Locator, inset: number) {
 const pageWidths = (page: Page) =>
   page.evaluate(() => ({ scrollWidth: document.scrollingElement!.scrollWidth, innerWidth: window.innerWidth }));
 
-/** Screenshot the union of `boxes`, padded, clamped to the page. */
+/** Screenshot the union of `boxes`, padded, from the VIEWPORT as the reader
+ *  sees it — no `fullPage`, which paints a fixed panel at its viewport offset
+ *  inside a taller image, and no scroll to the top, which would move a fixed
+ *  panel after its trigger. The union must already be on screen. */
 async function cropped(page: Page, path: string, boxes: Locator[]): Promise<void> {
-  // `boundingBox()` is relative to the VIEWPORT and a `fullPage` clip to the
-  // PAGE: scrolled, the crop lands `scrollY` too high, with the sticky site
-  // header painted across the table. At the top the two coincide. An open
-  // panel stays open — nothing closes it on scroll.
-  await page.evaluate(() => window.scrollTo(0, 0));
-  expect(await page.evaluate(() => window.scrollY)).toBe(0);
   const rects = (await Promise.all(boxes.map((b) => b.boundingBox()))).filter((r) => r !== null);
   expect(rects, "a box to crop around has no layout").toHaveLength(boxes.length);
+  const { width: vw, height: vh } = page.viewportSize()!;
+  const top = Math.min(...rects.map((r) => r.y));
+  const bottom = Math.max(...rects.map((r) => r.y + r.height));
+  expect(top, "the picture would start above the viewport").toBeGreaterThanOrEqual(0);
+  expect(bottom, "the picture would end below the viewport").toBeLessThanOrEqual(vh);
   const pad = 8;
   const x = Math.max(0, Math.min(...rects.map((r) => r.x)) - pad);
-  const y = Math.max(0, Math.min(...rects.map((r) => r.y)) - pad);
-  const right = Math.max(...rects.map((r) => r.x + r.width)) + pad;
-  const bottom = Math.max(...rects.map((r) => r.y + r.height)) + pad;
-  const vw = page.viewportSize()!.width;
-  await page.screenshot({ path, clip: { x, y, width: Math.min(right, vw) - x, height: bottom - y }, fullPage: true });
+  const y = Math.max(0, top - pad);
+  const right = Math.min(vw, Math.max(...rects.map((r) => r.x + r.width)) + pad);
+  await page.screenshot({ path, clip: { x, y, width: right - x, height: Math.min(vh, bottom + pad) - y } });
+}
+
+/** Scroll so `scope` starts 120px down the viewport, clear of the sticky site
+ *  header and tab rail (~110px), so a picture of it and its open panel is
+ *  what a reader sees with nothing painted across it. */
+async function frame(scope: Locator): Promise<void> {
+  await scope.evaluate((el) => window.scrollBy(0, el.getBoundingClientRect().top - 120));
+}
+
+/** Where an OPEN panel landed and whether it can be read whole. */
+async function panelFit(panel: Locator) {
+  return panel.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      position: getComputedStyle(el).position,
+      side: el.dataset.side ?? "down",
+      top: r.top,
+      bottom: r.bottom,
+      left: r.left,
+      right: r.right,
+      vw: document.documentElement.clientWidth,
+      vh: document.documentElement.clientHeight,
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+    };
+  });
+}
+
+/** The fix's proof: the open panel is `fixed`, inside the viewport's 16px
+ *  gutters, and its WHOLE text is visible — `clientHeight >= scrollHeight`.
+ *  Clipped by the table's box, the hub's four-part panel was 157 of 178px. */
+async function expectWholeOnScreen(panel: Locator, what: string) {
+  const fit = await panelFit(panel);
+  expect(fit.position, `${what}: the open panel is not fixed`).toBe("fixed");
+  expect(fit.clientHeight, `${what}: the panel's text is cut off (${fit.clientHeight} of ${fit.scrollHeight}px)`).toBeGreaterThanOrEqual(
+    fit.scrollHeight,
+  );
+  expect(fit.top, `${what}: above the viewport's top gutter`).toBeGreaterThanOrEqual(16 - 0.5);
+  expect(fit.bottom, `${what}: below the viewport's bottom gutter`).toBeLessThanOrEqual(fit.vh - 16 + 0.5);
+  expect(fit.left, `${what}: past the viewport's left gutter`).toBeGreaterThanOrEqual(16 - 0.5);
+  expect(fit.right, `${what}: past the viewport's right gutter`).toBeLessThanOrEqual(fit.vw - 16 + 0.5);
+  return fit;
+}
+
+/** Every ancestor that would make ITSELF the containing block of a `fixed`
+ *  panel — a transform, a filter, containment — and so could clip it again.
+ *  None may exist on any mount. */
+async function fixedTraps(panel: Locator): Promise<string[]> {
+  return panel.evaluate((el) => {
+    const traps: string[] = [];
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      const v = (prop: string) => cs.getPropertyValue(prop).trim();
+      const hits = [
+        ["transform", "none"],
+        ["translate", "none"],
+        ["scale", "none"],
+        ["rotate", "none"],
+        ["filter", "none"],
+        ["backdrop-filter", "none"],
+        ["perspective", "none"],
+        ["container-type", "normal"],
+      ]
+        .filter(([prop, idle]) => v(prop!) !== "" && v(prop!) !== idle)
+        .map(([prop]) => `${prop}:${v(prop!)}`);
+      if (/layout|paint|strict|content/.test(v("contain"))) hits.push(`contain:${v("contain")}`);
+      if (/transform|filter|perspective/.test(v("will-change"))) hits.push(`will-change:${v("will-change")}`);
+      if (hits.length) traps.push(`${a.tagName.toLowerCase()}.${[...a.classList].join(".")} → ${hits.join(", ")}`);
+    }
+    return traps;
+  });
 }
 
 /** Open the popover behind `button`; returns its panel. */
@@ -253,7 +334,6 @@ for (const width of [1280, 768, 320] as const) {
     const page = await spectator(browser, { width, height: 900 });
     await openWithCut(page, seed.divisionPath);
     const panel = page.locator("#panel-standings");
-    const region = panel.locator('[role="region"]').first();
     const block = panel.getByTestId("qual-legend").locator("xpath=..");
 
     // Premise: the scene holds every marker kind, so the pictures show them.
@@ -285,37 +365,33 @@ for (const width of [1280, 768, 320] as const) {
     // the tie note and the what-if — then the last row's.
     const tied = panel.locator('button[data-testid^="standings-tie-"]').first();
     await expect(tied).toBeVisible();
-    await tied.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await frame(block);
     const tiedPanel = await open(page, tied);
     await expect(tiedPanel.getByTestId("qual-headline")).toBeVisible();
     await expect(tiedPanel.getByTestId("qual-tie-note")).toBeVisible();
+    const tiedFit = await expectWholeOnScreen(tiedPanel, `division ${width}, tied row`);
+    expect(await fixedTraps(tiedPanel), "an ancestor would contain the fixed panel").toEqual([]);
     const middle = testInfo.outputPath(`standings-qual-${width}.png`);
     await cropped(page, middle, [block, tiedPanel]);
     await page.keyboard.press("Escape");
     await expect(tiedPanel).toBeHidden();
 
-    // 3. The last row opens UPWARD, inside the scroll box that would clip it.
+    // 3. The last row opens UPWARD (spec §5), whole on screen.
     const lastRow = triggers.last();
-    await lastRow.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await frame(block);
     const lastPanel = await open(page, lastRow);
     // Measured against the popover ROOT, as standings-popovers.spec.ts does:
     // the button's hit area is stretched over the cell's padding by negative
     // margins, so the panel hangs from the chip it explains, not the button.
-    const [box, pop, btn] = await Promise.all([
-      region.boundingBox(),
-      lastPanel.boundingBox(),
-      lastRow.locator("xpath=..").boundingBox(),
-    ]);
+    const [pop, btn] = await Promise.all([lastPanel.boundingBox(), lastRow.locator("xpath=..").boundingBox()]);
     expect(pop!.y + pop!.height, "the last row's panel hangs below its trigger").toBeLessThanOrEqual(btn!.y + 0.5);
-    expect(pop!.y, "the last row's panel is clipped at the top of the box").toBeGreaterThanOrEqual(box!.y - 0.5);
-    expect(pop!.x, "the panel runs out of the box on the left").toBeGreaterThanOrEqual(box!.x - 0.5);
-    expect(pop!.x + pop!.width, "the panel runs out of the box on the right").toBeLessThanOrEqual(box!.x + box!.width + 0.5);
+    await expectWholeOnScreen(lastPanel, `division ${width}, last row`);
     const lastShot = testInfo.outputPath(`standings-qual-${width}-last-row.png`);
     await cropped(page, lastShot, [block, lastPanel]);
     await page.keyboard.press("Escape");
 
     shots[width] = await controlSet(panel);
-    const measured = { width, ...widths, hits, lastPanel: { panel: pop, trigger: btn, box }, controls: shots[width] };
+    const measured = { width, ...widths, hits, tiedFit, lastPanel: { panel: pop, trigger: btn }, controls: shots[width] };
     await testInfo.attach(`measurements-${width}.json`, { body: JSON.stringify(measured, null, 1), contentType: "application/json" });
     console.log(`MEASURED ${JSON.stringify(measured)}`);
   });
@@ -341,8 +417,10 @@ test("the embedded standings widget at 320: cut line, markers and an open popove
   expect(hit.inside).toEqual([true, true, true, true, true]);
   const panel = await open(page, rank2);
   await expect(panel.getByTestId("qual-headline")).toBeVisible();
+  const fit = await expectWholeOnScreen(panel, "embed 320, rank 2");
+  expect(await fixedTraps(panel), "an ancestor would contain the fixed panel").toEqual([]);
   await cropped(page, testInfo.outputPath("embed-standings-qual-320.png"), [block, panel]);
-  console.log(`MEASURED ${JSON.stringify({ embed: 320, ...widths, hit })}`);
+  console.log(`MEASURED ${JSON.stringify({ embed: 320, ...widths, hit, fit })}`);
 });
 
 // ── The competition hub (plan Task 8) ─────────────────────────────────────
@@ -393,7 +471,6 @@ for (const width of [1280, 768, 320] as const) {
     await expect(page.getByTestId("mh-tab-panel-table"), "?tab=table opened a different tab").toBeVisible();
     const table = hubTable(page, "mh-table-");
     await expect(table).toHaveCount(1);
-    const region = table.locator('[role="region"]');
     await expect(table.getByTestId("qual-legend")).toContainText(dictString("en", "table.qual.legend.open"));
 
     // Premise: every marker kind, as on the division page.
@@ -420,43 +497,30 @@ for (const width of [1280, 768, 320] as const) {
       );
     }
 
-    // The tied row's ONE popover: status, tie note, inside the scroll box.
+    // The tied row's ONE popover — status, if you lose, tie note, what-if —
+    // WHOLE on screen. This is the fix round's proof: clipped by the table's
+    // box it showed 157 of its 178px at every width.
     const tied = table.locator('button[data-testid*="-tie-"]').first();
     await expect(tied).toBeVisible();
     await expect(tied, "the tied row's trigger is the qualification one").toHaveAttribute("aria-label", /^Rank \d+,/);
-    await tied.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await frame(table);
     const tiedPanel = await open(page, tied);
     await expect(tiedPanel.getByTestId("qual-headline")).toBeVisible();
     await expect(tiedPanel.getByTestId("qual-tie-note")).toBeVisible();
-    const [box0, pop0] = await Promise.all([region.boundingBox(), tiedPanel.boundingBox()]);
-    // Recorded, not asserted: a panel with room on neither side of its row is
-    // clamped to the roomier one and scrolls inside itself (the shared
-    // popover's rule). The hub's caption sits OUTSIDE its scroll box, so a
-    // short table leaves a middle row less room than the division page does.
-    const tiedFit = await tiedPanel.evaluate((el) => ({
-      side: el.dataset.side ?? "down",
-      height: Math.round(el.clientHeight),
-      content: el.scrollHeight,
-      clamped: el.scrollHeight > el.clientHeight + 1,
-    }));
-    expect(pop0!.y, "the panel is clipped at the top of the box").toBeGreaterThanOrEqual(box0!.y - 0.5);
-    expect(pop0!.y + pop0!.height, "the panel is clipped at the bottom of the box").toBeLessThanOrEqual(box0!.y + box0!.height + 0.5);
-    expect(pop0!.x + pop0!.width, "the panel runs out of the box on the right").toBeLessThanOrEqual(box0!.x + box0!.width + 0.5);
+    await expect(tiedPanel.getByTestId("qual-what-if")).toBeVisible();
+    const tiedFit = await expectWholeOnScreen(tiedPanel, `hub ${width}, tied row`);
+    expect(await fixedTraps(tiedPanel), "an ancestor would contain the fixed panel").toEqual([]);
     await cropped(page, testInfo.outputPath(`hub-table-${width}.png`), [table, tiedPanel]);
     await page.keyboard.press("Escape");
     await expect(tiedPanel).toBeHidden();
 
-    // 3. The last row opens UPWARD, inside the box.
+    // 3. The last row opens UPWARD (spec §5), whole on screen.
     const lastRow = triggers.last();
-    await lastRow.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await frame(table);
     const lastPanel = await open(page, lastRow);
-    const [box, pop, btn] = await Promise.all([
-      region.boundingBox(),
-      lastPanel.boundingBox(),
-      lastRow.locator("xpath=..").boundingBox(),
-    ]);
+    const [pop, btn] = await Promise.all([lastPanel.boundingBox(), lastRow.locator("xpath=..").boundingBox()]);
     expect(pop!.y + pop!.height, "the last row's panel hangs below its trigger").toBeLessThanOrEqual(btn!.y + 0.5);
-    expect(pop!.y, "the last row's panel is clipped at the top of the box").toBeGreaterThanOrEqual(box!.y - 0.5);
+    await expectWholeOnScreen(lastPanel, `hub ${width}, last row`);
     await cropped(page, testInfo.outputPath(`hub-table-${width}-last-row.png`), [table, lastPanel]);
     await page.keyboard.press("Escape");
 
@@ -481,7 +545,7 @@ for (const width of [1280, 768, 320] as const) {
       ...widths,
       hits,
       geometry: geometry.map((g) => ({ ...g, table: g.table.map(r1), cut: g.cut.map(r1), name: r1(g.name) })),
-      lastPanel: { panel: pop, trigger: btn, box },
+      lastPanel: { panel: pop, trigger: btn },
       tiedFit,
       controls: hubShots[width],
     };
@@ -528,6 +592,66 @@ test("the hub Overview's preview at 320: markers and the cut line, NO legend, no
   await first.evaluate((el) => el.scrollIntoView({ block: "center" }));
   const panel = await open(page, first);
   await expect(panel.getByTestId("qual-headline")).toBeVisible();
+  await expectWholeOnScreen(panel, "overview 320, rank 1");
+  expect(await fixedTraps(panel), "an ancestor would contain the fixed panel").toEqual([]);
   await cropped(page, testInfo.outputPath("hub-overview-320.png"), [preview, panel]);
   console.log(`MEASURED ${JSON.stringify({ overview: 320, ...widths, hits, geometry: { ...geometry, table: geometry.table.map(r1), cut: geometry.cut.map(r1), name: r1(geometry.name) } })}`);
+});
+
+test("an open panel follows its trigger: when the page scrolls, when the table's own box scrolls sideways, and when the viewport shrinks under it (hub, 320)", async ({ browser }) => {
+  // A short viewport, so the page has room to scroll with the trigger centred.
+  const page = await spectator(browser, { width: 320, height: 640 });
+  await openWithCut(page, `${seed.hubPath}?tab=table`);
+  const table = hubTable(page, "mh-table-");
+  const region = table.locator('[role="region"]');
+  // Unfolded, the long tail puts the table wider than its box: the box scrolls.
+  const more = table.locator('[data-testid$="-more"]');
+  await more.click();
+  await expect(more).toHaveAttribute("aria-expanded", "true");
+  expect(await region.evaluate((el) => el.scrollWidth - el.clientWidth), "premise: the box scrolls sideways").toBeGreaterThan(20);
+
+  const tied = table.locator('button[data-testid*="-tie-"]').first();
+  await tied.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  const panel = await open(page, tied);
+  /** The panel against its trigger root: the offsets a panel that follows
+   *  keeps, and where the trigger itself is. */
+  const offsets = () =>
+    panel.evaluate((el) => {
+      const a = el.parentElement!.getBoundingClientRect();
+      const p = el.getBoundingClientRect();
+      return {
+        dx: p.left - a.left,
+        dy: el.dataset.side === "up" ? a.top - p.bottom : p.top - a.bottom,
+        anchorTop: a.top,
+        anchorLeft: a.left,
+      };
+    });
+  const before = await offsets();
+  expect(before.anchorLeft - 6, "premise: the trigger clears the left gutter after a 6px sideways scroll").toBeGreaterThan(16);
+
+  // The page, by 40px: the trigger rises, and the panel with it.
+  expect(await page.evaluate(() => (window.scrollBy(0, 40), window.scrollY)), "premise: the page scrolls").toBeGreaterThan(0);
+  await expect.poll(async () => (await offsets()).anchorTop, { message: "premise: the page scroll moved the trigger" }).toBeLessThan(before.anchorTop - 20);
+  await expect.poll(async () => Math.abs((await offsets()).dy - before.dy), { message: "the panel stayed put when the page scrolled" }).toBeLessThanOrEqual(1);
+
+  // The table's own box, sideways by 6px: only a CAPTURE-phase listener hears
+  // it (a scroll event does not bubble).
+  const left0 = (await offsets()).anchorLeft;
+  await region.evaluate((el) => {
+    el.scrollLeft += 6;
+  });
+  await expect.poll(async () => (await offsets()).anchorLeft, { message: "premise: the box scroll moved the trigger" }).toBeLessThan(left0 - 5);
+  await expect.poll(async () => Math.abs((await offsets()).dx - before.dx), { message: "the panel stayed put when the table scrolled" }).toBeLessThanOrEqual(1);
+  await expectWholeOnScreen(panel, "hub 320, after scrolling");
+
+  // The viewport, shortened to end AT the panel's bottom: where it sat, it now
+  // crosses the bottom gutter. Only the resize listener places it again.
+  const fit = await panelFit(panel);
+  const shorter = Math.floor(fit.bottom);
+  expect(fit.bottom - fit.top, "premise: the shorter viewport still holds the whole panel").toBeLessThanOrEqual(shorter - 32);
+  await page.setViewportSize({ width: 320, height: shorter });
+  await expect
+    .poll(async () => (await panelFit(panel)).bottom, { message: "the panel stayed put when the viewport shrank under it" })
+    .toBeLessThanOrEqual(shorter - 16 + 0.5);
+  await expectWholeOnScreen(panel, "hub 320, after the viewport shrank");
 });

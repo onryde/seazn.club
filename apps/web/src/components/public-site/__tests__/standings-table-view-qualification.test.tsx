@@ -289,6 +289,15 @@ describe("StandingsTableView — with a cut (spec §5, Option B)", () => {
       for (const c of ["min-w-10", "-my-2.5", "py-2.5"]) expect(classes, `${id} ${c}`).toContain(c);
       // The marker takes the tie asterisk's place; the note is in the panel.
       expect(cell, id).not.toContain(">*<");
+      // What the button SHOWS: the rank chip, then the marker, and nothing
+      // else — a trigger that dropped the number or led with the marker would
+      // pass every check above.
+      const button = buttonIn(cell);
+      const inner = cell.slice(cell.indexOf(button) + button.length, cell.indexOf("</button>"));
+      const rank = ROWS.find((r) => r.entrantId === id)!.rank;
+      expect(inner, id).toMatch(
+        new RegExp(`^<span class="[^"]*">${rank}</span><span aria-hidden="true" data-qual-marker="${QUALS[id]!.status}"[^>]*>[^<]*</span>$`),
+      );
     }
   });
 
@@ -301,10 +310,14 @@ describe("StandingsTableView — with a cut (spec §5, Option B)", () => {
     expect(panel).toContain(' hidden=""');
   });
 
-  it("the rank column does not grow: same class and the same floors as the no-cut table", () => {
-    // The marker lives INSIDE the 40px content box (`w-12` less `pl-2`): chip
-    // (20px for one or two digits) + 1px gap + 16px marker = 37px. No new
-    // column, so the name column's floor arithmetic is unchanged.
+  it("a cut books no rank-column width of its own: the same rank class and the same two floors as the no-cut table", () => {
+    // What this proves is BUDGETING: the table does not reserve extra width
+    // for the marker (no new column, no wider class, no change to the floors
+    // the name column is protected by). That the marker then FITS the 40px
+    // content box (`w-12` less `pl-2`) is geometry this file cannot see; the
+    // proof is the e2e probe's measurement — every rank trigger 40×40 at
+    // 1280/768/320 with the whole row hit-tested — and the task-8 report's
+    // injected-digit table (37px for one or two digits, 38.9px for three).
     const floors = (h: string) => /--sv-min:\d+px;--sv-min-md:\d+px/.exec(h)![0];
     expect(floors(html)).toBe(floors(render(BASE)));
     expect(html).toMatch(/<th[^>]*data-col="rank"[^>]*class="w-12 py-2 pl-2\s/);
