@@ -354,7 +354,7 @@ inherited got finished off somewhere along the way — is wrong: W2 (#825,
 `ae94280cb`) touched none of these files. The chain is continuous:
 
 `device-score-pad.tsx:229` (`padAuth`) → `:370` → `registry.tsx:205,296`
-→ `pad-host.tsx:1528,1566` → `use-pad-pipeline.ts:396,1199`
+→ `pad-host.tsx:1528,1566` → `use-pad-pipeline.ts:396,1206`
 (`params.auth ?? SESSION_AUTH`) → `use-fixture-stream.ts:74,166`, where
 `authHeadersFor` (`transport.ts:85-87`) puts the `Bearer dl_` on the
 realtime-token request that the route's bypass at
@@ -390,9 +390,9 @@ that names the wrong file survives review precisely because every
 sentence in it is true.
 
 **3. "No independent refresh" — true, and closed.** The console now has a
-freshness floor of its own at `fixture-console.tsx:543-580`: on
+freshness floor of its own at `fixture-console.tsx:598-639`: on
 `visibilitychange` → visible and on `window.focus`, routed through
-`handlePadEvents` (`:446`) and **not** `resync` (`:422`). Only the former
+`handlePadEvents` (`:501`) and **not** `resync` (`:457`). Only the former
 raises `padSyncing`, and a refresh that bypassed it would leave
 Undo/Void/Forfeit clickable over a half-refreshed ledger — a stale
 `expected_seq` and a 409 on what should have been a clean undo — at
@@ -414,14 +414,31 @@ escaped every gate this wave ran.
 **4. "`sinceSeq` is an array count — unverified" — now VERIFIED, the
 defect is CONFIRMED, and there were THREE cursors, not one.** Reproduced
 red before the fix (`expected 3 to be 4` over a sparse ledger), so this
-is a measured defect rather than a reasoned one. `ledgerTipSeq`
-(`use-pad-pipeline.ts:732`) replaces the count at all three sites: the
-stream cursor at `:1203` that this bullet names, and the `expected_seq`
-derivations in `submit` (`:1608`) and `submitHeld` (`:1717`). The design
-named one, the plan named two, and `submitHeld` is the copy every real v3
-tap routes through — so a literal reading of either would have left the
-compounding-409 half of the defect live on the only path a scorer
+is a measured defect rather than a reasoned one. There were three cursor
+sites, and the design named one while the plan named two: the stream
+cursor that this bullet names, and the `expected_seq` derivations in
+`submit` and `submitHeld`. `submitHeld` is the copy every real v3 tap
+routes through, so a literal reading of either document would have left
+the compounding-409 half of the defect live on the only path a scorer
 actually hits.
+
+**CORRECTED in fix round 1 — only TWO of those three cursors wanted the
+tip.** The first build put `ledgerTipSeq` on all three at once, and for
+the poll that was a regression this branch introduced. A read cursor and
+a write cursor want opposite errors. `listEvents` is strict
+(`seq > since_seq`), and over a ledger of distinct ascending positive
+seqs the tip is always at least the count — so a count cursor asks for a
+strict SUPERSET of what a tip cursor asks for. It over-fetches rather
+than skipping, and that over-fetch recovers any row the ledger is missing
+above the count. Over `{1,2,5}` the count asks `> 3` and the organiser's
+seq 4 comes home; the tip asks `> 5` and seq 4 is stranded for the rest
+of the match, which is a rally the pad's fold never applies with nothing
+on screen to say so. The two `expected_seq` sites keep the tip, because
+there a count claims a slot the server has already filled. `sinceSeq` is
+the count again, and the case that witnesses the difference holds the
+missing rows on the server rather than running against an empty one —
+every sparse case in the first build ran empty, so none of them could see
+what the cursor FAILED to fetch.
 
 The sparseness is driven through its real producer rather than seeded: a
 pad holding `{1,2}` submits at `expected_seq 2`, the organiser commits
@@ -430,14 +447,22 @@ seq 3 after the pad's last poll, the 409 renegotiates, the ack lands at
 with seq 3 absent.
 
 **Residual — an owner decision, owed in writing, and not a defect.** The
-fix PREVENTS new gaps; it does not HEAL an existing one. Over `{1,2,4}`
-the poll now asks for `seq > 4` where it used to ask `seq > 3`; either
-way seq 3 is never re-requested, and an `initialEvents` re-seed remains
-the only thing that closes a hole already in the ledger. Healing would
-mean polling from the first MISSING seq, which changes the poll contract
-and needs its own design. Ruled out of W3's scope deliberately. The
-regression test PINS the stranded seq as expected: correct under that
-ruling, and **not** to be read as sign-off on the residual.
+`expected_seq` fix PREVENTS new gaps; nothing here HEALS the OLDEST row
+of an existing one. Over `{1,2,4}` the poll asks for `seq > 3`, which
+excludes seq 3 itself, so an `initialEvents` re-seed remains the only
+thing that closes a hole's first row. Healing that would mean polling
+from the first MISSING seq, which needs its own design and is ruled out
+of W3's scope deliberately. The regression test PINS the stranded seq as
+expected: correct under that ruling, and **not** to be read as sign-off
+on the residual.
+
+Stated at its true width, which the first build's wording did not: the
+poll's under-shoot heals every missing row ABOVE the count and never the
+one AT it, so a hole of any width shrinks to exactly its oldest row. The
+superseded sentence generalised a one-wide example (`{1,2,4}`, where tip
+and count+1 coincide) to every gap, and the tip cursor it described would
+have stranded a two-wide hole entire. That is the reading the fix-round
+test now pins with a populated server ledger.
 
 **Realtime works, and the number is now a gate rather than a
 measurement.** Measured both ways on 2026-09-23, same build and same
@@ -628,8 +653,8 @@ survey above was a hypothesis and these two rows did not survive the tree:
 - **The §6b(c) citation of `scoring.spec.ts:532-542` looks stale.** That
   comment claims the console's `events` are "only ever refreshed by
   fixture-console's OWN send() calls — never by the pad's independent
-  submission". But `fixture-console.tsx:442`'s `handlePadEvents` is wired as
-  `onEvents` at `:905`, and `pad-host.tsx:1575-1577` fires `onEvents` on any
+  submission". But `fixture-console.tsx:501`'s `handlePadEvents` is wired as
+  `onEvents` at `:1055`, and `pad-host.tsx:1575-1577` fires `onEvents` on any
   pipeline ledger change including a foreign-write merge. Read, not run —
   recorded as suspect rather than corrected.
 
