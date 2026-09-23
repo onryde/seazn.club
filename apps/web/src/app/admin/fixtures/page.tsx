@@ -1,5 +1,6 @@
 import Link from "@/components/ui/console-link";
-import { fixtureConfigPanel } from "@/server/usecases/admin-fixture-config";
+import { fixtureConfigPanel, fixtureIdFromLink } from "@/server/usecases/admin-fixture-config";
+import { parseFixtureLink } from "@/lib/fixture-link";
 import { ResnapshotForm } from "./resnapshot-form";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +9,9 @@ export const dynamic = "force-dynamic";
  * Fixture config snapshot (V347) — the only staff surface for a single fixture.
  *
  * Lookup-by-id rather than a browsable list on purpose: staff arrive here from a
- * support ticket holding a fixture id, and there is no useful "all fixtures"
- * ordering across every org. Functional bar, per the /admin rule — no polish,
+ * support ticket holding a fixture id or the organiser's match URL (#858 — no
+ * screen shows the uuid), and there is no useful "all fixtures" ordering across
+ * every org. Functional bar, per the /admin rule — no polish,
  * but it must still work at 375px, hence the wrapping toolbar and the JSON
  * blocks in their own overflow-x containers.
  */
@@ -23,7 +25,11 @@ export default async function AdminFixtureConfigPage({
   // Look up only when it PARSES as a uuid: `fixtureConfigPanel` would otherwise
   // hand Postgres a malformed uuid and 500 the page on a typo.
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
-  const panel = isUuid ? await fixtureConfigPanel(trimmed) : null;
+  // Otherwise try it as a pasted match URL. The parser refuses anything that is
+  // not a well-formed slug chain, so a junk link never reaches Postgres either.
+  const link = isUuid ? null : parseFixtureLink(trimmed);
+  const fixtureId = isUuid ? trimmed : link ? await fixtureIdFromLink(link) : null;
+  const panel = fixtureId ? await fixtureConfigPanel(fixtureId) : null;
 
   return (
     <div className="space-y-6">
@@ -47,9 +53,9 @@ export default async function AdminFixtureConfigPage({
           type="text"
           name="id"
           defaultValue={trimmed}
-          aria-label="Fixture id"
+          aria-label="Fixture id or match link"
           data-testid="fixture-id-input"
-          placeholder="Fixture UUID"
+          placeholder="Fixture UUID or match link"
           className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder:text-slate-500"
         />
         <button
@@ -60,9 +66,14 @@ export default async function AdminFixtureConfigPage({
         </button>
       </form>
 
-      {trimmed.length > 0 && !isUuid && (
+      {trimmed.length > 0 && !isUuid && !link && (
         <p className="text-sm text-amber-400" data-testid="fixture-not-found">
-          That is not a fixture UUID.
+          That is not a fixture UUID or a match link.
+        </p>
+      )}
+      {link && panel === null && (
+        <p className="text-sm text-amber-400" data-testid="fixture-not-found">
+          No fixture found for that link.
         </p>
       )}
       {isUuid && panel === null && (
@@ -74,6 +85,7 @@ export default async function AdminFixtureConfigPage({
       {panel && (
         <div
           data-testid="fixture-config-panel"
+          data-fixture-id={panel.fixtureId}
           data-diverged={panel.diverged ? "yes" : "no"}
           data-can-resnapshot={panel.canResnapshot ? "yes" : "no"}
           className="space-y-4 rounded-lg border border-slate-700 bg-slate-900 p-4"
@@ -86,6 +98,7 @@ export default async function AdminFixtureConfigPage({
               label="Fixture"
               value={`#${panel.fixtureNo ?? "—"} · ${panel.status} · ${panel.eventCount} events`}
             />
+            <Field label="Fixture id" value={panel.fixtureId} />
             <Field label="Frozen at" value={panel.snapshotAt ?? "never — folds against live config"} />
           </dl>
 

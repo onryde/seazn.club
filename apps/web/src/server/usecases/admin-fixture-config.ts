@@ -14,6 +14,13 @@ import { foldFixture } from "@/server/engine-db/fold";
 import { log } from "@/server/logger";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache } from "./scoring";
+import {
+  compBySlugUncached,
+  divBySlugUncached,
+  orgBySlugUncached,
+  type Resolution,
+} from "@/server/slug-resolve";
+import type { FixtureLink } from "@/lib/fixture-link";
 
 /**
  * THE ESCAPE HATCH FROM THE V347 CONFIG SNAPSHOT.
@@ -107,6 +114,35 @@ async function loadRow(db: Queryable, fixtureId: string): Promise<Row | null> {
     join organizations o on o.id = c.org_id
     where f.id = ${fixtureId}`;
   return row ?? null;
+}
+
+/**
+ * #858 — the fixture a pasted organiser match URL points at, or null. No screen
+ * shows a fixture uuid, so staff otherwise dig it out of the database. A
+ * renamed slug is followed (the console would 301 it), so an old link from a
+ * support ticket still resolves. Membership is not checked: `/admin` is staff.
+ */
+export async function fixtureIdFromLink(link: FixtureLink): Promise<string | null> {
+  const follow = async (
+    lookup: (slug: string) => Promise<Resolution>,
+    slug: string,
+  ): Promise<string | null> => {
+    const res = await lookup(slug);
+    if (res && "renamedTo" in res) {
+      const renamed = await lookup(res.renamedTo);
+      return renamed && "id" in renamed ? renamed.id : null;
+    }
+    return res?.id ?? null;
+  };
+  const orgId = await follow(orgBySlugUncached, link.orgSlug);
+  if (!orgId) return null;
+  const compId = await follow((s) => compBySlugUncached(orgId, s), link.compSlug);
+  if (!compId) return null;
+  const divId = await follow((s) => divBySlugUncached(compId, s), link.divSlug);
+  if (!divId) return null;
+  const [row] = await sql<{ id: string }[]>`
+    select id from fixtures where division_id = ${divId} and fixture_no = ${link.fixtureNo}`;
+  return row?.id ?? null;
 }
 
 /** Everything `/admin/fixtures` renders. Null when the id matches nothing —

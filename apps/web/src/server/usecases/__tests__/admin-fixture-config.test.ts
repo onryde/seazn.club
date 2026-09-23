@@ -11,7 +11,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { appendEvent, rebuildState, recomputeStandings } from "@/server/engine-db";
-import { fixtureConfigPanel, resnapshotFixtureConfig } from "../admin-fixture-config";
+import {
+  fixtureConfigPanel,
+  fixtureIdFromLink,
+  resnapshotFixtureConfig,
+} from "../admin-fixture-config";
 import { HttpError } from "@/lib/http";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -444,5 +448,60 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot", () => {
 
   it("returns null for a fixture that does not exist", async () => {
     expect(await fixtureConfigPanel(randomUUID())).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("fixtureIdFromLink (#858)", () => {
+  async function seedWithNo() {
+    const s = await seed();
+    const [row] = await sql<{ org: string; comp: string; div: string }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div
+      from divisions d join competitions c on c.id = d.competition_id
+      join organizations o on o.id = c.org_id where d.id = ${s.divisionId}`;
+    await sql`update fixtures set fixture_no = 7 where id = ${s.fixtureId}`;
+    return { ...s, slugs: row! };
+  }
+
+  it("resolves org → competition → division → match number to the fixture id", async () => {
+    const s = await seedWithNo();
+    const link = { orgSlug: s.slugs.org, compSlug: s.slugs.comp, divSlug: s.slugs.div };
+    expect(await fixtureIdFromLink({ ...link, fixtureNo: 7 })).toBe(s.fixtureId);
+    // Each level must actually be matched, not just the last one.
+    expect(await fixtureIdFromLink({ ...link, fixtureNo: 8 })).toBeNull();
+    expect(await fixtureIdFromLink({ ...link, divSlug: "no-such-div", fixtureNo: 7 })).toBeNull();
+    expect(await fixtureIdFromLink({ ...link, compSlug: "no-such-comp", fixtureNo: 7 })).toBeNull();
+    expect(await fixtureIdFromLink({ ...link, orgSlug: "no-such-org-858", fixtureNo: 7 })).toBeNull();
+  });
+
+  it("does not cross into another org's same-numbered match", async () => {
+    const a = await seedWithNo();
+    const b = await seedWithNo();
+    expect(
+      await fixtureIdFromLink({
+        orgSlug: a.slugs.org,
+        compSlug: b.slugs.comp,
+        divSlug: b.slugs.div,
+        fixtureNo: 7,
+      }),
+    ).toBeNull();
+  });
+
+  it("follows a renamed division slug, as the console's 301 does", async () => {
+    const s = await seedWithNo();
+    const [{ competition_id }] = await sql<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${s.divisionId}`;
+    const renamed = `${s.slugs.div}-renamed`;
+    await sql`update divisions set slug = ${renamed} where id = ${s.divisionId}`;
+    await sql`
+      insert into slug_history (entity_type, entity_id, parent_id, old_slug)
+      values ('division', ${s.divisionId}, ${competition_id}, ${s.slugs.div})`;
+    expect(
+      await fixtureIdFromLink({
+        orgSlug: s.slugs.org,
+        compSlug: s.slugs.comp,
+        divSlug: s.slugs.div,
+        fixtureNo: 7,
+      }),
+    ).toBe(s.fixtureId);
   });
 });
