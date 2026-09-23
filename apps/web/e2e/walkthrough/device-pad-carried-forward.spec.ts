@@ -7,7 +7,7 @@
 // next write is refused `403 RESULT_CARRIED_FORWARD` (`usecases/scoring.ts`,
 // the device-link block), and the phone must leave for the View-only screen —
 // a final scoreboard, no controls — rather than sit on controls whose every
-// tap can only be refused. There are two ways in, one test each:
+// tap can only be refused. Two ways in, and the negative pair, one phone each:
 //
 // 1. THE SEAM — a REAL tap on the INNER pad (not the chrome's own button, not
 //    a stubbed callback). This file is the ONLY proof of it (AGENTS.md class
@@ -21,22 +21,53 @@
 //
 //    Each hop has a unit witness on its own side; none can see the hops meet.
 //
-// 2. THE FINAL SCOREBOARD — the chrome's own "Void my last entry", after the
+// 2. THE NEGATIVE PAIR — an ORDINARY refusal (422 ALREADY_DECIDED) on the
+//    inner pad of a phone of its own must NOT move the chrome: only
+//    CHROME_TERMINAL_CODES end the surface. A host that forwarded every
+//    refusal passes test 1 and fails this one.
+//
+// 3. THE FINAL SCOREBOARD — the chrome's own "Void my last entry", after the
 //    match really ended elsewhere (a forfeit the organiser recorded) while the
 //    phone's stream was stalled. View-only keeps the header as the FINAL
 //    scoreboard (§4.5.3), so entering it re-reads the server; this proves that
 //    read is real — through the browser's HTTP cache and `/state`'s ETag,
 //    which no unit test with a mocked `apiV1` can see.
 //
-// WHY TEST 1 FLIPS STATUS BY SQL AND TEST 2 DOES NOT. Test 1 needs the inner
-// pad still mounted when it taps. A real ending (a ledger event) makes the
-// chrome re-read on that very tap (`onEvents` → `handlePadEvents`), see the
-// match decided and unmount the pad before its soft-committed write is sent —
-// so a SQL flip, with no event and no push, is what keeps a tappable pad in
-// front of the refusal. The cost: `/state`'s ETag is the ledger seq
-// (`fixtureStateEtag`), so after a SQL-only flip the browser revalidates to
-// `304` and keeps the old "in play" body — test 1's header can never become
-// final, for a reason no user can produce. Hence test 2, with a real event.
+// HOW AN INNER-PAD TAP CAN MEET THE REFUSAL AT ALL (tests 1 and 2). Every tap
+// makes the chrome re-read before the tap is even sent: the tap's PENDING
+// envelope changes `pipeline.events`, `onEvents` fires, and `handlePadEvents`
+// GETs `/state` — while the write itself waits out its soft-commit hold
+// (`HOLD_MS`). A re-read that SUCCEEDS and sees the match over takes the pad
+// away (`scoring` is false once finalized; `shouldMountPad` drops it once
+// there is an outcome). The held write may still go out — its hold tick
+// outlives the pad (queue.ts) — but its refusal comes back to a host that no
+// longer exists, and nothing forwards it: the chrome is already on its settled
+// screen, which is the product working. So a courtside tap meets the server's
+// refusal only on a pad that stays mounted past its result — cricket's
+// post-phase panel (`shouldMountPad` keeps a pad with a `phase: "post"`
+// panel) — or when that re-read FAILS: venue Wi-Fi that drops the GET and
+// lets the POST through. Tests 1 and 2 take the failed re-read on purpose:
+// `stallStateReads` aborts the phone's `GET …/state` from the moment the
+// match is flipped, and each test proves the tap's own re-read was TRIED (the
+// premise) before it waits on the refusal.
+//
+// Without the stall these tests would stand on two accidents instead.
+// `/state`'s ETag is the ledger seq alone (`fixtureStateEtag`), so after a
+// status-only change a successful re-read revalidates to `304` and keeps the
+// stale "in play" body — an earlier version of this file passed on exactly
+// that. Measured against a status-aware ETag (review fix round 1): the
+// negative pair's pad is then gone before its refusal arrives, so "View-only
+// never appears" would hold for a host that forwards EVERY refusal; and test
+// 1 survives only because of the accident below.
+//
+// THE SQL FLIPS ARE A SEAM PROOF, NOT A PRODUCT STATE. `decided` with the
+// stage `complete` meets `carried-forward.ts`'s `stageComplete` rule, and
+// `finalized` meets append-event's LOCKED statuses — but a flip appends no
+// event and leaves `outcome` NULL: a decided match with no result, which no
+// organiser action produces (and which the chrome's `decided`, "there is an
+// outcome", does not even read as over). They steer the SERVER's verdict and
+// nothing else; what the scorer is shown afterwards is test 3's job, whose
+// forfeit is real (an event, an outcome, a seq that moves).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Browser, type Page } from "@playwright/test";
@@ -73,13 +104,15 @@ const CONVERGE_MS = 20_000;
 const MOUNT_MS = 20_000;
 const SEED_MS = 60_000;
 
-/** Per test, at most: seeding, a mount, three sent writes (the tap that lands,
- *  the ordinary refusal, the carried-forward one) and four converges (the
- *  pad's own score, the chrome's switch, the pad leaving, the header's
- *  re-read) — expressed in the constants so none can move without the budget
- *  moving too. No poll-bound wait: nothing here waits on the stream's tick.
- *  The three-width capture waits on nothing. */
-const BUDGET_MS = Math.max(180_000, SEED_MS + MOUNT_MS + 3 * SEND_MS + 4 * CONVERGE_MS);
+/** Per test, at most: seeding, the pad's mount and its first paint, two sent
+ *  writes (the tap that lands, then the one refused) and six converges (the
+ *  worst case is test 3: the pad's own score, the chrome's undo going live
+ *  twice over — after the tap, and again once the stall is proven — the stall
+ *  itself, the chrome's switch, the Live pill leaving) — expressed in the
+ *  constants so none can move without the budget moving too. No poll-bound
+ *  wait: nothing here waits on the stream's tick. The three-width capture
+ *  waits on nothing. */
+const BUDGET_MS = Math.max(180_000, SEED_MS + 2 * MOUNT_MS + 2 * SEND_MS + 6 * CONVERGE_MS);
 
 /** The plan's UI bar: phone floor, tablet, desktop. */
 const WIDTHS = [320, 768, 1280] as const;
@@ -193,6 +226,12 @@ async function openLinkedPhone(
     })
     .toBe(1);
   await expect(viewOnly(device), "a tap that LANDED must not switch screens").toHaveCount(0);
+  // The chrome has re-read the landed tap (its undo needs the row's real id,
+  // and is greyed while a re-read is in flight): no re-read of the live match
+  // is still on the wire to answer AFTER a test flips it underneath.
+  await expect(voidMine(device), "the chrome must have re-read the landed tap").toBeEnabled({
+    timeout: CONVERGE_MS,
+  });
 
   /** Waits for the server to have answered one of this phone's writes with
    *  exactly `status`/`code`. Polled: the listener parses each body
@@ -220,6 +259,35 @@ async function openLinkedPhone(
   return { fx, stageId: fixture.data!.stage_id, deviceCtx, device, refusedWith };
 }
 
+/** The failed re-read (see the header): every `GET /api/v1/fixtures/{id}/state`
+ *  this phone makes from now on is dropped on the wire — the chrome's
+ *  `resync()` and the pad's own reconciliation both swallow that, as they must
+ *  on venue Wi-Fi. Returns how many were dropped, so a test can prove the
+ *  tap's re-read was really TRIED: if a future chrome stops re-reading on a
+ *  pending tap, the premise of the refusal tests is gone and they must say so
+ *  rather than pass on something else. */
+async function stallStateReads(device: Page): Promise<() => number> {
+  let dropped = 0;
+  await device.route(
+    (url) => url.pathname.startsWith("/api/v1/fixtures/") && url.pathname.endsWith("/state"),
+    (route) => {
+      dropped += 1;
+      return route.abort();
+    },
+  );
+  return () => dropped;
+}
+
+/** A tap's own re-read was attempted, and failed. */
+async function expectReReadDropped(stateReadsDropped: () => number, before: number) {
+  await expect
+    .poll(stateReadsDropped, {
+      timeout: CONVERGE_MS,
+      message: "the tap must make the chrome re-read (onEvents → handlePadEvents → GET /state)",
+    })
+    .toBeGreaterThan(before);
+}
+
 test("a real inner-pad tap refused RESULT_CARRIED_FORWARD moves the device to View-only", async ({
   page,
   browser,
@@ -227,31 +295,20 @@ test("a real inner-pad tap refused RESULT_CARRIED_FORWARD moves the device to Vi
   test.setTimeout(BUDGET_MS);
   const { fx, stageId, deviceCtx, device, refusedWith } = await openLinkedPhone(page, browser, "Carried");
   try {
-    // ---- the negative pair: an ORDINARY refusal on the inner pad -------------
-    // A finalized fixture is not "carried forward" (`SETTLED_OPEN_STATUSES`);
-    // its writes are refused `ALREADY_DECIDED` (append-event.ts). The pad says
-    // so in its own banner, and the chrome must NOT leave: only
-    // CHROME_TERMINAL_CODES end the surface. If the host forwarded every
-    // refusal, the pad would be gone and the carried-forward tap below could
-    // not happen at all.
-    await setFixtureStatusSql(fx.fixtureId, "finalized");
-    await half(device, "home").click();
-    await refusedWith(422, "ALREADY_DECIDED");
-    await expect(padRefusal(device), "an ordinary refusal shows on the pad's own banner").toBeVisible({
-      timeout: CONVERGE_MS,
-    });
-    await expect(viewOnly(device), "…and does not move the chrome to View-only").toHaveCount(0);
-
     // ---- the competition moves on underneath the courtside pad ---------------
-    // SQL, so NO ledger event and NO push: the inner pad stays mounted and
-    // live, exactly the stale courtside screen the refusal exists for.
+    // By SQL (a seam proof — see the header): no ledger event and no push, so
+    // nothing tells the phone. The phone's re-reads fail from here on, so the
+    // tap below re-reads nothing either — the stale courtside screen the
+    // refusal exists for. This pad has never seen any other refusal.
+    const stateReadsDropped = await stallStateReads(device);
     await setFixtureStatusSql(fx.fixtureId, "decided");
     await setStageStatusSql(stageId, "complete");
     await expect(devicePad(device), "precondition: nothing told the phone — the pad is still up").toBeVisible();
-    await expect(viewOnly(device), "the ordinary refusal above left the chrome where it was").toHaveCount(0);
 
     // ---- a REAL tap on the INNER pad ------------------------------------------
+    const droppedBefore = stateReadsDropped();
     await half(device, "home").click();
+    await expectReReadDropped(stateReadsDropped, droppedBefore);
 
     // The server's answer first, so a broken hop reads as itself: "refused
     // RESULT_CARRIED_FORWARD, and the chrome never moved" is the inert-seam
@@ -268,6 +325,47 @@ test("a real inner-pad tap refused RESULT_CARRIED_FORWARD moves the device to Vi
     await expect(voidMine(device), "…and no chrome undo, which the server would refuse the same way").toHaveCount(0);
     await expect(header(device).locator("p.font-mono"), "the scoreboard stays on screen").toBeVisible();
 
+    expect(await countOf(page.request, fx.fixtureId, "badminton.rally"), "and nothing was written").toBe(1);
+  } finally {
+    await deviceCtx.close();
+  }
+});
+
+test("an ordinary inner-pad refusal (422 ALREADY_DECIDED) never moves the device to View-only", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(BUDGET_MS);
+  const { fx, deviceCtx, device, refusedWith } = await openLinkedPhone(page, browser, "Ordinary");
+  try {
+    // A finalized fixture is not "carried forward" (`SETTLED_OPEN_STATUSES`);
+    // its writes are refused `ALREADY_DECIDED` (append-event.ts's LOCKED
+    // statuses). Same failed re-read as test 1, so the refusal comes back to
+    // a pad that is still THERE: without it a working re-read takes the pad
+    // away first (`scoring` is false once finalized), the refusal lands on no
+    // host at all, and this test would pass for a host that forwards EVERY
+    // refusal (measured — see the header).
+    const stateReadsDropped = await stallStateReads(device);
+    await setFixtureStatusSql(fx.fixtureId, "finalized");
+    const droppedBefore = stateReadsDropped();
+    await half(device, "home").click();
+    await expectReReadDropped(stateReadsDropped, droppedBefore);
+    await refusedWith(422, "ALREADY_DECIDED");
+
+    // The sync point, neutral on purpose: the refusal has been TAKEN — shown
+    // on the pad's own banner, or (the defect) turned into View-only. Neither
+    // showing means it reached no one, and the negative below would be
+    // vacuous, so that fails here instead. Two frames later the host's effect
+    // has run on it, and only then is "no View-only" a real answer: only
+    // CHROME_TERMINAL_CODES end the surface.
+    await expect(
+      padRefusal(device).or(viewOnly(device)).first(),
+      "the refusal must have been taken — on the pad's banner, or by the chrome",
+    ).toBeVisible({ timeout: CONVERGE_MS });
+    await device.evaluate(
+      () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))),
+    );
+    await expect(viewOnly(device), "an ordinary refusal must not move the chrome to View-only").toHaveCount(0);
     expect(await countOf(page.request, fx.fixtureId, "badminton.rally"), "and nothing was written").toBe(1);
   } finally {
     await deviceCtx.close();
@@ -349,10 +447,10 @@ test("the chrome's own undo, refused after the match ended elsewhere, lands on V
     expect(await countOf(page.request, fx.fixtureId, "core.void"), "and nothing was written").toBe(0);
 
     // ---- the View-only screen at the three UI widths (RULES) -----------------
-    // No horizontal page scroll, and the SAME control set (membership and
-    // order) at 320 as at 1280 — a phone view that differs is a defect, not a
-    // layout. Captured for the report; the assertions are what gate.
-    const perWidth: { w: number; buttons: string[] }[] = [];
+    // No horizontal page scroll, and the control set at every width is the
+    // one View-only promises: NONE. Pinned as the empty list at each width,
+    // not as "320 equals 1280" — two empty lists are equal, and so are two
+    // identical wrong ones. Captured for the report; the assertions gate.
     for (const w of WIDTHS) {
       await device.setViewportSize({ width: w, height: 800 });
       await expect(viewOnly(device), `${w}: View-only stays up`).toBeVisible();
@@ -360,12 +458,12 @@ test("the chrome's own undo, refused after the match ended elsewhere, lands on V
       const box = await viewOnly(device).boundingBox();
       expect(box, `${w}: the View-only line has a box`).not.toBeNull();
       expect(box!.width, `${w}: the View-only line fits the viewport`).toBeLessThanOrEqual(w);
-      perWidth.push({ w, buttons: (await device.getByRole("button").allInnerTexts()).map((b) => b.trim()) });
+      const buttons = (await device.getByRole("button").allInnerTexts()).map((b) => b.trim());
+      expect(buttons, `${w}: View-only offers no controls at all`).toEqual([]);
       const path = testInfo.outputPath(`view-only-carried-${w}.png`);
       await device.screenshot({ path, animations: "disabled" });
       await testInfo.attach(`view-only-carried-${w}`, { path, contentType: "image/png" });
     }
-    expect(perWidth[0]!.buttons, "same controls, same order at 320 and 1280").toEqual(perWidth[2]!.buttons);
   } finally {
     await deviceCtx.close();
   }
