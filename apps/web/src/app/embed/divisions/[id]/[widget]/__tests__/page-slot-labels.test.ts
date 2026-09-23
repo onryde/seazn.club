@@ -88,7 +88,18 @@ const payload = (locale: string, fixtures: PublicFixture[]): EmbedPayload => ({
     sport_name: null,
     entrant_count: 4,
   } as EmbedPayload["division"],
-  stages: [{ id: "ko", division_id: "d1", seq: 1, kind: "knockout", name: "Knockout", status: "active" }],
+  stages: [
+    {
+      id: "ko",
+      division_id: "d1",
+      seq: 1,
+      kind: "knockout",
+      name: "Knockout",
+      status: "active",
+      // V414 — no qualification cut on this hand-built stage.
+      qualify_count: null, qualify_per_group: false, next_stage_name: null, swiss_rounds: null, points_rule: null, has_rank_overrides: false,
+    },
+  ],
   pools: [],
   fixtures,
   standings: [],

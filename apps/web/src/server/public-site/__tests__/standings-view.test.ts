@@ -239,35 +239,22 @@ describe("buildTableView", () => {
     expect(v.rows[1]!.tieBreakText).toBe('table.tieBreak:{"with":"Alpha, zz","rule":"gd"}');
   });
 
-  it("the tie-break dictionary keys are an enumerable registry with every value spelled out", () => {
+  it("the tie-break registry covers every key a shipped module ranks on by default, every value spelled out", () => {
+    // Read off the engine, never typed here (fix round 1): every key in every
+    // built-in module's `defaultTiebreakers` must be in the registry, or its
+    // tie note and qualification what-if print the engine's English label —
+    // or, for a key the engine has no label for either (`game_ratio`, which
+    // tennis ranks on), the raw key. A module that starts ranking on a new key
+    // reds here until the key is added with its four translations.
+    const defaults = new Set(builtinModules.flatMap((m) => [...m.defaultTiebreakers]));
+    expect(defaults.size, "premise: the engine declares default cascades to check").toBeGreaterThan(5);
+    expect(defaults.has("game_ratio"), "premise: tennis ranks on game_ratio by default").toBe(true);
+    const unregistered = [...defaults].filter((key) => !Object.hasOwn(TIE_BREAK_MSG_KEYS, key));
+    expect(unregistered, "a default tie-break key that would print English (or the raw key)").toEqual([]);
     // Round 2, NEW-3: a `` `table.tieBreak.${key}` `` concatenation is
     // invisible to a grep, to `scripts/i18n/gen-keys.ts` and to any future
-    // source-scanning gate — the whole family could go missing without a red.
-    // This is the shape `packages/engine/src/competition/display.test.ts` uses
-    // to pin `DERIVED_METRICS`: the exact membership, so adding or dropping a
-    // rule is a deliberate edit here and not a silent one.
-    expect(Object.keys(TIE_BREAK_MSG_KEYS)).toEqual([
-      "points",
-      "wins",
-      "diff",
-      "for",
-      "fair_play",
-      "nrr",
-      "set_ratio",
-      "board_ratio",
-      "point_ratio",
-      "h2h_points",
-      "h2h_diff",
-      "h2h_for",
-      "direct",
-      "buchholz",
-      "buchholz_cut1",
-      "sberger",
-      "seed",
-      "lots",
-    ]);
-    // …and every value is the literal key for its own rule, so a typo in one
-    // of the eighteen strings reds here rather than in a spectator's browser.
+    // source-scanning gate — so every value is the literal key for its own
+    // rule, and a typo in one reds here rather than in a spectator's browser.
     for (const [trace, dictKey] of Object.entries(TIE_BREAK_MSG_KEYS)) {
       expect(dictKey).toBe(`table.tieBreak.${trace}`);
     }
@@ -415,5 +402,128 @@ describe("buildTableView", () => {
       championId: null,
     });
     expect(v.rows.map((r) => r.champion)).toEqual([false, false]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Standings qualification status (spec 2026-09-22, plan Task 6). The view
+// CARRIES what `buildQualificationView` resolved — the table's cut line and
+// each row's status, keyed by entrant id — and derives nothing itself. A table
+// with no cut carries null in both fields and is otherwise the table it was.
+//
+// Mutants killed (Task 6): (a) `qualification: null` unconditionally → the
+// carry-through case; (b) `qual` keyed by rank / by position instead of the
+// entrant id → the carry-through case (its statuses sit on the row that
+// arrives SECOND and sorts FIRST, so every wrong key lands on the wrong row).
+// ---------------------------------------------------------------------------
+describe("qualification (spec 2026-09-22)", () => {
+  // Input order [b, a], output order [a, b] — the order-differential scene of
+  // "rows come in rank order…" above.
+  const rows = [
+    row("b", { played: 1, points: 3, metrics: { gf: 1, ga: 0, gd: 1 }, rank: 2, tieBreak: { key: "diff", with: ["a"] } }),
+    row("a", { played: 1, points: 3, metrics: { gf: 2, ga: 0, gd: 2 }, rank: 1 }),
+  ];
+  const input: TableViewInput = { ...base, rows, championId: "a" };
+
+  it("empty case: no qualification input → view.qualification null and every row.qual null", () => {
+    const v = buildTableView(input);
+    expect(v.qualification).toBeNull();
+    expect(v.rows).toHaveLength(2);
+    expect(v.rows.every((r) => r.qual === null)).toBe(true);
+    expect(TableView.parse(v)).toEqual(v);
+  });
+
+  it("carries the table line and each row's status through unchanged, on the row of the entrant it names", () => {
+    const qualification = {
+      table: {
+        cutIndex: 1,
+        label: "Top 1 go through to KO · 1 round left",
+        legend: { through: "Through", open: "Still open", out: "Out", hint: "Tap a rank for details." },
+      },
+      rows: {
+        a: {
+          status: "win_k",
+          label: "Win and in",
+          ariaLabel: "Rank 1, Win and in, show details",
+          headline: "Win your next match and you're through to KO.",
+          ifYouLose: "If you lose your next match: Needs help.",
+          whatIf: null,
+          whatIfAssumption: null,
+        },
+        b: {
+          status: "needs_help",
+          label: "Needs help",
+          ariaLabel: "Rank 2, Needs help, show details",
+          headline: "Still open: you need other results to go your way.",
+          ifYouLose: "If you lose your next match: Out.",
+          whatIf: "If you finish level on points with Alpha, goal/run difference decides. Now: you +1, Alpha +2.",
+          whatIfAssumption: null,
+        },
+      },
+    } as const;
+    const v = buildTableView({ ...input, qualification });
+    expect(v.qualification).toEqual(qualification.table);
+    expect(v.rows.map((r) => r.entrantId)).toEqual(["a", "b"]);
+    expect(v.rows[0]!.qual).toEqual(qualification.rows.a);
+    expect(v.rows[1]!.qual).toEqual(qualification.rows.b);
+    expect(TableView.parse(v)).toEqual(v);
+
+    // A row the builder gave no status (a departed entrant) carries null,
+    // beside a row that does.
+    const onlyB = buildTableView({ ...input, qualification: { ...qualification, rows: { b: qualification.rows.b } } });
+    expect(onlyB.rows.map((r) => r.qual)).toEqual([null, qualification.rows.b]);
+  });
+
+  it("regression: a no-cut table (qualification null) is the table it was — two new nulls, every other field as pinned", () => {
+    // Every field spelled out, never read back off the builder: this is what
+    // the view said before Task 6, plus `qual: null` and `qualification: null`.
+    const expected = {
+      id: "div-s1-overall",
+      divisionId: "d1",
+      divisionSlug: "div",
+      divisionName: "Div",
+      caption: "League",
+      fullHref: "/shared/o/c/div?tab=standings",
+      updatedAt: "2026-09-05T10:00:00Z",
+      columns: [
+        { key: "played", abbr: "table.abbr.played", title: "table.col.played", compact: true },
+        { key: "won", abbr: "table.abbr.won", title: "table.col.won", compact: true },
+        { key: "lost", abbr: "table.abbr.lost", title: "table.col.lost", compact: true },
+        { key: "gf", abbr: "table.abbr.gf", title: "table.col.gf", compact: false },
+        { key: "ga", abbr: "table.abbr.ga", title: "table.col.ga", compact: false },
+        { key: "gd", abbr: "table.abbr.gd", title: "table.col.gd", compact: false },
+        { key: "points", abbr: "table.abbr.points", title: "table.col.points", compact: true },
+      ],
+      rows: [
+        {
+          rank: 1,
+          entrantId: "a",
+          name: "Alpha",
+          badgeUrl: "https://x/a.png",
+          colour: null,
+          cells: ["1", "0", "0", "2", "0", "2", "3"],
+          cellNotes: [null, null, null, null, null, null, null],
+          tieBreakText: null,
+          qual: null,
+          champion: true,
+        },
+        {
+          rank: 2,
+          entrantId: "b",
+          name: "Beta",
+          badgeUrl: null,
+          colour: null,
+          cells: ["1", "0", "0", "1", "0", "1", "3"],
+          cellNotes: [null, null, null, null, null, null, null],
+          tieBreakText: 'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diff"}',
+          qual: null,
+          champion: false,
+        },
+      ],
+      qualification: null,
+    };
+    expect(buildTableView({ ...input, qualification: null })).toEqual(expected);
+    // …and an absent input is the same table as an explicit null.
+    expect(buildTableView(input)).toEqual(expected);
   });
 });

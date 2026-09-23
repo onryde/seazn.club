@@ -823,7 +823,7 @@ describe.skipIf(!HAS_DB)("a person write drops the public Redis documents naming
   it("consent OFF: the rostered competition's hub, the division's documents, the match-centre documents of his fixture AND of a lineup-only fixture are gone; another competition's are kept; peers are told to EXPIRE the division", async () => {
     const { s, other, otherDivision, named, unrelated } = await docsScene("docs-consent");
     for (const key of [...named, ...unrelated]) probe.redis.set(key, { cached: "with Ben Stokes" });
-    // The hub document is rebuilt THROUGH `getPublicDivision`'s `pub-div-v2`
+    // The hub document is rebuilt THROUGH `getPublicDivision`'s `pub-div-v3`
     // entry. Were that entry only stale, the first rebuild after the drop would
     // be served the old names and bake them back into the hub for its TTL.
     expect((await getPublicDivision(s.orgSlug, s.competition.slug, s.division.slug))!.entrants.map((e) => e.display_name))
@@ -834,13 +834,13 @@ describe.skipIf(!HAS_DB)("a person write drops the public Redis documents naming
 
     expect(named.filter((key) => probe.redis.has(key)), "documents still naming Ben").toEqual([]);
     expect(unrelated.filter((key) => probe.redis.has(key)), "documents of a competition Ben is not in").toEqual(unrelated);
-    expect(expired(dataEntry("pub-div-v2", s.division.id)), "Ben's division data entry EXPIRES, not stale").toBe(true);
-    expect(untouched(dataEntry("pub-div-v2", otherDivision.id)), "a division Ben is not in").toBe(true);
+    expect(expired(dataEntry("pub-div-v3", s.division.id)), "Ben's division data entry EXPIRES, not stale").toBe(true);
+    expect(untouched(dataEntry("pub-div-v3", otherDivision.id)), "a division Ben is not in").toBe(true);
     const rebuilt = await getPublicDivision(s.orgSlug, s.competition.slug, s.division.slug);
     expect(rebuilt!.entrants.map((e) => e.display_name), "the first rebuild after the drop").not.toContain("Ben Stokes");
 
     // Every OTHER machine: the division tag goes out as EXPIRE, never as SWR,
-    // or a peer's hub rebuild reads its stale `pub-div-v2` (review r2-m2 Y6).
+    // or a peer's hub rebuild reads its stale `pub-div-v3` (review r2-m2 Y6).
     const div = divisionTag(s.division.id);
     const comp = competitionTag(s.competition.id);
     const modesOf = (tag: string) => probe.broadcasts.filter((b) => b.tags.includes(tag)).map((b) => b.mode);

@@ -17,9 +17,13 @@ import {
   withdrawTableEntrant,
   type BracketFixture,
   type FixtureUpdate,
-  type TableFixture,
 } from "@seazn/engine/competition";
 import { HttpError } from "@/lib/errors";
+import {
+  WITHDRAWAL_PENDING_STATUSES,
+  WITHDRAWAL_PLAYED_STATUSES,
+  tableWithdrawalInputs,
+} from "@/lib/table-withdrawal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getEntrant, patchEntrant } from "./entrants";
 import { getDivision } from "./divisions";
@@ -28,8 +32,10 @@ import { listDivisionFixtures, listEvents, getFixtureState } from "./fixtures";
 import { scoreEvent } from "./scoring";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
-const SETTLED = new Set(["decided", "finalized", "forfeited"]);
-const PENDING = new Set(["scheduled", "in_play"]);
+// The table policy's reading of DB statuses — shared with the qualification
+// builder so the two cannot disagree about who a departure would expunge.
+const SETTLED = WITHDRAWAL_PLAYED_STATUSES;
+const PENDING = WITHDRAWAL_PENDING_STATUSES;
 const REASON = "entrant withdrew";
 
 export interface WithdrawCascadeOut {
@@ -158,23 +164,9 @@ export async function withdrawEntrantCascade(
       const byId = new Map(mine.map((f) => [f.id, f]));
 
       if (TABLE_KINDS.has(stage.kind)) {
-        // Engine shapes: played fixtures carry a result naming both sides;
-        // the policy only counts involvement, so minimal deltas suffice.
-        const zero = (id: string) =>
-          ({ entrantId: id, played: 1, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} });
-        const played: TableFixture[] = mine
-          .filter((f) => SETTLED.has(f.status) && f.outcome !== null)
-          .map((f) => ({
-            id: f.id,
-            status: "decided" as const,
-            result: [zero(f.home_entrant_id ?? ""), zero(f.away_entrant_id ?? "")] as const,
-          }));
-        const pending = mine
-          .filter((f) => PENDING.has(f.status))
-          .map((f) => ({
-            id: f.id,
-            opponent: (f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id) ?? "",
-          }));
+        // lib/table-withdrawal: the ONE reading of these rows into the policy's
+        // input (the qualification builder reads the same verdict, ruling F1).
+        const { played, pending } = tableWithdrawalInputs(entrantId, mine);
         const result = withdrawTableEntrant(
           {
             id: stage.id,

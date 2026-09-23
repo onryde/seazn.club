@@ -79,7 +79,7 @@ describe("StandingsTable — every header word is the page dictionary's", () => 
   it("the tie note is the dictionary's sentence with the dictionary's rule name", () => {
     const html = table(es);
     const sentence = es["table.tieBreak"].replace("{with}", "Beta").replace("{rule}", es["table.tieBreak.diff"]);
-    expect(html).toContain(`>${sentence}</p>`);
+    expect(html).toContain(`>${sentence}</span>`);
     expect(html).not.toContain("Level with");
     expect(html).not.toContain(en["table.tieBreak.diff"]);
   });

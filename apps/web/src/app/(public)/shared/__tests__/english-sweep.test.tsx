@@ -332,6 +332,13 @@ const stage = (id: string, divisionId: string, seq: number, kind: PublicStage["k
   kind,
   name,
   status: "active",
+  // V414 — no qualification cut on these hand-built stages.
+  qualify_count: null,
+  qualify_per_group: false,
+  next_stage_name: null,
+  swiss_rounds: null,
+  points_rule: null,
+  has_rank_overrides: false,
 });
 
 const entrants = (divisionId: string, prefix: string, n: number): PublicEntrant[] =>

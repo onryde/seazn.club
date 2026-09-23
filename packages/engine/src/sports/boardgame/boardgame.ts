@@ -21,7 +21,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -776,6 +776,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     return [
       ...new Set([cfg.scoring.win + cfg.scoring.loss, cfg.scoring.draw * 2, 0]),
     ];
+  },
+
+  matchPointsBounds(cfg) {
+    return boundsFrom([cfg.scoring.win], [cfg.scoring.loss], [cfg.scoring.draw]);
   },
 
   officialLabel: { scorer: "Arbiter" }, // doc 13 §1

@@ -16,11 +16,17 @@ import { buildSwissTable, rankStandings } from "./tiebreakers.ts";
 export type FixtureStatus = "scheduled" | "in_play" | "decided" | "void" | "walkover";
 
 const SETTLED: ReadonlySet<FixtureStatus> = new Set(["decided", "void", "walkover"]);
+/** A fixture in one of these statuses is finished for its stage: it can no
+ *  longer move a table. Exported (standings qualification, plan M12) so the web
+ *  builder counts a table's remaining matches with the engine's own set rather
+ *  than a copy that could drift from `isTableStageComplete`. */
+export { SETTLED as SETTLED_FIXTURE_STATUSES };
 const COUNTS_FOR_STANDINGS: ReadonlySet<FixtureStatus> = new Set(["decided", "walkover"]);
 
 // A league/group/swiss fixture as the stage sees it: a status and, once
-// decided, the sport module's [home, away] delta pair (void fixtures carry no
-// result and never reach the standings fold).
+// decided, the sport module's [home, away] delta pair. Void fixtures never
+// reach the standings fold (the adapter may still attach a result, which
+// counts only for pool membership).
 //
 // `awardDelta` is the one-sided sit-out path (Swiss odd-field bye, KO seeded
 // bye): forfeited + `outcome.kind === "award"` with the other seat null, so
@@ -184,8 +190,10 @@ function entrantsOfPool(
     }
     if (fixture.awardDelta !== undefined) ids.add(fixture.awardDelta.entrantId);
   }
-  // Include declared entrants that happen to sit in this pool but have no
-  // counted result yet (e.g. all their games void) via the allEntrants order.
+  // Membership = every entrant on a fixture of this pool carrying a result or
+  // an awardDelta, whatever that fixture's status (a voided fixture that kept
+  // its outcome still counts). A declared entrant with neither is not a member
+  // here; filtering allEntrants only restores the declared order.
   return allEntrants.filter((id) => ids.has(id));
 }
 

@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { fetchCompetitionHub } from "./competition-hub-data";
+import { closeStandingsPopovers } from "./standings-popover";
 
 export const HUB_POLL_MS = 15_000;
 export const HUB_IDLE_POLL_MS = 60_000;
@@ -206,6 +207,12 @@ export function useLiveCompetition({
       // 2026-09-17).
       const ended = [...liveDivisionIds(held)].filter((id) => !stillLive.has(id));
       if (ended.length > 0) linger(ended);
+      // Owner ruling (2026-09-23): an update that CHANGES a standings table
+      // closes every open standings popover before the table is redrawn. Its
+      // row may be about to move, and the reader taps again. A tick that brings
+      // the same tables back leaves an open one alone, or every poll would
+      // shut it.
+      if (JSON.stringify(next.tables) !== JSON.stringify(held.tables)) closeStandingsPopovers();
       setDoc(next);
       return next;
     } catch {

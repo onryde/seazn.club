@@ -18,6 +18,8 @@ import { AttributionLink } from "@/components/attribution-link";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
+import type { AnySportModule } from "@seazn/engine/sport";
+import { divisionQualification } from "@/server/public-site/division-qualification";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
@@ -60,8 +62,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
 
   let metricSpecs: MetricSpecLike[] = [];
   let cascade: readonly string[] = [];
+  let module_: AnySportModule | null = null;
   try {
-    const module_ = resolveModule(division.sport_key, division.module_version);
+    module_ = resolveModule(division.sport_key, division.module_version);
     metricSpecs = module_.metrics;
     cascade = division.tiebreakers ?? module_.defaultTiebreakers;
   } catch {
@@ -177,6 +180,21 @@ export default async function EmbedWidgetPage({ params }: Props) {
       <p className="p-2 text-sm text-zinc-500">{t(dict, "division.bracketEmpty")}</p>
     );
   } else {
+    // Standings qualification status (spec 2026-09-22 §4.2) — the same
+    // assembly the public division page and the hub use, from the PINNED
+    // module and the live cfg: an embedded table is a public standings
+    // surface, and one that dropped the cut would disagree with the page it
+    // links to. Called per table with that table's own snapshot (its pool).
+    const qualificationFor = divisionQualification({
+      module_,
+      division,
+      dict,
+      locale: orgLocale,
+      fixtures,
+      entrantStatuses,
+      entrantNames,
+      cascade,
+    });
     body = (
       <div className="space-y-5">
         {stages.map((stage) => {
@@ -197,6 +215,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
                   : stage.name
               }
               dict={dict}
+              qualification={qualificationFor(stage, snap)}
             />
           ));
         })}

@@ -5,11 +5,16 @@
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import type { StandingsDelta } from "../core/types.ts";
+import type { TiebreakerKey } from "../sport/module.ts";
+import { RATIO_LEDGERS } from "./display.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 import {
+  FOR_KEYS,
   buchholz,
   buildSwissTable,
   directEncounter,
+  metricKeyOf,
+  metricOf,
   pointsToText,
   rankStandings,
   validateCascade,
@@ -188,6 +193,23 @@ describe("an absent metric is no data, not a zero (#429)", () => {
   });
 });
 
+// `metricKeyOf` names the alias `metricOf` reads. The what-if needs the name,
+// not the value: a stage rule's forfeit score lands in `for`/`against`/`diff`
+// only, and a sport's own `gf`/`gd` are read first (web qualification-view).
+describe("metricKeyOf: the alias metricOf reads", () => {
+  it("is the first alias the row records, a recorded zero included; none recorded is undefined", () => {
+    expect(metricKeyOf(row("fb", 0, { for: 3, gf: 0 }), FOR_KEYS)).toBe("gf");
+    expect(metricKeyOf(row("cr", 0, { runs_for: 9, for: 3 }), FOR_KEYS)).toBe("for");
+    expect(metricKeyOf(row("none", 0, { against: 1 }), FOR_KEYS)).toBeUndefined();
+  });
+
+  it("is the key whose value metricOf returns", () => {
+    const fb = row("fb", 0, { for: 3, gf: 0 });
+    expect(metricOf(fb, FOR_KEYS)).toBe(fb.metrics[metricKeyOf(fb, FOR_KEYS)!]);
+    expect(metricOf(fb, FOR_KEYS)).toBe(0);
+  });
+});
+
 // The non-regression pin for the two federation cascades named in the #429
 // ruling. Complete data on every row, so no key is ever absent — these orders
 // must not move, and they differ from each other, which is what makes the pair
@@ -310,5 +332,23 @@ describe("validateCascade rejections (spec 05 §4.1)", () => {
     expect(() =>
       validateCascade(["point_ratio"], { metrics: ["points_won", "points_lost"].map(metric) }),
     ).not.toThrow();
+  });
+});
+
+// Final review M2: the four ratio comparators read their won/lost pair from
+// RATIO_LEDGERS (display.ts), the pair the table's ratio column and breakdown
+// popover print — no second literal copy. Each case is read off that
+// declaration, so a comparator on any other pair (reversed, or a literal that
+// drifted from it) ranks the other way.
+describe("ratio comparators rank on RATIO_LEDGERS' pair — the pair the table prints", () => {
+  it.each(Object.entries(RATIO_LEDGERS))("%s", (key, [won, lost]) => {
+    // A 3/2 (1.5) beats B 5/4 (1.25) on the ratio, though B has more won: a
+    // comparator on won alone, or on the pair reversed (0.67 vs 0.8), puts B
+    // first. Level on points, so the ratio is what splits them.
+    const rows = [row("B", 3, { [won]: 5, [lost]: 4 }), row("A", 3, { [won]: 3, [lost]: 2 })];
+    const ranked = rankStandings(rows, { cascade: ["points", key as TiebreakerKey], results: [] });
+    expect(ranked.rows.map((entry) => entry.entrantId)).toEqual(["A", "B"]);
+    // Split by the ratio itself, not by a residual-tie fallback.
+    expect(ranked.rows[0]?.tieBreak?.key).toBe(key);
   });
 });

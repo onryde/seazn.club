@@ -980,6 +980,13 @@ async function main() {
   // together over real HTTP (own fresh free session — not an entitlement gate).
   await publicWithdrawnStandingsSuite();
 
+  // --- 2026-09-22 standings qualification status: the public division page
+  // marks each row's status, draws the cut line after place N and keys the
+  // markers in a legend; a league with no next stage draws none of it (V414's
+  // meta read, the snapshot, the builder and the table's prop, over real HTTP;
+  // own fresh free session — not an entitlement gate).
+  await publicQualificationStandingsSuite();
+
   // --- 2026-09-22 (production: "Sankar & Ritwik" outlived Ritwik): a roster
   // swap renames a pair whose name its people derived, never a custom one, and
   // the public division page shows the rename on the very next load — the
@@ -8759,6 +8766,152 @@ async function publicWithdrawnStandingsSuite(): Promise<void> {
       withdrawn[0].label.length > 0 &&
       withdrawn[0].label !== disqualified[0].label &&
       withdrawn[0].cls !== disqualified[0].cls,
+  );
+}
+
+/**
+ * Standings qualification status (spec 2026-09-22; plan Task 10): the PUBLIC
+ * division page marks each row's status, draws the cut line after place N and
+ * keys the markers in a legend under the table — and a table with no next
+ * stage draws none of it, exactly as before.
+ *
+ * Smoke rather than only e2e: smoke is the only gate a PR gets automatically
+ * (e2e.yml triggers on push to `main` alone), and the status reaches the page
+ * through a seam no unit test sees — V414's `stage_qualification_meta` read
+ * through `public_stages_v`, the standings snapshot, the builder, and the
+ * table's `qualification` prop. The served HTML is all smoke can read, so this
+ * pins STRUCTURE; the engine-exact statuses are
+ * `apps/web/e2e/standings-qualification.spec.ts`'s job.
+ *
+ * Markers are counted per ROW, not over the body: the legend draws one of each
+ * kind as its key, so a four-row table with a legend carries seven
+ * `data-qual-marker` attributes, and a whole-body count of four would fail on a
+ * healthy page.
+ *
+ * Own fresh free session (not an entitlement gate): a community org builds a
+ * Swiss → knockout composite and publishes one public competition.
+ */
+async function publicQualificationStandingsSuite(): Promise<void> {
+  const free = newSession();
+  const ver = await signIn(free, `delivered+qual_board_${tag}@resend.dev`);
+  const orgs = (await call(free, "/api/orgs")) as { id: string; slug: string }[];
+  const org = orgs.find((o) => o.id === ver.org_id)!;
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(free, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Qualification Board ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const mkDiv = async (name: string) =>
+    v1data<{ id: string; slug: string }>(
+      await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+        name,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      }),
+    );
+  type Fx = { id: string; stage_id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null };
+  const score = async (fixtureId: string) => {
+    const st = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${fixtureId}/state`));
+    await v1(free, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+      expected_seq: st.last_seq,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 0 },
+    });
+  };
+  // The fold runs after each result commits, and the public page is cached
+  // from its first render: a snapshot that trails its fixtures shows no
+  // status, so nothing is fetched until every result has folded.
+  const settle = async (stageId: string, played: number) => {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const rows = v1data<{ rows: { played: number }[] }>(await v1(free, `/api/v1/stages/${stageId}/standings`)).rows;
+      if (rows.reduce((n, r) => n + r.played, 0) === played) return;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  };
+  const field = (prefix: string) =>
+    ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual", display_name: `${prefix} ${n} ${tag}`, seed: i + 1 }));
+
+  // A Swiss of four over three rounds into Finals (places 1–2), round 1 played.
+  const swissDiv = await mkDiv("Swiss");
+  const stages = v1data<{ id: string; seq: number }[]>(
+    await v1(free, `/api/v1/divisions/${swissDiv.id}/stages`, "POST", [
+      { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 }, progression: null },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "Finals",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "on_complete",
+        },
+      },
+    ]),
+  );
+  const swissId = stages.find((s) => s.seq === 1)!.id;
+  await v1(free, `/api/v1/divisions/${swissDiv.id}/entrants`, "POST", field("Swiss"));
+  await v1(free, `/api/v1/divisions/${swissDiv.id}/start`, "POST");
+  await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");
+  const swissFx = v1data<Fx[]>(await v1(free, `/api/v1/divisions/${swissDiv.id}/fixtures`)).filter(
+    (f) => f.stage_id === swissId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null,
+  );
+  for (const f of swissFx) await score(f.id);
+  await settle(swissId, 4);
+
+  // The sibling: a league with NO next stage, round 1 played.
+  const plainDiv = await mkDiv("Plain");
+  const league = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${plainDiv.id}/stages`, "POST", { seq: 1, kind: "league", name: "League", config: {} }),
+  );
+  await v1(free, `/api/v1/divisions/${plainDiv.id}/entrants`, "POST", field("Plain"));
+  const gen = v1data<{ fixtures: Fx[] }>(await v1(free, `/api/v1/stages/${league.id}/generate`, "POST"));
+  await v1(free, `/api/v1/divisions/${plainDiv.id}/start`, "POST");
+  const firstRound = Math.min(...gen.fixtures.map((f) => f.round_no));
+  for (const f of gen.fixtures.filter((x) => x.round_no === firstRound)) await score(f.id);
+  await settle(league.id, 4);
+
+  const count = (body: string, re: RegExp) => (body.match(re) ?? []).length;
+  /** The standings box's own rows. The page also serves a results grid whose
+   *  rows are `<th scope="row">` too, so a body-wide count reads double. */
+  const standingsRows = (body: string) =>
+    count(/<div role="region"[^>]*>([\s\S]*?)<\/table>/.exec(body)?.[1] ?? "", /<th scope="row"/g);
+
+  const swissPage = await html(newSession(), `/shared/${org.slug}/${comp.slug}/${swissDiv.slug}?tab=standings`);
+  check(
+    `qualification board: the Swiss page is 200 and draws exactly ONE cut line and one legend (status=${swissPage.status})`,
+    swissPage.status === 200 &&
+      count(swissPage.body, /data-testid="qual-cut"/g) === 1 &&
+      count(swissPage.body, /data-testid="qual-legend"/g) === 1,
+  );
+  const rows = [...swissPage.body.matchAll(/<tr data-qual="(\w+)"[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => ({
+    status: m[1] ?? "",
+    markers: [...(m[2] ?? "").matchAll(/data-qual-marker="(\w+)"/g)].map((x) => x[1] ?? ""),
+  }));
+  check(
+    `qualification board: each of the four rows carries a status and ONE marker of that status (${rows
+      .map((r) => `${r.status}:${r.markers.join("/")}`)
+      .join(" ")})`,
+    rows.length === 4 && rows.every((r) => r.markers.length === 1 && r.markers[0] === r.status),
+  );
+  check(
+    `qualification board: the page's markers are the four rows' plus the legend's three keys (${count(swissPage.body, /data-qual-marker="/g)})`,
+    count(swissPage.body, /data-qual-marker="/g) === 4 + 3,
+  );
+
+  const plainPage = await html(newSession(), `/shared/${org.slug}/${comp.slug}/${plainDiv.slug}?tab=standings`);
+  check(
+    `qualification board: a league with no next stage draws its table (${standingsRows(plainPage.body)} rows) and no cut line, legend, status or marker`,
+    plainPage.status === 200 &&
+      // The positive pair: an empty page satisfies every zero below.
+      standingsRows(plainPage.body) === 4 &&
+      count(plainPage.body, /data-testid="qual-cut"/g) === 0 &&
+      count(plainPage.body, /data-testid="qual-legend"/g) === 0 &&
+      count(plainPage.body, /data-qual="/g) === 0 &&
+      count(plainPage.body, /data-qual-marker="/g) === 0,
   );
 }
 

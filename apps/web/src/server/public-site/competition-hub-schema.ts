@@ -178,6 +178,38 @@ export const TableColumn = z.object({
   /** Shown in the narrow (phone) rendering of the table. */
   compact: z.boolean(),
 });
+/** Standings qualification status (spec 2026-09-22 §4.1). Every string is
+ *  already resolved in the org's locale by `buildQualificationView`
+ *  (`./qualification-view.ts`); the renderer only places them. */
+export const QualStatusKind = z.enum(["through", "win_k", "needs_help", "out"]);
+/** One row's status. Named `QualRowView`, not `QualRow`: the engine's
+ *  qualification input row is `QualRow` (`@seazn/engine/competition`), and
+ *  both are imported side by side (controller ruling T2-C3). */
+export const QualRowView = z.object({
+  status: QualStatusKind,
+  /** R7 label: "Through" / "Win and in" / "Win 2 and in" / "Needs help" / "Out". */
+  label: z.string(),
+  /** "Rank 3, Win 2 and in, show details" — the trigger's accessible name. */
+  ariaLabel: z.string(),
+  headline: z.string(),
+  /** Only for the two open statuses, and never when the next match is a bye. */
+  ifYouLose: z.string().nullable(),
+  /** The tie-break what-if against the nearest rival across the line (§3.4). */
+  whatIf: z.string().nullable(),
+  /** "Assumes {rival}'s figures stay the same…" — present exactly when
+   *  `whatIf` rests on that assumption: a margin target, or the "safe" reading
+   *  (R5: neither is ever shown unlabelled). Null beside a rule-only what-if. */
+  whatIfAssumption: z.string().nullable(),
+});
+export const QualTable = z.object({
+  /** Places above the line: the line renders after row `cutIndex`. */
+  cutIndex: z.number().int().positive(),
+  label: z.string(),
+  legend: z.object({ through: z.string(), open: z.string(), out: z.string(), hint: z.string() }),
+});
+export type QualRowT = z.infer<typeof QualRowView>;
+export type QualTableT = z.infer<typeof QualTable>;
+
 export const TableRow = z.object({
   rank: z.number().nullable(),
   entrantId: z.string(),
@@ -191,7 +223,17 @@ export const TableRow = z.object({
   /** One formatted string per `TableColumn`, in the same order. Strings, not
    *  numbers: the builder has already applied the locale's number format. */
   cells: z.array(z.string()),
+  /** One entry per `cells` entry: the resolved breakdown a ratio cell opens
+   *  onto ("Points won 120 · Points lost 98 · Ratio 1.22"), or null for a
+   *  cell with nothing to explain (`ratioNote`, `standings-view.ts`).
+   *  Optional because a hub document cached before the field existed (Redis
+   *  15s, ISR 30s) reaches the client without it — absent reads as "no
+   *  note", which renders the plain cell it always did. */
+  cellNotes: z.array(z.string().nullable()).optional(),
   tieBreakText: z.string().nullable(),
+  /** Null = no status for this row (no cut, a departed entrant, or a table
+   *  where a status could be wrong). Required, so a builder cannot forget it. */
+  qual: QualRowView.nullable(),
   champion: z.boolean(),
 });
 export const TableView = z.object({
@@ -202,6 +244,8 @@ export const TableView = z.object({
   caption: z.string(),
   columns: z.array(TableColumn),
   rows: z.array(TableRow),
+  /** The cut line and legend; null when the table shows no status. */
+  qualification: QualTable.nullable(),
   updatedAt: z.string(),
   fullHref: z.string(),
 });

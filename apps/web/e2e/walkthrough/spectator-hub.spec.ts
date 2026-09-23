@@ -699,10 +699,11 @@ test("HB8: Overview, Matches, Table and Teams offer the same controls at 320 as 
     }
     const phoneOnly = sets[320]!.filter((c) => !sets[1280]!.includes(c));
     console.log(`HB8 ${id}: 320=${JSON.stringify(sets[320])}\n1280=${JSON.stringify(sets[1280])}`);
-    // `controlSet` cuts each label at 64 characters, and a view id carries a
-    // uuid, so the toggle is matched on its tag plus the cut testid — the
-    // `-full` link shares that prefix, but it is an `a`, not a `button`.
-    const isToggle = (c: string) => moreIds.some((m) => c === `button:${m.slice(0, 64)}`);
+    // Matched on the WHOLE test id: `controlSet` keeps ids uncut, because the
+    // table's tie-break buttons share this toggle's `mh-table-<viewId>-` prefix
+    // and a 64-character cut made them one string — which stripped every tie
+    // button from the phone's set and none from the desktop's.
+    const isToggle = (c: string) => moreIds.some((m) => c === `button:${m}`);
     const isHeroPresent = (c: string) => c.endsWith(":mh-hero-present");
     expect(sets[1280]!.filter(isHeroPresent), `${id}: the hero Present link is offered at 1280`).toHaveLength(1);
     expect(sets[320]!.filter(isHeroPresent), `${id}: the hero Present link folds at 320`).toHaveLength(0);

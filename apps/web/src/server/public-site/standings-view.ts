@@ -21,14 +21,17 @@ import "server-only";
 // which that component now reads from here too.
 import {
   DERIVED_METRICS,
+  RATIO_LEDGERS,
   derivedMetricText,
   tieBreakLabel,
+  type RatioKey,
   type StandingsRow,
 } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { standingsColumns, formatMetric, type MetricSpecLike } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { TableViewT } from "./competition-hub-schema";
+import type { QualificationView } from "./qualification-view";
 
 /** The columns a phone shows without asking: played, won, lost, points.
  *  Everything else — draws, the sport's own metrics, the cascade's derived
@@ -190,6 +193,7 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   fair_play: "table.tieBreak.fair_play",
   nrr: "table.tieBreak.nrr",
   set_ratio: "table.tieBreak.set_ratio",
+  game_ratio: "table.tieBreak.game_ratio",
   board_ratio: "table.tieBreak.board_ratio",
   point_ratio: "table.tieBreak.point_ratio",
   h2h_points: "table.tieBreak.h2h_points",
@@ -218,6 +222,48 @@ export function tieBreakRule(key: string, msg: (key: TKey) => string): string {
   return dictKey === undefined ? tieBreakLabel(key) : msg(dictKey);
 }
 
+/** The ratio columns that explain themselves on tap, and the sentence each one
+ *  says: the two integer totals the engine divides (`RATIO_LEDGERS`), then the
+ *  cell's own ratio text. Totals only, never per match (owner-approved).
+ *
+ *  `set_ratio` is left out ON PURPOSE. Its unit is the sport's word — "sets"
+ *  in volleyball and tennis, "games" in badminton, table tennis and carrom,
+ *  which all ride the same `sets_won` key (`METRIC_HEADER_KEYS` above keys the
+ *  header by label for exactly that reason) — so one sentence would tell a
+ *  badminton spectator about sets they never played. Points and boards mean
+ *  the same thing in every sport that ranks on them. Spelled out rather than
+ *  built from the key, like `TIE_BREAK_MSG_KEYS`, so the family stays
+ *  grep-able. */
+export const RATIO_NOTE_KEYS: Readonly<Partial<Record<RatioKey, TKey>>> = {
+  board_ratio: "table.ratioNote.board_ratio",
+  point_ratio: "table.ratioNote.point_ratio",
+};
+
+/** The breakdown popover's text for one ratio cell, or null when there is
+ *  nothing to explain: a column without a note, or a row with no ledger yet
+ *  (the engine's "—"). Null means NO trigger — the cell stays plain text
+ *  rather than becoming a button that opens onto "won 0 · lost 0".
+ *
+ *  The ratio is the engine's own `derivedMetricText`, not a local division,
+ *  so the popover can never show a number the cell beside it does not.
+ *  Shared by both standings tables, like `columnHeader` and `tieBreakRule`. */
+export function ratioNote(
+  row: StandingsRow,
+  key: string,
+  msg: (key: TKey, vars?: Record<string, string | number>) => string,
+): string | null {
+  const noteKey = Object.hasOwn(RATIO_NOTE_KEYS, key) ? RATIO_NOTE_KEYS[key as RatioKey] : undefined;
+  if (noteKey === undefined) return null;
+  const ratio = derivedMetricText(row, key as RatioKey);
+  if (ratio === null || ratio === "—") return null;
+  const [won, lost] = RATIO_LEDGERS[key as RatioKey];
+  return msg(noteKey, {
+    won: formatMetric(row.metrics[won] ?? 0),
+    lost: formatMetric(row.metrics[lost] ?? 0),
+    ratio,
+  });
+}
+
 export interface TableViewInput {
   /** Stable id for this table within the document — a division may publish an
    *  overall table and one per pool, so this is not the division id. */
@@ -243,12 +289,17 @@ export interface TableViewInput {
   /** `t(dict, …)` bound by the caller, in the ORG's locale. The builder resolves
    *  every string it emits; nothing downstream re-derives one. */
   msg: (key: TKey, vars?: Record<string, string | number>) => string;
+  /** Standings qualification (spec 2026-09-22), already resolved by
+   *  `buildQualificationView`; null/absent = no cut to show. Carried, never
+   *  derived: the table line as is, and each row's status by entrant id. */
+  qualification?: QualificationView | null;
 }
 
 export function buildTableView(input: TableViewInput): TableViewT {
   const columns = standingsColumns(input.metricSpecs, input.cascade, input.rows, DERIVED_METRICS);
   const ranked = [...input.rows].sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
   const name = (id: string) => input.entrantNames[id] ?? id;
+  const qual = input.qualification ?? null;
 
   return {
     id: input.id,
@@ -279,13 +330,21 @@ export function buildTableView(input: TableViewInput): TableViewT {
             ? formatMetric(r[c.key as "played" | "won" | "drawn" | "lost" | "points"])
             : formatMetric(r.metrics[c.key], c.decimals),
       ),
+      // Paired with `cells` by index, like the cells with the columns. Only a
+      // derived column can carry one; `ratioNote` decides which of those do.
+      cellNotes: columns.map((c) => (c.kind === "derived" ? ratioNote(r, c.key, input.msg) : null)),
       tieBreakText: r.tieBreak
         ? input.msg("table.tieBreak", {
             with: r.tieBreak.with.map(name).join(", "),
             rule: tieBreakRule(r.tieBreak.key, input.msg),
           })
         : null,
+      // Keyed by entrant id, never by rank or position: a shared rank is two
+      // rows, and the view's row order is its own. No status = null, which the
+      // schema states as a required key (never an absent one).
+      qual: qual !== null && Object.hasOwn(qual.rows, r.entrantId) ? qual.rows[r.entrantId]! : null,
       champion: input.championId === r.entrantId,
     })),
+    qualification: qual?.table ?? null,
   };
 }

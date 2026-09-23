@@ -5,6 +5,7 @@
 import { z } from "zod";
 import type { EntrantId, MatchOutcome, MetricSpec, StandingsDelta } from "../core/types.ts";
 import { EngineError } from "../core/errors.ts";
+import type { MatchPointsBounds } from "../sport/module.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 
 // Jul3/05 §2 — declarative points rule (stages.config.points).
@@ -228,4 +229,51 @@ export function applyRankLocks(
     out[rank - 1] = { ...row, rank };
   }
   return out as StandingsRow[];
+}
+
+// Standings qualification (spec 2026-09-22 §3.1, plan P1): a stage PointsRule
+// REPLACES the sport's points (applyPointsRule), so its bounds replace the
+// module's. Bonuses are summed per outcome class — an over-approximation when
+// two bonuses of one class exclude each other, which is safe (R3: cautious,
+// never wrong).
+//
+// Which outcome each bonus can land on, as `bonusesFor` applies it. A Record
+// over the zod enum, not a Set of strings (review fix 1): a new `when` kind is
+// then a tsc error here until someone classifies it, instead of a bonus that
+// silently falls outside every bound.
+type BonusWhen = PointsRule["bonuses"][number]["when"];
+type BonusClass = "win" | "loss" | "draw" | "no_result";
+const BONUS_CLASS: Record<BonusWhen, BonusClass> = {
+  win_margin_gte: "win",
+  forfeit_win: "win",
+  loss_margin_lte: "loss",
+  score_ratio_gte: "loss",
+  forfeit_loss: "loss",
+  draw: "draw",
+  no_result: "no_result",
+};
+
+export function pointsRuleBounds(rule: PointsRule): MatchPointsBounds {
+  const sum = (cls: BonusClass, sign: 1 | -1) =>
+    rule.bonuses
+      .filter((b) => BONUS_CLASS[b.when] === cls)
+      .reduce((s, b) => s + (sign === 1 ? Math.max(0, b.points) : Math.min(0, b.points)), 0);
+  const wins = [rule.base.win, ...(rule.forfeit ? [rule.forfeit.winnerPoints] : [])];
+  const losses = [rule.base.loss, ...(rule.forfeit ? [rule.forfeit.loserPoints] : [])];
+  const winFloor = Math.min(...wins) + sum("win", -1);
+  const lossCeil = Math.max(...losses) + sum("loss", 1);
+  // Only wins pay, at one amount (MatchPointsBounds.winsOnly): a bonus that
+  // can pay anything makes some outcome pay off-rate, so any one turns it off.
+  const winsOnly =
+    rule.bonuses.every((b) => b.points === 0) &&
+    wins.every((v) => v === rule.base.win) &&
+    rule.base.win !== 0 &&
+    [rule.base.draw, ...losses].every((v) => v === 0);
+  return {
+    max: Math.max(Math.max(...wins) + sum("win", 1), lossCeil, rule.base.draw + sum("draw", 1), sum("no_result", 1)),
+    min: Math.min(winFloor, Math.min(...losses) + sum("loss", -1), rule.base.draw + sum("draw", -1), sum("no_result", -1)),
+    winFloor,
+    lossCeil,
+    winsOnly,
+  };
 }

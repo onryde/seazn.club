@@ -82,6 +82,7 @@ const view: TableViewT = {
       colour: null,
       cells: ["2", "2", "0", "4", "6"],
       tieBreakText: null,
+      qual: null,
       champion: true,
     },
     {
@@ -92,9 +93,11 @@ const view: TableViewT = {
       colour: null,
       cells: ["2", "0", "2", "-4", "0"],
       tieBreakText: "Level with Alpha — separated on GD",
+      qual: null,
       champion: false,
     },
   ],
+  qualification: null,
 };
 
 type Props = Parameters<typeof StandingsTableView>[0];
@@ -191,11 +194,24 @@ describe("StandingsTableView — phone composition", () => {
     );
     expect(rowHtml(h, "a")).toContain('data-champion="true"');
     expect(rowHtml(h, "b")).toContain('data-champion="false"');
-    // The tie-break sentence is hover text AND real text: a `title` alone is
-    // an affordance a phone does not have (W1's stat-table finding).
-    expect(h).toContain('title="Level with Alpha — separated on GD"');
-    expect(h).toMatch(/class="sr-only">Level with Alpha — separated on GD</);
-    expect(rowHtml(h, "a")).not.toContain("sr-only\">Level with");
+    // The tie-break sentence is a TAP target now, not hover text: a `title`
+    // is an affordance a phone does not have (W1's stat-table finding), and
+    // the sr-only copy reached screen readers and nobody else. The row's rank
+    // is a button whose `aria-controls` names the panel holding the sentence
+    // (closed, so `hidden`), and `aria-describedby` keeps it spoken on focus.
+    const b = rowHtml(h, "b");
+    const trigger = /<button[^>]*data-testid="mh-table-t1-tie-b"[^>]*>/.exec(b)?.[0] ?? "";
+    expect(trigger, "the tied row's rank is not a popover trigger").not.toBe("");
+    expect(trigger).toContain('aria-expanded="false"');
+    const panelId = /aria-controls="([^"]+)"/.exec(trigger)?.[1] ?? "";
+    expect(trigger).toContain(`aria-describedby="${panelId}"`);
+    expect(b).toMatch(
+      new RegExp(`<span id="${panelId}" role="note"[^>]*hidden=""[^>]*>Level with Alpha — separated on GD</span>`),
+    );
+    expect(h).not.toContain('title="Level with Alpha — separated on GD"');
+    // Negative pair: the untied row has no trigger and no sentence.
+    expect(rowHtml(h, "a")).not.toContain("-tie-");
+    expect(rowHtml(h, "a")).not.toContain("Level with");
   });
 
   it("cells land under their own column — the i-th cell renders in the i-th column", () => {
@@ -245,7 +261,8 @@ describe("StandingsTableView — phone composition", () => {
     expect(h).not.toMatch(/class="inline-flex h-5 w-5 /);
     // The marker is a flex sibling with real gap, not an adjacent JSX
     // expression with no break opportunity between it and the chip.
-    expect(rowHtml(h, "b")).toMatch(/<span class="flex items-center gap-px">/);
+    // On a tied row that flex row IS the popover's trigger button.
+    expect(rowHtml(h, "b")).toMatch(/<button[^>]*class="[^"]*\sflex items-center gap-px\s/);
     expect(rowHtml(h, "b")).toMatch(/class="shrink-0 text-\[10px\] leading-none text-accent"/);
   });
 

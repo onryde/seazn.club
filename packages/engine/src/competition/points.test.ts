@@ -1,7 +1,7 @@
 // PointsRule / carry-over / rank-lock tests (Jul3/05, PROMPT-25 acceptance).
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { applyPointsRule, applyRankLocks, carryDeltas, PointsRule, validatePointsRule } from "./points.ts";
+import { applyPointsRule, applyRankLocks, carryDeltas, PointsRule, pointsRuleBounds, validatePointsRule } from "./points.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
 import { rankStandings } from "./tiebreakers.ts";
 import type { MatchOutcome, StandingsDelta } from "../core/types.ts";
@@ -189,5 +189,174 @@ describe("rank locks (Jul3/05 §4)", () => {
     expect(tied.every((r) => r.tieUnbroken === true)).toBe(true);
     const split = rankStandings([row("A", 3), row("B", 1)], { cascade: ["points"] }).rows;
     expect(split.some((r) => r.tieUnbroken)).toBe(false);
+  });
+});
+
+// Every delta shape a sport module hands to applyPointsRule (see the property
+// below). Shared by the bounds property and the winsOnly check.
+function ruleCorpus(): { outcome: MatchOutcome; pair: FixtureResult }[] {
+  const blank = (id: string, w: number, d: number, l: number): StandingsDelta => ({
+    entrantId: id, played: 1, won: w, drawn: d, lost: l, points: 0, metrics: {},
+  });
+  const corpus: { outcome: MatchOutcome; pair: FixtureResult }[] = [];
+  const scores = [0, 1, 3, 7, 10, 21, 40];
+  for (const hs of scores) for (const as_ of scores) corpus.push(result("H", "A", hs, as_));
+  corpus.push(
+    { outcome: { kind: "win", winner: "H", loser: "A", method: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
+    { outcome: { kind: "win", winner: "H", loser: "A", method: "forfeit" }, pair: [delta("H", 1, 0, 0, 21, 3), delta("A", 0, 0, 1, 3, 21)] },
+    { outcome: { kind: "award", winner: "H" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
+    { outcome: { kind: "tie" }, pair: [delta("H", 0, 1, 0, 5, 5), delta("A", 0, 1, 0, 5, 5)] },
+    { outcome: { kind: "tie" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
+    { outcome: { kind: "no_result" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
+  );
+  return corpus;
+}
+
+describe("pointsRuleBounds — safe per-side bounds for a custom points rule", () => {
+  // Oracle: applyPointsRule itself, over every outcome shape and a spread of
+  // margins. The bounds must CONTAIN every observed value, and for this rule be
+  // TIGHT (equal to the extremes). A rule-free reading (win 4 / loss 0) is the
+  // wrong constant this case separates from.
+  //
+  // Mutants, each run alone (2026-09-23): the brief's (i) `sum(win, 1)` dropped
+  // from max — the RUGBY case and the any-rule property. The property alone
+  // kills: winFloor without negative win bonuses; min without negative loss
+  // bonuses; the draw term without its bonus (max or min); the no-result term
+  // dropped (max or min); lossCeil dropped from max; winFloor dropped from min;
+  // and (review fix 1, BONUS_CLASS is a Record) each of the 7 `when` kinds moved
+  // to a wrong class, or the class filter inverted — RUGBY also kills the two
+  // margin kinds. A NEW kind is a tsc error (TS2741) until it is classified. The
+  // forfeit case kills: forfeit points left out of wins or losses, and
+  // winFloor/lossCeil read from the wrong end. RUGBY kills lossCeil without
+  // its bonuses and a bonus summed with its sign kept.
+  const RUGBY = PointsRule.parse({
+    base: { win: 4, draw: 2, loss: 0 },
+    bonuses: [
+      { when: "win_margin_gte", param: 20, points: 1 },
+      { when: "loss_margin_lte", param: 7, points: 1 },
+    ],
+  });
+  it("contains, and for this rule equals, what applyPointsRule actually awards", () => {
+    const seen = { win: [] as number[], loss: [] as number[], all: [] as number[] };
+    for (const [hs, as_] of [[30, 0], [21, 20], [10, 10], [5, 6], [0, 30]] as const) {
+      const { outcome, pair } = result("H", "A", hs, as_);
+      const [h, a] = applyPointsRule(outcome, pair, RUGBY);
+      for (const d of [h, a]) {
+        seen.all.push(d.points);
+        if (d.won === 1) seen.win.push(d.points);
+        if (d.lost === 1) seen.loss.push(d.points);
+      }
+    }
+    const b = pointsRuleBounds(RUGBY);
+    expect(b).toEqual({
+      max: Math.max(...seen.all),
+      min: Math.min(...seen.all, 0), // no_result scores 0
+      winFloor: Math.min(...seen.win),
+      lossCeil: Math.max(...seen.loss),
+      winsOnly: false, // the margin bonuses pay on some wins and some losses
+    });
+    expect(b.max).toBeGreaterThan(RUGBY.base.win); // the differential: base.win alone is wrong
+    expect(b.lossCeil).toBeGreaterThan(RUGBY.base.loss);
+  });
+  it("a forfeit rule widens the win floor and loss ceiling", () => {
+    const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1 } });
+    expect(pointsRuleBounds(rule)).toEqual({ max: 3, min: -1, winFloor: 2, lossCeil: 0, winsOnly: false });
+  });
+
+  // The two cases above pin exact values for two rules; they cannot see a bonus
+  // class dropped from a sum, a negative bonus, or a loss that outpays a win.
+  // This is the R3 property itself, for ANY rule: nothing applyPointsRule can
+  // award falls outside the bounds (they may be loose, never narrow). The
+  // corpus is every delta shape a sport module hands to applyPointsRule: played
+  // win/draw/loss over a spread of margins, a walkover, an award (a bye scores
+  // as one), a tie that counts as drawn and one that does not (cricket), and a
+  // no-result (every module returns 0/0/0 for it).
+  it("contains every value applyPointsRule awards, for any rule (negative bonuses, all kinds)", () => {
+    const n = fc.integer({ min: -6, max: 12 }).map((x) => x / 2);
+    const bonus = fc.record({
+      when: fc.constantFrom(...PointsRule.shape.bonuses.unwrap().element.shape.when.options),
+      param: fc.constantFrom(0, 0.5, 1, 2, 7, 20),
+      points: fc.integer({ min: -6, max: 6 }).map((x) => x / 2),
+    });
+    const rule = fc.record({
+      base: fc.record({ win: n, draw: n, loss: n }),
+      bonuses: fc.array(bonus, { maxLength: 5 }),
+      forfeit: fc.option(fc.record({ winnerPoints: n, loserPoints: n }), { nil: undefined }),
+    });
+    const corpus = ruleCorpus();
+    fc.assert(
+      fc.property(rule, (raw) => {
+        const r = PointsRule.parse(raw);
+        const b = pointsRuleBounds(r);
+        // One expect per rule, not per value: 4 per value timed out at 400 runs.
+        const outside: string[] = [];
+        for (const { outcome, pair } of corpus) {
+          for (const d of applyPointsRule(outcome, pair, r)) {
+            const at = `${outcome.kind} ${d.entrantId} ${JSON.stringify(d.metrics)} → ${d.points}`;
+            if (d.points < b.min) outside.push(`${at} < min ${b.min}`);
+            if (d.points > b.max) outside.push(`${at} > max ${b.max}`);
+            if (d.won === 1 && d.points < b.winFloor) outside.push(`${at} < winFloor ${b.winFloor}`);
+            if (d.lost === 1 && d.points > b.lossCeil) outside.push(`${at} > lossCeil ${b.lossCeil}`);
+          }
+        }
+        expect(outside).toEqual([]);
+      }),
+      { numRuns: 400, seed: 20260922 },
+    );
+  });
+});
+
+// Standings what-if (spec 2026-09-22 §3.4; controller rulings OQ1/M11). A
+// stage PointsRule REPLACES the sport's points, so under a rule the skip of
+// `wins` reads the RULE's winsOnly, never the sport's. True exactly when every
+// win pays one non-zero amount and every other outcome pays 0 — so any bonus
+// that can pay, a paying draw or loss, or a forfeit that pays differently
+// turns it off. One case per conjunct.
+describe("pointsRuleBounds — winsOnly: only wins pay, at one amount", () => {
+  const bounds = (raw: unknown) => pointsRuleBounds(PointsRule.parse(raw));
+  const BASE = { win: 2, draw: 0, loss: 0 };
+  it("one win amount, 0 for everything else → true (a forfeit at the same amount, a 0-point bonus)", () => {
+    expect(bounds({ base: BASE }).winsOnly).toBe(true);
+    expect(bounds({ base: BASE, forfeit: { winnerPoints: 2, loserPoints: 0 } }).winsOnly).toBe(true);
+    expect(bounds({ base: BASE, bonuses: [{ when: "win_margin_gte", param: 3, points: 0 }] }).winsOnly).toBe(true);
+  });
+  it("a paying draw, a paying loss, or a win that pays 0 → false", () => {
+    expect(bounds({ base: { ...BASE, draw: 1 } }).winsOnly).toBe(false);
+    expect(bounds({ base: { ...BASE, loss: 1 } }).winsOnly).toBe(false);
+    expect(bounds({ base: { ...BASE, loss: -1 } }).winsOnly).toBe(false);
+    expect(bounds({ base: { ...BASE, win: 0 } }).winsOnly).toBe(false);
+  });
+  it("a forfeit that pays the winner differently, or the loser anything → false", () => {
+    expect(bounds({ base: BASE, forfeit: { winnerPoints: 1, loserPoints: 0 } }).winsOnly).toBe(false);
+    expect(bounds({ base: BASE, forfeit: { winnerPoints: 2, loserPoints: -1 } }).winsOnly).toBe(false);
+  });
+  for (const when of PointsRule.shape.bonuses.unwrap().element.shape.when.options) {
+    it(`a "${when}" bonus that pays → false`, () => {
+      expect(bounds({ base: BASE, bonuses: [{ when, param: 0, points: 1 }] }).winsOnly).toBe(false);
+    });
+  }
+  // Oracle: applyPointsRule itself. Under every rule that claims winsOnly,
+  // every delta of every outcome shape pays exactly won × winFloor.
+  it("agrees with applyPointsRule: a winsOnly rule pays won × winFloor on every outcome shape", () => {
+    const rules = [
+      { base: BASE },
+      { base: { win: 3, draw: 0, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } },
+      { base: { win: 1.5, draw: 0, loss: 0 }, bonuses: [{ when: "no_result", points: 0 }] },
+    ];
+    let checked = 0;
+    const off: string[] = [];
+    for (const raw of rules) {
+      const r = PointsRule.parse(raw);
+      const b = pointsRuleBounds(r);
+      expect(b.winsOnly, JSON.stringify(raw)).toBe(true);
+      for (const { outcome, pair } of ruleCorpus()) {
+        for (const d of applyPointsRule(outcome, pair, r)) {
+          checked++;
+          if (d.points !== d.won * b.winFloor) off.push(`${JSON.stringify(raw)} ${outcome.kind} ${d.entrantId} → ${d.points}`);
+        }
+      }
+    }
+    expect(off).toEqual([]);
+    expect(checked).toBe(rules.length * ruleCorpus().length * 2);
   });
 });

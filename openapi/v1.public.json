@@ -39025,10 +39025,93 @@
                                         "type": "string"
                                       }
                                     },
+                                    "cellNotes": {
+                                      "type": "array",
+                                      "items": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
                                     "tieBreakText": {
                                       "anyOf": [
                                         {
                                           "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "qual": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "status": {
+                                              "type": "string",
+                                              "enum": [
+                                                "through",
+                                                "win_k",
+                                                "needs_help",
+                                                "out"
+                                              ]
+                                            },
+                                            "label": {
+                                              "type": "string"
+                                            },
+                                            "ariaLabel": {
+                                              "type": "string"
+                                            },
+                                            "headline": {
+                                              "type": "string"
+                                            },
+                                            "ifYouLose": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "whatIf": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "whatIfAssumption": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "status",
+                                            "label",
+                                            "ariaLabel",
+                                            "headline",
+                                            "ifYouLose",
+                                            "whatIf",
+                                            "whatIfAssumption"
+                                          ],
+                                          "additionalProperties": false
                                         },
                                         {
                                           "type": "null"
@@ -39047,10 +39130,61 @@
                                     "colour",
                                     "cells",
                                     "tieBreakText",
+                                    "qual",
                                     "champion"
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "qualification": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "cutIndex": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "label": {
+                                        "type": "string"
+                                      },
+                                      "legend": {
+                                        "type": "object",
+                                        "properties": {
+                                          "through": {
+                                            "type": "string"
+                                          },
+                                          "open": {
+                                            "type": "string"
+                                          },
+                                          "out": {
+                                            "type": "string"
+                                          },
+                                          "hint": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "through",
+                                          "open",
+                                          "out",
+                                          "hint"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "cutIndex",
+                                      "label",
+                                      "legend"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "updatedAt": {
                                 "type": "string"
@@ -39067,6 +39201,7 @@
                               "caption",
                               "columns",
                               "rows",
+                              "qualification",
                               "updatedAt",
                               "fullHref"
                             ],
@@ -39651,9 +39786,28 @@
                               "example"
                             ],
                             "tieBreakText": "example",
+                            "qual": {
+                              "status": null,
+                              "label": null,
+                              "ariaLabel": null,
+                              "headline": null,
+                              "ifYouLose": null,
+                              "whatIf": null,
+                              "whatIfAssumption": null
+                            },
                             "champion": true
                           }
                         ],
+                        "qualification": {
+                          "cutIndex": 1,
+                          "label": "example",
+                          "legend": {
+                            "through": "example",
+                            "open": "example",
+                            "out": "example",
+                            "hint": "example"
+                          }
+                        },
                         "updatedAt": "example",
                         "fullHref": "example"
                       }

@@ -447,6 +447,19 @@ conformanceSuite(football, {
   label: "knockout",
   stageCtxs: [{ kind: "knockout" }, { kind: "group" }],
 });
+// Standings qualification (review round 1) — the youth-cup shoot-out split
+// (spec 04 §1.4: SO win 2, SO loss 1). No other football cfg in the tree sets
+// it, so without this suite §9.3b never checks the split's winFloor/lossCeil
+// against a real `standingsDelta`, only against the cfg it was built from.
+conformanceSuite(football, {
+  cfg: {
+    extraTime: { enabled: true, halfMinutes: 15 },
+    shootout: true,
+    points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+  },
+  label: "shoot-out split",
+  stageCtxs: [{ kind: "group" }, { kind: "knockout" }],
+});
 // S5/#431 — quarters instead of halves (mini-soccer). No explicit `lineups`:
 // `teamSize: 7` on the preset means the default must resolve against ITS OWN
 // catalog (`resolvePositions`), which an 11-a-side-sized lineup would fail

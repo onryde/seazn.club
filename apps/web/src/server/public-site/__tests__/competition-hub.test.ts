@@ -93,6 +93,7 @@ import enPublic from "@/dictionaries/en/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import { resolveLatestModule } from "@/server/engine-db";
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
+import { registry, type AnySportModule } from "@seazn/engine/sport";
 import {
   competitionTag,
   divisionTag,
@@ -621,6 +622,13 @@ const STAGE: PublicStage = {
   kind: "league",
   name: "League",
   status: "active",
+  // V414 — no qualification cut on this hand-built stage.
+  qualify_count: null,
+  qualify_per_group: false,
+  next_stage_name: null,
+  swiss_rounds: null,
+  points_rule: null,
+  has_rank_overrides: false,
 };
 
 const ENTRANTS: PublicEntrant[] = [
@@ -2513,6 +2521,229 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Standings qualification status (spec 2026-09-22, plan Task 6) — through the
+// hub's REAL call site (AGENTS.md #1, the inert seam), never `buildTableView`
+// or `buildQualificationView` directly: the stage's V414 meta, the division's
+// fixtures and entrant statuses, the PINNED module's bounds and forfeit-score
+// declaration, the cascade and the org's locale all have to reach the builder
+// from `loadCompetitionHub` for these tables to carry a status.
+//
+// Mutants killed (Task 6): the call site deleted (`qualification` omitted) →
+// both cut tests; `awardAddsToLedger` hard-wired false, or read off the
+// LATEST module instead of the division's pinned one → the pinned-version
+// what-if; `poolId` null, or one pool's id given to the other → the
+// two-pool group (fix round 1).
+// ---------------------------------------------------------------------------
+describe("loadCompetitionHub — standings qualification status (spec 2026-09-22)", () => {
+  const E4: PublicEntrant = { ...ENTRANTS[2]!, id: "e4", display_name: "Gold Gulls", seed: 4 };
+  const CUT_STAGE: PublicStage = { ...STAGE, qualify_count: 2, next_stage_name: "Finals" };
+  // A football version the registry still serves to a division pinned to it,
+  // from before the sport declared a forfeit score: its config parses WITHOUT
+  // `awardScore`. Registered once in the shared registry the hub resolves
+  // through; it is not the latest, so nothing else in this file reaches it.
+  const OLD_FOOTBALL = "0.0.1";
+  const latestFootball = resolveLatestModule("football");
+  try {
+    registry.get("football", OLD_FOOTBALL);
+  } catch {
+    registry.register({
+      ...latestFootball,
+      version: OLD_FOOTBALL,
+      configSchema: latestFootball.configSchema.transform((cfg: Record<string, unknown>) =>
+        Object.fromEntries(Object.entries(cfg).filter(([key]) => key !== "awardScore")),
+      ),
+    } as unknown as AnySportModule);
+  }
+
+  /** A football league of four (the builder suite's `open4`): r1 e1>e4,
+   *  e3>e2; r2 e1>e3, and e4 FORFEITS to e2 (a walkover); r3 e1–e2 and e3–e4
+   *  to play. Points e1 6, e2 3, e3 3, e4 0; cut 2. The walkover's 3–0 is
+   *  inside e4's 6–8 and e2's 7–2. `moduleVersion` is the division's pin. */
+  function scene(moduleVersion: string = latestFootball.version) {
+    const g = (gf: number, ga: number): Record<string, number> => ({ gf, ga, gd: gf - ga });
+    const r = (entrantId: string, rank: number, won: number, goals: [number, number]) => ({
+      entrantId,
+      played: 2,
+      won,
+      drawn: 0,
+      lost: 2 - won,
+      points: 3 * won,
+      metrics: g(...goals),
+      rank,
+    });
+    const win = (id: string, round: number, winner: string, loser: string) =>
+      F({ id, status: "decided", round_no: round, home_entrant_id: winner, away_entrant_id: loser, outcome: { kind: "win", winner, loser } });
+    const fixtures = [
+      win("q1", 1, "e1", "e4"),
+      win("q2", 1, "e3", "e2"),
+      win("q3", 2, "e1", "e3"),
+      F({ id: "q4", status: "forfeited", round_no: 2, home_entrant_id: "e2", away_entrant_id: "e4", outcome: { kind: "award", winner: "e2" } }),
+      F({ id: "q5", status: "scheduled", round_no: 3, home_entrant_id: "e1", away_entrant_id: "e2" }),
+      F({ id: "q6", status: "scheduled", round_no: 3, home_entrant_id: "e3", away_entrant_id: "e4" }),
+    ];
+    const standings: PublicStandings[] = [
+      {
+        stage_id: "st1",
+        pool_id: null,
+        updated_at: "2026-09-04T16:00:00.000Z",
+        rows: [r("e1", 1, 2, [2, 0]), r("e2", 2, 1, [7, 2]), r("e3", 3, 1, [1, 1]), r("e4", 4, 0, [6, 8])],
+      },
+    ];
+    // `divisions` on the shell drives the loop and `division` on the detail is
+    // what the reader returned; the hub reads the SHELL's row for the module.
+    const division: PublicDivision = { ...DIV, module_version: moduleVersion, tiebreakers: ["points", "diff", "for"] };
+    getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [division], liveNow: [] });
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ division, stages: [CUT_STAGE], fixtures, standings, entrants: [...ENTRANTS, E4] }),
+    );
+  }
+
+  it("empty case first: a stage with no cut publishes qualification null and a null qual on every row", async () => {
+    // The default division detail (STAGE: V414 gave no cut).
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables).toHaveLength(1);
+    expect(doc.tables[0]!.qualification).toBeNull();
+    expect(doc.tables[0]!.rows.map((r) => r.qual)).toEqual([null, null]);
+    // …and the same league WITH a cut does carry one (its positive pair).
+    scene();
+    const cut = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(cut.tables[0]!.qualification).not.toBeNull();
+  });
+
+  it("a cut table carries the cut line, the legend and each entrant's status, in the org's locale", async () => {
+    scene();
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    const table = doc.tables[0]!;
+    expect(table.qualification).toEqual({
+      cutIndex: 2,
+      label: "Top 2 go through to Finals · 1 round left",
+      legend: { through: "Through", open: "Still open", out: "Out", hint: "Tap a rank for details." },
+    });
+    const byId = Object.fromEntries(table.rows.map((r) => [r.entrantId, r.qual]));
+    expect(byId.e1).toMatchObject({
+      status: "win_k",
+      label: "Win and in",
+      ariaLabel: "Rank 1, Win and in, show details",
+      headline: "Win your next match and you're through to Finals.",
+    });
+    expect(byId.e4).toMatchObject({
+      status: "needs_help",
+      label: "Needs help",
+      ifYouLose: "If you lose your next match: Out.",
+    });
+    // Every row of this table has a status — none is keyed to the wrong row.
+    expect(table.rows.map((r) => [r.entrantId, r.qual?.status])).toEqual([
+      ["e1", "win_k"],
+      ["e2", "needs_help"],
+      ["e3", "needs_help"],
+      ["e4", "needs_help"],
+    ]);
+  });
+
+  it("the average match reads the division's PINNED module version, not the latest: football's forfeit score counts only where the pin declares one", async () => {
+    // Premise: the two versions differ exactly in the forfeit score.
+    expect(latestFootball.configSchema.parse(DIV.config)).toMatchObject({ awardScore: { goals: 3 } });
+    expect(registry.get("football", OLD_FOOTBALL).configSchema.parse(DIV.config)).not.toHaveProperty("awardScore");
+    // e4 is −2 over 14 goals and its rival e2 is +5, so a win by 8 draws it
+    // level on goal difference. The latest football writes its forfeit score
+    // into the ledger, so those 14 goals are TWO matches' — an average of 7,
+    // no single match holds a win by 8: the rule and today's values.
+    scene();
+    const latest = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
+    const e4 = latest.rows.find((r) => r.entrantId === "e4")!.qual!;
+    expect(e4.whatIf).toBe(
+      "If you finish level on points with Red Rockets, goal/run difference decides. Now: you -2, Red Rockets +5.",
+    );
+    expect(e4.whatIfAssumption).toBeNull();
+    // Its pair: the SAME division pinned to the old version — same sport key,
+    // same config. That walkover scored nothing, the 14 goals are one match's,
+    // and the target stands.
+    scene(OLD_FOOTBALL);
+    const pinned = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
+    const p4 = pinned.rows.find((r) => r.entrantId === "e4")!.qual!;
+    expect(p4.whatIf).toBe(
+      "If you finish level on points with Red Rockets, goal/run difference decides: win your next match by 8 or more to finish ahead.",
+    );
+    expect(p4.whatIfAssumption).toBe(
+      "Assumes Red Rockets's figures stay the same and your next match is an average one.",
+    );
+  });
+
+  it("a group stage with a per-group cut: each pool's table carries ITS OWN pool's statuses and cut line", async () => {
+    // Two pools of three, one through from each (`qualify_per_group`).
+    //  Pool A: r1 e1>e2; r2 e1–e3, r3 e2–e3 to play. Still open for all three
+    //   (e3 has two left and can reach any total), and a loss puts only e2 out.
+    //  Pool B: r1 e4>e5, r2 e4>e6; r3 e5–e6 to play. e4 is out of reach.
+    // The two pools differ in every line a swap would move: the rounds left
+    // on the cut line, and the statuses. `poolId` wrong either way (null, or
+    // the other pool's) reads another pool's fixtures, and the table goes
+    // blank — never the right pool's line.
+    const E5: PublicEntrant = { ...ENTRANTS[2]!, id: "e5", display_name: "Silver Swans", seed: 5 };
+    const E6: PublicEntrant = { ...ENTRANTS[2]!, id: "e6", display_name: "Bronze Bears", seed: 6 };
+    const GROUP: PublicStage = { ...STAGE, kind: "group", qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" };
+    const pools = [
+      { id: "pA", stage_id: "st1", key: "A", name: "Pool A" },
+      { id: "pB", stage_id: "st1", key: "B", name: "Pool B" },
+    ];
+    const played = (id: string, pool: string, round: number, winner: string, loser: string) =>
+      F({ id, pool_id: pool, status: "decided", round_no: round, home_entrant_id: winner, away_entrant_id: loser, outcome: { kind: "win", winner, loser } });
+    const toPlay = (id: string, pool: string, round: number, home: string, away: string) =>
+      F({ id, pool_id: pool, status: "scheduled", round_no: round, home_entrant_id: home, away_entrant_id: away });
+    const fixtures = [
+      played("a1", "pA", 1, "e1", "e2"),
+      toPlay("a2", "pA", 2, "e1", "e3"),
+      toPlay("a3", "pA", 3, "e2", "e3"),
+      played("b1", "pB", 1, "e4", "e5"),
+      played("b2", "pB", 2, "e4", "e6"),
+      toPlay("b3", "pB", 3, "e5", "e6"),
+    ];
+    const r = (entrantId: string, rank: number, won: number, playedCount: number) => ({
+      entrantId,
+      played: playedCount,
+      won,
+      drawn: 0,
+      lost: playedCount - won,
+      points: 3 * won,
+      metrics: { gf: won, ga: playedCount - won, gd: 2 * won - playedCount },
+      rank,
+    });
+    const snap = (pool: string, rows: ReturnType<typeof r>[]): PublicStandings => ({
+      stage_id: "st1",
+      pool_id: pool,
+      updated_at: "2026-09-04T16:00:00.000Z",
+      rows,
+    });
+    // Pool B's snapshot first: the hub orders tables by pool id, not by input.
+    const standings = [
+      snap("pB", [r("e4", 1, 2, 2), r("e5", 2, 0, 1), r("e6", 3, 0, 1)]),
+      snap("pA", [r("e1", 1, 1, 1), r("e2", 2, 0, 1), r("e3", 3, 0, 0)]),
+    ];
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ stages: [GROUP], pools, fixtures, standings, entrants: [...ENTRANTS, E4, E5, E6] }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    expect(doc.tables.map((t) => t.id)).toEqual(["open-st1-pA", "open-st1-pB"]);
+    const [a, b] = doc.tables as [(typeof doc.tables)[0], (typeof doc.tables)[0]];
+
+    expect(a.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 2 rounds left" });
+    expect(a.rows.map((x) => [x.entrantId, x.qual?.label ?? null, x.qual?.ifYouLose ?? null])).toEqual([
+      ["e1", "Needs help", "If you lose your next match: Needs help."],
+      ["e2", "Needs help", "If you lose your next match: Out."],
+      ["e3", "Needs help", "If you lose your next match: Needs help."],
+    ]);
+
+    expect(b.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 1 round left" });
+    expect(b.rows.map((x) => [x.entrantId, x.qual?.label ?? null, x.qual?.ifYouLose ?? null])).toEqual([
+      ["e4", "Through", null],
+      ["e5", "Out", null],
+      ["e6", "Out", null],
+    ]);
+  });
+});
+
 describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
   it("keys on the competition id and tags the org, the competition and its division", async () => {
     const doc = await getPublicCompetitionHub("riverside", "autumn-cup");
@@ -2520,8 +2751,10 @@ describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
     expect(cacheCalls).toHaveLength(1);
     // v2 since the Knockout tab (plan R4): the page renders this cached
     // document WITHOUT re-parsing it, so a v1 entry — which has no
-    // `knockouts` — must never be served to a renderer that reads one.
-    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v3", "comp-1"]);
+    // `knockouts` — must never be served to a renderer that reads one. v4
+    // since standings qualification status (a v3 table has no
+    // `qualification` and its rows no `qual`).
+    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v4", "comp-1"]);
     // Derived from the SAME tag helpers the writers use, so the two halves of
     // the invalidation story cannot drift: `fireDivisionRevalidate` fires
     // `divisionTag` and `competitionTag`, and both are declared here.

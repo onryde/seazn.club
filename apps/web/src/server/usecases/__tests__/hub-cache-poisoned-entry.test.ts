@@ -97,6 +97,28 @@ describe("publicCompetitionHub — what comes back from Redis is checked", () =>
     expect((doc as { realtime: unknown }).realtime).toBeDefined();
   });
 
+  it("a pre-qualification (v3) entry — tables without `qualification`, rows without `qual` — is a miss and rebuilt", async () => {
+    // Standings qualification status (spec 2026-09-22) is why this key needs
+    // no version bump where the page's `pub-hub-v4` did: THIS layer re-parses
+    // every hit, so an entry an older build wrote is refused here and rebuilt.
+    // The fixture's table carries a status on row 0, so the rebuilt document
+    // is distinguishable from the stale one.
+    const stale = structuredClone(validHubDoc()) as {
+      tables: { qualification?: unknown; rows: { qual?: unknown }[] }[];
+    };
+    for (const table of stale.tables) {
+      delete table.qualification;
+      for (const r of table.rows) delete r.qual;
+    }
+    cacheGet.mockResolvedValue(stale);
+
+    const doc = (await publicCompetitionHub("riverside", "autumn-cup")) as unknown as typeof stale;
+
+    expect(loadCompetitionHub).toHaveBeenCalledTimes(1);
+    expect(doc.tables[0]!.qualification).not.toBeUndefined();
+    expect(doc.tables[0]!.rows.map((r) => r.qual === undefined)).not.toContain(true);
+  });
+
   it("the rebuilt document REPLACES the poisoned entry, so the next read is clean", async () => {
     // Rebuilding without writing back would re-poison on every request for the
     // rest of the TTL: every reader would pay a full rebuild and the bad entry

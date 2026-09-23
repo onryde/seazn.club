@@ -392,6 +392,21 @@ export interface PublicStage {
   kind: z.infer<typeof StageKind>;
   name: string;
   status: string;
+  /** V414 — the forecastable qualification cut (null = none: no destination,
+   *  or anything short of one clean cut); see `stage_qualification_meta`. */
+  qualify_count: number | null;
+  /** V414 — the cut counts per pool (`topNPerGroup`), not overall. */
+  qualify_per_group: boolean;
+  /** V414 — the destination stage the cut feeds, or null with no cut. */
+  next_stage_name: string | null;
+  /** V414 — a swiss stage's declared round count, else null. */
+  swiss_rounds: number | null;
+  /** V414 — the stage's own PointsRule jsonb, or null (sport points apply). */
+  points_rule: unknown;
+  /** V414 (ruling M1) — the organiser pinned ranks on this stage
+   *  (`config.rank_overrides`). NOT the same as a row's `rankLocked`, which
+   *  the engine also sets on every tie it settles by lots. */
+  has_rank_overrides: boolean;
 }
 
 export interface PublicStandings {
@@ -899,7 +914,9 @@ export async function getPublicDivision(
   const detail = await unstable_cache(
     async () => {
       const stages = await sql<PublicStage[]>`
-        select id, division_id, seq, kind, name, status
+        select id, division_id, seq, kind, name, status,
+               qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
+               has_rank_overrides
         from public_stages_v where division_id = ${division.id} order by seq`;
       const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
         select p.id, p.stage_id, p.key, p.name
@@ -957,7 +974,9 @@ export async function getPublicDivision(
     },
     // v2 (privacy hotfix, 2026-09-16): a member the division's name policy
     // masks now carries no `person_id` and no `photo` (maskPublicEntrantNames).
-    ["pub-div-v2", division.id],
+    // v3 (V414): every stage carries the qualification columns; a v2 entry
+    // would hand the standings builder `undefined` for all six.
+    ["pub-div-v3", division.id],
     {
       tags: [divisionTag(division.id), competitionTag(division.competition_id)],
       revalidate: REVALIDATE_FAST,

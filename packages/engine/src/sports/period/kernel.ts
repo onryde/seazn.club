@@ -35,7 +35,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -2660,6 +2660,16 @@ export function makePeriodModule(
         );
       }
       return [...new Set(totals)];
+    },
+
+    matchPointsBounds(cfg) {
+      const p = cfg.points;
+      const opt = (v: number | undefined) => (v !== undefined ? [v] : []);
+      return boundsFrom(
+        [p.win, ...opt(p.otWin), ...opt(p.shootoutWin)],
+        [p.loss, ...opt(p.otLoss), ...opt(p.shootoutLoss)],
+        [p.draw],
+      );
     },
 
     officialLabel: preset.officialLabel,

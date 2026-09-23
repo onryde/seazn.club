@@ -19,6 +19,7 @@ import { EngineError } from "../core/errors.ts";
 import { shuffle } from "../core/rng.ts";
 import type { EntrantId, MetricSpec, StandingsDelta } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
+import { RATIO_LEDGERS, type RatioKey } from "./display.ts";
 import {
   foldResults,
   resultsAmong,
@@ -233,8 +234,11 @@ const sgn = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
 
 // Ledger key aliases: the abstract `diff`/`for` tiebreaks map to whatever the
 // sport calls goal/run difference and goals/runs for (spec 04 per-sport).
-const DIFF_KEYS = ["gd", "diff", "run_diff"] as const;
-const FOR_KEYS = ["gf", "for", "runs_for"] as const;
+export const DIFF_KEYS = ["gd", "diff", "run_diff"] as const;
+export const FOR_KEYS = ["gf", "for", "runs_for"] as const;
+/** The "against" twin of FOR_KEYS, index for index — the what-if's average
+ *  match size is for + against (tie-what-if.ts). No comparator reads it. */
+export const AGAINST_KEYS = ["ga", "against", "runs_against"] as const;
 
 const FAIR_PLAY_KEYS = ["fair_play"] as const;
 
@@ -249,12 +253,17 @@ const FAIR_PLAY_KEYS = ["fair_play"] as const;
 // for every signed metric (a −5 GD is worse than no GD, not better) and blocks
 // any future rate metric outright, where no attempts is not the same as 0%.
 // Callers now state their own answer rather than inheriting a silent one.
-function metricOf(row: StandingsRow, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const value = row.metrics[key];
-    if (value !== undefined) return value;
-  }
-  return undefined;
+export function metricOf(row: StandingsRow, keys: readonly string[]): number | undefined {
+  const key = metricKeyOf(row, keys);
+  return key === undefined ? undefined : row.metrics[key];
+}
+
+/** The alias `metricOf` reads: the first of `keys` this row records. Callers
+ *  that need to know WHICH ledger a row's `for`/`diff` resolve to (a stage
+ *  rule's forfeit score reaches `for`/`against`/`diff` only — points.ts
+ *  `applyPointsRule`) ask this rather than re-walking the alias order. */
+export function metricKeyOf<K extends string>(row: StandingsRow, keys: readonly K[]): K | undefined {
+  return keys.find((key) => row.metrics[key] !== undefined);
 }
 
 // Integer-ledger readers (the ratio metrics and NRR). An unrecorded count IS 0
@@ -262,7 +271,7 @@ function metricOf(row: StandingsRow, keys: readonly string[]): number | undefine
 // the identity the fold would have summed to, with `compareRatio` already
 // giving 0/0 its own "no data" branch. Named so the default is a decision at
 // the call site rather than a fallback hidden inside the lookup.
-function ledgerOf(row: StandingsRow, keys: readonly string[]): number {
+export function ledgerOf(row: StandingsRow, keys: readonly string[]): number {
   return metricOf(row, keys) ?? 0;
 }
 
@@ -307,6 +316,16 @@ function nrrFraction(row: StandingsRow): { n: number; d: number } {
   return { n: rf * bb - ra * bf, d: bf * bb };
 }
 
+// A ratio key compares its integer won/lost pair, cross-multiplied, never
+// divided. The pair is RATIO_LEDGERS' (display.ts) — the ONE declaration the
+// ratio column, the breakdown popover and the qualification what-if also read,
+// so the cascade cannot rank on a pair the table does not print (final review
+// M2: these four were literal copies before).
+function ratioComparator(key: RatioKey): Comparator {
+  const [won, lost] = RATIO_LEDGERS[key];
+  return (a, b) => compareRatio(ledgerOf(a, [won]), ledgerOf(a, [lost]), ledgerOf(b, [won]), ledgerOf(b, [lost]));
+}
+
 // spec 05 §4.1 — one comparator per non-structural TiebreakerKey. h2h_* /
 // direct / lots are handled by the refinement driver (they need the tie-group
 // context, not a pairwise value).
@@ -321,37 +340,13 @@ const COMPARATORS: Partial<Record<TiebreakerKey, Comparator>> = {
     const nb = nrrFraction(b);
     return compareRatio(na.n, na.d, nb.n, nb.d);
   },
-  set_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["sets_won"]),
-      ledgerOf(a, ["sets_lost"]),
-      ledgerOf(b, ["sets_won"]),
-      ledgerOf(b, ["sets_lost"]),
-    ),
+  set_ratio: ratioComparator("set_ratio"),
   // Tennis games won/lost (v6/00 §2) — same cross-multiplied form as
   // set_ratio, one level down the nested ledger.
-  game_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["games_won"]),
-      ledgerOf(a, ["games_lost"]),
-      ledgerOf(b, ["games_won"]),
-      ledgerOf(b, ["games_lost"]),
-    ),
+  game_ratio: ratioComparator("game_ratio"),
   // Carrom boards won/lost (carrom.md §4) — same cross-multiplied form.
-  board_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["boards_won"]),
-      ledgerOf(a, ["boards_lost"]),
-      ledgerOf(b, ["boards_won"]),
-      ledgerOf(b, ["boards_lost"]),
-    ),
-  point_ratio: (a, b) =>
-    compareRatio(
-      ledgerOf(a, ["points_won"]),
-      ledgerOf(a, ["points_lost"]),
-      ledgerOf(b, ["points_won"]),
-      ledgerOf(b, ["points_lost"]),
-    ),
+  board_ratio: ratioComparator("board_ratio"),
+  point_ratio: ratioComparator("point_ratio"),
   // Swiss cascade-time metrics — read the assembled ledger (spec 05 §4.1).
   buchholz: (a, b, ctx) =>
     ctx.swiss ? sgn(buchholz(ctx.swiss, a.entrantId) - buchholz(ctx.swiss, b.entrantId)) : 0,

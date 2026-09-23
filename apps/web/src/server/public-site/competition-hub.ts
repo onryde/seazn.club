@@ -73,6 +73,7 @@ import {
 import { statusOf } from "./match-centre";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
+import { divisionQualification } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
 import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
@@ -771,6 +772,22 @@ export async function loadCompetitionHub(
       (a, b) =>
         (a.status === "complete" ? 1 : 0) - (b.status === "complete" ? 1 : 0) || a.seq - b.seq,
     );
+    // Standings qualification status (spec 2026-09-22): the same assembly the
+    // division page and the embed use. Bounds and the walkover's ledger come
+    // from the division's PINNED module and live cfg; the cascade is the one
+    // the table is ranked and captioned by. Called per table with that
+    // table's own snapshot, which carries its pool.
+    const cascade = d.tiebreakers ?? module_?.defaultTiebreakers ?? [];
+    const qualificationFor = divisionQualification({
+      module_,
+      division: d,
+      dict,
+      locale,
+      fixtures,
+      entrantStatuses: Object.fromEntries(entrants.map((e) => [e.id, e.status])),
+      entrantNames: names,
+      cascade,
+    });
     for (const stage of orderedStages) {
       if (BRACKET_KINDS.has(stage.kind)) continue;
       const snapshots = standings
@@ -787,13 +804,14 @@ export async function loadCompetitionHub(
             fullHref: `${divHref}?tab=standings`,
             rows: snap.rows,
             metricSpecs: module_?.metrics ?? [],
-            cascade: d.tiebreakers ?? module_?.defaultTiebreakers ?? [],
+            cascade,
             entrantNames: names,
             entrantLogos: badges,
             entrantColours: colours,
             championId,
             updatedAt: snap.updated_at,
             msg,
+            qualification: qualificationFor(stage, snap),
           }),
         );
       }
@@ -1059,12 +1077,15 @@ export async function getPublicCompetitionHub(
   const shell = await getPublicCompetition(orgSlug, compSlug);
   if (!shell) return null;
   // v2 since the Knockout tab added `knockouts`; v3 since squads, bans and
-  // division prose (division-page parity, 2026-09-16). The page renders this
-  // cached document WITHOUT re-parsing it (unlike `usecases/public.ts`, whose
-  // Redis hit goes back through `CompetitionHubDoc.safeParse`), so an older
-  // entry must never reach a renderer that reads the new fields. Bump again on
-  // any shape change a cached hit cannot satisfy.
-  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v3", shell.competition.id], {
+  // division prose (division-page parity, 2026-09-16); v4 since standings
+  // qualification status (`qualification` on a table, `qual` on its rows,
+  // 2026-09-22). The page renders this cached document WITHOUT re-parsing it
+  // (unlike `usecases/public.ts`, whose Redis hit goes back through
+  // `CompetitionHubDoc.safeParse` — so that key, `pub:v1:hub:{id}`, needs no
+  // bump: `hub-cache-poisoned-entry.test.ts` pins an old-shape hit as a miss),
+  // so an older entry must never reach a renderer that reads the new fields.
+  // Bump again on any shape change a cached hit cannot satisfy.
+  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v4", shell.competition.id], {
     tags: [
       orgTag(orgSlug),
       competitionTag(shell.competition.id),

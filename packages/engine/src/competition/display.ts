@@ -30,11 +30,31 @@ export const DERIVED_METRICS: readonly DerivedMetricSpec[] = [
   { key: "sberger", label: "SB", decimals: 2 },
 ];
 
+/**
+ * The integer won/lost pair each ratio key divides. Declared ONCE: the ratio
+ * text below reads it, so does the standings table's breakdown popover, which
+ * prints these two totals beside the ratio, the qualification what-if
+ * (`tie-what-if.ts`), and the cascade's own comparators (`tiebreakers.ts`
+ * `ratioComparator`) — two copies of the pair would let the popover explain a
+ * number the cell did not compute, or the table rank on a pair it never
+ * shows. `game_ratio` has no column (`DERIVED_METRICS`); it is here because a
+ * tie decided on it still prints both sides' values and a target.
+ */
+export const RATIO_LEDGERS = {
+  set_ratio: ["sets_won", "sets_lost"],
+  game_ratio: ["games_won", "games_lost"],
+  board_ratio: ["boards_won", "boards_lost"],
+  point_ratio: ["points_won", "points_lost"],
+} as const satisfies Partial<Record<TiebreakerKey, readonly [string, string]>>;
+
+export type RatioKey = keyof typeof RATIO_LEDGERS;
+
 function metric(row: StandingsRow, key: string): number {
   return row.metrics[key] ?? 0;
 }
 
-function ratioText(won: number, lost: number, decimals: number): string {
+/** won/lost as a ratio column prints it: ∞ when unbeaten, — with no ledger. */
+export function ratioText(won: number, lost: number, decimals: number): string {
   if (lost === 0) return won > 0 ? "∞" : "—";
   return (won / lost).toFixed(decimals);
 }
@@ -54,11 +74,12 @@ export function derivedMetricText(row: StandingsRow, key: TiebreakerKey): string
       return nrr > 0 ? `+${text}` : text;
     }
     case "set_ratio":
-      return ratioText(metric(row, "sets_won"), metric(row, "sets_lost"), 2);
+    case "game_ratio":
     case "board_ratio":
-      return ratioText(metric(row, "boards_won"), metric(row, "boards_lost"), 2);
-    case "point_ratio":
-      return ratioText(metric(row, "points_won"), metric(row, "points_lost"), 2);
+    case "point_ratio": {
+      const [won, lost] = RATIO_LEDGERS[key];
+      return ratioText(metric(row, won), metric(row, lost), 2);
+    }
     case "buchholz":
     case "buchholz_cut1": {
       const value = row.metrics[key];

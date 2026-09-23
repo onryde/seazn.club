@@ -44,7 +44,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -2674,6 +2674,15 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       totals.push(cfg.points.shootoutWin + cfg.points.shootoutLoss);
     }
     return [...new Set(totals)];
+  },
+
+  matchPointsBounds(cfg) {
+    const p = cfg.points;
+    return boundsFrom(
+      [p.win, ...(p.shootoutWin !== undefined ? [p.shootoutWin] : [])],
+      [p.loss, ...(p.shootoutLoss !== undefined ? [p.shootoutLoss] : [])],
+      [p.draw],
+    );
   },
 
   officialLabel: { scorer: "Referee" }, // doc 13 §1

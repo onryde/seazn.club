@@ -22,7 +22,11 @@
 // bottom-left corner. Measured with `elementFromPoint` on every row, before and
 // after. Every sticky rank cell is `z-10` and the popover is `z-10` inside one
 // of them, so the tie was decided on DOM order and the later row won. The fix
-// raises the CELL that contains an open `<details>`.
+// raises the CELL that contains an open popover. (It was an open `<details>`
+// then; since the shared `StandingsPopover` replaced it, the open mark is the
+// popover root's `data-open`, and the raise is `has-[[data-open]]:z-20`: above
+// the z-10 neighbours, which is all it is for, and below the z-30 tab rail, so
+// an open row scrolled under the rail no longer paints over it.)
 //
 // This suite is `renderToStaticMarkup`, so it can see the class and the chip
 // but NOT the cascade — class present is not class in effect. The behavioural
@@ -269,7 +273,7 @@ describe("StandingsTable — a departed entrant is marked with the status she ho
 });
 
 describe("StandingsTable — an open tie-break popover is not painted over by the rows below", () => {
-  it("raises the sticky rank cell whose details is open", () => {
+  it("raises the sticky rank cell whose popover is open", () => {
     const html = table();
     const rankCells = [...html.matchAll(/<td class="sticky left-0[^"]*"/g)].map((m) => m[0]);
     expect(rankCells.length, "the sticky rank cells are no longer this shape").toBe(3);
@@ -279,9 +283,12 @@ describe("StandingsTable — an open tie-break popover is not painted over by th
       // would pass on a cell that had lost `z-10` and stopped being sticky at
       // all; asserting only the first is the state the defect shipped in.
       expect(cell).toContain("z-10");
-      expect(cell, "the open-details raise is gone — the popover will be covered again").toContain(
-        "has-[details[open]]:z-30",
+      expect(cell, "the open-popover raise is gone — the popover will be covered again").toContain(
+        "has-[[data-open]]:z-20",
       );
+      // …and no higher: at z-30 the open cell tied the sticky tab rail and won
+      // on DOM order, painting over the rail when scrolled under it.
+      expect(cell, "the open-popover raise is above the tab rail's z-30").not.toMatch(/has-\[\[data-open\]\]:z-(?:[3-9]\d|\d{3,})\b/);
     }
   });
 
@@ -296,15 +303,17 @@ describe("StandingsTable — an open tie-break popover is not painted over by th
     // React escapes `&` in an attribute value, so the rendered class reads
     // `[tr:last-child_&amp;]:bottom-full`. Decode before asserting, or this
     // passes only by accident of how the variant is spelled.
-    const tip = (/<p role="tooltip" class="([^"]*)"/.exec(html)?.[1] ?? "").replace(/&amp;/g, "&");
-    expect(tip, "the tooltip lost its last-row flip").toContain("[tr:last-child_&]:bottom-full");
+    const tip = (/<span id="[^"]*" role="note"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "").replace(/&amp;/g, "&");
+    expect(tip, "the popover lost its last-row flip").toContain("[tr:last-child_&]:bottom-full");
     // Both halves of the flip: `bottom-full` alone leaves `top-0` winning, and
     // the margin has to move with it or the gap lands on the wrong side.
     expect(tip).toContain("[tr:last-child_&]:top-auto");
     expect(tip).toContain("[tr:last-child_&]:mt-0");
     expect(tip).toContain("[tr:last-child_&]:mb-1");
-    // The default direction still holds for every other row.
+    // The default direction still holds for every other row: below the
+    // trigger (`top-full`, now explicit — the `<details>` got it from flow).
     expect(tip).toMatch(/\bmt-1\b/);
+    expect(tip).toMatch(/(^|\s)top-full(\s|$)/);
   });
 
   it("premise: the container really is the clipping kind", () => {
@@ -317,15 +326,19 @@ describe("StandingsTable — an open tie-break popover is not painted over by th
     expect(html).toMatch(/<div[^>]*class="relative overflow-x-auto/);
   });
 
-  it("premise: the popover really does live inside that cell, and is itself z-10", () => {
-    // If the tooltip moved out of the sticky cell the fix above would be
+  it("premise: the popover really does live inside that cell, whose stacking context traps its z-index", () => {
+    // If the popover moved out of the sticky cell the fix above would be
     // pointing at the wrong element, and this suite would keep passing.
     const html = table();
     const cell = /<td class="sticky left-0[\s\S]*?<\/td>/.exec(html)?.[0] ?? "";
-    expect(cell, "the tie-break row is no longer the first rank cell rendered").toContain("<details");
-    // The tooltip's own layer, inside that cell. If it were higher than the
-    // next row's sticky cell on its own, the raise above would be unnecessary;
-    // it is z-10, which is exactly the tie that lost.
-    expect(cell).toMatch(/<p role="tooltip" class="absolute left-0 z-10 /);
+    expect(cell, "the tie-break row is no longer the first rank cell rendered").toContain(
+      'data-testid="standings-tie-bo"',
+    );
+    // The panel, inside that cell and positioned. Its own z-index (z-20) is
+    // LOCAL to the cell's stacking context — a sticky `z-10` cell makes one —
+    // so however high it is it cannot beat the next row's cell by itself;
+    // that is why the CELL has to rise.
+    expect(cell).toMatch(/<span id="[^"]*" role="note"[^>]*class="absolute top-full z-20 /);
+    expect(cell).toMatch(/<td class="sticky left-0 z-10 /);
   });
 });

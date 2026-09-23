@@ -2,6 +2,7 @@
 // doc 13 §1 (officialLabel) and the conformance kit's needs (PROMPT-03 §4:
 // declaredPointsSets; arbitraryEvent/coarsen hooks from spec 03 §6 + §9.6).
 import { z } from "zod";
+import { EngineError } from "../core/errors.ts";
 import type { CoreEv, EventEnvelope, FoldableModule, FoldContext } from "../core/events.ts";
 import type { LineupPolicy, SquadState } from "../core/lineup.ts";
 import type { MatchPosition } from "../core/position.ts";
@@ -624,6 +625,66 @@ export function stampAttributionRequired(
   };
 }
 
+/** Points ONE side can take from ONE match under a cfg — standings
+ *  qualification status (spec 2026-09-22 §3.1, plan P1). `max`/`min` bound
+ *  every outcome `standingsDelta` can return, a bye included: the competition
+ *  layer scores a bye through `standingsDelta` as an `award` win
+ *  (apps/web engine-db/competition.ts `awardByeDelta`). That layer applies a
+ *  stage's PointsRule ON TOP of every pair, byes and played fixtures alike
+ *  (`applyPointsRule`), which overrides these sport bounds; the rule's own
+ *  bounds are `pointsRuleBounds` (standings plan, Task 2).
+ *  `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
+ *  `lossCeil` is the most ANY loss can still pay. A forecast that promised
+ *  "win and you're through" with `max` would be wrong for an OT win. */
+export interface MatchPointsBounds {
+  max: number;
+  min: number;
+  winFloor: number;
+  lossCeil: number;
+  /** Points are `winFloor × won` on every outcome: every win pays ONE
+   *  non-zero amount and everything else (loss, draw, tie, no-result) pays 0,
+   *  so two rows level on points are level on wins and the tie-break `wins`
+   *  cannot separate them (standings what-if, spec 2026-09-22 §3.4, OQ1).
+   *  NOT `supportsDraws`: carrom and limited-overs cricket draw nothing and
+   *  still pay a no-result. Checked against real deltas by conformance §9.3b
+   *  (played matches) and match-points-bounds.test.ts (the bye/award path). */
+  winsOnly: boolean;
+}
+
+/** Build bounds from a sport's win-type values, loss-type values and every
+ *  other per-side value its cfg declares (draw, tie, no-result). `min` is
+ *  clamped to at most 0 because an outcome can pay a hard-coded 0 that no cfg
+ *  field declares: boardgame's double forfeit (`no_result`, 0 each side). Every
+ *  other kernel's no-result either pays a cfg value already in `others` (draw
+ *  points in football, period, generic and carrom; `noResult` in cricket) or
+ *  cannot happen (nested and set-based refuse it). Every shipped cfg schema is
+ *  nonnegative, so 0 is always a valid lower bound; it is merely loose (the
+ *  safe direction) for a cfg where every outcome pays above 0 — and a
+ *  hard-coded 0 is consistent with `winsOnly`, which only asks that nothing
+ *  but a win pays. Throws on an empty `wins` or `losses`, which would
+ *  otherwise yield ±Infinity. */
+export function boundsFrom(
+  wins: readonly number[],
+  losses: readonly number[],
+  others: readonly number[] = [],
+): MatchPointsBounds {
+  if (wins.length === 0) {
+    throw new EngineError("CONFIG_INVALID", "boundsFrom needs at least one WIN payout", { wins, losses });
+  }
+  if (losses.length === 0) {
+    throw new EngineError("CONFIG_INVALID", "boundsFrom needs at least one LOSS payout", { wins, losses });
+  }
+  const all = [...wins, ...losses, ...others];
+  const zero = (v: number) => v === 0;
+  return {
+    max: Math.max(...all),
+    min: Math.min(0, ...all),
+    winFloor: Math.min(...wins),
+    lossCeil: Math.max(...losses),
+    winsOnly: wins.every((v) => v === wins[0]) && wins[0] !== 0 && losses.every(zero) && others.every(zero),
+  };
+}
+
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every
 // SportModule folds through foldMatch unchanged.
 export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> {
@@ -771,6 +832,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // §9.3 — allowed per-fixture point totals under cfg (football {3, 2}, …);
   // the conformance kit checks Σ points of both deltas is in this set.
   declaredPointsSets(cfg: Cfg): readonly number[];
+
+  // Standings qualification (spec 2026-09-22 §3.1) — per-SIDE bounds, checked
+  // against real `standingsDelta` output by conformance §9.3b.
+  matchPointsBounds(cfg: Cfg): MatchPointsBounds;
 
   officialLabel: { scorer: string }; // doc 13 §1 — 'Umpire'/'Referee'/'Arbiter'
 
