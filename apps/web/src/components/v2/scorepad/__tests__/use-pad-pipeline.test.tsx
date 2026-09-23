@@ -2992,3 +2992,133 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
     expect(rig.lastSinceSeq()).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// "Void my last entry" — a FOREIGN void that names the SERVER's id of an event
+// THIS pad scored, delivered by a poll that honours its own cursor.
+//
+// The device-link chrome (`device-score-pad.tsx`) and its inner pad are two
+// writers on one fixture. The chrome's `device-void-mine` sends
+// `core.void {event_id}` naming the row id it read from the SERVER — the only
+// id it has ever seen. The inner pad learns of that void only through its
+// stream, and until this fix it held the target under the CLIENT-fabricated
+// idempotency key it stamped at ack time (`AppendSuccess` carried no row id).
+//
+// R5's poll test (above) already covers a foreign void — but its transport
+// hands back BOTH rows on every call, whatever cursor it was given. A real
+// `/events?since_seq=` is strict (`seq > since_seq`) and the pad's read cursor
+// is the ledger COUNT, so after this pad's own ack the target's seq is never
+// asked for again: only the void arrives, naming an id the ledger does not
+// hold, and `resolveVoids` rejects every fold from there on. The pad froze on
+// the pre-void score behind a rejection banner while the chrome's header,
+// which re-reads the whole ledger, showed the right one. These cases use the
+// cursor-honest `serverLedger` for exactly that reason.
+//
+// Two owner-approved fixes, each with its own witness here:
+//  - Fix A: the POST ack carries the new row's id (`event_id`), and the ack
+//    stamps it — so the target's id is right from the moment it lands.
+//  - Fix B: when a streamed batch leaves a void naming an id the ledger does
+//    not hold, the pipeline re-reads the ledger ONCE for that void and merges
+//    the target row (the default merge direction adopts the wire id).
+// ---------------------------------------------------------------------------
+describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored event (device-void-mine)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const REAL_ID = "server-real-id-device-void-mine";
+  const POLL = 1_000;
+
+  const scoredRow = (id: string): LedgerSlotEvent => ({
+    id,
+    seq: 1,
+    type: "generic.score",
+    payload: { by: "H", points: 2 },
+    recorded_at: "2026-09-23T10:00:00.000Z",
+    recorded_by: "user-1",
+    device_link_id: null,
+    voids_event_id: null,
+  });
+  const voidRow = (seq: number, target: string): LedgerSlotEvent => ({
+    id: `chrome-void-${seq}`,
+    seq,
+    type: "core.void",
+    payload: {},
+    recorded_at: "2026-09-23T10:00:05.000Z",
+    recorded_by: "user-1",
+    device_link_id: null,
+    voids_event_id: target,
+  });
+  const laterRow = (seq: number): LedgerSlotEvent => ({
+    id: `later-${seq}`,
+    seq,
+    type: "generic.score",
+    payload: { by: "A", points: 1 },
+    recorded_at: "2026-09-23T10:00:09.000Z",
+    recorded_by: "someone-else",
+    device_link_id: null,
+    voids_event_id: null,
+  });
+  /** An ack exactly as the pre-fix server wrote it: no row id at all. */
+  const ackWithoutId = (seq: number): AppendCallResult => ({
+    kind: "ok",
+    data: { seq, state_summary: { seq }, outcome: null, status: "in_play" },
+  });
+  /** Fix A's ack: the server names the row it just wrote. */
+  const ackWithId = (seq: number, eventId: string): AppendCallResult => ({
+    kind: "ok",
+    data: { seq, state_summary: { seq }, outcome: null, status: "in_play", event_id: eventId },
+  });
+
+  const running = (pad: { current: UsePadPipelineResult }) =>
+    (pad.current.state as { running?: { home: number; away: number } }).running;
+
+  /** Score one event through the pad, then publish the server's truth. */
+  async function scoreThenServer(opts: {
+    ack: AppendCallResult;
+    serverLedger: LedgerSlotEvent[];
+    serverRows: LedgerSlotEvent[];
+    transport?: (base: PadTransport) => PadTransport;
+  }) {
+    const rig = fakeTransport({ appendResults: [opts.ack], serverLedger: opts.serverLedger });
+    const transport = opts.transport ? opts.transport(rig.transport) : rig.transport;
+    const pad = mountPipeline(
+      baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
+    );
+    await pad.current.submit("generic.score", { by: "H", points: 2 });
+    expect(running(pad), "the pad's own score must fold before anything is undone").toEqual({ home: 2, away: 0 });
+    // The server's own ledger from here on: the row this pad scored under its
+    // REAL id, and whatever else the test says landed.
+    opts.serverLedger.push(...opts.serverRows);
+    await vi.advanceTimersByTimeAsync(0); // settle into polling
+    return { rig, pad };
+  }
+
+  async function nextTick() {
+    await vi.advanceTimersByTimeAsync(POLL);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("MUTATION TARGET (Fix A): an ack that names its row stamps the server's id at ack time — the void then resolves with no heal read at all", async () => {
+    const serverLedger: LedgerSlotEvent[] = [];
+    const { rig, pad } = await scoreThenServer({
+      ack: ackWithId(1, REAL_ID),
+      serverLedger,
+      serverRows: [scoredRow(REAL_ID), voidRow(2, REAL_ID)],
+    });
+    // Before any stream read: the ack itself carried the id.
+    expect(pad.current.events.find((e) => e.seq === 1)?.id).toBe(REAL_ID);
+    // "Is this mine" follows the id the ledger actually holds.
+    expect(pad.current.ownEventIds.has(REAL_ID)).toBe(true);
+
+    await nextTick();
+
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad)).toBeUndefined();
+    // Nothing was dangling, so Fix B never fired: the only read is the poll.
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq)).toEqual([1]);
+  });
+});

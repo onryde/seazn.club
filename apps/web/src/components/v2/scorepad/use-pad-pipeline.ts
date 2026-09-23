@@ -569,16 +569,25 @@ function toEnvelopeFields(type: string, payload: unknown): { payload: unknown; v
  *  of how many renegotiations happened; the "already-applied" branch never
  *  renegotiates within its own call (pipeline.ts's resolveConflict decides
  *  it BEFORE any resend), so `pending.expectedSeq + 1` already is the
- *  confirmed value there and needs no override. */
+ *  confirmed value there and needs no override.
+ *
+ *  `confirmedId` (device-void-mine, Fix A) is the same idea for the row's ID:
+ *  the server's own `AppendSuccess.event_id`, passed on the "acked" branch.
+ *  When given it WINS over the idempotency key, so the ledger holds the event
+ *  under the id every other writer's void will name. Absent — a pre-ack
+ *  optimistic build, an "already-applied" outcome (no ack body at all), or a
+ *  server that predates the field — the key stays, exactly as before, and
+ *  `resolveVoidTargetId` below still translates it for this pad's own voids. */
 export function pendingToEnvelope(
   fixtureId: string,
   identity: OwnIdentity,
   pending: PendingEvent,
   confirmedSeq?: number,
+  confirmedId?: string,
 ): EventEnvelope {
   const { payload, voids } = toEnvelopeFields(pending.type, pending.payload);
   return {
-    id: pending.idempotencyKey,
+    id: confirmedId ?? pending.idempotencyKey,
     fixtureId,
     // append-event.ts: the accepted row lands at expected_seq + 1 — the best
     // guess pre-ack, and still correct post-ack UNLESS a renegotiation
@@ -1405,13 +1414,26 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // so pendingToEnvelope's own expectedSeq+1 default is already
           // right there and needs no override.
           const confirmedSeq = outcome.kind === "acked" ? outcome.result.seq : undefined;
+          // device-void-mine, Fix A — the row's REAL id, from the same ack. A
+          // void written elsewhere (the device chrome's "Void my last entry",
+          // the console) names the server's id and nothing else, and this
+          // pad's stream never re-reads a row it already holds (its cursor is
+          // the COUNT, and `listEvents` is strict), so the ack is the one
+          // moment this pad can learn it. See `pendingToEnvelope`.
+          const confirmedId = outcome.kind === "acked" ? outcome.result.event_id : undefined;
           // S12/#421 pass I — `next` itself still never reassigned (pass G's
           // own invariant, unchanged); pendingWithLocalVoidTarget hands
           // pendingToEnvelope a COPY with only `payload` possibly rewritten,
           // exactly like `eventToSend` above does for the wire, but answering
           // the LOCAL question instead (see that helper's own doc, and the
           // file header's PASS I UPDATE, for why the two can differ).
-          const acked = pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(next, ledgerEventsRef.current), confirmedSeq);
+          const acked = pendingToEnvelope(
+            fixtureId,
+            identity,
+            pendingWithLocalVoidTarget(next, ledgerEventsRef.current),
+            confirmedSeq,
+            confirmedId,
+          );
           // S12/#421 pass F — was a raw spread
           // (`[...ledgerEventsRef.current, acked]`), never routed through
           // mergeEnvelopesIntoLedger like the other writers into

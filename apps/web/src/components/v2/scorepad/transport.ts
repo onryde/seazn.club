@@ -79,6 +79,19 @@ const ledgerSlotEventSchema = z.object({
 });
 const ledgerSlotEventsSchema = z.array(ledgerSlotEventSchema);
 
+/**
+ * The ack as the pipeline may trust it. Every field rides through untouched
+ * (no stricter than before), except `event_id`: the ack's stamp becomes the
+ * pad's ledger id for the row, so anything that is not a non-empty string is
+ * DROPPED rather than passed on — an entry under a junk id is exactly as
+ * unresolvable to a later void as one under the pad's own minted key, and a
+ * missing id falls back to that key honestly (`AppendSuccess.event_id`).
+ */
+function appendSuccessOf(data: AppendSuccess): AppendSuccess {
+  const { event_id: eventId, ...rest } = data as Omit<AppendSuccess, "event_id"> & { event_id?: unknown };
+  return typeof eventId === "string" && eventId.length > 0 ? { ...rest, event_id: eventId } : rest;
+}
+
 /** Session vs device-link — the one fact that changes the outgoing request. */
 export type PadAuthMode = { kind: "session" } | { kind: "device_link"; token: string };
 
@@ -315,7 +328,7 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
       }
       const { body: envelope, fromOurApi } = await parseEnvelope<AppendSuccess>(res);
       if (res.ok && envelope.ok && envelope.data !== undefined) {
-        return { kind: "ok", data: envelope.data };
+        return { kind: "ok", data: appendSuccessOf(envelope.data) };
       }
       const message = envelope.error?.message ?? `request failed (${res.status})`;
       // 409 splits two ways, on its CODE rather than its status. A stale

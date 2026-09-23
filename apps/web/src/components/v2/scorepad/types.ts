@@ -230,6 +230,15 @@ export interface AppendSuccess {
   state_summary: unknown;
   outcome: unknown;
   status: string;
+  /** The id of the row the server wrote (on an idempotent replay, the row the
+   *  original write created). `use-pad-pipeline.ts`'s ack stamps it as the
+   *  ledger entry's id, so a void written ELSEWHERE — the device chrome's
+   *  "Void my last entry", the console, a second official — names an id this
+   *  pad holds. OPTIONAL on purpose: a server that predates it, or a Redis
+   *  answer cached before it existed, sends none, and the pad then keeps its
+   *  fabricated-id fallback (`pendingToEnvelope`, `resolveVoidTargetId`).
+   *  `transport.ts` drops any value that is not a non-empty string. */
+  event_id?: string;
 }
 
 // ---------------------------------------------------------------------------
