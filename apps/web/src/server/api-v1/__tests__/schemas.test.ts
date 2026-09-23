@@ -647,6 +647,32 @@ describe("CapacityPrecheck.config.window (review finding 3 — resource exhausti
   });
 });
 
+// V416: `show_seeds` must SURVIVE the parse. `PatchDivision` is a plain
+// `z.object`, which strips an undeclared key rather than refusing it — so a
+// schema that forgot the field would turn the Settings toggle's
+// `{ show_seeds: false }` into an empty patch, and `{ name, show_seeds }` into
+// a rename that silently drops the setting. Asserted on the parsed DATA, never
+// on `.success` alone, which a strip passes.
+describe("PatchDivision / Division — show_seeds (V416)", () => {
+  it("keeps show_seeds in the parsed patch, both values, alone or beside another field", () => {
+    for (const value of [false, true]) {
+      expect(PatchDivision.parse({ show_seeds: value })).toEqual({ show_seeds: value });
+      expect(PatchDivision.parse({ name: "Open", show_seeds: value })).toEqual({ name: "Open", show_seeds: value });
+    }
+  });
+
+  it("refuses a show_seeds that is not a boolean", () => {
+    for (const bad of ["false", 0, null]) {
+      expect(PatchDivision.safeParse({ name: "Open", show_seeds: bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("the Division response declares show_seeds, so the OpenAPI document carries it", () => {
+    expect(Division.shape.show_seeds.safeParse(false).success).toBe(true);
+    expect(Division.shape.show_seeds.safeParse(null).success).toBe(false);
+  });
+});
+
 // RS004: organiser-facing API for the five V364 eligibility/approval
 // columns RS001/RS002 added to the schema but never wired to a request/
 // response shape. Validation-only (no DB round trip — see

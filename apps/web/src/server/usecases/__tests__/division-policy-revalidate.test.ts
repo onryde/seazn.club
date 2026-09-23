@@ -243,3 +243,79 @@ describe.skipIf(!HAS_DB)("patchDivision — a name-policy change expires the org
     expect(kept.filter((key) => redis.has(key))).toEqual(kept);
   });
 });
+
+// V416 — `show_seeds` is the same kind of "take this off the public site now"
+// write as a name policy, over a narrower reach: seeds are printed by this
+// division's own public documents (the hub's Teams cards, the division page,
+// its entrants document) and by nothing org-wide — no player card, org page
+// or match centre prints a seed. So the division tag EXPIRES and the
+// competition tag is revalidated, exactly `fireScoreRevalidate`'s pair, and
+// the org tag is left alone: an org bust would rebuild the org's whole public
+// tree for a setting that touches one division.
+describe.skipIf(!HAS_DB)("patchDivision — a show_seeds change expires the division's public pages", () => {
+  let auth: AuthCtx;
+  let orgSlug: string;
+  let competitionId: string;
+
+  const division = async (name: string) =>
+    createDivision(auth, competitionId, { name, sport_key: "generic", variant_key: "score", config: GENERIC });
+
+  beforeAll(async () => {
+    ({ auth } = await seedOrg("pro"));
+    [{ slug: orgSlug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Show Seeds Revalidate Cup",
+      visibility: "public",
+      branding: {},
+    });
+    competitionId = comp.id;
+  });
+
+  const tagsOf = (calls: FlushCall[]) => calls.flatMap((c) => c.tags).sort();
+  const docsOf = (divisionId: string) => [
+    `pub:v1:div:${divisionId}:entrants-v2`,
+    `pub:v1:div:${divisionId}:standings`,
+    `pub:v1:div:${divisionId}:schedule`,
+  ];
+
+  for (const [from, to] of [
+    [true, false],
+    [false, true],
+  ] as const) {
+    it(`show_seeds ${from} → ${to}: the division tag EXPIRES, the competition tag revalidates, never the org tag; the hub and this division's documents are dropped, another division's are kept`, async () => {
+      const shown = await division(`Seeds ${from}→${to}`);
+      const other = await division(`Other ${from}→${to}`);
+      if (!from) await sql`update divisions set show_seeds = false where id = ${shown.id}`;
+      const named = [`pub:v1:hub:${competitionId}`, ...docsOf(shown.id)];
+      const unrelated = docsOf(other.id);
+      redis.clear();
+      for (const key of [...named, ...unrelated]) redis.set(key, { cached: "Seed 1" });
+
+      const { result, calls } = await inRequest(() => patchDivision(auth, shown.id, { show_seeds: to }));
+
+      expect(result.show_seeds).toBe(to);
+      expect(tagsOf(calls)).toEqual([divisionTag(shown.id), competitionTag(competitionId)].sort());
+      expect(tagsOf(calls), "an org-wide bust for a one-division setting").not.toContain(orgTag(orgSlug));
+      expect(calls.find((c) => c.tags.includes(divisionTag(shown.id)))!.durations, "the division tag").toEqual({
+        expire: 0,
+      });
+      expect(named.filter((key) => redis.has(key)), "documents still printing the old seeds").toEqual([]);
+      expect(unrelated.filter((key) => redis.has(key)), "another division's documents").toEqual(unrelated);
+    });
+  }
+
+  it("re-sending the stored show_seeds fires nothing and drops nothing", async () => {
+    const d = await division("Seeds unchanged");
+    expect(d.show_seeds, "precondition: a new division shows its seeds").toBe(true);
+    const kept = [`pub:v1:hub:${competitionId}`, ...docsOf(d.id)];
+    redis.clear();
+    for (const key of kept) redis.set(key, { cached: true });
+
+    const { result, calls } = await inRequest(() => patchDivision(auth, d.id, { show_seeds: true }));
+
+    expect(result.show_seeds).toBe(true);
+    expect(calls).toEqual([]);
+    expect(kept.filter((key) => redis.has(key))).toEqual(kept);
+  });
+});
