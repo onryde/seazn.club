@@ -65,6 +65,9 @@ const api = vi.hoisted(() => ({
    *  installs), recording how each call settled — the real-socket case. */
   real: false,
   realOutcomes: [] as { url: string; outcome: Promise<{ resolved: unknown } | { rejected: unknown }> }[],
+  /** When set, `/state` resolves exactly this body (the ledger still answers
+   *  `events`) — for server shapes the default double does not produce. */
+  stateBody: null as unknown,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -103,6 +106,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         });
       }
       if (url.includes("/events")) return Promise.resolve(api.events);
+      if (api.stateBody !== null) return Promise.resolve(api.stateBody);
       return Promise.resolve({
         status: "in_play",
         last_seq: api.events.length,
@@ -250,6 +254,7 @@ beforeEach(() => {
   api.malformed = null;
   api.real = false;
   api.realOutcomes.length = 0;
+  api.stateBody = null;
 });
 
 afterEach(() => {
@@ -633,6 +638,37 @@ describe("DeviceScorePad — a refresh whose 200 carried no usable body", () => 
     expect(() => island.rerender(baseProps()), "the pad crashed after a bodiless send-resync").not.toThrow();
     expect(island.text()).toContain(EN_UI["device.failed"]);
     expect(propsOf(voidMine(island.tree())).disabled, "busy cleared by send()'s finally").toBe(false);
+  });
+
+  it("a PRE-START fixture's empty ledger is a valid refresh, and is APPLIED", async () => {
+    // The guard's other edge (review round 3). An empty array is what the
+    // ledger of a fixture nobody has started yet IS, and `/state` then answers
+    // `scheduled`, `last_seq: 0`, null summary and state — the shape
+    // `getFixtureState` (server/usecases/fixtures.ts) builds from a fixture
+    // with no `match_states` row. A guard that read "empty" as "missing" would
+    // strand a pre-start pad on whatever it held before. The pad opens here on
+    // an in-play bootstrap with one of its own entries, so both setters leave
+    // a visible mark: `live` flips the header to Start, `events` removes Void.
+    const doc = stubDocument("visible");
+    stubWindow();
+    const island = renderIsland(DeviceScorePad, baseProps());
+    const startMatch = () => island.tree().find((e) => propsOf(e)["data-testid"] === "score-start-match");
+    // Baseline, so the flips below are real flips.
+    expect(startMatch(), "an in-play bootstrap offers no Start").toBeUndefined();
+    expect(propsOf(voidMine(island.tree())).disabled).toBe(false);
+
+    api.events = [];
+    api.stateBody = { fixture_id: "f1", status: "scheduled", last_seq: 0, summary: null, state: null, outcome: null };
+    fire(doc, "visibilitychange");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(() => island.rerender(baseProps()), "the pad crashed applying a pre-start refresh").not.toThrow();
+    expect(startMatch(), "live applied — status is scheduled, so Start is offered").toBeDefined();
+    expect(
+      island.tree().some((e) => e.type === "button" && propsOf(e).title !== undefined),
+      "events applied — the empty ledger leaves this link nothing to void",
+    ).toBe(false);
+    expect(propsOf(startMatch()!).disabled, "padSyncing cleared by the finally").toBe(false);
   });
 
   it("the REAL path: node fetch, a socket destroyed mid-body with no abort", async () => {

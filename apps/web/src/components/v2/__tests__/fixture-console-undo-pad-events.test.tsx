@@ -48,6 +48,9 @@ const api = vi.hoisted(() => ({
    *  The real-socket proof of that `apiV1` behaviour lives in
    *  `device-score-pad-freshness-floor.test.tsx`. */
   malformed: null as "state" | "events" | null,
+  /** When set, `/state` resolves exactly this body (the ledger still answers
+   *  `events`) — for server shapes the default double does not produce. */
+  stateBody: null as unknown,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -67,6 +70,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         });
       }
       if (url.includes("/events")) return Promise.resolve(api.events);
+      if (api.stateBody !== null) return Promise.resolve(api.stateBody);
       return Promise.resolve({
         status: "in_play",
         last_seq: api.events.length,
@@ -190,6 +194,7 @@ beforeEach(() => {
   api.events = [SEEDED];
   api.hang = false;
   api.malformed = null;
+  api.stateBody = null;
 });
 
 afterEach(() => {
@@ -393,6 +398,34 @@ describe("FixtureConsole — a resync whose 200 carried no usable body", () => {
     expect(post?.options?.json, "live untouched — expected_seq is still the bootstrap's").toMatchObject({
       expected_seq: 1,
     });
+  });
+
+  it("a PRE-START fixture's empty ledger is a valid resync, and is APPLIED", async () => {
+    // The guard's other edge (review round 3). An empty array is what the
+    // ledger of a fixture nobody has started yet IS, and `/state` then answers
+    // `scheduled`, `last_seq: 0`, null summary and state — `getFixtureState`'s
+    // shape (server/usecases/fixtures.ts) for a fixture with no `match_states`
+    // row. A guard that read "empty" as "missing" would strand the console on
+    // whatever it held before. It opens here in play with one entry, so both
+    // setters leave a visible mark: `live` brings Start back, `events` takes
+    // Void last away.
+    const island = renderIsland(FixtureConsole, baseProps());
+    const onEvents = propsOf(findScorePad(island.tree())).onEvents as (events: readonly EventEnvelope[]) => void;
+    const startMatch = () => island.tree().find((e) => propsOf(e)["data-testid"] === "score-start-match");
+    expect(startMatch(), "an in-play bootstrap offers no Start").toBeUndefined();
+    expect(propsOf(findUndoLast(island.tree())).disabled).toBe(false);
+
+    api.events = [];
+    api.stateBody = { fixture_id: "f1", status: "scheduled", last_seq: 0, summary: null, state: null, outcome: null };
+    onEvents([padFired]);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(() => island.rerender(baseProps()), "the console crashed applying a pre-start resync").not.toThrow();
+    expect(startMatch(), "live applied — status is scheduled, so Start is offered").toBeDefined();
+    expect(() => findUndoLast(island.tree()), "events applied — an empty ledger has no last entry to void").toThrow(
+      "Void last entry button not found",
+    );
+    expect(propsOf(startMatch()!).disabled, "padSyncing cleared by the finally").toBe(false);
   });
 
   it("send(): a write that lands but whose resync comes back bodiless says so in the operator's language", async () => {
