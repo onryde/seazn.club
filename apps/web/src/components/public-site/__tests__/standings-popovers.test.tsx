@@ -131,12 +131,15 @@ describe("the division page's table (StandingsTable)", () => {
     expect(al!.button).toContain('aria-expanded="false"');
     // The panel exists, is closed, and says the English sentence verbatim.
     expect(al!.panel, "aria-controls names no element").not.toBe("");
-    expect(al!.panel).toContain("hidden");
+    // Anchored on the attribute's serialised form: a bare "hidden" also
+    // matches `overflow-hidden`, `sr-only`'s neighbours or a `max-md:hidden`.
+    expect(al!.panel).toContain(' hidden=""');
     expect(al!.panel).toContain(">Points won 120 · Points lost 98 · Ratio 1.22");
     expect(RATIO_TEXT(ROWS[0]!)).toBe("Points won 120 · Points lost 98 · Ratio 1.22");
-    // The cell still SHOWS the ratio — the trigger is the number itself.
-    expect(al!.button).toBeDefined();
-    expect(html).toMatch(/data-testid="standings-ratio-point_ratio-al"[^>]*>1\.22<\/button>/);
+    // The cell still SHOWS the ratio — the trigger's whole content is the
+    // number itself, nothing added around it.
+    const inner = html.slice(html.indexOf(al!.button) + al!.button.length);
+    expect(inner.slice(0, inner.indexOf("</button>"))).toBe("1.22");
     // Beta's own numbers, not Alpha's: the note is per row.
     const be = all.find((x) => x.testid === "standings-ratio-point_ratio-be");
     expect(be!.panel).toContain(">Points won 110 · Points lost 104 · Ratio 1.06");
@@ -159,7 +162,7 @@ describe("the division page's table (StandingsTable)", () => {
     expect(html).not.toContain("<summary");
     const ties = all.filter((x) => x.testid.startsWith("standings-tie-"));
     expect(ties.map((x) => x.testid)).toEqual(["standings-tie-al"]);
-    expect(ties[0]!.panel).toContain("hidden");
+    expect(ties[0]!.panel).toContain(' hidden=""');
     expect(ties[0]!.panel).toContain(`>${TIE_TEXT}`);
   });
 
