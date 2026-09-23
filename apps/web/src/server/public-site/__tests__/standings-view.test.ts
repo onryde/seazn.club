@@ -239,36 +239,22 @@ describe("buildTableView", () => {
     expect(v.rows[1]!.tieBreakText).toBe('table.tieBreak:{"with":"Alpha, zz","rule":"gd"}');
   });
 
-  it("the tie-break dictionary keys are an enumerable registry with every value spelled out", () => {
+  it("the tie-break registry covers every key a shipped module ranks on by default, every value spelled out", () => {
+    // Read off the engine, never typed here (fix round 1): every key in every
+    // built-in module's `defaultTiebreakers` must be in the registry, or its
+    // tie note and qualification what-if print the engine's English label —
+    // or, for a key the engine has no label for either (`game_ratio`, which
+    // tennis ranks on), the raw key. A module that starts ranking on a new key
+    // reds here until the key is added with its four translations.
+    const defaults = new Set(builtinModules.flatMap((m) => [...m.defaultTiebreakers]));
+    expect(defaults.size, "premise: the engine declares default cascades to check").toBeGreaterThan(5);
+    expect(defaults.has("game_ratio"), "premise: tennis ranks on game_ratio by default").toBe(true);
+    const unregistered = [...defaults].filter((key) => !Object.hasOwn(TIE_BREAK_MSG_KEYS, key));
+    expect(unregistered, "a default tie-break key that would print English (or the raw key)").toEqual([]);
     // Round 2, NEW-3: a `` `table.tieBreak.${key}` `` concatenation is
     // invisible to a grep, to `scripts/i18n/gen-keys.ts` and to any future
-    // source-scanning gate — the whole family could go missing without a red.
-    // This is the shape `packages/engine/src/competition/display.test.ts` uses
-    // to pin `DERIVED_METRICS`: the exact membership, so adding or dropping a
-    // rule is a deliberate edit here and not a silent one.
-    expect(Object.keys(TIE_BREAK_MSG_KEYS)).toEqual([
-      "points",
-      "wins",
-      "diff",
-      "for",
-      "fair_play",
-      "nrr",
-      "set_ratio",
-      "game_ratio",
-      "board_ratio",
-      "point_ratio",
-      "h2h_points",
-      "h2h_diff",
-      "h2h_for",
-      "direct",
-      "buchholz",
-      "buchholz_cut1",
-      "sberger",
-      "seed",
-      "lots",
-    ]);
-    // …and every value is the literal key for its own rule, so a typo in one
-    // of the nineteen strings reds here rather than in a spectator's browser.
+    // source-scanning gate — so every value is the literal key for its own
+    // rule, and a typo in one reds here rather than in a spectator's browser.
     for (const [trace, dictKey] of Object.entries(TIE_BREAK_MSG_KEYS)) {
       expect(dictKey).toBe(`table.tieBreak.${trace}`);
     }
