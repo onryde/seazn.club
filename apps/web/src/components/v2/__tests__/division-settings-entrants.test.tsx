@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DivisionSettings } from "@/components/v2/division-settings";
+import enUi from "@/dictionaries/en/ui.json";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
 // Same harness as stages-panel-delete.test.tsx: mock the router + confirm hooks
@@ -26,6 +27,7 @@ function renderSettings(
     entrantModel?: EffectiveEntrantModel;
     entrantModelSource?: "sport" | "override";
     canEdit?: boolean;
+    showSeeds?: boolean;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -52,6 +54,7 @@ function renderSettings(
       entrantModelSource={overrides.entrantModelSource ?? "sport"}
       autoPosts={false}
       canAutoPost={false}
+      showSeeds={overrides.showSeeds ?? true}
       viewerPlan="community"
     />,
   );
@@ -104,5 +107,27 @@ describe("DivisionSettings — Entrants block", () => {
   it("hides the editing affordances from viewers (canEdit=false)", () => {
     const html = renderSettings({ canEdit: false });
     expect(html).not.toContain("Save entrant settings");
+  });
+});
+
+// V416 — the Public page block opens at the division's STORED show_seeds, not
+// at a constant: its collapsed summary names the state, and the checkbox is
+// seeded from the same prop. The words come from the dictionary, so a copy
+// change moves this test with it.
+describe("DivisionSettings — Public page block (show_seeds)", () => {
+  const shown = enUi["divset.publicPage.seedsShown"];
+  const hidden = enUi["divset.publicPage.seedsHidden"];
+
+  it("summarises a division that hides its seeds as hidden", () => {
+    const html = renderSettings({ showSeeds: false });
+    expect(html).toContain(enUi["divset.publicPage.title"]);
+    expect(html).toContain(hidden);
+    expect(html).not.toContain(shown);
+  });
+
+  it("summarises a division that shows its seeds as shown", () => {
+    const html = renderSettings({ showSeeds: true });
+    expect(html).toContain(shown);
+    expect(html).not.toContain(hidden);
   });
 });

@@ -979,6 +979,7 @@ export default async function DivisionPage({
             // Event Pass rungs, so an org-wide resolve would show a pass holder
             // a locked control on the competition they paid for.
             canAutoPost={await hasFeature(auth.orgId, "news.auto", competition.id)}
+            showSeeds={division.show_seeds}
             viewerPlan={viewerPlan}
             embed={
               competition.visibility !== "private" ? (

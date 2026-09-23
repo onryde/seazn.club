@@ -90,6 +90,7 @@ function mount(stages: StageProp[], locked: boolean) {
     entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
+    showSeeds: true,
     viewerPlan: "community",
   });
 }
