@@ -33,6 +33,13 @@ import { subjectToScorerCapabilityGates } from "./scorers";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats } from "./stages";
 import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
+import {
+  RESULT_CARRIED_FORWARD,
+  RESULT_CARRIED_FORWARD_MESSAGE,
+  SETTLED_OPEN_STATUSES,
+  carriedForwardFacts,
+  isCarriedForward,
+} from "./carried-forward";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
 export interface ScoreOutcome {
@@ -480,6 +487,20 @@ async function assertEntitledToScore(
   if (auth.via === "device_link") {
     if (input.type === "core.finalize") {
       throw new HttpError(403, "Finalizing needs an organiser or scorer account");
+    }
+    // Scorer sheets §4.3: once a settled result has moved the competition on —
+    // a feed seated, the next Swiss round seated, the stage complete — a
+    // device link may do nothing more with this fixture; corrections are the
+    // organiser's. Evaluated LIVE (unpairing re-opens it), and only for a
+    // settled fixture, so a live tap never pays for the query.
+    // ONE status gate on this path, and it is this one: the facts are read
+    // without resultCarriedForward's own status check, so neither guard
+    // covers for the other (pre-flight A15).
+    if (SETTLED_OPEN_STATUSES.has(ctx.fixture_status)) {
+      const loaded = await withTenant(auth.orgId, (tx) => carriedForwardFacts(tx, fixtureId));
+      if (loaded && isCarriedForward(loaded.facts)) {
+        throw new HttpError(403, RESULT_CARRIED_FORWARD_MESSAGE, RESULT_CARRIED_FORWARD);
+      }
     }
     if (input.type === "core.void") {
       if (ctx.fixture_status === "finalized") {
