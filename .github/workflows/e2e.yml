@@ -847,8 +847,28 @@ jobs:
           # price gap — hard-fail it rather than downgrading back to a warning.
           E2E_REQUIRE_MONEY_PATH: "1"
 
-      - name: Upload Playwright report (on failure)
-        if: failure()
+      # A test that fails and then passes on retry leaves the job green, so an
+      # `if: failure()` upload threw away the only trace and screenshot of the
+      # failed attempt (entrant-rename-walkthrough, run 35841095614: flaky,
+      # nothing left to diagnose). `retain-on-failure` keeps the failed
+      # attempt's trace in the html report even when the retry passes; this
+      # step decides whether that report is worth uploading.
+      - name: Detect flaky tests
+        id: flaky
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            let n = 0;
+            try { n = JSON.parse(fs.readFileSync(process.env.REPORT, "utf8")).stats.flaky || 0; } catch {}
+            if (n > 0) console.log("::warning::" + n + " flaky test(s) — report uploaded for the failed attempt");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "flaky=" + (n > 0) + "\n");
+          '
+        env:
+          REPORT: apps/web/playwright-report/results.json
+
+      - name: Upload Playwright report (on failure or flake)
+        if: failure() || steps.flaky.outputs.flaky == 'true'
         uses: actions/upload-artifact@v4
         with:
           # Per leg: three jobs uploading one artifact name collide and the
@@ -1133,8 +1153,28 @@ jobs:
           PLAYWRIGHT_BASE: http://localhost:3000
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
 
-      - name: Upload Playwright report (on failure)
-        if: failure()
+      # A test that fails and then passes on retry leaves the job green, so an
+      # `if: failure()` upload threw away the only trace and screenshot of the
+      # failed attempt (entrant-rename-walkthrough, run 35841095614: flaky,
+      # nothing left to diagnose). `retain-on-failure` keeps the failed
+      # attempt's trace in the html report even when the retry passes; this
+      # step decides whether that report is worth uploading.
+      - name: Detect flaky tests
+        id: flaky
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            let n = 0;
+            try { n = JSON.parse(fs.readFileSync(process.env.REPORT, "utf8")).stats.flaky || 0; } catch {}
+            if (n > 0) console.log("::warning::" + n + " flaky test(s) — report uploaded for the failed attempt");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "flaky=" + (n > 0) + "\n");
+          '
+        env:
+          REPORT: apps/web/playwright-report/results.json
+
+      - name: Upload Playwright report (on failure or flake)
+        if: failure() || steps.flaky.outputs.flaky == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-serial
@@ -1439,8 +1479,28 @@ jobs:
           PLAYWRIGHT_BASE: http://localhost:3000
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
 
-      - name: Upload Playwright report (on failure)
-        if: failure()
+      # A test that fails and then passes on retry leaves the job green, so an
+      # `if: failure()` upload threw away the only trace and screenshot of the
+      # failed attempt (entrant-rename-walkthrough, run 35841095614: flaky,
+      # nothing left to diagnose). `retain-on-failure` keeps the failed
+      # attempt's trace in the html report even when the retry passes; this
+      # step decides whether that report is worth uploading.
+      - name: Detect flaky tests
+        id: flaky
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            let n = 0;
+            try { n = JSON.parse(fs.readFileSync(process.env.REPORT, "utf8")).stats.flaky || 0; } catch {}
+            if (n > 0) console.log("::warning::" + n + " flaky test(s) — report uploaded for the failed attempt");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "flaky=" + (n > 0) + "\n");
+          '
+        env:
+          REPORT: apps/web/playwright-report/results.json
+
+      - name: Upload Playwright report (on failure or flake)
+        if: failure() || steps.flaky.outputs.flaky == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-mobile-${{ matrix.slug }}

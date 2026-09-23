@@ -12,6 +12,7 @@ import {
   type SeededCompetition,
 } from "../settings-support";
 import { apiJson, setDateTime } from "../helpers";
+import { waitForHydration } from "../directory-kit";
 import { routes } from "../../src/lib/routes";
 
 /**
@@ -131,6 +132,7 @@ test("settings tab: matchMinutes/gapMinutes/perEntrantMinRest persist across a r
   const div = await seedDivision(request, comp.id);
   try {
     await page.goto(scheduleUrl(div.slug, "settings"));
+    await waitForHydration(page.getByTestId("settings-match-minutes"));
 
     // Stable data-testid hooks (settings-panel.tsx), not `getByLabel` — the
     // match-length/gap inputs sit inside a wrapping `<label>` whose text
@@ -184,8 +186,19 @@ test("settings tab: startAt/endAt persist across a reload, and an untouched tz s
     // division's own `tz` override above, by design (#448: the display lane
     // and the governing clock are deliberately different fields).
     const dateInputs = page.locator('input[type="date"]');
+    // `goto` returns at `load`, before React hydrates. The split date+time
+    // control keeps its halves in state seeded once from props, so a date typed
+    // into the server HTML is lost, the time half then joins onto "", and the
+    // save honestly stores `startAt: null` — the reload reads back "" (CI flake,
+    // 2026-09-23). Wait for React on the control before typing into it.
+    await waitForHydration(dateInputs.first());
     await setDateTime(page, "2026-10-01T09:00"); // startAt: split date+time control
     await dateInputs.nth(1).fill("2026-10-05"); // endAt: plain date input
+    // The typed values are still there at Save, so a dropped keystroke fails
+    // here, at the fill, instead of as a persistence defect after the reload.
+    await expect(dateInputs.first()).toHaveValue("2026-10-01");
+    await expect(page.getByLabel("Time", { exact: true })).toHaveValue("09:00");
+    await expect(dateInputs.nth(1)).toHaveValue("2026-10-05");
 
     await page.getByRole("button", { name: /^Save/i }).click();
     await expect(page.getByText(L.saved)).toBeVisible();
@@ -217,6 +230,7 @@ test("case #17: half-filled or inverted play hours block the save before any net
   const div = await seedDivision(request, comp.id);
   try {
     await page.goto(scheduleUrl(div.slug, "settings"));
+    await waitForHydration(page.getByTestId("settings-day-start").locator("select"));
 
     let putFired = false;
     page.on("request", (req) => {
@@ -262,6 +276,7 @@ test("constraints tab: noBackToBack persists across a reload", async ({ page, re
     await page.goto(scheduleUrl(div.slug, "constraints"));
 
     const toggle = page.getByTestId("constraint-no-back-to-back");
+    await waitForHydration(toggle);
     await expect(toggle).not.toBeChecked();
     // Instant-save on toggle (`constraints-panel.tsx`'s `saveConstraints`) —
     // there is no separate Save button for this field; the checked state only
