@@ -47,6 +47,12 @@ const api = vi.hoisted(() => ({
    *  stubbed rejection standing in for it. Same double as
    *  `fixture-console-undo-pad-events.test.tsx`'s. */
   hang: false,
+  /** The same half-open socket, answered the way `apiV1` answered an abort
+   *  that landed MID-BODY before review round 1: the body-parse catch
+   *  swallowed it and the call RESOLVED with `undefined`. The helper is fixed
+   *  at the root now (`client-v1.test.ts`); this keeps the pad's own
+   *  `throwIfAborted` honest against any transport that still resolves. */
+  resolveUndefinedOnAbort: false,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -56,11 +62,15 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     apiV1: vi.fn((url: string, options?: { method?: string; json?: unknown; signal?: AbortSignal }) => {
       api.calls.push({ url, options });
       if (options?.method === "POST") return Promise.resolve({});
-      if (api.hang) {
-        return new Promise((_resolve, reject) => {
+      if (api.hang || api.resolveUndefinedOnAbort) {
+        return new Promise((resolve, reject) => {
           const signal = options?.signal;
           if (signal === undefined || signal === null) return; // never settles
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => (api.resolveUndefinedOnAbort ? resolve(undefined) : reject(signal.reason)),
+            { once: true },
+          );
         });
       }
       if (url.includes("/events")) return Promise.resolve(api.events);
@@ -206,6 +216,7 @@ beforeEach(() => {
   api.events = [OWN];
   api.headline = null;
   api.hang = false;
+  api.resolveUndefinedOnAbort = false;
 });
 
 afterEach(() => {
@@ -359,6 +370,32 @@ describe("DeviceScorePad — the tab-return freshness floor (G1)", () => {
       propsOf(voidMine(island.tree())).disabled,
       "a refresh that never answers must not gate the controls forever",
     ).toBe(false);
+  });
+
+  it("an aborted refresh that RESOLVES (undefined) leaves the pad's state untouched and its gate open", async () => {
+    // Review round 1: a transport that answers an abort by resolving rather
+    // than rejecting — `apiV1` did exactly that for an abort mid-body — used
+    // to reach `setLive(undefined)`, and the next render threw on
+    // `live.summary`. `resync` now checks its own signal after the requests
+    // settle and before touching state.
+    const doc = stubDocument("visible");
+    stubWindow();
+    const island = renderIsland(DeviceScorePad, baseProps());
+
+    api.resolveUndefinedOnAbort = true;
+    fire(doc, "visibilitychange");
+    expect(propsOf(voidMine(island.tree())).disabled, "the refresh really is in flight").toBe(true);
+
+    await vi.advanceTimersByTimeAsync(OPPORTUNISTIC_RESYNC_MS + 1);
+
+    // A fresh render, not the harness's last output: a render that THREW
+    // leaves the previous tree in place, so reading `island.tree()` alone
+    // could not tell a crashed pad from a healthy one.
+    expect(() => island.rerender(baseProps()), "the pad crashed rendering an aborted refresh").not.toThrow();
+    expect(island.text(), "live state untouched — still the bootstrap headline").toContain("0 — 0");
+    const settled = voidMine(island.tree());
+    expect(propsOf(settled).title, "events untouched — still targeting this link's own seq 1").toContain("seq 1");
+    expect(propsOf(settled).disabled, "padSyncing cleared by the finally").toBe(false);
   });
 
   it("is NOT an interval — a pad nobody returns to costs nothing", async () => {

@@ -161,6 +161,12 @@ export function DeviceScorePad({
             signal: controller?.signal,
           }),
         ]);
+        // Never write an aborted refresh into state. `apiV1` now rejects on an
+        // abort mid-body (review round 1), but before that it RESOLVED with
+        // `undefined` there, and `setLive(undefined)` crashed the next render
+        // on `live.summary`. Checked here as well so no transport that answers
+        // an abort by resolving can reach the setters.
+        controller?.signal.throwIfAborted();
         setLive(state);
         setEvents(all);
       } finally {
