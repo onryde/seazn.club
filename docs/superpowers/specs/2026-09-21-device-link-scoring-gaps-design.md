@@ -577,11 +577,37 @@ DATABASE_URL=<test db> DATABASE_SSL=disable \
 It runs the two realtime-bearing specs in their own projects
 (`e2e/device-links.spec.ts` under `serial`,
 `e2e/walkthrough/console-device-live-sync.spec.ts` under `walkthrough`) with
-`E2E_REQUIRE_REALTIME=1`, and it refuses to report a pass it did not earn: a
-spec that selects **zero** tests, a spec that has lost its
-`assertPropagatedUnderPoll()` clause, or a kit that no longer reads the switch
-each exit **3**, distinct from the realtime red at **1** and the missing
-environment at **2**.
+`E2E_REQUIRE_REALTIME=1`, and it refuses to report a pass it did not earn.
+Five exit codes, because "the gate could not run", "the gate ran nothing" and
+"the gate red for an unrelated reason" must none of them read as a pass — nor
+as a realtime regression:
+
+| code | meaning |
+|---|---|
+| 0 | every realtime-bearing spec joined a channel and beat the poll |
+| 1 | realtime regression — at least one pad sat on the poll |
+| 2 | environment — no server, or no `DATABASE_URL`; nothing was measured |
+| 3 | gate integrity — zero tests selected, or the spec set / clause / switch does not match the tree |
+| 4 | inconclusive — a leg failed carrying no realtime verdict at all |
+
+Three things that guard are worth stating because each was a real hole:
+
+- **The clause check counts CALL-shaped occurrences only.** In
+  `device-links.spec.ts` the symbol appears three times — an import at `:5`,
+  a prose comment at `:477`, and exactly **one** call at `:661`. A substring
+  grep is satisfied by the comment alone, so every call site could be deleted
+  and the gate would still run six tests, assert nothing about realtime, and
+  exit 0. Measured: with the call commented out and the import and comment
+  left in place, `grep -qa` is still satisfied.
+- **The declared spec list is cross-checked against the tree**, in both
+  directions: a declared spec with no call refuses, and a spec that calls the
+  clause but is not declared refuses. That closes commenting an entry out,
+  emptying the list, and adding a realtime spec nobody gated.
+- **A failing leg is classified before the verdict is printed.** "At least one
+  pad sat on the poll" is a claim about a cause, and it used to be printed on
+  any non-zero leg — demonstrably wrongly (see the stale-server note below).
+  A leg that fails carrying none of `assertPropagatedUnderPoll`'s four
+  verdicts exits 4 instead.
 
 Measured both ways on 2026-09-23, same build, same DB, same specs — the only
 variable being whether the server got the ROOT `.env.local`:
@@ -590,6 +616,13 @@ variable being whether the server got the ROOT `.env.local`:
 |---|---|---|
 | `:3371` | yes | **exit 0** — 8 passed (serial, 14.5s) + 3 passed (walkthrough, 12.9s) |
 | `:3381` | no | **exit 1** — 1 failed / 7 passed, and 1 failed / 2 passed |
+
+"Same DB" there is measured, not assumed — both repo `.env.local` files point
+`DATABASE_URL` at the **dev** database, so a server on the test DB is on it
+because something overrode them. `lsof` on the green server's pid shows its
+pool connected to `127.0.0.1:54609`, and `pg_stat_activity` on that cluster
+names those exact client ports as `seazn_w3rt` — the same database the
+Playwright process and the red server used.
 
 Both reds name the seam exactly:
 
@@ -620,12 +653,18 @@ Found while proving this gate: a server left running from the previous day
 (15h39m old) against a since-rebuilt `.next` serves HTML referencing chunks
 that no longer exist — `/_next/static/chunks/<name>.js` answers **500
 `text/plain`**, the browser raises `ChunkLoadError`, and the pad never mounts.
-The gate correctly exits 1, but the specs fail on `toBeVisible()` for the pad,
-the page reads "Something went wrong", and **no realtime message appears at
-all**. Before accepting a red from this gate, check that the failure text
-contains "no websocket ever joined this fixture's channel". If it instead says
-the pad did not mount, compare the server's start time against the build's and
-restart it — that is an environment fault wearing a realtime costume.
+The specs fail on `toBeVisible()` for the pad, the page reads "Something went
+wrong", and **no realtime message appears at all** — an environment fault
+wearing a realtime costume.
+
+The gate's first version printed "at least one pad sat on the poll" over
+exactly that, which is why the classification in the table above exists: this
+case now exits **4**, not 1, and says the run fell over before realtime was
+measured. Verified against that same stale server, which was deliberately left
+running as the fixture for it; a genuine no-root-`.env.local` server on the
+current build still exits 1 on the same code, so the classifier discriminates
+rather than merely suppressing. If you see exit 4, compare the server's start
+time with the build's and restart it.
 
 **Still OPEN for the owner, and not settled by this wave:** whether to give
 Actions a real Supabase JWKS so CI can join a channel. It has its own cost and
