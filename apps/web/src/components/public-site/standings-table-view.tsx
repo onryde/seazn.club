@@ -139,8 +139,54 @@ const COLUMN_SIZES = [
   { upTo: Number.POSITIVE_INFINITY, cls: "w-16", px: 64 },
 ] as const;
 
-function columnSize(chars: number): (typeof COLUMN_SIZES)[number] {
-  return COLUMN_SIZES.find((s) => chars <= s.upTo) ?? COLUMN_SIZES[COLUMN_SIZES.length - 1]!;
+/** Wider columns, for a HEADER word the character count under-books.
+ *
+ *  The header row is 11px uppercase, `tracking-wider`, semibold — and the
+ *  count above treats a header letter like a body digit. A whole-word header
+ *  is wider than that: "DIFFERENCE" paints 72.9px, and in the 64px column the
+ *  count gave it (60px of content) it spilled LEFT into its neighbour, so the
+ *  generic table's header read "AGAINST DIFFERENCE PTS" as one run. Dutch
+ *  "PUNTENVERHOUDING" paints 125.4px. Literal class names, 8px apart, for the
+ *  same scanner reason as above. */
+const HEADER_SIZES = [
+  { cls: "w-18", px: 72 },
+  { cls: "w-20", px: 80 },
+  { cls: "w-22", px: 88 },
+  { cls: "w-24", px: 96 },
+  { cls: "w-26", px: 104 },
+  { cls: "w-28", px: 112 },
+  { cls: "w-30", px: 120 },
+  { cls: "w-32", px: 128 },
+  { cls: "w-34", px: 136 },
+  { cls: "w-36", px: 144 },
+  { cls: "w-38", px: 152 },
+  { cls: "w-40", px: 160 },
+] as const;
+
+type ColumnSize = { cls: string; px: number };
+
+/** What one header character costs at the header's own type, rounded UP.
+ *  Measured in Chromium on the built app (Geist 11px uppercase, 0.55px
+ *  tracking, weight 600), one word at a time, over every header word the four
+ *  locales print: the widest per-character word is "GEWONNEN", 8.65px. A
+ *  single capital runs wider ("W" is 11.5px) but a one-letter header sits in a
+ *  32px column with 28px of content. `standings-table-view-headers.test.tsx`
+ *  holds the measured table. */
+const HEADER_CHAR_PX = 9;
+
+/** The content box a header word needs: its longest WORD, since a header may
+ *  wrap at a space but never inside a word, plus the cell's own padding —
+ *  `pl-0.5` and either `pr-0.5` between columns or the `pr-2` end gutter. */
+function headerPx(abbr: string, atRowEnd: boolean): number {
+  const longest = Math.max(0, ...abbr.split(/\s+/).map((word) => [...word].length));
+  return longest * HEADER_CHAR_PX + 2 + (atRowEnd ? 8 : 2);
+}
+
+/** The column's size: the character count's, unless the header needs more. */
+function columnSize(chars: number, header: number): ColumnSize {
+  const byChars: ColumnSize = COLUMN_SIZES.find((s) => chars <= s.upTo) ?? COLUMN_SIZES[COLUMN_SIZES.length - 1]!;
+  if (byChars.px >= header) return byChars;
+  return HEADER_SIZES.find((s) => s.px >= header) ?? HEADER_SIZES[HEADER_SIZES.length - 1]!;
 }
 
 /** The rank column: `w-12` (48px) less `pl-2` (8px) = 40px of content box, for
@@ -197,9 +243,6 @@ export function StandingsTableView({
   // disclosure renders under a preview offering to reveal columns that are
   // unconditionally hidden, which is a control that does nothing.
   const hasLongTail = preview === undefined && view.columns.some((c) => !c.compact);
-  const sizes = view.columns.map((c, i) =>
-    columnSize(Math.max(c.abbr.length, ...view.rows.map((r) => (r.cells[i] ?? "").length))),
-  );
   // A PREVIEW narrows to `PREVIEW_KEYS`; a full table shows every compact
   // column, and a long-tail one folds below `md` until the disclosure is
   // opened. From `md` up a full table folds nothing, ever.
@@ -228,22 +271,6 @@ export function StandingsTableView({
   // not lost: "Full division" sits beside it and is the affordance for it.
   const foldCls = (c: TableColumnT) =>
     shown(c) ? "" : preview === undefined ? " max-md:hidden" : " hidden";
-  // The floor described at the top of the file, in two flavours because the
-  // column set differs by viewport. BELOW `md` a folded column is
-  // `display:none` and claims nothing, so only the shown set counts — which is
-  // what keeps the collapsed phone off a rail while still guaranteeing the
-  // name column its 96px once the disclosure is open. From `md` UP nothing
-  // folds, so every column counts.
-  const floor = (px: (c: TableColumnT, i: number) => number) =>
-    RANK_PX + NAME_MIN_PX + view.columns.reduce((total, c, i) => total + px(c, i), 0);
-  const minPhone = floor((c, i) => (shown(c) ? sizes[i]!.px : 0));
-  // The wide floor counts every column because above `md` a full table folds
-  // nothing — but a PREVIEW folds at every width (see `foldCls`), so counting
-  // its hidden columns reserves width for cells that are not rendered. That is
-  // what kept **Points** behind a scroll after the fold fix: the columns were
-  // gone and the floor still demanded 380px in a 318px rail, so the table
-  // overflowed by exactly the space its invisible columns had booked.
-  const minWide = floor((c, i) => (preview === undefined || shown(c) ? sizes[i]!.px : 0));
 
   // ── THE END GUTTER ────────────────────────────────────────────────────────
   // Every numeric column is `px-0.5` (2px a side), which is right BETWEEN
@@ -267,6 +294,16 @@ export function StandingsTableView({
   // order, which is a class present rather than a class in effect.
   const lastPhone = view.columns.reduce((last, c, i) => (shown(c) ? i : last), -1);
   const lastWide = preview === undefined ? view.columns.length - 1 : lastPhone;
+  // A column's width: its widest cell or header by character count, widened
+  // where the header's longest word would not fit its content box — which
+  // for the column at the end of the row (at either width) is 6px narrower,
+  // the `pr-2` gutter below.
+  const sizes = view.columns.map((c, i) =>
+    columnSize(
+      Math.max(c.abbr.length, ...view.rows.map((r) => (r.cells[i] ?? "").length)),
+      headerPx(c.abbr, i === lastPhone || i === lastWide),
+    ),
+  );
   // The box does not change — Tailwind is border-box and the floors sum
   // `sizes[i].px` — so this spends 6px of the end column's CONTENT, which the
   // widest thing it holds (a 3-digit points total, a signed 6-character rate in
@@ -277,6 +314,24 @@ export function StandingsTableView({
     if (i === lastWide) return "pr-0.5 md:pr-2";
     return "pr-0.5";
   };
+
+  // The floor described at the top of the file (it sums `sizes`, so it follows
+  // them), in two flavours because the column set differs by viewport. BELOW
+  // `md` a folded column is
+  // `display:none` and claims nothing, so only the shown set counts — which is
+  // what keeps the collapsed phone off a rail while still guaranteeing the
+  // name column its 96px once the disclosure is open. From `md` UP nothing
+  // folds, so every column counts.
+  const floor = (px: (c: TableColumnT, i: number) => number) =>
+    RANK_PX + NAME_MIN_PX + view.columns.reduce((total, c, i) => total + px(c, i), 0);
+  const minPhone = floor((c, i) => (shown(c) ? sizes[i]!.px : 0));
+  // The wide floor counts every column because above `md` a full table folds
+  // nothing — but a PREVIEW folds at every width (see `foldCls`), so counting
+  // its hidden columns reserves width for cells that are not rendered. That is
+  // what kept **Points** behind a scroll after the fold fix: the columns were
+  // gone and the floor still demanded 380px in a 318px rail, so the table
+  // overflowed by exactly the space its invisible columns had booked.
+  const minWide = floor((c, i) => (preview === undefined || shown(c) ? sizes[i]!.px : 0));
 
   // ── THE CUT LINE ──────────────────────────────────────────────────────────
   // Its first cell spans rank, name and the columns shown at the narrowest

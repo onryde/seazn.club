@@ -593,6 +593,99 @@ for (const width of WIDTHS) {
   });
 }
 
+// ── Hub Table tab: column headers stand apart ────────────────────────────
+//
+// A generic division's long-tail headers are whole words ("Against",
+// "Difference"), 11px uppercase with tracking — wider than the fixed column
+// they sat in, so a right-aligned word spilled LEFT into its neighbour and the
+// row read "AGAINST DIFFERENCE PTS" as one run. No unit test can see it
+// (`apps/web` vitest has no layout); only the browser measures a painted word.
+
+/** Every DISPLAYED header of a hub table, left to right: its column key, the
+ *  painted box of the words a sighted reader sees (the `aria-hidden` notation
+ *  where the cell has one, else its own text), and the cell's content box. */
+async function headerGeometry(section: Locator) {
+  return section.locator("thead th").evaluateAll((ths) =>
+    ths
+      .filter((th) => getComputedStyle(th).display !== "none")
+      .map((th) => {
+        const shown = th.querySelector("[aria-hidden]") ?? th;
+        const range = document.createRange();
+        range.selectNodeContents(shown);
+        const text = range.getBoundingClientRect();
+        const cell = th.getBoundingClientRect();
+        const cs = getComputedStyle(th);
+        return {
+          key: th.getAttribute("data-col") ?? "team",
+          text: (shown.textContent ?? "").trim(),
+          left: text.left,
+          right: text.right,
+          cellLeft: cell.left + parseFloat(cs.paddingLeft),
+          cellRight: cell.right - parseFloat(cs.paddingRight),
+        };
+      }),
+  );
+}
+
+/** At least this much clear space between two neighbouring header words —
+ *  the two cells' facing paddings (`pl-0.5` + `pr-0.5`), i.e. each word inside
+ *  its own content box. */
+const HEADER_GAP_PX = 4;
+
+function expectHeadersApart(g: Awaited<ReturnType<typeof headerGeometry>>, where: string) {
+  for (const h of g) {
+    expect(h.left, `${where}: "${h.text}" spills out of its own cell on the left`).toBeGreaterThanOrEqual(h.cellLeft - 0.5);
+    expect(h.right, `${where}: "${h.text}" spills out of its own cell on the right`).toBeLessThanOrEqual(h.cellRight + 0.5);
+  }
+  for (let i = 1; i < g.length; i++) {
+    const gap = g[i]!.left - g[i - 1]!.right;
+    expect(gap, `${where}: "${g[i - 1]!.text}" and "${g[i]!.text}" run together (${gap.toFixed(1)}px apart)`).toBeGreaterThanOrEqual(
+      HEADER_GAP_PX,
+    );
+  }
+}
+
+/** The columns each width shows, pinned so the header fix cannot move the
+ *  fold: every column from `md` up, the compact set on a closed phone table,
+ *  every column again once "More" opens it. */
+const EVERY_COLUMN = ["rank", "team", "played", "won", "lost", "for", "against", "diff", "points"];
+const COMPACT = ["rank", "team", "played", "won", "lost", "points"];
+
+for (const width of [1280, 768, 320] as const) {
+  test(`hub Table tab at ${width}: every column header stands clear of its neighbours, and the fold is unchanged`, async ({ browser }) => {
+    const page = await spectator(browser, { width, height: 900 });
+    await openUntil(page, paths.hub(), (p) => hubSwiss(p).getByTestId("qual-cut").count(), 1);
+    const section = hubSwiss(page);
+    const head = section.locator("thead");
+    await frame(section);
+    const shoot = async (name: string) =>
+      page.screenshot({ path: test.info().outputPath(`${name}.png`), clip: await clipAround(page, [head]) });
+
+    const closed = await headerGeometry(section);
+    await shoot(`hub-header-${width}`);
+    expect(
+      closed.map((h) => h.key),
+      "the columns shown",
+    ).toEqual(width < 768 ? COMPACT : EVERY_COLUMN);
+    expectHeadersApart(closed, `${width}`);
+    await expectNoHorizontalScroll(page);
+
+    if (width < 768) {
+      const more = section.getByTestId(`mh-table-${scene.swiss.slug}-${scene.swiss.table.stageId}-overall-more`);
+      await expect(async () => {
+        if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+        await expect(more).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
+      }).toPass({ timeout: 15_000 });
+      const opened = await headerGeometry(section);
+      await shoot(`hub-header-${width}-more`);
+      expect(opened.map((h) => h.key), "the columns shown once opened").toEqual(EVERY_COLUMN);
+      expectHeadersApart(opened, `${width}, opened`);
+      await expectNoHorizontalScroll(page);
+    }
+    console.log(`MEASURED hub headers ${width}: ${JSON.stringify(closed.map((h) => [h.text, Math.round(h.left), Math.round(h.right)]))}`);
+  });
+}
+
 // ── Pictures: each surface at 1280, 768 and 320, closed and open ─────────
 
 /** Scroll so `block` starts 120px down the viewport, clear of the sticky
