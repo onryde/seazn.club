@@ -7,3 +7,4 @@ export * from "./progression.ts";
 export * from "./display.ts";
 export * from "./points.ts";
 export * from "./round-role.ts";
+export * from "./qualification.ts";

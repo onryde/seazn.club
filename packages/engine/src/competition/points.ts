@@ -5,6 +5,7 @@
 import { z } from "zod";
 import type { EntrantId, MatchOutcome, MetricSpec, StandingsDelta } from "../core/types.ts";
 import { EngineError } from "../core/errors.ts";
+import type { MatchPointsBounds } from "../sport/module.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 
 // Jul3/05 §2 — declarative points rule (stages.config.points).
@@ -228,4 +229,33 @@ export function applyRankLocks(
     out[rank - 1] = { ...row, rank };
   }
   return out as StandingsRow[];
+}
+
+// Standings qualification (spec 2026-09-22 §3.1, plan P1): a stage PointsRule
+// REPLACES the sport's points (applyPointsRule), so its bounds replace the
+// module's. Bonuses are summed per outcome class — an over-approximation when
+// two bonuses of one class exclude each other, which is safe (R3: cautious,
+// never wrong).
+const WIN_BONUS = new Set(["win_margin_gte", "forfeit_win"]);
+const LOSS_BONUS = new Set(["loss_margin_lte", "score_ratio_gte", "forfeit_loss"]);
+
+export function pointsRuleBounds(rule: PointsRule): MatchPointsBounds {
+  const sum = (kinds: (when: string) => boolean, sign: 1 | -1) =>
+    rule.bonuses
+      .filter((b) => kinds(b.when))
+      .reduce((s, b) => s + (sign === 1 ? Math.max(0, b.points) : Math.min(0, b.points)), 0);
+  const win = (w: string) => WIN_BONUS.has(w);
+  const loss = (w: string) => LOSS_BONUS.has(w);
+  const draw = (w: string) => w === "draw";
+  const noResult = (w: string) => w === "no_result";
+  const wins = [rule.base.win, ...(rule.forfeit ? [rule.forfeit.winnerPoints] : [])];
+  const losses = [rule.base.loss, ...(rule.forfeit ? [rule.forfeit.loserPoints] : [])];
+  const winFloor = Math.min(...wins) + sum(win, -1);
+  const lossCeil = Math.max(...losses) + sum(loss, 1);
+  return {
+    max: Math.max(Math.max(...wins) + sum(win, 1), lossCeil, rule.base.draw + sum(draw, 1), sum(noResult, 1)),
+    min: Math.min(winFloor, Math.min(...losses) + sum(loss, -1), rule.base.draw + sum(draw, -1), sum(noResult, -1)),
+    winFloor,
+    lossCeil,
+  };
 }
