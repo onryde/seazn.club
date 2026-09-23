@@ -28,7 +28,14 @@ import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { playerLinkId } from "@/lib/name-display";
 import { toLocale } from "@/lib/i18n-constants";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t, type TKey } from "@/lib/i18n";
+import type { AnySportModule } from "@seazn/engine/sport";
+import {
+  buildQualificationView,
+  divisionAwardAddsToLedger,
+  divisionPointsBounds,
+  stageQualMeta,
+} from "@/server/public-site/qualification-view";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { variantLabel } from "@/server/public-site/variant-label";
@@ -78,8 +85,9 @@ export default async function DivisionHomePage({ params }: Props) {
   // MetricSpec[] + cascade from the division's PINNED module version.
   let metricSpecs: MetricSpecLike[] = [];
   let cascade: readonly string[] = [];
+  let module_: AnySportModule | null = null;
   try {
-    const module_ = resolveModule(division.sport_key, division.module_version);
+    module_ = resolveModule(division.sport_key, division.module_version);
     metricSpecs = module_.metrics;
     cascade = division.tiebreakers ?? module_.defaultTiebreakers;
   } catch {
@@ -131,6 +139,16 @@ export default async function DivisionHomePage({ params }: Props) {
   // Accept-Language — a per-visitor choice would need a request-scoped read and
   // would make every cached copy wrong for somebody.
   const dict = await getDictionary(orgLocale, "public");
+  // Standings qualification status (spec 2026-09-22 §4.2): the division-wide
+  // inputs once, exactly as the competition hub builds them — the per-match
+  // bounds and whether a walkover writes goals come from the PINNED module and
+  // the live cfg (a retired module gives no bounds, so no status). Every word
+  // is the org's, like the rest of this ISR page.
+  const qualBounds = divisionPointsBounds(module_, division.config);
+  const awardAddsToLedger = divisionAwardAddsToLedger(module_, division.config);
+  const qualMsg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
+  const qualPlural = (key: string, count: number, vars?: Record<string, string | number>) =>
+    plural(dict, key, count, orgLocale, vars);
   // `ShareButton` reads its label through `useMsg()` (ui.json), which needs a
   // `<DictProvider>` ancestor to see any locale but English — the fixture
   // page's own finding, and this page had none either (Task 16 review, I1).
@@ -272,6 +290,21 @@ export default async function DivisionHomePage({ params }: Props) {
               const poolFixtures = fixtures.filter(
                 (f) => f.stage_id === stage.id && (f.pool_id ?? null) === (snap.pool_id ?? null),
               );
+              // This table's cut line and statuses (null: no cut, or anything
+              // the builder cannot be sure of — then the table is as before).
+              const qualification = buildQualificationView({
+                stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
+                poolId: snap.pool_id ?? null,
+                rows: snap.rows as StandingsRow[],
+                fixtures,
+                entrantStatuses,
+                bounds: qualBounds,
+                awardAddsToLedger,
+                cascade,
+                entrantNames,
+                msg: qualMsg,
+                plural: qualPlural,
+              });
               return (
                 <div key={snap.pool_id ?? "overall"} className="mb-6 space-y-3">
                   <StandingsTable
@@ -287,6 +320,7 @@ export default async function DivisionHomePage({ params }: Props) {
                         : stage.name
                     }
                     dict={dict}
+                    qualification={qualification}
                   />
                   {poolFixtures.length > 0 && (
                     <details>

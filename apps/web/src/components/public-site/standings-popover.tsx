@@ -74,6 +74,11 @@ export interface StandingsPopoverProps {
   testid?: string;
   /** Layout for the button itself — its display, gap and hit area. */
   className?: string;
+  /** The button's accessible name, for a trigger whose content cannot say it:
+   *  a rank chip beside an aria-hidden qualification marker is named "Rank 3,
+   *  Win and in, show details" (spec 2026-09-22 §5). Omitted — every trigger
+   *  before that — and the content names the button, exactly as before. */
+  ariaLabel?: string;
 }
 
 /** Shared by every panel, exported so the static-markup tests read the classes
@@ -103,6 +108,7 @@ export function StandingsPopover({
   align = "start",
   testid,
   className = "",
+  ariaLabel,
 }: StandingsPopoverProps) {
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -204,6 +210,7 @@ export function StandingsPopover({
         ref={buttonRef}
         type="button"
         data-testid={testid}
+        aria-label={ariaLabel}
         aria-expanded={open}
         aria-controls={panelId}
         aria-describedby={panelId}

@@ -17,7 +17,14 @@ import { Bracket } from "@/components/public-site/bracket";
 import { AttributionLink } from "@/components/attribution-link";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { toLocale } from "@/lib/i18n-constants";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t, type TKey } from "@/lib/i18n";
+import type { AnySportModule } from "@seazn/engine/sport";
+import {
+  buildQualificationView,
+  divisionAwardAddsToLedger,
+  divisionPointsBounds,
+  stageQualMeta,
+} from "@/server/public-site/qualification-view";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
@@ -60,8 +67,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
 
   let metricSpecs: MetricSpecLike[] = [];
   let cascade: readonly string[] = [];
+  let module_: AnySportModule | null = null;
   try {
-    const module_ = resolveModule(division.sport_key, division.module_version);
+    module_ = resolveModule(division.sport_key, division.module_version);
     metricSpecs = module_.metrics;
     cascade = division.tiebreakers ?? module_.defaultTiebreakers;
   } catch {
@@ -177,6 +185,15 @@ export default async function EmbedWidgetPage({ params }: Props) {
       <p className="p-2 text-sm text-zinc-500">{t(dict, "division.bracketEmpty")}</p>
     );
   } else {
+    // Standings qualification status (spec 2026-09-22 §4.2) — the same inputs
+    // the public division page and the hub build, from the PINNED module and
+    // the live cfg: an embedded table is a public standings surface, and one
+    // that dropped the cut would disagree with the page it links to.
+    const qualBounds = divisionPointsBounds(module_, division.config);
+    const awardAddsToLedger = divisionAwardAddsToLedger(module_, division.config);
+    const qualMsg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
+    const qualPlural = (key: string, count: number, vars?: Record<string, string | number>) =>
+      plural(dict, key, count, orgLocale, vars);
     body = (
       <div className="space-y-5">
         {stages.map((stage) => {
@@ -197,6 +214,19 @@ export default async function EmbedWidgetPage({ params }: Props) {
                   : stage.name
               }
               dict={dict}
+              qualification={buildQualificationView({
+                stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
+                poolId: snap.pool_id ?? null,
+                rows: snap.rows as StandingsRow[],
+                fixtures,
+                entrantStatuses,
+                bounds: qualBounds,
+                awardAddsToLedger,
+                cascade,
+                entrantNames,
+                msg: qualMsg,
+                plural: qualPlural,
+              })}
             />
           ));
         })}
