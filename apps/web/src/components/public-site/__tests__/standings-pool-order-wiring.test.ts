@@ -8,9 +8,11 @@
 // or keeps query order (the embed did) reads B first and reds here.
 //
 // The hub is `competition-hub.test.ts`'s ("pools read Pool A above Pool B").
-// The organiser console reads its pools through its own tenant query; that
-// page needs a signed-in organiser to render, so its wiring is pinned from
-// the source below and driven for real in `e2e/standings-qualification.spec.ts`.
+// The organiser console is rendered through its own harness, where the tenant
+// read of its pools can be answered: `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/
+// __tests__/qualification-plumbing.test.tsx` ("pools read Pool A above Pool B
+// whatever their ids…"), and it is driven for real in
+// `e2e/standings-qualification.spec.ts`.
 import { describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { readFileSync } from "node:fs";
@@ -140,12 +142,6 @@ describe("pool order on the pages that draw one standings table per pool", () =>
     const drawn = tables(root);
     expect(drawn.map((el) => el.props.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
     expect(drawn.map((el) => el.props.rows.map((r) => r.entrantId))).toEqual([["e1", "e2"], ["e3", "e4"]]);
-  });
-
-  it("organiser console: its pools are put in order by the same helper, not left to the query", () => {
-    const src = readFileSync(join(process.cwd(), "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx"), "utf8");
-    expect(src).toMatch(/import \{[^}]*\bcomparePools\b[^}]*\} from "@\/lib\/pool-order"/);
-    expect(src).toMatch(/\.sort\(comparePools\)/);
   });
 
   it("no surface sorts pools by id any more", () => {

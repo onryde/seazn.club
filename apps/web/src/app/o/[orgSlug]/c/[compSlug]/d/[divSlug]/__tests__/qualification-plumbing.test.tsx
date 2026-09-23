@@ -350,6 +350,37 @@ describe("organiser console — the standings tables get the same qualification 
     expect(b.html).toContain("First place goes through to Finals · 1 round left");
   });
 
+  it("pools read Pool A above Pool B whatever their ids and the query's order (lib/pool-order.ts)", async () => {
+    // The two-pool scene with ids that sort OPPOSITE to the names ("f…" is
+    // Pool A's), handed back by the tenant read in B, A order: a console that
+    // sorts by id, or keeps query order, draws Pool B first.
+    twoPoolScene();
+    const POOL_A = "ffffffff-0000-4000-8000-00000000000a";
+    const POOL_B = "00000000-0000-4000-8000-00000000000b";
+    const id = (p: unknown) => (p === "pA" ? POOL_A : p === "pB" ? POOL_B : p);
+    scene.fixtures = scene.fixtures.map((f) => ({ ...(f as object), pool_id: id((f as { pool_id: unknown }).pool_id) }));
+    scene.pools = {
+      gr: [
+        { id: POOL_B, key: "B", name: "Pool B" },
+        { id: POOL_A, key: "A", name: "Pool A" },
+      ],
+    };
+    scene.snaps = Object.fromEntries(
+      Object.values(scene.snaps).map((v) => {
+        const pool = id((v as { pool_id: string }).pool_id) as string;
+        return [`gr:${pool}`, { ...(v as object), pool_id: pool }];
+      }),
+    );
+    expect([POOL_A, POOL_B].sort(), "premise: the ids sort B first").toEqual([POOL_B, POOL_A]);
+    qual.listStageQualificationMeta.mockResolvedValue(
+      new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" })]]),
+    );
+    const tables = await renderTables();
+    expect(tables.map((x) => x.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    // Each caption over its OWN pool's rows — the tables moved, not the labels.
+    expect(tables.map((x) => x.rowIds)).toEqual([["e1", "e2", "e3"], ["e4", "e5", "e6"]]);
+  });
+
   it("the console speaks the VIEWER's locale: a French viewer gets the French cut line", async () => {
     swissScene();
     scene.locale = "fr";
