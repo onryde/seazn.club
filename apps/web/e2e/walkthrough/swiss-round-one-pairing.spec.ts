@@ -453,6 +453,22 @@ test("Pair next, tapped: a plain press pairs top-vs-bottom; Unpair; Neighbours p
   //    this press would send Neighbours again.
   await unpair.click();
   await expect.poll(async () => (await roundPairs(page, 1)).length, { timeout: GENERATE_MS }).toBe(0);
+  // The DB is ahead of the page: Pair next re-enables when the Unpair POST
+  // returns, before the refresh moves the rail back to round 1, and a press
+  // that beats the refresh sends `{}` whether or not the pick was kept. So
+  // the reset is read off the page itself: once the rail is back on round 1
+  // (`openMenuFor` waits for the menu to name it), Top vs bottom must be the
+  // checked radio again. A kept pick shows Neighbours checked here.
+  const menuAgain = await openMenuFor(card, 1);
+  const checked = menuAgain.getByRole("radio", { checked: true });
+  await expect(checked, "the Neighbours pick outlived the press that used it").toHaveCount(1);
+  await expect(checked).toHaveAttribute("data-testid", "stage-pairing-fold");
+  await expect(checked).toContainText(say(EN, "schedule.pairing.fold"));
+  await expect(card.getByTestId("stage-pairing-rank_adjacent")).toHaveAttribute("aria-checked", "false");
+  const toggle = card.getByTestId("stage-pairing-toggle");
+  await toggle.click();
+  await expect(card.getByTestId("stage-pairing-menu")).toHaveCount(0);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await generate.click();
   await expect.poll(() => roundPairs(page, 1), { timeout: GENERATE_MS }).toEqual(fold);
   expect(bodies).toEqual(["{}", '{"pairing":"rank_adjacent"}', "{}"]);
