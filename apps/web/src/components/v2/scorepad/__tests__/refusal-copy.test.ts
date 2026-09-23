@@ -84,7 +84,7 @@ describe("NEXT_MATCH_STARTED names the match to void first, in the scorer's lang
   // match by its round's code ("QF·3"), rendered in the scorer's language.
   it.each(Object.keys(LOCALES))("%s: a knockout match is named by the board's round code, in the scorer's language", (locale) => {
     const dict = LOCALES[locale]!;
-    const coded = { ...nextMatch, round: 1, seq: 3, code: { key: "bracket.roundShort.quarter" as const, params: {} } };
+    const coded = { ...nextMatch, round: 1, seq: 3, code: { key: "bracket.roundShort.quarter" as const, params: {}, ref_seq: 3 } };
     const text = refusalText({ code: "NEXT_MATCH_STARTED", message: english, nextMatch: coded }, say(dict));
     const board = matchRef(1, 3, say(dict), say(dict)("bracket.roundShort.quarter"));
     expect(text).toBe(interpolate(dict["scorepad.refusal.nextMatchStartedRef"]!, { ref: board }));

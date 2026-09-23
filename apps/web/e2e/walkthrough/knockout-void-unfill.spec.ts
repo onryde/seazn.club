@@ -104,6 +104,7 @@ interface Fx {
   status: string;
   outcome: { winner?: string } | null;
   /** The round-role columns the schedule board names a round by. */
+  ext_key?: string | null;
   lane?: "WB" | "LB" | "GF" | null;
   is_final?: boolean;
   third_place?: boolean;
@@ -272,9 +273,10 @@ test("an organiser voids a decided knockout result, scores it the other way, and
   // truth, never retyped: `boardRoundCodes` over the draw as read back, and
   // `matchRef`'s composition, in the organiser's dictionary.
   const boardLabel = (dict: Dict) => {
-    const code = boardRoundCodes(drawn, [{ id: stage.data!.id, kind: stage.data!.kind }], lookup(dict)).get(final.id)?.code;
-    expect(code, "the board names a knockout final's round by its code").toBeDefined();
-    return composeMatchRef(final.round_no, final.seq_in_round, lookup(dict), code);
+    const rc = boardRoundCodes(drawn, [{ id: stage.data!.id, kind: stage.data!.kind }], lookup(dict)).get(final.id);
+    expect(rc, "the board names a knockout final's round by its code").toBeDefined();
+    // schedule-board.tsx's own expression: the code, then its refSeq.
+    return composeMatchRef(final.round_no, rc!.refSeq, lookup(dict), rc!.code);
   };
   const finalFr = boardLabel(FR);
   expect(finalFr, "…so it is never called by the round number the board does not print").not.toBe(

@@ -58,7 +58,7 @@ describe("nextMatchRefOf reads the code whole, or not at all", () => {
   const base = { fixture_id: "fx", round: 2, seq: 1 };
 
   it("keeps a code the board could have chosen, params and all", () => {
-    const code = { key: "bracket.roundShort.roundOf", params: { n: 16 } };
+    const code = { key: "bracket.roundShort.roundOf", params: { n: 16 }, ref_seq: 5 };
     expect(nextMatchRefOf({ next_match: { ...base, code } })).toEqual({ ...base, code });
   });
 
@@ -67,12 +67,15 @@ describe("nextMatchRefOf reads the code whole, or not at all", () => {
   });
 
   it.each([
-    ["a key the board never chooses", { key: "auth.signOut", params: {} }],
-    ["a key with no params", { key: "bracket.roundShort.final" }],
-    ["params that are a list", { key: "bracket.roundShort.final", params: [] }],
-    ["a param that is not a number", { key: "bracket.roundShort.roundOf", params: { n: { x: 1 } } }],
-    ["a number sent as text", { key: "bracket.roundShort.roundOf", params: { n: "16" } }],
-    ["a param that is not a finite number", { key: "bracket.roundShort.roundOf", params: { n: Number.NaN } }],
+    ["a key the board never chooses", { key: "auth.signOut", params: {}, ref_seq: 1 }],
+    ["a key with no params", { key: "bracket.roundShort.final", ref_seq: 1 }],
+    ["params that are a list", { key: "bracket.roundShort.final", params: [], ref_seq: 1 }],
+    ["a param that is not a number", { key: "bracket.roundShort.roundOf", params: { n: { x: 1 } }, ref_seq: 1 }],
+    ["a number sent as text", { key: "bracket.roundShort.roundOf", params: { n: "16" }, ref_seq: 1 }],
+    ["a param that is not a finite number", { key: "bracket.roundShort.roundOf", params: { n: Number.NaN }, ref_seq: 1 }],
+    ["no ref_seq", { key: "bracket.roundShort.final", params: {} }],
+    ["a ref_seq that is not a whole number", { key: "bracket.roundShort.final", params: {}, ref_seq: 1.5 }],
+    ["a ref_seq below 1", { key: "bracket.roundShort.final", params: {}, ref_seq: 0 }],
     ["a bare string", "bracket.roundShort.final"],
     ["null", null],
   ])("refuses the whole ref for %s, so the reader falls back to the plain sentence", (_label, code) => {
@@ -86,8 +89,12 @@ describe("nextMatchLabel is the board's own label, in the reader's language", ()
   it.each(Object.keys(LOCALES))("%s: a coded round reads as the board prints it; an uncoded one as R{n}·{seq}", (locale) => {
     const dict = LOCALES[locale]!;
     const say = (k: MessageKey, vars?: Record<string, string | number>) => interpolate(dict[k] ?? k, vars);
-    const code = { key: "bracket.roundShort.roundOf" as const, params: { n: 16 } };
+    const code = { key: "bracket.roundShort.roundOf" as const, params: { n: 16 }, ref_seq: 5 };
     expect(nextMatchLabel({ round: 1, seq: 5, code }, say)).toBe(matchRef(1, 5, say, say(code.key, code.params)));
     expect(nextMatchLabel({ round: 2, seq: 1 }, say)).toBe(matchRef(2, 1, say));
+    // The number after a code is the board's refSeq, not seq_in_round: a
+    // bronze match, second in its final's round, is "3rd·1" on the board.
+    const bronze = { key: "bracket.roundShort.thirdPlace" as const, params: {}, ref_seq: 1 };
+    expect(nextMatchLabel({ round: 2, seq: 2, code: bronze }, say)).toBe(matchRef(2, 1, say, say(bronze.key)));
   });
 });

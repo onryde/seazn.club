@@ -218,7 +218,7 @@ const lookupIn = (locale: Locale) => (key: MessageKey, vars?: Record<string, str
 
 /** What the SCHEDULE BOARD calls `fixtureId` in `locale` — the expression
  *  schedule-board.tsx builds each card's ref with (`matchRef` over the code
- *  `boardRoundCodes` gives it), fed by the board's own read. Fix round 2
+ *  and `refSeq` `boardRoundCodes` gives it), fed by the board's own read. Fix round 2
  *  ruling: the refusal names the next match with exactly this. */
 async function boardRef(auth: AuthCtx, fixtureId: string, locale: Locale = "en"): Promise<string> {
   const [{ division_id }] = await sql<{ division_id: string }[]>`select division_id from fixtures where id = ${fixtureId}`;
@@ -228,7 +228,8 @@ async function boardRef(auth: AuthCtx, fixtureId: string, locale: Locale = "en")
   ]);
   const f = board.find((x) => x.id === fixtureId)!;
   const lookup = lookupIn(locale);
-  return matchRef(f.round_no, f.seq_in_round, lookup, boardRoundCodes(board, stages, lookup).get(f.id)?.code);
+  const rc = boardRoundCodes(board, stages, lookup).get(f.id);
+  return matchRef(f.round_no, rc?.refSeq ?? f.seq_in_round, lookup, rc?.code);
 }
 
 /** The refusal names `fixtureId` — by the board's label, in every language the
@@ -1251,11 +1252,11 @@ describe.skipIf(!HAS_DB)("fix round 2: the un-fill's locks", () => {
     expect(released, "pp-q2's void went through — it was not the deadlock victim").toEqual([pp.final.id]);
     expect(q1Err, "pp-q1's void was refused, not killed").toBeInstanceOf(HttpError);
     expect((q1Err as HttpError).code, "…because pp-q2 has been played").toBe("NEXT_MATCH_STARTED");
-    // …and it names pp-q2 the board's way. The board codes only knockout and
-    // double-elimination rounds, so a page playoff's match keeps "R2·1" there,
-    // and here.
+    // …and it names pp-q2 the board's way: since #854 the board codes a page
+    // playoff's rounds too, so Qualifier 2 is "Q2·1" there, and here.
     const ref = await expectNamesTheBoardsWay(pp.auth, q1Err as HttpError, pp.q2.id);
-    expect(ref.code, "a round the board does not code carries no code").toBeUndefined();
+    expect(ref.code?.key, "Qualifier 2, by the board's own playoff code").toBe("bracket.roundShort.qualifier2");
+    expect((q1Err as HttpError).message).toContain(`(${msgFor("en", "bracket.roundShort.qualifier2")}·1)`);
     const after = await row(pp.final.id);
     expect(after.home_entrant_id, "pp-q1's winner keeps the final seat (its void rolled back)").toBe(before.home_entrant_id);
     expect(after.away_entrant_id, "pp-q2's winner was taken back").toBeNull();
@@ -1324,6 +1325,28 @@ describe.skipIf(!HAS_DB)("fix round 2: the un-fill's locks", () => {
     expect(queued, "the late fill queued behind the void").toBe(true);
     expect(filled, "it seated nobody").not.toContain(rig.final.id);
     expect(seat(await row(rig.final.id), line.winner_to_slot), "the voided winner is NOT put back").toBeNull();
+  });
+
+  // The number after a code is the board's `refSeq`, not seq_in_round: a
+  // bronze match plays in its final's round, second, and the board calls it
+  // "3rd·1" (#854). A void whose loser went to a bronze match already under
+  // way is refused naming it exactly that way — "3rd·2" would name a match the
+  // board shows nowhere.
+  it("names a started bronze match '3rd·1', the board's number for it — not its seq_in_round", async () => {
+    const rig = await knockout({ thirdPlace: true });
+    const [line, other] = rig.r1 as [Row, Row];
+    expect(rig.third, "premise: the stage has a bronze match").not.toBeNull();
+    expect(rig.third!.seq_in_round, "premise: it is NOT the first match of its round").not.toBe(1);
+    expect(line.loser_to_fixture, "premise: the line's loser goes to the bronze match").toBe(rig.third!.id);
+    const decider = await decide(rig.auth, line.id);
+    await decide(rig.auth, other.id);
+    await append(rig.auth, rig.third!.id, "core.start", {});
+
+    const err = await refusal(voidEvent(rig.auth, line.id, decider));
+
+    expect(err.code).toBe("NEXT_MATCH_STARTED");
+    await expectNamesTheBoardsWay(rig.auth, err, rig.third!.id);
+    expect(err.message).toContain(`(${msgFor("en", "bracket.roundShort.thirdPlace")}·1)`);
   });
 
   it("and a late fill for a result that still stands seats its winner as before", async () => {

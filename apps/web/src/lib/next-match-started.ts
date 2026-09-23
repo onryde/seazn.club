@@ -16,9 +16,10 @@
 //
 // THE LABEL (fix round 2, controller ruling 2026-09-23): the refusal names the
 // next match with the SAME label the schedule board shows it by. The board
-// names a knockout or double-elimination match by its round's code — "F·1",
-// "QF·3", "WB2·1" (`boardRoundCodes` + `matchRef`, board/round-codes.ts and
-// schedule-board.tsx) — and every other match "R2·1". The server runs the
+// names a bracket match by its round's code — "F·1", "QF·3", "WB2·1", and
+// since #854 a page playoff's "Q2·1" and a stepladder's "E2·1"
+// (`boardRoundCodes` + `matchRef`, board/round-codes.ts and schedule-board.tsx)
+// — and every other match "R2·1". The server runs the
 // board's own `boardRoundCodes` and sends the code it chose as the DICTIONARY
 // KEY behind it (`code`), never as text: the codes are localized (a
 // quarter-final is QF, CF or KF), and only the reader knows their language.
@@ -45,14 +46,23 @@ export const ROUND_CODE_KEYS = [
   "bracket.roundShort.losersRound",
   "bracket.roundShort.grandFinal",
   "bracket.roundShort.grandFinalReset",
+  "bracket.roundShort.qualifier1",
+  "bracket.roundShort.eliminator",
+  "bracket.roundShort.qualifier2",
+  "bracket.roundShort.rung",
 ] as const;
 
 /** A round code as the dictionary key (and its `{n}`) the board rendered it
  *  from, so each reader renders it in their own language. `roundRoleShort`
- *  only ever passes numbers. */
+ *  only ever passes numbers. `ref_seq` is the number the board prints after
+ *  the code — `BoardRoundCode.refSeq`, the match's place among its stage's
+ *  matches of the same round role — which is NOT always its seq_in_round: a
+ *  bronze match, second in its final's round, is "3rd·1", and a page
+ *  playoff's Eliminator, second in round 1, is "E·1" (#854). */
 export interface RoundCodeRef {
   key: (typeof ROUND_CODE_KEYS)[number];
   params: Record<string, number>;
+  ref_seq: number;
 }
 
 /** The machine-readable half, carried in the error body as `next_match` so a
@@ -73,8 +83,8 @@ export interface NextMatchRef {
  *  board chose. The server's English sentence, the console and the pad all
  *  name the match through this. */
 export function nextMatchLabel(ref: Pick<NextMatchRef, "round" | "seq" | "code">, lookup: MatchRefLookup): string {
-  const code = ref.code === undefined ? undefined : lookup(ref.code.key, ref.code.params);
-  return composeMatchRef(ref.round, ref.seq, lookup, code);
+  if (ref.code === undefined) return composeMatchRef(ref.round, ref.seq, lookup);
+  return composeMatchRef(ref.round, ref.code.ref_seq, lookup, lookup(ref.code.key, ref.code.params));
 }
 
 /** The server's English sentence, naming the match by `label` — its
@@ -101,10 +111,15 @@ export function nextMatchRefOf(extra: Record<string, unknown> | null | undefined
 /** A `code` exactly as `RoundCodeRef` says, or null. */
 function roundCodeOf(raw: unknown): RoundCodeRef | null {
   if (!raw || typeof raw !== "object") return null;
-  const { key, params } = raw as { key?: unknown; params?: unknown };
+  const { key, params, ref_seq } = raw as { key?: unknown; params?: unknown; ref_seq?: unknown };
   if (!(ROUND_CODE_KEYS as readonly unknown[]).includes(key)) return null;
+  if (!Number.isInteger(ref_seq) || (ref_seq as number) < 1) return null;
   if (!params || typeof params !== "object" || Array.isArray(params)) return null;
   const entries = Object.entries(params);
   if (!entries.every(([, v]) => typeof v === "number" && Number.isFinite(v))) return null;
-  return { key: key as RoundCodeRef["key"], params: Object.fromEntries(entries) as RoundCodeRef["params"] };
+  return {
+    key: key as RoundCodeRef["key"],
+    params: Object.fromEntries(entries) as RoundCodeRef["params"],
+    ref_seq: ref_seq as number,
+  };
 }

@@ -190,7 +190,8 @@ async function reachable(tx: Tx, src: Node, moved: Record<Side, boolean>, out: M
  *  ruling 2026-09-23): the board's own `boardRoundCodes` over the rows of its
  *  stage — the columns the board reads — with a lookup that RECORDS the
  *  dictionary key it chose instead of rendering it. The code goes out as that
- *  key, so each reader renders it in their own language
+ *  key, with the board's `refSeq` — the number it prints after the code —
+ *  so each reader renders it in their own language
  *  (lib/next-match-started.ts); a round the board does not code carries none,
  *  and reads "R2·1" there and here alike. Read only on the way to a refusal. */
 async function boardRef(tx: Tx, t: Node): Promise<NextMatchRef> {
@@ -199,9 +200,11 @@ async function boardRef(tx: Tx, t: Node): Promise<NextMatchRef> {
     select id, stage_id, round_no, seq_in_round, ext_key, lane, is_final, third_place, conditional
     from fixtures where stage_id = ${t.stage_id}`;
   const recordKey = (key: string, vars?: Record<string, string | number>) => JSON.stringify({ key, params: vars ?? {} });
-  const code = boardRoundCodes(rows, stage ? [stage] : [], recordKey).get(t.id)?.code;
+  const rc = boardRoundCodes(rows, stage ? [stage] : [], recordKey).get(t.id);
   const ref: NextMatchRef = { fixture_id: t.id, round: t.round_no, seq: t.seq_in_round };
-  return code === undefined ? ref : { ...ref, code: JSON.parse(code) as RoundCodeRef };
+  if (rc === undefined) return ref;
+  const { key, params } = JSON.parse(rc.code) as Pick<RoundCodeRef, "key" | "params">;
+  return { ...ref, code: { key, params, ref_seq: rc.refSeq } };
 }
 
 /** The SAME lock every append to that fixture takes (append-event.ts), held

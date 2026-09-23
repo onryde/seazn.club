@@ -1040,7 +1040,7 @@ describe("scoringErrorText keeps engine English off the scorer's screen", () => 
       const say: MsgFn = (k, vars) => interpolate(dict[k] ?? k, vars);
       const english = "The next match (QF·3) has already started. Void that one first.";
       const extra = {
-        next_match: { fixture_id: "fx-qf", round: 1, seq: 3, code: { key: "bracket.roundShort.quarter", params: {} } },
+        next_match: { fixture_id: "fx-qf", round: 1, seq: 3, code: { key: "bracket.roundShort.quarter", params: {}, ref_seq: 3 } },
       };
       const text = scoringErrorText("NEXT_MATCH_STARTED", english, say, "score.failed", extra);
       const board = matchRef(1, 3, say, say("bracket.roundShort.quarter"));

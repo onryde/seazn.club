@@ -461,7 +461,7 @@ describe("409 classification", () => {
   });
 
   it("carries the board's round code through with the ref (fix round 2)", async () => {
-    const next_match = { fixture_id: "fx-final", round: 2, seq: 1, code: { key: "bracket.roundShort.final", params: {} } };
+    const next_match = { fixture_id: "fx-final", round: 2, seq: 1, code: { key: "bracket.roundShort.final", params: {}, ref_seq: 1 } };
     const { fn } = fakeFetch(() => fakeResponse(409, body("NEXT_MATCH_STARTED", { next_match })));
     const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", {
       expected_seq: 3,
@@ -479,8 +479,8 @@ describe("409 classification", () => {
       { next_match: { ...ref, round: "2" } },
       // A code must be one of the board's round-code keys: any other key would
       // print whatever sentence that key holds in the middle of this one.
-      { next_match: { ...ref, code: { key: "auth.signOut", params: {} } } },
-      { next_match: { ...ref, code: { key: "bracket.roundShort.roundOf", params: { n: { x: 1 } } } } },
+      { next_match: { ...ref, code: { key: "auth.signOut", params: {}, ref_seq: 1 } } },
+      { next_match: { ...ref, code: { key: "bracket.roundShort.roundOf", params: { n: { x: 1 } }, ref_seq: 1 } } },
       { next_match: { ...ref, code: "bracket.roundShort.final" } },
     ]) {
       const { fn } = fakeFetch(() => fakeResponse(409, body("NEXT_MATCH_STARTED", extra)));
