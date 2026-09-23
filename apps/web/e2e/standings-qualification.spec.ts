@@ -698,6 +698,9 @@ for (const width of [1280, 768, 320] as const) {
         await expect(more).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
       }).toPass({ timeout: 15_000 });
       const opened = await headerGeometry(section);
+      // The opened long tail lives past the region's right edge: scroll it
+      // into view so the picture shows the headers the check just measured.
+      await section.locator('[role="region"]').evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
       await shoot(`hub-header-${width}-more`);
       expect(opened.map((h) => h.key), "the columns shown once opened").toEqual(EVERY_COLUMN);
       expectHeadersApart(opened, `${width}, opened`);
