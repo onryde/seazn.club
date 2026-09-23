@@ -76,15 +76,32 @@ Every anchor in spec §3 and §4.5, re-read in the tree (`grep -a`, then opened)
 | P2 | "`enc-boundary.test.ts` admits `device-links.ts`" | The test takes its column list from `V<n>__stream_sessions.sql` alone; a `secret_enc` declared in any other migration is invisible to it, and it asserts exactly three columns. | Task 1 derives columns from every delta and replaces the single-directory rule with a per-column allow-list. |
 | P3 | "`DEVICE_LINK_KEK` is added to … CI env" | `RELAY_KEK` is in NO workflow (relay tests set it in `beforeAll`). Because `createDeviceLink` will now seal, every mint in CI — hand-over e2e, smoke's pass-grant check — needs the key in the SERVER's env. | Task 1 adds it beside `AUTH_SECRET` in all 8 jobs and pins that with a wiring test. |
 | P4 | "transport classifies this code as terminal" | Already true: a 403 carrying our envelope returns `{kind:"rejected", code}` (transport.ts:375-376) and the pipeline stores it in `lastRejection`. What is missing is only pipeline → registry → chrome. | Task 5 adds the callback; no transport behaviour change, just an exported code set. |
-| P5 | "decided … not carried forward → void its own events (fix a mistake right after the match)" | `onDecided` fills the knockout target synchronously in the same request (scoring.ts:660-668), so a knockout fixture is carried forward the instant it is decided. A stage's last fixture is carried as soon as the stage completes. The umpire's undo window after a decision exists only for league/group fixtures and Swiss boards before the next pairing. | Built as specified (safe direction); Task 4 pins the knockout case with a test so nobody "discovers" it later. **Owner question Q2.** |
+| P5 | "decided … not carried forward → void its own events (fix a mistake right after the match)" | `onDecided` fills the knockout target synchronously in the same request (scoring.ts:660-668), so a knockout fixture is carried forward the instant it is decided. A stage's last fixture is carried as soon as the stage completes. The umpire's undo window after a decision exists only for league/group fixtures and Swiss boards before the next pairing. | Built as specified (safe direction); Task 4 pins the knockout case with a test so nobody "discovers" it later. **Owner ruling Q2 (2026-09-23): build as specified.** |
 | P6 | Waiting "re-checks fixture metadata (sides + labels) every POLL_MS (`cache: "no-store"`)" | A device link may read ONLY `/state` and `/events` (doc 13 §7 `rejectDeviceLink`, fixtures.ts:27); `GET /fixtures/{id}` refuses it. And the inner pad needs each side's members + lineup, which only the server page loads. | Waiting calls `router.refresh()` on the `force-dynamic` scan page every `POLL_MS` (and on tab return). Same cadence, same "only while waiting" rule, no new device-link read surface, and one authority (the page) for side data. |
-| P7 | Row ref examples `R1 M3`, `SF1`, `Round 3 · Board 2` | The one authority for a match reference is `matchRef()` (slot-label.ts:38, key `slot.match_ref`, "R1·2"); the board card and every feeder label use it. | The sheet uses `matchRef(round_no, seq_in_round)` so the printed ref, the board chip and "Winner of R1·2" cannot disagree. **Owner question Q6.** |
+| P7 | Row ref examples `R1 M3`, `SF1`, `Round 3 · Board 2` | The one authority for a match reference is `matchRef()` (slot-label.ts:38, key `slot.match_ref`, "R1·2"); the board card and every feeder label use it. | The sheet uses `matchRef(round_no, seq_in_round)` so the printed ref, the board chip and "Winner of R1·2" cannot disagree. **Owner ruling Q6 (2026-09-23): `matchRef()` format.** |
 | P8 | Confirm: "Start match sends `core.start` and opens the pad" | Today the inner pad mounts BEFORE start, and `useFixtureStream` has no fetch on mount (first read is a signal or the 15 s poll). Mounting it only after Start with the server bootstrap's events would show a pre-start pad and send a stale `expected_seq`. | Task 6 seeds the inner pad from the chrome's own post-start `resync()` at the moment it mounts. `e2e/device-links.spec.ts` "reaches its own inner pad faster than the poll" loses its premise (inner pad mounted pre-start) and is re-pointed, never weakened. |
 | P9 | migration | V414 is claimed on `backup/qualstatus-pre-rebase3`. | V415. Re-check at commit time. |
-| P10 | (silent) | "Rebuild fixtures" hard-deletes fixtures and cascades `device_links` (stages.ts:2997-3013); the confirm dialog counts device links. A rebuild after printing kills every printed QR on that stage (`LINK_INVALID`). | Out of scope to change; **owner question Q4**. |
-| P11 | "Legacy hash-only links keep working until their `expires_at`" + "(only a legacy hash-only link) → revoke, mint" | Both hold only if nothing calls `ensure` on that fixture. A print or hand-over on a fixture with a live legacy link revokes it — including mid-match. | Built as specified; **owner question Q3**. |
+| P10 | (silent) | "Rebuild fixtures" hard-deletes fixtures and cascades `device_links` (stages.ts:2997-3013); the confirm dialog counts device links. A rebuild after printing kills every printed QR on that stage (`LINK_INVALID`). | The rebuild itself is unchanged; **owner ruling Q4 (2026-09-23)**: Task 3 adds one line to the existing confirm. |
+| P11 | "Legacy hash-only links keep working until their `expires_at`" + "(only a legacy hash-only link) → revoke, mint" | Both hold only if nothing calls `ensure` on that fixture. A print or hand-over on a fixture with a live legacy link revokes it — including mid-match. | Built as specified; **owner ruling Q3 (2026-09-23)**: greenfield, no deployed legacy links, no mid-match protection needed. |
 | P12 | "Dead link — existing screen" | `DeadLink` in `app/score/[token]/page.tsx` is hard-coded English, and so are the resolver's messages it prints. | Task 6 touches the file, so it localises them (fix-inline rule). |
 | P13 | (silent) | `proxy.ts`'s Origin check covers `/api/**` only; a POST under `/o/**` is protected by `SameSite=Lax` alone. | Task 8 serves the PDF from `/api/v1/competitions/{id}/exports/scorer-sheets`, inside `proxy.ts`'s check (no bespoke guard). |
+
+### Owner rulings (2026-09-23)
+
+These were open questions in the first draft. The owner has now ruled on each, and the tasks below implement the rulings. None is open.
+
+| # | Ruling | Where it lands |
+|---|---|---|
+| Q1 | `DEVICE_LINK_KEK` is ALWAYS set. **Fail closed** when it is missing or malformed: mint, ensure, reissue and print refuse with `503 DEVICE_LINK_KEK_MISSING`, a server-configuration error. Resolving an existing link by its hash needs no key and keeps working. Format: exactly 64 hex chars (32 bytes), validated the same way as `RELAY_KEK`. `.env.example` documents `openssl rand -hex 32`. | T1 (`.env.example`, wiring test), T2 (`sealSecret`/`openSecret` + fail-closed test) |
+| Q2 | Build as specified: a knockout fixture is carried forward the instant it is decided, so a device link has zero undo window. Task 4's test stays and pins it. **Recorded, not built:** an organiser's console void does NOT empty the downstream slot either. `onDecided`'s null path only recomputes (scoring.ts:636), and `fillSlot` only fills empty sides (stages.ts:3544). That is out of scope; the owner is deciding a separate fix. | T4 (unchanged) |
+| Q3 | Greenfield: no legacy links are deployed. Ensure's replace-legacy path stays exactly as designed, with no mid-match protection and no extra legacy-only branches. | T2 (unchanged), T3 (legacy copy branch dropped) |
+| Q4 | Yes: add one line to the existing Rebuild fixtures confirmation, "Printed scorer sheets for this stage will stop working", in all 4 locales. It shows only when the stage has device links (the confirmation already counts them: `attachmentWarning`, stages-panel.tsx:1618, fed by `attachments.deviceLinks`, stages.ts:2904-2918). | **T3**, which owns hand-over and links (Step 4b) |
+| Q5 | Option A: an inline day select plus a Print button right of the title, stacking under it on phones. T9 Step 0 keeps the 320/1280 screenshot gate of A before building. Option B is dropped. | T9 |
+| Q6 | The match ref uses the `matchRef()` format ("R1·2"). | T8 (already) |
+| Q7 | Each court starts a new page. Page numbering runs per court: "Court 2 · page 1 of 2". | T7 (`pageInCourt`/`pagesInCourt`), T8 (heading, no global page counter) |
+| Q8 | The panel's "shown once" copy becomes "Same QR every time — Revoke & reissue if a sheet is lost" (all 4 locales). | T3 |
+| Q9 | The owner sets `DEVICE_LINK_KEK` in `.env.local` and on Fly (stg + prod). The plan never runs `fly` commands. | Pre-merge checklist |
+| Q10 | Accepted: no Tamil or CJK glyphs. The Known-limits note stays. | T8, Self-Review |
 
 ### What #848 already gives the scan screens — reuse, do not duplicate
 
@@ -418,7 +435,9 @@ describe("DEVICE_LINK_KEK reaches every server a test boots", () => {
   }
 
   it(".env.example documents it", () => {
-    expect(readFileSync(resolve(ROOT, ".env.example"), "utf8")).toMatch(/^DEVICE_LINK_KEK=$/m);
+    const example = readFileSync(resolve(ROOT, ".env.example"), "utf8");
+    expect(example).toMatch(/^DEVICE_LINK_KEK=$/m);
+    expect(example).toMatch(/openssl rand -hex 32/); // owner ruling Q1
   });
 });
 ```
@@ -433,7 +452,8 @@ Run it — expect 5 failures. Then add, directly under every `AUTH_SECRET:` line
 and in `.env.example` under `RELAY_KEK=`:
 
 ```
-# Envelope key for device-link secrets (scorer sheets). 64 hex chars. Separate from RELAY_KEK on purpose.
+# Envelope key for device-link secrets (scorer sheets). REQUIRED: without it, minting/printing scoring links fails closed (503).
+# Exactly 64 hex chars (32 bytes). Separate from RELAY_KEK on purpose. Generate: openssl rand -hex 32
 DEVICE_LINK_KEK=
 ```
 
@@ -637,6 +657,35 @@ and in `pass-scope-w2.test.ts`, inside the `scoring.device_links` case after the
 
 Also make the fourth enc-boundary test (Task 1 Step 6) part of this run.
 
+Append one more case to the `ensureDeviceLink` describe, for **owner ruling Q1: fail closed**. `createDeviceLink`, `resolveDeviceLinkToken` and `sql` are already imported by the file.
+
+```ts
+  it("fails CLOSED without a valid DEVICE_LINK_KEK: 503 DEVICE_LINK_KEK_MISSING, nothing revoked; resolving by hash still works (Q1)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const live = await ensureDeviceLink(owner, fixtures[0].id);
+    const keep = process.env.DEVICE_LINK_KEK;
+    const MISSING = { status: 503, code: "DEVICE_LINK_KEK_MISSING" };
+    try {
+      delete process.env.DEVICE_LINK_KEK;
+      await expect(ensureDeviceLink(owner, fixtures[1].id)).rejects.toMatchObject(MISSING); // mint path
+      await expect(ensureDeviceLink(owner, fixtures[0].id)).rejects.toMatchObject(MISSING); // re-show path
+      await expect(createDeviceLink(owner, fixtures[0].id, null)).rejects.toMatchObject(MISSING); // reissue
+      process.env.DEVICE_LINK_KEK = "abcd"; // malformed is the same refusal
+      await expect(ensureDeviceLink(owner, fixtures[1].id)).rejects.toMatchObject(MISSING);
+      delete process.env.DEVICE_LINK_KEK;
+      // The scoring door needs no key: a sheet already on court keeps working.
+      await expect(resolveDeviceLinkToken(live.secret)).resolves.toMatchObject({ fixture_id: fixtures[0].id });
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from device_links where fixture_id = ${fixtures[0].id} and revoked_at is null`;
+      expect(n, "the failed reissue revoked nothing").toBe(1);
+    } finally {
+      process.env.DEVICE_LINK_KEK = keep;
+    }
+  });
+```
+
 - [ ] **Step 3: Run — expect FAIL**
 
 `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets/apps/web && eval "$($S env --label sheets)" && rm -f "$TMPDIR/sheets.json" && rtk proxy pnpm exec vitest run src/server/usecases/__tests__/device-links.test.ts src/server/usecases/__tests__/pass-scope-w2.test.ts src/server/relay/__tests__/enc-boundary.test.ts --reporter=json --outputFile="$TMPDIR/sheets.json"; echo EXIT=$?`
@@ -673,6 +722,27 @@ async function loadLinkableFixture(tx: Tx, fixtureId: string, competitionId?: st
   }
 }
 
+/** Owner ruling Q1 (2026-09-23): the key is always set, and a server without
+ *  it fails CLOSED with a configuration error the organiser can report. It
+ *  must not surface as a bare 500 or, worse, as an unsealed link. Only the
+ *  paths that need the key go through these; resolving a link by hash does not. */
+const KEK_MISSING = "Scoring links are not configured on this server (DEVICE_LINK_KEK missing or malformed)";
+
+function sealSecret(secret: string): Buffer {
+  try {
+    return sealWith("DEVICE_LINK_KEK", secret);
+  } catch {
+    throw new HttpError(503, KEK_MISSING, "DEVICE_LINK_KEK_MISSING");
+  }
+}
+
+function openSecret(enc: Uint8Array): string {
+  if (!/^[0-9a-f]{64}$/i.test(process.env.DEVICE_LINK_KEK ?? "")) {
+    throw new HttpError(503, KEK_MISSING, "DEVICE_LINK_KEK_MISSING");
+  }
+  return openWith("DEVICE_LINK_KEK", enc); // a tamper/wrong-key failure stays a 500 — it is not a config gap
+}
+
 /** Revoke every live link on the fixture and mint a sealed, unexpiring one.
  *  Sealed BEFORE any write: a missing DEVICE_LINK_KEK throws with nothing revoked. */
 async function mintInTx(
@@ -682,7 +752,7 @@ async function mintInTx(
   label: string | null,
 ): Promise<DeviceLinkRow & { secret: string }> {
   const secret = mintDeviceLinkSecret();
-  const sealed = sealWith("DEVICE_LINK_KEK", secret);
+  const sealed = sealSecret(secret);
   await tx`
     update device_links set revoked_at = now()
     where fixture_id = ${fixtureId} and revoked_at is null`;
@@ -738,7 +808,7 @@ async function ensureInTx(
     order by created_at desc limit 1`;
   if (live && live.secret_enc) {
     const { secret_enc, ...row } = live;
-    return { row, secret: openWith("DEVICE_LINK_KEK", secret_enc), minted: false };
+    return { row, secret: openSecret(secret_enc), minted: false };
   }
   // None, or only a legacy hash-only link (its secret is unrecoverable): replace it.
   const { secret, ...row } = await mintInTx(tx, auth, fixtureId, label);
@@ -864,6 +934,9 @@ Expected: both `openapi/*.json` modified. Run the route-coverage/key-scope suite
   - delete `lockFixtureLinks` from `ensureInTx` → expected kill: "concurrent ensures … agree on ONE secret". This kill is RACE-dependent: run the mutant 3 times and report how many reds; if it survives all three, raise the parallelism to 12 and say so.
   - delete the finalized/cancelled throw → killed by "refuses finalized and cancelled".
   - delete `requireSessionEditor` in `ensureDeviceLink` → killed by "refuses an API key".
+  - `sealSecret` without its try/catch (a bare Error → 500) → killed by the Q1 case's first `MISSING` assertion.
+  - `openSecret` without its key check → killed by the Q1 case's re-show assertion (openWith throws a plain Error).
+  - seal AFTER the revoke in `mintInTx` → killed by the Q1 case's "revoked nothing" assertion.
   - `ensureDeviceLinks` passes `undefined` as competitionId to `requireFeature` → killed by the pass-scope-w2 sibling paywall.
   - drop the `competitionId` comparison in `loadLinkableFixture` → killed by "a foreign fixture 404s".
 
@@ -884,34 +957,28 @@ E2E owed by this task: `scorer-sheets-print-scan.spec.ts` "regression: a console
 - Create: `apps/web/src/components/v2/device-link-copy.ts`
 - Create: `apps/web/src/components/v2/__tests__/device-link-copy.test.ts`
 - Modify: `apps/web/src/components/v2/device-link-panel.tsx` (whole component body)
+- Modify: `apps/web/src/components/v2/stages-panel.tsx` (`attachmentWarning`, :1618; owner ruling Q4)
+- Modify: `apps/web/src/components/v2/__tests__/stages-panel-roster-drift.test.tsx` (append to the `attachmentWarning` describe, :177)
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` (keys beside the existing `dlink.*`), regenerate `apps/web/src/lib/i18n-keys.ts`
 
 **Interfaces:**
 - Consumes: v1 POST `/device-links` (ensure) and POST `/device-links/reissue` (Task 2).
-- Produces: `expiryCopy(expiresAt: string | null, format: (iso: string) => string): { key: MessageKey; vars?: Record<string, string> }` and `liveCopy(...)` with the same shape. Test ids: `device-link-mint` (kept), `device-link-show`, `device-link-reissue`, `device-link-reissue-confirm`, `device-link-url`.
+- Produces: `liveCopy(expiresAt: string | null, format: (iso: string) => string): { key: MessageKey; vars?: Record<string, string> }`, the one line whose copy depends on the expiry. Under a shown QR the copy is the fixed `dlink.sameQr` (owner ruling Q8). Test ids: `device-link-mint` (kept), `device-link-show`, `device-link-reissue`, `device-link-reissue-confirm`, `device-link-url`.
 
 - [ ] **Step 1: Failing test** `apps/web/src/components/v2/__tests__/device-link-copy.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { expiryCopy, liveCopy } from "../device-link-copy";
+import { liveCopy } from "../device-link-copy";
 
 const fmt = (iso: string) => `AT(${iso})`;
 
 describe("device-link panel copy (scorer sheets §4.2)", () => {
   it("a sealed link (null expiry) says 'until the match is over' — never an epoch date", () => {
-    expect(expiryCopy(null, fmt)).toEqual({ key: "dlink.untilOver" });
     expect(liveCopy(null, fmt)).toEqual({ key: "dlink.liveUntilOver" });
   });
-  it("a legacy link keeps its dated copy", () => {
-    expect(expiryCopy("2026-09-23T23:59:59Z", fmt)).toEqual({
-      key: "dlink.shownOnce",
-      vars: { date: "AT(2026-09-23T23:59:59Z)" },
-    });
-    expect(liveCopy("2026-09-23T23:59:59Z", fmt)).toEqual({
-      key: "dlink.live",
-      vars: { date: "AT(2026-09-23T23:59:59Z)" },
-    });
+  it("a dated row keeps the existing dated line (the key that already exists — no new legacy copy, ruling Q3)", () => {
+    expect(liveCopy("2026-09-23T23:59:59Z", fmt)).toEqual({ key: "dlink.live", vars: { date: "AT(2026-09-23T23:59:59Z)" } });
   });
 });
 ```
@@ -927,15 +994,6 @@ export interface CopyRef {
   vars?: Record<string, string>;
 }
 
-/** Under the QR just shown. A sealed link (V415) has no expiry: it lives until
- *  the match is over and re-shows the same QR, so the old "shown once, until
- *  <date>" copy would be false. Legacy links keep it. */
-export function expiryCopy(expiresAt: string | null, format: (iso: string) => string): CopyRef {
-  return expiresAt === null
-    ? { key: "dlink.untilOver" as MessageKey }
-    : { key: "dlink.shownOnce" as MessageKey, vars: { date: format(expiresAt) } };
-}
-
 /** The "a link is live" line when no QR is on screen. */
 export function liveCopy(expiresAt: string | null, format: (iso: string) => string): CopyRef {
   return expiresAt === null
@@ -948,7 +1006,8 @@ export function liveCopy(expiresAt: string | null, format: (iso: string) => stri
 
 | key | en | fr | es | nl |
 |---|---|---|---|---|
-| `dlink.untilOver` | Works until this match is over. Showing or printing it again gives the same QR. | Valable jusqu'à la fin de ce match. L'afficher ou l'imprimer à nouveau donne le même QR. | Válido hasta que termine este partido. Mostrarlo o imprimirlo de nuevo da el mismo QR. | Geldig tot deze wedstrijd voorbij is. Opnieuw tonen of printen geeft dezelfde QR. |
+| `dlink.sameQr` (owner ruling Q8) | Same QR every time — Revoke & reissue if a sheet is lost. | Toujours le même QR — Révoquer et réémettre si une feuille est perdue. | Siempre el mismo QR: revoca y vuelve a emitir si se pierde una hoja. | Elke keer dezelfde QR — intrekken en opnieuw uitgeven als een formulier kwijt is. |
+| `progression.rosterDrift.sheetsStop` (owner ruling Q4) | Printed scorer sheets for this stage will stop working. | Les feuilles de score imprimées pour cette phase ne fonctionneront plus. | Las hojas de puntuación impresas para esta fase dejarán de funcionar. | Geprinte scoreformulieren voor deze fase werken dan niet meer. |
 | `dlink.liveUntilOver` | A scoring link is live for this match until it is over. | Un lien de score est actif pour ce match jusqu'à sa fin. | Hay un enlace de puntuación activo para este partido hasta que termine. | Er is een scorelink actief voor deze wedstrijd tot hij voorbij is. |
 | `dlink.showQr` | Show QR | Afficher le QR | Mostrar QR | QR tonen |
 | `dlink.reissue` | Revoke & reissue | Révoquer et réémettre | Revocar y volver a emitir | Intrekken en opnieuw uitgeven |
@@ -956,7 +1015,7 @@ export function liveCopy(expiresAt: string | null, format: (iso: string) => stri
 | `dlink.reissueConfirm` | Yes, reissue | Oui, réémettre | Sí, volver a emitir | Ja, opnieuw uitgeven |
 | `dlink.keep` | Keep this QR | Garder ce QR | Mantener este QR | Deze QR houden |
 
-Then `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run i18n:gen-keys && pnpm run i18n:check`.
+Delete `dlink.shownOnce` from all four dictionaries (its only reader is the paragraph Step 4 replaces; `grep -a -rn shownOnce apps/web/src apps/web/e2e` must come back empty apart from the dictionaries). Then `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run i18n:gen-keys && pnpm run i18n:check`.
 
 - [ ] **Step 4: Panel.** In `device-link-panel.tsx`: `ActiveLink.expires_at: string | null`; `minted` state `expires_at: string | null`; rename `mint` → `show` (same POST to `/device-links`, which is now ensure); add:
 
@@ -985,14 +1044,39 @@ Then `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run 
   }
 ```
 
-Render changes: under the QR, replace the `dlink.shownOnce` paragraph with `{(() => { const c = expiryCopy(minted.expires_at, fmtDate); return msg(c.key, c.vars); })()}`; give the URL paragraph `data-testid="device-link-url"`. In the `active && !minted` branch: the live line uses `liveCopy(active.expires_at, fmtDate)`; buttons in this order — `dlink.showQr` (`data-testid="device-link-show"`, `onClick={show}`, `btn btn-primary text-xs`), `dlink.revoke` (unchanged), `dlink.reissue` (`data-testid="device-link-reissue"`, `onClick={() => setConfirmReissue(true)}`, `btn btn-ghost text-xs`). Replace the old `dlink.newLink` button. When `confirmReissue`: a `role="alert"` paragraph with `dlink.reissueWarn` and two buttons, `dlink.reissueConfirm` (`data-testid="device-link-reissue-confirm"`, `btn btn-danger text-xs`, `onClick={reissue}`) and `dlink.keep` (`onClick={() => setConfirmReissue(false)}`). NO `window.confirm` — e2e fails on native dialogs (`failOnNativeDialog`). Buttons wrap: container `flex flex-wrap gap-2`, each button `min-h-11` for touch.
+Render changes: under the QR, replace the `dlink.shownOnce` paragraph with `{msg("dlink.sameQr")}`; give the URL paragraph `data-testid="device-link-url"`. In the `active && !minted` branch: the live line uses `liveCopy(active.expires_at, fmtDate)`; buttons in this order — `dlink.showQr` (`data-testid="device-link-show"`, `onClick={show}`, `btn btn-primary text-xs`), `dlink.revoke` (unchanged), `dlink.reissue` (`data-testid="device-link-reissue"`, `onClick={() => setConfirmReissue(true)}`, `btn btn-ghost text-xs`). Replace the old `dlink.newLink` button. When `confirmReissue`: a `role="alert"` paragraph with `dlink.reissueWarn` and two buttons, `dlink.reissueConfirm` (`data-testid="device-link-reissue-confirm"`, `btn btn-danger text-xs`, `onClick={reissue}`) and `dlink.keep` (`onClick={() => setConfirmReissue(false)}`). NO `window.confirm` — e2e fails on native dialogs (`failOnNativeDialog`). Buttons wrap: container `flex flex-wrap gap-2`, each button `min-h-11` for touch.
+
+- [ ] **Step 4b: Rebuild warning (owner ruling Q4).** Rebuild fixtures CASCADEs `device_links` (stages.ts:2997-3013), so every printed QR on the stage dies. The confirmation already counts the links. `attachments.deviceLinks` comes from the query at stages.ts:2904-2918, and it counts ALL rows, revoked ones included. The result is harmless: a stage whose links were all revoked still shows the line. `attachmentWarning` (stages-panel.tsx:1618) turns the count into text for the confirmation body at :672.
+
+  First the failing test. Append inside `describe("attachmentWarning — …")` in `stages-panel-roster-drift.test.tsx`, reusing that file's `drift` and `msg` helpers:
+
+```ts
+  it("warns that printed scorer sheets stop working — only when device links are attached (owner ruling Q4)", () => {
+    const withLinks = attachmentWarning(drift({ officials: 0, lineups: 0, deviceLinks: 2 }), msg, "en");
+    expect(withLinks).toContain("Printed scorer sheets for this stage will stop working.");
+    const without = attachmentWarning(drift({ officials: 3, lineups: 0, deviceLinks: 0 }), msg, "en");
+    expect(without).not.toContain("scorer sheets");
+    expect(without).not.toBe(""); // the negative pair still warns about the officials
+  });
+```
+Run it → FAIL. Then, in `attachmentWarning`, replace the final `return msg("progression.rosterDrift.alsoCleared", { items });` with:
+
+```ts
+  const cleared = msg("progression.rosterDrift.alsoCleared", { items });
+  // Owner ruling Q4 (2026-09-23): the cascade takes every printed QR on this
+  // stage with it — say so in the one dialog that precedes it.
+  return a.deviceLinks > 0 ? `${cleared} ${msg("progression.rosterDrift.sheetsStop")}` : cleared;
+```
+Before relying on it, re-pin every caller of `rebuildStage` / `attachmentWarning`. Any other Rebuild entry point must build its body the same way, or the line is missing there; report what you find. Run the whole roster-drift test file → PASS.
 
 - [ ] **Step 5: Run** the copy test (PASS), `pnpm run i18n:check` (clean), `$S gate --label sheets` (lint+typecheck clean), and the existing hand-over e2e whole: `apps/web/e2e/device-links.spec.ts` (it clicks `device-link-mint`) — `$S rebuild --label sheets` first.
 
 - [ ] **Step 6: Visual** — at 320/768/1280 capture the panel in each state (no link; QR shown; live link with the three buttons; reissue confirmation) with `screenshotAtWidths` from a throwaway spec under `$TMPDIR` or via the Task 10 capture spec; `expectNoHorizontalScroll` at each width; read every string on screen in `en` and one other locale.
 
 - [ ] **Step 7: Mutation check**
-  - `expiryCopy` ignores null (always dated) → killed by "a sealed link (null expiry) says 'until the match is over'".
+  - `liveCopy` ignores null (always dated) → killed by "a sealed link (null expiry) says 'until the match is over'".
+  - `attachmentWarning` appends the sheets line unconditionally → killed by Step 4b's negative case.
+  - the sheets line removed → killed by Step 4b's positive case.
   - panel's Show QR posts to `/reissue` → killed by Task 10 regression "hand-over after printing keeps the printed QR" (record that the killer lives in Task 10; run it there).
 
 - [ ] **Step 8: Commit** (`git add` the five source paths, the four `ui.json`, `apps/web/src/lib/i18n-keys.ts`) — message `feat(device-links): hand-over panel re-shows the same QR; explicit revoke & reissue`.
@@ -2288,7 +2372,7 @@ Then run every e2e file that opens `/score/…`, WHOLE, after `$S rebuild --labe
   - `selectSheetFixtures(c: readonly SheetCandidate[], day: string): SheetCandidate[]` (filtered AND ordered)
   - `sheetDays(c: readonly SheetCandidate[]): string[]`
   - `defaultSheetDay(days: readonly string[], today: string): string | null`
-  - `ROWS_PER_PAGE = 5`; `interface SheetPage { courtHeading: string | null; continued: boolean; rows: SheetCandidate[] }`; `paginateSheet(rows, noCourt: string): SheetPage[]`
+  - `ROWS_PER_PAGE = 5`; `interface SheetPage { courtHeading: string | null; continued: boolean; pageInCourt: number; pagesInCourt: number; rows: SheetCandidate[] }`; `paginateSheet(rows, noCourt: string): SheetPage[]`. Numbering runs per court, owner ruling Q7.
 - Produces (`@/server/usecases/scorer-sheets`):
   - `loadSheetCandidates(auth: AuthCtx, competitionId: string, day?: string): Promise<SheetCandidate[]>`
   - `listSheetDays(auth: AuthCtx, competitionId: string): Promise<string[]>`
@@ -2412,13 +2496,15 @@ describe("paginateSheet", () => {
     expect(paginateSheet([], "No court")).toEqual([]);
   });
 
-  it(`${ROWS_PER_PAGE} rows per page; each court starts a page; an overflow page is marked continued`, () => {
+  it(`${ROWS_PER_PAGE} rows per page; each court starts a page; numbering is PER COURT (owner ruling Q7)`, () => {
     const c1 = Array.from({ length: ROWS_PER_PAGE + 1 }, () => c({ court_name: "Court 1" }));
     const c2 = [c({ court_name: "Court 2", court_sort: 1 })];
-    expect(paginateSheet([...c1, ...c2], "No court").map((p) => [p.courtHeading, p.continued, p.rows.length])).toEqual([
-      ["Court 1", false, ROWS_PER_PAGE],
-      ["Court 1", true, 1],
-      ["Court 2", false, 1],
+    expect(
+      paginateSheet([...c1, ...c2], "No court").map((p) => [p.courtHeading, p.continued, p.rows.length, p.pageInCourt, p.pagesInCourt]),
+    ).toEqual([
+      ["Court 1", false, ROWS_PER_PAGE, 1, 2],
+      ["Court 1", true, 1, 2, 2],
+      ["Court 2", false, 1, 1, 1], // a global counter would say 3 of 3
     ]);
   });
 
@@ -2469,6 +2555,9 @@ export interface SheetCandidate {
 export interface SheetPage {
   courtHeading: string | null;
   continued: boolean;
+  /** Owner ruling Q7: "Court 2 · page 1 of 2" — numbered within its court. */
+  pageInCourt: number;
+  pagesInCourt: number;
   rows: SheetCandidate[];
 }
 
@@ -2523,10 +2612,18 @@ export function paginateSheet(rows: readonly SheetCandidate[], noCourt: string):
     const heading = row.court_name ?? noCourt;
     if (!current || current.courtHeading !== heading || current.rows.length === ROWS_PER_PAGE) {
       const continued = current !== null && current.courtHeading === heading;
-      current = { courtHeading: heading, continued, rows: [] };
+      current = { courtHeading: heading, continued, pageInCourt: 0, pagesInCourt: 0, rows: [] };
       pages.push(current);
     }
     current.rows.push(row);
+  }
+  const total = new Map<string | null, number>();
+  for (const p of pages) total.set(p.courtHeading, (total.get(p.courtHeading) ?? 0) + 1);
+  const seen = new Map<string | null, number>();
+  for (const p of pages) {
+    p.pageInCourt = (seen.get(p.courtHeading) ?? 0) + 1;
+    seen.set(p.courtHeading, p.pageInCourt);
+    p.pagesInCourt = total.get(p.courtHeading)!;
   }
   return pages;
 }
@@ -2710,6 +2807,7 @@ Before running, open `usecases/entrants.ts` ~:240 and copy its exact member join
   - drop the `court_sort` term in `compare` → killed by "court SORT beats court NAME".
   - drop the courtless-first term → killed by the ordering case (`none` sorts first on its empty venue name).
   - drop `current.courtHeading !== heading` → killed by the pagination case.
+  - number pages globally (`pageInCourt = index + 1`, `pagesInCourt = pages.length`) → killed by the Court 2 row of the pagination case.
   - `d >= today` → `d > today` → killed by the "today" assertion.
   - SQL: `division_tz`/`org_tz` swapped in `resolveVenueTz` → killed by the DB tz assertion.
   - SQL window narrowed to `+ interval '1 day'` → survives by design (the JS filter decides; the window is an optimisation, not a guard). Record as an accepted survivor.
@@ -2749,7 +2847,7 @@ E2E owed: Task 10's golden journey prints from a real seeded schedule and assert
   - `rateLimit` + `__setRateLimitCounterForTests`, `resolveLocale`, `msgFor`, `intlLocaleFor`.
 - Produces:
   - `interface SheetRow { fixtureId; url; time; matchLine; home; away; homeTbd: boolean; awayTbd: boolean; homeMembers: string[]; awayMembers: string[] }`
-  - `interface SheetModel { header: DocModel; pages: { heading: string; rows: SheetRow[] }[]; labels: { eyebrow; scan; winner; score; signature: string; page: (n: number, of: number) => string } }`. `header` is a DocModel with `kind: "scoresheet"`, `sections: []` and `pageBreaks: "auto"`, used ONLY for the shared masthead and title block. `meta.printedAt` is supplied by the caller, never `Date.now()` in the renderer.
+  - `interface SheetModel { header: DocModel; pages: { heading: string; rows: SheetRow[] }[]; labels: { eyebrow; scan; winner; score; signature: string } }`. Page numbering is in each page's `heading` and runs per court (owner ruling Q7). `header` is a DocModel with `kind: "scoresheet"`, `sections: []` and `pageBreaks: "auto"`, used ONLY for the shared masthead and title block. `meta.printedAt` is supplied by the caller, never `Date.now()` in the renderer.
   - `renderScorerSheetPdf(model: SheetModel): Promise<Buffer>`
   - `buildScorerSheet(auth, competitionId: string, day: string, origin: string, locale: Locale, opts: { printedAt: string }): Promise<SheetModel>`. It throws `HttpError(422, …, "NO_FIXTURES_ON_DAY")` when nothing prints, the way `buildAdmitTicketsDoc` refuses an empty ticket run.
   - `POST /api/v1/competitions/{id}/exports/scorer-sheets` with JSON body `{ date: "YYYY-MM-DD" }`. Responses: 200 `application/pdf`, attachment, `private, no-store`, or 400 / 402 / 403 / 422 / 429 in the v1 envelope.
@@ -2799,7 +2897,6 @@ const header: DocModel = {
 };
 const labels: SheetModel["labels"] = {
   eyebrow: "SCORER SHEETS", scan: "Scan to score", winner: "Winner", score: "Score", signature: "Umpire",
-  page: (n, of) => `Page ${n} of ${of}`,
 };
 const row = (i: number, over: Partial<SheetRow> = {}): SheetRow => ({
   fixtureId: `f${i}`, url: `https://example.test/score/dl_token${i}`, time: "10:30",
@@ -2895,7 +2992,8 @@ export interface SheetModel {
   /** Masthead + title block only — `sections` stays empty. */
   header: DocModel;
   pages: { heading: string; rows: SheetRow[] }[];
-  labels: { eyebrow: string; scan: string; winner: string; score: string; signature: string; page: (n: number, of: number) => string };
+  /** No page counter here: numbering is per court and lives in each page's heading (owner ruling Q7). */
+  labels: { eyebrow: string; scan: string; winner: string; score: string; signature: string };
 }
 
 const QR = 104;
@@ -2948,7 +3046,8 @@ export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
     }
   }
 
-  // Own footer: doc-render's says "printed … page N of M" in English.
+  // Own footer: doc-render's says "printed … page N of M" in English, and it
+  // numbers the whole PDF. The sheet numbers per court in each heading (Q7).
   // Keep it inside the content box — text at or below page.height - MARGIN
   // is suppressed by pdfkit (doc-render's note).
   const range = doc.bufferedPageRange();
@@ -2956,7 +3055,7 @@ export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
     doc.switchToPage(i);
     const fy = doc.page.height - MARGIN - 10;
     doc.font(FONT.body).fontSize(7).fillColor(PALETTE.mute).text(
-      `${model.header.meta.printedAt} · ${model.labels.page(i - range.start + 1, range.count)}`,
+      model.header.meta.printedAt,
       MARGIN, fy, { width: width - 90, lineBreak: false },
     );
     doc.font(FONT.body).fontSize(7).fillColor(PALETTE.mute)
@@ -3012,6 +3111,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(rows.map((r) => r.fixtureId).sort()).toEqual(fx.map((f) => f.id).sort());
     expect(m.labels.scan).toBe(msgFor("fr", "sheets.pdf.scan"));
     expect(m.header.kind).toBe("scoresheet");
+    expect(m.pages[0]!.heading).toMatch(/page 1 sur \d+$/); // per-court numbering, Q7
     const final = rows.find((r) => r.fixtureId === fx.find((f) => f.round_no === 2)!.id)!;
     expect(final.homeTbd).toBe(true);
     expect(final.home).toBe(resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 1 } }, (k, v) => msgFor("fr", k, v), "schedule.tbd"));
@@ -3091,10 +3191,9 @@ export async function buildScorerSheet(
       winner: t("sheets.pdf.winner"),
       score: t("sheets.pdf.score"),
       signature: t("sheets.pdf.signature"),
-      page: (n, of) => t("sheets.pdf.page", { n, of }),
     },
     pages: paginateSheet(rows, t("sheets.pdf.noCourt")).map((p) => ({
-      heading: p.continued ? t("sheets.pdf.continued", { court: p.courtHeading ?? "" }) : (p.courtHeading ?? ""),
+      heading: t("sheets.pdf.courtPage", { court: p.courtHeading ?? "", n: p.pageInCourt, of: p.pagesInCourt }),
       rows: p.rows.map((r) => ({
         fixtureId: r.id,
         url: `${origin}/score/${links.get(r.id)!.secret}`,
@@ -3252,9 +3351,8 @@ Check two things. First, that `requireResourceAuth`'s `"write"` scope means edit
 | `sheets.pdf.winner` | Winner | Vainqueur | Ganador | Winnaar |
 | `sheets.pdf.score` | Score | Score | Resultado | Score |
 | `sheets.pdf.signature` | Umpire | Arbitre | Árbitro | Scheidsrechter |
-| `sheets.pdf.page` | Page {n} of {of} | Page {n} sur {of} | Página {n} de {of} | Pagina {n} van {of} |
+| `sheets.pdf.courtPage` (owner ruling Q7) | {court} · page {n} of {of} | {court} · page {n} sur {of} | {court} · página {n} de {of} | {court} · pagina {n} van {of} |
 | `sheets.pdf.noCourt` | No court assigned | Aucun terrain attribué | Sin pista asignada | Geen baan toegewezen |
-| `sheets.pdf.continued` | {court} (continued) | {court} (suite) | {court} (continuación) | {court} (vervolg) |
 
 - [ ] **Step 10: Run** the Step 2, 5 and 7 files, plus the six doc-render/doc-theme/exports suites from Step 3, via vitest JSON: PASS, and `pending == 0` on the DB files. Then run `$S gate --label sheets` (clean) and the OpenAPI drift check (`git status --porcelain openapi/` empty after commit).
 
@@ -3290,10 +3388,7 @@ E2E owed: Task 10 downloads this through the UI and opens a token taken from the
 - Consumes: `listSheetDays` (T7), `defaultSheetDay`/`localDateOf` (T7), `hasFeature(orgId, "scoring.device_links", competitionId)`, `UpgradeGate`, the page's existing `viewerPlan`, `billingFrozen`, `canEdit`, `orgTz`.
 - Produces: `PrintScorerSheets({ action, days, defaultDay, allowed, viewerPlan })`; test ids `print-sheets`, `print-sheets-day`, `print-sheets-submit`, `print-sheets-error`.
 
-- [ ] **Step 0: Owner gate (RULES: ≥2 UI options before building).** Before writing code, send the owner two mock-ups (320 and 1280 each) through the controller, with a recommendation:
-  - **A — inline header control:** a native day `<select>` plus a "Print scorer sheets" button, right of the schedule page title (stacks under it on phones). One tap to print today.
-  - **B — header button + panel:** one "Print scorer sheets" button opening a small panel of days as radio rows with counts ("Wed 23 Sep · 14 matches") and a Download button. Better when a competition spans many days.
-  Build the chosen one. The code below is A; for B keep the same props, test ids and POST contract.
+- [ ] **Step 0: Screenshot gate for option A (owner ruling Q5, 2026-09-23).** The owner chose **A — an inline day select plus a "Print scorer sheets" button right of the schedule page title, stacking under it on phones.** Option B (a button that opens a panel) is dropped; build no code path for it. Before writing product code, send the owner a mock-up of A at 320 and 1280 through the controller, and build once it is accepted.
 
 - [ ] **Step 1: Failing harness test** `print-scorer-sheets.test.tsx`:
 
@@ -3679,6 +3774,12 @@ Each commented body is a REQUIRED test body whose assertions are fixed above; th
 
 ---
 
+## Pre-merge checklist (owner actions — the plan never runs them)
+
+- [ ] **Owner ruling Q9 (2026-09-23):** the owner has set `DEVICE_LINK_KEK` (64 hex, `openssl rand -hex 32`) in `.env.local` and as a Fly secret on **stg and prod**. Nobody on this branch runs `fly` commands. The implementer confirms only by asking the owner; the local `.env.local` check stays count-only and never prints the value. Without it, the Q1 fail-closed path turns every print and hand-over into a 503 the moment this merges.
+- [ ] Flyway: `V415` is still unclaimed on every branch (Global Constraints loop) at merge time.
+- [ ] Owner ruling Q2's follow-up (console void does not empty the downstream slot) is tracked by the owner separately. It is NOT part of this branch.
+
 ## Self-Review
 
 - **Spec coverage.** §4.1 sealed secret + KEK → T1. §4.2 ensure / reissue / legacy replacement / concurrency → T2, panel → T3. §4.3 carried-forward, evaluated live, session actors unaffected → T4. §4.5 View-only through the real refusal seam → T5; Confirm / Waiting / no-opponent / localised dead link → T6. §4.4 day selection, order, pagination, PDF, route, control → T7–T9. Journeys, smoke, regression, visual → T10. Spec §6 exclusions (auto-advance, engine, Swiss pairing) are in Do NOT touch.
@@ -3687,6 +3788,7 @@ Each commented body is a REQUIRED test body whose assertions are fixed above; th
 - **Empty case first:** carried-forward, `scanScreen`, `selectSheetFixtures`, `sheetDays`, `paginateSheet`, `PrintScorerSheets`.
 - **Right answer ≠ the wrong one's constant:** Auckland day (T7), court sort vs name (T7), default day ≠ first option (T9), scheduled fixture with a hand-filled feed (T4), finalised vs carried copy (T6).
 - **Shared document system (T8):** the renderer reuses `doc-theme`'s `registerFonts`/`FONT`/`PALETTE`/`qrBuffer` and `doc-render`'s masthead/title block — no second QR helper, palette or font set; the route follows the timetable/tickets exports. Glyph coverage was MEASURED (fontkit, 2026-09-23): Inter covers Latin, Vietnamese, Greek, Cyrillic; Barlow Condensed covers Latin/Vietnamese only; neither covers Tamil, Devanagari, Arabic, Hebrew, Thai or CJK — person names are therefore set in Inter, and non-covered scripts print as missing glyphs (a known limit shared with every existing export).
+- **Owner rulings folded in (2026-09-23):** Q1 fail-closed 503 plus the `.env.example` generator line (T1/T2, tested with the negative pair: resolve-by-hash still works). Q2 zero undo window kept; the console-void gap is recorded, not built. Q3 no legacy-only branches: T3's dated "shown once" copy is gone. Q4 rebuild warning in T3 Step 4b. Q5 option A only. Q6 `matchRef`. Q7 per-court numbering (T7 test's Court 2 row is the differential against a global counter). Q8 fixed QR copy. Q9 pre-merge checklist. Q10 Known-limits kept.
 - **Type consistency:** `EnsuredDeviceLink { row, secret, minted }` is the same in T2/T6/T8; `ViewOnlyReason` is defined in T5 and extended in T6, never redefined; `SheetCandidate` is shared by T7/T8; the wire code `RESULT_CARRIED_FORWARD` is pinned against its server source in T5.
 - **Accepted survivors, recorded:** the SQL ±1-day window (T7) is an optimisation, not a guard. The carried-forward check runs before the fixture lock (T4), so a Swiss pairing committing in the same instant can let one void through.
 - **Where the plan gives assertions rather than code:** T10's five non-golden test bodies and the golden test's pad taps. They depend on e2e helper return shapes and desk testids that Step 1 reads first. Every assertion is named, and review rejects a body that drops one.
