@@ -588,7 +588,7 @@ as a realtime regression:
 | 1 | realtime regression — at least one pad sat on the poll |
 | 2 | environment — no server, or no `DATABASE_URL`; nothing was measured |
 | 3 | gate integrity — zero tests selected, or the spec set / clause / switch does not match the tree |
-| 4 | inconclusive — a leg failed carrying no realtime verdict at all |
+| 4 | inconclusive — **every** failing leg carried no realtime verdict at all |
 
 Three things that guard are worth stating because each was a real hole:
 
@@ -608,6 +608,24 @@ Three things that guard are worth stating because each was a real hole:
   any non-zero leg — demonstrably wrongly (see the stale-server note below).
   A leg that fails carrying none of `assertPropagatedUnderPoll`'s four
   verdicts exits 4 instead.
+- **A measured realtime verdict outranks a sibling leg's unrelated failure.**
+  Classification is per leg *and remembered* per leg. One leg failing on a
+  flake while another fails on a genuinely refused channel is not an
+  inconclusive run — it is a regression plus a second problem, and it exits
+  **1** with both legs named. The intermediate version tracked only "something
+  failed without a verdict", which printed *"This is NOT evidence of a realtime
+  regression"* over a sibling log containing "no websocket ever joined this
+  fixture's channel". Driven, not argued: a keyless server taken down between
+  the two legs produced exactly that state, and the two orderings give exit 1
+  and exit 4 on the same run. An absent symptom that means *suppressed* rather
+  than *safe* is the worst shape a gate can have, because the text tells the
+  reader to stop looking.
+
+One consequence worth knowing before you add a spec: the derivation looks for
+a **direct** `assertPropagatedUnderPoll(` call. A spec that reaches the clause
+through a shared helper is declared-but-not-derived and exits 3. Either call
+the clause in the spec, or extend the derivation deliberately — do not delete
+the cross-check to get past it.
 
 Measured both ways on 2026-09-23, same build, same DB, same specs — the only
 variable being whether the server got the ROOT `.env.local`:
