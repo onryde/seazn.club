@@ -8,6 +8,7 @@ import { divisionAccent, divisionHue, divisionShortCode, divisionTint } from "@/
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import { CONFLICT_LABEL, cardTitle, type BoardConflict, type BoardFixture } from "./types";
 import { formatBoardConflictDetail } from "./conflict-detail-format";
+import type { BoardRoundCode } from "./round-codes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { AlertTriangle, Lock, Pin } from "lucide-react";
@@ -25,6 +26,7 @@ export function FixtureBlock({
   onPick,
   onTogglePin,
   time,
+  roundCode,
 }: {
   fixture: BoardFixture;
   divisionName: string;
@@ -45,6 +47,11 @@ export function FixtureBlock({
   onTogglePin: () => void;
   /** Optional time caption (agenda/tray contexts). */
   time?: string;
+  /** This card's knockout round code ("QF") and full round name, from the
+   *  board's one `boardRoundCodes` map; `undefined` keeps the plain
+   *  `R{round_no}` chip. REQUIRED as a key (not `?:`) so every mount has to
+   *  pass it — a mount that forgot would silently show `R{n}` everywhere. */
+  roundCode: BoardRoundCode | undefined;
 }) {
   const msg = useMsg();
   const movable = canEdit && fixture.status === "scheduled";
@@ -115,11 +122,19 @@ export function FixtureBlock({
             type="button"
             onClick={onPick}
             aria-pressed={picked}
-            aria-label={msg("board.block.pickAria", {
-              title,
-              n: fixture.round_no,
-              state: picked ? msg("board.block.statePicked") : msg("board.block.statePick"),
-            })}
+            aria-label={
+              roundCode
+                ? msg("board.block.pickAriaRole", {
+                    title,
+                    round: roundCode.label,
+                    state: picked ? msg("board.block.statePicked") : msg("board.block.statePick"),
+                  })
+                : msg("board.block.pickAria", {
+                    title,
+                    n: fixture.round_no,
+                    state: picked ? msg("board.block.statePicked") : msg("board.block.statePick"),
+                  })
+            }
             className="min-w-0 flex-1 truncate text-left font-medium text-slate-700 hover:text-purple-700"
           >
             {title}
@@ -157,7 +172,9 @@ export function FixtureBlock({
           </span>
         )}
         {time && <span>{time}</span>}
-        <span>R{fixture.round_no}</span>
+        <span data-testid="board-round-code" title={roundCode?.label}>
+          {roundCode ? roundCode.code : `R${fixture.round_no}`}
+        </span>
         {fixture.status !== "scheduled" && <span className="text-sky-600">{statusLabel(fixture.status)}</span>}
         {conflictGroups.map((group) => {
           const head = group[0]!;

@@ -85,9 +85,12 @@ async function seedFixtureWithRoundRole(): Promise<{
     variant_key: "score",
     config: GENERIC_CONFIG,
   });
+  // Three entrants, not two: the "ordinary row" case below needs fixtures
+  // this seed did NOT hand-update, and two entrants generate exactly one.
   await createEntrants(auth, division.id, [
     { kind: "individual", display_name: "A", seed: 1, members: [] },
     { kind: "individual", display_name: "B", seed: 2, members: [] },
+    { kind: "individual", display_name: "C", seed: 3, members: [] },
   ]);
   const [stage] = await createStages(auth, division.id, {
     seq: 1,
@@ -114,7 +117,7 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read drops the five round-role/ext_key columns", () => {
+describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role columns only when set, ext_key/is_final never", () => {
   it("listDivisionFixtures (bracket/stages panel) still carries all five columns", async () => {
     const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
     const rows = await listDivisionFixtures(auth, divisionId);
@@ -127,20 +130,42 @@ describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read drops the five rou
     expect(row!.conditional).toBe(true);
   });
 
-  it("listDivisionFixturesForBoard (schedule board) omits all five columns, not just leaves them unused", async () => {
+  // Schedule-board knockout round codes (2026-09-23): the board now READS
+  // three of the five — `lane`, `third_place`, `conditional` feed the card's
+  // round code (board/round-codes.ts) — so the contract changed from "never
+  // selected" to "carried only when it says something". `ext_key` and
+  // `is_final` stay off entirely: `roundRole()` never reads `isFinal`, and
+  // the page-playoff codes that would need `ext_key` are out of scope.
+  it("listDivisionFixturesForBoard carries lane/third_place/conditional when set, and never ext_key/is_final", async () => {
     const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
     const rows = await listDivisionFixturesForBoard(auth, divisionId);
     const row = rows.find((f) => f.id === fixtureId);
     expect(row).toBeDefined();
-    // Not `.toBeFalsy()` — the columns must be ABSENT from the row (never
-    // selected), not merely null/false, or the RSC flight still pays for
-    // the key name and a JSON `null`/`false` value per fixture.
-    for (const col of ROUND_ROLE_COLS) {
+    expect(row!.lane).toBe("WB");
+    expect(row!.third_place).toBe(true);
+    expect(row!.conditional).toBe(true);
+    for (const col of ["ext_key", "is_final"] as const) {
       expect(Object.prototype.hasOwnProperty.call(row, col), `row should not have "${col}"`).toBe(false);
     }
     // Everything the board actually renders is still there.
     expect(row!.home_entrant_id).toBeDefined();
     expect(row!.status).toBeDefined();
     expect(row!.round_no).toBeDefined();
+  });
+
+  it("listDivisionFixturesForBoard omits all five keys on an ordinary row — a default costs no bytes", async () => {
+    const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
+    const rows = await listDivisionFixturesForBoard(auth, divisionId);
+    // The league's OTHER fixtures were never hand-updated: lane null, both
+    // flags false — the value every round-robin row on a 5x66 board has.
+    const plain = rows.filter((f) => f.id !== fixtureId);
+    expect(plain.length).toBeGreaterThan(0);
+    for (const row of plain) {
+      // Not `.toBeFalsy()` — ABSENT, not null/false, or the RSC flight still
+      // pays for the key name and a JSON `null`/`false` per fixture.
+      for (const col of ROUND_ROLE_COLS) {
+        expect(Object.prototype.hasOwnProperty.call(row, col), `row should not have "${col}"`).toBe(false);
+      }
+    }
   });
 });

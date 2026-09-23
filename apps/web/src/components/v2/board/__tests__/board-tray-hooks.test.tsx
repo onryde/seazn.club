@@ -48,6 +48,7 @@ const render = (unscheduled: BoardFixture[]) =>
         entrantNames={{ e1: "Alpha", e2: "Bravo" }}
         feedLabels={{}}
         fixtureTitles={{}}
+        roundCodes={new Map()}
         conflictsByFixture={{}}
         canEdit
         pickedId={null}

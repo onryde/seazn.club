@@ -5,7 +5,8 @@
 // slug) so a filtered view is shareable. Empty selection = everyone.
 import { divisionAccent, divisionInk, divisionShortCode, divisionTint } from "@/lib/division-hue";
 import { Tip } from "@/components/ui/tip";
-import type { BoardDivision } from "./types";
+import type { BoardDivision, BoardFixture } from "./types";
+import { roundLegendEntries, type BoardRoundCode } from "./round-codes";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export function BoardLegend({
@@ -65,5 +66,50 @@ export function BoardLegend({
       )}
       <Tip id="board.filter" />
     </div>
+  );
+}
+
+/**
+ * The round-code key (schedule-board knockout round codes, 2026-09-23): one
+ * compact row naming each code on the cards in view — "QF Quarter-finals ·
+ * SF Semi-finals · F Final" — so a chip is never a riddle. Renders nothing
+ * when no card in view carries a code (a round-robin board, or a day with no
+ * knockout match), and wraps rather than scrolls at 320px.
+ */
+export function BoardRoundLegend({
+  fixtures,
+  tray,
+  codes,
+}: {
+  /** The cards the current view renders with a round chip. */
+  fixtures: readonly Pick<BoardFixture, "id">[];
+  /** The tray's cards. A SEPARATE prop, never concatenated by the caller:
+   *  building `[...dayFixtures, ...unscheduled]` inside `ScheduleBoard`
+   *  makes the React Compiler skip that whole component
+   *  (react-hooks/preserve-manual-memoization, four errors). */
+  tray: readonly Pick<BoardFixture, "id">[];
+  codes: ReadonlyMap<string, BoardRoundCode>;
+}) {
+  const msg = useMsg();
+  const entries = roundLegendEntries([...fixtures, ...tray], codes);
+  if (entries.length === 0) return null;
+  return (
+    <ul
+      data-testid="board-legend-rounds"
+      aria-label={msg("board.roundLegend.aria")}
+      className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] leading-tight text-slate-600"
+    >
+      {entries.map((e, i) => (
+        <li key={`${e.code}|${e.label}`} className="inline-flex items-baseline gap-1">
+          {i > 0 && (
+            <span aria-hidden className="text-slate-300">
+              ·
+            </span>
+          )}
+          <span className="font-semibold text-slate-800">{e.code}</span>
+          <span>{e.label}</span>
+        </li>
+      ))}
+    </ul>
   );
 }

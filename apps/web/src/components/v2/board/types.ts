@@ -63,6 +63,16 @@ export interface BoardFixture {
   schedule_source: string;
   schedule_locked: boolean;
   outcome: unknown;
+  /** Bracket position flags (V368) — the inputs `roundRole()` reads for the
+   *  card's knockout round code (board/round-codes.ts). OPTIONAL and sent only
+   *  when they say something (`listDivisionFixturesForBoard`): absent means
+   *  the column default — lane null, flag false — which is every round-robin
+   *  row, so a league board pays no bytes for them. `is_final`/`ext_key` are
+   *  not sent at all: `roundRole()` never reads `isFinal`, and the one reader
+   *  of `ext_key` (page playoff) is not coded on the board. */
+  lane?: "WB" | "LB" | "GF" | null;
+  third_place?: boolean;
+  conditional?: boolean;
 }
 
 export interface BoardConfig {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { laneRoundRank, roundRoleFor, roundRoleLabel } from "../round-role-label.ts";
+import type { RoundRole } from "@seazn/engine/competition";
+import { laneRoundRank, roundRoleFor, roundRoleLabel, roundRoleShort } from "../round-role-label.ts";
+import { msgFor } from "@/lib/messages-i18n";
+import { LOCALES } from "@/lib/i18n-constants";
+import type { MessageKey } from "@/lib/messages";
 
 const msg = ((key: string, params?: Record<string, unknown>) =>
   params ? `${key}:${JSON.stringify(params)}` : key) as never;
@@ -105,4 +109,117 @@ describe("roundRoleFor", () => {
     );
     expect(tp).toEqual({ kind: "third_place" });
   });
+});
+
+// Schedule-board knockout round codes (2026-09-23, owner-approved design): the
+// board's card chip used to read `R{round_no}` for every stage, so a
+// quarter-final and a semi-final were indistinguishable on the board.
+describe("roundRoleShort", () => {
+  const en = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
+
+  /** One role per kind. `satisfies` over the whole union means a new RoundRole
+   *  kind fails TYPECHECK here as well as in the switch — this table is the
+   *  enumeration the locale sweep below walks, so it cannot silently skip one. */
+  const ONE_OF_EACH = {
+    round_of: { kind: "round_of", entrants: 16 },
+    quarter_final: { kind: "quarter_final" },
+    semi_final: { kind: "semi_final" },
+    final: { kind: "final" },
+    winners_final: { kind: "winners_final" },
+    losers_round: { kind: "losers_round", n: 2 },
+    losers_final: { kind: "losers_final" },
+    grand_final: { kind: "grand_final" },
+    grand_final_reset: { kind: "grand_final_reset" },
+    third_place: { kind: "third_place" },
+    qualifier1: { kind: "qualifier1" },
+    eliminator: { kind: "eliminator" },
+    qualifier2: { kind: "qualifier2" },
+    rung: { kind: "rung", n: 1 },
+    plain_round: { kind: "plain_round", n: 2 },
+  } satisfies { [K in RoundRole["kind"]]: Extract<RoundRole, { kind: K }> };
+
+  /** The code for fixture `round_no` of a bracket, via the REAL position
+   *  pipeline (laneRoundRank -> roundRole) rather than a role typed in here. */
+  const codeAt = (
+    rows: readonly { round_no: number; lane: "WB" | "LB" | "GF" | null }[],
+    round_no: number,
+    lane: "WB" | "LB" | "GF" | null,
+    kind: string,
+    flags: { third_place?: boolean; conditional?: boolean } = {},
+  ) => {
+    const role = roundRoleFor(
+      rows,
+      { round_no, lane, is_final: false, third_place: flags.third_place ?? false, conditional: flags.conditional ?? false },
+      kind,
+    );
+    return roundRoleShort(en, role, { lane, roundInLane: laneRoundRank(rows, lane, round_no).roundInLane });
+  };
+
+  it("single elimination, 16 entrants: R16, QF, SF, F — the round of N carries N, not the round number", () => {
+    const ko16 = [1, 2, 3, 4].map((round_no) => ({ round_no, lane: null }));
+    expect([1, 2, 3, 4].map((r) => codeAt(ko16, r, null, "knockout"))).toEqual(["R16", "QF", "SF", "F"]);
+  });
+
+  it("single elimination, 8 entrants: QF, SF, F — the SAME round_no 1 reads QF here and R16 above", () => {
+    // Ordering differential: a namer keyed on round_no instead of distance from
+    // the final would give round 1 the same code in both brackets.
+    const ko8 = [1, 2, 3].map((round_no) => ({ round_no, lane: null }));
+    expect([1, 2, 3].map((r) => codeAt(ko8, r, null, "knockout"))).toEqual(["QF", "SF", "F"]);
+  });
+
+  it("a third-place match reads 3rd, not F — it shares the final's round, so only the flag tells them apart", () => {
+    const ko8 = [1, 2, 3].map((round_no) => ({ round_no, lane: null }));
+    expect(codeAt(ko8, 3, null, "knockout", { third_place: true })).toBe("3rd");
+    // Its positive pair: the same position WITHOUT the flag is the final.
+    expect(codeAt(ko8, 3, null, "knockout")).toBe("F");
+  });
+
+  it("double elimination numbers each lane: WB1..WB3, LB1..LB4, GF, and GF2 for the bracket reset", () => {
+    const de = [
+      ...[1, 2, 3].map((round_no) => ({ round_no, lane: "WB" as const })),
+      ...[7, 8, 9, 10].map((round_no) => ({ round_no, lane: "LB" as const })),
+      { round_no: 14, lane: "GF" as const },
+      { round_no: 15, lane: "GF" as const },
+    ];
+    // WB3 is the engine's `winners_final` and WB2 its `semi_final` — the
+    // winners' semi is not the tournament's semi, so the lane number is used.
+    expect([1, 2, 3].map((r) => codeAt(de, r, "WB", "double_elim"))).toEqual(["WB1", "WB2", "WB3"]);
+    // LB4 is the engine's `losers_final`: numbered in the same sequence, not "LF".
+    expect([7, 8, 9, 10].map((r) => codeAt(de, r, "LB", "double_elim"))).toEqual(["LB1", "LB2", "LB3", "LB4"]);
+    expect(codeAt(de, 14, "GF", "double_elim")).toBe("GF");
+    expect(codeAt(de, 15, "GF", "double_elim", { conditional: true })).toBe("GF2");
+  });
+
+  it("a round-robin round stays uncoded (null) so the board keeps its plain R{n}", () => {
+    const league = [1, 2, 3].map((round_no) => ({ round_no, lane: null }));
+    expect(codeAt(league, 2, null, "league")).toBeNull();
+    expect(codeAt(league, 3, null, "league")).toBeNull(); // NOT "F" — a league's last round is no final
+  });
+
+  it("page-playoff, stepladder-rung and plain roles are out of scope: null", () => {
+    for (const role of [
+      ONE_OF_EACH.qualifier1,
+      ONE_OF_EACH.eliminator,
+      ONE_OF_EACH.qualifier2,
+      ONE_OF_EACH.rung,
+      ONE_OF_EACH.plain_round,
+    ]) {
+      expect(roundRoleShort(en, role, { lane: null, roundInLane: 0 }), role.kind).toBeNull();
+    }
+  });
+
+  for (const locale of LOCALES) {
+    it(`${locale}: every coded role resolves to a real dictionary string, placeholders filled`, () => {
+      const lookup = (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars);
+      for (const role of Object.values(ONE_OF_EACH) as RoundRole[]) {
+        for (const lane of [null, "WB", "LB", "GF"] as const) {
+          const code = roundRoleShort(lookup, role, { lane, roundInLane: 1 });
+          if (code === null) continue;
+          expect(code, `${role.kind}/${lane}`).not.toMatch(/\{[a-zA-Z]+\}/);
+          expect(code, `${role.kind}/${lane}`).not.toMatch(/^bracket\./);
+          expect(code.length, `${role.kind}/${lane}`).toBeGreaterThan(0);
+        }
+      }
+    });
+  }
 });

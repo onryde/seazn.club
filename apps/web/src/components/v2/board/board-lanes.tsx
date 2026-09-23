@@ -8,6 +8,7 @@ import type { FeedLabelPair } from "@/lib/schedule-board";
 import { FixtureBlock } from "./fixture-block";
 import { timeLabel } from "@/lib/day-label";
 import { courtDisplayName, type BoardConflict, type BoardDivision, type BoardFixture } from "./types";
+import type { BoardRoundCode } from "./round-codes";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export function BoardLanes({
@@ -24,6 +25,7 @@ export function BoardLanes({
   onTogglePin,
   highlightId,
   courtNames,
+  roundCodes,
 }: {
   day: string;
   divisions: BoardDivision[];
@@ -44,6 +46,8 @@ export function BoardLanes({
    *  `courtNamesById`) — see `courtDisplayName`'s own doc comment. Optional,
    *  falling back to the fixture's own bare name when omitted. */
   courtNames?: Record<string, string>;
+  /** The board's one knockout round-code map (board/round-codes.ts). */
+  roundCodes: ReadonlyMap<string, BoardRoundCode>;
 }) {
   const msg = useMsg();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -95,6 +99,7 @@ export function BoardLanes({
                       picked={pickedId === f.id}
                       onPick={() => onPick(f.id)}
                       onTogglePin={() => onTogglePin(f)}
+                      roundCode={roundCodes.get(f.id)}
                       // P9 pass 4a: resolved NAME first, the frozen label as
                       // a fallback — never court_id (a raw uuid). P9 pass 4d:
                       // venue-qualified via courtNames when ambiguous.

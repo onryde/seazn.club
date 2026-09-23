@@ -17,6 +17,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { LOCALES } from "@/lib/i18n-constants";
 import { consoleFixtures } from "@/components/v2/schedule-board";
 import { cardTitle, type BoardFixture } from "@/components/v2/board/types";
+import { boardRoundCodes, withRoundCodeRefs } from "@/components/v2/board/round-codes";
 
 /** The venue zone in every case below. */
 const AKL = "Pacific/Auckland";
@@ -223,6 +224,36 @@ describe("feedLabels", () => {
   it("skips a row with no feed wiring at all", () => {
     expect(feedLabels([row({ id: "solo" })])).toEqual({});
   });
+
+  // Schedule-board knockout round codes (2026-09-23): the board names a
+  // feeder by its round code ("Winner of QF·3"), resolving {round, seq} inside
+  // a stage. A cross-stage edge (`wireCrossFeeds`) carries the SOURCE stage's
+  // coordinates, and the seat's own stage can hold a DIFFERENT fixture at the
+  // same {round, seq} — so such an edge says which stage it came from.
+  it("stamps the SOURCE stage onto a cross-stage edge, and only onto a cross-stage edge", () => {
+    const rows = [
+      row({ id: "ko-qf", stage_id: "ko", round_no: 1, seq_in_round: 3, winner_to_fixture: "ko-sf", winner_to_slot: 2 }),
+      row({ id: "ko-sf", stage_id: "ko", round_no: 2, seq_in_round: 2 }),
+      row({ id: "main-r1", stage_id: "main", round_no: 1, seq_in_round: 3, loser_to_fixture: "plate-r1", loser_to_slot: 1 }),
+      row({ id: "plate-r1", stage_id: "plate", round_no: 1, seq_in_round: 1 }),
+    ];
+    const labels = feedLabels(rows);
+    // Same stage: byte-identical to before — no `stage` param, no payload cost.
+    expect(labels["ko-sf"]!.away).toEqual({ key: "slot.winner_match", params: { round: 1, seq: 3 } });
+    // Cross stage: the source stage rides along.
+    expect(labels["plate-r1"]!.home).toEqual({
+      key: "slot.loser_match",
+      params: { round: 1, seq: 3, stage: "main" },
+    });
+  });
+
+  it("rows without stage_id (the public namer's per-stage rows) are unchanged", () => {
+    const rows = [
+      row({ id: "a", round_no: 1, seq_in_round: 1, winner_to_fixture: "b", winner_to_slot: 1 }),
+      row({ id: "b", round_no: 2, seq_in_round: 1 }),
+    ];
+    expect(feedLabels(rows)["b"]!.home).toEqual({ key: "slot.winner_match", params: { round: 1, seq: 1 } });
+  });
 });
 
 // The required anti-drift regression (F1 brief): the board card's OWN short
@@ -279,6 +310,53 @@ describe("anti-drift: board card ref code vs feed label {ext} (P7/F1, required)"
       expect(matchup).toContain(cardCode);
     });
   }
+
+  // Schedule-board knockout round codes (2026-09-23): the same invariant on
+  // the CODED path. A knockout quarter-final's own AI-console/ghost code and
+  // the "Winner of …" text on the semi it feeds must both say "QF·3" — the
+  // board threads ONE round-code map into both, so they cannot disagree.
+  for (const locale of LOCALES) {
+    it(`${locale}: knockout — consoleFixtures()'s .code and the fed slot's matchup embed the identical CODED ref`, () => {
+      const lookup: SlotLabelLookup = (k, vars) => msgFor(locale, k, vars);
+      const qf = { ...boardFixture("qf3", 1, 3) };
+      const sf: BoardFixture = { ...boardFixture("sf2", 2, 2), home_entrant_id: null, away_entrant_id: null };
+      const others = [
+        boardFixture("qf1", 1, 1),
+        boardFixture("qf2", 1, 2),
+        boardFixture("qf4", 1, 4),
+        boardFixture("sf1", 2, 1),
+        boardFixture("f", 3, 1),
+      ];
+      const board = [qf, sf, ...others];
+      const codes = boardRoundCodes(board, [{ id: "st-1", kind: "knockout" }], lookup);
+      const rows: FeedRow[] = board.map((f) => ({
+        id: f.id,
+        round_no: f.round_no,
+        seq_in_round: f.seq_in_round,
+        winner_to_fixture: f.id === "qf3" ? "sf2" : null,
+        winner_to_slot: f.id === "qf3" ? 1 : null,
+        loser_to_fixture: null,
+        loser_to_slot: null,
+      }));
+      const feeds = withRoundCodeRefs(board, feedLabels(rows), codes);
+
+      const byId = new Map(consoleFixtures(board, { e1: "A", e2: "B" }, feeds, lookup, codes).map((r) => [r.id, r]));
+      const cardCode = byId.get("qf3")!.code;
+      const qfCode = msgFor(locale, "bracket.roundShort.quarter");
+      expect(cardCode).toBe(matchRef(1, 3, lookup, qfCode));
+      expect(cardCode).not.toBe(matchRef(1, 3, lookup)); // the coded ref really differs from R1·3
+      expect(cardTitle(sf, {}, feeds, lookup)).toContain(cardCode);
+      expect(byId.get("sf2")!.matchup).toContain(cardCode);
+    });
+  }
+
+  it("a league fixture's console code is untouched by the round-code map (R{round}·{seq})", () => {
+    const lookup: SlotLabelLookup = (k, vars) => msgFor("en", k, vars);
+    const board = [boardFixture("l1", 2, 3)];
+    const codes = boardRoundCodes(board, [{ id: "st-1", kind: "league" }], lookup);
+    expect(codes.size).toBe(0);
+    expect(consoleFixtures(board, {}, {}, lookup, codes)[0]!.code).toBe("R2·3");
+  });
 
   it("resolveSlotLabel's {ext} substitution for a feed label is the literal matchRef() output, not a re-derived copy", () => {
     const lookup: SlotLabelLookup = (k, vars) => msgFor("en", k, vars);

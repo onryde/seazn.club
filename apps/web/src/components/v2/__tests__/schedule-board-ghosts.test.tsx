@@ -108,6 +108,7 @@ describe("the grid's ghost block", () => {
           entrantNames={{}}
           feedLabels={{}}
           fixtureTitles={{}}
+          roundCodes={new Map()}
           conflictsByFixture={{}}
           canEdit={false}
           multi

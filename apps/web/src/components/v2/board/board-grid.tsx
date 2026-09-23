@@ -10,6 +10,7 @@ import { FixtureBlock } from "./fixture-block";
 import { timeLabel } from "@/lib/day-label";
 import { divisionInk, divisionTint } from "@/lib/division-hue";
 import { UNASSIGNED, type BoardConfig, type BoardConflict, type BoardFixture, type GhostBlock } from "./types";
+import type { BoardRoundCode } from "./round-codes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { overlaps, toMs } from "./use-disruption-signals";
@@ -41,6 +42,7 @@ export function BoardGrid({
   ghosts,
   blackouts = [],
   matchMinutes = slotMinutes,
+  roundCodes,
 }: {
   day: string;
   slots: number[];
@@ -89,6 +91,8 @@ export function BoardGrid({
    *  `slotMinutes` (today's — imperfect but no worse than before this prop
    *  existed) for callers that don't pass it. */
   matchMinutes?: number;
+  /** The board's one knockout round-code map (board/round-codes.ts). */
+  roundCodes: ReadonlyMap<string, BoardRoundCode>;
 }) {
   const msg = useMsg();
   const columns: (string | null)[] = courts.length > 0 ? courts : [null];
@@ -214,6 +218,7 @@ export function BoardGrid({
                               picked={pickedId === f.id}
                               onPick={() => onPick(f.id)}
                               onTogglePin={() => onTogglePin(f)}
+                              roundCode={roundCodes.get(f.id)}
                             />
                           </div>
                         ))}

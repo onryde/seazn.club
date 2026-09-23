@@ -68,6 +68,9 @@ export interface FeedRow {
   winner_to_slot: number | null;
   loser_to_fixture: string | null;
   loser_to_slot: number | null;
+  /** The row's stage. Optional: only the schedule board's two pages select
+   *  it, and only so `feedLabels` can mark a CROSS-stage edge (below). */
+  stage_id?: string;
 }
 
 export interface FeedLabelPair {
@@ -88,6 +91,15 @@ export interface FeedLabelPair {
  * composition point both label mechanisms share (see board/types.ts's
  * cardTitle()), so a card's short code and this feed's rendered text can't
  * drift onto two ref formats.
+ *
+ * A CROSS-stage edge (`wireCrossFeeds`, usecases/stages.ts) also carries
+ * `params.stage` — the SOURCE stage — when both rows say which stage they are
+ * in. `{round, seq}` only names a fixture within one stage, and the seat's
+ * own stage can hold a different fixture at the same coordinates; the
+ * schedule board resolves a feeder's round code by exactly that pair
+ * (board/round-codes.ts), so without the stage it would name the wrong match.
+ * Same-stage edges — every edge a generator writes — stay byte-identical, and
+ * rows without `stage_id` (the public namer's per-stage rows) are unchanged.
  */
 export function feedLabels(rows: readonly FeedRow[]): Record<string, FeedLabelPair> {
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -98,7 +110,17 @@ export function feedLabels(rows: readonly FeedRow[]): Record<string, FeedLabelPa
       [source.loser_to_fixture, source.loser_to_slot, "slot.loser_match"],
     ] as const) {
       if (!target || !slot || !byId.has(target)) continue;
-      const label: SlotLabel = { key, params: { round: source.round_no, seq: source.seq_in_round } };
+      const targetStage = byId.get(target)!.stage_id;
+      const crossStage =
+        source.stage_id !== undefined && targetStage !== undefined && source.stage_id !== targetStage;
+      const label: SlotLabel = {
+        key,
+        params: {
+          round: source.round_no,
+          seq: source.seq_in_round,
+          ...(crossStage ? { stage: source.stage_id } : {}),
+        },
+      };
       const pair = (labels[target] ??= {});
       if (slot === 1) pair.home = label;
       else pair.away = label;

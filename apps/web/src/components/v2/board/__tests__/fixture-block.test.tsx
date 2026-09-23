@@ -52,7 +52,11 @@ const baseProps = {
   picked: false,
   onPick: () => {},
   onTogglePin: () => {},
+  roundCode: undefined,
 };
+
+/** The chip's text, read off the ONE element carrying the testid. */
+const chipText = (html: string) => /data-testid="board-round-code"[^>]*>([^<]*)</.exec(html)?.[1];
 
 describe("FixtureBlock", () => {
   it("merges same-code conflicts into ONE badge instead of repeating it per entrant", () => {
@@ -149,6 +153,44 @@ describe("FixtureBlock", () => {
     expect(html).toContain("Ganador del Grupo A");
     expect(html).toContain("Ganador del Grupo B");
     expect(html).not.toContain("Winner of Group A");
+  });
+
+  // Schedule-board knockout round codes (2026-09-23, owner-approved design).
+  it("a knockout card's chip shows its round code, with the long round name as its tooltip", () => {
+    const html = renderToStaticMarkup(
+      <FixtureBlock {...baseProps} roundCode={{ code: "QF", label: "Quarter-finals", order: [0, -2, 0] }} />,
+    );
+    expect(chipText(html)).toBe("QF");
+    expect(html).toMatch(/data-testid="board-round-code"[^>]*title="Quarter-finals"/);
+    expect(html).not.toContain(">R1<");
+  });
+
+  it("a card with no code keeps R{round_no} — and no tooltip", () => {
+    const html = renderToStaticMarkup(<FixtureBlock {...baseProps} fixture={{ ...fixture, round_no: 2 }} />);
+    expect(chipText(html)).toBe("R2");
+    expect(html).not.toMatch(/data-testid="board-round-code"[^>]*title="/);
+  });
+
+  it("the pick button's accessible name carries the LONG round name for a coded card, the round number otherwise", () => {
+    const coded = renderToStaticMarkup(
+      <FixtureBlock {...baseProps} roundCode={{ code: "SF", label: "Semi-finals", order: [0, -1, 0] }} />,
+    );
+    expect(coded).toContain('aria-label="D vs E — Semi-finals. Pick to move"');
+    const plain = renderToStaticMarkup(<FixtureBlock {...baseProps} />);
+    expect(plain).toContain('aria-label="D vs E — round 1. Pick to move"');
+  });
+
+  it("es: the coded accessible name is localized end to end", () => {
+    const html = renderToStaticMarkup(
+      <DictProvider dict={esDict} locale="es">
+        <FixtureBlock
+          {...baseProps}
+          roundCode={{ code: es["bracket.roundShort.semi"], label: es["bracket.round.semi"], order: [0, -1, 0] }}
+        />
+      </DictProvider>,
+    );
+    expect(chipText(html)).toBe(es["bracket.roundShort.semi"]);
+    expect(html).toContain(`— ${es["bracket.round.semi"]}. `);
   });
 
   it("the division chip stays legible on the new division-tinted card background", () => {

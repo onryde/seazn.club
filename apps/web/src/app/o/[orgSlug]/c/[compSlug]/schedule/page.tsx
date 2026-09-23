@@ -118,16 +118,18 @@ export default async function CompetitionSchedulePage({
     divisions.map(async (d) => ({
       division: d,
       stages: await listStages(auth, d.id),
-      // F1 follow-up (payload budget "gap 15"): the board never reads
-      // ext_key/lane/is_final/third_place/conditional — this projection
-      // drops them instead of shipping them across the RSC flight unread.
+      // F1 follow-up (payload budget "gap 15"): the board's own projection —
+      // no ext_key/is_final, and lane/third_place/conditional only where set
+      // (they drive the knockout round codes; see the function's comment).
       fixtures: await listDivisionFixturesForBoard(auth, d.id),
       entrants: await listEntrants(auth, d.id),
     })),
   );
+  // `stage_id` lets feedLabels() mark a CROSS-stage edge with its source
+  // stage, so the board's round codes resolve a feeder in the right stage.
   const feedRows = await withTenant(auth.orgId, (tx) =>
     tx<FeedRow[]>`
-      select f.id, f.round_no, f.seq_in_round, f.winner_to_fixture, f.winner_to_slot,
+      select f.id, f.stage_id, f.round_no, f.seq_in_round, f.winner_to_fixture, f.winner_to_slot,
              f.loser_to_fixture, f.loser_to_slot
       from fixtures f join divisions d on d.id = f.division_id
       where d.competition_id = ${id}`,
