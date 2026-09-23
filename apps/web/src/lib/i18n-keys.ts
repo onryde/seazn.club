@@ -4152,7 +4152,6 @@ export type DictionaryKey =
   | "player.result.won"
   | "player.stats"
   | "player.upcoming"
-  | "player.upcoming.otherEvent"
   | "player.upcoming.showLess"
   | "player.upcoming.showMore"
   | "player.upcoming.timeTbd"

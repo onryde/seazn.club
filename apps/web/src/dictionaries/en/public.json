@@ -502,7 +502,6 @@
   "player.opponent": "v {opponent}",
   "player.upcoming": "Upcoming",
   "player.upcoming.timeTbd": "Time TBD",
-  "player.upcoming.otherEvent": "Other event",
   "player.upcoming.showMore": "Show {count} more",
   "player.upcoming.showLess": "Show less",
   "org.live.one": "{count} live now",

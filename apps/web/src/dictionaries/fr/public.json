@@ -502,7 +502,6 @@
   "player.opponent": "contre {opponent}",
   "player.upcoming": "À venir",
   "player.upcoming.timeTbd": "Heure à déterminer",
-  "player.upcoming.otherEvent": "Autre événement",
   "player.upcoming.showMore": "Afficher {count} de plus",
   "player.upcoming.showLess": "Afficher moins",
   "org.live.one": "{count} en direct",

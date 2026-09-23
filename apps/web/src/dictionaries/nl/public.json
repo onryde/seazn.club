@@ -502,7 +502,6 @@
   "player.opponent": "tegen {opponent}",
   "player.upcoming": "Binnenkort",
   "player.upcoming.timeTbd": "Tijd NNB",
-  "player.upcoming.otherEvent": "Ander evenement",
   "player.upcoming.showMore": "Toon er nog {count}",
   "player.upcoming.showLess": "Toon minder",
   "org.live.one": "{count} nu live",

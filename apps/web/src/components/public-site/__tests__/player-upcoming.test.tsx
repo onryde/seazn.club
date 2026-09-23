@@ -154,11 +154,26 @@ describe("PlayerUpcoming", () => {
     expect(undated).not.toContain('data-testid="mh-player-upcoming-time"');
   });
 
-  it("the Other event chip rides ONLY the other competition's rows", () => {
+  it("another competition's row names it in the ACCENT colour, with no chip; the current competition's row stays muted (owner 2026-09-23)", () => {
     const html = render([row("home"), row("away", { isOtherCompetition: true, competitionName: "Spring Open" })]);
-    expect(html.match(/data-testid="mh-player-upcoming-other"/g)).toHaveLength(1);
+    /** The where-line's class on one row: the first where-line after that row's own testid. */
+    const whereClass = (id: string) =>
+      html
+        .slice(html.indexOf(`mh-player-upcoming-row-${id}"`))
+        .match(/data-testid="mh-player-upcoming-where" class="([^"]*)"/)?.[1];
+    const has = (cls: string) => new RegExp(`(?:^|\\s)${cls}(?:\\s|$)`);
+    expect(whereClass("away"), "away where-line rendered").toBeDefined();
+    expect(whereClass("away")).toMatch(has("text-accent-strong"));
+    expect(whereClass("away")).toMatch(has("font-semibold"));
+    expect(whereClass("home"), "home where-line rendered").toBeDefined();
+    expect(whereClass("home")).not.toMatch(has("text-accent-strong"));
+    expect(whereClass("home")).not.toMatch(has("font-semibold"));
+    // The competition NAME is what is highlighted, inside that line.
     const away = html.slice(html.indexOf('mh-player-upcoming-row-away"'));
-    expect(away).toContain(`>${esc(en["player.upcoming.otherEvent"])}<`);
+    expect(away).toContain(">Spring Open<");
+    // The chip is gone: no testid, and no pill anywhere in the list.
+    expect(html).not.toContain('data-testid="mh-player-upcoming-other"');
+    expect(html).not.toMatch(has("rounded-full"));
   });
 
   it("every row links to its fixture, names competition and division as SEPARATE elements, and the opponent with the Matches grammar", () => {
@@ -217,12 +232,11 @@ describe("PlayerUpcoming", () => {
     ["fr", fr],
     ["nl", nl],
   ] as const)("%s: every new word is that locale's own dictionary value, never a dotted key", (locale, dict) => {
-    // The TBD and Other-event rows sit inside the first five, so the served
-    // markup carries them; the last two wait behind the toggle.
+    // The TBD row sits inside the first five, so the served markup carries it;
+    // the last two wait behind the toggle.
     const rows = [row("tbc", { scheduledAt: null }), row("other", { isOtherCompetition: true }), ...seven.slice(0, 5)];
     const html = render(rows, dict as Dict, locale);
     expect(html).toContain(`>${esc(dict["player.upcoming.timeTbd"])}<`);
-    expect(html).toContain(`>${esc(dict["player.upcoming.otherEvent"])}<`);
     expect(html).toContain(`>${esc(interpolate(dict["player.upcoming.showMore"], { count: 2 }))}<`);
     expect(html).not.toContain("player.upcoming.");
     const u = island(rows, dict as Dict, locale);

@@ -1,8 +1,9 @@
 // Player profile — the Upcoming list (spec 2026-09-23, R3/R4). A SERVER
 // component: rendered once per ISR regeneration, no poll (spec: no live
 // updates). One chronological list in the reader's order, which it never
-// re-sorts. Each row names its competition › division; a row from another
-// competition carries the Other event chip.
+// re-sorts. Each row names its competition › division; on a row from another
+// competition that line is the highlight, in the accent colour (owner
+// 2026-09-23, replacing the "Other event" chip).
 //
 // "Show N more" is the one client piece (owner request 2026-09-23,
 // superseding plan D2's <details>): `UpcomingReveal` in
@@ -35,6 +36,11 @@ export interface PlayerUpcomingProps {
   /** The ORG's locale, the page's own (ISR: never the viewer's). */
   locale: Locale;
 }
+
+/** The competition › division line. Another competition's row is accented, so
+ *  the competition NAME is what stands out; this competition's stays muted. */
+const WHERE = "min-w-0 truncate";
+const WHERE_OTHER = `${WHERE} font-semibold text-accent-strong`;
 
 function upcomingRow(row: PlayerUpcomingRow, dict: Dict, locale: Locale) {
   const day = formatPublicInstant(locale, row.tz, row.scheduledAt, { day: "numeric" });
@@ -84,16 +90,8 @@ function upcomingRow(row: PlayerUpcomingRow, dict: Dict, locale: Locale) {
               </span>
             ) : null}
           </span>
-          <span className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-ink-muted">
-            {row.isOtherCompetition ? (
-              <span
-                data-testid="mh-player-upcoming-other"
-                className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent-strong"
-              >
-                {t(dict, "player.upcoming.otherEvent")}
-              </span>
-            ) : null}
-            <span data-testid="mh-player-upcoming-where" className="min-w-0 truncate">
+          <span className="mt-1 flex min-w-0 items-center text-xs text-ink-muted">
+            <span data-testid="mh-player-upcoming-where" className={row.isOtherCompetition ? WHERE_OTHER : WHERE}>
               <span>{row.competitionName}</span>{" "}
               <span aria-hidden="true">›</span>{" "}
               <span>{row.divisionName}</span>
