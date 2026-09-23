@@ -1037,7 +1037,7 @@ export function FixtureConsole({
             <div className="mb-4">
               <DeviceLinkPanel
                 fixtureId={fixture.id}
-                scorerLabel={sport.scorerLabel}
+                sportKey={sport.key}
                 embedded
                 viewerPlan={viewerPlan}
               />

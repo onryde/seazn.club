@@ -65,7 +65,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 
 const SEALED: Link = { id: "l1", label: null, expires_at: null, created_at: "2026-09-23T09:00:00.000Z" };
 const ORIGIN = "https://sheets.example";
-const PROPS = { fixtureId: "f1", scorerLabel: "Umpire", viewerPlan: "pro" as const };
+const PROPS = { fixtureId: "f1", sportKey: "badminton", viewerPlan: "pro" as const };
 const t = (key: Parameters<typeof tRuntime>[1], vars?: Record<string, string | number>) =>
   tRuntime(messages, key, vars);
 
@@ -248,7 +248,8 @@ describe("device-link panel — what it says about a sealed link (null expiry)",
   it("the panel's description says the link lives until the match is finalized or cancelled — never 'today only'", async () => {
     const island = renderIsland(DeviceLinkPanel, PROPS);
     await flush();
-    expect(island.text()).toContain(t("dlink.desc", { scorer: "umpire" }));
+    expect(island.text()).toContain(t("dlink.desc", { scorer: t("sport.official.badminton").toLowerCase() }));
+    expect(island.text()).toContain("as the umpire");
     expect(island.text()).toContain("until it's finalized or cancelled");
     expect(island.text()).not.toMatch(/\btoday\b/i);
   });

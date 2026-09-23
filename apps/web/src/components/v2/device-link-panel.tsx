@@ -16,6 +16,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
+import { officialLabelKey } from "@/lib/official-label";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
 interface ActiveLink {
@@ -28,13 +29,15 @@ interface ActiveLink {
 
 export function DeviceLinkPanel({
   fixtureId,
-  scorerLabel,
+  sportKey,
   embedded = false,
   viewerPlan,
 }: {
   fixtureId: string;
-  /** Sport-aware copy (doc 13 §1): 'Umpire' / 'Referee' / 'Arbiter' / 'Scorer'. */
-  scorerLabel: string;
+  /** Names the sport's official in the viewer's locale (doc 13 §1:
+   *  'Umpire' / 'Referee' / 'Arbiter' / 'Scorer'), never the engine's English
+   *  label — see `officialLabelKey`. */
+  sportKey: string;
   /**
    * R7/C3 (D-19) — rendered INSIDE the scoring card, opened from its heading
    * row, instead of as the last card on the page. Drops this component's own
@@ -176,7 +179,7 @@ export function DeviceLinkPanel({
     >
       {!embedded && <h2 className="text-sm font-semibold text-slate-700">{msg("dlink.title")}</h2>}
       <p className={`text-xs text-slate-600 ${embedded ? "" : "mt-1"}`}>
-        {msg("dlink.desc", { scorer: scorerLabel.toLowerCase() })}
+        {msg("dlink.desc", { scorer: msg(officialLabelKey(sportKey)).toLowerCase() })}
       </p>
 
       {paywall && (

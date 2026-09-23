@@ -441,7 +441,7 @@ describe("device score pad: Start match carries a stable hook", () => {
 // pinned below at the same strength the old mint assertion had.
 describe("device link panel: every hand-over control carries a stable hook on the branch that shows it", () => {
   it('no active/minted link yet: the "Create scoring link" button carries the hook, with its own real text', () => {
-    const html = renderToStaticMarkup(<DeviceLinkPanel fixtureId="f1" scorerLabel="Umpire" viewerPlan="community" />);
+    const html = renderToStaticMarkup(<DeviceLinkPanel fixtureId="f1" sportKey="badminton" viewerPlan="community" />);
     const tag = html.match(/<button\b[^>]*data-testid="device-link-mint"[^>]*>([\s\S]*?)<\/button>/);
     expect(tag, 'no <button data-testid="device-link-mint"> found').not.toBeNull();
     expect(tag![1]).toContain(tRuntime(messages, "dlink.create"));
@@ -459,7 +459,7 @@ describe("device link panel: every hand-over control carries a stable hook on th
   // `run()` (fired from OUTSIDE the commit phase, since the mount commit has
   // long since finished) lands before the second.
   it('the live-link branch (once a link is already active) hooks "Show QR" and "Revoke & reissue", and the Create/mint button is absent (kills M7)', async () => {
-    const island = renderIsland(DeviceLinkPanel, { fixtureId: "f1", scorerLabel: "Umpire", viewerPlan: "community" as const });
+    const island = renderIsland(DeviceLinkPanel, { fixtureId: "f1", sportKey: "badminton", viewerPlan: "community" as const });
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
