@@ -2513,7 +2513,7 @@
   "score.seqConflict": "Le score a évolué sur un autre appareil — la vue a été actualisée, veuillez revérifier.",
   "score.nextMatchStarted": "Le match suivant ({ref}) a déjà commencé. Annulez d'abord celui-là.",
   "score.failed": "Échec",
-  "score.recordedBy": "enregistré par le {scorer}",
+  "score.recordedBy": "enregistré (rôle : {scorer})",
   "score.matchActions": "Actions du match",
   "score.matchActionsNote": "Elles clôturent la feuille de match. Elles ne peuvent pas être annulées depuis le pupitre.",
   "score.handOverDevice": "Confier l’appareil",
