@@ -16,9 +16,13 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 
+import enPublic from "@/dictionaries/en/public.json";
 import enUi from "@/dictionaries/en/ui.json";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import type { MessageKey } from "@/lib/messages";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
 import { resolveVenueTz } from "@/lib/tz";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -28,6 +32,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { startDivision } from "@/server/usecases/schedule";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { getPublicPlayerUpcoming, maskPublicEntrantNames, type PublicCompetition, type PublicOrg } from "../data";
 import { readPlayerUpcoming, UPCOMING_STALE_AFTER_MS, type PlayerUpcomingRow } from "../public-player-matches";
 
@@ -64,12 +69,14 @@ interface Scene {
   sib: Comp;
   unl: Comp;
   prv: Comp;
+  ko: Comp;
   slugs: { singles: string; sib: string };
   doublesDivisionId: string;
   pairOpponent: { id: string; raw: string };
   f: Record<
     | "di" | "bo" | "cy" | "hal" | "ian" | "jo" | "pair" | "seatNamed" | "seatTbd" | "setup"
-    | "withdrawn" | "doneDivision" | "ned" | "archived" | "oli" | "pat" | "oldComp" | "foreign",
+    | "withdrawn" | "doneDivision" | "ned" | "archived" | "oli" | "pat" | "oldComp" | "foreign"
+    | "koFinal" | "koBye" | "koFlipBye" | "koFlipFinal",
     string
   >;
 }
@@ -108,7 +115,14 @@ async function openOrg(label: string): Promise<{ orgId: string; orgSlug: string;
   return { orgId, orgSlug, auth: { orgId, via: "session", userId: null, role: "owner", keyId: null } };
 }
 
-async function league(auth: AuthCtx, competitionId: string, slug: string, sides: Side[], start = true): Promise<League> {
+async function league(
+  auth: AuthCtx,
+  competitionId: string,
+  slug: string,
+  sides: Side[],
+  start = true,
+  kind: "league" | "knockout" = "league",
+): Promise<League> {
   const division = await createDivision(auth, competitionId, {
     name: slug,
     slug,
@@ -121,7 +135,7 @@ async function league(auth: AuthCtx, competitionId: string, slug: string, sides:
     division.id,
     sides.map((s, i) => ({ kind: s.kind, display_name: s.name, seed: i + 1, members: s.members.map(member) })) as never,
   )) as { id: string }[];
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: slug, config: {} });
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: slug, config: {} });
   await generateStageFixtures(auth, stage!.id);
   if (start) await startDivision(auth, division.id);
   const [{ slug: stored }] = await sql<{ slug: string }[]>`select slug from divisions where id = ${division.id}`;
@@ -279,6 +293,58 @@ async function seed(): Promise<Scene> {
   const oldComp = vs(oldL, 0, 1); // undated leftover
   await sql`update competitions set status = 'completed' where id = ${old.id}`;
 
+  // ---- KO: a knockout in its OWN unlisted competition, read as that card, so no
+  // other card's list moves. Three entrants in a four-draw (match-centre-load-
+  // feeder-read.test.ts' shape): Ada, seed 1, draws the bye and goes straight
+  // into the final, which waits on the other semi-final.
+  const ko = await comp("Knockout Cup", "unlisted");
+  const [{ visibility: koVisibility }] = await sql<{ visibility: string }[]>`
+    select visibility from competitions where id = ${ko.id}`;
+  expect(koVisibility).toBe("unlisted"); // premise: not degraded to private
+  const koL = await league(auth, ko.id, "ko", [adaSide(), await opponent("Uma Vale"), await opponent("Vic Wren")], true, "knockout");
+  const adaKo = koL.entrantIds[0]!;
+  const half = await sql<{ id: string; round_no: number }[]>`
+    select id, round_no from fixtures
+    where division_id = ${koL.divisionId}
+      and ((home_entrant_id = ${adaKo} and away_entrant_id is null)
+        or (away_entrant_id = ${adaKo} and home_entrant_id is null))
+    order by round_no`;
+  const koBye = half.find((r) => r.round_no === 1)?.id;
+  const koFinal = half.find((r) => r.round_no > 1)?.id;
+  if (!koBye || !koFinal) throw new Error(`seed: no bye line + half-filled final for Ada: ${JSON.stringify(half)}`);
+  // The bye line back in its pre-2026-09-17 shape: left scheduled, no outcome.
+  await sql`update fixtures set status = 'scheduled', outcome = null where id = ${koBye}`;
+
+  // ---- KO-FLIP: the same draw again, mirrored where the first one cannot reach.
+  //  - its bye line with the bye on the HOME seat (Ada away), legacy shape;
+  //  - its final with the bye label beside ADA's filled seat (an entrant is never
+  //    a bye, whatever label rides beside it — `hubByeSides`), and the waiting
+  //    seat's stored label gone, so its name can only come from the FEED EDGES.
+  const koFlipL = await league(
+    auth, ko.id, "ko-flip", [adaSide(), await opponent("Wes Yale"), await opponent("Xia Zorn")], true, "knockout",
+  );
+  const adaFlip = koFlipL.entrantIds[0]!;
+  const flipHalf = await sql<{ id: string; round_no: number; ada_home: boolean }[]>`
+    select id, round_no, home_entrant_id = ${adaFlip} as ada_home from fixtures
+    where division_id = ${koFlipL.divisionId}
+      and ((home_entrant_id = ${adaFlip} and away_entrant_id is null)
+        or (away_entrant_id = ${adaFlip} and home_entrant_id is null))
+    order by round_no`;
+  const flipBye = flipHalf.find((r) => r.round_no === 1);
+  const flipFinal = flipHalf.find((r) => r.round_no > 1);
+  if (!flipBye || !flipFinal) throw new Error(`seed: no bye line + half-filled final for Ada: ${JSON.stringify(flipHalf)}`);
+  await sql`
+    update fixtures set home_entrant_id = away_entrant_id, away_entrant_id = home_entrant_id,
+                        home_slot_label = away_slot_label, away_slot_label = home_slot_label,
+                        status = 'scheduled', outcome = null
+    where id = ${flipBye.id}`;
+  const byeLabel = sql.json({ key: "bracket.slot.bye", params: {} });
+  if (flipFinal.ada_home) {
+    await sql`update fixtures set home_slot_label = ${byeLabel}, away_slot_label = null where id = ${flipFinal.id}`;
+  } else {
+    await sql`update fixtures set away_slot_label = ${byeLabel}, home_slot_label = null where id = ${flipFinal.id}`;
+  }
+
   // ---- ANOTHER ORG, with Ada on one of its rosters -------------------------------
   const other = await openOrg("other");
   const otherComp = await createCompetition(other.auth, {
@@ -304,10 +370,14 @@ async function seed(): Promise<Scene> {
     sib,
     unl,
     prv,
+    ko,
     slugs: { singles: singles.slug, sib: sibL.slug },
     doublesDivisionId: doubles.divisionId,
     pairOpponent: { id: doubles.entrantIds[1]!, raw: pairRaw },
-    f: { di, bo, cy, hal, ian, jo, pair, seatNamed, seatTbd, setup, withdrawn, doneDivision, ned, archived, oli, pat, oldComp, foreign },
+    f: {
+      di, bo, cy, hal, ian, jo, pair, seatNamed, seatTbd, setup, withdrawn, doneDivision, ned, archived, oli, pat, oldComp, foreign,
+      koFinal, koBye, koFlipBye: flipBye.id, koFlipFinal: flipFinal.id,
+    },
   };
 }
 
@@ -472,6 +542,86 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
     expect(byId(rows, scene.f.pair).opponentLabel).toBe(masked!.display_name);
     expect(byId(rows, scene.f.seatNamed).opponentLabel).toBe(enUi["slot.winner_group"].replace("{g}", "A"));
     expect(byId(rows, scene.f.seatTbd).opponentLabel).toBe(enUi["schedule.tbd"]);
+  });
+
+  /** A fixture's two seats as stored, and the empty seat's label. */
+  async function seats(fixtureId: string) {
+    const [row] = await sql<
+      {
+        outcome: unknown;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        home_slot_label: SlotLabel | null;
+        away_slot_label: SlotLabel | null;
+      }[]
+    >`select outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label from fixtures where id = ${fixtureId}`;
+    if (!row) throw new Error(`fixture ${fixtureId} not found`);
+    return { ...row, empty: row.home_entrant_id === null ? row.home_slot_label : row.away_slot_label };
+  }
+
+  it("opponent, KNOCKOUT: a seat waiting on a match names that match's ROUND (the match centre's namer), never the board's R·code", async () => {
+    // Premise: the final is scheduled, Ada holds one seat, and the other waits on
+    // a feeder MATCH of a round that holds two (the bye line and the other semi).
+    expect(await premise(scene.f.koFinal)).toMatchObject({ status: "scheduled", ada_side: true });
+    const { empty } = await seats(scene.f.koFinal);
+    expect(empty?.key).toBe("slot.winner_match");
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures
+      where stage_id = (select stage_id from fixtures where id = ${scene.f.koFinal}) and round_no = ${Number(empty!.params.round)}`;
+    expect(n).toBe(2);
+
+    const expected = enPublic["knockout.feederWinner"]
+      .replace("{round}", enUi["bracket.round.semi"])
+      .replace("{seq}", String(empty!.params.seq));
+    const ui = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
+    const row = byId(await read(scene.ko.id), scene.f.koFinal);
+    expect(row.opponentLabel).toBe(expected);
+    expect(row.opponentLabel, "not the organiser board's short code").not.toBe(resolveSlotLabel(empty, ui, "schedule.tbd"));
+  });
+
+  it("a BYE is not an upcoming match: a legacy scheduled bye line is left out on EITHER seat, the final it fed is not", async () => {
+    // Premise: the pre-2026-09-17 shape — scheduled, no outcome, Ada on one seat
+    // and the bye label on the empty one — once with the bye AWAY, once HOME.
+    for (const id of [scene.f.koBye, scene.f.koFlipBye]) {
+      expect(await premise(id), id).toMatchObject({ status: "scheduled", ada_side: true });
+      const bye = await seats(id);
+      expect(bye.outcome, id).toBeNull();
+      expect(bye.empty?.key, id).toBe("bracket.slot.bye");
+    }
+    expect((await seats(scene.f.koBye)).away_entrant_id, "bye on the AWAY seat").toBeNull();
+    expect((await seats(scene.f.koFlipBye)).home_entrant_id, "bye on the HOME seat").toBeNull();
+    const got = ids(await read(scene.ko.id));
+    expect(got).not.toContain(scene.f.koBye);
+    expect(got).not.toContain(scene.f.koFlipBye);
+    expect(got, "the positive pair: the same card still lists Ada's final").toContain(scene.f.koFinal);
+  });
+
+  it("a FILLED seat is never a bye, whatever label rides beside it: Ada's final carrying the bye label on HER seat is still listed", async () => {
+    const final = await seats(scene.f.koFlipFinal);
+    const adaSeatLabel = final.home_entrant_id === null ? final.away_slot_label : final.home_slot_label;
+    // Premise: Ada's (filled) seat carries the bye key; the other seat is empty.
+    expect(await premise(scene.f.koFlipFinal)).toMatchObject({ status: "scheduled", ada_side: true });
+    expect(adaSeatLabel?.key).toBe("bracket.slot.bye");
+    expect(final.home_entrant_id === null || final.away_entrant_id === null).toBe(true);
+    expect(ids(await read(scene.ko.id))).toContain(scene.f.koFlipFinal);
+  });
+
+  it("opponent, KNOCKOUT: a waiting seat with NO stored label is named from the FEED EDGES", async () => {
+    const { empty } = await seats(scene.f.koFlipFinal);
+    // Premise: nothing stored on the waiting seat, so only the feeder can name it.
+    expect(empty).toBeNull();
+    const [feeder] = await sql<{ round_no: number; seq_in_round: number }[]>`
+      select round_no, seq_in_round from fixtures
+      where winner_to_fixture = ${scene.f.koFlipFinal} and id <> ${scene.f.koFlipBye}`;
+    expect(feeder, "premise: the other semi-final feeds the final").toBeDefined();
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures
+      where stage_id = (select stage_id from fixtures where id = ${scene.f.koFlipFinal}) and round_no = ${feeder!.round_no}`;
+    expect(n).toBe(2);
+    const expected = enPublic["knockout.feederWinner"]
+      .replace("{round}", enUi["bracket.round.semi"])
+      .replace("{seq}", String(feeder!.seq_in_round));
+    expect(byId(await read(scene.ko.id), scene.f.koFlipFinal).opponentLabel).toBe(expected);
   });
 
   it("each row carries ITS division's venue zone", async () => {

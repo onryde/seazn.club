@@ -736,6 +736,18 @@ export const UPCOMING_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
 /** A safety cap on the read. The five-row cut is the component's. */
 export const UPCOMING_SAFETY_CAP = 50;
 
+/**
+ * The slot-label key `stages.ts` stores on a bye's phantom side — the ONLY
+ * record of a bye (`competition-hub.ts`' `hubByeSides` reads the same key). A
+ * bye is nobody's next match, but a bye line can sit `scheduled` with no
+ * outcome: every line generated before 2026-09-17, and a seeded or dead-feeder
+ * bye until `awardSeededByes` settles it. Matched with its seat EMPTY, never by
+ * "one side is null", which is also every seat still waiting on a feeder. The
+ * `coalesce` keeps an unlabelled empty seat (a null key) from turning the
+ * whole `not (...)` null and dropping the row.
+ */
+const BYE_SLOT_KEY = "bracket.slot.bye";
+
 interface UpcomingDbRow {
   id: string;
   stage_id: string;
@@ -792,6 +804,8 @@ export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<
       and c.status not in ('completed','archived')
       and d.status <> 'completed'
       and f.status = 'scheduled'
+      and not (f.home_entrant_id is null and coalesce(f.home_slot_label->>'key', '') = ${BYE_SLOT_KEY})
+      and not (f.away_entrant_id is null and coalesce(f.away_slot_label->>'key', '') = ${BYE_SLOT_KEY})
       and (f.scheduled_at is null or f.scheduled_at >= ${cutoff.toISOString()})
     order by f.scheduled_at asc nulls last, f.round_no, f.seq_in_round, f.id
     limit ${UPCOMING_SAFETY_CAP}`;
