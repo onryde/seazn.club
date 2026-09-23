@@ -590,7 +590,7 @@ as a realtime regression:
 | 3 | gate integrity — zero tests selected, or the spec set / clause / switch does not match the tree |
 | 4 | inconclusive — **every** failing leg carried no realtime verdict at all |
 
-Three things that guard are worth stating because each was a real hole:
+Four things that guard are worth stating because each was a real hole:
 
 - **The clause check counts CALL-shaped occurrences only.** In
   `device-links.spec.ts` the symbol appears three times — an import at `:5`,
@@ -606,8 +606,11 @@ Three things that guard are worth stating because each was a real hole:
 - **A failing leg is classified before the verdict is printed.** "At least one
   pad sat on the poll" is a claim about a cause, and it used to be printed on
   any non-zero leg — demonstrably wrongly (see the stale-server note below).
-  A leg that fails carrying none of `assertPropagatedUnderPoll`'s four
-  verdicts exits 4 instead.
+  Each failing leg is now matched against `assertPropagatedUnderPoll`'s four
+  verdicts, and the run is judged on the whole set rather than leg by leg: it
+  exits **4** only when **every** failing leg carried no verdict. If even one
+  carried a verdict the run is a **1**, whatever the other legs did — the next
+  bullet is why that direction matters, not a qualification of this one.
 - **A measured realtime verdict outranks a sibling leg's unrelated failure.**
   Classification is per leg *and remembered* per leg. One leg failing on a
   flake while another fails on a genuinely refused channel is not an
