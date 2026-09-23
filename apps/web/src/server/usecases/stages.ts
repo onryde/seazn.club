@@ -40,7 +40,6 @@ import {
   validatePointsRule,
   withdrawBracketEntrant,
   type BracketFixture,
-  type FixtureStatus,
   type PoolTable,
   type ProgressionSpec,
   type SourceShape,
@@ -76,6 +75,7 @@ import {
   SWISS_PAIRING_NOT_SWISS_MESSAGE,
 } from "@/lib/swiss-pairing";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
@@ -4026,28 +4026,12 @@ async function insertStandingsCarriedEvent(
     values (${divisionId}, ${seq}, 'standings_carried', ${tx.json(payload as never)})`;
 }
 
-// Mirrors engine-db/competition.ts's private toEngineStatus (not exported):
-// DB fixtures.status -> engine FixtureStatus (spec 05 §1 vocabulary). Needed
-// only to satisfy BracketFixture's required `status` field when rebuilding a
-// completed bracket's own fixtures for `losersOfRound` below —
-// resolveProgression's round_loser branch never actually reads status
-// (round + loser only), but the type does.
-function toBracketFixtureStatus(dbStatus: string): FixtureStatus {
-  switch (dbStatus) {
-    case "decided":
-    case "finalized":
-      return "decided";
-    case "forfeited":
-      return "walkover";
-    case "abandoned":
-    case "cancelled":
-      return "void";
-    case "in_play":
-      return "in_play";
-    default:
-      return "scheduled";
-  }
-}
+// `toBracketFixtureStatus` (imported above from lib/fixture-engine-status as
+// the ONE DB -> engine status mapping) exists here only to satisfy
+// BracketFixture's required `status` field when rebuilding a completed
+// bracket's own fixtures for `losersOfRound` below — resolveProgression's
+// round_loser branch never actually reads status (round + loser only), but the
+// type does.
 
 // Rebuild the completed bracket's own BracketFixture[] for `roundLosers`
 // (@seazn/engine/competition's progression.ts) — never re-derived from `standings_snapshots`, which

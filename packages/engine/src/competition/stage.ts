@@ -16,6 +16,11 @@ import { buildSwissTable, rankStandings } from "./tiebreakers.ts";
 export type FixtureStatus = "scheduled" | "in_play" | "decided" | "void" | "walkover";
 
 const SETTLED: ReadonlySet<FixtureStatus> = new Set(["decided", "void", "walkover"]);
+/** A fixture in one of these statuses is finished for its stage: it can no
+ *  longer move a table. Exported (standings qualification, plan M12) so the web
+ *  builder counts a table's remaining matches with the engine's own set rather
+ *  than a copy that could drift from `isTableStageComplete`. */
+export { SETTLED as SETTLED_FIXTURE_STATUSES };
 const COUNTS_FOR_STANDINGS: ReadonlySet<FixtureStatus> = new Set(["decided", "walkover"]);
 
 // A league/group/swiss fixture as the stage sees it: a status and, once

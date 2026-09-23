@@ -6,6 +6,10 @@ import { withTenant } from "@/lib/db";
 // had drifted into calling any award outcome a bye, which let Unpair destroy
 // real two-sided forfeits. See that module's header.
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+// DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary). ONE
+// mapping, shared with the qualification builder and the bracket rebuild in
+// usecases/stages.ts; the local name is kept so the call sites read as before.
+import { engineFixtureStatus as toEngineStatus } from "@/lib/fixture-engine-status";
 import { log } from "@/server/logger";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
@@ -20,7 +24,6 @@ import {
   type BracketStage,
   type DivisionEvent,
   type FixtureResult,
-  type FixtureStatus,
   type StandingsRow,
   type TableFixture,
   type TableStage,
@@ -69,23 +72,6 @@ export function parseStageKind(raw: string, stageId: string): StageKind {
   return parsed.data;
 }
 
-// DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary).
-function toEngineStatus(dbStatus: string): FixtureStatus {
-  switch (dbStatus) {
-    case "decided":
-    case "finalized":
-      return "decided";
-    case "forfeited":
-      return "walkover";
-    case "abandoned":
-    case "cancelled":
-      return "void";
-    case "in_play":
-      return "in_play";
-    default:
-      return "scheduled";
-  }
-}
 
 /** Phantom seat for `SportModule.init` when synthesising a one-sided award
  *  bye delta — never written to the DB, never appears in the folded table
