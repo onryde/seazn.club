@@ -291,14 +291,16 @@ export async function resnapshotFixtureConfig(
     // them meant the panel reported `diverged: no` over a fixture still showing
     // the old config's result, until somebody happened to append another event.
     //
-    // A corrected config that UN-decides a knockout line is the same erasure a
-    // void is, so it owes the same ruling (owner, 2026-09-23;
+    // A corrected config that UN-decides (or flips) a knockout line is the same
+    // move a void is, so it owes the same ruling (owner, 2026-09-23;
     // `engine-db/fed-seats.ts`): take back the name the old result advanced, or
     // refuse with NEXT_MATCH_STARTED when the next match is already under way.
     // Before any cache is rewritten, so a refusal rolls back the snapshot above
-    // and writes no audit row.
-    const released =
-      folded && row.outcome !== null && folded.outcome === null ? await releaseFedSeats(tx, fixtureId) : [];
+    // and writes no audit row. This hatch runs no fill afterwards (it never
+    // has: a re-snapshot that DECIDES a line seats nobody either), so a flip
+    // here leaves the seat empty and labelled rather than holding a name the
+    // result no longer gives it.
+    const released = folded ? await releaseFedSeats(tx, fixtureId, row.outcome, folded.outcome) : [];
     if (folded) {
       await tx`
         insert into match_states (fixture_id, last_seq, state, summary)

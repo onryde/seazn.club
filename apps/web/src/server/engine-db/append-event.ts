@@ -45,9 +45,10 @@ export interface AppendResult {
   summary: ScoreSummary;
   outcome: MatchOutcome | null;
   status: string;
-  /** The fixtures whose seat this write EMPTIED because it erased a knockout
-   *  decision (`releaseFedSeats`, owner ruling 2026-09-23) — from the update's
-   *  own `returning id`. Empty for every write that erased nothing. Their
+  /** The fixtures whose seat this write EMPTIED because it took back a
+   *  knockout decision — erased it, or flipped it — (`releaseFedSeats`, owner
+   *  ruling 2026-09-23), including any cascade walkover it reset — from the
+   *  update's own `returning id`. Empty for every write that moved nobody. Their
    *  public documents changed (a name became a "Winner of …" seat), so
    *  `scoreEvent` publishes them with the fixtures a decision advanced into. */
   released: string[];
@@ -339,16 +340,17 @@ export async function appendEventInTx(
     );
   }
 
-  // Owner ruling 2026-09-23: a write that ERASES a decision (a void, whatever
-  // it voided) takes back the names that decision advanced into the next
-  // fixture — or is refused, 409 NEXT_MATCH_STARTED, when that fixture has
-  // already started. Here, after the fold has proved the decision is gone and
-  // BEFORE the first write, so a refusal leaves nothing behind. Keyed on the
-  // stored outcome going to null, never on the event type: every path that
-  // appends goes through this one function, so none can erase a decision
-  // around it. See fed-seats.ts for the rules.
-  const released =
-    fixture.outcome !== null && outcome === null ? await releaseFedSeats(tx, fixtureId) : [];
+  // Owner ruling 2026-09-23: a write that takes back a decision (a void,
+  // whatever it voided) takes back the names that decision advanced into the
+  // next fixture — or is refused, 409 NEXT_MATCH_STARTED, when that fixture has
+  // already started. Here, after the fold and BEFORE the first write, so a
+  // refusal leaves nothing behind. Keyed on who the stored outcome advanced
+  // against who the new fold advances — never on the event type — so it covers
+  // a decision erased AND one flipped without passing through undecided (fix
+  // round 1), and every path that appends goes through this one function, so
+  // none can move a decision around it. A no-op unless that changed. See
+  // fed-seats.ts for the rules.
+  const released = await releaseFedSeats(tx, fixtureId, fixture.outcome, outcome);
 
   // Same transaction as the event that made it necessary: a crash between the
   // two can never leave a fixture with history and no frozen cfg.

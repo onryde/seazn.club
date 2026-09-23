@@ -13,6 +13,7 @@ import { deferred } from "@/lib/deferred";
 import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
+import { advancingSides } from "@/server/engine-db/fed-seats";
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -663,8 +664,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
       from fixtures f join stages s on s.id = f.stage_id
       where f.id = ${fixtureId}`;
     if (!fixture) return null;
-    const winner = o.kind === "win" || o.kind === "award" ? o.winner : undefined;
-    const loser = o.kind === "win" ? o.loser : undefined;
+    // One reading of who advances, shared with the un-fill (fed-seats.ts), so
+    // the two can never disagree about which name a decision put where.
+    const { winner, loser } = advancingSides(outcome);
     if (winner && fixture.winner_to_fixture && fixture.winner_to_slot) {
       const filled = await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
       if (filled !== null) advanced.push(filled);
