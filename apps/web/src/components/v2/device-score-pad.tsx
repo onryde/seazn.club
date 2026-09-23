@@ -177,11 +177,12 @@ export function DeviceScorePad({
 
   /** Same seam and same reasoning as fixture-console.tsx's own
    *  `handlePadEvents` — see its comment. `<ScorePad/>`'s own pipeline
-   *  stamps a client-fabricated id on every event it knows about and never
-   *  learns the server's real row id, so the raw event list this fires with
-   *  is deliberately unused; only a real `resync()` (the same one `send()`
-   *  already trusts) can tell this component the real id `lastOwnVoidable`
-   *  needs. A failed opportunistic resync is swallowed — with ONE exception:
+   *  stamps a client-fabricated id on every event it has not yet seen acked,
+   *  and on every event acked WITHOUT an `event_id` (device-void-mine: an ack
+   *  that names its row gets the server's id), so the raw event list this
+   *  fires with is still deliberately unused; only a real `resync()` (the
+   *  same one `send()` already trusts) is guaranteed to give this component
+   *  the real id `lastOwnVoidable` needs. A failed opportunistic resync is swallowed — with ONE exception:
    *  a dead link (G1 review round 1, owner-approved). The tab-return listener
    *  below is often the first request after the organiser revoked the link or
    *  it expired, and swallowing that left the scorer on live controls that

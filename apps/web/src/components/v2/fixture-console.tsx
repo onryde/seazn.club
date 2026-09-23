@@ -494,10 +494,11 @@ export function FixtureConsole({
    *  ledger changed (a new submit, an ack, or a foreign-write merge) — the
    *  RAW event list it hands over is deliberately unused here. That
    *  pipeline stamps a CLIENT-fabricated id (the idempotency key) on every
-   *  event it knows about and never learns the server's real row id —
-   *  `AppendSuccess` carries no row id at all, so the id survives forever
-   *  (`use-pad-pipeline.ts`'s own S12/#421 pass F/G history, fixed there via
-   *  a targeted re-read before the pad's OWN void send). Trusting the
+   *  event not yet acked, and keeps it forever for an event acked WITHOUT an
+   *  `event_id` (an ack that names its row gets the server's id — device-
+   *  void-mine, Fix A; `use-pad-pipeline.ts`'s own S12/#421 pass F/G history
+   *  covers the rest, fixed there via a targeted re-read before the pad's
+   *  OWN void send). Trusting the
    *  pad-supplied id here directly would reintroduce that exact bug one
    *  layer out: `send()` below has no id-resolution step, so it would void
    *  an id the server has never seen. A real `resync()` — the same one

@@ -12,8 +12,9 @@
 // The mechanism, for the record (the unit twin in `use-pad-pipeline.test.tsx`,
 // "a foreign void naming the SERVER id of a pad-scored event", pins each step):
 //
-//   1. the pad's own tap is acked with no row id, so the pad keeps the rally
-//      under the idempotency key it minted;
+//   1. the pad's own tap is acked WITHOUT an `event_id` (every ack did, before
+//      Fix A), so the pad keeps the rally under the idempotency key it
+//      minted;
 //   2. the chrome's void names the rally by the SERVER's row id — the only id
 //      the chrome has ever seen;
 //   3. the pad's stream asks `?since_seq=<count>`, which is strict, so the
