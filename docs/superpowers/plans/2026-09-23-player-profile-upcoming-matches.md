@@ -1,5 +1,13 @@
 # Player Profile — Upcoming Matches Implementation Plan
 
+> **Superseded in part.** See the spec's "Amendments after approval" section
+> (`docs/superpowers/specs/2026-09-23-player-profile-upcoming-matches-design.md`).
+> The `<details>` reveal, the "Other event" chip and "Time TBC" were replaced
+> (by a client "Show N more" / "Show less" toggle, an accent-coloured
+> competition › division line, and "Time TBD"). Court and venue come from
+> `court_id` / `venue_id`, legacy bye lines are excluded, and a name-masked
+> (youth) card lists its own competition only.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A visitor on a player's public card sees that player's next scheduled matches across every public competition of the same org (plus the card's own competition), in one chronological "Upcoming" section above Matches.
