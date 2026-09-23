@@ -379,6 +379,30 @@ const STATUS_STYLE: Record<string, string> = {
   cancelled: "bg-slate-100 text-slate-600",
 };
 
+/**
+ * W3 fix round 1 (S2) — the upper bound on an OPPORTUNISTIC refresh, in ms.
+ *
+ * `apiV1` sets no timeout and passes no signal of its own, so a `fetch` that
+ * hangs hangs forever. That is survivable for a refresh the operator asked
+ * for and watched fail; it is not survivable for `handlePadEvents`, whose
+ * `finally` is the only thing that lowers `padSyncing` — and `padSyncing`
+ * greys out Undo, Void and Forfeit. An unsettled promise there is a console
+ * whose controls never come back, with no error and no explanation.
+ *
+ * 10s is well above a healthy round trip on a bad connection and well below
+ * "the operator concludes the console is broken". The failure is swallowed
+ * (see `handlePadEvents`), so the cost of an over-eager abort is one stale
+ * render until the next trigger — strictly better than a dead console.
+ *
+ * Applied at the CALL SITE rather than inside `apiV1`: that helper is shared
+ * by every v1 caller in the app, and a global timeout would change the
+ * behaviour of uploads, long writes and the console's own `send()` POST, none
+ * of which this finding is about. `send()` therefore still passes no budget
+ * and is unchanged — it reports its own failures, and bounding it would turn
+ * a successful append followed by a slow read into a visible "score failed".
+ */
+const OPPORTUNISTIC_RESYNC_MS = 10_000;
+
 export function FixtureConsole({
   fixture,
   sport,
@@ -419,14 +443,38 @@ export function FixtureConsole({
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const resync = useCallback(async () => {
-    const [state, all] = await Promise.all([
-      apiV1<LiveState>(`/api/v1/fixtures/${fixture.id}/state`),
-      apiV1<EventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`),
-    ]);
-    setLive(state);
-    setEvents(all);
-  }, [fixture.id]);
+  /** Re-read `/state` and the full ledger. `timeoutMs` bounds the pair — see
+   *  `OPPORTUNISTIC_RESYNC_MS` for who passes one and why the callers that do
+   *  not are deliberately left unbounded.
+   *
+   *  An explicit `AbortController` on the global `setTimeout` rather than
+   *  `AbortSignal.timeout`: that helper runs on a timer node's fake timers do
+   *  not drive (measured — a 1s `AbortSignal.timeout` does not fire under
+   *  `vi.advanceTimersByTimeAsync(5000)`), so the bound would have no unit
+   *  coverage at all and this file has none by construction otherwise
+   *  (`apps/web` vitest is `environment: "node"`). Clearing the timer on
+   *  settle is also strictly better than leaving one armed per refresh. */
+  const resync = useCallback(
+    async (opts?: { timeoutMs?: number }) => {
+      const budget = opts?.timeoutMs;
+      const controller = budget === undefined ? null : new AbortController();
+      const timer =
+        controller === null
+          ? null
+          : setTimeout(() => controller.abort(new Error(`resync exceeded its ${budget}ms budget`)), budget);
+      try {
+        const [state, all] = await Promise.all([
+          apiV1<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
+          apiV1<EventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`, { signal: controller?.signal }),
+        ]);
+        setLive(state);
+        setEvents(all);
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
+    },
+    [fixture.id],
+  );
 
   /** Fired whenever `<ScorePad/>`'s own pipeline reports its reconciled
    *  ledger changed (a new submit, an ack, or a foreign-write merge) — the
@@ -442,10 +490,17 @@ export function FixtureConsole({
    *  `send()` itself trusts — is the only way this component learns the
    *  real id. A failed opportunistic resync is swallowed: nothing the user
    *  directly did here should surface as an error, and the next pad event
-   *  (or an explicit action) catches up. */
+   *  (or an explicit action) catches up.
+   *
+   *  BOUNDED (fix round 1, S2). This is the one resync path whose `finally`
+   *  is load-bearing — it is the only clear of `padSyncing`, and `padSyncing`
+   *  greys out Undo/Void/Forfeit. Without a budget an unsettled `fetch` never
+   *  reaches that `finally`, and the tab-return listener below fires this at
+   *  exactly the moment a half-open socket is most likely. See
+   *  `OPPORTUNISTIC_RESYNC_MS`. */
   const handlePadEvents = useCallback(() => {
     setPadSyncing(true);
-    void resync()
+    void resync({ timeoutMs: OPPORTUNISTIC_RESYNC_MS })
       .catch(() => undefined)
       .finally(() => setPadSyncing(false));
   }, [resync]);
@@ -546,17 +601,21 @@ export function FixtureConsole({
     // server behaviour, and returning states it rather than throwing. It is
     // reachable in tests because `apps/web` vitest is `environment: "node"` and
     // `_hook-harness.tsx` commits effects with no browser at all — every other
-    // `document` listener in this file (`:87`, `:1257`) sits in a child the
-    // harness never mounts, and this is the first one on the always-mounted
+    // `document` listener in this file sits in a CHILD the harness never
+    // mounts (`TextPromptDialog`'s keydown trap and `ForfeitButton`'s
+    // pointerdown dismiss), and this is the first one on the always-mounted
     // root. Guarding is what lets three existing console suites render at all.
+    // Named by their components on purpose: the line numbers this comment
+    // originally carried were already wrong when it was written, because the
+    // guard's own inserted lines moved the thing it was pointing at.
     //
     // Consequence, stated because it is easy to miss: nothing in node can
     // observe this listener, so no unit test can cover the lines below. The
     // browser proof is `e2e/walkthrough/console-stalled-pipeline.spec.ts`.
     // BOTH clauses, and they are not redundant — this file's own test suites
     // present two DIFFERENT shapes. `fixture-console-forfeit-hooks` and
-    // `-person-names` `vi.stubGlobal("document", …)` (they need it for the
-    // child-component listeners at `:87`/`:1257`) but never stub `window`;
+    // `-person-names` `vi.stubGlobal("document", …)` (they need it for those
+    // two child-component listeners) but never stub `window`;
     // `-undo-pad-events` stubs neither. Drop the `window` clause and the first
     // two crash on `window.addEventListener` below. Mutation note: only the
     // `window` clause is currently witnessed — no suite stubs `window` while
