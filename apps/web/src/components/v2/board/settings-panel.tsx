@@ -134,8 +134,9 @@ export function capacityRequestFromDraft(
   return {
     // `id` lets an `id`-kind fixture_on_date/fixture_on_weekday selector
     // resolve into a forcedDemand floor server-side too. `extKey`/`winnerTo`
-    // are NOT available here — the page's fetched fixture list never
-    // carries `ext_key`/`winner_to_fixture`, and neither is in the public
+    // are NOT available here — the page's fetched fixture list carries no
+    // `winner_to_fixture` and `ext_key` on page-playoff rows only (their
+    // round codes), and neither is in the public
     // API schema — so a `terminal`/`ext_key` selector cannot resolve and
     // stays undercounted on this card. Same "client hint, server
     // authority" split as demandCap.

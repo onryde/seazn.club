@@ -128,8 +128,9 @@ export default async function DivisionSchedulePage({
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
     // F1 follow-up (payload budget "gap 15"): the board's own projection —
-    // no ext_key/is_final, and lane/third_place/conditional only where set
-    // (they drive the knockout round codes; see the function's comment).
+    // ext_key (page-playoff rows only), is_final, lane, third_place and
+    // conditional each only where set — they drive the bracket round codes
+    // (see the function's comment).
     listDivisionFixturesForBoard(auth, id),
     listEntrants(auth, id),
     getScheduleSettings(auth, id),

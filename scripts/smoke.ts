@@ -1078,7 +1078,8 @@ async function main() {
 
   // --- Schedule-board knockout round codes (2026-09-23): a knockout card on
   // the division board renders its round-role chip (SF, F) and the legend
-  // names it — not the generic R{n}. Own fresh community org; keyless-safe.
+  // names it — not the generic R{n}; then a page playoff's Q1/E/Q2/F. Own
+  // fresh org (repriced to Pro for the page playoff); keyless-safe.
   await boardRoundCodesSuite();
 
   // --- Task 23: every grant an Event Pass actually delivers, asserted as a
@@ -1803,9 +1804,10 @@ async function p72Suite(): Promise<void> {
  *  SERVER-RENDERED HTML for a freshly generated 4-entrant knockout carries the
  *  round-role chip on its cards — SF for both semi-finals, F for the final,
  *  each with the long round name as its title — and the legend row naming
- *  them. Every expected string is read from the en dictionary on disk (this
- *  runner cannot import the JSON-backed `@/lib/messages`), so a copy change
- *  moves the check with it. */
+ *  them; then a generated page playoff's board reads Q1 / E / Q2 / F (board
+ *  playoff codes). Every expected string is read from the en dictionary on
+ *  disk (this runner cannot import the JSON-backed `@/lib/messages`), so a
+ *  copy change moves the check with it. */
 async function boardRoundCodesSuite(): Promise<void> {
   const en = JSON.parse(
     readFileSync(new URL("../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8"),
@@ -1878,6 +1880,59 @@ async function boardRoundCodesSuite(): Promise<void> {
     new RegExp(
       `data-testid="board-legend-rounds" role="list" aria-label="${en["board.roundLegend.aria"]}"`,
     ).test(page.body),
+  );
+
+  // Board playoff codes (2026-09-23): a generated PAGE PLAYOFF's division board
+  // reads Q1 / E / Q2 / F — the codes that ride the board read's one new
+  // column, `ext_key` (page-playoff rows only). Without it the server would
+  // hand the board four key-less rows and every chip would stay R{n}. The page
+  // playoff is Pro-gated (format-gates.ts), so this org is repriced first.
+  await setPlan(who.org_id, "pro", owner);
+  const ppDiv = await v1(owner, `/api/v1/competitions/${compRow.id}/divisions`, "POST", {
+    name: "Playoffs",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const ppRow = v1data<{ id: string; slug: string }>(ppDiv);
+  await v1(
+    owner,
+    `/api/v1/divisions/${ppRow.id}/entrants`,
+    "POST",
+    ["Page One", "Page Two", "Page Three", "Page Four"].map((name, i) => ({
+      kind: "individual",
+      display_name: name,
+      seed: i + 1,
+    })),
+  );
+  const ppStage = await v1(owner, `/api/v1/divisions/${ppRow.id}/stages`, "POST", {
+    seq: 1,
+    kind: "page_playoff",
+    name: "Playoffs",
+  });
+  const ppGenerated = await v1(owner, `/api/v1/stages/${v1data<{ id: string }>(ppStage).id}/generate`, "POST");
+  const ppPage = await html(owner, `/o/${orgSlug}/c/${compRow.slug}/d/${ppRow.slug}/schedule?tab=board`);
+  const ppChips = (code: string, name: string) =>
+    ppPage.body.match(
+      new RegExp(
+        `data-testid="board-round-code" data-round-code-chip="knockout" title="${name}" class="[^"]*">${code}<`,
+        "g",
+      ),
+    )?.length ?? 0;
+  const ppCounts = [
+    ppChips(en["bracket.roundShort.qualifier1"], en["bracket.round.qualifier1"]),
+    ppChips(en["bracket.roundShort.eliminator"], en["bracket.round.eliminator"]),
+    ppChips(en["bracket.roundShort.qualifier2"], en["bracket.round.qualifier2"]),
+    ppChips(en["bracket.roundShort.final"], en["bracket.round.final"]),
+  ];
+  check(
+    `board round codes: a generated page playoff's division board renders one each of ${en["bracket.roundShort.qualifier1"]}, ${en["bracket.roundShort.eliminator"]}, ${en["bracket.roundShort.qualifier2"]} and ${en["bracket.roundShort.final"]}, and no plain R{n} chip (got ${ppCounts.join("/")})`,
+    ppDiv.status === 201 &&
+      ppStage.status < 300 &&
+      ppGenerated.status < 300 &&
+      ppPage.status === 200 &&
+      ppCounts.every((n) => n === 1) &&
+      !ppPage.body.includes('data-round-code-chip="plain"'),
   );
 }
 

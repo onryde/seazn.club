@@ -283,6 +283,7 @@ export function consoleFixtures(
   }
   return boardFixtures.map((f) => {
     const maxRound = maxRoundOf.get(f.division_id) ?? 0;
+    const roundCode = roundCodes?.get(f.id);
     return {
       id: f.id,
       stage_id: f.stage_id,
@@ -302,8 +303,10 @@ export function consoleFixtures(
       // can no longer drift onto two ref formats. `lookup` falls through to
       // matchRef()'s own client-safe English default when undefined (see the
       // param comment above), identically to how it already does for
-      // cardTitle()'s `matchup` on the next line.
-      code: matchRef(f.round_no, f.seq_in_round, lookup, roundCodes?.get(f.id)?.code),
+      // cardTitle()'s `matchup` on the next line. A coded fixture numbers
+      // itself by `refSeq`, exactly as `withRoundCodeRefs` numbers it in a
+      // "Winner of …" seat: a page playoff's Eliminator is "E·1" in both.
+      code: matchRef(f.round_no, roundCode?.refSeq ?? f.seq_in_round, lookup, roundCode?.code),
       matchup: cardTitle(f, entrantNames, feedLabels, lookup),
       isFinal: maxRound > 0 && f.round_no === maxRound && atMaxRound.get(f.division_id) === 1,
       isJunior: false,
@@ -621,10 +624,10 @@ export function ScheduleBoard({
   );
 
   // ------------------------------------------------------- round codes
-  // Knockout round codes (2026-09-23, owner-approved): each knockout /
-  // double-elim fixture's short code ("QF", "WB2") and round name, computed
-  // ONCE per fixture list, plus the feed-label map with every knockout
-  // feeder's code stamped on ("Winner of QF·3"). Every card title on this
+  // Knockout round codes (2026-09-23, owner-approved): each bracket fixture's
+  // short code ("QF", "WB2", "Q1", "E2") and round name, computed ONCE per
+  // fixture list, plus the feed-label map with every bracket feeder's code
+  // stamped on ("Winner of QF·3", "Winner of E·1"). Every card title on this
   // board — cards, move panel, conflicts, announcements, the AI console —
   // reads `feedLabels` below, so one map keeps them all saying the same thing.
   //

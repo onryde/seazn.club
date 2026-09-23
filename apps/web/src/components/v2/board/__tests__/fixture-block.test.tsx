@@ -158,7 +158,7 @@ describe("FixtureBlock", () => {
   // Schedule-board knockout round codes (2026-09-23, owner-approved design).
   it("a knockout card's chip shows its round code, with the long round name as its tooltip", () => {
     const html = renderToStaticMarkup(
-      <FixtureBlock {...baseProps} roundCode={{ code: "QF", label: "Quarter-finals", order: [0, -2, 0] }} />,
+      <FixtureBlock {...baseProps} roundCode={{ code: "QF", label: "Quarter-finals", refSeq: 1, order: [0, -2, 0, 1] }} />,
     );
     expect(chipText(html)).toBe("QF");
     expect(html).toMatch(/data-testid="board-round-code"[^>]*title="Quarter-finals"/);
@@ -179,7 +179,7 @@ describe("FixtureBlock", () => {
       (/data-testid="board-round-code"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "").split(/\s+/).filter(Boolean);
     const coded = classesOf(
       renderToStaticMarkup(
-        <FixtureBlock {...baseProps} showDivision roundCode={{ code: "QF", label: "Quarter-finals", order: [0, -2, 0] }} />,
+        <FixtureBlock {...baseProps} showDivision roundCode={{ code: "QF", label: "Quarter-finals", refSeq: 1, order: [0, -2, 0, 1] }} />,
       ),
     );
     const plain = classesOf(renderToStaticMarkup(<FixtureBlock {...baseProps} showDivision />));
@@ -195,7 +195,7 @@ describe("FixtureBlock", () => {
 
   it("the pick button's accessible name carries the LONG round name for a coded card, the round number otherwise", () => {
     const coded = renderToStaticMarkup(
-      <FixtureBlock {...baseProps} roundCode={{ code: "SF", label: "Semi-finals", order: [0, -1, 0] }} />,
+      <FixtureBlock {...baseProps} roundCode={{ code: "SF", label: "Semi-finals", refSeq: 1, order: [0, -1, 0, 1] }} />,
     );
     expect(coded).toContain('aria-label="D vs E — Semi-finals. Pick to move"');
     const plain = renderToStaticMarkup(<FixtureBlock {...baseProps} />);
@@ -207,7 +207,7 @@ describe("FixtureBlock", () => {
       <DictProvider dict={esDict} locale="es">
         <FixtureBlock
           {...baseProps}
-          roundCode={{ code: es["bracket.roundShort.semi"], label: es["bracket.round.semi"], order: [0, -1, 0] }}
+          roundCode={{ code: es["bracket.roundShort.semi"], label: es["bracket.round.semi"], refSeq: 1, order: [0, -1, 0, 1] }}
         />
       </DictProvider>,
     );

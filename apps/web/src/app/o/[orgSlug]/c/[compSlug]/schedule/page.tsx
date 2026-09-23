@@ -119,8 +119,9 @@ export default async function CompetitionSchedulePage({
       division: d,
       stages: await listStages(auth, d.id),
       // F1 follow-up (payload budget "gap 15"): the board's own projection —
-      // no ext_key/is_final, and lane/third_place/conditional only where set
-      // (they drive the knockout round codes; see the function's comment).
+      // ext_key (page-playoff rows only), is_final, lane, third_place and
+      // conditional each only where set — they drive the bracket round codes
+      // (see the function's comment).
       fixtures: await listDivisionFixturesForBoard(auth, d.id),
       entrants: await listEntrants(auth, d.id),
     })),

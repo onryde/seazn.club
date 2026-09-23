@@ -42,8 +42,12 @@ afterAll(async () => {
 const en = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
 
 /** One division, `n` seeded entrants, one generated stage of `kind`. Pro:
- *  double elimination is Pro-gated (format-gates.ts). */
-async function seedGeneratedStage(kind: "knockout" | "double_elim" | "league", n: number, config: Record<string, unknown>) {
+ *  double elimination and the page playoff are Pro-gated (format-gates.ts). */
+async function seedGeneratedStage(
+  kind: "knockout" | "double_elim" | "league" | "page_playoff" | "stepladder",
+  n: number,
+  config: Record<string, unknown>,
+) {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -85,8 +89,9 @@ async function readBoth(seed: Awaited<ReturnType<typeof seedGeneratedStage>>) {
   const kind = stages[0]!.kind;
   const laneRows = full.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
   // The expectation, from the FULL row through the engine — never a table
-  // typed in here. ext_key is passed too: the full read has it, the board
-  // does not, and the codes must still agree.
+  // typed in here. ext_key is passed too: the full read has it on every
+  // row, the board only on a page playoff's (`pp-*`), and the codes must
+  // still agree.
   const expected = new Map(
     full.map((f) => {
       const lane = f.lane ?? null;
@@ -243,5 +248,118 @@ describe.skipIf(!HAS_DB)("board round codes over a real generated bracket, read 
     for (const f of round2) {
       expect(cardTitle(f, {}, feeds, en)).toMatch(/^Winner of R1·[1-4] vs Winner of R1·[1-4]$/);
     }
+  });
+  // -------------------------------------------------------------------------
+  // Board playoff codes (2026-09-23, owner-approved): the page playoff and the
+  // stepladder, through the same real generator -> real board read -> codes
+  // path. The page playoff is the one that needs a NEW column on the board
+  // read (`ext_key`, sent for page-playoff rows only): without it Qualifier 1
+  // and the Eliminator are indistinguishable.
+  // -------------------------------------------------------------------------
+
+  /** The division's feed read, as its schedule page makes it. */
+  const feedRowsFor = (divisionId: string) => sql<FeedRow[]>`
+    select id, stage_id, round_no, seq_in_round, winner_to_fixture, winner_to_slot,
+           loser_to_fixture, loser_to_slot
+    from fixtures where division_id = ${divisionId}`;
+
+  it("page playoff: Q1, E, Q2, F — ext_key ARRIVES on the board read, and every code matches the full-row engine role", async () => {
+    const { board, full, codes, expected } = await readBoth(await seedGeneratedStage("page_playoff", 4, {}));
+    const keyOf = new Map(full.map((f) => [f.id, f.ext_key]));
+    expect(Object.fromEntries(board.map((f) => [keyOf.get(f.id), codes.get(f.id)?.code ?? null]))).toEqual({
+      "pp-q1": en("bracket.roundShort.qualifier1"),
+      "pp-elim": en("bracket.roundShort.eliminator"),
+      "pp-q2": en("bracket.roundShort.qualifier2"),
+      "pp-final": en("bracket.roundShort.final"),
+    });
+    for (const f of board) {
+      expect(f.ext_key, f.id).toBe(keyOf.get(f.id));
+      expect(codes.get(f.id)?.code ?? null, f.id).toBe(expected.get(f.id));
+    }
+  });
+
+  it("stepladder of 5: E1, E2, E3, then F — is_final arrives on the ladder's last game only", async () => {
+    const { board, codes, expected } = await readBoth(await seedGeneratedStage("stepladder", 5, {}));
+    const ordered = [...board].sort((a, b) => a.round_no - b.round_no);
+    expect(ordered.map((f) => codes.get(f.id)?.code ?? null)).toEqual([
+      en("bracket.roundShort.rung", { n: 1 }),
+      en("bracket.roundShort.rung", { n: 2 }),
+      en("bracket.roundShort.rung", { n: 3 }),
+      en("bracket.roundShort.final"),
+    ]);
+    expect(ordered.map((f) => codes.get(f.id)?.label)).toEqual([
+      en("bracket.round.eliminatorN", { n: 1 }),
+      en("bracket.round.eliminatorN", { n: 2 }),
+      en("bracket.round.eliminatorN", { n: 3 }),
+      en("bracket.round.final"),
+    ]);
+    for (const f of board) expect(codes.get(f.id)?.code ?? null, f.id).toBe(expected.get(f.id));
+    expect(board.filter((f) => f.is_final === true).map((f) => f.id)).toEqual([ordered.at(-1)!.id]);
+    // No page-playoff key, so none sent.
+    for (const f of board) expect(Object.prototype.hasOwnProperty.call(f, "ext_key"), f.id).toBe(false);
+  });
+
+  it("page playoff placeholders over the REAL feed edges: 'Loser of Q1·1 vs Winner of E·1', then 'Winner of Q1·1 vs Winner of Q2·1'", async () => {
+    const { auth, divisionId } = await seedGeneratedStage("page_playoff", 4, {});
+    const [board, stages, feedRows] = await Promise.all([
+      listDivisionFixturesForBoard(auth, divisionId),
+      listStages(auth, divisionId),
+      feedRowsFor(divisionId),
+    ]);
+    const codes = boardRoundCodes(board, stages, en);
+    const feeds = withRoundCodeRefs(board, feedLabels(feedRows), codes);
+    const ref = (key: MessageKey, seq: number) => en("slot.match_ref_code", { code: en(key), seq });
+    const title = (ext: string) => cardTitle(board.find((f) => f.ext_key === ext)!, {}, feeds, en);
+    expect(title("pp-q2")).toBe(
+      `${en("slot.loser_match", { ext: ref("bracket.roundShort.qualifier1", 1) })} vs ${en("slot.winner_match", { ext: ref("bracket.roundShort.eliminator", 1) })}`,
+    );
+    expect(title("pp-final")).toBe(
+      `${en("slot.winner_match", { ext: ref("bracket.roundShort.qualifier1", 1) })} vs ${en("slot.winner_match", { ext: ref("bracket.roundShort.qualifier2", 1) })}`,
+    );
+    // The Eliminator really is its round's second match — E·1 is refSeq, not seq_in_round.
+    expect(board.find((f) => f.ext_key === "pp-elim")!.seq_in_round).toBe(2);
+  });
+
+  it("stepladder placeholders over the REAL feed edges: each climber is 'Winner of E{n}·1'", async () => {
+    const { auth, divisionId } = await seedGeneratedStage("stepladder", 4, {});
+    const [board, stages, feedRows] = await Promise.all([
+      listDivisionFixturesForBoard(auth, divisionId),
+      listStages(auth, divisionId),
+      feedRowsFor(divisionId),
+    ]);
+    const feeds = withRoundCodeRefs(board, feedLabels(feedRows), boardRoundCodes(board, stages, en));
+    const [, rung2, final] = [...board].sort((a, b) => a.round_no - b.round_no);
+    const winnerOf = (n: number) =>
+      en("slot.winner_match", { ext: en("slot.match_ref_code", { code: en("bracket.roundShort.rung", { n }), seq: 1 }) });
+    expect(cardTitle(rung2!, {}, feeds, en)).toMatch(new RegExp(` vs ${winnerOf(1)}$`));
+    expect(cardTitle(final!, {}, feeds, en)).toMatch(new RegExp(` vs ${winnerOf(2)}$`));
+  });
+
+  it("a page playoff whose rows LOST their ext_key keeps R{n} — even with its final still flagged", async () => {
+    // history.ts re-inserts a stage's fixtures without ext_key (or is_final);
+    // is_final is kept here so the knockout-style presence test alone would
+    // pass the stage — only the key can refuse it.
+    const seed = await seedGeneratedStage("page_playoff", 4, {});
+    await sql`update fixtures set ext_key = null where division_id = ${seed.divisionId}`;
+    const { board, codes, expected } = await readBoth(seed);
+    expect(board.some((f) => f.is_final === true)).toBe(true);
+    for (const f of board) expect(Object.prototype.hasOwnProperty.call(f, "ext_key"), f.id).toBe(false);
+    // The wrong answer the fallback refuses: named by position, QF QF SF F.
+    expect(tally([...expected.values()])).toEqual({
+      [en("bracket.roundShort.quarter")]: 2,
+      [en("bracket.roundShort.semi")]: 1,
+      [en("bracket.roundShort.final")]: 1,
+    });
+    expect(codes.size).toBe(0);
+  });
+
+  it("a PRE-V368 stepladder keeps R{n}", async () => {
+    const seed = await seedGeneratedStage("stepladder", 4, {});
+    await toPreV368(seed.divisionId);
+    const { board, codes, expected } = await readBoth(seed);
+    expect(board.length).toBe(3);
+    // What coding it by position would print.
+    expect([...expected.values()].every((c) => c !== null)).toBe(true);
+    expect(codes.size).toBe(0);
   });
 });

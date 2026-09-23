@@ -117,7 +117,7 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role columns only when set, ext_key never", () => {
+describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role columns only when set, ext_key only on a page-playoff row", () => {
   it("listDivisionFixtures (bracket/stages panel) still carries all five columns", async () => {
     const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
     const rows = await listDivisionFixtures(auth, divisionId);
@@ -135,9 +135,10 @@ describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role column
   // round code (board/round-codes.ts), and `is_final` is the presence test
   // that keeps a pre-V368 stage on its plain R{n} (review M2) — so the
   // contract changed from "never selected" to "carried only when it says
-  // something". `ext_key` stays off entirely: only the page-playoff codes
-  // would need it, and they are out of scope.
-  it("listDivisionFixturesForBoard carries lane/is_final/third_place/conditional when set, and never ext_key", async () => {
+  // something". `ext_key` follows the same rule on narrower terms (board
+  // playoff codes, same day): it is sent ONLY when it is a page-playoff key
+  // (`pp-*`) — see the page-playoff case below — so this row's key stays off.
+  it("listDivisionFixturesForBoard carries lane/is_final/third_place/conditional when set, and no non-page-playoff ext_key", async () => {
     const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
     const rows = await listDivisionFixturesForBoard(auth, divisionId);
     const row = rows.find((f) => f.id === fixtureId);
@@ -160,6 +161,10 @@ describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role column
     // flags false — the value every round-robin row on a 5x66 board has.
     const plain = rows.filter((f) => f.id !== fixtureId);
     expect(plain.length).toBeGreaterThan(0);
+    // Positive pair for ext_key: these rows DO have one in the table (the
+    // league generator's own ids) — the board read is what leaves it off.
+    const full = new Map((await listDivisionFixtures(auth, divisionId)).map((f) => [f.id, f]));
+    for (const row of plain) expect(full.get(row.id)!.ext_key, row.id).toMatch(/\S/);
     for (const row of plain) {
       // Not `.toBeFalsy()` — ABSENT, not null/false, or the RSC flight still
       // pays for the key name and a JSON `null`/`false` per fixture.
@@ -167,5 +172,47 @@ describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role column
         expect(Object.prototype.hasOwnProperty.call(row, col), `row should not have "${col}"`).toBe(false);
       }
     }
+  });
+
+  // Board playoff codes (2026-09-23): a page playoff's ext_key is the ONLY
+  // thing that tells Qualifier 1 from the Eliminator (same round, same flags),
+  // so the board read sends it — for page-playoff rows only.
+  it("listDivisionFixturesForBoard sends ext_key on a REAL page playoff's four rows, and on nothing else", async () => {
+    const { auth, divisionId } = await seedFixtureWithRoundRole();
+    // A fourth entrant: a page playoff takes exactly four.
+    await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "D", seed: 4, members: [] }]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 2,
+      kind: "page_playoff",
+      name: "Playoffs",
+      config: {},
+      progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const board = await listDivisionFixturesForBoard(auth, divisionId);
+    const full = new Map((await listDivisionFixtures(auth, divisionId)).map((f) => [f.id, f]));
+    const pp = board.filter((f) => f.stage_id === stage!.id);
+    // What the generator wrote — read back through the FULL row, not typed here.
+    expect(pp.map((f) => full.get(f.id)!.ext_key).sort()).toEqual(["pp-elim", "pp-final", "pp-q1", "pp-q2"]);
+    for (const f of pp) expect(f.ext_key, f.id).toBe(full.get(f.id)!.ext_key);
+    // Every other row — the league's, each with its own generator key — has none.
+    const others = board.filter((f) => f.stage_id !== stage!.id);
+    expect(others.length).toBeGreaterThan(0);
+    for (const f of others) {
+      expect(full.get(f.id)!.ext_key, f.id).toMatch(/\S/);
+      expect(Object.prototype.hasOwnProperty.call(f, "ext_key"), `${f.id} should not have "ext_key"`).toBe(false);
+    }
+  });
+
+  it("a key merely CONTAINING 'pp-' is not a page-playoff key: not sent", async () => {
+    const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
+    await sql`update fixtures set ext_key = 'lg-pp-q1' where id = ${fixtureId}`;
+    const [row] = (await listDivisionFixturesForBoard(auth, divisionId)).filter((f) => f.id === fixtureId);
+    expect(row).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(row, "ext_key")).toBe(false);
+    // Positive pair: the same row with a real page-playoff key IS sent it.
+    await sql`update fixtures set ext_key = 'pp-q1' where id = ${fixtureId}`;
+    const [keyed] = (await listDivisionFixturesForBoard(auth, divisionId)).filter((f) => f.id === fixtureId);
+    expect(keyed!.ext_key).toBe("pp-q1");
   });
 });
