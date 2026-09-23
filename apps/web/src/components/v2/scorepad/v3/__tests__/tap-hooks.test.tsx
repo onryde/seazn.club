@@ -52,8 +52,8 @@ import { messages } from "@/lib/messages";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 
 // Task 8 fix round 2 (review re-review round 1, out-of-scope observation
-// "M7 survived"): the "New link" arm of DeviceLinkPanel's ternary
-// (device-link-panel.tsx ~:156, `active && !minted`) is reachable in node
+// "M7 survived"): the live-link arm of DeviceLinkPanel's ternary
+// (device-link-panel.tsx, `active && !minted`) is reachable in node
 // ONLY by driving its `refresh()` effect to completion — `active` has no
 // prop, it is state `apiV1` alone populates. Both other components in this
 // file that import the SAME module (FixtureConsole, DeviceScorePad) are
@@ -426,15 +426,20 @@ describe("device score pad: Start match carries a stable hook", () => {
   });
 });
 
-// --- DeviceLinkPanel: mint, on BOTH branches that can show it ---------------
+// --- DeviceLinkPanel: the hand-over controls, on BOTH branches -------------
 //
-// Fix round 1 (Minor 4): the "New link" control (device-link-panel.tsx
-// ~:156, the `active && !minted` branch) and the "Create scoring link"
-// control (~:162, the `!minted && !active` branch) are two arms of the SAME
-// `minted ? … : active ? … : …` ternary — mutually exclusive by
-// construction, never both rendered at once — so both now carry
-// `device-link-mint` rather than leaving the rotate path unhooked.
-describe("device link panel: mint carries a stable hook on every branch that can show it", () => {
+// Fix round 1 (Minor 4): the live-link controls (the `active && !minted`
+// branch) and the "Create scoring link" control (the `!minted && !active`
+// branch) are two arms of the SAME `minted ? … : active ? … : …` ternary —
+// mutually exclusive by construction, never both rendered at once — so
+// neither branch is left unhooked.
+//
+// Scorer sheets Task 3 (forced test edit, controller ruling): the live branch
+// no longer has a "New link" mint — POST /device-links is ENSURE now, so a
+// second mint would only re-show the same QR. That branch now offers "Show
+// QR" (`device-link-show`) and "Revoke & reissue" (`device-link-reissue`),
+// pinned below at the same strength the old mint assertion had.
+describe("device link panel: every hand-over control carries a stable hook on the branch that shows it", () => {
   it('no active/minted link yet: the "Create scoring link" button carries the hook, with its own real text', () => {
     const html = renderToStaticMarkup(<DeviceLinkPanel fixtureId="f1" scorerLabel="Umpire" viewerPlan="community" />);
     const tag = html.match(/<button\b[^>]*data-testid="device-link-mint"[^>]*>([\s\S]*?)<\/button>/);
@@ -443,7 +448,7 @@ describe("device link panel: mint carries a stable hook on every branch that can
   });
 
   // Fix round 2 (review re-review round 1, out-of-scope observation "M7
-  // survived"): the "New link" arm (~:156, `active && !minted`) has `active`
+  // survived"): the live-link arm (`active && !minted`) has `active`
   // as its ONLY gate, and `active` is state that ONLY `refresh()`'s `apiV1`
   // call populates — no prop reaches it. `renderToStaticMarkup` never runs
   // that effect at all (recurring failure class 2), so this is the ONE test
@@ -453,16 +458,21 @@ describe("device link panel: mint carries a stable hook on every branch that can
   // `await apiV1(...)` resolves on the first, and `setActive`'s resulting
   // `run()` (fired from OUTSIDE the commit phase, since the mount commit has
   // long since finished) lands before the second.
-  it('the "New link" branch (once a link is already active) ALSO carries the hook, and the primary button is absent (kills M7)', async () => {
+  it('the live-link branch (once a link is already active) hooks "Show QR" and "Revoke & reissue", and the Create/mint button is absent (kills M7)', async () => {
     const island = renderIsland(DeviceLinkPanel, { fixtureId: "f1", scorerLabel: "Umpire", viewerPlan: "community" as const });
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
     const tree = island.tree();
-    const mintButtons = tree.filter((el) => el.type === "button" && propsOf(el)["data-testid"] === "device-link-mint");
-    expect(mintButtons, "exactly one mint-hooked button once a link is active — never zero, never two").toHaveLength(1);
-    expect(textOf(mintButtons[0]!)).toContain(tRuntime(messages, "dlink.newLink"));
-    expect(textOf(mintButtons[0]!)).not.toContain(tRuntime(messages, "dlink.create"));
+    const hooked = (id: string) => tree.filter((el) => el.type === "button" && propsOf(el)["data-testid"] === id);
+    const showButtons = hooked("device-link-show");
+    expect(showButtons, "exactly one Show-QR-hooked button once a link is active — never zero, never two").toHaveLength(1);
+    expect(textOf(showButtons[0]!)).toContain(tRuntime(messages, "dlink.showQr"));
+    expect(textOf(showButtons[0]!)).not.toContain(tRuntime(messages, "dlink.create"));
+    expect(hooked("device-link-mint"), "no mint-hooked button on the live-link branch").toHaveLength(0);
+    const reissueButtons = hooked("device-link-reissue");
+    expect(reissueButtons, "exactly one reissue-hooked button once a link is active — never zero, never two").toHaveLength(1);
+    expect(textOf(reissueButtons[0]!)).toContain(tRuntime(messages, "dlink.reissue"));
   });
 });
 
