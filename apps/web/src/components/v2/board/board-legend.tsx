@@ -7,6 +7,7 @@ import { divisionAccent, divisionInk, divisionShortCode, divisionTint } from "@/
 import { Tip } from "@/components/ui/tip";
 import type { BoardDivision, BoardFixture } from "./types";
 import { roundLegendEntries, type BoardRoundCode } from "./round-codes";
+import { RoundCodeChip } from "./round-code-chip";
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export function BoardLegend({
@@ -71,8 +72,9 @@ export function BoardLegend({
 
 /**
  * The round-code key (schedule-board knockout round codes, 2026-09-23): one
- * compact row naming each code on the cards in view — "QF Quarter-finals ·
- * SF Semi-finals · F Final" — so a chip is never a riddle. Renders nothing
+ * compact row naming each code on the cards in view — "[QF] Quarter-finals
+ * [SF] Semi-finals [F] Final", each code drawn with the card's own
+ * `RoundCodeChip` — so a chip is never a riddle. Renders nothing
  * when no card in view carries a code (a round-robin board, or a day with no
  * knockout match), and wraps rather than scrolls at 320px.
  */
@@ -97,16 +99,13 @@ export function BoardRoundLegend({
     <ul
       data-testid="board-legend-rounds"
       aria-label={msg("board.roundLegend.aria")}
-      className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] leading-tight text-slate-600"
+      className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-[11px] leading-tight text-slate-600"
     >
-      {entries.map((e, i) => (
+      {/* Design review 2026-09-23: each entry is the card's own chip, then
+          its long name; entries are separated by gap alone — no dots. */}
+      {entries.map((e) => (
         <li key={`${e.code}|${e.label}`} className="inline-flex items-baseline gap-1">
-          {i > 0 && (
-            <span aria-hidden className="text-slate-300">
-              ·
-            </span>
-          )}
-          <span className="font-semibold text-slate-800">{e.code}</span>
+          <RoundCodeChip code={e.code} knockout />
           <span>{e.label}</span>
         </li>
       ))}

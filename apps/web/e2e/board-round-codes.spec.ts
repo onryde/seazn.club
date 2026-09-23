@@ -40,6 +40,67 @@ interface ListedFixture {
 }
 
 const START = new Date(Date.UTC(2026, 8, 21, 9, 0)).toISOString();
+/** An instant on the seeded day, `minutes` after START. */
+const at = (minutes: number) => new Date(Date.parse(START) + minutes * 60_000).toISOString();
+
+async function createCompetition(request: APIRequestContext): Promise<string> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Round Codes ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.data?.id, `competition create → ${comp.status}`).toBeTruthy();
+  return comp.data!.id;
+}
+
+/** One division of `names.length` entrants with a single generated stage of
+ *  `kind`, scheduled on `courtIds`; returns its fixtures (nothing placed). */
+async function addDivision(
+  request: APIRequestContext,
+  competitionId: string,
+  name: string,
+  stage: { kind: "knockout" | "league"; name: string; config?: Record<string, unknown> },
+  names: string[],
+  courtIds: string[],
+): Promise<{ divisionId: string; fixtures: ListedFixture[] }> {
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", {
+    name,
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divisionId = div.data!.id;
+  const added = await addEntrantsViaApi(request, divisionId, names);
+  expect(added.ids.length).toBe(names.length);
+  await createStageAndGenerate(request, divisionId, stage);
+  const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: START,
+      matchMinutes: 30,
+      gapMinutes: 0,
+      courts: courtIds,
+      perEntrantMinRest: 0,
+      blackouts: [],
+      sessionWindows: [],
+    },
+  });
+  expect(settings.status).toBe(200);
+  const listed = await apiJson<ListedFixture[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  expect(listed.status).toBe(200);
+  return { divisionId, fixtures: listed.data! };
+}
+
+async function place(request: APIRequestContext, fixtureId: string, scheduledAt: string, courtId: string) {
+  const placed = await apiJson(request, `/api/v1/fixtures/${fixtureId}`, "PATCH", {
+    scheduled_at: scheduledAt,
+    court_id: courtId,
+  });
+  expect(placed.status, `place ${fixtureId}`).toBe(200);
+}
+
+const find = (fixtures: ListedFixture[], round: number, seq: number) =>
+  fixtures.find((f) => f.round_no === round && f.seq_in_round === seq && !f.third_place)!;
 
 /** A private competition with one division of `names.length` entrants and a
  *  single generated stage of `kind`, on a one-court grid. The first-round
@@ -50,45 +111,18 @@ async function seedBoard(
   stage: { kind: "knockout" | "league"; name: string; config?: Record<string, unknown> },
   names: string[],
 ): Promise<{ divisionId: string; fixtures: ListedFixture[]; placedId: string }> {
-  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
-    ends_on: "2030-12-31",
-    name: `Round Codes ${TAG}`,
-    visibility: "private",
-  });
-  expect(comp.data?.id, `competition create → ${comp.status}`).toBeTruthy();
-  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
-    name: "Round Codes",
-    sport_key: "generic",
-    variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-  });
-  const divisionId = div.data!.id;
-  const added = await addEntrantsViaApi(request, divisionId, names);
-  expect(added.ids.length).toBe(names.length);
-  await createStageAndGenerate(request, divisionId, stage);
+  const competitionId = await createCompetition(request);
   const { courts } = await seedVenueWithCourts(request, ["Court A"]);
-  const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
-    tz: "UTC",
-    config: {
-      startAt: START,
-      matchMinutes: 30,
-      gapMinutes: 0,
-      courts: courts.map((c) => c.id),
-      perEntrantMinRest: 0,
-      blackouts: [],
-      sessionWindows: [],
-    },
-  });
-  expect(settings.status).toBe(200);
-  const listed = await apiJson<ListedFixture[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
-  expect(listed.status).toBe(200);
-  const fixtures = listed.data!;
-  const first = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
-  const placed = await apiJson(request, `/api/v1/fixtures/${first.id}`, "PATCH", {
-    scheduled_at: START,
-    court_id: courts[0]!.id,
-  });
-  expect(placed.status).toBe(200);
+  const { divisionId, fixtures } = await addDivision(
+    request,
+    competitionId,
+    "Round Codes",
+    stage,
+    names,
+    courts.map((c) => c.id),
+  );
+  const first = find(fixtures, 1, 1);
+  await place(request, first.id, START, courts[0]!.id);
   return { divisionId, fixtures, placedId: first.id };
 }
 
@@ -161,18 +195,22 @@ test.describe("schedule board — knockout round codes", () => {
       new RegExp(`— ${fill("bracket.round.semi")}\\.`),
     );
 
-    // Legend: every code in view, with its name, in bracket order.
+    // Legend: every code in view — the card's own chip, then its name — in
+    // bracket order, one entry per item and no dot separators between them.
     const legend = page.getByTestId("board-legend-rounds");
     await expect(legend).toBeVisible();
     await expect(legend).toHaveAttribute("aria-label", fill("board.roundLegend.aria"));
-    expect(normalise((await legend.textContent()) ?? "")).toBe(
-      [
-        `${fill("bracket.roundShort.quarter")}${fill("bracket.round.quarter")}`,
-        `${fill("bracket.roundShort.semi")}${fill("bracket.round.semi")}`,
-        `${fill("bracket.roundShort.final")}${fill("bracket.round.final")}`,
-        `${fill("bracket.roundShort.thirdPlace")}${fill("bracket.round.thirdPlace")}`,
-      ].join("·"),
-    );
+    await expect(legend.locator("li")).toHaveText([
+      `${fill("bracket.roundShort.quarter")}${fill("bracket.round.quarter")}`,
+      `${fill("bracket.roundShort.semi")}${fill("bracket.round.semi")}`,
+      `${fill("bracket.roundShort.final")}${fill("bracket.round.final")}`,
+      `${fill("bracket.roundShort.thirdPlace")}${fill("bracket.round.thirdPlace")}`,
+    ]);
+    expect(await legend.textContent()).not.toContain("·");
+    // Same chip as the card: the identical class attribute on both.
+    const legendChipClass = await legend.locator('[data-round-code-chip="knockout"]').first().getAttribute("class");
+    expect(legendChipClass).toBeTruthy();
+    expect(await chip(page, placedId).getAttribute("class")).toBe(legendChipClass);
 
     await expectNoHorizontalScroll(page);
     await page.screenshot({ path: testInfo.outputPath("board-round-codes-1280.png") });
@@ -220,5 +258,98 @@ test.describe("schedule board — knockout round codes", () => {
     await expect(chip(page, placedId)).not.toHaveAttribute("title", /./);
     // …and only then the absence.
     await expect(page.getByTestId("board-legend-rounds")).toHaveCount(0);
+  });
+});
+
+/** Screenshot the board region only — from just above the round legend down
+ *  `height` px — so a capture shows the cards, not the page chrome. Scrolls to
+ *  the top first: a `fullPage` clip is in DOCUMENT coordinates, and
+ *  `boundingBox()` is viewport-relative. */
+async function shootBoard(page: Page, path: string, height: number) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const box = (await page.getByTestId("board-legend-rounds").boundingBox())!;
+  const width = page.viewportSize()!.width;
+  await page.screenshot({ path, fullPage: true, clip: { x: 0, y: Math.max(0, box.y - 56), width, height } });
+}
+
+test.describe("schedule board — knockout codes beside a round-robin division", () => {
+  // The owner's own concern: a COMPETITION board carrying a knockout division
+  // and a round-robin one on the same day — QF/SF chips beside plain R1/R2
+  // chips on one grid, and a "Winner of QF·n" placeholder placed ON the grid.
+  test("competition board: QF/SF and R1/R2 chips side by side, placeholder on the grid", async ({ page }, testInfo) => {
+    const request = page.request;
+    const competitionId = await createCompetition(request);
+    const { courts } = await seedVenueWithCourts(request, ["Court A", "Court B"]);
+    const courtIds = courts.map((c) => c.id);
+    const ko = await addDivision(
+      request,
+      competitionId,
+      "Boys Singles",
+      { kind: "knockout", name: "Knockout", config: { thirdPlace: true } },
+      ENTRANTS_8,
+      courtIds,
+    );
+    const rr = await addDivision(
+      request,
+      competitionId,
+      "Girls Singles",
+      { kind: "league", name: "League" },
+      ["Iris", "Juno", "Kira", "Lune"],
+      courtIds,
+    );
+    // Knockout on Court A: the four quarter-finals, then the first semi.
+    for (const seq of [1, 2, 3, 4]) await place(request, find(ko.fixtures, 1, seq).id, at((seq - 1) * 30), courtIds[0]!);
+    const sf1 = find(ko.fixtures, 2, 1);
+    await place(request, sf1.id, at(120), courtIds[0]!);
+    // Round-robin on Court B: both round-1 matches, then both round-2 ones.
+    const rrR1 = find(rr.fixtures, 1, 1);
+    const rrR2 = find(rr.fixtures, 2, 1);
+    await place(request, rrR1.id, at(0), courtIds[1]!);
+    await place(request, find(rr.fixtures, 1, 2).id, at(30), courtIds[1]!);
+    await place(request, rrR2.id, at(60), courtIds[1]!);
+    await place(request, find(rr.fixtures, 2, 2).id, at(90), courtIds[1]!);
+
+    const divBoard = await divisionPath(request, ko.divisionId, "/schedule");
+    const compBoard = divBoard.replace(/\/d\/[^/]+\/schedule$/, "/schedule");
+    expect(compBoard).not.toBe(divBoard);
+    const qf1 = find(ko.fixtures, 1, 1);
+    const qfRef1 = fill("slot.match_ref_code", { code: fill("bracket.roundShort.quarter"), seq: 1 });
+
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(compBoard);
+      // Both kinds of chip on ONE board, each on its own division's card.
+      await expect(chip(page, qf1.id)).toHaveText(fill("bracket.roundShort.quarter"));
+      await expect(chip(page, sf1.id)).toHaveText(fill("bracket.roundShort.semi"));
+      await expect(chip(page, rrR1.id)).toHaveText("R1");
+      await expect(chip(page, rrR2.id)).toHaveText("R2");
+      // The heavier variant is the knockout one only.
+      await expect(chip(page, qf1.id)).toHaveAttribute("data-round-code-chip", "knockout");
+      await expect(chip(page, rrR1.id)).toHaveAttribute("data-round-code-chip", "plain");
+      // The placeholder is on the BOARD (placed), not only in the tray.
+      await expect(page.getByTestId("board-tray").locator(`[data-fixture-id="${sf1.id}"]`)).toHaveCount(0);
+      await expect(page.locator(`[data-fixture-id="${sf1.id}"]`)).toContainText(
+        fill("slot.winner_match", { ext: qfRef1 }),
+      );
+      // The legend names only the knockout's codes — R{n} needs no key.
+      const legend = page.getByTestId("board-legend-rounds");
+      await expect(legend).toBeVisible();
+      await expect(legend).toContainText(fill("bracket.round.quarter"));
+      await expect(legend).not.toContainText("R1");
+      const box = (await legend.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      await expectNoHorizontalScroll(page);
+      await shootBoard(page, testInfo.outputPath(`v2-comp-${width}.png`), width === 320 ? 1000 : 760);
+    }
+
+    // The knockout DIVISION board, same day.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${divBoard}?tab=board`);
+    await expect(chip(page, qf1.id)).toHaveText(fill("bracket.roundShort.quarter"));
+    await expect(page.locator(`[data-fixture-id="${sf1.id}"]`)).toContainText(
+      fill("slot.winner_match", { ext: qfRef1 }),
+    );
+    await expectNoHorizontalScroll(page);
+    await shootBoard(page, testInfo.outputPath("v2-division-1280.png"), 760);
   });
 });

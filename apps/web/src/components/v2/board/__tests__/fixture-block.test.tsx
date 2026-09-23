@@ -171,6 +171,28 @@ describe("FixtureBlock", () => {
     expect(html).not.toMatch(/data-testid="board-round-code"[^>]*title="/);
   });
 
+  // Design review 2026-09-23 (owner-approved): a bracket-role code reads one
+  // step heavier than a plain R{n} — weight plus a stronger ink token, no new
+  // hue, no fill — and the division badge stays the loudest thing on the card.
+  it("a knockout chip is one step heavier than a plain R{n} chip; the division badge stays louder", () => {
+    const classesOf = (html: string) =>
+      (/data-testid="board-round-code"[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "").split(/\s+/).filter(Boolean);
+    const coded = classesOf(
+      renderToStaticMarkup(
+        <FixtureBlock {...baseProps} showDivision roundCode={{ code: "QF", label: "Quarter-finals", order: [0, -2, 0] }} />,
+      ),
+    );
+    const plain = classesOf(renderToStaticMarkup(<FixtureBlock {...baseProps} showDivision />));
+    expect(coded).toContain("font-semibold");
+    expect(plain).not.toContain("font-semibold");
+    // A stronger ink token on the coded chip, and the plain one keeps the meta line's.
+    expect(coded).toContain("text-slate-700");
+    expect(plain).toContain("text-slate-500");
+    expect(plain).not.toContain("text-slate-700");
+    // Never a fill or white ink: those are the division badge's, which must win.
+    for (const cls of [...coded, ...plain]) expect(cls).not.toMatch(/^(bg-|text-white)/);
+  });
+
   it("the pick button's accessible name carries the LONG round name for a coded card, the round number otherwise", () => {
     const coded = renderToStaticMarkup(
       <FixtureBlock {...baseProps} roundCode={{ code: "SF", label: "Semi-finals", order: [0, -1, 0] }} />,

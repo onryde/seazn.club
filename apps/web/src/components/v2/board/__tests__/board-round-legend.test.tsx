@@ -10,6 +10,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import fr from "@/dictionaries/fr/ui.json";
 import { BoardRoundLegend } from "../board-legend";
+import { FixtureBlock } from "../fixture-block";
 import { boardRoundCodes } from "../round-codes";
 import type { BoardFixture } from "../types";
 
@@ -52,7 +53,9 @@ describe("BoardRoundLegend", () => {
     expect(html).toContain('aria-label="Round codes"');
     // Text-only projection: tags stripped, so the order reads as a person does.
     const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    expect(text).toBe("QF Quarter-finals · SF Semi-finals · F Final · 3rd Third place");
+    expect(text).toBe("QF Quarter-finals SF Semi-finals F Final 3rd Third place");
+    // Design review 2026-09-23: entries are separated by GAP, never a dot.
+    expect(html).not.toContain("·");
   });
 
   it("names only what is in view: a day holding just the semi-final lists SF alone", () => {
@@ -69,10 +72,39 @@ describe("BoardRoundLegend", () => {
       <BoardRoundLegend fixtures={[knockout[3]!, knockout[0]!]} tray={[knockout[4]!, knockout[1]!]} codes={codes} />,
     );
     const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    expect(text).toBe("QF Quarter-finals · F Final · 3rd Third place");
+    expect(text).toBe("QF Quarter-finals F Final 3rd Third place");
     // Tray alone (the week view, whose cards carry no chip) still gets its key.
     const trayOnly = renderToStaticMarkup(<BoardRoundLegend fixtures={[]} tray={[knockout[2]!]} codes={codes} />);
     expect(trayOnly.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).toBe("SF Semi-finals");
+  });
+
+  it("each entry leads with the SAME chip the card renders — identical class set, so the key cannot drift", () => {
+    const codes = boardRoundCodes(knockout, stages, en);
+    const classSet = (html: string, re: RegExp) =>
+      [...new Set((re.exec(html)?.[1] ?? "").split(/\s+/).filter(Boolean))].sort();
+    const legend = renderToStaticMarkup(<BoardRoundLegend fixtures={[knockout[0]!]} tray={[]} codes={codes} />);
+    const card = renderToStaticMarkup(
+      <FixtureBlock
+        fixture={knockout[0]!}
+        divisionName="Open"
+        showDivision={false}
+        entrantNames={{ e1: "Ash", e2: "Brook" }}
+        feedLabels={{}}
+        fixtureTitles={{}}
+        conflicts={[]}
+        canEdit
+        picked={false}
+        onPick={() => {}}
+        onTogglePin={() => {}}
+        roundCode={codes.get(knockout[0]!.id)}
+      />,
+    );
+    const legendChip = classSet(legend, /data-round-code-chip="knockout"[^>]*class="([^"]*)"/);
+    const cardChip = classSet(card, /data-testid="board-round-code"[^>]*class="([^"]*)"/);
+    expect(cardChip.length).toBeGreaterThan(0);
+    expect(legendChip).toEqual(cardChip);
+    // …and the legend chip is not the card's testid (e2e counts cards by it).
+    expect(legend).not.toContain('data-testid="board-round-code"');
   });
 
   it("renders NOTHING when no shown card carries a code (a round-robin board)", () => {
