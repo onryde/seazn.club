@@ -81,7 +81,7 @@ interface Scene {
   f: Record<
     | "di" | "bo" | "cy" | "hal" | "ian" | "jo" | "pair" | "seatNamed" | "seatTbd" | "setup"
     | "withdrawn" | "doneDivision" | "ned" | "archived" | "oli" | "pat" | "oldComp" | "foreign"
-    | "koFinal" | "koBye" | "koFlipBye" | "koFlipFinal" | "yaraCur" | "yaraSib",
+    | "koFinal" | "koBye" | "koFlipBye" | "koFlipFinal" | "archivedComp" | "yaraCur" | "yaraSib",
     string
   >;
 }
@@ -311,6 +311,12 @@ async function seed(): Promise<Scene> {
   const oldL = await league(auth, old.id, "old-open", [adaSide(), await opponent("Rae Reed")]);
   const oldComp = vs(oldL, 0, 1); // undated leftover
   await sql`update competitions set status = 'completed' where id = ${old.id}`;
+  // An ARCHIVED public competition, with a dated fixture that would otherwise be upcoming.
+  const arc = await comp("Archived Cup", "public");
+  const arcL = await league(auth, arc.id, "arc-open", [adaSide(), await opponent("Abe Ash")]);
+  const archivedComp = vs(arcL, 0, 1);
+  await at(archivedComp, inHours(30));
+  await sql`update competitions set status = 'archived' where id = ${arc.id}`;
 
   // ---- YARA: a player whose CARD is name-masked (a youth division in CUR), who
   // also plays in the public sibling competition (an adult division there). The
@@ -410,7 +416,7 @@ async function seed(): Promise<Scene> {
     yaraOpponent: { id: youthL.entrantIds[1]!, raw: "Zed Quinn", divisionId: youthL.divisionId },
     f: {
       di, bo, cy, hal, ian, jo, pair, seatNamed, seatTbd, setup, withdrawn, doneDivision, ned, archived, oli, pat, oldComp, foreign,
-      koFinal, koBye, koFlipBye: flipBye.id, koFlipFinal: flipFinal.id, yaraCur, yaraSib,
+      koFinal, koBye, koFlipBye: flipBye.id, koFlipFinal: flipFinal.id, archivedComp, yaraCur, yaraSib,
     },
   };
 }
@@ -629,8 +635,15 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
     expect(byId(ada, scene.f.ned)).toMatchObject({ isOtherCompetition: true });
   });
 
-  it("finished and archived places are not upcoming: an archived division, a completed division, a completed competition", async () => {
-    const gone = [scene.f.archived, scene.f.doneDivision, scene.f.oldComp];
+  it("finished and archived places are not upcoming: an archived division, a completed division, a completed competition, an ARCHIVED public competition", async () => {
+    const gone = [scene.f.archived, scene.f.doneDivision, scene.f.oldComp, scene.f.archivedComp];
+    const [arc] = await sql<{ status: string; visibility: string; scheduled_at: Date | null }[]>`
+      select c.status, c.visibility, f.scheduled_at from fixtures f
+      join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+      where f.id = ${scene.f.archivedComp}`;
+    // Premise: public, archived, and dated in the window — only its status keeps it out.
+    expect(arc).toMatchObject({ status: "archived", visibility: "public" });
+    expect(arc!.scheduled_at!.getTime()).toBeGreaterThan(scene.now.getTime());
     for (const id of gone) expect(await premise(id), id).toMatchObject({ status: "scheduled", ada_side: true });
     const got = ids(await read(scene.cur.id));
     for (const id of gone) expect(got, id).not.toContain(id);
