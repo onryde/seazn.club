@@ -29,7 +29,7 @@
 
 ## Plan-level decisions (the owner should confirm them; each is reversible)
 
-- **D1: finished places are not upcoming.** A competition with `status in ('completed','archived')` or a division with `status = 'completed'` contributes no rows. The spec does not mention this. Without it, a finished event's undated leftover fixtures would read "Time TBC" on every card forever. See Review Focus 1.
+- **D1: finished places are not upcoming.** A competition with `status in ('completed','archived')` or a division with `status = 'completed'` contributes no rows. The spec does not mention this. Without it, a finished event's undated leftover fixtures would read "Time TBD" on every card forever. See Review Focus 1.
 - **D2: "Show N more" is a native `<details>/<summary>`** inside the server component, not a client island. It needs no JS and no dictionary slice sent to the client (`player-matches-dict.ts` exists because an island's `dict` prop gets serialised). The rows are server-rendered and stay in the DOM while collapsed.
 - **D3: `getPublicPlayerUpcoming` is uncached.** Its only freshness bound is the page's ISR (measured `s-maxage=30`, see `publicPlayerGate`'s comment). No tag could cover it: a schedule write in *another* competition fires that competition's tags, and none of them is on this card's entry. The cost is one indexed query per ISR regeneration, plus one masking pass.
 - **D4: layout.** On desktop, Upcoming and Matches share the left 7-column cell (one new wrapper, `data-testid="player-main-column"`). Upcoming renders first, and nothing renders when there are no rows.
@@ -38,7 +38,7 @@
 
 - **R1:** same org only. Never read `persons.user_id` or claims.
 - **R2:** show `public` competitions, plus the card's own competition whatever its visibility. A foreign `unlisted` competition never appears. `private` never appears.
-- **R3:** show `status = 'scheduled'` only. Dated rows come first (ascending), then undated rows labelled "Time TBC". Show 5, then "Show N more". `in_play` is excluded.
+- **R3:** show `status = 'scheduled'` only. Dated rows come first (ascending), then undated rows labelled "Time TBD". Show 5, then "Show N more". `in_play` is excluded.
 - **Staleness:** exclude a row when `scheduled_at < now − 3 hours`. Keep `scheduled_at IS NULL` rows.
 - **Order:** `scheduled_at ASC NULLS LAST, round_no, seq_in_round, id`, with a safety cap of 50.
 - **R4:** Upcoming is its own section **above** Matches. Each row names competition › division, and rows from another competition carry an "Other event" chip.
@@ -53,7 +53,7 @@
 
 ## Review Focus
 
-1. **A finished competition or division with undated leftover `scheduled` fixtures.** Someone reading the card expects nothing from an event that is over. Without D1 those rows would say "Time TBC" forever. *Test: Task 1, "finished and archived places are not upcoming".*
+1. **A finished competition or division with undated leftover `scheduled` fixtures.** Someone reading the card expects nothing from an event that is over. Without D1 those rows would say "Time TBD" forever. *Test: Task 1, "finished and archived places are not upcoming".*
 2. **A sibling competition's archived division.** Archived divisions 404 on the public site, so their fixtures must not be listed and linked into a dead page. *Test: Task 1, same test.*
 3. **A bracket seat still waiting on a feeder, and a youth pair opponent.** The row must read the public round-named label ("Winner of Group A"), or the localised TBD, never a raw key or a UUID. A youth division's pair must be masked exactly as on the division page. *Test: Task 1, "opponent: the masked entrant name, else the seat's public label, else the localised TBD".*
 4. **Realistically long competition, division and opponent names at 320px.** They should truncate, never cause horizontal scroll. *Test: Task 4 e2e, long seeded names plus `expectNoHorizontalScroll` at 320/768/1280.*
@@ -638,7 +638,7 @@ Append at the end of the file:
 // above: `public_fixtures_v` AND `public_divisions_v` (the fixture view alone
 // keeps an archived division). A finished place is not upcoming (plan D1): a
 // completed/archived competition or a completed division contributes nothing,
-// or its undated leftovers would read "Time TBC" forever.
+// or its undated leftovers would read "Time TBD" forever.
 //
 // Membership is the ROSTER (`entrant_members` of a registered/confirmed
 // entrant): a future fixture is nobody's by lineup yet. V412 moved the status
@@ -934,7 +934,7 @@ cd /Users/ashokhein/github/seazn.club-player-upcoming && git add apps/web/src/se
   - `export interface PlayerUpcomingProps { rows: readonly PlayerUpcomingRow[]; dict: Dict; locale: Locale }`
   - `export function PlayerUpcoming(props: PlayerUpcomingProps)` returns null when there are no rows
   - testids: `mh-player-upcoming-row-{fixtureId}`, `mh-player-upcoming-time`, `mh-player-upcoming-tbc`, `mh-player-upcoming-court`, `mh-player-upcoming-venue`, `mh-player-upcoming-other`, `mh-player-upcoming-where`, `mh-player-upcoming-rest` (the `<details>`), `mh-player-upcoming-more` (the `<summary>`)
-  - dictionary keys: `player.upcoming`, `player.upcoming.timeTbc`, `player.upcoming.otherEvent`, `player.upcoming.showMore` (`{count}`)
+  - dictionary keys: `player.upcoming`, `player.upcoming.timeTbd`, `player.upcoming.otherEvent`, `player.upcoming.showMore` (`{count}`)
 
 - [ ] **Step 1: Write the failing helper tests**
 
@@ -1038,14 +1038,14 @@ describe("PlayerUpcoming", () => {
     expect(html).toContain(`>${esc(interpolate(en["player.upcoming.showMore"], { count: 2 }))}<`);
   });
 
-  it("a dated row shows the time in the VENUE zone; an undated row shows Time TBC instead", () => {
+  it("a dated row shows the time in the VENUE zone; an undated row shows Time TBD instead", () => {
     const html = render([row("dated"), row("undated", { scheduledAt: null })]);
     const dated = html.slice(html.indexOf('mh-player-upcoming-row-dated"'), html.indexOf('mh-player-upcoming-row-undated"'));
     const undated = html.slice(html.indexOf('mh-player-upcoming-row-undated"'));
     expect(dated).toContain(">15:30<"); // 10:00Z in Asia/Kolkata — not the runtime's 10:00
     expect(dated).not.toContain('data-testid="mh-player-upcoming-tbc"');
     expect(undated).toContain('data-testid="mh-player-upcoming-tbc"');
-    expect(undated).toContain(`>${esc(en["player.upcoming.timeTbc"])}<`);
+    expect(undated).toContain(`>${esc(en["player.upcoming.timeTbd"])}<`);
     expect(undated).not.toContain('data-testid="mh-player-upcoming-time"');
   });
 
@@ -1084,7 +1084,7 @@ describe("PlayerUpcoming", () => {
       dict as Dict,
       locale,
     );
-    expect(html).toContain(`>${esc(dict["player.upcoming.timeTbc"])}<`);
+    expect(html).toContain(`>${esc(dict["player.upcoming.timeTbd"])}<`);
     expect(html).toContain(`>${esc(dict["player.upcoming.otherEvent"])}<`);
     expect(html).toContain(`>${esc(interpolate(dict["player.upcoming.showMore"], { count: 2 }))}<`);
     expect(html).not.toContain("player.upcoming.");
@@ -1146,7 +1146,7 @@ Then delete the local `formatIn` function (its doc comment and body, `:50-64`, f
 ```json
   "player.opponent": "v {opponent}",
   "player.upcoming": "Upcoming",
-  "player.upcoming.timeTbc": "Time TBC",
+  "player.upcoming.timeTbd": "Time TBD",
   "player.upcoming.otherEvent": "Other event",
   "player.upcoming.showMore": "Show {count} more",
 ```
@@ -1156,7 +1156,7 @@ Then delete the local `formatIn` function (its doc comment and body, `:50-64`, f
 ```json
   "player.opponent": "vs. {opponent}",
   "player.upcoming": "Próximos",
-  "player.upcoming.timeTbc": "Hora por confirmar",
+  "player.upcoming.timeTbd": "Hora por confirmar",
   "player.upcoming.otherEvent": "Otro evento",
   "player.upcoming.showMore": "Mostrar {count} más",
 ```
@@ -1166,7 +1166,7 @@ Then delete the local `formatIn` function (its doc comment and body, `:50-64`, f
 ```json
   "player.opponent": "contre {opponent}",
   "player.upcoming": "À venir",
-  "player.upcoming.timeTbc": "Horaire à confirmer",
+  "player.upcoming.timeTbd": "Horaire à confirmer",
   "player.upcoming.otherEvent": "Autre événement",
   "player.upcoming.showMore": "Afficher {count} de plus",
 ```
@@ -1176,7 +1176,7 @@ Then delete the local `formatIn` function (its doc comment and body, `:50-64`, f
 ```json
   "player.opponent": "tegen {opponent}",
   "player.upcoming": "Binnenkort",
-  "player.upcoming.timeTbc": "Tijd volgt",
+  "player.upcoming.timeTbd": "Tijd volgt",
   "player.upcoming.otherEvent": "Ander evenement",
   "player.upcoming.showMore": "Toon er nog {count}",
 ```
@@ -1263,7 +1263,7 @@ function upcomingRow(row: PlayerUpcomingRow, dict: Dict, locale: Locale) {
               </span>
             ) : (
               <span data-testid="mh-player-upcoming-tbc" className="shrink-0 font-semibold uppercase tracking-wide">
-                {t(dict, "player.upcoming.timeTbc")}
+                {t(dict, "player.upcoming.timeTbd")}
               </span>
             )}
             {row.courtLabel ? (
@@ -1351,7 +1351,7 @@ Message file `${TMPDIR:-/tmp}/pu/msg2.txt`:
 feat(public-site): PlayerUpcoming list + shared formatPublicInstant
 
 Server component: five rows then a native <details> "Show N more"; time in
-the venue zone or "Time TBC"; competition › division; Other event chip.
+the venue zone or "Time TBD"; competition › division; Other event chip.
 formatIn moved out of the player-matches client island into
 lib/public-date-locale (a server component cannot call a client export).
 4 keys × 4 locales; i18n-keys regenerated.
@@ -1598,7 +1598,7 @@ Create `apps/web/e2e/player-upcoming.spec.ts`:
 //
 // One Pro org (player pages are Pro-gated), one player, three competitions:
 //   CUR (public)   — the card; 7 of Ada's fixtures: 1 PLAYED (Matches), 5 dated,
-//                    1 left undated (Time TBC, behind the reveal)
+//                    1 left undated (Time TBD, behind the reveal)
 //   SIB (public)   — 1 fixture, dated between CUR's first and second: the
 //                    list is one sort, and this row carries the chip. Its
 //                    competition and division names are deliberately long.
@@ -1751,7 +1751,7 @@ test("R2 positive pair: the unlisted competition's OWN card lists its fixture fi
   await expect(section.getByTestId(`mh-player-upcoming-row-${sibFixture}`).getByTestId("mh-player-upcoming-other")).toHaveCount(1);
 });
 
-test("Show more reveals rows six and seven, the undated one reading Time TBC, and the summary goes away", async ({ browser }) => {
+test("Show more reveals rows six and seven, the undated one reading Time TBD, and the summary goes away", async ({ browser }) => {
   const page = await spectator(browser, { width: 390, height: 844 });
   await page.goto(card(cur.slug), { waitUntil: "load" });
   const section = page.getByTestId("mh-player-upcoming");
@@ -1759,7 +1759,7 @@ test("Show more reveals rows six and seven, the undated one reading Time TBC, an
   await expect(last).toBeHidden();
   await section.getByTestId("mh-player-upcoming-more").click();
   await expect(last).toBeVisible();
-  await expect(last.getByTestId("mh-player-upcoming-tbc")).toHaveText(dictString("en", "player.upcoming.timeTbc"));
+  await expect(last.getByTestId("mh-player-upcoming-tbc")).toHaveText(dictString("en", "player.upcoming.timeTbd"));
   await expect(section.locator('[data-testid^="mh-player-upcoming-row-"]:visible')).toHaveCount(7);
   await expect(section.getByTestId("mh-player-upcoming-more")).toBeHidden();
 });
@@ -1854,7 +1854,7 @@ cd /Users/ashokhein/github/seazn.club-player-upcoming && eval "$(~/.claude/skill
 
 Expected: `6 passed` (setup + 5), `EXIT=0`. The base must be `localhost`, never `127.0.0.1`. The file is serial, so treat a red count as a floor. If a poll's own timeout was **not** exceeded but `test.setTimeout` was, the failure is the wall clock, not the data.
 
-Then **look at** the six PNGs under `apps/web/test-results/**/upcoming-shots/`. Read each image and check: the chip reads "Other event", the long sibling names truncate with an ellipsis, the 320 row does not overflow, and the undated row reads "Time TBC". Write a one-line verdict per screen in the task report.
+Then **look at** the six PNGs under `apps/web/test-results/**/upcoming-shots/`. Read each image and check: the chip reads "Other event", the long sibling names truncate with an ellipsis, the 320 row does not overflow, and the undated row reads "Time TBD". Write a one-line verdict per screen in the task report.
 
 Mutation check owed from Task 2: delete `group-open:hidden` from `player-upcoming.tsx`, `rebuild`, and re-run this file. The "Show more … summary goes away" test must go red. Restore, `rebuild`, and re-run to green.
 
@@ -1887,7 +1887,7 @@ test(player-upcoming): e2e across three competitions + smoke R2 pair
 
 e2e: order across CUR/SIB, chip on the sibling row only, unlisted sibling
 absent (and present on its own card), played fixture stays in Matches,
-Show more reveals Time TBC, sibling row links under the sibling's slug,
+Show more reveals Time TBD, sibling row links under the sibling's slug,
 320/768/1280 collapsed+expanded with no horizontal scroll.
 smoke: the passed card lists its board fixture; the unlisted sibling's never.
 
@@ -1931,7 +1931,7 @@ cd /Users/ashokhein/github/seazn.club-player-upcoming && git add apps/web/e2e/pl
 
 ## Open risks
 
-- **Copy clash:** the owner ruled "Time TBC" (R3), but the public hub and match centre already say "Time TBD" (`matchesHub.timeTbd`, `matchCentre.status.timeTbd`). The plan follows the ruling. Flag the inconsistency to the owner.
+- **Copy clash:** the owner ruled "Time TBD" (R3), but the public hub and match centre already say "Time TBD" (`matchesHub.timeTbd`, `matchCentre.status.timeTbd`). The plan follows the ruling. Flag the inconsistency to the owner.
 - **D1 is a behaviour the spec did not state.** If the owner wants finished events' leftovers shown, delete the two status predicates and the matching test. M9/M10 in the sweep show exactly which lines those are.
 - **`mobile.spec.ts`'s player-card test** renders Upcoming whenever its seeded player has scheduled fixtures. Local runs do not cover it, so CI dispatch (T4 S8) is the only proof.
 - **`match-centre-load.ts`** keeps its own inline stage-rows query for the seat namer, and T1 adds a second copy. Merging them into one helper would touch the match centre, which is outside this plan's blast radius. Record it; do not fix it here.
