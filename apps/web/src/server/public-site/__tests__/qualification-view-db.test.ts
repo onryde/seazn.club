@@ -324,7 +324,7 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     const full = await load(r, pool);
     expect(full.rows.length).toBe(4);
     expect(full.view).not.toBeNull();
-    expect(full.view!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
+    expect(full.view!.table.label).toBe("First place goes through to Finals · 2 rounds left");
     expectSameStatuses(full.view!, await engineStatuses(r, full.rows, full.statuses, leagueLeft, 1));
   });
 
@@ -352,7 +352,7 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(cascaded.rows.map((x) => x.entrantId).sort()).toEqual([...a.others, a.leaver].sort());
     expect(cascaded.view).not.toBeNull();
     expect(cascaded.view!.rows[a.leaver]).toBeUndefined();
-    expect(cascaded.view!.table.label).toBe("Top 1 go through to Finals · 1 round left");
+    expect(cascaded.view!.table.label).toBe("First place goes through to Finals · 1 round left");
     expectSameStatuses(cascaded.view!, await engineStatuses(a.r, cascaded.rows, cascaded.statuses, leagueLeft, 1));
 
     // (b) a registrant's self-cancel (registrations.ts) moves ONLY the entrant

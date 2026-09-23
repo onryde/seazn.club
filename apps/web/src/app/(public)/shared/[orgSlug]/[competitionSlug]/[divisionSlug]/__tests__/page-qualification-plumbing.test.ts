@@ -290,17 +290,17 @@ describe("public division page — the standings table gets its qualification vi
       expect(Object.keys(qualification!.rows).sort(), caption).toEqual([...rowIds].sort());
     }
     const [a, b] = tables as [(typeof tables)[0], (typeof tables)[0]];
-    expect(a.qualification!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
-    expect(b.qualification!.table.label).toBe("Top 1 go through to Finals · 1 round left");
+    expect(a.qualification!.table.label).toBe("First place goes through to Finals · 2 rounds left");
+    expect(b.qualification!.table.label).toBe("First place goes through to Finals · 1 round left");
     expect(Object.fromEntries(Object.entries(b.qualification!.rows).map(([id, r]) => [id, r.status]))).toEqual({
       e4: "through",
       e5: "out",
       e6: "out",
     });
     // …and each table DRAWS its own: the line, and rank 1's trigger name.
-    expect(a.html).toContain("Top 1 go through to Finals · 2 rounds left");
+    expect(a.html).toContain("First place goes through to Finals · 2 rounds left");
     expect(a.html).not.toContain("1 round left");
-    expect(b.html).toContain("Top 1 go through to Finals · 1 round left");
+    expect(b.html).toContain("First place goes through to Finals · 1 round left");
     expect(/<button[^>]*data-testid="standings-rank-e4"[^>]*>/.exec(b.html)?.[0] ?? "").toContain(
       'aria-label="Rank 1, Through, show details"',
     );

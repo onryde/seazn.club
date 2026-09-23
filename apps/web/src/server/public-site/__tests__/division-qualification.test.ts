@@ -139,8 +139,8 @@ describe("divisionQualification — the table's pool is the snapshot's", () => {
     expect(Object.keys(a.rows).sort()).toEqual(["e1", "e2", "e3"]);
     expect(Object.keys(b.rows).sort()).toEqual(["e4", "e5", "e6"]);
 
-    expect(a.table).toMatchObject({ cutIndex: 1, label: "Top 1 go through to Finals · 2 rounds left" });
-    expect(b.table).toMatchObject({ cutIndex: 1, label: "Top 1 go through to Finals · 1 round left" });
+    expect(a.table).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 2 rounds left" });
+    expect(b.table).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 1 round left" });
     expect(Object.fromEntries(Object.entries(a.rows).map(([id, r]) => [id, [r.label, r.ifYouLose]]))).toEqual({
       e1: ["Needs help", "If you lose your next match: Needs help."],
       e2: ["Needs help", "If you lose your next match: Out."],

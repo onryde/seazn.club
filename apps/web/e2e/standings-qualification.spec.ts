@@ -267,10 +267,15 @@ function statusText(s: QualStatus): string {
   }
 }
 
-/** The cut line's words for a table the engine has read. */
+/** The cut line's words for a table the engine has read: the cut sentence
+ *  agrees with N, the rounds left with the rounds (final review COPY — one
+ *  key pluralised on the rounds printed "Top 1 go through"). */
 function cutText(e: Expected, next: string): string {
+  const n = e.input.cut;
   const left = Math.max(...e.order.map((id) => e.input.remaining.get(id) ?? 0));
-  return dictString("en", left === 1 ? "table.qual.cut.one" : "table.qual.cut.other", { n: e.input.cut, next, count: left });
+  const cut = dictString("en", n === 1 ? "table.qual.cut.one" : "table.qual.cut.other", { n, next });
+  if (left === 0) return cut;
+  return `${cut} · ${dictString("en", left === 1 ? "table.qual.roundsLeft.one" : "table.qual.roundsLeft.other", { count: left })}`;
 }
 
 // ── What a page draws ────────────────────────────────────────────────────

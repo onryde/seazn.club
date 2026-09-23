@@ -220,7 +220,8 @@ function headline(s: QualStatus, i: QualificationViewInput, next: string, n: num
     case "needs_help":
       return i.msg("table.qual.headline.needsHelp");
     case "out":
-      return i.msg("table.qual.headline.out", { n });
+      // Pluralised on N (final review COPY): "…in the top 1" read badly.
+      return i.plural("table.qual.headline.out", n, { n });
   }
 }
 
@@ -460,13 +461,14 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     0,
     ...engine.rows.filter((r) => r.active).map((r) => engine.remaining.get(r.entrantId) ?? 0),
   );
+  // Two plurals, two keys (final review COPY): the cut sentence agrees with N
+  // ("First place goes…" / "Top 2 go…"), the rounds left with the rounds.
+  // One key pluralised on the rounds printed "Top 1 go through".
+  const cutLine = i.plural("table.qual.cut", cut, { n: cut, next });
   return {
     table: {
       cutIndex: cut,
-      label:
-        roundsLeft > 0
-          ? i.plural("table.qual.cut", roundsLeft, { n: cut, next })
-          : i.msg("table.qual.cutNoRounds", { n: cut, next }),
+      label: roundsLeft > 0 ? `${cutLine} · ${i.plural("table.qual.roundsLeft", roundsLeft)}` : cutLine,
       legend: {
         through: i.msg("table.qual.legend.through"),
         open: i.msg("table.qual.legend.open"),

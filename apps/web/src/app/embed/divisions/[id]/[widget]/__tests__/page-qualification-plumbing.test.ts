@@ -272,16 +272,16 @@ describe("embed standings widget — the table gets its qualification view", () 
     }
     const a = byCaption.get("Groups — Pool A")!;
     const b = byCaption.get("Groups — Pool B")!;
-    expect(a.qualification!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
-    expect(b.qualification!.table.label).toBe("Top 1 go through to Finals · 1 round left");
+    expect(a.qualification!.table.label).toBe("First place goes through to Finals · 2 rounds left");
+    expect(b.qualification!.table.label).toBe("First place goes through to Finals · 1 round left");
     expect(Object.fromEntries(Object.entries(b.qualification!.rows).map(([id, r]) => [id, r.status]))).toEqual({
       e4: "through",
       e5: "out",
       e6: "out",
     });
-    expect(a.html).toContain("Top 1 go through to Finals · 2 rounds left");
+    expect(a.html).toContain("First place goes through to Finals · 2 rounds left");
     expect(a.html).not.toContain("1 round left");
-    expect(b.html).toContain("Top 1 go through to Finals · 1 round left");
+    expect(b.html).toContain("First place goes through to Finals · 1 round left");
     expect(/<button[^>]*data-testid="standings-rank-e4"[^>]*>/.exec(b.html)?.[0] ?? "").toContain(
       'aria-label="Rank 1, Through, show details"',
     );

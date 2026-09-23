@@ -291,6 +291,20 @@ function rr4(played: 1 | 2): Scene {
   };
 }
 
+/** League of four, cut 1, five rounds settled and round 6 to play: A
+ *  (15) is Through, D (3) Out — both N = 1 statuses in one table. */
+function settledCut1(): Scene {
+  return {
+    kind: "league",
+    meta: { qualifyCount: 1 },
+    rows: [row("A", 1, 5, 5), row("B", 2, 2, 5), row("C", 3, 2, 5), row("D", 4, 1, 5)],
+    fixtures: [
+      won(1, "A", "C"), won(1, "B", "D"), won(2, "A", "D"), won(2, "B", "C"), won(3, "A", "B"), won(3, "C", "D"),
+      won(4, "A", "C"), won(4, "D", "B"), won(5, "A", "D"), won(5, "C", "B"), open(6, "A", "B"), open(6, "C", "D"),
+    ],
+  };
+}
+
 /** The reviewer's probe (fix round 1): league of four after three rounds —
  *  r1 A>B, C>D; r2 A>C, B>D; r3 A>D, B>C; r4 A–B, C–D open, and with
  *  `left` 2 also r5 A–D, B–C. A 9 (+3), B 6 (+1), C 3 (+1), D 0 (−5). */
@@ -1160,27 +1174,64 @@ describe("wording", () => {
     const two = must(view({ ...s, fixtures: [...s.fixtures, open(4, "A", "D"), open(4, "B", "C")] }));
     expect(two.rows.A!.headline).toBe("Win 2 of your remaining matches and you're through to Finals.");
     expect(two.table.label).toBe("Top 2 go through to Finals · 2 rounds left");
-    const settled = must(
-      view({
-        kind: "league",
-        meta: { qualifyCount: 1 },
-        rows: [row("A", 1, 5, 5), row("B", 2, 2, 5), row("C", 3, 2, 5), row("D", 4, 1, 5)],
-        fixtures: [
-          won(1, "A", "C"), won(1, "B", "D"), won(2, "A", "D"), won(2, "B", "C"), won(3, "A", "B"), won(3, "C", "D"),
-          won(4, "A", "C"), won(4, "D", "B"), won(5, "A", "D"), won(5, "C", "B"), open(6, "A", "B"), open(6, "C", "D"),
-        ],
-      }),
-    );
+    const settled = must(view(settledCut1()));
     expect(settled.rows.A).toMatchObject({ label: "Through", headline: "Through to Finals, whatever happens next." });
-    expect(settled.rows.D).toMatchObject({ label: "Out", headline: "Can no longer finish in the top 1." });
+    expect(settled.rows.D).toMatchObject({ label: "Out", headline: "Can no longer finish first." });
   });
-  it("nobody still in has a match left (only two departed entrants' match is open): the cut line drops the count", () => {
+
+  // Final review COPY: the cut line was pluralised on the rounds left, never
+  // on N, so a one-place cut read "Top 1 go through to Finals"; the Out
+  // headline read "…in the top 1". Each is now its own key, pluralised on N,
+  // and the rounds left another, pluralised on the rounds and joined with " · ".
+  // Every case pins the WHOLE sentence at N = 1 and N = 2 — a count-plural
+  // pair differs only at one, so a single N cannot tell them apart.
+  it("the cut line agrees with N: one place reads naturally, two read as before (with rounds left)", () => {
+    expect(must(view(rr4(2))).table.label).toBe("First place goes through to Finals · 1 round left");
+    expect(must(view(rr4(1))).table.label).toBe("First place goes through to Finals · 2 rounds left");
+    expect(must(view(swiss4())).table.label).toBe("Top 2 go through to Finals · 1 round left");
+  });
+  it("nobody still in has a match left (only departed entrants' matches are open): the cut line drops the count, at N = 1 and N = 2", () => {
     const s = rr4(2);
     const fixtures = [...s.fixtures.filter((f) => f.round_no < 3), won(3, "A", "B"), open(3, "C", "D")];
     const rows = [row("A", 1, 3, 3), row("B", 2, 2, 3), row("C", 3, 0, 2), row("D", 4, 0, 2)];
     const v = must(view({ ...s, rows, fixtures, statuses: { C: "withdrawn", D: "withdrawn" } }));
-    expect(v.table.label).toBe("Top 1 go through to Finals");
+    expect(v.table.label).toBe("First place goes through to Finals");
     expect(v.rows.A!.status).toBe("through");
+    // N = 2: five entrants, A, C and B finished; D and E (departed, award
+    // mode) still owe each other a match.
+    const five = must(
+      view({
+        kind: "league",
+        rows: [row("A", 1, 3, 3), row("C", 2, 2, 3), row("B", 3, 1, 2), row("D", 4, 0, 2), row("E", 5, 0, 2)],
+        fixtures: [
+          won(1, "A", "D"), won(1, "B", "E"), won(2, "A", "B"), won(2, "C", "D"), won(3, "C", "E"), won(3, "A", "C"), open(4, "D", "E"),
+        ],
+        statuses: { D: "withdrawn", E: "withdrawn" },
+      }),
+    );
+    expect(five.table.label).toBe("Top 2 go through to Finals");
+  });
+  it("the Out headline agrees with N: first place at N = 1, the top N from two", () => {
+    expect(must(view(settledCut1())).rows.D!.headline).toBe("Can no longer finish first.");
+    // after3 with one round left, cut 2: A (9) and B (6) are beyond D's best (3).
+    const d = must(view(after3(1))).rows.D!;
+    expect(d.status).toBe("out");
+    expect(d.headline).toBe("Can no longer finish in the top 2.");
+  });
+  it("N = 1 reads naturally in every locale — the cut line and the Out headline", () => {
+    const expected: [Dict, string, string][] = [
+      [es as Dict, "El primer clasificado pasa a Finals · queda 1 ronda", "Ya no puede terminar en primer lugar."],
+      [fr as Dict, "Le premier passe en Finals · 1 tour restant", "Ne peut plus finir à la première place."],
+      [nl as Dict, "De nummer 1 gaat door naar Finals · nog 1 ronde", "Kan niet meer als eerste eindigen."],
+    ];
+    for (const [dict, cutLine, outLine] of expected) {
+      expect(must(view(rr4(2), {}, dict)).table.label).toBe(cutLine);
+      expect(must(view(settledCut1(), {}, dict)).rows.D!.headline).toBe(outLine);
+    }
+    // …and N = 2 keeps its counted form.
+    expect(must(view(swiss4(), {}, fr as Dict)).table.label).toBe("Les 2 premiers passent en Finals · 1 tour restant");
+    expect(must(view(swiss4(), {}, nl as Dict)).table.label).toBe("De eerste 2 gaan door naar Finals · nog 1 ronde");
+    expect(must(view(after3(1), {}, es as Dict)).rows.D!.headline).toBe("Ya no puede terminar entre los 2 primeros.");
   });
   it("Spanish: the locale path resolves every string in the org's language", () => {
     const v = must(view(swiss4(), {}, es as Dict));
@@ -1195,7 +1246,7 @@ describe("copy coverage", () => {
   const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
   const qualKeys = Object.keys(en).filter((k) => k.startsWith("table.qual."));
   it("every table.qual key exists in es/fr/nl with the same placeholders", () => {
-    expect(qualKeys.length).toBe(26);
+    expect(qualKeys.length).toBe(28);
     for (const [name, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
       const d = dict as Record<string, string>;
       for (const k of qualKeys) {

@@ -2728,14 +2728,14 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     expect(doc.tables.map((t) => t.id)).toEqual(["open-st1-pA", "open-st1-pB"]);
     const [a, b] = doc.tables as [(typeof doc.tables)[0], (typeof doc.tables)[0]];
 
-    expect(a.qualification).toMatchObject({ cutIndex: 1, label: "Top 1 go through to Finals · 2 rounds left" });
+    expect(a.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 2 rounds left" });
     expect(a.rows.map((x) => [x.entrantId, x.qual?.label ?? null, x.qual?.ifYouLose ?? null])).toEqual([
       ["e1", "Needs help", "If you lose your next match: Needs help."],
       ["e2", "Needs help", "If you lose your next match: Out."],
       ["e3", "Needs help", "If you lose your next match: Needs help."],
     ]);
 
-    expect(b.qualification).toMatchObject({ cutIndex: 1, label: "Top 1 go through to Finals · 1 round left" });
+    expect(b.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 1 round left" });
     expect(b.rows.map((x) => [x.entrantId, x.qual?.label ?? null, x.qual?.ifYouLose ?? null])).toEqual([
       ["e4", "Through", null],
       ["e5", "Out", null],
