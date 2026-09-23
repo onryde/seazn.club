@@ -96,8 +96,9 @@ function fakeTransport(opts: {
   // W3 task 1 — the two CURSORS this pad hands the server. Recorded at the
   // wire rather than read out of the hook's own state on purpose: the
   // defect is about what the SERVER is told, so only the argument that
-  // actually crossed this boundary witnesses it. `listEventsSince` still
-  // answers with an empty batch, exactly as before.
+  // actually crossed this boundary witnesses it. `listEventsSince` answers
+  // from `serverLedger` when one is given and with an empty batch when it is
+  // not — see that option's own doc just above.
   const listEventsSinceCalls: { fixtureId: string; sinceSeq: number }[] = [];
   let cursor = 0;
   const transport: PadTransport = {
@@ -2719,14 +2720,21 @@ describe("R8/#675 — a reload inside the amendment's hold window", () => {
 
 // W3 task 1 (device-link scoring gaps, §5) — the pad's own ledger cursor.
 describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 1)", () => {
-  // THE DEFECT: `sinceSeq`/`expectedSeq` read the ARRAY LENGTH as if it were
-  // the ledger tip. That is true only while the ledger is gapless. A 409
-  // renegotiation makes it sparse: our ack is merged at the SERVER's seq
-  // (`runDrain`'s `confirmedSeq`) while the foreign row that caused the
-  // conflict is read inside `resolveConflict` and never committed. Length 3
-  // over {1,2,4} then asks the poll for `seq > 3`, so the foreign seq 3 is
-  // skipped FOREVER — nothing ever lowers the length again, and only an
-  // `initialEvents` re-seed heals it.
+  // THE DEFECT: `expectedSeq` read the ARRAY LENGTH as if it were the ledger
+  // tip. That is true only while the ledger is gapless. A 409 renegotiation
+  // makes it sparse: our ack is merged at the SERVER's seq (`runDrain`'s
+  // `confirmedSeq`) while the foreign row that caused the conflict is read
+  // inside `resolveConflict` and never committed. Length 3 over {1,2,4} then
+  // claims `expected_seq` 3 — a slot the server already filled — and earns
+  // another 409, another renegotiation and another gap. It compounds.
+  //
+  // FIX ROUND 1 CORRECTION: the POLL cursor is a different question and gets
+  // the opposite answer. `listEvents` is strict (`seq > since_seq`), so a
+  // count cursor asks for a strict SUPERSET of what a tip cursor asks for —
+  // it over-fetches rather than skipping, and that over-fetch recovers any
+  // row the ledger is missing above the count. Round 1 moved all three
+  // cursors onto the tip together and removed that heal; `sinceSeq` is the
+  // count again and the two `expected_seq` sites keep the tip.
   //
   // Read the fixtures before the assertions. Most cases here SEED a sparse
   // ledger and pin what the CURSOR does with it; one case
@@ -2806,12 +2814,44 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
     return { pad, ...rig };
   }
 
-  it("asks the poll for events after the TIP, not after the count", async () => {
+  it("asks the poll from the COUNT, not the tip — the read cursor under-shoots on purpose", async () => {
+    // CORRECTED in fix round 1. This case originally pinned the poll cursor at
+    // the TIP (5), on the reading that a count "skips" rows. It does the
+    // opposite: `listEvents` is strict (`seq > since_seq`), so the LOWER
+    // cursor asks for a strict superset. The tip was the right answer for the
+    // two `expected_seq` sites and the wrong one here, and pinning 5 froze
+    // that regression as the expected value. The case below that holds a
+    // populated `serverLedger` is what actually witnesses the difference.
     const rig = await renderPipeline(sparseLedger());
 
-    // The cursor the stream was handed. A count says 3, `count + 1` says 4;
-    // both lose the rows above them. The tip says 5.
-    expect(rig.lastSinceSeq()).toBe(5);
+    // Over `{1,2,5}` the three candidates are all different — count 3,
+    // `count + 1` 4, tip 5 — so this number distinguishes them inside the case
+    // under test rather than relying on the gapless control.
+    expect(rig.lastSinceSeq()).toBe(3);
+  });
+
+  it("RECOVERS a row that sits above the count — the poll under-shoot is a self-heal", async () => {
+    // GAP 5 (fix round 1). Every other sparse case in this describe runs
+    // against an EMPTY `serverLedger`, so they can only witness what the pad
+    // ASKS for — never what it FETCHES. This one holds the rows the pad is
+    // missing, which is the only way the difference is observable.
+    //
+    // The endpoint is STRICT (`seq > since_seq`,
+    // `server/usecases/fixtures.ts` `listEvents`), so a LOWER cursor asks for
+    // a strict SUPERSET. Over `{1,2,5}` the count is 3 and the tip is 5: the
+    // count asks `> 3` and seq 4 comes home, the tip asks `> 5` and seq 4 is
+    // stranded for the rest of the match. Each stranded row is a rally the
+    // pad's fold never applies and nothing on screen says so.
+    const rig = await renderPipeline(sparseLedger(), { serverLedger: [foreignRow(3), foreignRow(4)] });
+
+    // The CONSEQUENCE first — it is the assertion that matters, and reading it
+    // first means a regression reds on the rally that went missing rather than
+    // on a number.
+    expect(
+      rig.pad.current.events.map((e) => e.seq),
+      "seq 4 sits above the count and at-or-below the tip — the under-shoot is what brings it back",
+    ).toEqual([1, 2, 4, 5]);
+    expect(rig.lastSinceSeq(), "the poll cursor under-shoots the tip while the ledger is sparse").toBe(3);
   });
 
   it("derives the next expectedSeq from the TIP, not the count", async () => {
@@ -2854,10 +2894,21 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
     // that came from `listEvents`' own `order by seq`, two layers away, and
     // `v3/pad-host.tsx` takes `initialEvents` from any caller. Not live today;
     // an unguarded invariant all the same.
-    const rig = await renderPipeline([slotEvent(5), slotEvent(1), slotEvent(2)]);
+    //
+    // CORRECTED in fix round 1: the order-sensitivity is now read off the
+    // `expected_seq` the pad SUBMITS, because that is the cursor that still
+    // takes the tip. The poll cursor is the count again, and a count is
+    // order-insensitive — asserting on it here would be a tautology that a raw
+    // spread passes just as happily, i.e. a test that had stopped killing the
+    // mutant it was written for.
+    const rig = await renderPipeline([slotEvent(5), slotEvent(1), slotEvent(2)], { appendResults: [success(6)] });
 
     expect(rig.pad.current.events.map((e) => e.seq)).toEqual([1, 2, 5]); // seeded THROUGH the merge
-    expect(rig.lastSinceSeq()).toBe(5); // …and the tip is the max, not the last one handed in
+
+    await rig.pad.current.submit("generic.score", { by: "A", points: 1 });
+    // A raw-spread seed leaves seq 2 last, so the tip reads 2 and the write
+    // claims a slot three behind the server's.
+    expect(rig.lastSubmittedExpectedSeq()).toBe(5);
   });
 
   it("a REAL 409 renegotiation produces the sparse ledger — it is not merely seeded that way", async () => {
@@ -2893,11 +2944,13 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
     // `resolveConflict` and never committed.
     expect(rig.pad.current.events.map((e) => e.seq)).toEqual([1, 2, 4]);
 
-    // The next poll therefore asks from 4. A count would say 3 — and seq 3
-    // is lost EITHER WAY (`> 3` excludes 3), which is exactly why this fix
-    // PREVENTS the next gap rather than healing this one.
+    // The next poll therefore asks from 3, the count — and seq 3 is lost
+    // anyway, because `> 3` excludes 3 itself. That is the residual: the read
+    // cursor's under-shoot heals every row ABOVE the count, never the oldest
+    // missing one. Only an `initialEvents` re-seed closes that, and the write
+    // cursor's tip is what stops the NEXT gap from opening.
     await vi.advanceTimersByTimeAsync(POLL_MS);
-    expect(rig.lastSinceSeq()).toBe(4);
+    expect(rig.lastSinceSeq()).toBe(3);
     await vi.advanceTimersByTimeAsync(0);
     expect(rig.pad.current.events.map((e) => e.seq), "seq 3 stays stranded — prevention, not healing").toEqual([
       1, 2, 4,

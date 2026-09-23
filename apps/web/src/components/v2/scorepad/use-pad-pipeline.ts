@@ -705,18 +705,25 @@ function mergeEnvelopesIntoLedger(
 }
 
 /**
- * The ledger's highest known seq — NOT `events.length`.
+ * The ledger's highest known seq — NOT `events.length`. This is the WRITE
+ * cursor: both `expected_seq` sites below take it, and the poll's READ cursor
+ * deliberately does not (see `useFixtureStream`'s `sinceSeq` below, which
+ * explains why the two want opposite errors).
  *
  * `mergeEnvelopesIntoLedger` above keys by seq into a Map and returns the
  * values sorted ascending, so the ledger is legitimately SPARSE after a 409
  * renegotiation: our ack is merged at the server's own seq (`runDrain`'s
  * `confirmedSeq`) while the foreign row that caused the conflict was only
  * read inside `resolveConflict` and never committed. `{1,2,4}` then has
- * length 3, and a cursor built from that length asks the poll for `seq > 3`
- * — skipping seq 3 permanently, because nothing ever lowers the length
- * again, and only an `initialEvents` re-seed heals it. The same stale count
- * then becomes the NEXT write's `expected_seq`, earning another 409, another
- * renegotiation and another gap; it compounds.
+ * length 3 — and a write that claims `expected_seq` 3 is claiming a slot the
+ * server already filled. It earns a 409 it did not need, renegotiates into
+ * another gap, and the next write repeats it from a count that is now one
+ * further behind. It compounds, and that compounding is the whole reason this
+ * helper exists.
+ *
+ * On the READ side that same under-count is not a skip but an OVER-fetch, and
+ * a useful one, so the poll keeps it. Fix round 1 had moved all three cursors
+ * onto the tip together; the read cursor is corrected back at its call site.
  *
  * Reads the LAST element rather than scanning for a max: the sort order is
  * that function's contract, and duplicating a max() here would let the two
@@ -1197,10 +1204,31 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   useFixtureStream({
     fixtureId,
     auth: params.auth ?? SESSION_AUTH,
-    // W3 task 1 — the TIP, never the count. See `ledgerTipSeq`'s own doc:
-    // a sparse ledger ({1,2,4}) has length 3, and asking the poll for
-    // `seq > 3` skips the organiser's seq 3 forever.
-    sinceSeq: ledgerTipSeq(ledgerEvents),
+    // W3 task 1, fix round 1 — the COUNT here, on purpose, where both
+    // `expected_seq` sites below take the TIP. A read cursor and a write
+    // cursor want OPPOSITE errors, and reading this line as an oversight is
+    // how round 1 got it wrong.
+    //
+    // `listEvents` is strict — `seq > since_seq`
+    // (`server/usecases/fixtures.ts`) — and over a ledger of distinct
+    // ascending positive seqs `tip >= length` ALWAYS, with equality only while
+    // it is gapless from 1. So a count cursor asks for a strict SUPERSET of
+    // what a tip cursor asks for: it under-shoots by exactly the width of the
+    // gaps, re-requests the window `(length, tip]` on every tick, and any row
+    // this pad is missing inside that window comes home. Over `{1,2,5}` it
+    // asks `> 3` and recovers the organiser's seq 4. A tip cursor asks `> 5`
+    // and strands seq 4 for the rest of the match — a rally the pad's fold
+    // never applies, with nothing on screen to say so.
+    //
+    // What the under-shoot costs: while the ledger is sparse, every tick
+    // re-fetches that window and runs one `reconcileAfterAck` round trip.
+    // Bounded by the gap's own width, and it stops the moment the gap closes.
+    //
+    // What it does NOT do: heal the OLDEST missing row. `> length` still
+    // excludes seq `length` itself, so a hole's first row needs an
+    // `initialEvents` re-seed. Polling from `firstMissingSeq - 1` would close
+    // that too; that is a separate design and deliberately not taken here.
+    sinceSeq: ledgerEvents.length,
     listEventsSince: transport.listEventsSince,
     onEvents: onStreamEvents,
     skipPollWhile: skipPollWhileDraining,
@@ -1708,8 +1736,8 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       submitInFlight.current = { type, payload };
       lastAccepted.current = { type, payload, at: now };
       try {
-        // W3 task 1 — the THIRD copy of this cursor, and the one that
-        // matters most: `submitHeld` is what `createSkinDispatch`'s
+        // W3 task 1 — the SECOND `expected_seq` copy of this cursor, and the
+        // one that matters most: `submitHeld` is what `createSkinDispatch`'s
         // `heldSubmit` routes every real v3 tap through (see the R7-42 note
         // on the guard just above, which records the same trap once already),
         // so a fix that reached only `submit()` would fix nothing a scorer
