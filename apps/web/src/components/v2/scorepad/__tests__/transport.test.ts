@@ -707,6 +707,12 @@ describe("CHROME_TERMINAL_CODES (scorer sheets §4.5)", () => {
     expect(terminalRefusalOf({ code: "FORBIDDEN", message: "m" })).toBeNull();
     // The undo refusals are terminal for the QUEUE, never for the chrome.
     for (const code of TERMINAL_CONFLICT_CODES) expect(terminalRefusalOf({ code, message: "m" })).toBeNull();
+    // Named, not only swept (rebase onto #856): the 409 NEXT_MATCH_STARTED
+    // joined that queue set, and the pad names the match to void in its own
+    // banner — it must never end the courtside surface. Pinned by name so it
+    // stays pinned if it ever leaves TERMINAL_CONFLICT_CODES.
+    expect(TERMINAL_CONFLICT_CODES.has("NEXT_MATCH_STARTED"), "premise: #856's code is queue-terminal").toBe(true);
+    expect(terminalRefusalOf({ code: "NEXT_MATCH_STARTED", message: "m" })).toBeNull();
   });
 
   it("every chrome-terminal code is one the server declares (usecases/carried-forward.ts)", () => {

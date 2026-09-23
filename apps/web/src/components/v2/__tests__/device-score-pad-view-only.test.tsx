@@ -144,6 +144,24 @@ describe("DeviceScorePad — View-only (scorer sheets §4.5)", () => {
     expect(headerText(island.tree())).not.toContain(api.serverFinal);
   });
 
+  // Rebase onto #856 (knockout void un-fill): a second refusal code reaches
+  // this same catch. 409 NEXT_MATCH_STARTED — "void the next match first" —
+  // is the organiser's to act on, and the umpire stays on the screen, reading
+  // why in their own words (#856's copy). It must never be mistaken for the
+  // carried-forward refusal and end the surface.
+  it("a 409 NEXT_MATCH_STARTED on the chrome's own void stays on the screen with its own words — never View-only", async () => {
+    api.postRefusal = { code: "NEXT_MATCH_STARTED", status: 409 };
+    const island = renderIsland(DeviceScorePad, props("decided", { kind: "win" }));
+    (propsOf(byTestId(island.tree(), "device-void-mine")!).onClick as () => void)();
+    await flush();
+    expect(api.posts, "the void really went to the server").toBe(1);
+    expect(byTestId(island.tree(), "scan-view-only"), "NEXT_MATCH_STARTED is not a chrome-terminal refusal").toBeUndefined();
+    expect(byTestId(island.tree(), "device-void-mine"), "the undo stays offered").toBeDefined();
+    expect(textOfTree(island.tree()), "the refusal is said in the scorer's words").toContain(
+      dict["scorepad.refusal.nextMatchStarted"],
+    );
+  });
+
   it("hands the inner pad an onTerminalRefusal that switches to View-only and unmounts the pad", async () => {
     const island = renderIsland(DeviceScorePad, props("in_play", null));
     const pad = island.tree().find((e) => e.type === ScorePad);
