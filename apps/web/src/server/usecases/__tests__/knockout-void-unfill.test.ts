@@ -1030,6 +1030,24 @@ async function chaseWonOnANoBall(
 }
 
 describe.skipIf(!HAS_DB)("fix round 1: a void that FLIPS the winner without passing through undecided", () => {
+  // The gate's first clause: with no STORED decision there is nothing to take
+  // back, so recording a first result can never be refused by the un-fill.
+  // The scene needs a seat that already holds this line's player and a final
+  // that is not waiting — both only reachable by raw SQL — because that is
+  // exactly the state in which reaching for the next match WOULD refuse.
+  it("a FIRST result takes nothing back: it never reaches the next match, even one holding this line's player that is not waiting", async () => {
+    const rig = await knockout();
+    const line = rig.r1[0]!;
+    const column = line.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = ${line.home_entrant_id}, status = 'cancelled' where id = ${rig.final.id}`;
+
+    await decide(rig.auth, line.id);
+
+    const final = await row(rig.final.id);
+    expect(seat(final, line.winner_to_slot), "the seat is untouched").toBe(line.home_entrant_id);
+    expect(final.status).toBe("cancelled");
+  });
+
   it("takes the old winner back and the ordinary fill seats the NEW one — the final never keeps a name the result no longer gives it", async () => {
     const rig = await cricketKnockout();
     const line = rig.r1[0]!;
