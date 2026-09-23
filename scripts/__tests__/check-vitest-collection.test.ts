@@ -117,6 +117,14 @@ const REST = [
   // C_GLOBBED. Seventh wave running — and it reddened this gate on the
   // wave's own full run, which is the list doing what its comments promise.
   "src/server/public-site/__tests__/public-round-namer-cross-stage-feed.test.ts",
+  // Standings popovers + qualification status (PR #849): the Pts-ratio note
+  // and the qualification builder, its pool helper and their DB suites. None
+  // begin with "c", so all five belong here. Eighth wave running.
+  "src/server/public-site/__tests__/division-qualification.test.ts",
+  "src/server/public-site/__tests__/public-stages-qualification-db.test.ts",
+  "src/server/public-site/__tests__/qualification-view-db.test.ts",
+  "src/server/public-site/__tests__/qualification-view.test.ts",
+  "src/server/public-site/__tests__/standings-ratio-note.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
