@@ -51,8 +51,19 @@ export class HistoryError extends Error {
   }
 }
 
+const JsonObject = z.record(z.string(), z.unknown());
+
 // A fixture snapshot rich enough to re-insert the row on undo/redo of a
 // destructive op (fixtures_cleared / pool_entrants_cleared payloads).
+//
+// Restore fidelity (2026-09-23): every field after `locked` was added so the
+// re-inserted row is the row that was taken — its ext_key, V368 round role,
+// placeholders, feed edges, number, generation-time verdict and the rest of
+// its schedule placement. Which columns are kept, and which deliberately are
+// not, is decided beside the one reader and the one writer
+// (`snapshotFixtures` / `restoreFixtures`, apps/web/src/server/usecases/
+// history.ts). Every one is optional: a snapshot a ledger already holds from
+// before they existed restores with the column defaults, as it always did.
 export const FixtureSnapshot = z.object({
   id: z.string(),
   stage_id: z.string().optional(),
@@ -64,6 +75,25 @@ export const FixtureSnapshot = z.object({
   at: z.string().nullable().optional(),
   court: z.string().nullable().optional(),
   locked: z.boolean().optional(),
+  schedule_source: z.string().optional(),
+  fixture_no: z.number().int().optional(),
+  ext_key: z.string().nullable().optional(),
+  lane: z.string().nullable().optional(),
+  is_final: z.boolean().optional(),
+  third_place: z.boolean().optional(),
+  conditional: z.boolean().optional(),
+  home_slot_label: JsonObject.nullable().optional(),
+  away_slot_label: JsonObject.nullable().optional(),
+  winner_to_fixture: z.string().nullable().optional(),
+  winner_to_slot: z.number().int().nullable().optional(),
+  loser_to_fixture: z.string().nullable().optional(),
+  loser_to_slot: z.number().int().nullable().optional(),
+  /** The row's status when snapshotted; restored, with `outcome`, only on a
+   *  row that carried no score events (`restoreFixtures`). */
+  status: z.string().optional(),
+  outcome: JsonObject.nullable().optional(),
+  /** Did the row carry score events? They cascade away with the delete. */
+  scored: z.boolean().optional(),
 });
 export type FixtureSnapshot = z.infer<typeof FixtureSnapshot>;
 
