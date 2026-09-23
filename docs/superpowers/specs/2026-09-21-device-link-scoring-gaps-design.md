@@ -543,12 +543,109 @@ cookie-consent so the banner cannot race the pad.
   red-fails in every CI leg otherwise. Append at the END in wave order;
   the list is grouped by programme, never alphabetical.
 
+### The switch existed and was never thrown — `scripts/realtime-gate.sh` (W3 T3, 2026-09-23)
+
+`E2E_REQUIRE_REALTIME=1` has been honoured since the kit was written
+(`e2e/realtime-propagation-kit.ts`, `const REQUIRE_REALTIME =
+process.env.E2E_REQUIRE_REALTIME === "1"`). Nothing has ever set it.
+Re-verified against the tree on 2026-09-23: `grep -rn E2E_REQUIRE_REALTIME
+.github/` still returns **nothing** — not in `e2e.yml`, not in `ci.yml`, not in
+any of the twelve workflow files.
+
+**CI structurally cannot join a channel**, so this is not an oversight that CI
+could absorb. Both halves re-read on 2026-09-23 and both still stand:
+
+- `e2e.yml` sets `NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"` — a
+  stub host, chosen because `publicStorageUrl("")` "hides every badge/crest,
+  making logo assertions untestable", with the file's own note that "No real
+  Supabase call rides on it in e2e."
+- The realtime signing key is a "CI-only dummy keypair (kid
+  `e2e-ci-dummy-es256`) — generated for this workflow, **never imported into a
+  real Supabase JWKS**."
+
+So in CI the pad asks the token door, is answered 200, and then no socket ever
+joins. The kit degrades by design and annotates the run; nothing reds.
+
+**The local prod-target run can join, and it is the only thing that can.** The
+gate is therefore a local command, not a CI job:
+
+```bash
+DATABASE_URL=<test db> DATABASE_SSL=disable \
+  REALTIME_GATE_PORT=3371 scripts/realtime-gate.sh
+```
+
+It runs the two realtime-bearing specs in their own projects
+(`e2e/device-links.spec.ts` under `serial`,
+`e2e/walkthrough/console-device-live-sync.spec.ts` under `walkthrough`) with
+`E2E_REQUIRE_REALTIME=1`, and it refuses to report a pass it did not earn: a
+spec that selects **zero** tests, a spec that has lost its
+`assertPropagatedUnderPoll()` clause, or a kit that no longer reads the switch
+each exit **3**, distinct from the realtime red at **1** and the missing
+environment at **2**.
+
+Measured both ways on 2026-09-23, same build, same DB, same specs — the only
+variable being whether the server got the ROOT `.env.local`:
+
+| server | root `.env.local` | result |
+|---|---|---|
+| `:3371` | yes | **exit 0** — 8 passed (serial, 14.5s) + 3 passed (walkthrough, 12.9s) |
+| `:3381` | no | **exit 1** — 1 failed / 7 passed, and 1 failed / 2 passed |
+
+Both reds name the seam exactly:
+
+> flow (c) device chrome -> its own inner pad: no websocket ever joined this
+> fixture's channel, so the "under 15000ms" clause was NOT exercised. The value
+> did arrive (13774ms, "0" -> "1"), by poll.
+
+> flow (a) device-link pad -> organiser console screen: no websocket ever
+> joined this fixture's channel ... The value did arrive (12955ms ...), by
+> poll.
+
+13.8s and 13.0s against a 15s poll: the value always arrives, which is why a
+realtime regression here reads as a green suite and a lag rather than a
+failure. The timings are also the fastest check that the gate ran for real —
+the green legs finish in ~14s and ~13s, the red ones take 30s and 24s because
+every measured write waits out the poll.
+
+**The one thing every hand-rolled version gets wrong** is the server. The env
+script passes only `apps/web/.env.local`; a key-name diff of the two files
+shows exactly one difference, `SUPABASE_JWT_PRIVATE_KEY`, present in the root
+file and absent from `apps/web`'s. Without it the server falls back to HS256
+(`src/lib/realtime.ts` mints fine, and the token door still answers 200 — the
+device-link token specs pass), and live Supabase then refuses the join. Start
+the gate's server with **both** `--env-file` flags.
+
+**A stale server reads as a realtime red, and the message does not say so.**
+Found while proving this gate: a server left running from the previous day
+(15h39m old) against a since-rebuilt `.next` serves HTML referencing chunks
+that no longer exist — `/_next/static/chunks/<name>.js` answers **500
+`text/plain`**, the browser raises `ChunkLoadError`, and the pad never mounts.
+The gate correctly exits 1, but the specs fail on `toBeVisible()` for the pad,
+the page reads "Something went wrong", and **no realtime message appears at
+all**. Before accepting a red from this gate, check that the failure text
+contains "no websocket ever joined this fixture's channel". If it instead says
+the pad did not mount, compare the server's start time against the build's and
+restart it — that is an environment fault wearing a realtime costume.
+
+**Still OPEN for the owner, and not settled by this wave:** whether to give
+Actions a real Supabase JWKS so CI can join a channel. It has its own cost and
+its own secret-handling decision (note `e2e.yml`'s standing instruction not to
+introduce a var whose name contains `PRIVATE_KEY`, because Actions strips
+job-env vars by name match). Until that is decided, realtime is proven
+**locally, deliberately, by running this script** — and nowhere else.
+
 ## 7. Open questions for the owner
 
 1. ~~Durable idempotency~~ — **answered 2026-09-21**, see §6.
 2. ~~W3's blast radius~~ — **answered 2026-09-21**, see §4.8.
 3. **Ceiling value** — to be derived during implementation (§4.4) and
    brought back if the derivation is contested.
+4. **A real Supabase JWKS for CI** — raised 2026-09-23, **not settled by
+   W3**. CI cannot join a realtime channel by construction (stub host, dummy
+   keypair — §6b), so `E2E_REQUIRE_REALTIME=1` can only ever be thrown
+   locally, via `scripts/realtime-gate.sh`. Giving Actions a real JWKS would
+   put realtime under CI, at the cost of a real signing key in the workflow
+   and the name-matching secret-stripping problem `e2e.yml` documents.
 
 ## 7b. Wave sequence (owner-approved 2026-09-21)
 
