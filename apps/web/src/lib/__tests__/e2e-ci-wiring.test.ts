@@ -364,6 +364,15 @@ const WALKTHROUGH_SPECS: string[] = [
   // apps/web vitest is environment "node", so there is no document, no
   // visibilitychange, and no way to observe the listener at all.
   "console-stalled-pipeline.spec.ts",
+  // Device-link write path, G1 (a standalone fix W3's whole-branch review
+  // found, not a fourth wave) — the SAME floor on the console's twin, the
+  // courtside device-link pad. Same cursor discrimination: the pad's realtime
+  // door and its poll are aborted for the whole run, the chrome's own
+  // `since_seq=0` read is let through, so the header is proven to refresh on a
+  // tab return WITHOUT the pad's pipeline. The unit suite can invoke the
+  // registered handler against a stubbed document; only this sees a browser
+  // deliver the event.
+  "device-pad-stalled-pipeline.spec.ts",
 
   // Entrant rename (2026-09-22, reported from production: a pair swapped a
   // partner and kept the old partner's name). One organiser renames one pair
