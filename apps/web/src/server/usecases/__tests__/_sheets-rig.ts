@@ -19,7 +19,11 @@ import { GENERIC_CONFIG } from "./_seed";
 // of the rig's own, stubbed UNCONDITIONALLY — never `??=` a developer's
 // .env.local one: CI's unit job has no DEVICE_LINK_KEK at all, so an ambient
 // key (or a malformed one) would make a local run test something CI cannot.
-// Each suite importing the rig calls `vi.unstubAllEnvs()` in its afterAll.
+//
+// CALLERS: `vi.unstubAllEnvs()` in `afterAll` ONLY — never in `afterEach`. The
+// stub runs ONCE, when this module is imported; an afterEach unstub strips the
+// key after the first test, and every later mint in the file fails
+// 503 DEVICE_LINK_KEK_MISSING (or seals with an ambient key CI never has).
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 
 export type RigStageKind = "league" | "knockout" | "swiss";

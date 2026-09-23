@@ -4,8 +4,10 @@
 // never a fixture on both ends. One killing case per gate: winner feed
 // (knockout), loser feed, Swiss next round (+ its ad-hoc exclusion), stage
 // complete, and the scoring path's own status gate.
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql, withTenant } from "@/lib/db";
+import { cacheEnabled } from "@/lib/cache";
 import { seedOrg } from "./_seed";
 import { decide, deviceFor, fixturesOf, pairNextSwissRound, seedStage, voidEvent } from "./_sheets-rig";
 import { addFixture, unpairSwissRound } from "../stages";
@@ -110,6 +112,24 @@ describe.skipIf(!HAS_DB)("device-link refusal once a result is carried forward (
     await expect(voidEvent(device, r1[0]!.id, own)).resolves.toBeDefined();
   });
 
+  // Review m3: the next-round lookup is scoped to THIS stage. Another stage in
+  // the same org (RLS lets the lookup see it) with a seated round 2 must not
+  // carry this Swiss round — a league's round 2 is seated from generation.
+  it("swiss: a seated round 2 in ANOTHER stage of the same org does not carry this round (stage_id scope)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D"], { rounds: 2 });
+    const { stage: other } = await seedStage(auth, "league", ["E", "F", "G", "H"]);
+    const otherR2 = (await fixturesOf(other.id)).filter(
+      (x) => x.round_no === 2 && (x.home_entrant_id !== null || x.away_entrant_id !== null),
+    );
+    expect(otherR2.length, "precondition: the other stage's round 2 is seated").toBeGreaterThan(0);
+    const r1 = (await fixturesOf(stage.id)).filter((x) => x.round_no === 1 && x.home_entrant_id && x.away_entrant_id);
+    expect(r1.length, "precondition: round 1 is seated (two boards)").toBe(2);
+    const device = await deviceFor(auth, r1[0]!.id);
+    const own = await decide(device, r1[0]!.id);
+    await expect(voidEvent(device, r1[0]!.id, own)).resolves.toBeDefined();
+  });
+
   it("stage complete: carried; stage re-opened: not carried", async () => {
     const { auth } = await seedOrg("pro");
     const { stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
@@ -120,6 +140,40 @@ describe.skipIf(!HAS_DB)("device-link refusal once a result is carried forward (
     await expect(voidEvent(device, f!.id, own)).rejects.toMatchObject(CARRIED);
     await sql`update stages set status = 'active' where id = ${stage.id}`;
     await expect(voidEvent(device, f!.id, own)).resolves.toBeDefined();
+  });
+
+  // Review I1. The device's deciding tap is itself what carries a knockout SF
+  // (onDecided seats the winner in the same request). If its ack is lost, the
+  // pad resends the SAME key. With Redis absent (or the retry beating the
+  // cacheSet) the fast path misses, and the durable replay lives in appendEvent's
+  // catch — which a 403 thrown before appendEvent would never reach. The retry
+  // must get the ORIGINAL answer; a NEW keyed write must still be refused.
+  it("a keyed retry of the device's OWN deciding tap replays the original answer once carried (no Redis) — a new key still 403s (review I1)", async () => {
+    // Load-bearing: with Redis on, the fast path would answer the retry and this
+    // test would stop witnessing the ledger replay (scoring-durable-idempotency.test.ts).
+    expect(cacheEnabled(), "precondition: no Redis — the ledger replay is the path under test").toBe(false);
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf1 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const device = await deviceFor(auth, sf1.id);
+    await scoreEvent(device, sf1.id, { expected_seq: 0, type: "core.start", payload: {} });
+    const tap = {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 1 },
+      idempotency_key: `idem-${randomUUID()}`,
+    };
+    const first = await scoreEvent(device, sf1.id, tap);
+    // Precondition: the tap carried the SF — a fresh keyed write is refused.
+    await expect(
+      scoreEvent(device, sf1.id, { ...tap, expected_seq: first.seq, idempotency_key: `idem-${randomUUID()}` }),
+    ).rejects.toMatchObject(CARRIED);
+    const retry = await scoreEvent(device, sf1.id, tap);
+    expect(retry.event_id, "the retry names the row the original tap wrote").toBe(first.event_id);
+    expect(retry).toEqual(first);
+    const [{ total }] = await sql<{ total: number }[]>`
+      select count(*)::int as total from score_events where fixture_id = ${sf1.id}`;
+    expect(total, "core.start + the one result — the retry wrote nothing").toBe(2);
   });
 
   it("a SCHEDULED fixture whose feed an organiser filled by hand still scores (Review Focus 2)", async () => {
