@@ -36,6 +36,7 @@ import {
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
+import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -4830,28 +4831,65 @@ test("boardgame v3 pad: the pairing card (pre) and the halves + Draw tile (live)
 // every swipe on a phone was eaten by the page instead of moving a tile.
 // Self-contained: /games/2048 is a static registry page, no auth/org state,
 // so this needs none of this file's setup-test fixtures.
+//
+// ONE gesture on a SEEDED board -- never a retry loop over newGame()'s random
+// one. The old version tried up to four directions in turn, and it hung (not
+// slow: `page.mouse.move` never returned, so 60s and then #817's 120s budget
+// were both exhausted -- CI run 35924224847, mobile-430, trace stuck in the
+// SECOND gesture's move for 118s) whenever the first direction was a legal
+// no-op, e.g. both opening tiles already flush right (~5% of boards). The
+// chain, reproduced locally:
+//   1. a `page.mouse` drag is a text-selection drag, so the no-op first
+//      gesture left a non-collapsed Selection on the board (empty cells
+//      2-2 -> 2-3, reads "\n");
+//   2. the second gesture pressed at the SAME start point, inside that
+//      selection, so its move began a native selection drag -- at once on
+//      Linux (Blink's text-drag delay is 0 there; 150ms on macOS, which is why
+//      it never reproduced on a Mac until the button was held 200ms first);
+//   3. `dragstart` fired un-prevented and `dragend` in the same millisecond
+//      (nothing to drag), and Playwright's drag interception, having seen that
+//      dragstart, awaits `Input.dragIntercepted` with no timeout -- an event a
+//      drag that never reached the system never sends.
+// Not a product defect: the same two gestures sent as raw CDP input (no
+// Playwright drag interception) still move the tile. A single gesture on a
+// fresh page has no selection to drag, on any platform, so it cannot hang.
 test("2048 (mobile swipe bug): touch-action is disabled at rest, and a swipe moves a tile", async ({
   page,
 }) => {
-  // Default 60s is tight for this test specifically: hydration wait, then up
-  // to 4 directions each doing a down/move/up plus a 1000ms settle-poll --
-  // fine on a quiet machine, but the CI mobile matrix runs many width shards
-  // concurrently, and under that load this hit "Test timeout of 60000ms
-  // exceeded" with no assertion diff at all (same as its own retry, on
-  // mobile-320 one run and mobile-360 another) -- a blown wall-clock budget,
-  // not a per-width DOM race. Matches the 120s this file already gives its
-  // other multi-interaction pad tests.
-  test.setTimeout(120_000);
+  // Two 4s side by side in the top row. A swipe RIGHT merges them into an 8 on
+  // the row's far edge (0-3) and scores 8. Nothing else can put an 8 there:
+  // left merges at 0-0, down slides both to row 3 unmerged, up is a no-op, and
+  // applyMove's spawn only ever writes a 2 or a 4 -- so this also pins the
+  // gesture's direction mapping, and does not depend on the RNG at all.
+  // useGameStore reads storage on mount (the game is client-only), so an init
+  // script is early enough.
+  const seeded: Game2048State = {
+    board: [
+      [4, 4, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ],
+    score: 0,
+    best: 0,
+    keepPlaying: false,
+  };
+  await page.addInitScript(
+    ([key, value]) => window.localStorage.setItem(key, value),
+    [GAME_2048_STORAGE_KEY, JSON.stringify(seeded)] as const,
+  );
   await page.goto("/games/2048", { waitUntil: "load" });
   await dismissCookieBanner(page);
   const area = page.getByTestId("2048-swipe-area");
   await expect(area).toBeVisible();
-  // "load" resolves before React hydrates -- a swipe fired before hydration
-  // lands on server-rendered markup with no pointer handler attached yet and
-  // is silently a no-op (same trap this file's own auditRoute/cricket-pad
-  // comments already record). Wait for hydration's own opening-board spawn
-  // effect to land before driving any pointer input.
-  await expect(page.locator('[data-testid="2048-board"] [data-value]:not([data-value="0"])')).toHaveCount(2);
+  const cell = (pos: string) => page.locator(`[data-testid="2048-board"] [data-cell="${pos}"]`);
+  const score = page.getByText(/^Score: \d+/);
+  // "load" resolves before React mounts the client-only game -- a swipe fired
+  // before then lands on markup with no pointer handler attached yet and is
+  // silently a no-op. The SEEDED board rendering is the mount witness.
+  await expect(cell("0-0")).toHaveAttribute("data-value", "4");
+  await expect(cell("0-1")).toHaveAttribute("data-value", "4");
+  await expect(score).toHaveText(/^Score: 0 /);
 
   // The actual regression check: touch-action must already be "none" BEFORE
   // any pointer/touch interaction happens, since that is the only moment the
@@ -4878,51 +4916,15 @@ test("2048 (mobile swipe bug): touch-action is disabled at rest, and a swipe mov
   // 2048.css fixes the board at exactly 288x288; stay inside it with margin.
   const amp = Math.max(30, Math.min(box!.width, box!.height) / 2 - 20);
 
-  // newGame() spawns exactly two tiles (state.ts), so a fresh board reads 14
-  // empty cells. A move that actually lands either changes the score (a
-  // merge happened) or changes the empty-cell count (no merge -- slide()
-  // just moved tiles, then spawn() adds exactly one back; applyMove's
-  // `moved` guard means a no-op swipe spawns nothing and both signals stay
-  // frozen). Two random tiles are placed by the RNG, so a single fixed
-  // direction is occasionally already a legal no-op (e.g. both tiles happen
-  // to land already flush against that edge) -- rather than accept that
-  // rare flake, try each of the four directions in turn and require one of
-  // them to move something, which is true for any two-tile board.
-  const emptyCellsAt = () => page.locator('[data-testid="2048-board"] [data-value="0"]').count();
-  const scoreTextAt = () => page.getByText(/^Score: \d+/).textContent();
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  // Well past swipeTransition's 24px threshold (state.ts).
+  await page.mouse.move(startX + amp, startY, { steps: 5 });
+  await page.mouse.up();
 
-  async function settled(prevScore: string | null, prevEmpty: number): Promise<boolean> {
-    for (let i = 0; i < 20; i++) {
-      const scoreNow = await scoreTextAt();
-      const emptyNow = await emptyCellsAt();
-      if (scoreNow !== prevScore || emptyNow !== prevEmpty) return true;
-      await page.waitForTimeout(50);
-    }
-    return false;
-  }
-
-  const directions: [number, number][] = [
-    [amp, 0], // right
-    [-amp, 0], // left
-    [0, amp], // down
-    [0, -amp], // up
-  ];
-  let moved = false;
-  for (const [dx, dy] of directions) {
-    const scoreBefore = await scoreTextAt();
-    const emptyBefore = await emptyCellsAt();
-
-    await page.mouse.move(startX, startY);
-    await page.mouse.down();
-    // Well past swipeTransition's 24px threshold (state.ts).
-    await page.mouse.move(startX + dx, startY + dy, { steps: 5 });
-    await page.mouse.up();
-
-    moved = await settled(scoreBefore, emptyBefore);
-    if (moved) break;
-  }
-  expect(
-    moved,
-    "no swipe in any of the 4 directions moved a tile -- touch-action regression is back",
-  ).toBe(true);
+  await expect(cell("0-3"), "a swipe right did not merge the two 4s on the row's far edge").toHaveAttribute(
+    "data-value",
+    "8",
+  );
+  await expect(score).toHaveText(/^Score: 8 /);
 });
