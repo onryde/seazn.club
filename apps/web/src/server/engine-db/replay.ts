@@ -15,6 +15,9 @@ export interface ReplayedOutcome {
   state_summary: unknown;
   outcome: unknown;
   status: string;
+  /** The row the original append wrote — the same `event_id` its own answer
+   *  carried (`ScoreOutcome`), so a retrying pad learns it too. */
+  event_id: string;
 }
 
 /**
@@ -36,8 +39,8 @@ export async function replayOutcomeFor(
   idempotencyKey: string,
 ): Promise<ReplayedOutcome | null> {
   return withTenant(orgId, async (tx) => {
-    const [row] = await tx<{ seq: number; type: string }[]>`
-      select seq, type from score_events
+    const [row] = await tx<{ id: string; seq: number; type: string }[]>`
+      select id, seq, type from score_events
       where fixture_id = ${fixtureId} and idempotency_key = ${idempotencyKey}`;
     if (!row) return null;
 
@@ -60,6 +63,7 @@ export async function replayOutcomeFor(
       // The candidate's own TYPE, not the fold alone: `fixtureStatusFromFold`
       // can never answer "finalized", and only `nextStatus` knows that rule.
       status: nextStatus(row.type, folded.outcome, folded.active),
+      event_id: row.id,
     };
   });
 }

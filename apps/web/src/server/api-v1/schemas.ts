@@ -1500,6 +1500,11 @@ export const AppendEventResponse = z.object({
   state_summary: z.unknown(),
   outcome: z.unknown().nullable(),
   status: z.string(),
+  /** The id of the row this append wrote (on an idempotent replay, the row the
+   *  original append wrote) — the same id `GET /events` reports for it and a
+   *  `core.void`'s `event_id` names. Lets a client hold the event under the
+   *  server's id from the moment it lands. */
+  event_id: Uuid,
 });
 
 export const FixtureState = z.object({

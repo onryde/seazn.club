@@ -39,6 +39,13 @@ export interface ScoreOutcome {
   state_summary: unknown;
   outcome: unknown;
   status: string;
+  /** The id of the row this write created — or, on an idempotent replay, the
+   *  row the ORIGINAL write created. A pad that is not told it keeps the event
+   *  under the key it minted, and cannot then resolve a void that names the
+   *  server's id (the device chrome's "Void my last entry", the console's
+   *  undo, a second official's). Every answer this function returns carries
+   *  it, cached ones included: the Redis fast path stores this same object. */
+  event_id: string;
 }
 
 const IDEM_TTL_SECONDS = 24 * 60 * 60; // doc 08 §4
@@ -218,6 +225,7 @@ export async function scoreEvent(
     state_summary: result.summary,
     outcome: result.outcome,
     status: result.status,
+    event_id: result.event.id,
   };
 
   // R10 M3: everything from here on runs AFTER the event committed, so the
