@@ -541,6 +541,28 @@ export function FixtureConsole({
   // `resync` is a `useCallback` keyed on `fixture.id` alone, `handlePadEvents`
   // on `[resync]`, so this effect subscribes ONCE. No memoisation needed here.
   useEffect(() => {
+    // No DOM underneath ⇒ no listener. This is not a harness concession: React
+    // never runs an effect during SSR, so "no document" is this effect's real
+    // server behaviour, and returning states it rather than throwing. It is
+    // reachable in tests because `apps/web` vitest is `environment: "node"` and
+    // `_hook-harness.tsx` commits effects with no browser at all — every other
+    // `document` listener in this file (`:87`, `:1257`) sits in a child the
+    // harness never mounts, and this is the first one on the always-mounted
+    // root. Guarding is what lets three existing console suites render at all.
+    //
+    // Consequence, stated because it is easy to miss: nothing in node can
+    // observe this listener, so no unit test can cover the lines below. The
+    // browser proof is `e2e/walkthrough/console-stalled-pipeline.spec.ts`.
+    // BOTH clauses, and they are not redundant — this file's own test suites
+    // present two DIFFERENT shapes. `fixture-console-forfeit-hooks` and
+    // `-person-names` `vi.stubGlobal("document", …)` (they need it for the
+    // child-component listeners at `:87`/`:1257`) but never stub `window`;
+    // `-undo-pad-events` stubs neither. Drop the `window` clause and the first
+    // two crash on `window.addEventListener` below. Mutation note: only the
+    // `window` clause is currently witnessed — no suite stubs `window` while
+    // leaving `document` absent, so the `document` clause is carried on
+    // correctness (the effect reads both), not on a kill.
+    if (typeof document === "undefined" || typeof window === "undefined") return;
     const refreshIfVisible = () => {
       if (document.visibilityState !== "visible") return;
       // `handlePadEvents` swallows its own failure: nothing the operator
