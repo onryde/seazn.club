@@ -41,4 +41,25 @@ describe("DEVICE_LINK_KEK reaches every server a test boots", () => {
     expect(example).toMatch(/^DEVICE_LINK_KEK=$/m);
     expect(example).toMatch(/openssl rand -hex 32/); // owner ruling Q1
   });
+
+  // scripts/ci-local.sh mirrors these jobs locally, and its standalone server.js starts with common_env's exports
+  // and nothing else: a standalone server reads only .env/.env.production, never .env.local. Without the key there,
+  // every mint in a local ci-local run fails closed.
+  it("scripts/ci-local.sh: common_env exports the workflows' own throwaway key", () => {
+    const script = readFileSync(resolve(ROOT, "scripts/ci-local.sh"), "utf8");
+    const body = /^common_env\(\) \{\n([\s\S]*?)^\}/m.exec(script)?.[1];
+    expect(body, "ci-local.sh has no common_env() — the premise of this test moved").toBeDefined();
+    expect(body, "common_env no longer carries AUTH_SECRET — the premise of this test moved").toMatch(/^\s+export AUTH_SECRET=/m);
+    const local = [...body!.matchAll(/^\s+export DEVICE_LINK_KEK=([0-9a-f]{64})\s*$/gm)].map((m) => m[1]);
+    // Derived from the workflows, never typed here: a key rotated in CI and not here reds this test.
+    const ci = new Set(
+      WORKFLOWS.flatMap((wf) =>
+        [...readFileSync(resolve(ROOT, ".github/workflows", wf), "utf8").matchAll(/^\s+DEVICE_LINK_KEK:\s*([0-9a-f]{64})\s*$/gm)].map(
+          (m) => m[1],
+        ),
+      ),
+    );
+    expect(ci.size, "the workflows disagree on the throwaway key").toBe(1);
+    expect(local).toEqual([...ci]);
+  });
 });

@@ -272,6 +272,9 @@ start_server() {
 common_env() {
   export DATABASE_SSL=disable
   export AUTH_SECRET=ci-only-insecure-secret-please-change-in-prod-0123456789
+  # CI's throwaway device-link envelope key (scorer sheets §4.1), the same value as the workflows. Never a real key:
+  # the standalone server never reads .env.local, so without this every mint in a local run fails closed.
+  export DEVICE_LINK_KEK=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
   export NEXT_TELEMETRY_DISABLED=1
   export SCHEDULING_AI_BASE_URL="http://127.0.0.1:4319"
 }
