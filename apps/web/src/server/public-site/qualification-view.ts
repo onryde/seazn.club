@@ -125,7 +125,10 @@ export interface QualificationViewInput {
   bounds: MatchPointsBounds | null;
   /** The division's walkover writes goals into the ledger
    *  (`divisionAwardAddsToLedger`) — then a two-sided award counts toward the
-   *  what-if's average match. A one-sided bye never does. */
+   *  what-if's average match. The SPORT's forfeit score never reaches a
+   *  one-sided bye; a stage PointsRule's `forfeit.awardScore` does, and scores
+   *  every walkover too — the builder reads that off `stage.meta.pointsRule`
+   *  itself, whatever this flag says. */
   awardAddsToLedger: boolean;
   cascade: readonly string[];
   entrantNames: Readonly<Record<string, string>>;
@@ -148,16 +151,32 @@ function counted(f: QualFixture): boolean {
 }
 
 /** A counted match that adds nothing to the goal/set ledger (T3-⚠3): a
- *  no-result; a one-sided bye (the adapter folds it from a fresh 0–0 state);
- *  or a two-sided award — a walkover — in a sport whose forfeit writes no
- *  score (`awardAddsToLedger` false; ice hockey's writes `awardScore` goals,
- *  so its walkover is an ordinary match here). The what-if's average match
- *  leaves these out. */
-function ledgerless(f: QualFixture, awardAddsToLedger: boolean): boolean {
+ *  no-result; and, unless a stage rule scores forfeits (`ruleScoresForfeits`),
+ *  a one-sided bye (the adapter folds it from a fresh 0–0 state) or a
+ *  two-sided award — a walkover — in a sport whose forfeit writes no score
+ *  (`awardAddsToLedger` false; ice hockey's writes `awardScore` goals, so its
+ *  walkover is an ordinary match here). The what-if's average match leaves
+ *  these out. */
+function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleScoresForfeits: boolean): boolean {
   const kind = outcomeKind(f);
   if (kind === "no_result") return true;
   if (kind !== "award") return false;
+  if (ruleScoresForfeits) return false;
   return isOneSidedAwardBye(f) || !awardAddsToLedger;
+}
+
+/** A stage PointsRule with a non-zero `forfeit.awardScore`: `applyPointsRule`
+ *  adds it to for/against/diff on every forfeit, and the adapter applies the
+ *  rule to a one-sided bye's delta as well (engine-db/competition.ts
+ *  `awardByeDelta`), so under it every award is a ledger match. Read here, not
+ *  by the caller: V414 publishes the rule as `meta.pointsRule`, and a caller
+ *  cannot forget it. (A rule that does not parse never gets this far —
+ *  `boundsInForce` refuses it.) */
+function ruleScoresForfeits(meta: StageQualMeta): boolean {
+  if (meta.pointsRule === null || meta.pointsRule === undefined) return false;
+  const parsed = PointsRule.safeParse(meta.pointsRule);
+  const score = parsed.success ? parsed.data.forfeit?.awardScore : undefined;
+  return score !== undefined && (score[0] !== 0 || score[1] !== 0);
 }
 
 function statusLabel(s: QualStatus, i: QualificationViewInput): string {
@@ -225,6 +244,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   if (i.cascade[0] !== "points") return null; // Review Focus 4: points do not decide places
   const perMatch = boundsInForce(i);
   if (perMatch === null) return null;
+  const ruleScored = ruleScoresForfeits(meta);
 
   const isSwiss = i.stage.kind === "swiss";
   if (isSwiss && (meta.swissRounds === null || meta.swissRounds < 1)) return null;
@@ -331,7 +351,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     const rival = rivalId === null ? undefined : byId.get(rivalId);
     if (!rival) return null;
     // The average match counts only matches with a ledger (T3-⚠3).
-    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger)).length;
+    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleScored)).length;
     const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;

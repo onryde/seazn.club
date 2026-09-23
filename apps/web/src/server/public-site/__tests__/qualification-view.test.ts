@@ -852,6 +852,51 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const d = must(view(swiss5(), { awardAddsToLedger: divisionAwardAddsToLedger(ICEHOCKEY, {}) })).rows.D!;
     expect(d.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides: win your next match by 4 or more to finish ahead.`);
   });
+
+  // A stage PointsRule's `forfeit.awardScore` (V414 publishes it as
+  // meta.pointsRule): `applyPointsRule` adds it to for/against/diff on EVERY
+  // forfeit, and the adapter applies the rule to a one-sided bye's delta too
+  // (engine-db/competition.ts `awardByeDelta`). So under such a rule a walkover
+  // AND a bye are ledger matches — whatever the sport, and without the caller
+  // having to say so (the generic module's awardAddsToLedger stays false here).
+  // Each pair is the same scene under the same rule minus its awardScore.
+  const scoredRule = (awardScore?: [number, number]) => ({
+    base: { win: W, draw: 1, loss: 0 },
+    bonuses: [],
+    forfeit: { winnerPoints: W, loserPoints: 0, ...(awardScore ? { awardScore } : {}) },
+  });
+  it("a stage rule's forfeit score puts a walkover in the ledger even where the sport's does not", () => {
+    // The walkover scene: B's 3–0 is inside B's 7–2 and D's 6–8.
+    const o = open4({ D: [6, 8], B: [7, 2] });
+    const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const scored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    expect(scored.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
+    expect(scored.whatIfAssumption).toBeNull();
+    const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } })).rows.D!;
+    expect(unscored.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
+    // A 0–0 forfeit score adds nothing, so it is no ledger match either.
+    const nil = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
+    expect(nil.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
+  });
+  it("…and a one-sided bye too (the adapter applies the rule to the bye's delta)", () => {
+    // swiss5's fixtures, goals as a 3–0 bye rule folds them: r1 A 3–0 B, E 3–0
+    // D, C bye; r2 A 2–0 C, E 1–0 B, D bye. D is 3–3 (level) over one real
+    // match and one bye; its rival E is +4, so a win by 5 draws them level:
+    // it fits one 6-goal match, not an average of 3 over two.
+    const s = swiss5();
+    const rows = [
+      row("A", 1, 2, 2, [5, 0]),
+      row("E", 2, 2, 2, [4, 0]),
+      row("C", 3, 1, 2, [3, 2]),
+      row("D", 4, 1, 2, [3, 3]),
+      row("B", 5, 0, 2, [0, 4]),
+    ];
+    const scored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    expect(scored.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides. Now: you 0, Ed +4.`);
+    expect(scored.whatIfAssumption).toBeNull();
+    const unscored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule() } })).rows.D!;
+    expect(unscored.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides: win your next match by 5 or more to finish ahead.`);
+  });
   it("winsOnly from the bounds IN FORCE: badminton skips `wins` for set ratio", () => {
     const bb = divisionPointsBounds(BADMINTON, {})!;
     expect(bb.winsOnly).toBe(true);
