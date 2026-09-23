@@ -23,6 +23,10 @@
 //    or inside the scroll box that clips it, so a panel never floats on
 //    explaining a row the reader can no longer see. Focus follows the Esc
 //    rule, and handing it back never scrolls the page to the button;
+//  * closes when the hub's live update changes a standings table
+//    (`POPOVER_CLOSE_EVENT`);
+//  * reads closed when the BROWSER hides it: `aria-expanded` follows the
+//    panel, so the next tap opens it rather than "closing" nothing;
 //  * a 40px tap target both ways: `min-w-10` here, and each host stretches
 //    the button over its cell's `py-2.5` with `-my-2.5 py-2.5`.
 //
@@ -36,7 +40,7 @@
 // panel is placed.
 //
 //  * The root carries `data-open` while open. A sticky host cell can then
-//    raise itself with `has-[[data-open]]:z-30`; `standings-table.tsx`
+//    raise itself with `has-[[data-open]]:z-20`; `standings-table.tsx`
 //    explains why the CELL, not the panel, has to rise.
 //  * An open panel is `position: fixed`, placed from the trigger's own box on
 //    every open, scroll and resize. It is NOT a portal: the panel stays where
@@ -75,8 +79,8 @@
 // open, so the markup is its SSR). Only there is it painted over the sticky
 // site header (`z-40`) and tab rail (`z-30`). A z-index could not do it on the
 // division page: there the panel sits in the sticky rank cell, a stacking
-// context raised only to `z-30`, so a `z-45` panel still painted under the
-// header (measured with `elementFromPoint`). The top layer also paints it over
+// context raised only to `z-30` then (`z-20` now), so a `z-45` panel still
+// painted under the header (measured with `elementFromPoint`). The top layer also paints it over
 // a neighbouring sticky cell, so it no longer depends on the cell's raise. A
 // browser without the Popover API paints it where it sits, with the classes'
 // `z-20`, which is how every panel painted before.
@@ -86,6 +90,18 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
  *  other open one closes. An event rather than shared state because the
  *  division page mounts one table per pool and nothing else connects them. */
 export const POPOVER_OPEN_EVENT = "seazn:standings-popover-open";
+
+/** Fired on `document` to close every open standings popover. The hub fires
+ *  it when a live update CHANGES a standings table (owner ruling 2026-09-23:
+ *  "simply close it" — the row may be about to move, and the reader taps
+ *  again). */
+export const POPOVER_CLOSE_EVENT = "seazn:standings-popover-close";
+
+/** Closes every open standings popover (see POPOVER_CLOSE_EVENT). */
+export function closeStandingsPopovers(): void {
+  if (typeof document === "undefined") return;
+  document.dispatchEvent(new Event(POPOVER_CLOSE_EVENT));
+}
 
 export interface StandingsPopoverProps {
   /** What the button shows — the rank chip and its marker, or the ratio. */
@@ -287,6 +303,35 @@ export function StandingsPopover({
     };
   }, [open, align]);
 
+  // The browser can hide an open panel without this component: a
+  // `hidePopover()` from anywhere (which fires `toggle`), or React moving the
+  // panel's row. The hub closes every popover before a changed table is drawn
+  // (POPOVER_CLOSE_EVENT), so this is the safety net for anything else that
+  // moves a row. Moving a node out and back in hides a popover and fires NO
+  // event at all (measured, Chromium 149), so a watch on the DOM covers that.
+  // Either way the open state follows the panel. Focus follows the Esc rule.
+  useEffect(() => {
+    const panel = panelRef.current;
+    const root = rootRef.current;
+    // No `popover` attribute: no Popover API (see `raise`), nothing to lose.
+    if (!open || !panel || !root || !panel.hasAttribute("popover")) return;
+    const lost = () => {
+      if (panel.matches(":popover-open")) return;
+      if (root.contains(document.activeElement)) buttonRef.current?.focus({ preventScroll: true });
+      setOpen(false);
+    };
+    const onToggle = (e: Event) => {
+      if ((e as ToggleEvent).newState === "closed") lost();
+    };
+    panel.addEventListener("toggle", onToggle);
+    const watch = new MutationObserver(lost);
+    watch.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      panel.removeEventListener("toggle", onToggle);
+      watch.disconnect();
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     // The outside-tap close. Not redundant with the focusout close below: on
@@ -307,13 +352,20 @@ export function StandingsPopover({
     const onOtherOpened = (e: Event) => {
       if ((e as CustomEvent<string>).detail !== id) setOpen(false);
     };
+    // The Esc rule for focus, without scrolling the page to the button.
+    const onCloseAll = () => {
+      if (rootRef.current?.contains(document.activeElement)) buttonRef.current?.focus({ preventScroll: true });
+      setOpen(false);
+    };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener(POPOVER_OPEN_EVENT, onOtherOpened);
+    document.addEventListener(POPOVER_CLOSE_EVENT, onCloseAll);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener(POPOVER_OPEN_EVENT, onOtherOpened);
+      document.removeEventListener(POPOVER_CLOSE_EVENT, onCloseAll);
     };
   }, [open, id]);
 

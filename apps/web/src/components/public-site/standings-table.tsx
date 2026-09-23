@@ -252,7 +252,7 @@ export function StandingsTable({
                 {/* Rank column frozen inside the scroll container (v3/02 §3.3)
                     — solid bg so scrolled columns pass underneath, not through.
 
-                    `has-[[data-open]]:z-30` is what stops the tie-break
+                    `has-[[data-open]]:z-20` is what stops the tie-break
                     popover being painted over by the rows BELOW it. Every one of
                     these cells is `z-10`, and an open panel is trapped in its
                     own cell's stacking context, so however high the panel's own
@@ -274,7 +274,7 @@ export function StandingsTable({
                     row whose panel would still cross that bottom edge is
                     flipped the same way, measured on open (`data-side`). */}
                 <td
-                  className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums has-[[data-open]]:z-30 ${
+                  className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums has-[[data-open]]:z-20 ${
                     row.rank === 1 ? "bg-amber-50" : "bg-surface"
                   }`}
                 >

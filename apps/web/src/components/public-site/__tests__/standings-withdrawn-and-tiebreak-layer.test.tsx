@@ -24,7 +24,9 @@
 // of them, so the tie was decided on DOM order and the later row won. The fix
 // raises the CELL that contains an open popover. (It was an open `<details>`
 // then; since the shared `StandingsPopover` replaced it, the open mark is the
-// popover root's `data-open`, and the raise is `has-[[data-open]]:z-30`.)
+// popover root's `data-open`, and the raise is `has-[[data-open]]:z-20`: above
+// the z-10 neighbours, which is all it is for, and below the z-30 tab rail, so
+// an open row scrolled under the rail no longer paints over it.)
 //
 // This suite is `renderToStaticMarkup`, so it can see the class and the chip
 // but NOT the cascade — class present is not class in effect. The behavioural
@@ -282,8 +284,11 @@ describe("StandingsTable — an open tie-break popover is not painted over by th
       // all; asserting only the first is the state the defect shipped in.
       expect(cell).toContain("z-10");
       expect(cell, "the open-popover raise is gone — the popover will be covered again").toContain(
-        "has-[[data-open]]:z-30",
+        "has-[[data-open]]:z-20",
       );
+      // …and no higher: at z-30 the open cell tied the sticky tab rail and won
+      // on DOM order, painting over the rail when scrolled under it.
+      expect(cell, "the open-popover raise is above the tab rail's z-30").not.toMatch(/has-\[\[data-open\]\]:z-(?:[3-9]\d|\d{3,})\b/);
     }
   });
 

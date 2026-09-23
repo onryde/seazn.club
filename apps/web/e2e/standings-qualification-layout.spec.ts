@@ -812,6 +812,34 @@ for (const [where, width] of [
       expect(h.inPanel, `y ${h.y}: ${h.hit} is painted over the panel (sticky chrome there: ${h.chrome})`).toBe(true);
     }
     console.log(`CHROME ${where} ${width} ${JSON.stringify(hits)}`);
+
+    // The division page freezes its rank column: the open row's sticky rank
+    // cell is raised to beat its z-10 neighbours, and no higher. Where that
+    // cell sits under the z-30 tab rail, the RAIL is painted (a z-30 cell tied
+    // the rail and won on DOM order). The point is below the panel, so the
+    // top-layer panel cannot be what answers.
+    if (where === "division") {
+      const under = await lastRow.evaluate((el) => {
+        const cell = el.closest("td")!.getBoundingClientRect();
+        const rail = [...document.querySelectorAll("div")].find((d) => {
+          const cs = getComputedStyle(d);
+          return cs.position === "sticky" && cs.top === "54px";
+        });
+        const panelBottom = el.parentElement!.querySelector('[role="note"]')!.getBoundingClientRect().bottom;
+        if (!rail) return { error: "no tab rail" };
+        const r = rail.getBoundingClientRect();
+        const top = Math.max(cell.top, r.top, panelBottom) + 2;
+        const bottom = Math.min(cell.bottom, r.bottom) - 2;
+        if (top >= bottom) return { error: `no point under both: ${Math.round(top)} ≥ ${Math.round(bottom)}` };
+        const x = cell.left + cell.width / 2;
+        const y = (top + bottom) / 2;
+        const hit = document.elementFromPoint(x, y);
+        return { x: Math.round(x), y: Math.round(y), inRail: hit !== null && rail.contains(hit), inCell: hit !== null && el.closest("td")!.contains(hit) };
+      });
+      expect(under.error, "premise: the open row's rank cell is under the tab rail, below the panel").toBeUndefined();
+      expect(under.inRail, `the open row's rank cell is painted over the tab rail at ${under.x},${under.y}`).toBe(true);
+      expect(under.inCell).toBe(false);
+    }
     const bottom = await panel.evaluate((el) => el.getBoundingClientRect().bottom);
     await page.screenshot({ path: testInfo.outputPath(`chrome-${where}-${width}.png`), clip: { x: 0, y: 0, width, height: Math.ceil(bottom) + 48 } });
   });

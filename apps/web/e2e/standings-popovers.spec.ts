@@ -229,6 +229,14 @@ async function expectClosed(trigger: Locator, panel: Locator): Promise<void> {
   await expect(panel).toBeHidden();
 }
 
+/** The attributes an OPEN panel is given at runtime — the top layer's
+ *  `popover`, the fixed placement's `style`, an upward panel's `data-side` —
+ *  none of which the server renders. A closed panel must carry none of them:
+ *  its DOM is its SSR again. */
+const RUNTIME_ATTRS = ["popover", "style", "data-side"] as const;
+const runtimeAttrs = (panel: Locator) =>
+  panel.evaluate((el, names) => Object.fromEntries(names.map((n) => [n, el.getAttribute(n)])), [...RUNTIME_ATTRS]);
+
 /** Points inside `panel` that are NOT the panel when hit-tested — i.e. where
  *  something else is painted on top of it. Samples the corners (inset) and the
  *  centre, keeping only points inside the viewport; returns what was hit at
@@ -372,6 +380,78 @@ for (const surface of [DIVISION, HUB]) {
       await page.keyboard.press("Escape");
       await expectClosed(trigger, panel);
       await expect(trigger, "Esc did not return focus to the trigger").toBeFocused();
+    });
+
+    test("Esc hands the panel back as the server rendered it: no popover, style or data-side left on it", async ({ browser }) => {
+      const page = await open(browser, surface, 1280);
+      // The second row opens down; the LAST row (c) opens up, so data-side is
+      // set while it is open and there is something for the close to strip.
+      for (const [who, side] of [["b", null], ["c", "up"]] as const) {
+        const trigger = surface.tie(page, who);
+        const panel = await panelOf(trigger);
+        await trigger.evaluate((el) => el.scrollIntoView({ block: "center" }));
+        await trigger.click();
+        await expectOpen(trigger, panel);
+        // The positive pair: open, the runtime attributes ARE there.
+        const opened = await runtimeAttrs(panel);
+        expect(opened.popover, `${who}: premise: the open panel is a manual popover`).toBe("manual");
+        expect(opened.style, `${who}: premise: the open panel is placed`).toContain("position: fixed");
+        expect(opened["data-side"], `${who}: premise: the side it opened on`).toBe(side);
+        await page.keyboard.press("Escape");
+        await expectClosed(trigger, panel);
+        expect(await runtimeAttrs(panel), `${who}: the closed panel kept runtime attributes`).toEqual({
+          popover: null,
+          style: null,
+          "data-side": null,
+        });
+      }
+    });
+
+    test("a panel the browser hides on its own — hidePopover(), or React moving its row — reads closed, and the next tap reopens it", async ({
+      browser,
+    }) => {
+      const page = await open(browser, surface, 1280);
+      const trigger = surface.tie(page, "b");
+      const panel = await panelOf(trigger);
+      await trigger.evaluate((el) => el.scrollIntoView({ block: "center" }));
+
+      // 1. Hidden by the API (fires `toggle`).
+      await trigger.click();
+      await expectOpen(trigger, panel);
+      await panel.evaluate((el) => (el as HTMLElement).hidePopover());
+      await expectClosed(trigger, panel);
+      await trigger.click();
+      await expectOpen(trigger, panel);
+      expect(await outsideViewport(panel), "reopened after hidePopover").toBeNull();
+
+      // 2. Its row moved, as React moves a keyed <tr> when a live result
+      //    reorders the table. Moving a node out and back in hides an open
+      //    popover and fires NO toggle event (measured in Chromium 149). The
+      //    row goes to the end and straight back, so React's DOM is as it
+      //    left it. Opened by a tap that focuses nothing (iOS Safari): with
+      //    the button focused, removing it fires a focusout that closes the
+      //    popover on its own and would hide whether the move is noticed.
+      await trigger.click();
+      await expectClosed(trigger, panel);
+      // Focus off the button while it is CLOSED (a blur while open is the
+      // tab-away close), then a DOM click, which focuses nothing.
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await trigger.evaluate((el) => (el as HTMLElement).click());
+      await expectOpen(trigger, panel);
+      expect(await page.evaluate(() => document.activeElement?.tagName), "premise: nothing in the popover is focused").toBe("BODY");
+      const hidden = await trigger.evaluate((el) => {
+        const tr = el.closest("tr")!;
+        const body = tr.parentElement!;
+        const next = tr.nextSibling;
+        body.appendChild(tr);
+        body.insertBefore(tr, next);
+        return !el.parentElement!.querySelector('[role="note"]')!.matches(":popover-open");
+      });
+      expect(hidden, "premise: moving the row hid the open popover").toBe(true);
+      await expectClosed(trigger, panel);
+      await trigger.click();
+      await expectOpen(trigger, panel);
+      expect(await outsideViewport(panel), "reopened after its row moved").toBeNull();
     });
 
     test("focus: tabbing away closes it, an Esc someone else handled is left alone, and Esc never pulls focus in from outside", async ({
@@ -649,6 +729,73 @@ for (const surface of [DIVISION, HUB]) {
     }
   });
 }
+
+// ── the hub's live update ────────────────────────────────────────────────────
+//
+// Owner ruling (2026-09-23): when the hub applies a live update that CHANGES a
+// standings table, every open standings popover closes ("simply close it"),
+// and the reader taps again. Driven through the real transport: the hub
+// document's own endpoint is answered with the server's document, and the
+// hook's poll is brought forward with the page clock. Nothing here is live, so
+// the poll runs at HUB_IDLE_POLL_MS (60s) with no realtime channel.
+
+test.describe("hub live update", () => {
+  test("an update that changes the standings table closes an open popover, and the next tap reopens it; a tick with the same table leaves it open", async ({
+    browser,
+  }) => {
+    const page = await spectator(browser, { width: 1280, height: 900 });
+    await page.clock.install();
+    // What the endpoint answers: the server's own document, with one cell of
+    // the FIRST row's changed when `change` is set. Not the open row (b), so
+    // no row moves and only the close-on-update can close it (a moved row is
+    // the DOM watch's case, covered above).
+    let change = false;
+    let answered = 0;
+    await page.route("**/api/v1/public/orgs/*/competitions/*/hub", async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { data: { tables: { rows: { entrantId: string; cells: string[] }[] }[] } };
+      if (change) {
+        const row = body.data.tables.flatMap((t) => t.rows).find((r) => r.entrantId === seed.ids.a);
+        expect(row, "premise: the hub document carries row a").toBeTruthy();
+        row!.cells[0] = `${row!.cells[0]}0`;
+      }
+      answered += 1;
+      await route.fulfill({ response, json: body });
+    });
+    await page.goto(HUB.path(), { waitUntil: "load" });
+    await HUB.ready(page);
+    const trigger = HUB.tie(page, "b");
+    const panel = await panelOf(trigger);
+    await trigger.evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await trigger.click();
+    await expectOpen(trigger, panel);
+    const rowA = page.locator('[data-testid^="mh-table-"] tbody tr').filter({ has: HUB.tie(page, "a") });
+    const rowABefore = await rowA.innerText();
+
+    /** One poll tick, answered; then long enough for React to apply it. */
+    const tick = async () => {
+      const before = answered;
+      await page.clock.fastForward(61_000);
+      await expect.poll(() => answered, { message: "premise: the hub polled its document" }).toBeGreaterThan(before);
+      await page.waitForTimeout(500);
+    };
+
+    // 1. The same table: still open.
+    await tick();
+    await expectOpen(trigger, panel);
+
+    // 2. A changed table: closed, and the change is on screen.
+    change = true;
+    await tick();
+    await expectClosed(trigger, panel);
+    await expect(rowA, "premise: the changed table is the one drawn").not.toHaveText(rowABefore);
+
+    // 3. The next tap opens it again.
+    await trigger.click();
+    await expectOpen(trigger, panel);
+    expect(await outsideViewport(panel), "reopened after the update").toBeNull();
+  });
+});
 
 // ── carrom: a board-ratio panel over the frozen rank column ─────────────────
 //
