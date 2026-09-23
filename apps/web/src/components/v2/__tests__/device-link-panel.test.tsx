@@ -96,6 +96,10 @@ describe("device-link panel — Show QR vs Revoke & reissue (scorer sheets §4.2
     click(byTestId(island.tree(), "device-link-show"));
     await flush();
     expect(api.posts).toEqual(["/api/v1/fixtures/f1/device-links"]);
+    // "Survives" means NOTHING revoked the live link on the way: no DELETE,
+    // and the link the panel shows afterwards is still the one it started with.
+    expect(api.deletes, "Show QR never revokes the live link first").toEqual([]);
+    expect(api.active?.id).toBe(SEALED.id);
   });
 
   it("Revoke & reissue asks first, and only the confirm posts to /reissue", async () => {
@@ -229,23 +233,27 @@ describe("device-link panel — a server with no DEVICE_LINK_KEK (owner ruling Q
     expect(island.text()).not.toContain(SERVER_ENGLISH);
   });
 
-  it("a 402 on either POST opens the upgrade gate, not an error line (Show QR and the reissue confirm)", async () => {
-    api.refuse = { message: "upgrade required", status: 402, code: "PAYMENT_REQUIRED" };
-    const gate = (tree: ReactElement[]) => tree.some((el) => propsOf(el).feature === "scoring.device_links");
-    for (const path of ["show", "reissue"] as const) {
+  // One `it` per path, so each starts from `beforeEach`'s fresh double: a
+  // shared loop let the first path's side effects (a DELETE nulling the live
+  // link) leak into the second and red it for the wrong reason.
+  it.each(["show", "reissue"] as const)(
+    "a 402 on the %s POST opens the upgrade gate, not an error line",
+    async (path) => {
+      api.refuse = { message: "upgrade required", status: 402, code: "PAYMENT_REQUIRED" };
+      const gate = (tree: ReactElement[]) => tree.some((el) => propsOf(el).feature === "scoring.device_links");
       const island = renderIsland(DeviceLinkPanel, PROPS);
       await flush();
-      expect(gate(island.tree()), `${path}: no gate before the tap`).toBe(false);
+      expect(gate(island.tree()), "no gate before the tap").toBe(false);
       if (path === "show") click(byTestId(island.tree(), "device-link-show"));
       else {
         click(byTestId(island.tree(), "device-link-reissue"));
         click(byTestId(island.tree(), "device-link-reissue-confirm"));
       }
       await flush();
-      expect(gate(island.tree()), `${path}: the upgrade gate opens`).toBe(true);
-      expect(island.text(), `${path}: the server's sentence is not shown`).not.toContain("upgrade required");
-    }
-  });
+      expect(gate(island.tree()), "the upgrade gate opens").toBe(true);
+      expect(island.text(), "the server's sentence is not shown").not.toContain("upgrade required");
+    },
+  );
 
   it("any other refusal still shows its own message (the negative pair — the mapping is by code, not blanket)", async () => {
     api.refuse = { message: "fixture is finalized", status: 422, code: "FIXTURE_FINALIZED" };
