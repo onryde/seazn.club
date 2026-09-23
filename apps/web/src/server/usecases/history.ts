@@ -29,7 +29,7 @@ import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
-import { generateStageFixtures } from "./stages";
+import { generateStageFixtures, wireCrossFeeds } from "./stages";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
@@ -144,6 +144,16 @@ function resolveCourtWrite(value: unknown, context: Record<string, unknown>): Co
 //     conditional (V368 round role), home/away_slot_label (TBD placeholders),
 //     winner_to/loser_to fixture+slot (the feed edges), fixture_no (the
 //     number printed on sheets — renumbered only when taken since).
+//   - ...except an ext_key a LIVE row of the same stage holds by the time of
+//     the restore. Rows are minted outside the ledger — the Swiss shell
+//     top-up (stages.ts reconcileSwissRoundShells) inserts `sw-rN-bK` shells
+//     no undo ever removes — so the key can be taken again, and `(stage_id,
+//     ext_key)` is unique: a raw restore raised 23505, and since every retry
+//     replays the same snapshot, Undo was stuck for good. The restored row
+//     comes back WITHOUT the key instead (logged). The live row keeps it
+//     because it is the one the generator already recognises; the restored
+//     row is a board the generator no longer claims — exactly what every
+//     restored row was before this fix, now confined to the colliding one.
 //   - status / outcome of a row that carried no score events — on such a row
 //     they can only be the generator's own verdicts (a bye's award, a
 //     departed qualifier's walkover or void) or 'scheduled' (see
@@ -168,9 +178,16 @@ function resolveCourtWrite(value: unknown, context: Record<string, unknown>): Co
 //     (legacy free text, superseded by venue_id / court_id); parent_fixture_id
 //     (nothing in apps/web writes it).
 //
-// Known residual: a feed edge INTO a restored row from a row that is not in
-// the snapshot (a cross-stage `cross_feeds` edge, stages.ts wireCrossFeeds)
-// was SET NULL by the delete and is not re-wired here.
+// Feed edges INTO a restored row from a row outside its snapshot were SET NULL
+// by the delete, and the snapshot (outgoing edges only) cannot carry them. The
+// ones a stage DECLARES — `cross_feeds` — are re-derived after every restore
+// by the generator's own `wireCrossFeeds`, which fills null edges only. That
+// is what re-wires a multi-step restore: undo B then A, and A's snapshot is
+// taken after B's delete nulled A→B, so A comes back without it; restoring B
+// next re-derives it. Known residual: an INTRA-stage edge that a later,
+// partial regeneration's feed pass wrote from an older row into one of its
+// own new rows (stages.ts, "Second pass: feeds") is declared nowhere but that
+// pass, so undoing that regeneration and restoring it does not re-wire it.
 // ---------------------------------------------------------------------------
 
 /** What `snapshotFixtures` returns: every field present (the SQL selects them
@@ -185,8 +202,7 @@ interface SnapshotRow extends FixtureSnapshot {
   status: string;
 }
 
-/** The one snapshot read. Ordered by fixture number, so a restore that must
- *  renumber a taken number still hands them out in the original order. */
+/** The one snapshot read. Unordered: `restoreFixtures` owns the order. */
 async function snapshotFixtures(
   tx: Tx,
   by: { ids: readonly string[] } | { poolId: string },
@@ -206,8 +222,7 @@ async function snapshotFixtures(
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
            f.status, f.outcome,
            exists (select 1 from score_events se where se.fixture_id = f.id) as scored
-    from fixtures f where ${where}
-    order by f.fixture_no, f.id`;
+    from fixtures f where ${where}`;
 }
 
 /** A row that carried no score events comes back with the status and outcome
@@ -240,7 +255,12 @@ async function restoreFixtures(
   const jsonb = (value: Record<string, unknown> | null | undefined) =>
     value === null || value === undefined ? null : tx.json(value as never);
   const restored: FixtureSnapshot[] = [];
-  for (const s of snapshots) {
+  // Insert order IS renumber order: a row whose number was taken gets the
+  // trigger's max + 1, so rows go in by their original number and two that
+  // both lost theirs keep their relative order. A legacy snapshot carries no
+  // numbers at all, and the stable sort leaves its rows as they were.
+  const ordered = [...snapshots].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0));
+  for (const s of ordered) {
     const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType });
     const verdict = restoredVerdict(s);
     // venue_id: derived from the court being restored, the one rule its only
@@ -248,9 +268,11 @@ async function restoreFixtures(
     // from the court it must agree with. No court, no venue.
     // fixture_no: its own number unless something took it since, in which
     // case null lets the insert trigger hand out the next free one.
+    // ext_key: its own key unless a live row of the stage holds it now (see
+    // the KEPT list above) — then null, never a 23505 that sticks Undo.
     // Feed edges are written after every row is in (below): an edge may
     // point at a row later in this same list.
-    const inserted = await tx<{ id: string }[]>`
+    const inserted = await tx<{ id: string; ext_key: string | null }[]>`
       insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
                             home_entrant_id, away_entrant_id, scheduled_at, court_id,
                             venue_id, schedule_locked, schedule_source, fixture_no,
@@ -264,12 +286,23 @@ async function restoreFixtures(
               (select n.no from (select ${s.fixture_no ?? null}::int as no) n
                 where not exists (select 1 from fixtures t
                                   where t.division_id = ${divisionId} and t.fixture_no = n.no)),
-              ${s.ext_key ?? null}, ${s.lane ?? null}, ${s.is_final === true},
+              (select k.key from (select ${s.ext_key ?? null}::text as key) k
+                where not exists (select 1 from fixtures t
+                                  where t.stage_id = ${s.stage_id!} and t.ext_key = k.key)),
+              ${s.lane ?? null}, ${s.is_final === true},
               ${s.third_place === true}, ${s.conditional === true},
               ${jsonb(s.home_slot_label)}, ${jsonb(s.away_slot_label)},
               ${verdict.status}, ${jsonb(verdict.outcome)})
-      on conflict (id) do nothing returning id`;
-    if (inserted.length > 0) restored.push(s);
+      on conflict (id) do nothing returning id, ext_key`;
+    const [row] = inserted;
+    if (row === undefined) continue;
+    restored.push(s);
+    if (s.ext_key && row.ext_key === null) {
+      log.warn(
+        { divisionId, fixtureId: s.id, extKey: s.ext_key, eventType },
+        "history: a live fixture of this stage holds the restored row's ext_key — restored without it",
+      );
+    }
   }
   // An edge whose target no longer exists is dropped with its slot, never
   // written as a dangling id (the FK would refuse it).
@@ -285,6 +318,9 @@ async function restoreFixtures(
                          where t.id = ${s.loser_to_fixture ?? null})
       where id = ${s.id}`;
   }
+  // Edges INTO the restored rows that a stage declares (`cross_feeds`): the
+  // generator's own re-derivation, null edges only — see the header above.
+  await wireCrossFeeds(tx, divisionId);
   return restored.map((s) => s.id);
 }
 

@@ -3156,7 +3156,11 @@ interface CrossFeed {
   slot: 1 | 2;
 }
 
-async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> {
+/** Wire every declared `cross_feeds` edge whose source and target both exist,
+ *  filling NULL edges only — so it is safe to re-run at any time. Also called
+ *  by history.ts `restoreFixtures`: an undo's delete SET NULLs the edges into
+ *  the rows it removes, and restoring them re-derives the declared ones. */
+export async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> {
   const stages = await tx<{ id: string; seq: number; config: Record<string, unknown> }[]>`
     select id, seq, config from stages where division_id = ${divisionId}`;
   const bySeq = new Map(stages.map((s) => [s.seq, s]));

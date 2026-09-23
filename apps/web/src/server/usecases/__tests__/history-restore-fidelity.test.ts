@@ -28,8 +28,9 @@
 // Real Postgres required; skipped without DATABASE_URL.
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import { boardRoundCodes } from "@/components/v2/board/round-codes";
@@ -55,7 +56,11 @@ afterAll(async () => {
   await client?.end();
 });
 
-const en = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const en =(key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
 
 type Row = Record<string, unknown>;
 
@@ -145,6 +150,16 @@ async function seedGeneratedStage(
   return { auth, divisionId, mainId: main!.id, laterId: later!.id };
 }
 
+/** Append a ledger event as-is (a snapshot shape the code under test would not
+ *  build itself), at the head, so the next Undo inverts it. */
+async function appendRawEvent(divisionId: string, type: string, payload: Record<string, unknown>) {
+  const [{ seq }] = await sql<{ seq: number }[]>`
+    select coalesce(max(seq), 0)::int + 1 as seq from division_events where division_id = ${divisionId}`;
+  await sql`
+    insert into division_events (division_id, seq, type, payload, actor_id)
+    values (${divisionId}, ${seq}, ${type}, ${sql.json(payload as never)}, null)`;
+}
+
 /** Undo the generation, make a later edit so that undo becomes history, then
  *  restore a save point taken before the undo: two undo steps, the second of
  *  which re-inserts the snapshot (the raw path, never the generator). */
@@ -195,7 +210,7 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
       config: { thirdPlace: true },
       witnesses: ["ext_key", "status", "outcome", "third_place", "away_slot_label"],
     },
-  ])("$name", async ({ n, kind, config, witnesses }) => {
+  ])("$name — and a regeneration after it recognises every row and changes nothing", async ({ n, kind, config, witnesses }) => {
     const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(n, kind, config);
     const generated = await wholeRows("stage_id", mainId);
     expect(generated.length).toBeGreaterThan(0);
@@ -204,20 +219,49 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
     await undoThenRestore(auth, divisionId, mainId, laterId);
 
     expect(await wholeRows("stage_id", mainId)).toEqual(generated);
+
+    // Regeneration is idempotent by ext_key, and its bye pass only fills an
+    // EMPTY seat: over a faithful restore it creates nothing and advances no
+    // bye winner a second time — every row, byes and their fed slots
+    // included, stays exactly as generated.
+    const again = await generateStageFixtures(auth, mainId);
+    expect(again).toMatchObject({ created: 0, existing: generated.length });
+    expect(await wholeRows("stage_id", mainId)).toEqual(generated);
   });
 
-  it("the schedule board names the restored knockout exactly as it named the generated one (QF, SF, F, 3rd — never R{n})", async () => {
-    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(8, "knockout", { thirdPlace: true });
+  it.each([
+    {
+      name: "knockout of 8 with a bronze match: QF, SF, F, 3rd",
+      n: 8,
+      kind: "knockout" as const,
+      config: { thirdPlace: true },
+      codes: () => ["3rd", "F", "QF", "QF", "QF", "QF", "SF", "SF"],
+    },
+    {
+      // Named from ext_key `pp-*` alone (#854) — the column the restore used to drop.
+      name: "page playoff of 4: Q1, E, Q2, F",
+      n: 4,
+      kind: "page_playoff" as const,
+      config: {},
+      codes: () => [
+        en("bracket.roundShort.qualifier1"),
+        en("bracket.roundShort.eliminator"),
+        en("bracket.roundShort.qualifier2"),
+        en("bracket.roundShort.final"),
+      ].sort(),
+    },
+  ])("the schedule board names the restored stage exactly as it named the generated one — $name, never R{n}", async ({ n, kind, config, codes }) => {
+    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(n, kind, config);
     const codesOf = async () => {
       const [board, stages] = await Promise.all([
         listDivisionFixturesForBoard(auth, divisionId),
         listStages(auth, divisionId),
       ]);
-      const codes = boardRoundCodes(board.filter((f) => f.stage_id === mainId), stages, en);
-      return new Map([...codes].map(([id, c]) => [id, c.code]));
+      const named = boardRoundCodes(board.filter((f) => f.stage_id === mainId), stages, en);
+      return new Map([...named].map(([id, c]) => [id, c.code]));
     };
     const generated = await codesOf();
-    expect([...generated.values()].sort()).toEqual(["3rd", "F", "QF", "QF", "QF", "QF", "SF", "SF"]);
+    expect([...generated.values()].sort()).toEqual(codes());
 
     await undoThenRestore(auth, divisionId, mainId, laterId);
 
@@ -255,14 +299,65 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
     );
   });
 
-  it("a regeneration after the restore recognises every restored row by ext_key and creates nothing", async () => {
+  // Minor 1 (review of #857). A row minted OUTSIDE the ledger can take a key
+  // back while the stage sits undone — the Swiss shell top-up
+  // (reconcileSwissRoundShells) inserts `sw-rN-bK` shells with no ledger
+  // entry, so no undo ever removes them. Inserted directly here: the same
+  // state, a live row of the stage holding one snapshot row's ext_key. The
+  // raw restore used to raise 23505 on `(stage_id, ext_key)`, and every retry
+  // replays the same snapshot — Undo stuck for good.
+  it("a key a live row took since the undo: the restored row comes back WITHOUT it, everything else whole, and Undo completes", async () => {
     const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(8, "knockout", { thirdPlace: true });
     const generated = await wholeRows("stage_id", mainId);
-    await undoThenRestore(auth, divisionId, mainId, laterId);
+    const bronze = generated.find((r) => r.third_place === true)!;
+    const checkpoint = await createCheckpoint(auth, divisionId, "generated");
+    await undoDivision(auth, divisionId);
 
-    const again = await generateStageFixtures(auth, mainId);
-    expect(again).toMatchObject({ created: 0, existing: generated.length });
-    expect(await wholeRows("stage_id", mainId)).toEqual(generated);
+    const liveId = randomUUID();
+    await sql`
+      insert into fixtures (id, stage_id, division_id, round_no, seq_in_round, ext_key, fixture_no)
+      values (${liveId}, ${mainId}, ${divisionId}, 9, 1, ${bronze.ext_key as string}, 999)`;
+    await generateStageFixtures(auth, laterId);
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(restoreCheckpoint(auth, divisionId, checkpoint.id, true)).resolves.toMatchObject({ steps: 2 });
+
+    const after = await wholeRows("stage_id", mainId);
+    expect(after.find((r) => r.id === liveId)).toMatchObject({ ext_key: bronze.ext_key });
+    expect(after.filter((r) => r.id !== liveId)).toEqual(
+      generated.map((r) => (r.id === bronze.id ? { ...r, ext_key: null } : r)),
+    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatchObject({ fixtureId: bronze.id, extKey: bronze.ext_key });
+  });
+
+  // Minor 2. A declared cross-stage feed A→B lives on A's row. Undo B then A:
+  // B's delete SET NULLs A→B, so A's snapshot is taken without it, and a
+  // restore brings A back first. Only re-deriving the declared feed once B is
+  // back can re-wire it.
+  it("a declared cross-stage feed is re-wired when a save point restores its source stage BEFORE its target", async () => {
+    const { auth, divisionId } = await seedDivision(4);
+    const feed = { from_ext_key: "se-r0-i0", side: "loser", to_stage_seq: 2, to_ext_key: "se-r0-i0", slot: 2 };
+    const [a] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "A", config: { cross_feeds: [feed] } });
+    const [b] = await createStages(auth, divisionId, { seq: 2, kind: "knockout", name: "B", config: {} });
+    const [later] = await createStages(auth, divisionId, { seq: 3, kind: "league", name: "Later", config: {} });
+    await generateStageFixtures(auth, a!.id);
+    await generateStageFixtures(auth, b!.id);
+    const beforeA = await wholeRows("stage_id", a!.id);
+    const beforeB = await wholeRows("stage_id", b!.id);
+    const source = beforeA.find((r) => r.ext_key === feed.from_ext_key)!;
+    const target = beforeB.find((r) => r.ext_key === feed.to_ext_key)!;
+    expect(source).toMatchObject({ loser_to_fixture: target.id, loser_to_slot: 2 });
+
+    const checkpoint = await createCheckpoint(auth, divisionId, "both generated");
+    await undoDivision(auth, divisionId); // B goes; A→B is SET NULL
+    await undoDivision(auth, divisionId); // A goes, snapshotted without A→B
+    await generateStageFixtures(auth, later!.id);
+    // later undone, then A restored, then B.
+    expect(await restoreCheckpoint(auth, divisionId, checkpoint.id, true)).toMatchObject({ steps: 3 });
+
+    expect(await wholeRows("stage_id", a!.id)).toEqual(beforeA);
+    expect(await wholeRows("stage_id", b!.id)).toEqual(beforeB);
   });
 });
 
@@ -366,5 +461,58 @@ describe.skipIf(!HAS_DB)("snapshots the ledger already holds, and snapshots that
     const [row] = await sql<Row[]>`select * from fixtures where id = ${fxId}`;
     expect(row).toMatchObject({ ext_key: "restored-key", is_final: true, winner_to_fixture: null, winner_to_slot: null });
     expect(row!.fixture_no).not.toBe(taken!.fixture_no);
+  });
+
+  // Minor 3 (review of #857): the two guards no other scene reaches.
+  it("a snapshot row that still exists is left exactly as it stands — its snapshotted edges never overwrite the live row's", async () => {
+    const { auth, divisionId } = await seedDivision(4);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    const before = await wholeRows("stage_id", stage!.id);
+    const live = before[0]!;
+    const other = before[1]!;
+    expect(live.winner_to_fixture).toBeNull();
+    await appendRawEvent(divisionId, "fixtures_cleared", {
+      stage_id: stage!.id,
+      fixture_ids: [live.id],
+      fixtures: [{
+        id: live.id, stage_id: stage!.id, pool_id: null, round_no: live.round_no, seq_in_round: live.seq_in_round,
+        home_entrant_id: live.home_entrant_id, away_entrant_id: live.away_entrant_id, at: null, court: null,
+        fixture_no: live.fixture_no, ext_key: live.ext_key,
+        winner_to_fixture: other.id, winner_to_slot: 1, status: "scheduled", outcome: null, scored: false,
+      }],
+    });
+
+    await expect(undoDivision(auth, divisionId)).resolves.toBeDefined();
+
+    expect(await wholeRows("stage_id", stage!.id)).toEqual(before);
+  });
+
+  it("two restored rows whose numbers were both taken since are renumbered in their original order", async () => {
+    const { auth, divisionId } = await seedDivision(4);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    const [{ top }] = await sql<{ top: number }[]>`
+      select max(fixture_no)::int as top from fixtures where division_id = ${divisionId}`;
+    const snap = (fixtureNo: number, roundNo: number) => ({
+      id: randomUUID(), stage_id: stage!.id, pool_id: null, round_no: roundNo, seq_in_round: 1,
+      home_entrant_id: null, away_entrant_id: null, at: null, court: null,
+      fixture_no: fixtureNo, ext_key: null, status: "scheduled", outcome: null, scored: false,
+    });
+    // Listed LATER number first — the order a snapshot read does not promise.
+    const later = snap(top - 1, 20);
+    const earlier = snap(top - 3, 21);
+    await appendRawEvent(divisionId, "fixtures_cleared", {
+      stage_id: stage!.id,
+      fixture_ids: [later.id, earlier.id],
+      fixtures: [later, earlier],
+    });
+
+    await expect(undoDivision(auth, divisionId)).resolves.toBeDefined();
+
+    const numbers = await sql<{ id: string; fixture_no: number }[]>`
+      select id, fixture_no from fixtures where id in ${sql([later.id, earlier.id])}`;
+    const noOf = new Map(numbers.map((r) => [r.id, r.fixture_no]));
+    expect([noOf.get(earlier.id), noOf.get(later.id)]).toEqual([top + 1, top + 2]);
   });
 });
