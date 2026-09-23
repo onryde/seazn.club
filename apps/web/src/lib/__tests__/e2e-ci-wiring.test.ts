@@ -399,6 +399,16 @@ const WALKTHROUGH_SPECS: string[] = [
   // the next match — the seam from the 409's `next_match` to the console copy
   // that no unit test drives end to end.
   "knockout-void-unfill.spec.ts",
+
+  // Printable scorer sheets, Task 3 — the console's device hand-over panel
+  // once links are durable: Show QR re-shows the SAME secret (a printed sheet
+  // keeps working), Revoke & reissue and Revoke both ask first, Keep sends no
+  // DELETE and a confirm sends exactly one (counted off the wire), a reissued
+  // secret no longer opens a pad, a finalized match's REAL 422 renders the
+  // localised refusal in en and fr, and the Rebuild confirm names printed
+  // sheets only when the stage has device links. The panel's unit suite
+  // drives a double and can see none of the wire.
+  "scorer-sheets-handover-panel.spec.ts",
 ];
 
 afterEach(() => {
