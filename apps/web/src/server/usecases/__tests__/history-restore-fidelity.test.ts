@@ -37,12 +37,13 @@ import { boardRoundCodes } from "@/components/v2/board/round-codes";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures, listStages } from "../stages";
+import { createEntrants, deleteEntrant } from "../entrants";
+import { createStages, deleteStage, generateStageFixtures, listStages } from "../stages";
 import { listDivisionFixturesForBoard, patchFixture } from "../fixtures";
 import { applySchedule, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createCourt, createVenue } from "../venues";
+import { createCourt, createVenue, deleteCourt } from "../venues";
+import { withdrawEntrantCascade } from "../withdrawal";
 import {
   clearPoolEntrants,
   clearScheduleScoped,
@@ -736,5 +737,149 @@ describe.skipIf(!HAS_DB)("every history write keeps a fixture's venue its court'
 
     expect((await undoDivision(auth, divisionId)).applied.type).toBe("schedule_restored");
     expect(await placement()).toEqual(onNorth);
+  });
+});
+
+// G3 (gap hunt, #857). A restore wrote the snapshot back as it was, whatever the
+// roster had done since: a withdrawn entrant re-seated in a line to be played
+// (what F14 exists to prevent), and a deleted entrant, court, pool or stage
+// written back as a dangling id — a foreign-key failure that refused the whole
+// Undo, on every retry, because every retry replays the same snapshot.
+describe.skipIf(!HAS_DB)("a restore respects what the roster lost since the snapshot", () => {
+  it("an entrant WITHDRAWN since: her seat on a line still to play restores EMPTY, its feed and labels kept; the bye the draw already awarded her keeps her (F14)", async () => {
+    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(6, "knockout", { thirdPlace: true });
+    const generated = await wholeRows("stage_id", mainId);
+    const seats = (r: Row, id: unknown) => r.home_entrant_id === id || r.away_entrant_id === id;
+    // A bye holder: settled at generation, and advanced into a line to play.
+    const bye = generated.find((r) => r.status !== "scheduled" && (r.home_entrant_id === null) !== (r.away_entrant_id === null))!;
+    const holder = (bye.home_entrant_id ?? bye.away_entrant_id) as string;
+    const fed = generated.find((r) => r.status === "scheduled" && seats(r, holder))!;
+    expect(fed).toBeDefined();
+    const side = fed.home_entrant_id === holder ? "home" : "away";
+    // The emptied seat's placeholder: a filled seat stores no label, so the
+    // board names it from the feed edge ("Winner of R1·n") — kept below, with
+    // every stored label, by the whole-row equality.
+    expect(bye).toMatchObject({ winner_to_fixture: fed.id, winner_to_slot: side === "home" ? 1 : 2 });
+
+    await withdrawEntrantCascade(auth, holder); // before Start: a status flip, the rows keep her
+    expect((await wholeRows("stage_id", mainId)).filter((r) => seats(r, holder))).toHaveLength(2);
+
+    await undoThenRestore(auth, divisionId, mainId, laterId);
+
+    expect(await wholeRows("stage_id", mainId)).toEqual(
+      generated.map((r) => (r.id === fed.id ? { ...r, [`${side}_entrant_id`]: null } : r)),
+    );
+  });
+
+  it("an entrant DELETED since: every seat she held restores empty, and Undo completes", async () => {
+    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(4, "league", {});
+    const generated = await wholeRows("stage_id", mainId);
+    const [gone] = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${divisionId} and seed = 4`;
+    expect(generated.filter((r) => r.home_entrant_id === gone!.id || r.away_entrant_id === gone!.id)).toHaveLength(3);
+    const checkpoint = await createCheckpoint(auth, divisionId, "generated");
+    await undoDivision(auth, divisionId);
+    await deleteEntrant(auth, gone!.id);
+    await generateStageFixtures(auth, laterId);
+
+    await expect(restoreCheckpoint(auth, divisionId, checkpoint.id, true)).resolves.toMatchObject({ steps: 2 });
+
+    const empty = (id: unknown) => (id === gone!.id ? null : id);
+    expect(await wholeRows("stage_id", mainId)).toEqual(
+      generated.map((r) => ({ ...r, home_entrant_id: empty(r.home_entrant_id), away_entrant_id: empty(r.away_entrant_id) })),
+    );
+  });
+
+  // Through a pool clear: its snapshot is taken with the placement ON (an
+  // undone generation's is not — the move after it is undone first).
+  it("a court DELETED since: the restored row keeps its time but comes back with no court and no venue, and Undo completes", async () => {
+    const { auth, divisionId } = await seedDivision(8);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } },
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const venue = await createVenue(auth, { name: "Hall", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+    const [pool] = await sql<{ id: string }[]>`select id from pools where stage_id = ${stage!.id} order by id limit 1`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where pool_id = ${pool!.id} order by fixture_no limit 1`;
+    await patchFixture(auth, f!.id, { scheduled_at: new Date(Date.UTC(2026, 6, 12, 9)).toISOString(), court_id: court.id });
+    const before = await wholeRows("pool_id", pool!.id);
+    expect(before.find((r) => r.id === f!.id)).toMatchObject({ court_id: court.id, venue_id: venue.id });
+    await clearPoolEntrants(auth, pool!.id, true); // snapshot holds the court; the rows leave it
+    await deleteCourt(auth, court.id);
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("pool_entrants_restored");
+
+    expect(await wholeRows("pool_id", pool!.id)).toEqual(
+      before.map((r) => (r.id === f!.id ? { ...r, court_id: null, venue_id: null } : r)),
+    );
+  });
+
+  it.each([
+    { how: "a single move", event: "schedule_edited" },
+    { how: "a board apply", event: "schedule_applied" },
+    { how: "a schedule clear", event: "schedule_restored" },
+  ])("a court DELETED since the fixture left it by $how: Undo puts the fixture on no court, not a dangling one", async ({ event }) => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const venue = await createVenue(auth, { name: "Hall", sort: 0 });
+    const c1 = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+    const c2 = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
+    const [f] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
+    const at = new Date(Date.UTC(2026, 6, 12, 9)).toISOString();
+    await patchFixture(auth, f!.id, { scheduled_at: at, court_id: c1.id });
+    if (event === "schedule_edited") await patchFixture(auth, f!.id, { court_id: c2.id });
+    if (event === "schedule_applied") {
+      await applySchedule(auth, mainId, {
+        assignments: [{ fixture_id: f!.id, scheduled_at: at, court_id: c2.id }],
+        source: "manual",
+      });
+    }
+    if (event === "schedule_restored") {
+      await clearScheduleScoped(auth, { division_id: divisionId, scope: { excludeLocked: true }, confirm: true });
+    }
+    await deleteCourt(auth, c1.id); // nothing is on it any more
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe(event);
+
+    const [row] = await sql<Row[]>`select scheduled_at, court_id, venue_id from fixtures where id = ${f!.id}`;
+    expect(row).toEqual({ scheduled_at: new Date(at), court_id: null, venue_id: null });
+  });
+
+  it("a stage DELETED since: its snapshot rows are skipped, and Undo completes", async () => {
+    const { auth, divisionId } = await seedDivision(4);
+    const [first] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "First", config: {} });
+    const [last] = await createStages(auth, divisionId, { seq: 2, kind: "league", name: "Last", config: {} });
+    await generateStageFixtures(auth, last!.id);
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("fixtures_cleared"); // snapshot of Last
+    await generateStageFixtures(auth, first!.id); // the later edit
+    await deleteStage(auth, last!.id); // appends a NON-reversible stage_deleted
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("fixtures_cleared"); // First's generation
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+
+    await expect(undoDivision(auth, divisionId)).resolves.toMatchObject({ applied: { type: "fixtures_generated" } });
+
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${last!.id}`;
+    expect(n).toBe(0);
+    expect(warnSpy).toHaveBeenCalledWith(expect.objectContaining({ stageIds: [last!.id] }), expect.any(String));
+  });
+
+  it("a pool DELETED since: the row restores with no pool", async () => {
+    const { auth, divisionId } = await seedDivision(2);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: {} });
+    const fxId = randomUUID();
+    await appendRawEvent(divisionId, "fixtures_cleared", {
+      stage_id: stage!.id,
+      fixture_ids: [fxId],
+      fixtures: [{
+        id: fxId, stage_id: stage!.id, pool_id: randomUUID(), round_no: 1, seq_in_round: 1,
+        home_entrant_id: null, away_entrant_id: null, at: null, court: null,
+        status: "scheduled", outcome: null, scored: false,
+      }],
+    });
+
+    await expect(undoDivision(auth, divisionId)).resolves.toBeDefined();
+
+    expect(await sql`select pool_id from fixtures where id = ${fxId}`).toEqual([{ pool_id: null }]);
   });
 });
