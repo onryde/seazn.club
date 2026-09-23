@@ -48,10 +48,11 @@ export const ROUND_CODE_KEYS = [
 ] as const;
 
 /** A round code as the dictionary key (and its `{n}`) the board rendered it
- *  from, so each reader renders it in their own language. */
+ *  from, so each reader renders it in their own language. `roundRoleShort`
+ *  only ever passes numbers. */
 export interface RoundCodeRef {
   key: (typeof ROUND_CODE_KEYS)[number];
-  params: Record<string, string | number>;
+  params: Record<string, number>;
 }
 
 /** The machine-readable half, carried in the error body as `next_match` so a
@@ -104,6 +105,6 @@ function roundCodeOf(raw: unknown): RoundCodeRef | null {
   if (!(ROUND_CODE_KEYS as readonly unknown[]).includes(key)) return null;
   if (!params || typeof params !== "object" || Array.isArray(params)) return null;
   const entries = Object.entries(params);
-  if (!entries.every(([, v]) => typeof v === "string" || (typeof v === "number" && Number.isFinite(v)))) return null;
+  if (!entries.every(([, v]) => typeof v === "number" && Number.isFinite(v))) return null;
   return { key: key as RoundCodeRef["key"], params: Object.fromEntries(entries) as RoundCodeRef["params"] };
 }
