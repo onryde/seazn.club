@@ -1115,6 +1115,31 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     expect(doc.tables[0]!.rows.every((r) => r.champion === false)).toBe(true);
   });
 
+  it("pools read Pool A above Pool B — never in pool-id order (lib/pool-order.ts)", async () => {
+    // Ids chosen to sort OPPOSITE to the names, and the snapshots handed over
+    // in id order: an id sort, what this builder used to do, reads B first.
+    const POOL_A = "ffffffff-0000-4000-8000-00000000000a";
+    const POOL_B = "00000000-0000-4000-8000-00000000000b";
+    const snap = (pool_id: string, entrantId: string): PublicStandings => ({
+      ...SNAPSHOT,
+      pool_id,
+      rows: [{ entrantId, played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: { gf: 1, ga: 0 }, rank: 1 }],
+    });
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        stages: [{ ...STAGE, kind: "group", name: "Groups" }],
+        pools: [
+          { id: POOL_B, stage_id: "st1", key: "B", name: "Pool B" },
+          { id: POOL_A, stage_id: "st1", key: "A", name: "Pool A" },
+        ],
+        standings: [snap(POOL_B, "e2"), snap(POOL_A, "e1")],
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables.map((v) => v.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(doc.tables.map((v) => v.id)).toEqual([`open-st1-${POOL_A}`, `open-st1-${POOL_B}`]);
+  });
+
   it("a COMPLETE league crowns rank 1 in the table it publishes", async () => {
     getPublicDivisionMock.mockResolvedValue(
       divisionDetail({ stages: [{ ...STAGE, status: "complete" }] }),
@@ -1135,7 +1160,10 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     expect(doc.tabs).not.toContain("table");
   });
 
-  it("pool tables are captioned with their pool and ordered by pool id", async () => {
+  // Retitled: it said "ordered by pool id", and its ids ("pA" < "pB") sort the
+  // same way as its names, so it could not tell the two orders apart. The
+  // test above it gives the ids the OPPOSITE order.
+  it("pool tables are captioned with their pool, Pool A first", async () => {
     const pools = [
       { id: "pB", stage_id: "st1", key: "B", name: "Pool B" },
       { id: "pA", stage_id: "st1", key: "A", name: "Pool A" },

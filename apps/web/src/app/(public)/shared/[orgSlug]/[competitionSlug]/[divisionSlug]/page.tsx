@@ -27,6 +27,7 @@ import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
 import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { playerLinkId } from "@/lib/name-display";
+import { byPoolOrder } from "@/lib/pool-order";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -278,7 +279,8 @@ export default async function DivisionHomePage({ params }: Props) {
         }
         const snapshots = standings
           .filter((s) => s.stage_id === stage.id)
-          .sort((a, b) => (a.pool_id ?? "").localeCompare(b.pool_id ?? ""));
+          // Pool A above Pool B — the pool's own order, never its random id.
+          .sort(byPoolOrder(pools));
         if (snapshots.length === 0) return null;
         return (
           <section key={stage.id}>

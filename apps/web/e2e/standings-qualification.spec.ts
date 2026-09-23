@@ -504,6 +504,44 @@ test("pools: each pool draws its own line after place 1 and its own legend, with
   expect(seen.size, "each pool drawn once").toBe(POOLS);
 });
 
+// ── Pool order ───────────────────────────────────────────────────────────
+//
+// Pools read in the organiser's order — Pool A above Pool B — on every surface
+// that draws one table per pool. They used to be sorted by pool UUID on the
+// public division page and the hub (and left in query order on the embed), so
+// "Pool B" came first whenever B's random id sorted lower. The ids are random
+// here, so this run witnesses the old defect only when they happen to sort
+// opposite to the names; it logs which. The deterministic kill is in vitest
+// (`lib/__tests__/pool-order.test.ts` and the surface tests beside it).
+
+/** Which pool each caption names, in DOM order. */
+const poolLetters = (texts: string[]) => texts.map((t) => /Pool ([A-Z])\b/.exec(t)?.[1] ?? `? ${t}`);
+
+test("pools: Pool A reads above Pool B on the division page, the hub Table tab and the console", async ({ page, browser }) => {
+  const letters = ["A", "B"].slice(0, POOLS);
+
+  const pub = await spectator(browser, { width: 1280, height: 900 });
+  await openUntil(pub, paths.division(scene.pools.slug), (p) => withCut(p).count(), POOLS);
+  expect(poolLetters(await pub.locator("#panel-standings table > caption").allTextContents()), "division page").toEqual(letters);
+
+  const hub = await spectator(browser, { width: 1280, height: 900 });
+  const hubPools = (p: Page) => p.locator(`section[data-testid^="mh-table-${scene.pools.slug}-"]`);
+  await openUntil(hub, paths.hub(), (p) => hubPools(p).count(), POOLS);
+  expect(poolLetters(await hubPools(hub).locator("h3").allTextContents()), "hub Table tab").toEqual(letters);
+  // The witness: each hub section's test id ends with its pool id, in drawn order.
+  const ids = (await hubPools(hub).evaluateAll((els) => els.map((el) => el.getAttribute("data-testid") ?? ""))).map(
+    (tid) => UUID.exec(tid)?.[0] ?? tid,
+  );
+  console.log(
+    `POOL-ORDER witness: pool ids in drawn (A, B) order ${JSON.stringify(ids)}; a sort by id would ${
+      [...ids].sort().join() === ids.join() ? "ALSO pass" : "FAIL"
+    } this run`,
+  );
+
+  await openUntil(page, paths.console(scene.pools.slug), (p) => consoleWithCut(p).count(), POOLS);
+  expect(poolLetters(await page.locator("table > caption").allTextContents()), "console").toEqual(letters);
+});
+
 // ── No cut ───────────────────────────────────────────────────────────────
 
 test("regression: a league with no next stage draws no marker, line, legend or status trigger", async ({ browser }) => {

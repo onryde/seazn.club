@@ -34,6 +34,7 @@ import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
+import { comparePools } from "@/lib/pool-order";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -440,10 +441,14 @@ export default async function DivisionPage({
     tab === "standings"
       ? await Promise.all(
           tableStages.map(async (stage) => {
-            const pools = await withTenant(auth.orgId, (tx) =>
-              tx<{ id: string; key: string; name: string }[]>`
-                select id, key, name from pools where stage_id = ${stage.id} order by key`,
-            );
+            // Pool A above Pool B: the same helper every public surface uses
+            // (`lib/pool-order.ts`), so the console cannot drift from them.
+            const pools = [
+              ...(await withTenant(auth.orgId, (tx) =>
+                tx<{ id: string; key: string; name: string }[]>`
+                  select id, key, name from pools where stage_id = ${stage.id}`,
+              )),
+            ].sort(comparePools);
             const tables =
               pools.length > 0
                 ? await Promise.all(
