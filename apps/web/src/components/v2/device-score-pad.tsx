@@ -8,7 +8,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
+// `OPPORTUNISTIC_RESYNC_MS` — the bound on this pad's opportunistic refresh
+// (`handlePadEvents`) is the console's, imported rather than copied: one
+// authority for one number. Its doc there says why the bound exists, why 10s,
+// and why it sits at the call site rather than inside `apiV1`; every word of
+// it applies to this twin, whose `padSyncing` greys Start and "Void my last
+// entry" the same way. `send()` passes no budget, as the console's does not.
 import {
+  OPPORTUNISTIC_RESYNC_MS,
   resolvePadSpecForMount,
   shouldMountPad,
   type LiveState,
@@ -72,27 +79,6 @@ interface Props {
 }
 
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
-
-/**
- * G1 — the upper bound on an OPPORTUNISTIC refresh, in ms. The same bound, for
- * the same reason, as `fixture-console.tsx`'s constant of the same name (not
- * exported there, and this twin is deliberately not a shared hook — see
- * `handlePadEvents` below).
- *
- * `apiV1` sets no timeout and passes no signal of its own, so a `fetch` that
- * hangs hangs forever. `handlePadEvents`' `finally` is the only thing that
- * lowers `padSyncing`, and `padSyncing` greys out Start and "Void my last
- * entry" — so an unsettled refresh is a courtside pad whose controls never
- * come back, with no error and no explanation. The tab-return listener below
- * fires that refresh at exactly the moment a woken phone's half-open socket is
- * most likely.
- *
- * Applied at the call site, never inside `apiV1` (shared by every v1 caller),
- * and never on `send()`'s own resync, which reports its own failures: bounding
- * it would turn a successful append followed by a slow read into a visible
- * "score failed". Exported only so the unit test can pin the budget.
- */
-export const OPPORTUNISTIC_RESYNC_MS = 10_000;
 
 export function DeviceScorePad({
   token,

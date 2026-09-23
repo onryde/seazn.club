@@ -401,7 +401,7 @@ const STATUS_STYLE: Record<string, string> = {
  * and is unchanged — it reports its own failures, and bounding it would turn
  * a successful append followed by a slow read into a visible "score failed".
  */
-const OPPORTUNISTIC_RESYNC_MS = 10_000;
+export const OPPORTUNISTIC_RESYNC_MS = 10_000;
 
 export function FixtureConsole({
   fixture,
