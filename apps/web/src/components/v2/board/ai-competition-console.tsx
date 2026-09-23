@@ -67,6 +67,7 @@ import { blockingConflictKey, type AiConsoleFixture } from "./ai-diff";
 // A leaf with ZERO imports, so a client component may hold it: the CODE is the
 // contract between the refusal and this card, and the sentence is not.
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { AiReviewPanel } from "./ai-review-panel";
 import { buildReviewRows } from "./ai-review";
@@ -630,6 +631,7 @@ export function JointReviewStep({
       const localReason = (f: JointUndoFailure): string => {
         if (f.code === SCHEDULE_LOCKED_CODE) return msg("board.ai.joint.reasonLocked");
         if (f.code === JOINT_UNDO_SUPERSEDED_CODE) return msg("board.ai.joint.reasonSuperseded");
+        if (f.code === PLAYED_REFUSAL_CODE) return msg("board.ai.joint.reasonPlayed");
         return f.reason;
       };
       // Grouped on the CODE where there is one, so two divisions frozen for the

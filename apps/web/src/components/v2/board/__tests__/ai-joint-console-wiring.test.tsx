@@ -86,6 +86,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiV1Error } from "@/lib/client-v1";
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import type { AiParsePreviewResponse } from "@/server/api-v1/schemas";
 import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai-competition-console";
@@ -679,6 +680,36 @@ describe("the review step is wired to the console's own state", () => {
   // still surfaces the server's own message. Suppressing it would trade an
   // untranslated known refusal for an unreportable unknown failure, and leave
   // the organiser with a card that says a division failed and nothing else.
+  // Review 2 of #857, I2: a division whose rewind touches a match that has
+  // started or finished since the apply is refused by the history
+  // results-guard. The usecase now carries that EngineError's code in
+  // `failed[]` (competition-schedule-restore.test.ts drives it for real); the
+  // card says it locally, never the engine's English.
+  it("says a played refusal in the reader's own copy, never the engine's English", async () => {
+    const LOCAL = enText["board.ai.joint.reasonPlayed"]!;
+    expect(typeof LOCAL, "board.ai.joint.reasonPlayed is missing from en/ui.json").toBe("string");
+    const ENGINE_CLAUSE = "has started or finished, so it can";
+
+    const ctx = await applied(() => ({
+      restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
+      failed: [
+        {
+          division_id: "d2",
+          reason: `a match this change touches ${ENGINE_CLAUSE}'t be undone or redone`,
+          code: PLAYED_REFUSAL_CODE,
+        },
+      ],
+      ok: false,
+    }));
+
+    ctx.undo();
+    await flush();
+    const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+    expect(html, "the division is still named").toContain("Under 14s");
+    expect(html, "the refusal is not said in the reader's language").toContain(esc(LOCAL));
+    expect(html, "the engine's English leaked into a translated card").not.toContain(ENGINE_CLAUSE);
+  });
+
   it("still shows an unrecognised refusal's own message, rather than swallowing it", async () => {
     const ctx = await applied(() => ({
       restored: [],

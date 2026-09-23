@@ -13,6 +13,7 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
@@ -567,7 +568,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       setUndoable(false);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
+      setError(undoRefusalMessage(err, msg));
     }
   }
 
@@ -1759,6 +1760,16 @@ export function classifyActError(
     text: err instanceof Error ? err.message : msg("schedule.error.failed"),
     refresh: false,
   };
+}
+
+/** What "Undo" beside a notice says when the server refuses it. The played
+ *  refusal (a match the change touches has started or finished) is said
+ *  locally, off the CODE — the server's sentence is English, and
+ *  history-panel.tsx gives the same refusal the same sentence. Anything else
+ *  keeps its own message, which is the one an organiser can quote. */
+export function undoRefusalMessage(err: unknown, msg: Msg): string {
+  if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) return msg("history.error.played");
+  return err instanceof Error ? err.message : msg("schedule.error.undoFailed");
 }
 
 export function generatePreconditionMessage(err: unknown, msg: Msg): string | null {

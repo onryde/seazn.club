@@ -15,6 +15,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 // Zero imports of its own, so a client component may hold it. The CODE is the
 // contract between a schedule-lock refusal and this panel; the SENTENCE is not.
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
@@ -163,6 +164,11 @@ export function HistoryPanel({
         // sentence to decide how to render it breaks the moment the sentence is
         // reworded, which is exactly what `@/lib/schedule-lock` makes cheap.
         setError(msg("history.error.frozen"));
+      } else if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) {
+        // An undo/redo whose change touches a match that has started or
+        // finished. The server's sentence is English; say it locally, off the
+        // code, like the two refusals above.
+        setError(msg("history.error.played"));
       } else {
         // Deliberately NOT blanket-suppressed. Every refusal this client can
         // recognise now has its own sentence; what is left is the unanticipated

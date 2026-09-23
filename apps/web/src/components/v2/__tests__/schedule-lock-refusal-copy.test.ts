@@ -58,11 +58,14 @@ const KEYS: { key: string; source: string }[] = [
   { key: "history.error.frozen", source: "src/components/v2/history-panel.tsx" },
   { key: "history.error.seqConflict", source: "src/components/v2/history-panel.tsx" },
   { key: "history.checkpoint.frozenDelete", source: "src/components/v2/history-panel.tsx" },
+  { key: "history.error.played", source: "src/components/v2/history-panel.tsx" },
+  { key: "history.error.played", source: "src/components/v2/stages-panel.tsx" },
+  { key: "board.ai.joint.reasonPlayed", source: "src/components/v2/board/ai-competition-console.tsx" },
 ];
 
 /** The two JOINT-card sentences. Grouped because the card is
  *  competition-scoped and neither may point at a control it has not got. */
-const JOINT_KEYS = ["board.ai.joint.reasonLocked", "board.ai.joint.reasonSuperseded"];
+const JOINT_KEYS = ["board.ai.joint.reasonLocked", "board.ai.joint.reasonSuperseded", "board.ai.joint.reasonPlayed"];
 
 /** Comments stripped: this file's own prose quotes the sentences it guards, and
  *  a component's comment may legitimately do the same. Only rendered code

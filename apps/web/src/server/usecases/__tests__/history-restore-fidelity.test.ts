@@ -62,6 +62,9 @@ import {
   undoDivision,
 } from "../history";
 import { EngineError } from "@seazn/engine/core";
+import { v1 } from "@/server/api-v1/http";
+import { ApiV1Error, apiV1 } from "@/lib/client-v1";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -580,6 +583,35 @@ describe.skipIf(!HAS_DB)("a fixture in play or finalized is never taken away by 
       expect(await scoreEventsIn("stage_id", mainId)).toEqual(events);
     },
   );
+
+  // Review 2 of #857, I2: what an organiser is told. The refusal crosses the
+  // real /api/v1 envelope (`v1`) into the real client parser (`apiV1`) — the
+  // panels' `ApiV1Error.code` branch reads exactly this. The sentence behind it
+  // is the engine's, English, and used to name a fixture UUID and a
+  // "force-clear" control that does not exist.
+  it("the played refusal reaches the client as its CODE, in a sentence with no fixture id and no control that does not exist", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    await startDivision(auth, divisionId);
+    const [target] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
+    await play(auth, target!.id, "in_play");
+
+    const res = await v1(() => undoDivision(auth, divisionId));
+    vi.stubGlobal("fetch", vi.fn(async () => res));
+    try {
+      const err = await apiV1(`/api/v1/divisions/${divisionId}/undo`, { method: "POST", json: {} }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(ApiV1Error);
+      expect(err).toMatchObject({ status: 422, code: PLAYED_REFUSAL_CODE });
+      const message = (err as Error).message;
+      expect(message).not.toContain(target!.id);
+      expect(message).not.toMatch(/force-clear/i);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 
   it.each(["in_play", "finalized"] as const)(
     "a pool clear — redone, or made — is refused while one of the pool's fixtures is %s — every row and every score event survives",

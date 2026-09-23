@@ -16,3 +16,9 @@ export const PLAYED_FIXTURE_STATUSES: readonly string[] = ["in_play", "decided",
 export function isPlayedFixtureStatus(status: string): boolean {
   return PLAYED_FIXTURE_STATUSES.includes(status);
 }
+
+/** The /api/v1 error code a history step answers with when it would touch a
+ *  played fixture (the engine's results-guard, mapped in history.ts's
+ *  `toEngineError`). Clients say the refusal in the reader's own language off
+ *  this CODE — the server's sentence is English prose. */
+export const PLAYED_REFUSAL_CODE = "ALREADY_DECIDED";

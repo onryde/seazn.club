@@ -1,5 +1,6 @@
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { EngineError } from "@seazn/engine/core";
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { JOINT_APPLY_EVENT } from "./competition-schedule-ai";
@@ -216,7 +217,14 @@ export async function restoreCompetitionSchedule(
         // Spread, not `code: …` with an undefined value: the wire shape stays
         // exactly as it was for every refusal that has no code, so a caller
         // reading `failed` sees a new key only where there is one to read.
-        ...(err instanceof HttpError && err.code ? { code: err.code } : {}),
+        // An EngineError carries one too — the played refusal
+        // (`ALREADY_DECIDED`, the history results-guard) is one, and without
+        // its code the card could only print the engine's English.
+        ...(err instanceof HttpError && err.code
+          ? { code: err.code }
+          : err instanceof EngineError
+            ? { code: err.code }
+            : {}),
       });
     }
   }
