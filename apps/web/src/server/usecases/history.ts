@@ -25,6 +25,7 @@ import { sql, withTenant } from "@/lib/db";
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { PLAYED_FIXTURE_STATUSES, isPlayedFixtureStatus } from "@/lib/played-fixture-statuses";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -54,15 +55,13 @@ async function loadLedger(tx: Tx, divisionId: string): Promise<LedgerEvent[]> {
   return rows.map((r) => ({ seq: Number(r.seq), type: r.type, payload: r.payload }));
 }
 
-// The statuses history treats as PLAYED — the rows it never deletes, moves or
-// clears, the set `deleteStage` (stages.ts) already refuses on. It used to be
-// `'decided'` alone, so undoing a generation, and redoing or making a pool
-// clear, deleted an `in_play` or `finalized` fixture outright, its score events
-// cascading with it — the results-guard ("never silently discard a
-// scoresheet", engine history.ts) only ever saw half the scoresheets.
-// `forfeited` / `abandoned` are not here on purpose: a generation writes them
-// itself (a bye, a departed qualifier), with nothing played to lose.
-const PLAYED_STATUSES: readonly string[] = ["in_play", "decided", "finalized"];
+// The statuses history treats as PLAYED (`@/lib/played-fixture-statuses`,
+// shared with the bulk shift). It used to be `'decided'` alone, so undoing a
+// generation, and redoing or making a pool clear, deleted an `in_play` or
+// `finalized` fixture outright, its score events cascading with it — the
+// results-guard ("never silently discard a scoresheet", engine history.ts)
+// only ever saw half the scoresheets.
+const PLAYED_STATUSES = [...PLAYED_FIXTURE_STATUSES];
 
 /** The engine's results-guard input: any undo/redo whose op touches one of
  *  these is refused whole (`UNDO_BLOCKED_HAS_RESULTS`). */
@@ -1131,7 +1130,7 @@ async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableF
     court: f.court_id,
     at: f.scheduled_at,
     locked: f.schedule_locked,
-    decided: PLAYED_STATUSES.includes(f.status),
+    decided: isPlayedFixtureStatus(f.status),
   }));
 }
 
@@ -1233,7 +1232,7 @@ export async function clearPoolEntrants(
           court: f.court,
           at: f.at,
           locked: f.locked,
-          decided: PLAYED_STATUSES.includes(f.status),
+          decided: isPlayedFixtureStatus(f.status),
           snapshot: f,
         })),
         poolId,

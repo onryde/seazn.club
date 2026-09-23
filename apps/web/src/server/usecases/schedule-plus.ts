@@ -12,6 +12,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendDivisionEvent } from "@/server/engine-db";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { isPlayedFixtureStatus } from "@/lib/played-fixture-statuses";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 
 const MS_PER_MIN = 60_000;
@@ -81,7 +82,10 @@ export async function shiftDivisionSchedule(
         stageId: f.stage_id,
         poolId: f.pool_id ?? undefined,
         locked: f.schedule_locked,
-        decided: f.status === "decided",
+        // History's played set, not `decided` alone: a shift that moved an
+        // in-play kick-off could then be neither undone nor redone — the
+        // results-guard refuses any history step that touches a played row.
+        decided: isPlayedFixtureStatus(f.status),
       })),
       input.scope,
       input.delta_minutes,
