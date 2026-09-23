@@ -10,8 +10,9 @@
 // THE TEST, in the browser: Create → QR; the live line with its three
 // controls; Show QR re-showing the same secret; the reissue and revoke
 // questions opened and backed out of (Keep sends NO DELETE — counted off the
-// wire), a confirmed reissue minting a new secret whose predecessor no longer
-// opens a pad, a confirmed "Revoke now" sending exactly ONE DELETE; the
+// wire), a confirmed reissue minting a new secret that opens the scan's
+// Confirm card while its predecessor lands on the localised dead-link screen,
+// a confirmed "Revoke now" sending exactly ONE DELETE; the
 // ensure route's REAL 422 on a finalized match rendered as the localised
 // dlink.error.matchOver, never the server's English, with every hand-over
 // control gone (owner ruling 2026-09-23); and the Rebuild confirm
@@ -206,12 +207,21 @@ test("the hand-over panel in every state, en + fr: Show QR re-shows, Revoke and 
   const device = await context.browser()!.newContext();
   const dp = await device.newPage();
   const origin = new URL(page.url()).origin;
+  // The reissued-away secret lands on the localised dead-link screen, naming
+  // the revocation — a positive screen, not a `count()` of a pad that a slow
+  // first paint would also report as zero. The new secret opens the scan's
+  // Confirm card (the match has not started, scorer sheets §4.5.1) and no pad.
   await dp.goto(`${origin}/score/${first}`);
-  const oldPadRenders = await dp.locator('[data-role="pad-v3"]').count();
+  await expect(dp.getByTestId("scan-dead-link"), "the reissued-away secret is dead").toContainText(
+    EN["device.dead.revoked"]!,
+    { timeout: STEP_MS },
+  );
+  await expect(dp.locator('[data-role="pad-v3"]')).toHaveCount(0);
   await dp.goto(`${origin}/score/${second}`);
-  await expect(dp.locator('[data-role="pad-v3"]')).toBeVisible({ timeout: STEP_MS });
+  await expect(dp.getByTestId("scan-confirm"), "the new secret opens the scan").toBeVisible({ timeout: STEP_MS });
+  await expect(dp.getByTestId("score-start-match")).toBeVisible();
+  await expect(dp.getByTestId("scan-dead-link")).toHaveCount(0);
   await device.close();
-  expect(oldPadRenders, "the reissued-away secret no longer opens a pad").toBe(0);
 
   // 7. fr: the live line names the official in French, and every question.
   await setLocale(page, "fr");

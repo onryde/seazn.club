@@ -31,6 +31,8 @@ import type { ReactElement } from "react";
 import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
 import { OPPORTUNISTIC_RESYNC_MS, type SideInfo, type SportInfo } from "@/components/v2/fixture-console";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { msgFor } from "@/lib/messages-i18n";
+import { deadLinkKey } from "@/lib/scan-screen";
 
 const api = vi.hoisted(() => ({
   calls: [] as { url: string; options?: { method?: string; json?: unknown; signal?: AbortSignal } }[],
@@ -503,7 +505,9 @@ describe("DeviceScorePad — the tab-return freshness floor (G1)", () => {
 // stops listening. Anything else a refresh can fail with stays swallowed.
 describe("DeviceScorePad — a tab-return refresh that finds the link dead", () => {
   // The two codes the server throws for a link that died mid-day
-  // (`server/usecases/device-links.ts`); message verbatim from there.
+  // (`server/usecases/device-links.ts`); message verbatim from there. The
+  // message stays the server's wire text; the screen says it by CODE, in the
+  // scorer's language (scorer sheets §4.5, P12) — hence `deadCopy`.
   const REVOKED = {
     code: "LINK_REVOKED",
     status: 401,
@@ -514,20 +518,21 @@ describe("DeviceScorePad — a tab-return refresh that finds the link dead", () 
     status: 401,
     message: "This device link has expired — ask the organiser",
   };
+  const deadCopy = (refusal: { code: string }) => msgFor("en", deadLinkKey(refusal.code));
 
   it.each([REVOKED, EXPIRED])("$code lands on the dead-link screen, as a refused send does", async (refusal) => {
     const doc = stubDocument("visible");
     stubWindow();
     const island = renderIsland(DeviceScorePad, baseProps());
     // Positive baseline: a live pad with its controls, not the dead screen.
-    expect(island.text()).not.toContain(refusal.message);
+    expect(island.text()).not.toContain(deadCopy(refusal));
     expect(propsOf(voidMine(island.tree())).disabled).toBe(false);
 
     api.refuse = refusal;
     fire(doc, "visibilitychange");
     await vi.advanceTimersByTimeAsync(1000);
 
-    expect(island.text(), "the scorer must be told the link is dead").toContain(refusal.message);
+    expect(island.text(), "the scorer must be told the link is dead").toContain(deadCopy(refusal));
     expect(
       island.tree().some((e) => e.type === "button"),
       "a dead link keeps no controls — every tap on them would fail",
@@ -542,7 +547,7 @@ describe("DeviceScorePad — a tab-return refresh that finds the link dead", () 
     api.refuse = REVOKED;
     fire(doc, "visibilitychange");
     await vi.advanceTimersByTimeAsync(1000);
-    expect(island.text(), "precondition: the pad is on the dead-link screen").toContain(REVOKED.message);
+    expect(island.text(), "precondition: the pad is on the dead-link screen").toContain(deadCopy(REVOKED));
     expect(refreshCalls(), "precondition: the refresh that found it dead did fetch").toHaveLength(2);
 
     api.calls.length = 0;

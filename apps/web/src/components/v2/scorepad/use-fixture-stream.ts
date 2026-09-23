@@ -19,6 +19,11 @@ import type { LedgerSlotEvent } from "./types";
 import { authHeadersFor, readV1Envelope, type PadAuthMode } from "./transport";
 
 const POLL_MS = 15_000;
+// Exported on its own line: `e2e/realtime-propagation-kit.ts` `padPollMs()`
+// parses the declaration above by `/^const POLL_MS\s*=/m` and throws on any
+// other shape, so the declaration stays exactly as it is. The scan page's
+// Waiting screen (scan-waiting.tsx) polls at the same cadence.
+export { POLL_MS };
 
 export interface RealtimeSubscription {
   unsubscribe(): void;

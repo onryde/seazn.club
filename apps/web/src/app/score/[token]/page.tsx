@@ -29,6 +29,17 @@ import {
 import { hasFeature } from "@/lib/entitlements";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
+import { ScanWaiting } from "@/components/v2/scan-waiting";
+import { entrantDisplayName } from "@/lib/entrant-name";
+import { deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
+import { resultCarriedForward } from "@/server/usecases/carried-forward";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { matchRef, resolveSlotLabel } from "@/lib/slot-label";
+import { venueTzForDivision } from "@/server/venue-tz";
+import { intlLocaleFor } from "@/lib/public-date-locale";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveLocale } from "@/lib/resolve-locale";
+import type { MessageKey } from "@/lib/messages";
 
 export default async function ScorePadPage({
   params,
@@ -36,17 +47,18 @@ export default async function ScorePadPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
+  // First, so even the dead-link screen speaks the scorer's language: the
+  // resolver's own messages are English and never reach a screen (P12).
+  const locale = await resolveLocale();
+  const t = (k: MessageKey, v?: Record<string, string | number>) => msgFor(locale, k, v);
 
   let link;
   try {
     link = await resolveDeviceLinkToken(token);
   } catch (err) {
-    // Expired / revoked / unknown → the doc 13 §7 dead-end screen.
-    const message =
-      err instanceof HttpError && err.code !== "LINK_INVALID"
-        ? err.message
-        : "This scoring link is not valid.";
-    return <DeadLink message={message} />;
+    // Expired / revoked / unknown → the doc 13 §7 dead-end screen, by CODE.
+    const code = err instanceof HttpError ? (err.code ?? null) : null;
+    return <DeadLink message={t(deadLinkKey(code))} hint={t("device.askFreshLink")} />;
   }
 
   // Server-trusted read context: this page IS the device-link surface, so it
@@ -75,6 +87,12 @@ export default async function ScorePadPage({
         scheduled_at: string | null;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
+        /** Scorer sheets §4.5 — what a TBD side is called while it waits
+         *  ("Winner of R1·1"), and the match's own ref ("R1·3"). */
+        seq_in_round: number;
+        home_slot_label: SlotLabel | null;
+        away_slot_label: SlotLabel | null;
+        division_id: string;
         sport_key: string;
         module_version: string;
         config: unknown;
@@ -86,6 +104,7 @@ export default async function ScorePadPage({
     >`
       select f.id, f.round_no, ven.name as venue_name, crt.name as court_name,
              f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
+             f.seq_in_round, f.home_slot_label, f.away_slot_label, d.id as division_id,
              d.sport_key, d.module_version, d.config,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding
@@ -97,7 +116,7 @@ export default async function ScorePadPage({
       where f.id = ${link.fixture_id}`;
     return row ?? null;
   });
-  if (!fixture) return <DeadLink message="This fixture no longer exists." />;
+  if (!fixture) return <DeadLink message={t("device.dead.gone")} hint={t("device.askFreshLink")} />;
 
   // Same brand chain as the public pages / noticeboard (Pro entitlements
   // resolved inside orgBoardChrome): the volunteer's pad wears club colors.
@@ -147,6 +166,42 @@ export default async function ScorePadPage({
     side(fixture.away_entrant_id),
   ]);
 
+  // Scorer sheets §4.5 — which screen this scan opens on. One table
+  // (`scanScreen`); `resultCarriedForward` is the same live predicate the
+  // scoring path refuses on, status gate included (a SCHEDULED fixture whose
+  // feed target was hand-seated is still the umpire's to score).
+  const carried = await withTenant(link.org_id, (tx) => resultCarriedForward(tx, fixture.id));
+  const screen = scanScreen({
+    status: state.status,
+    homeKnown: fixture.home_entrant_id !== null,
+    awayKnown: fixture.away_entrant_id !== null,
+    carriedForward: carried,
+  });
+  // The venue's zone through the one authority for that join (`venue-tz.ts`),
+  // never a fourth copy of it.
+  const tz = await venueTzForDivision(fixture.division_id);
+  const scheduledLabel = fixtureTimeLabel(fixture.scheduled_at, tz, intlLocaleFor(locale));
+  const ref = matchRef(fixture.round_no, fixture.seq_in_round, t);
+  if (screen.screen === "waiting") {
+    // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
+    // until both sides exist, when it renders the pad fresh — the Waiting →
+    // Confirm hop needs no client state.
+    const meta = [fixture.court_name, scheduledLabel, `${fixture.division_name} · ${ref}`]
+      .filter(Boolean)
+      .join(" · ");
+    return (
+      <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
+        <div className="mx-auto max-w-2xl">
+          <ScanWaiting
+            home={home ? entrantDisplayName(home) : resolveSlotLabel(fixture.home_slot_label, t, "schedule.tbd")}
+            away={away ? entrantDisplayName(away) : resolveSlotLabel(fixture.away_slot_label, t, "schedule.tbd")}
+            meta={meta}
+          />
+        </div>
+      </main>
+    );
+  }
+
   // S13/#422 — the v2 pad's bootstrap, resolved unconditionally now that the
   // feature flag that used to gate it is gone. `recordedBy` is the ISSUING human
   // (`link.issued_by` — doc 13 §7 attribution, the same value `read.userId`
@@ -178,6 +233,8 @@ export default async function ScorePadPage({
           court_label: fixture.court_name,
           competition_name: fixture.competition_name,
           division_name: fixture.division_name,
+          match_ref: ref,
+          scheduled_label: scheduledLabel,
         }}
         sport={{
           key: fixture.sport_key,
@@ -205,22 +262,27 @@ export default async function ScorePadPage({
           recorded_at: e.recorded_at,
           voids_event_id: e.voids_event_id,
           device_link_id: e.device_link_id,
+          recorded_by: e.recorded_by,
         }))}
         scorePadV2={scorePadV2}
+        initialViewOnly={screen.screen === "view_only" ? screen.reason : null}
         />
       </div>
     </main>
   );
 }
 
-function DeadLink({ message }: { message: string }) {
+/** Doc 13 §7's dead end. Both lines arrive localised: no English literal is
+ *  left in this file. */
+function DeadLink({ message, hint }: { message: string; hint: string }) {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-slate-950 px-4 text-center">
+    <main
+      data-testid="scan-dead-link"
+      className="flex min-h-screen flex-col items-center justify-center bg-slate-950 px-4 text-center"
+    >
       <p className="text-4xl">⏱️</p>
       <h1 className="mt-3 text-lg font-semibold text-slate-100">{message}</h1>
-      <p className="mt-2 text-sm text-slate-400">
-        Ask the organiser to hand you a fresh link.
-      </p>
+      <p className="mt-2 text-sm text-slate-400">{hint}</p>
     </main>
   );
 }

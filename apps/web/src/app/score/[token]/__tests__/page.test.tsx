@@ -16,10 +16,18 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
-import { createDeviceLink } from "@/server/usecases/device-links";
+import { createDeviceLink, ensureDeviceLink } from "@/server/usecases/device-links";
 import { seedCourts, seedOrg } from "@/server/usecases/__tests__/_seed";
+import { decide, deviceFor, fixturesOf, seedStage } from "@/server/usecases/__tests__/_sheets-rig";
 import { DeviceScorePad } from "@/components/v2/device-score-pad";
+import { ScanWaiting } from "@/components/v2/scan-waiting";
+import fr from "@/dictionaries/fr/ui.json";
 import ScorePadPage from "../page";
+
+// The page resolves the viewer's locale from the request (cookie, user,
+// header); there is no request here. Hoisted so one test can switch it.
+const locale = vi.hoisted(() => ({ value: "en" as "en" | "fr" }));
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => locale.value }));
 
 // Every mint seals now (scorer sheets §4.1). A throwaway key of this file's own,
 // never the developer's .env.local one: CI's unit job has no DEVICE_LINK_KEK at
@@ -128,5 +136,125 @@ describe.skipIf(!HAS_DB)("ScorePadPage (P9 cutover)", () => {
     const pad = find(tree, DeviceScorePad);
     const fixtureProp = (pad!.props as { fixture: { court_label: string | null } }).fixture;
     expect(fixtureProp.court_label).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
+  it("TBD side → Waiting, naming the slot label ('Winner of …'), no pad", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const final = (await fixturesOf(stage.id)).find((f) => f.round_no === 2)!;
+    const { secret } = await ensureDeviceLink(auth, final.id);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    const waiting = find(tree, ScanWaiting);
+    expect(waiting).not.toBeNull();
+    expect(find(tree, DeviceScorePad)).toBeNull();
+    const { home, away, meta } = waiting!.props as { home: string; away: string; meta: string };
+    expect(home).toMatch(/^Winner of R1/);
+    expect(away).toMatch(/^Winner of R1/);
+    expect(home, "each side names its own feeder").not.toBe(away);
+    expect(meta, "the meta line names the match").toContain("R2·1");
+  });
+
+  it("one side filled, the other still TBD → still Waiting, the known side by name", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const fixtures = await fixturesOf(stage.id);
+    const sf1 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const final = fixtures.find((f) => f.round_no === 2)!;
+    await decide(await deviceFor(auth, sf1.id), sf1.id);
+    const { secret } = await ensureDeviceLink(auth, final.id);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    const waiting = find(tree, ScanWaiting);
+    expect(waiting, "one TBD side still waits").not.toBeNull();
+    const { home, away } = waiting!.props as { home: string; away: string };
+    const named = [home, away].filter((s) => !s.startsWith("Winner of"));
+    expect(named, "the filled side reads as its entrant, not a slot label").toHaveLength(1);
+    expect(["A", "B", "C", "D"]).toContain(named[0]);
+  });
+
+  it("carried forward → the pad renders View-only from its first paint", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf1 = (await fixturesOf(stage.id)).find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const device = await deviceFor(auth, sf1.id);
+    await decide(device, sf1.id);
+    const { secret } = await ensureDeviceLink(auth, sf1.id);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    expect((find(tree, DeviceScorePad)!.props as { initialViewOnly: string | null }).initialViewOnly).toBe(
+      "carried_forward",
+    );
+  });
+
+  it("finalized → View-only 'finalized', even though nothing is carried", async () => {
+    const { auth, fixtureId } = await seedScorableFixture();
+    const link = await ensureDeviceLink(auth, fixtureId);
+    await sql`update fixtures set status = 'finalized' where id = ${fixtureId}`;
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: link.secret }) });
+    expect((find(tree, DeviceScorePad)!.props as { initialViewOnly: string | null }).initialViewOnly).toBe(
+      "finalized",
+    );
+  });
+
+  it("scheduled, both sides → the pad with no View-only, a match ref and a venue-tz time", async () => {
+    const { auth, fixtureId } = await seedScorableFixture();
+    await sql`update fixtures set scheduled_at = '2026-09-23T10:30:00Z' where id = ${fixtureId}`;
+    // The venue's zone, not UTC: a division override to Auckland moves 10:30Z
+    // to 22:30 on the card.
+    await sql`
+      insert into schedule_settings (division_id, org_id, tz)
+      select f.division_id, d.org_id, 'Pacific/Auckland'
+      from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
+      on conflict (division_id) do update set tz = excluded.tz`;
+    const { secret } = await ensureDeviceLink(auth, fixtureId);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    const p = find(tree, DeviceScorePad)!.props as {
+      initialViewOnly: string | null;
+      fixture: { match_ref: string | null; scheduled_label: string | null };
+    };
+    expect(p.initialViewOnly).toBeNull();
+    expect(p.fixture.match_ref).toMatch(/^R1·\d+$/);
+    expect(p.fixture.scheduled_label).toContain("22:30");
+  });
+
+  it("a SCHEDULED semi whose final was hand-seated → Confirm, not View-only (the page's own status gate, A15)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf2 = (await fixturesOf(stage.id)).find((f) => f.round_no === 1 && f.seq_in_round === 2)!;
+    const column = sf2.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = (select home_entrant_id from fixtures where id = ${sf2.id}) where id = ${sf2.winner_to_fixture}`;
+    const { secret } = await ensureDeviceLink(auth, sf2.id);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    expect((find(tree, DeviceScorePad)!.props as { initialViewOnly: string | null }).initialViewOnly).toBeNull();
+  });
+
+  it("a revoked link → localised dead screen, not the resolver's English", async () => {
+    const { auth, fixtureId } = await seedScorableFixture();
+    const link = await ensureDeviceLink(auth, fixtureId);
+    await sql`update device_links set revoked_at = now() where id = ${link.row.id}`;
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: link.secret }) });
+    const text = JSON.stringify(tree);
+    expect(text).toContain("This scoring link was revoked.");
+    expect(text).not.toContain("ask the organiser");
+  });
+
+  it("the dead screen speaks the viewer's language — French in, French out", async () => {
+    const { auth, fixtureId } = await seedScorableFixture();
+    const link = await ensureDeviceLink(auth, fixtureId);
+    await sql`update device_links set revoked_at = now() where id = ${link.row.id}`;
+    locale.value = "fr";
+    try {
+      const text = JSON.stringify(await ScorePadPage({ params: Promise.resolve({ token: link.secret }) }));
+      expect(text).toContain(fr["device.dead.revoked"]);
+      expect(text).toContain(fr["device.askFreshLink"]);
+      expect(text).not.toContain("This scoring link was revoked.");
+    } finally {
+      locale.value = "en";
+    }
+  });
+
+  it("an unknown token → the 'not valid' screen", async () => {
+    const text = JSON.stringify(await ScorePadPage({ params: Promise.resolve({ token: "dl_nope" }) }));
+    expect(text).toContain("This scoring link is not valid.");
   });
 });

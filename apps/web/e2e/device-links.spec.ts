@@ -112,7 +112,7 @@ test("device link opens the pad anonymously and authorises scoring", async ({
 // on a `setTimeout` Playwright prints whichever `expect.poll` was in flight, so
 // a wall-clock overrun would surface as "the pad never asked for a realtime
 // token", a data-shaped lie, above the timeout line.
-const PAD_MOUNT_MS = 20_000; // boot the pad and paint an entrant name
+const PAD_MOUNT_MS = 20_000; // boot the page and paint an entrant name; then Start → the pad
 const TOKEN_WAIT_MS = 20_000; // then the mount effect's token round trip
 const REALTIME_SEED_MS = 40_000; // seed + generate + mint + goto, generously
 
@@ -120,7 +120,8 @@ test("the device-link pad sends its dl_ token to the realtime-token door", async
   request,
   browser,
 }) => {
-  test.setTimeout(REALTIME_SEED_MS + PAD_MOUNT_MS + TOKEN_WAIT_MS);
+  // Two mounts: the Confirm card, then the pad Start mounts (scorer sheets §4.5.1).
+  test.setTimeout(REALTIME_SEED_MS + 2 * PAD_MOUNT_MS + TOKEN_WAIT_MS);
   const seeded = await seedScoredDivision(request, ["Sierra", "Tango"], { decide: false });
   const gen = await apiJson<{ fixtures: { id: string }[] }>(
     request,
@@ -138,10 +139,11 @@ test("the device-link pad sends its dl_ token to the realtime-token door", async
   expect(minted.status).toBe(201);
   const secret = minted.data!.secret;
 
-  // Signed OUT and explicitly empty, for the same reason the test above says:
-  // `browser.newContext()` inherits `use.storageState`, and an organiser cookie
-  // would authorise the token door by itself and make the header irrelevant.
-  const anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  // Signed OUT, for the same reason the test above says: `browser.newContext()`
+  // inherits `use.storageState`, and an organiser cookie would authorise the
+  // token door by itself and make the header irrelevant. No cookies, only a
+  // seeded consent choice, so the banner cannot sit over the Start button.
+  const anonCtx = await browser.newContext({ storageState: await consentedAnonymousState() });
   // Hoisted out of the try so `finally` can unroute it — see the note there.
   const page = await anonCtx.newPage();
   try {
@@ -162,9 +164,14 @@ test("the device-link pad sends its dl_ token to the realtime-token door", async
     });
 
     await page.goto(`/score/${secret}`);
+    // A not-yet-started scan opens on the Confirm card (scorer sheets §4.5.1);
+    // the pad — and so its stream and its token request — mounts on Start.
+    await expect(page.getByText(/Sierra|Tango/).first()).toBeVisible({ timeout: PAD_MOUNT_MS });
+    expect(tokenStatuses, "no pad before Start, so no token request yet").toEqual([]);
+    await page.getByTestId("score-start-match").click();
     // The pad itself has to be on screen, or a missing token request below
     // would only mean the pad never mounted.
-    await expect(page.getByText(/Sierra|Tango/).first()).toBeVisible({ timeout: PAD_MOUNT_MS });
+    await expect(page.locator('[data-role="pad-v3"]')).toBeVisible({ timeout: PAD_MOUNT_MS });
 
     // Polled on the ANSWER, which the handler pushes after the header, so this
     // one wait covers both halves without spending a second budget on it.
@@ -464,11 +471,20 @@ test("a device link mints a realtime token for its own fixture only (private com
 // about a write it did not make is its own realtime stream.
 //
 // `device-score-pad.tsx` renders `<ScorePad initialEvents={...}/>` from a
-// SERVER prop that never changes after mount, and the chrome's `resync()`
+// seed that never changes after the pad mounts, and the chrome's `resync()`
 // writes only the chrome's own `live`/`events` state. So there is no seam
 // between the two halves of this screen except the stream. That makes this
 // the sharpest possible test of the stream: one browser tab, one fixture, and
 // a value that can reach the pad by no other route.
+//
+// RE-POINTED (scorer sheets §4.5.1, Task 6). The inner pad now mounts only
+// AFTER Start — a not-yet-started scan opens on the Confirm card — and it
+// mounts SEEDED with the post-start ledger, so the chrome's own `core.start`
+// is in the pad's seed and can no longer be the observed write (it would
+// "arrive" by construction). The observed write is therefore a SECOND
+// writer's: the organiser's `POST /events` over the API, after the device
+// tapped Start and its pad mounted. Same clause, same budget: the device's
+// inner pad must paint a write it did not make, faster than the poll.
 //
 // WHY THE ASSERTION IS A CLOCK AND NOT A WAIT. The stream falls back to a
 // 15-second poll whenever realtime is unavailable, and the fallback is
@@ -491,10 +507,10 @@ test("a device link mints a realtime token for its own fixture only (private com
 // `PAD_MOUNT_MS`: a wall-clock overrun prints whichever `expect.poll` was in
 // flight, so an over-tight flat number would surface as "the pad never
 // caught up" — a data-shaped lie about the product. There is no `HOLD_MS`
-// term because this test taps no pad tile: the write is a chrome button and
-// goes straight to the API.
+// term because this test taps no pad tile: Start is a chrome button, and the
+// observed write goes straight to the API.
 const FLOW_C_SEED_MS = 45_000; // competition + division + entrants + stage + generate + start + mint
-const FLOW_C_MOUNT_MS = 20_000; // boot the pad and paint an entrant name
+const FLOW_C_MOUNT_MS = 20_000; // boot the page and paint the Confirm card; then Start → the pad
 const FLOW_C_TOKEN_MS = 20_000; // the mount effect's realtime-token round trip
 /** The "did it arrive at all" bound, deliberately WIDER than one poll tick:
  *  two ticks plus slack, so a write landing just after a tick still converges
@@ -522,12 +538,13 @@ async function padLedgerSize(page: Page): Promise<string> {
   return ((await el.textContent().catch(() => null)) ?? "").trim();
 }
 
-test("a device-link chrome write reaches its own inner pad faster than the poll", async ({
+test("a second writer's event reaches a device link's inner pad, mounted after Start, faster than the poll", async ({
   request,
   browser,
   playwright,
 }) => {
-  test.setTimeout(FLOW_C_SEED_MS + FLOW_C_MOUNT_MS + FLOW_C_TOKEN_MS + FLOW_C_CONVERGE_MS);
+  // Two mounts now: the Confirm card, then the pad Start mounts.
+  test.setTimeout(FLOW_C_SEED_MS + 2 * FLOW_C_MOUNT_MS + FLOW_C_TOKEN_MS + FLOW_C_CONVERGE_MS);
 
   // PRIVATE, for the branch isolation described above — same seeding shape as
   // the cross-fixture realtime test directly above this one.
@@ -610,9 +627,19 @@ test("a device-link chrome write reaches its own inner pad faster than the poll"
     const watch = await watchFixtureRealtime(device, fixtureId);
     await device.goto(`/score/${secret}`);
 
+    // A not-yet-started scan opens on the Confirm card, with NO inner pad yet
+    // (scorer sheets §4.5.1) — the empty case, before the device starts it.
+    const start = device.locator('[data-testid="score-start-match"]');
+    await expect(
+      device.getByTestId("scan-confirm"),
+      "a not-yet-started fixture opens on the Confirm card",
+    ).toBeVisible({ timeout: FLOW_C_MOUNT_MS });
+    await expect(padV3(device), "no inner pad before Start").toHaveCount(0);
+    await start.click();
+
     await expect(
       padV3(device),
-      "the v3 pad must render on the device link — without it there is no inner surface to propagate TO",
+      "the v3 pad must render once Start is tapped — without it there is no inner surface to propagate TO",
     ).toBeVisible({ timeout: FLOW_C_MOUNT_MS });
     await expect
       .poll(() => watch.tokenStatuses.length, {
@@ -625,59 +652,60 @@ test("a device-link chrome write reaches its own inner pad faster than the poll"
     // absent header.
     expect(watch.authHeaders[0]).toBe(`Bearer ${secret}`);
 
-    // The chrome's own control, NOT a pad tile. `score-start-match` lives on
-    // `device-score-pad.tsx`'s outer chrome and posts `core.start` straight to
-    // the API; the inner pad is not involved in the write at all, which is
-    // what makes its own screen moving a propagation fact rather than a local
-    // optimistic update.
-    const start = device.locator('[data-testid="score-start-match"]');
-    await expect(
-      start,
-      "the device chrome offers Start match on a not-yet-started fixture — this is the write under test",
-    ).toBeVisible({ timeout: FLOW_C_MOUNT_MS });
-
     // Not decoration. `padLedgerSize` reports "" for a locator that is not
     // there yet, so a pad still hydrating would hand `measurePropagation` a
-    // `before` of "" and then "change" to "0" a few hundred milliseconds
+    // `before` of "" and then "change" to "1" a few hundred milliseconds
     // later — a false realtime pass produced entirely by page load, with no
     // write involved at all. This settles the reading first and fails loudly
     // if it is still moving.
     const idle = await expectObservableIdle({
       read: () => padLedgerSize(device),
-      what: "flow (c): the inner pad's ledger count before the chrome writes",
+      what: "flow (c): the inner pad's ledger count before the second writer writes",
     });
-    expect(
-      idle,
-      "the inner pad must be painting a ledger count to move OFF — an empty reading means the activity panel never rendered",
-    ).not.toBe("");
+    // The pad mounted SEEDED with the post-start ledger — the start is
+    // already in it, so it cannot be what moves the count below.
+    expect(idle, "the pad mounts seeded with the device's own core.start").toBe("1");
 
+    // The SECOND writer: the organiser, over the API. The device is not
+    // involved in this write at all, which is what makes its inner pad moving
+    // a propagation fact rather than a local optimistic update.
+    const fx = await apiJson<{ home_entrant_id: string }>(request, `/api/v1/fixtures/${fixtureId}`);
+    expect(fx.status, `fixture read: ${JSON.stringify(fx.error)}`).toBe(200);
     const moved = await measurePropagation({
-      what: "flow (c): the chrome's core.start reaching the inner v3 pad",
+      what: "flow (c): an organiser's generic.score reaching the device's inner v3 pad",
       read: () => padLedgerSize(device),
-      write: () => start.click(),
+      write: async () => {
+        const posted = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+          expected_seq: 1,
+          type: "generic.score",
+          payload: { by: fx.data!.home_entrant_id, points: 1 },
+          idempotency_key: crypto.randomUUID(),
+        });
+        expect(posted.status, `the organiser's write: ${JSON.stringify(posted.error)}`).toBe(201);
+      },
       timeoutMs: FLOW_C_CONVERGE_MS,
     });
 
     assertPropagatedUnderPoll({
-      where: "flow (c) device chrome -> its own inner pad",
+      where: "flow (c) second writer -> the device's inner pad",
       result: moved,
       watch,
       pollMs: PAD_POLL_MS,
     });
 
     // Positive pair for the count above. `measurePropagation` is satisfied by
-    // ANY change, so on its own it cannot tell "the chrome's core.start
-    // arrived" from "something else landed on this fixture". Pin both ends:
-    // the ledger holds exactly one event and it is the start, and the pad's
-    // own count agrees with it.
+    // ANY change, so on its own it cannot tell "the organiser's score arrived"
+    // from "something else landed on this fixture". Pin both ends: the ledger
+    // holds exactly the device's start and the organiser's score, and the
+    // pad's own count agrees with it.
     const rows = await apiJson<{ type: string }[]>(
       request,
       `/api/v1/fixtures/${fixtureId}/events?since_seq=0`,
     );
     expect(
       (rows.data ?? []).map((e) => e.type),
-      "the chrome wrote exactly one event, and it is the start",
-    ).toEqual(["core.start"]);
+      "the device's start, then the organiser's score — nothing else",
+    ).toEqual(["core.start", "generic.score"]);
     expect(
       moved.after,
       "the pad's own ledger count must agree with the server's — a screen that moved to some other number is reading something else",

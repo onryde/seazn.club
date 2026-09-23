@@ -16,9 +16,10 @@ import { consentedAnonymousState } from "./scorepad-a11y-kit";
 // same seeding call and the same anonymous-context/cookie-consent pattern
 // scorepad-v2.spec.ts's own device-link test already established. `generic`
 // stays the sport for the same reason S10 chose it: `generic.score` is the
-// only REPEATABLE action cheap enough to drive with no real roster, and it
-// tolerates `state.phase === "pre"`, so no `core.start` is needed before
-// going offline.
+// only REPEATABLE action cheap enough to drive with no real roster. Since
+// scorer sheets §4.5.1 the scan of a scheduled fixture opens on the Confirm
+// card and the pad mounts only after Start match, so every scenario taps Start
+// first (`openDeviceLink`) and every ledger below leads with that core.start.
 //
 // TWO WAYS OF GOING "OFFLINE", DELIBERATELY DIFFERENT PER SCENARIO (unchanged
 // from the harness version): airplane mode uses the real `context.setOffline`
@@ -124,13 +125,33 @@ async function ledgerOf(
  *  TOKEN is the only credential (scorepad-v2.spec.ts's own device-link test,
  *  same reasoning). Accepts the cookie-consent banner, which an anonymous
  *  context always starts without and which would otherwise intercept the
- *  pad's own taps. */
-async function openDeviceLink(page: Page, secret: string): Promise<void> {
+ *  pad's own taps.
+ *
+ *  The fixture is not yet started, so the scan opens on the Confirm card and
+ *  the pad mounts only on Start (scorer sheets §4.5.1) — the product's own
+ *  flow, so the device taps it. Online, before any scenario goes offline:
+ *  every ledger below therefore opens with the device's `core.start`
+ *  (`STARTED`), and the pad's first queued event targets seq 1, not 0. */
+async function openDeviceLink(page: Page, request: APIRequestContext, fixtureId: string, secret: string): Promise<void> {
   await page.goto(`/score/${secret}`);
   const accept = page.getByRole("button", { name: "Accept", exact: true });
   if ((await accept.count()) > 0) await accept.click();
-  await expect(scorebug(page), "the v3 board must render on the device link").toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("scan-confirm"), "a not-yet-started scan opens on Confirm").toBeVisible({
+    timeout: 20_000,
+  });
+  await page.getByTestId("score-start-match").click();
+  await expect(scorebug(page), "the v3 board must render once the device starts the match").toBeVisible({
+    timeout: 20_000,
+  });
+  await expect
+    .poll(async () => (await ledgerOf(request, fixtureId)).map((e) => e.type), {
+      message: "the device's Start must land before a scenario goes offline",
+    })
+    .toEqual(["core.start"]);
 }
+
+/** The device's own Start, which every scenario's ledger opens with. */
+const STARTED = { type: "core.start", payload: {} };
 
 /** ScoringPad v3, tapModel S (R7/A1): the scoreboard HALF is the button, so
  *  there is no "Add points" form to expand. Indexed positionally, home first
@@ -211,7 +232,7 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
   const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
   try {
     const page = await ctx.newPage();
-    await openDeviceLink(page, secret);
+    await openDeviceLink(page, request, fixture.fixtureId, secret);
     // Assert the SEED, not a downstream effect racing something else's own
     // dismissal — see task-2-report.md, Step 7: `expectNoCookieBanner` here
     // raced `openDeviceLink`'s own reactive Accept-click (and, under load,
@@ -237,7 +258,7 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
     await pressAddPoints(page, 3, dbName, 3);
 
     await expect(page.getByText(OFFLINE_TEXT)).toBeVisible();
-    expect((await ledgerOf(request, fixture.fixtureId)).length, "nothing reached the server yet").toBe(0);
+    expect((await ledgerOf(request, fixture.fixtureId)).length, "nothing but the start reached the server yet").toBe(1);
 
     // Tab death: a real reload, not a soft re-render. The route persists on
     // this `page` across the navigation (Playwright routes survive reload
@@ -252,7 +273,7 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
         message: "the queue must survive a real reload — nothing in-memory did",
       })
       .toBe(3);
-    expect((await ledgerOf(request, fixture.fixtureId)).length, "still nothing on the server").toBe(0);
+    expect((await ledgerOf(request, fixture.fixtureId)).length, "still nothing but the start on the server").toBe(1);
 
     await page.unrouteAll();
     // Nothing in the app polls "is the network back" independently — it only
@@ -264,9 +285,10 @@ test("tab death mid-queue: the durable queue survives a real reload and drains i
     await expect.poll(() => queueRowCount(page, dbName)).toBe(0);
 
     const ledger = await ledgerOf(request, fixture.fixtureId);
-    expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual(
-      scoreEvents(fixture.homeEntrantId, homePerson(fixture), 1, 2, 3),
-    );
+    expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual([
+      STARTED,
+      ...scoreEvents(fixture.homeEntrantId, homePerson(fixture), 1, 2, 3),
+    ]);
     await expectNoHorizontalScroll(page);
   } finally {
     await ctx.close();
@@ -282,7 +304,7 @@ test("airplane mode: scoring continues offline, an explicit offline state and no
   const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
   try {
     const page = await ctx.newPage();
-    await openDeviceLink(page, secret);
+    await openDeviceLink(page, request, fixture.fixtureId, secret);
 
     // The real thing (brief's own requirement), not a stubbed transport —
     // this scenario never navigates again, so there is no reload for a
@@ -294,7 +316,7 @@ test("airplane mode: scoring continues offline, an explicit offline state and no
     await pressAddPoints(page, 3, dbName, 2);
 
     await expect(page.getByText(OFFLINE_TEXT)).toBeVisible();
-    expect((await ledgerOf(request, fixture.fixtureId)).length, "nothing reached the server while offline").toBe(0);
+    expect((await ledgerOf(request, fixture.fixtureId)).length, "nothing but the start reached the server while offline").toBe(1);
 
     await ctx.setOffline(false);
 
@@ -302,9 +324,10 @@ test("airplane mode: scoring continues offline, an explicit offline state and no
     await expect.poll(() => queueRowCount(page, dbName)).toBe(0);
 
     const ledger = await ledgerOf(request, fixture.fixtureId);
-    expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual(
-      scoreEvents(fixture.homeEntrantId, homePerson(fixture), 2, 3),
-    );
+    expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual([
+      STARTED,
+      ...scoreEvents(fixture.homeEntrantId, homePerson(fixture), 2, 3),
+    ]);
     await expectNoHorizontalScroll(page);
   } finally {
     await ctx.close();
@@ -317,7 +340,7 @@ test("a 409 mid-drain resyncs against the ledger and completes with no duplicate
   const ctx = await browser.newContext({ storageState: await consentedAnonymousState() });
   try {
     const page = await ctx.newPage();
-    await openDeviceLink(page, secret);
+    await openDeviceLink(page, request, fixture.fixtureId, secret);
 
     const eventsUrl = (url: URL): boolean => url.pathname === `/api/v1/fixtures/${fixture.fixtureId}/events`;
     await page.route(eventsUrl, (route) => route.abort());
@@ -328,13 +351,14 @@ test("a 409 mid-drain resyncs against the ledger and completes with no duplicate
 
     // Out-of-band: the standalone `request` fixture is its own
     // APIRequestContext (never a browser request, so `page.route` above never
-    // sees it) landing a genuine, server-accepted write at expected_seq=0 —
-    // the EXACT slot the client's first queued event still believes is free.
+    // sees it) landing a genuine, server-accepted write at expected_seq=1 —
+    // the slot right after the Start tap's core.start (seq 1), i.e. the EXACT
+    // slot the client's first queued event still believes is free.
     // A different `by` AND a sentinel `points` value so content comparison
     // alone (pipeline.ts's resolveConflict) unambiguously reads this as
     // foreign, never "our own event replayed".
     const outOfBand = await apiJson(request, `/api/v1/fixtures/${fixture.fixtureId}/events`, "POST", {
-      expected_seq: 0,
+      expected_seq: 1,
       type: "generic.score",
       payload: { by: fixture.awayEntrantId, points: 999 },
     });
@@ -352,6 +376,7 @@ test("a 409 mid-drain resyncs against the ledger and completes with no duplicate
     // exactly once around the foreign slot, per the S10 replay ruling.
     const ledger = await ledgerOf(request, fixture.fixtureId);
     expect(ledger.map((e) => ({ type: e.type, payload: e.payload }))).toEqual([
+      STARTED,
       // The out-of-band write is a raw API append with no lineup context, so
       // it carries no `person` — unlike the two the PAD wrote.
       { type: "generic.score", payload: { by: fixture.awayEntrantId, points: 999 } },
@@ -384,7 +409,7 @@ test("the queue-status pill stays fully on-screen at phone width, offline text i
   });
   try {
     const page = await ctx.newPage();
-    await openDeviceLink(page, secret);
+    await openDeviceLink(page, request, fixture.fixtureId, secret);
     await ctx.setOffline(true);
 
     const dbName = queueDbName(fixture.fixtureId);

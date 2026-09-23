@@ -2,13 +2,13 @@
 // way (pipeline → registry → this callback) is only proven end to end by
 // e2e/walkthrough/device-pad-carried-forward.spec.ts; this file pins the
 // chrome's half: the prop it hands down, and its own send() path.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ReactElement } from "react";
 import en from "@/dictionaries/en/ui.json";
 import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
 import { ScorePad } from "@/components/v2/scorepad/registry";
 import type { SideInfo, SportInfo } from "@/components/v2/fixture-console";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 
 const dict = en as Record<string, string>;
 const DEVICE_LINK_ID = "dl-1";
@@ -200,6 +200,19 @@ describe("DeviceScorePad — View-only (scorer sheets §4.5)", () => {
     expect(dict["device.scan.viewOnly.finalized"]).not.toBe(dict["device.scan.viewOnly.carried"]);
   });
 
+  it("the pad chrome registers no interval of its own (Waiting's poll must not leak into it)", async () => {
+    const spy = vi.spyOn(globalThis, "setInterval");
+    try {
+      const island = renderIsland(DeviceScorePad, props("in_play", null));
+      await flush(); // effects run: a mount-time setInterval would be recorded here
+      island.rerender(props("in_play", null));
+      await flush();
+      expect(spy.mock.calls.map((c) => c[1]), "DeviceScorePad must not poll: the stream owns freshness").toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("initialViewOnly on an in-play fixture still mounts no pad and no controls", () => {
     // The differential for the first-paint gate: in play, with no View-only,
     // the pad and the undo are both there (test above); with it, neither is.
@@ -210,5 +223,76 @@ describe("DeviceScorePad — View-only (scorer sheets §4.5)", () => {
     expect(byTestId(island.tree(), "scan-view-only")).toBeDefined();
     expect(island.tree().find((e) => e.type === ScorePad)).toBeUndefined();
     expect(byTestId(island.tree(), "device-void-mine")).toBeUndefined();
+  });
+});
+
+describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
+  it("scheduled with both sides: the Confirm card with Start, and NO inner pad yet", () => {
+    const island = renderIsland(DeviceScorePad, {
+      ...props("scheduled", null),
+      initialEvents: [],
+      fixture: { ...props("scheduled", null).fixture, match_ref: "R1·3", scheduled_label: "Wed 23 Sep, 10:30" },
+    });
+    const card = byTestId(island.tree(), "scan-confirm");
+    expect(card).toBeDefined();
+    expect(textOf(card), "the card names the match").toContain("R1·3");
+    expect(textOf(card), "and its time").toContain("Wed 23 Sep, 10:30");
+    expect(textOf(card), "and its court").toContain("Court 2");
+    expect(textOf(card), "and both sides, for the umpire to check").toContain("Nia");
+    expect(textOf(card)).toContain("Mira");
+    expect(textOf(card)).toContain(dict["device.scan.confirmTitle"]);
+    const start = byTestId(island.tree(), "score-start-match");
+    expect(start, "Start lives on the Confirm card").toBeDefined();
+    expect(textOf(byTestId(walk(card!), "score-start-match")), "…inside it, not beside it").toBe(dict["score.startMatch"]);
+    expect(island.tree().find((e) => e.type === ScorePad)).toBeUndefined();
+  });
+
+  it("in play: no Confirm card — the pad", () => {
+    const island = renderIsland(DeviceScorePad, props("in_play", null));
+    expect(byTestId(island.tree(), "scan-confirm")).toBeUndefined();
+    expect(byTestId(island.tree(), "score-start-match")).toBeUndefined();
+    expect(island.tree().find((e) => e.type === ScorePad)).toBeDefined();
+  });
+
+  it("Start match sends core.start, then mounts the pad SEEDED with the post-start ledger", async () => {
+    const island = renderIsland(DeviceScorePad, { ...props("scheduled", null), initialEvents: [] });
+    const { apiV1 } = await import("@/lib/client-v1");
+    // Restore the file-level mock afterwards: vitest.config.ts has no
+    // mockReset/restoreMocks, so a replaced implementation would leak into
+    // every later test in this file (pre-flight A18).
+    const original = vi.mocked(apiV1).getMockImplementation()!;
+    onTestFinished(() => void vi.mocked(apiV1).mockImplementation(original));
+    const started = {
+      id: "ev-start",
+      seq: 1,
+      type: "core.start",
+      payload: {},
+      recorded_at: "2026-09-23T10:31:00.000Z",
+      voids_event_id: null,
+      device_link_id: DEVICE_LINK_ID,
+      recorded_by: "u1",
+    };
+    const posted: unknown[] = [];
+    vi.mocked(apiV1).mockImplementation(((url: string, options?: { method?: string; json?: unknown }) => {
+      if (options?.method === "POST") {
+        posted.push(options.json);
+        return Promise.resolve({});
+      }
+      if (url.includes("/events")) return Promise.resolve([started]);
+      return Promise.resolve({ status: "in_play", last_seq: 1, summary: null, state: {}, outcome: null });
+    }) as typeof apiV1);
+    // Empty case first: the pad is not there before Start.
+    expect(island.tree().find((e) => e.type === ScorePad)).toBeUndefined();
+    (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+    await flush();
+    expect(posted.map((p) => (p as { type: string }).type), "Start posts exactly one core.start").toEqual(["core.start"]);
+    const pad = island.tree().find((e) => e.type === ScorePad);
+    expect(pad, "the pad mounts once the match is started").toBeDefined();
+    expect(byTestId(island.tree(), "scan-confirm"), "Confirm is gone once started").toBeUndefined();
+    const seeded = propsOf(pad!).initialEvents as { type: string; seq: number; recordedBy: string | null }[];
+    // Not the page's pre-start bootstrap (`scorePadV2.initialEvents`, empty
+    // here): the pad's stream does not read on mount, so a pad opened on the
+    // bootstrap would send its first tap at a stale seq (P8).
+    expect(seeded.map((e) => [e.type, e.seq, e.recordedBy])).toEqual([["core.start", 1, "u1"]]);
   });
 });
