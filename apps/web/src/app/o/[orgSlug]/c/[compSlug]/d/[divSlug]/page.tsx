@@ -12,6 +12,8 @@ import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
+import { listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
+import { divisionQualification } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { STAGE_RULES_SPORTS } from "@/lib/match-rules";
 // From the DB-free module, not through the server-only usecase above: this
@@ -460,6 +462,31 @@ export default async function DivisionPage({
   // dictionary (the same helpers as the hub's table), in this viewer's
   // locale. Loaded only on the tab that draws them, like `standings` above.
   const publicDict = tab === "standings" ? await getDictionary(locale, "public") : {};
+  // Standings qualification status (R1a, spec 2026-09-22 §4.2): the same cut
+  // line, markers, legend and popover the public pages draw. The meta comes
+  // from V414's `stage_qualification_meta` — the function `public_stages_v`
+  // calls — read for the table stages of the tenant-scoped `listStages` above
+  // and nothing else; the view is built by the helper the division page, the
+  // embed and the hub use. Its words are this VIEWER's, like the rest of the
+  // table's (`publicDict`, `locale`), where the ISR public pages use the org's.
+  // No meta for any stage → nothing to build.
+  const qualMeta =
+    tab === "standings"
+      ? await listStageQualificationMeta(auth, tableStages.map((s) => s.id))
+      : new Map<string, StageQualMetaRow>();
+  const qualificationFor =
+    qualMeta.size > 0
+      ? divisionQualification({
+          module_: sportModule,
+          division,
+          dict: publicDict,
+          locale,
+          fixtures,
+          entrantStatuses,
+          entrantNames,
+          cascade,
+        })
+      : null;
 
   // Stream Overlay W1 (task 6) — the per-PAGE half of every run-sheet row's
   // stream panel, resolved ONCE here rather than per row.
@@ -798,6 +825,17 @@ export default async function DivisionPage({
                   const ranked = [...(snap.rows as StandingsRow[])].sort(
                     (a, b) => (a.rank ?? 99) - (b.rank ?? 99),
                   );
+                  // This table's cut line and statuses (null: no cut, or
+                  // anything the builder cannot be sure of — then the table
+                  // is as before). The pool is the one this table was read for.
+                  const stageMeta = qualMeta.get(stage.id);
+                  const qualification =
+                    stageMeta && qualificationFor
+                      ? qualificationFor(
+                          { id: stage.id, kind: stage.kind, ...stageMeta },
+                          { pool_id: poolId, rows: snap.rows as StandingsRow[] },
+                        )
+                      : null;
                   return (
                     <div key={caption} className="mb-6 last:mb-0 space-y-3">
                       <StandingsTable
@@ -809,6 +847,7 @@ export default async function DivisionPage({
                         entrantStatuses={entrantStatuses}
                         caption={caption}
                         dict={publicDict}
+                        qualification={qualification}
                       />
                       {poolFixtures.length > 0 && (
                         <details>
