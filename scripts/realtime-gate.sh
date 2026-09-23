@@ -26,6 +26,14 @@
 #
 #   1. It runs nothing. A `--project` that selects zero tests exits 0 and
 #      proves nothing, so every spec/project pair must select >= 1 test.
+#      SELECTION IS NOT EXECUTION, though, and that door was open until fix
+#      round 1: Playwright exits 0 when every test it ran was skipped at
+#      runtime (`test.skip(cond)`, `test.fixme`, a `describe.skip`), so a spec
+#      that skips itself under E2E_PROD_TARGET or a missing secret lists as
+#      n >= 1, exits 0, and earns a PASS over zero executed assertions. A leg
+#      that exits 0 having skipped anything is therefore refused too. A gate
+#      whose whole job is to refuse a vacuous green does not get to keep one
+#      of its own.
 #   2. It runs tests that assert nothing about realtime. The clause is
 #      `assertPropagatedUnderPoll()`; a spec that still IMPORTS the symbol, or
 #      merely names it in a comment, has not kept it. Only CALL-shaped
@@ -52,8 +60,9 @@ set -uo pipefail
 #   0  every realtime-bearing spec joined a channel and beat the poll
 #   1  realtime regression: at least one pad sat on the poll
 #   2  environment: no server, or no DATABASE_URL — nothing was measured
-#   3  gate integrity: zero tests selected, or the spec set / clause / switch
-#      does not match the tree
+#   3  gate integrity: zero tests selected, a leg that exited 0 without
+#      running everything it selected, or the spec set / clause / switch does
+#      not match the tree
 #   4  inconclusive: EVERY failing leg carried no realtime verdict, so whatever
 #      broke, it was not measured as a realtime failure. If any leg DID carry
 #      one, the run is a 1 — a measured regression is never downgraded to a 4
@@ -119,6 +128,32 @@ project_for() {
 clause_calls() {
   grep -aE "\b${CLAUSE}\(" "$1" 2>/dev/null \
     | grep -acvE "^[[:space:]]*(//|\*|/\*)" || true
+}
+
+# Did this leg's log carry a bucket of tests that did not execute?
+#
+# Read off the reporter's own summary tokens, which are emitted by
+# `generateSummaryMessage` (playwright/lib/runner/index.js) as `  N skipped`
+# and `  N did not run` — a separate line each, uncoloured because stdout is a
+# pipe here, and printed only when the bucket is non-empty. A run in which
+# EVERY test skipped prints no `N passed` line at all and exits 0.
+#
+# Deliberately NOT the positive form the obvious reading suggests ("N passed
+# >= the N we selected"). The `passed` tally counts the whole run, including
+# the `setup` project's two auth tests, while the pre-flight count excludes
+# them — so for the walkthrough leg, which selects ONE test, setup alone
+# supplies a passing 2 and the comparison is satisfied with the spec's only
+# test skipped. A check that its own arithmetic makes vacuous is worse than no
+# check, because it reads as cover.
+#
+# A heuristic, like `clause_calls` above, and unlike that one it errs toward
+# REFUSING: a digit followed by exactly `skipped` or `did not run` anywhere in
+# the log trips it. Line anchors would be more precise and would break the
+# moment anything colours the output, and for this gate a false refusal is the
+# cheap direction. Verified no such phrase occurs in the gated specs, the kit
+# or auth.setup.ts.
+leg_has_unrun_tests() {
+  grep -qaE "[0-9]+ (skipped|did not run)" "$1"
 }
 
 if [ -z "${DATABASE_URL:-}" ]; then
@@ -239,8 +274,10 @@ echo "  ${SELECTED} realtime-bearing test(s) will run with ${SWITCH}=1"
 FAILED=0
 NOT_REALTIME=0
 REALTIME_RED=0
+UNRUN=0
 VERDICT_LEGS=""
 SILENT_LEGS=""
+UNRUN_LEGS=""
 for spec in "${SPECS[@]}"; do
   project="$(project_for "$spec")"
   # `serial` specs are entangled with shared org-level state; apps/web's own
@@ -272,6 +309,16 @@ for spec in "${SPECS[@]}"; do
       echo "  Nothing in that output came from ${CLAUSE}(), so that leg fell" >&2
       echo "  over before realtime was measured at all." >&2
     fi
+  elif leg_has_unrun_tests "$leg"; then
+    # Only on a leg that EXITED 0, and that restriction is the whole design.
+    # A leg that FAILED routinely leaves a `did not run` bucket behind — the
+    # serial project aborts its remaining tests after the first red — so
+    # applying this to a failing leg would re-report a measured regression as
+    # a gate-integrity fault, which is failure mode 4 wearing a new hat. A leg
+    # that exits 0 while skipping is the one shape nothing else here catches.
+    UNRUN=1
+    UNRUN_LEGS="${UNRUN_LEGS} ${spec}"
+    echo "realtime-gate: ${spec} exited 0 with test(s) that never ran." >&2
   fi
 done
 
@@ -303,5 +350,22 @@ fi
 if [ "$FAILED" -ne 0 ]; then
   echo "REALTIME GATE: FAILED — at least one pad sat on the poll." >&2
   exit 1
+fi
+# Last, and after every failure verdict above, on purpose. `UNRUN` is only ever
+# set on a leg that exited 0, so reaching here means nothing failed anywhere —
+# which is exactly when a skipped test is indistinguishable from a pass unless
+# something says so. Placing it above would let a skip in one leg downgrade a
+# measured regression in another, which is the one thing this script's
+# precedence block exists to prevent.
+if [ "$UNRUN" -ne 0 ]; then
+  echo "REALTIME GATE: REFUSED — a leg passed without running what it selected." >&2
+  echo "  legs: ${UNRUN_LEGS# }" >&2
+  echo "  Playwright exits 0 when every test it ran was skipped, so a spec" >&2
+  echo "  that skips itself under E2E_PROD_TARGET or a missing secret earns a" >&2
+  echo "  green over zero executed assertions. Read the leg's own summary:" >&2
+  echo "  a 'skipped' or 'did not run' bucket says how many." >&2
+  echo "  Either remove the skip condition or drop the spec from SPECS — a" >&2
+  echo "  gated spec that does not run is not gated." >&2
+  exit 3
 fi
 echo "REALTIME GATE: PASS — every channel joined and beat the poll (${SELECTED} tests)."
