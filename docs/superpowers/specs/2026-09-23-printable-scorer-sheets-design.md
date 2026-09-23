@@ -29,7 +29,7 @@ fixture** — it clears the sides and the next pairing refills the same row. A
 printed Swiss sheet therefore stays bound to the board and scores whatever
 pairing it currently holds.
 
-## 3. Current state (verified 2026-09-22/23, re-pin before building)
+## 3. Current state (re-pinned 2026-09-23 against main c22e4df93, after W3 #845; re-pin again before building)
 
 - Mint: `createDeviceLink` (`apps/web/src/server/usecases/device-links.ts:121`) —
   session editor only (`requireSessionEditor` :87), `requireFeature("scoring.device_links",
@@ -38,27 +38,36 @@ pairing it currently holds.
   live link for the fixture** (one live device). Secret stored as `token_hash` only,
   returned once.
 - Resolve: `resolveDeviceLinkToken` (:249) — `LINK_INVALID` / `LINK_REVOKED` / `LINK_EXPIRED`.
-- Console gate: `f/[no]/page.tsx:224` `deviceHandover` and `fixture-console.tsx:534`
+- Console gate: `f/[no]/page.tsx:224` `deviceHandover` and `fixture-console.tsx:679`
   `canHandOver = deviceHandover && scoring && home && away`. The server does NOT require
   both sides; the UI does.
 - Scoring refusals: only `finalized` and `cancelled` lock appends
   (`engine-db/append-event.ts:169`). Stage, division and competition status are never
   checked (`usecases/scoring.ts:449` checks only setup/scheduled phase). Device-link
   actors additionally may not finalize, may not void once finalized, may only void their
-  own events (`scoring.ts:458-474`). They **may** send `core.start`.
+  own events (`scoring.ts:457-475`). They **may** send `core.start`.
 - A decided / forfeited / abandoned fixture still accepts `core.void`, which reverts the
   result (`packages/engine/src/core/events.ts:188-214`).
-- Advancement: `onDecided → fillSlot` (`scoring.ts:621-653`, `stages.ts:3439`) writes the
+- Advancement: `onDecided → fillSlot` (`scoring.ts:621-653`, `stages.ts:3544`) writes the
   winner/loser into `winner_to_fixture`/`loser_to_fixture` **only while the target side is
   null**. Next Swiss round refused while any seated board of the previous one is unsettled
-  (`stages.ts:1013`). Stage completion requires counted fixtures settled
+  (`stages.ts:1068`, `STAGE_NOT_READY`). Stage completion requires counted fixtures settled
   (`engine-db/competition.ts:596`).
 - TBD labels: `fixtures.home_slot_label/away_slot_label` (V360), rendered by
   `resolveSlotLabel` (`apps/web/src/lib/slot-label.ts:55`). Swiss shells have null sides
   and no label.
-- Scan page: `app/score/[token]/page.tsx` never selects slot labels; `device-score-pad.tsx`
-  shows plain `TBD` and hides start/undo unless both sides exist (:292-359). Entrants arrive
-  as page props — the realtime stream does not carry side fills.
+- Scan page: `app/score/[token]/page.tsx` already selects `court_name`, `scheduled_at`,
+  `division_name`, `round_no` (:87-89; `scheduled_at` is never passed to the pad) but never
+  slot labels. `device-score-pad.tsx` shows plain `TBD` (:292, :296), gates start/undo (:322)
+  and mounts the inner pad only when `home && away` (:359). `home`/`away` are props with no
+  state; neither pad nor page has `router.refresh` or a timer.
+- Side fills DO emit a `state_changed` broadcast (reason `schedule`) to the target fixture
+  (`scoring.ts:339`, `schedule.ts:150`), but `useFixtureStream` ignores it (onSignal fetches
+  events only, `use-fixture-stream.ts:168`) — and while a side is null no stream is mounted
+  at all. Pad poll: `POLL_MS = 15_000` (`use-fixture-stream.ts:21`, unexported).
+- Inner-pad 403s classify as `rejected` (`transport.ts:295-297, 362-363`); the only
+  inner→chrome channel is `onEvents` (`registry.tsx:204, 299`). Only the chrome's own
+  `send()` errors (`device-score-pad.tsx:175`) reach `DeviceScorePad`.
 - PDF/QR: `pdfkit` + `qrcode` installed; pattern of record is
   `app/(public)/shared/[orgSlug]/[competitionSlug]/poster.pdf/route.ts` with
   `server/doc-render.ts` / `doc-theme.ts`.
@@ -151,18 +160,27 @@ Page additionally loads court, scheduled time, division, match ref and both slot
    ref, names; button **Start match** sends `core.start` and opens the pad. `in_play` skips
    straight to the pad.
 2. **Waiting** — a side is null: "Waiting for **Winner of QF1** vs **Ben Lim**" + "This
-   page updates by itself". Side fills emit no score event, so the page re-checks every
-   15s while waiting (`cache: "no-store"`; must not rebuild the stream subscription —
-   see the inline-`auth` resubscribe trap), then moves to Confirm.
+   page updates by itself". No stream is mounted while a side is null, so the chrome
+   re-checks fixture metadata (sides + labels) every `POLL_MS` while — and only while —
+   waiting (`cache: "no-store"`), then moves to Confirm and the inner pad mounts. This is
+   an interval, which W3 §5 avoided on the console to not double a live stream's polling;
+   here no stream exists during Waiting, so nothing doubles. The `state_changed`
+   (`schedule`) broadcast is NOT used as the trigger: CI cannot join realtime and the
+   broadcast is a floating promise (W3 §7b), so it could only ever be a speed-up.
 3. **View only** — carried forward / finalized / cancelled: final scoreboard, no controls,
    "Match over — result carried forward. Ask the organiser to correct it." (or finalised /
-   cancelled wording). A live pad receiving `RESULT_CARRIED_FORWARD` switches here.
+   cancelled wording). A live pad whose tap is refused with `RESULT_CARRIED_FORWARD`
+   switches here. **No such path exists today** — an inner-pad 403 is classified
+   `rejected` and never reaches the chrome. Build it: transport classifies this code as
+   terminal and the pipeline surfaces it through a new registry callback (beside
+   `onEvents`) that `DeviceScorePad` consumes. This is a seam — prove it by a REAL
+   inner-pad tap in e2e, not a stubbed callback.
 4. **Dead link** — revoked / deleted: existing screen.
 
-Coordination: device-link scoring gaps W3 (realtime seam,
-`2026-09-21-device-link-scoring-gaps-design.md` §5) is next in that programme and touches
-the same pad subscription. Whichever lands second rebases onto the other; the waiting
-re-check stays out of `useFixtureStream`.
+Coordination: W3 (#845) has merged. **G1** (device-pad freshness floor, standalone fix,
+branch `fix/device-pad-freshness-floor`) edits `device-score-pad.tsx` and lands first;
+this work rebases onto it. The waiting re-check stays out of `useFixtureStream` (which is
+unmounted during Waiting and fetches events only).
 
 UI bar: mobile-first, screenshots of all four screens and the print control at 320 / 768 /
 1280, no horizontal page scroll.
