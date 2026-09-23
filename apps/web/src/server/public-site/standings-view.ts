@@ -193,6 +193,7 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   fair_play: "table.tieBreak.fair_play",
   nrr: "table.tieBreak.nrr",
   set_ratio: "table.tieBreak.set_ratio",
+  game_ratio: "table.tieBreak.game_ratio",
   board_ratio: "table.tieBreak.board_ratio",
   point_ratio: "table.tieBreak.point_ratio",
   h2h_points: "table.tieBreak.h2h_points",

@@ -254,6 +254,7 @@ describe("buildTableView", () => {
       "fair_play",
       "nrr",
       "set_ratio",
+      "game_ratio",
       "board_ratio",
       "point_ratio",
       "h2h_points",
@@ -267,7 +268,7 @@ describe("buildTableView", () => {
       "lots",
     ]);
     // …and every value is the literal key for its own rule, so a typo in one
-    // of the eighteen strings reds here rather than in a spectator's browser.
+    // of the nineteen strings reds here rather than in a spectator's browser.
     for (const [trace, dictKey] of Object.entries(TIE_BREAK_MSG_KEYS)) {
       expect(dictKey).toBe(`table.tieBreak.${trace}`);
     }

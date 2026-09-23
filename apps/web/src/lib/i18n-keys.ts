@@ -6193,6 +6193,7 @@ export type DictionaryKey =
   | "table.tieBreak.direct"
   | "table.tieBreak.fair_play"
   | "table.tieBreak.for"
+  | "table.tieBreak.game_ratio"
   | "table.tieBreak.h2h_diff"
   | "table.tieBreak.h2h_for"
   | "table.tieBreak.h2h_points"

@@ -320,6 +320,7 @@
   "table.tieBreak.fair_play": "fair play",
   "table.tieBreak.nrr": "net run rate",
   "table.tieBreak.set_ratio": "setratio",
+  "table.tieBreak.game_ratio": "gameratio",
   "table.tieBreak.board_ratio": "bordratio",
   "table.tieBreak.point_ratio": "puntenratio",
   "table.tieBreak.h2h_points": "punten onderling duel",

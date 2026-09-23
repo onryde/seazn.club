@@ -320,6 +320,7 @@
   "table.tieBreak.fair_play": "fair play",
   "table.tieBreak.nrr": "net run rate",
   "table.tieBreak.set_ratio": "set ratio",
+  "table.tieBreak.game_ratio": "game ratio",
   "table.tieBreak.board_ratio": "board ratio",
   "table.tieBreak.point_ratio": "point ratio",
   "table.tieBreak.h2h_points": "head-to-head",
