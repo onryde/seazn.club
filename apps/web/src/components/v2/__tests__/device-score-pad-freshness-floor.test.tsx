@@ -25,12 +25,8 @@
 // is `e2e/walkthrough/device-pad-stalled-pipeline.spec.ts`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import {
-  DeviceScorePad,
-  OPPORTUNISTIC_RESYNC_MS,
-  type PadEventIn,
-} from "@/components/v2/device-score-pad";
-import type { SideInfo, SportInfo } from "@/components/v2/fixture-console";
+import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
+import { OPPORTUNISTIC_RESYNC_MS, type SideInfo, type SportInfo } from "@/components/v2/fixture-console";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 
 const api = vi.hoisted(() => ({
@@ -350,14 +346,23 @@ describe("DeviceScorePad — the tab-return freshness floor (G1)", () => {
     expect(signals[1]).toBe(signals[0]);
 
     // The budget itself is a requirement, not a derived value, so it is
-    // checked against the requirement: well above a slow courtside round trip
-    // (an over-eager abort fails every refresh on bad Wi-Fi, which makes the
-    // floor inert exactly where it is needed) and inside the minute W3's
-    // console test holds as the most a scorer should wait on greyed controls.
-    // The two waits below are measured FROM the constant, so on their own they
-    // could only catch a timer that disagrees with it — this line is what
-    // catches the constant itself moving out of range.
-    expect(OPPORTUNISTIC_RESYNC_MS).toBeGreaterThanOrEqual(5_000);
+    // checked against the requirement. The two waits below are measured FROM
+    // the constant, so on their own they could only catch a timer that
+    // disagrees with it — these lines are what catch the constant itself
+    // moving out of range.
+    //
+    // FLOOR 8s (review round 1 — a 5s floor admitted a 5s budget and killed
+    // no mutant). A courtside refresh is two GETs, one of them the WHOLE
+    // ledger, over venue Wi-Fi or mobile data, where multi-second round trips
+    // are routine; an abort that lands on a slow-but-alive refresh fails it
+    // silently, and the floor then does nothing exactly where it is needed.
+    // The walkthrough leans on it too: `device-pad-stalled-pipeline.spec.ts`
+    // holds the refresh open for this budget less 4s of headroom to observe
+    // the gate, and refuses to run on under 3s of hold (a budget below 7s).
+    //
+    // CEILING 60s — the minute W3's console test holds as the most a scorer
+    // should wait on greyed controls.
+    expect(OPPORTUNISTIC_RESYNC_MS).toBeGreaterThanOrEqual(8_000);
     expect(OPPORTUNISTIC_RESYNC_MS).toBeLessThanOrEqual(60_000);
 
     // Not before the budget: the timer must be armed with the constant, not
@@ -396,6 +401,26 @@ describe("DeviceScorePad — the tab-return freshness floor (G1)", () => {
     const settled = voidMine(island.tree());
     expect(propsOf(settled).title, "events untouched — still targeting this link's own seq 1").toContain("seq 1");
     expect(propsOf(settled).disabled, "padSyncing cleared by the finally").toBe(false);
+  });
+
+  it("leaves no timer armed once a refresh settles", async () => {
+    // The bound's timer is cleared in `resync`'s `finally`. Without that, every
+    // settled refresh leaves one armed for the full budget — two per tab
+    // return — which later aborts a controller nobody is listening to.
+    const doc = stubDocument("visible");
+    stubWindow();
+    renderIsland(DeviceScorePad, baseProps());
+    expect(vi.getTimerCount(), "nothing is armed at rest").toBe(0);
+
+    fire(doc, "visibilitychange");
+    // Positive pair: the budget timer IS visible to this count while the
+    // refresh is in flight, so the zero below is the clear, not a blind spot.
+    expect(vi.getTimerCount(), "the budget timer is armed while the refresh is in flight").toBe(1);
+
+    // Settles at once (the double answers immediately) — far short of the
+    // budget, so an uncleared timer would still be pending here.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(vi.getTimerCount(), "a settled refresh must clear its budget timer").toBe(0);
   });
 
   it("is NOT an interval — a pad nobody returns to costs nothing", async () => {

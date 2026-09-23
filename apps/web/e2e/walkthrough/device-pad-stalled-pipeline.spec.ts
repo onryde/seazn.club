@@ -45,6 +45,7 @@
 // `since_seq=0`, it would learn the foreign rally and move the header before
 // the visibility flip — which the precondition asserts does not happen — so
 // the discriminator is self-guarding rather than assumed.
+import { readFileSync } from "node:fs";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { apiJson, seedRosteredFixture, TAG } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
@@ -66,9 +67,51 @@ const POLL_WAIT_MS = POLL_MS * 2 + 15_000;
  *  THAT and only that; nothing slower is ever proven absent with it. */
 const SETTLE_MS = 2_500;
 
+/** The refresh's own abort budget, read from the declaration the device pad
+ *  imports (`fixture-console.tsx`) — the `padPollMs()` idiom. Not an import:
+ *  that module drags JSON-backed src into the e2e loader. Not a typed copy:
+ *  the hold below is only valid relative to this number, and a copy would go
+ *  on assuming yesterday's. */
+function opportunisticResyncMs(): number {
+  const url = new URL("../../src/components/v2/fixture-console.tsx", import.meta.url);
+  const m = readFileSync(url, "utf8").match(/^export const OPPORTUNISTIC_RESYNC_MS\s*=\s*([0-9_]+)\s*;/m);
+  if (!m) {
+    throw new Error(
+      "OPPORTUNISTIC_RESYNC_MS's declaration shape changed in components/v2/fixture-console.tsx — " +
+        "update this reader. Do NOT replace it with a literal: the hold below is derived from it.",
+    );
+  }
+  const ms = Number(m[1]!.replace(/_/g, ""));
+  if (!Number.isFinite(ms) || ms <= 0) {
+    throw new Error(`OPPORTUNISTIC_RESYNC_MS read from fixture-console.tsx is not a usable budget: "${m[1]}"`);
+  }
+  return ms;
+}
+const RESYNC_BUDGET_MS = opportunisticResyncMs();
+
+/** Headroom the HELD refresh still needs inside that budget once released —
+ *  the route's `continue()`, the server round trip and a render, ~100-300ms
+ *  locally; 4s is an order of magnitude over on a loaded machine. A hold that
+ *  ate into it would have the bound abort the very refresh under test, and
+ *  the header would never move: a red that reads as "no refresh at all". */
+const HOLD_HEADROOM_MS = 4_000;
+
 /** How long the chrome's refresh is held open so the `padSyncing` window is
- *  observable at all (without it the window closes in one round trip). */
-const HOLD_MS = 6_000;
+ *  observable at all (without it the window closes in one round trip).
+ *  DERIVED from the budget (review round 1 — it was a flat 6s beside a 10s
+ *  budget, so lowering the budget to 5s would have aborted every held
+ *  refresh). */
+const HOLD_MS = RESYNC_BUDGET_MS - HOLD_HEADROOM_MS;
+// The gate check waits `HOLD_MS - 2_000`; under ~1s of that, the window is too
+// short to observe honestly. Refused here, by name, rather than as a flaky
+// `toBeDisabled` three minutes in. The unit floor in
+// `device-score-pad-freshness-floor.test.tsx` (>= 8s) keeps this unreachable.
+if (HOLD_MS < 3_000) {
+  throw new Error(
+    `OPPORTUNISTIC_RESYNC_MS (${RESYNC_BUDGET_MS}ms) leaves only ${HOLD_MS}ms to hold the padSyncing ` +
+      `window open after ${HOLD_HEADROOM_MS}ms of headroom — too short to observe the gate.`,
+  );
+}
 
 /** One page-level wait for a value to converge, and the pad's mount. */
 const CONVERGE_MS = 20_000;
