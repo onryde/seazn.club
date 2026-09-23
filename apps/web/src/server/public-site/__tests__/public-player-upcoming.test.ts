@@ -1,0 +1,498 @@
+// Player profile — upcoming matches across the org
+// (docs/superpowers/specs/2026-09-23-player-profile-upcoming-matches-design.md,
+//  plan docs/superpowers/plans/2026-09-23-player-profile-upcoming-matches.md).
+//
+// DB-only: seeds ONE scene in beforeAll and asks `readPlayerUpcoming` about it.
+// Every exclusion test states its PREMISE first — the fixture exists, has Ada on
+// a side, carries the status the test is about — so an absent row is about the
+// rule under test, never about a fixture the query could not see anyway.
+// Expected strings are derived from the dictionaries and the one masking
+// function, never typed as a table.
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: (...a: unknown[]) => Promise<unknown>) => fn,
+  revalidateTag: vi.fn(),
+}));
+
+import enUi from "@/dictionaries/en/ui.json";
+import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { resolveVenueTz } from "@/lib/tz";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { appendEvent } from "@/server/engine-db/append-event";
+import { createCompetition } from "@/server/usecases/competitions";
+import { createDivision } from "@/server/usecases/divisions";
+import { createEntrants } from "@/server/usecases/entrants";
+import { startDivision } from "@/server/usecases/schedule";
+import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { getPublicPlayerUpcoming, maskPublicEntrantNames, type PublicCompetition, type PublicOrg } from "../data";
+import { readPlayerUpcoming, UPCOMING_STALE_AFTER_MS, type PlayerUpcomingRow } from "../public-player-matches";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+const HOUR = 60 * 60 * 1000;
+
+const GENERIC_CONFIG = {
+  resultMode: "score",
+  allowDraws: true,
+  points: { w: 3, d: 1, l: 0 },
+  progressScore: false,
+};
+
+type FixtureRow = { id: string; home_entrant_id: string | null; away_entrant_id: string | null };
+type Side = { kind: "individual" | "pair"; name: string; members: string[] };
+interface League {
+  divisionId: string;
+  slug: string;
+  entrantIds: string[];
+  fixtures: FixtureRow[];
+}
+interface Comp {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+interface Scene {
+  orgId: string;
+  orgSlug: string;
+  now: Date;
+  ada: string;
+  cur: Comp;
+  sib: Comp;
+  unl: Comp;
+  prv: Comp;
+  slugs: { singles: string; sib: string };
+  doublesDivisionId: string;
+  pairOpponent: { id: string; raw: string };
+  f: Record<
+    | "di" | "bo" | "cy" | "hal" | "ian" | "jo" | "pair" | "seatNamed" | "seatTbd" | "setup"
+    | "withdrawn" | "doneDivision" | "ned" | "archived" | "oli" | "pat" | "oldComp" | "foreign",
+    string
+  >;
+}
+
+let scene: Scene;
+
+const member = (personId: string) => ({
+  person_id: personId,
+  squad_number: null,
+  default_position_key: null,
+  is_captain: false,
+  roles: [] as string[],
+});
+
+async function seedPerson(orgId: string, fullName: string): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name, dob, gender, consent)
+    values (${orgId}, ${fullName}, '2000-04-03', 'f', ${sql.json({ public_name: true })})
+    returning id`;
+  return id;
+}
+
+async function openOrg(label: string): Promise<{ orgId: string; orgSlug: string; auth: AuthCtx }> {
+  const suffix = randomUUID().slice(0, 8);
+  const orgSlug = `pup-${label}-${suffix}`;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug) values (${`PUP ${label} ${suffix}`}, ${orgSlug}) returning id`;
+  await setOrgPlan(orgId);
+  // No caps: a create over a cap silently comes back PRIVATE, which would make
+  // every visibility test pass for the wrong reason (premise asserted in seed()).
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+    values (${orgId}, 'competitions.max_active', null, 'test'),
+           (${orgId}, 'dashboard.public.max', 50, 'test')`;
+  await invalidateOrgEntitlements(orgId);
+  return { orgId, orgSlug, auth: { orgId, via: "session", userId: null, role: "owner", keyId: null } };
+}
+
+async function league(auth: AuthCtx, competitionId: string, slug: string, sides: Side[], start = true): Promise<League> {
+  const division = await createDivision(auth, competitionId, {
+    name: slug,
+    slug,
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  const created = (await createEntrants(
+    auth,
+    division.id,
+    sides.map((s, i) => ({ kind: s.kind, display_name: s.name, seed: i + 1, members: s.members.map(member) })) as never,
+  )) as { id: string }[];
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: slug, config: {} });
+  await generateStageFixtures(auth, stage!.id);
+  if (start) await startDivision(auth, division.id);
+  const [{ slug: stored }] = await sql<{ slug: string }[]>`select slug from divisions where id = ${division.id}`;
+  const fixtures = await sql<FixtureRow[]>`
+    select id, home_entrant_id, away_entrant_id from fixtures where division_id = ${division.id}`;
+  return { divisionId: division.id, slug: stored, entrantIds: created.map((e) => e.id), fixtures };
+}
+
+function vs(l: League, a: number, b: number): string {
+  const [x, y] = [l.entrantIds[a]!, l.entrantIds[b]!];
+  const row = l.fixtures.find(
+    (f) => (f.home_entrant_id === x && f.away_entrant_id === y) || (f.home_entrant_id === y && f.away_entrant_id === x),
+  );
+  if (!row) throw new Error(`seed: no fixture between entrants ${a} and ${b} in ${l.slug}`);
+  return row.id;
+}
+
+const at = (fixtureId: string, when: Date) =>
+  sql`update fixtures set scheduled_at = ${when.toISOString()} where id = ${fixtureId}`;
+
+/** The real write path: core.start puts a fixture in play; a result decides it. */
+async function play(orgId: string, fixtureId: string, finish: boolean): Promise<void> {
+  await appendEvent(orgId, fixtureId, 0, { type: "core.start", payload: {}, recordedBy: null });
+  if (finish) {
+    await appendEvent(orgId, fixtureId, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 1 }, recordedBy: null });
+  }
+}
+
+async function seed(): Promise<Scene> {
+  const now = new Date();
+  const inHours = (h: number) => new Date(now.getTime() + h * HOUR);
+  const { orgId, orgSlug, auth } = await openOrg("main");
+  await sql`update organizations set timezone = 'Europe/London' where id = ${orgId}`;
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('generic', 'Generic', '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+    on conflict (key) do nothing`;
+  await sql`
+    insert into sport_variants (sport_key, key, name, config, is_system)
+    values ('generic', 'score', 'Score', ${sql.json(GENERIC_CONFIG)}, true)
+    on conflict do nothing`;
+
+  const ada = await seedPerson(orgId, "Ada Quill");
+  const adaSide = (): Side => ({ kind: "individual", name: "Ada Quill", members: [ada] });
+  const opponent = async (name: string): Promise<Side> => ({ kind: "individual", name, members: [await seedPerson(orgId, name)] });
+  const comp = async (name: string, visibility: "public" | "unlisted" | "private"): Promise<Comp> => {
+    const c = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: `${name} ${randomUUID().slice(0, 6)}`,
+      visibility,
+      branding: {},
+    });
+    return { id: c.id, slug: c.slug, name: c.name };
+  };
+  const cur = await comp("Current Cup", "public");
+  const sib = await comp("Sibling League", "public");
+  const unl = await comp("Unlisted Open", "unlisted");
+  const prv = await comp("Private Friendly", "private");
+  const old = await comp("Old Cup", "public");
+  const landed = await sql<{ id: string; visibility: string }[]>`
+    select id, visibility from competitions where id in ${sql([cur.id, sib.id, unl.id, prv.id, old.id])}`;
+  const vis = Object.fromEntries(landed.map((r) => [r.id, r.visibility]));
+  // Premise: nothing degraded to private under a cap.
+  expect([vis[cur.id], vis[sib.id], vis[unl.id], vis[prv.id], vis[old.id]]).toEqual([
+    "public", "public", "unlisted", "private", "public",
+  ]);
+
+  // ---- CUR singles: Ada v six opponents, one per rule --------------------------
+  const singles = await league(auth, cur.id, "singles", [
+    adaSide(),
+    ...(await Promise.all(["Bo Birch", "Cy Cole", "Di Dunn", "Hal Hart", "Ian Ives", "Jo Jay"].map(opponent))),
+  ]);
+  const [bo, cy, di, hal, ian, jo] = [1, 2, 3, 4, 5, 6].map((n) => vs(singles, 0, n)) as [string, string, string, string, string, string];
+  await at(bo, inHours(48));
+  await sql`update fixtures set court_label = 'Court 3', venue = 'Riverside Hall' where id = ${bo}`;
+  // Ada AWAY here. Every other listed row of hers seats her at HOME (measured: a
+  // home-only membership mutant survived the suite without this swap), so this
+  // is the one row that proves her side is read per fixture.
+  await sql`update fixtures set home_entrant_id = ${singles.entrantIds[1]!}, away_entrant_id = ${singles.entrantIds[0]!}
+            where id = ${bo}`;
+  await at(cy, inHours(24));
+  await play(orgId, cy, false); // in_play
+  await at(di, inHours(-2)); // inside the 3h grace
+  await at(hal, inHours(-4)); // stale
+  await at(ian, inHours(30));
+  await play(orgId, ian, true); // decided
+  await at(jo, inHours(36));
+  await sql`update fixtures set status = 'cancelled' where id = ${jo}`;
+  await sql`
+    insert into schedule_settings (division_id, org_id, tz) values (${singles.divisionId}, ${orgId}, 'America/New_York')
+    on conflict (division_id) do update set tz = excluded.tz`;
+
+  // ---- CUR doubles: a PAIR membership, in a YOUTH division ---------------------
+  const [ed, fi, gus] = [await seedPerson(orgId, "Ed Ennis"), await seedPerson(orgId, "Fiona Grant"), await seedPerson(orgId, "Gus Hale")];
+  const pairRaw = "Fiona Grant & Gus Hale";
+  const doubles = await league(auth, cur.id, "doubles", [
+    { kind: "pair", name: "Ada Quill & Ed Ennis", members: [ada, ed] },
+    { kind: "pair", name: pairRaw, members: [fi, gus] },
+  ]);
+  await sql`update divisions set youth = true, player_name_display = 'first_initial' where id = ${doubles.divisionId}`;
+  const pair = vs(doubles, 0, 1);
+  await at(pair, inHours(72));
+
+  // ---- CUR seats: Ada HOME, the away seat empty — labelled once, bare once -----
+  const seats = await league(auth, cur.id, "seats", [adaSide(), await opponent("Lu Lane"), await opponent("Mo Moss")]);
+  const seatNamed = vs(seats, 0, 1);
+  const seatTbd = vs(seats, 0, 2);
+  for (const id of [seatNamed, seatTbd]) {
+    await sql`update fixtures set home_entrant_id = ${seats.entrantIds[0]!}, away_entrant_id = null where id = ${id}`;
+  }
+  await sql`update fixtures set away_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })}
+            where id = ${seatNamed}`;
+  await at(seatNamed, inHours(144));
+  await at(seatTbd, inHours(168));
+
+  // ---- CUR setup: generated, never started — the view withholds time/court ------
+  const setupL = await league(auth, cur.id, "setup", [adaSide(), await opponent("Quin Rowe")], false);
+  const setup = vs(setupL, 0, 1);
+  await at(setup, inHours(12));
+  await sql`update fixtures set court_label = 'Court 9' where id = ${setup}`;
+
+  // ---- CUR withdrawn: Ada's entrant withdrew, the fixture was left scheduled ----
+  const wd = await league(auth, cur.id, "withdrawn", [adaSide(), await opponent("Kim Knox")]);
+  const withdrawn = vs(wd, 0, 1);
+  await at(withdrawn, inHours(20));
+  await sql`update entrants set status = 'withdrawn' where id = ${wd.entrantIds[0]!}`;
+
+  // ---- CUR completed division, undated leftover (Review Focus 1) ----------------
+  const done = await league(auth, cur.id, "done", [adaSide(), await opponent("Sy Stone")]);
+  const doneDivision = vs(done, 0, 1);
+  await sql`update divisions set status = 'completed' where id = ${done.divisionId}`;
+
+  // ---- SIB: public sibling, own venue zone; plus an ARCHIVED division ------------
+  const sibL = await league(auth, sib.id, "sib-open", [adaSide(), await opponent("Ned North")]);
+  const ned = vs(sibL, 0, 1);
+  await at(ned, inHours(26));
+  // A CONFIRMED entrant: every other entrant keeps the 'registered' default.
+  await sql`update entrants set status = 'confirmed' where id = ${sibL.entrantIds[0]!}`;
+  await sql`
+    insert into schedule_settings (division_id, org_id, tz) values (${sibL.divisionId}, ${orgId}, 'Asia/Kolkata')
+    on conflict (division_id) do update set tz = excluded.tz`;
+  const arch = await league(auth, sib.id, "sib-archived", [adaSide(), await opponent("Tia Todd")]);
+  const archived = vs(arch, 0, 1);
+  await at(archived, inHours(28));
+  await sql`update divisions set archived_at = now() where id = ${arch.divisionId}`;
+
+  // ---- UNL / PRV / OLD ------------------------------------------------------------
+  const unlL = await league(auth, unl.id, "unl-open", [adaSide(), await opponent("Oli Otter")]);
+  const oli = vs(unlL, 0, 1);
+  await at(oli, inHours(1));
+  const prvL = await league(auth, prv.id, "prv-open", [adaSide(), await opponent("Pat Pike")]);
+  const pat = vs(prvL, 0, 1);
+  await at(pat, inHours(1));
+  const oldL = await league(auth, old.id, "old-open", [adaSide(), await opponent("Rae Reed")]);
+  const oldComp = vs(oldL, 0, 1); // undated leftover
+  await sql`update competitions set status = 'completed' where id = ${old.id}`;
+
+  // ---- ANOTHER ORG, with Ada on one of its rosters -------------------------------
+  const other = await openOrg("other");
+  const otherComp = await createCompetition(other.auth, {
+    ends_on: "2030-12-31",
+    name: `Elsewhere ${randomUUID().slice(0, 6)}`,
+    visibility: "public",
+    branding: {},
+  });
+  const foreignL = await league(other.auth, otherComp.id, "foreign", [
+    { kind: "individual", name: "Xen Yu", members: [await seedPerson(other.orgId, "Xen Yu")] },
+    { kind: "individual", name: "Yul Zed", members: [await seedPerson(other.orgId, "Yul Zed")] },
+  ]);
+  const foreign = foreignL.fixtures[0]!.id;
+  await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${foreignL.entrantIds[0]!}, ${ada}, ${other.orgId})`;
+  await at(foreign, inHours(4));
+
+  return {
+    orgId,
+    orgSlug,
+    now,
+    ada,
+    cur,
+    sib,
+    unl,
+    prv,
+    slugs: { singles: singles.slug, sib: sibL.slug },
+    doublesDivisionId: doubles.divisionId,
+    pairOpponent: { id: doubles.entrantIds[1]!, raw: pairRaw },
+    f: { di, bo, cy, hal, ian, jo, pair, seatNamed, seatTbd, setup, withdrawn, doneDivision, ned, archived, oli, pat, oldComp, foreign },
+  };
+}
+
+const read = (current: string, over: { personId?: string; now?: Date } = {}) =>
+  readPlayerUpcoming(sql, {
+    orgId: scene.orgId,
+    orgSlug: scene.orgSlug,
+    personId: over.personId ?? scene.ada,
+    currentCompetitionId: current,
+    locale: "en",
+    now: over.now ?? scene.now,
+  });
+const ids = (rows: PlayerUpcomingRow[]) => rows.map((r) => r.fixtureId);
+const byId = (rows: PlayerUpcomingRow[], id: string) => {
+  const row = rows.find((r) => r.fixtureId === id);
+  if (!row) throw new Error(`row ${id} missing`);
+  return row;
+};
+
+/** Premise: the fixture exists, has Ada on a side, and carries its status. */
+async function premise(fixtureId: string) {
+  const [row] = await sql<{ status: string; scheduled_at: Date | null; ada_side: boolean }[]>`
+    select f.status, f.scheduled_at,
+           exists (select 1 from entrant_members em
+                   where em.person_id = ${scene.ada}
+                     and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)) as ada_side
+    from fixtures f where f.id = ${fixtureId}`;
+  if (!row) throw new Error(`premise: fixture ${fixtureId} not found`);
+  return row;
+}
+
+beforeAll(async () => {
+  if (!HAS_DB) return;
+  scene = await seed();
+}, 180_000);
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
+  const client = globalForDb._sql;
+  globalForDb._sql = undefined;
+  await client?.end();
+});
+
+describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
+  it("EMPTY: a person with no fixtures has no upcoming rows", async () => {
+    expect(await read(scene.cur.id, { personId: randomUUID() })).toEqual([]);
+  });
+
+  it("lists Ada's scheduled fixtures across the org — ONE merged sort, dated ascending, then undated", async () => {
+    const f = scene.f;
+    // Ned (another competition) sits BETWEEN two of the card's own rows: the
+    // list is one sort, not the card's competition first.
+    expect(ids(await read(scene.cur.id))).toEqual([f.di, f.ned, f.bo, f.pair, f.seatNamed, f.seatTbd, f.setup]);
+  });
+
+  it("flags ONLY the other competition's row, and links every row under its OWN competition's slug", async () => {
+    const rows = await read(scene.cur.id);
+    expect(rows.filter((r) => r.isOtherCompetition).map((r) => r.fixtureId)).toEqual([scene.f.ned]);
+    expect(byId(rows, scene.f.ned)).toMatchObject({
+      href: `/shared/${scene.orgSlug}/${scene.sib.slug}/${scene.slugs.sib}/fixtures/${scene.f.ned}`,
+      competitionSlug: scene.sib.slug,
+      competitionName: scene.sib.name,
+      divisionSlug: scene.slugs.sib,
+    });
+    expect(byId(rows, scene.f.bo)).toMatchObject({
+      href: `/shared/${scene.orgSlug}/${scene.cur.slug}/${scene.slugs.singles}/fixtures/${scene.f.bo}`,
+      isOtherCompetition: false,
+      courtLabel: "Court 3",
+      venue: "Riverside Hall",
+    });
+  });
+
+  it("R2: an UNLISTED sibling never reaches another competition's card", async () => {
+    expect(await premise(scene.f.oli)).toMatchObject({ status: "scheduled", ada_side: true });
+    expect(ids(await read(scene.cur.id))).not.toContain(scene.f.oli);
+  });
+
+  it("R2: …but its OWN card lists it, beside the org's public rows flagged as other events (the positive pair)", async () => {
+    const rows = await read(scene.unl.id);
+    expect(byId(rows, scene.f.oli).isOtherCompetition).toBe(false);
+    expect(byId(rows, scene.f.bo).isOtherCompetition).toBe(true);
+    expect(byId(rows, scene.f.ned).isOtherCompetition).toBe(true);
+  });
+
+  it("R2: a PRIVATE competition never appears, even named as the card's own", async () => {
+    expect(await premise(scene.f.pat)).toMatchObject({ status: "scheduled", ada_side: true });
+    expect(ids(await read(scene.cur.id))).not.toContain(scene.f.pat);
+    expect(ids(await read(scene.prv.id))).not.toContain(scene.f.pat);
+  });
+
+  it("R3: in-play, decided and cancelled fixtures are excluded — only 'scheduled' is upcoming", async () => {
+    expect((await premise(scene.f.cy)).status).toBe("in_play");
+    expect((await premise(scene.f.ian)).status).toBe("decided");
+    expect((await premise(scene.f.jo)).status).toBe("cancelled");
+    const got = ids(await read(scene.cur.id));
+    for (const id of [scene.f.cy, scene.f.ian, scene.f.jo]) expect(got).not.toContain(id);
+  });
+
+  it("staleness: a slot 2h past is still upcoming, one 4h past is not — and the window moves with `now`", async () => {
+    expect(UPCOMING_STALE_AFTER_MS).toBe(3 * HOUR); // the spec's value
+    const got = ids(await read(scene.cur.id));
+    expect(got).toContain(scene.f.di);
+    expect(got).not.toContain(scene.f.hal);
+    const later = new Date(scene.now.getTime() + 2 * HOUR);
+    expect(ids(await read(scene.cur.id, { now: later }))).not.toContain(scene.f.di);
+  });
+
+  it("a division still in SETUP: time and court withheld, and the row sorts after every dated one", async () => {
+    const p = await premise(scene.f.setup);
+    expect(p.scheduled_at).not.toBeNull(); // the BASE row is dated; the view withholds it
+    const rows = await read(scene.cur.id);
+    expect(byId(rows, scene.f.setup)).toMatchObject({ scheduledAt: null, courtLabel: null, venue: null });
+    expect(rows.at(-1)!.fixtureId).toBe(scene.f.setup);
+    // Its base time (+12h) is EARLIER than Bo's (+48h): last place is NULLS LAST, not its time.
+    expect(p.scheduled_at!.getTime()).toBeLessThan(Date.parse(byId(rows, scene.f.bo).scheduledAt!));
+  });
+
+  it("membership: a WITHDRAWN entrant's fixture is gone", async () => {
+    expect(await premise(scene.f.withdrawn)).toMatchObject({ status: "scheduled", ada_side: true });
+    expect(ids(await read(scene.cur.id))).not.toContain(scene.f.withdrawn);
+  });
+
+  it("membership reads EACH fixture's side: Ada AWAY is found and faces the home side; a CONFIRMED entrant counts like a registered one", async () => {
+    // Premises: the only away seat and the only confirmed entrant in the scene.
+    const [bo] = await sql<{ ada_away: boolean }[]>`
+      select exists (select 1 from entrant_members em
+                     where em.person_id = ${scene.ada} and em.entrant_id = f.away_entrant_id) as ada_away
+      from fixtures f where f.id = ${scene.f.bo}`;
+    expect(bo!.ada_away).toBe(true);
+    const [ned] = await sql<{ status: string }[]>`
+      select e.status from fixtures f
+      join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+      join entrants e on e.id = em.entrant_id
+      where f.id = ${scene.f.ned} and em.person_id = ${scene.ada}`;
+    expect(ned!.status).toBe("confirmed");
+    const rows = await read(scene.cur.id);
+    expect(byId(rows, scene.f.bo).opponentLabel).toBe("Bo Birch");
+    expect(ids(rows)).toContain(scene.f.ned);
+  });
+
+  it("R1: another org's fixture never appears, even with Ada on its roster", async () => {
+    expect(await premise(scene.f.foreign)).toMatchObject({ status: "scheduled", ada_side: true });
+    expect(ids(await read(scene.cur.id))).not.toContain(scene.f.foreign);
+  });
+
+  it("finished and archived places are not upcoming: an archived division, a completed division, a completed competition", async () => {
+    const gone = [scene.f.archived, scene.f.doneDivision, scene.f.oldComp];
+    for (const id of gone) expect(await premise(id), id).toMatchObject({ status: "scheduled", ada_side: true });
+    const got = ids(await read(scene.cur.id));
+    for (const id of gone) expect(got, id).not.toContain(id);
+  });
+
+  it("opponent: the masked entrant name, else the seat's public label, else the localised TBD", async () => {
+    const rows = await read(scene.cur.id);
+    expect(byId(rows, scene.f.bo).opponentLabel).toBe("Bo Birch");
+    const [masked] = await maskPublicEntrantNames(
+      [{ id: scene.pairOpponent.id, kind: "pair", display_name: scene.pairOpponent.raw }],
+      { youth: true, player_name_display: "first_initial" },
+    );
+    expect(masked!.display_name, "premise: this division's policy changes the name").not.toBe(scene.pairOpponent.raw);
+    expect(byId(rows, scene.f.pair).opponentLabel).toBe(masked!.display_name);
+    expect(byId(rows, scene.f.seatNamed).opponentLabel).toBe(enUi["slot.winner_group"].replace("{g}", "A"));
+    expect(byId(rows, scene.f.seatTbd).opponentLabel).toBe(enUi["schedule.tbd"]);
+  });
+
+  it("each row carries ITS division's venue zone", async () => {
+    const rows = await read(scene.cur.id);
+    expect(byId(rows, scene.f.bo).tz).toBe("America/New_York");
+    expect(byId(rows, scene.f.ned).tz).toBe("Asia/Kolkata");
+    const [ss] = await sql<{ tz: string }[]>`select tz from schedule_settings where division_id = ${scene.doublesDivisionId}`;
+    expect(byId(rows, scene.f.pair).tz).toBe(resolveVenueTz(ss?.tz ?? null, "Europe/London"));
+  });
+
+  it("getPublicPlayerUpcoming reads for the CARD's org and competition", async () => {
+    const org = { id: scene.orgId, slug: scene.orgSlug, default_locale: "en" } as PublicOrg;
+    const onSib = await getPublicPlayerUpcoming({
+      org,
+      competition: { id: scene.sib.id } as PublicCompetition,
+      personId: scene.ada,
+      now: scene.now,
+    });
+    // From SIB's card, Ned is home and the CUR rows are the other events.
+    expect(byId(onSib, scene.f.ned).isOtherCompetition).toBe(false);
+    expect(byId(onSib, scene.f.bo).isOtherCompetition).toBe(true);
+    expect(ids(onSib)).toEqual(ids(await read(scene.sib.id)));
+  });
+});

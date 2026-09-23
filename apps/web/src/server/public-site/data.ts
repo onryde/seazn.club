@@ -31,7 +31,7 @@ import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib
 import { loadMatchCentre } from "./match-centre-load";
 import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
-import type { PlayerMatchLine } from "./public-player-matches";
+import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -1642,6 +1642,38 @@ export async function getPublicPlayer(
       }
     : player;
   return { org: shell.org, competition: shell.competition, player: shown, ...rest, matches };
+}
+
+/**
+ * Player profile — upcoming matches across the org (spec 2026-09-23). The page
+ * calls this only AFTER `getPublicPlayer` passed the gate, so every refusal is
+ * still `publicPlayerGate`'s. Only fixture data is read (already public on each
+ * fixture's own page), never another competition's card, so no other
+ * competition's entitlement is asked (spec §4).
+ *
+ * UNCACHED on purpose (plan D3): a schedule write in ANOTHER competition fires
+ * that competition's tags, none of which this card carries, so a tagged entry
+ * would serve a moved fixture until its TTL anyway. The page's own ISR
+ * (`s-maxage=30`, measured — `publicPlayerGate`'s note) bounds the reads.
+ *
+ * Imported lazily for the same reason as the Matches reader in
+ * `getPublicPlayer`: it takes `maskPublicEntrantNames` from THIS file.
+ */
+export async function getPublicPlayerUpcoming(args: {
+  org: PublicOrg;
+  competition: PublicCompetition;
+  personId: string;
+  now?: Date;
+}): Promise<PlayerUpcomingRow[]> {
+  const { readPlayerUpcoming } = await import("./public-player-matches");
+  return readPlayerUpcoming(sql, {
+    orgId: args.org.id,
+    orgSlug: args.org.slug,
+    personId: args.personId,
+    currentCompetitionId: args.competition.id,
+    locale: toLocale(args.org.default_locale),
+    now: args.now ?? new Date(),
+  });
 }
 
 /**
