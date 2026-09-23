@@ -27,9 +27,13 @@ import es from "@/dictionaries/es/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { playerMatchesDict } from "@/lib/player-matches-dict";
 import type { PlayerMatchLineT } from "@/server/public-site/player-matches-schema";
+import type { PlayerUpcomingRow } from "@/server/public-site/public-player-matches";
 
-const stub = vi.hoisted(() => ({ getPublicPlayer: vi.fn() }));
-vi.mock("@/server/public-site/data", () => ({ getPublicPlayer: stub.getPublicPlayer }));
+const stub = vi.hoisted(() => ({ getPublicPlayer: vi.fn(), getPublicPlayerUpcoming: vi.fn() }));
+vi.mock("@/server/public-site/data", () => ({
+  getPublicPlayer: stub.getPublicPlayer,
+  getPublicPlayerUpcoming: stub.getPublicPlayerUpcoming,
+}));
 // No effect runs under `renderToStaticMarkup`, so nothing polls; this keeps a
 // real `fetch` out of the module graph all the same.
 vi.mock("@/components/public-site/player-matches-data", () => ({ fetchPlayerMatches: vi.fn() }));
@@ -83,6 +87,7 @@ interface DataOver {
   memberships?: unknown[];
   stats?: unknown[];
   career?: unknown[];
+  upcoming?: PlayerUpcomingRow[];
 }
 
 const data = (over: DataOver = {}) => ({
@@ -126,6 +131,7 @@ const params = Promise.resolve({ orgSlug: "riverside", competitionSlug: "autumn-
 
 async function renderPage(over: DataOver = {}) {
   stub.getPublicPlayer.mockResolvedValue(data(over));
+  stub.getPublicPlayerUpcoming.mockResolvedValue(over.upcoming ?? []);
   const tree = (await Page({ params })) as ReactElement;
   return { tree, html: renderToStaticMarkup(tree) };
 }
@@ -274,11 +280,15 @@ describe("player page — composition", () => {
     expect(at("player-stats")).toBeLessThan(at("player-squad"));
   });
 
-  it("two columns from lg: Matches spans 7, the rest stacks in 5 — one DOM", async () => {
-    const { html } = await renderPage({ matches: [line("f1")] });
+  it("two columns from lg: Upcoming and Matches share the 7-span column, the rest stacks in 5 — one DOM", async () => {
+    const { html } = await renderPage({ matches: [line("f1")], upcoming: [upcomingRow("u1")] });
+    const at = (id: string) => html.indexOf(`data-testid="${id}"`);
     expect(html).toMatch(/class="[^"]*\blg:grid-cols-12\b/);
-    expect(html).toMatch(/data-testid="mh-player-matches" class="[^"]*\blg:col-span-7\b/);
+    expect(html).toMatch(/data-testid="player-main-column" class="[^"]*\blg:col-span-7\b/);
+    expect(at("player-main-column")).toBeLessThan(at("mh-player-upcoming"));
+    expect(at("mh-player-upcoming")).toBeLessThan(at("mh-player-matches"));
     expect(html).toMatch(/class="[^"]*\blg:col-span-5\b/);
+    expect(html.search(/class="[^"]*\blg:col-span-5\b/)).toBeGreaterThan(at("mh-player-matches"));
   });
 
   it("section titles are Barlow 16 px uppercase ink (P3), not the tracked Geist eyebrow", async () => {
@@ -412,5 +422,79 @@ describe("player page — contract", () => {
   it("keeps its ISR exports", async () => {
     expect(revalidate).toBe(300);
     expect(await generateStaticParams()).toEqual([]);
+  });
+});
+
+const upcomingRow = (fixtureId: string, over: Partial<PlayerUpcomingRow> = {}): PlayerUpcomingRow => ({
+  fixtureId,
+  href: `${HUB}/premier/fixtures/${fixtureId}`,
+  scheduledAt: "2030-07-01T10:00:00.000Z",
+  tz: "Europe/London",
+  venue: null,
+  courtLabel: null,
+  opponentLabel: `Opponent ${fixtureId}`,
+  competitionName: "Autumn Cup",
+  competitionSlug: "autumn-cup",
+  divisionName: "Premier",
+  divisionSlug: "premier",
+  isOtherCompetition: false,
+  ...over,
+});
+
+describe("player page — Upcoming", () => {
+  it("EMPTY: no rows, no section — and the read was for THIS card's org, competition and player", async () => {
+    const { html } = await renderPage({ upcoming: [] });
+    expect(html).not.toContain('data-testid="mh-player-upcoming"');
+    // No orphan heading either (the positive pair is the next test).
+    expect(html).not.toContain(`>${esc(en["player.upcoming"])}<`);
+    expect(stub.getPublicPlayerUpcoming).toHaveBeenCalledWith(
+      expect.objectContaining({
+        org: expect.objectContaining({ id: "o1", slug: "riverside" }),
+        competition: expect.objectContaining({ id: "c1" }),
+        personId: PERSON,
+      }),
+    );
+  });
+
+  it("with rows: its own section, titled from the dictionary, ABOVE Matches", async () => {
+    const { html } = await renderPage({ upcoming: [upcomingRow("u1")], matches: [line("f1")] });
+    const upcoming = section(html, "mh-player-upcoming");
+    expect(upcoming).toContain(`>${esc(en["player.upcoming"])}<`);
+    // A real section heading, styled like its siblings (P3) — not a bare label.
+    expect(upcoming).toContain(
+      `<h2 class="mb-3 font-display text-base font-semibold uppercase tracking-wide text-ink">${esc(en["player.upcoming"])}</h2>`,
+    );
+    expect(upcoming).toContain('data-testid="mh-player-upcoming-row-u1"');
+    expect(html.indexOf('data-testid="mh-player-upcoming"')).toBeLessThan(html.indexOf('data-testid="mh-player-matches"'));
+  });
+
+  it("an es org's heading is the es dictionary's own word", async () => {
+    expect(es["player.upcoming"], "premise: es differs from en").not.toBe(en["player.upcoming"]);
+    const { html } = await renderPage({ locale: "es", upcoming: [upcomingRow("u1")] });
+    expect(section(html, "mh-player-upcoming")).toContain(`>${esc(es["player.upcoming"])}<`);
+  });
+
+  it("the list is handed the ORG's dictionary AND locale: an es row is phrased and dated in es", async () => {
+    const month = (tag: string) =>
+      new Intl.DateTimeFormat(tag, { timeZone: "Europe/London", month: "short" }).format(new Date("2030-07-01T10:00:00.000Z"));
+    expect(month("es"), "premise: the es month differs from the en-GB one").not.toBe(month("en-GB"));
+    expect(es["player.opponent"], "premise: es phrases the opponent differently").not.toBe(en["player.opponent"]);
+    const upcoming = section((await renderPage({ locale: "es", upcoming: [upcomingRow("u1")] })).html, "mh-player-upcoming");
+    expect(upcoming).toContain(`>${esc(es["player.opponent"].replace("{opponent}", "Opponent u1"))}<`);
+    expect(upcoming).toContain(`>${esc(month("es"))}<`);
+    expect(upcoming).not.toContain(`>${esc(month("en-GB"))}<`);
+  });
+
+  it("a refused card reads nothing: notFound fires before the upcoming read", async () => {
+    stub.getPublicPlayer.mockResolvedValue(null);
+    await expect(Page({ params })).rejects.toThrow("CALLED_NOT_FOUND");
+    expect(stub.getPublicPlayerUpcoming).not.toHaveBeenCalled();
+  });
+
+  it("Matches is unchanged beside it: same slab and rows with or without Upcoming (regression)", async () => {
+    const lines = [line("f3"), line("f2", { result: "lost" }), line("f1", { result: "drawn" })];
+    const without = (await renderPage({ matches: lines })).html;
+    const withRows = (await renderPage({ matches: lines, upcoming: [upcomingRow("u1")] })).html;
+    expect(section(withRows, "mh-player-matches")).toBe(section(without, "mh-player-matches"));
   });
 });

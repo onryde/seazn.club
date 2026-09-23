@@ -2,9 +2,10 @@
 // contains persons with public_name consent, so anyone else 404s here. Photo
 // only with photo consent; DOB is never in any public payload.
 //
-// Spectator surface W2, Task 14 (owner-approved option C): Matches leads — the
-// newest match as a court slab, older ones as rows, updating in place while the
-// page is open (R10, `PlayerMatches`) — then Career, Stats and the squad entry.
+// Spectator surface W2, Task 14 (owner-approved option C), plus the upcoming
+// list (spec 2026-09-23): Upcoming (when any) then Matches lead — the newest
+// match as a court slab, older ones as rows, updating in place while the page
+// is open (R10, `PlayerMatches`) — then Career, Stats and the squad entry.
 // One DOM: from `lg` the page splits 7/5, below it the same blocks stack.
 //
 // Every visible word is the ORG's locale, from the `public` dictionary. Not the
@@ -14,13 +15,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { getPublicPlayer } from "@/server/public-site/data";
+import { getPublicPlayer, getPublicPlayerUpcoming } from "@/server/public-site/data";
 import { playerMetaDescription } from "@/lib/public-meta";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { playerMatchesDict } from "@/lib/player-matches-dict";
 import { routes } from "@/lib/routes";
 import { PlayerMatches } from "@/components/public-site/player-matches";
+import { PlayerUpcoming } from "@/components/public-site/player-upcoming";
 
 export const revalidate = 300; // doc 09 §3: entrant/player pages revalidate 300
 
@@ -64,6 +66,10 @@ export default async function PlayerCardPage({ params }: Props) {
   const locale = toLocale(org.default_locale);
   const dict = await getDictionary(locale, "public");
   const hub = routes.shared(org.slug, competition.slug);
+  // Spec 2026-09-23 — the player's next scheduled matches across the org. Read
+  // only after the gate above has passed (`getPublicPlayer`'s notFound), and
+  // uncached (plan D3): the page's own ISR bounds it.
+  const upcoming = await getPublicPlayerUpcoming({ org, competition, personId: player.id });
 
   return (
     <div className="min-w-0">
@@ -102,23 +108,34 @@ export default async function PlayerCardPage({ params }: Props) {
       </div>
 
       <div className="mt-6 space-y-6 lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0">
-        {/* W2 Task 14 — renders in every state, empty included (R9). */}
-        <section data-testid="mh-player-matches" className="min-w-0 lg:col-span-7">
-          <h2 className={SECTION_TITLE}>{t(dict, "player.matches")}</h2>
-          <PlayerMatches
-            orgSlug={org.slug}
-            competitionSlug={competition.slug}
-            personId={player.id}
-            // `generatedAt` is the instant of getPublicPlayer's CACHED read, not
-            // this render's: a render inside a warm entry shows lines that old,
-            // and the island's "Updated Ns ago" and its older-response guard
-            // both count from it. Both sides of that guard are then server
-            // clocks — this one and the poll document's.
-            initial={{ matches, generatedAt }}
-            dict={playerMatchesDict(dict)}
-            locale={locale}
-          />
-        </section>
+        {/* One 7-span cell from lg (plan D4): Upcoming, when there is any, then
+            Matches. Upcoming renders no empty state (spec R3/§3); Matches
+            renders in every state, empty included (R9). */}
+        <div data-testid="player-main-column" className="min-w-0 space-y-6 lg:col-span-7">
+          {upcoming.length > 0 ? (
+            <section data-testid="mh-player-upcoming" className="min-w-0">
+              <h2 className={SECTION_TITLE}>{t(dict, "player.upcoming")}</h2>
+              <PlayerUpcoming rows={upcoming} dict={dict} locale={locale} />
+            </section>
+          ) : null}
+          {/* W2 Task 14 — renders in every state, empty included (R9). */}
+          <section data-testid="mh-player-matches" className="min-w-0">
+            <h2 className={SECTION_TITLE}>{t(dict, "player.matches")}</h2>
+            <PlayerMatches
+              orgSlug={org.slug}
+              competitionSlug={competition.slug}
+              personId={player.id}
+              // `generatedAt` is the instant of getPublicPlayer's CACHED read, not
+              // this render's: a render inside a warm entry shows lines that old,
+              // and the island's "Updated Ns ago" and its older-response guard
+              // both count from it. Both sides of that guard are then server
+              // clocks — this one and the poll document's.
+              initial={{ matches, generatedAt }}
+              dict={playerMatchesDict(dict)}
+              locale={locale}
+            />
+          </section>
+        </div>
 
         <div className="min-w-0 space-y-6 lg:col-span-5">
           {/* S9/#418 — the per-sport career rollup, scoped to THIS competition
