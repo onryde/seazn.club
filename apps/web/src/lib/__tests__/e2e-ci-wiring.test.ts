@@ -389,6 +389,16 @@ const WALKTHROUGH_SPECS: string[] = [
   // are in e2e/entrant-rename.spec.ts; this is the only test that carries one
   // pair through all three, each starting from what the last one left.
   "entrant-rename-walkthrough.spec.ts",
+
+  // Knockout void un-fill (2026-09-23, owner report: voiding a decided
+  // knockout result left the voided winner seated in the final). One organiser
+  // decides R1·1 on the pad, voids it from the console, scores it the other
+  // way, and reads the final's own console after each step: the old winner,
+  // "Winner of R1·1" again, then the new winner. Once the final has started
+  // the void is refused, and the refusal reaches the screen in French naming
+  // the next match — the seam from the 409's `next_match` to the console copy
+  // that no unit test drives end to end.
+  "knockout-void-unfill.spec.ts",
 ];
 
 afterEach(() => {
