@@ -11,6 +11,7 @@ import {
   resolveFixtureCfg,
 } from "@/server/engine-db";
 import { foldFixture } from "@/server/engine-db/fold";
+import { releaseFedSeats } from "@/server/engine-db/fed-seats";
 import { log } from "@/server/logger";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache } from "./scoring";
@@ -78,6 +79,7 @@ interface Row {
   pool_id: string | null;
   fixture_no: number | null;
   status: string;
+  outcome: unknown;
   config_snapshot: unknown;
   config_snapshot_at: Date | null;
   division_config: unknown;
@@ -95,7 +97,7 @@ type Queryable = postgres.ISql;
 
 async function loadRow(db: Queryable, fixtureId: string): Promise<Row | null> {
   const [row] = await db<Row[]>`
-    select f.id, f.org_id, f.stage_id, f.pool_id, f.fixture_no, f.status,
+    select f.id, f.org_id, f.stage_id, f.pool_id, f.fixture_no, f.status, f.outcome,
            f.config_snapshot, f.config_snapshot_at,
            d.config as division_config, s.config as stage_config, d.sport_key,
            d.name as division_name, c.name as competition_name, o.name as org_name,
@@ -146,7 +148,7 @@ export async function resnapshotFixtureConfig(
   if (trimmed.length === 0) {
     throw new HttpError(400, "Say why — the audit row is the only record of the discarded config.");
   }
-  const row = await sql.begin(async (tx) => {
+  const { row, released } = await sql.begin(async (tx) => {
     // FIRST statement in the transaction, and the SAME lock `append-event.ts`
     // serialises every append on. Without it the guards below were evaluated
     // against a row read on another connection before the tx opened, so a
@@ -288,6 +290,15 @@ export async function resnapshotFixtureConfig(
     // no read path re-folds), `fixtures.outcome` and `fixtures.status`. Leaving
     // them meant the panel reported `diverged: no` over a fixture still showing
     // the old config's result, until somebody happened to append another event.
+    //
+    // A corrected config that UN-decides a knockout line is the same erasure a
+    // void is, so it owes the same ruling (owner, 2026-09-23;
+    // `engine-db/fed-seats.ts`): take back the name the old result advanced, or
+    // refuse with NEXT_MATCH_STARTED when the next match is already under way.
+    // Before any cache is rewritten, so a refusal rolls back the snapshot above
+    // and writes no audit row.
+    const released =
+      folded && row.outcome !== null && folded.outcome === null ? await releaseFedSeats(tx, fixtureId) : [];
     if (folded) {
       await tx`
         insert into match_states (fixture_id, last_seq, state, summary)
@@ -317,7 +328,7 @@ export async function resnapshotFixtureConfig(
         before: row.config_snapshot,
         after: live,
       } as never)})`;
-    return row;
+    return { row, released };
   });
 
   // The re-snapshot can decide or un-decide the fixture, and the player-stats
@@ -351,7 +362,9 @@ export async function resnapshotFixtureConfig(
     // resolves — but a failure is logged, never thrown: the Redis delete inside
     // stays non-blocking, and a cache that could not be dropped must not report
     // a committed re-snapshot as failed.
-    await invalidatePublicCache(row.org_id, fixtureId).catch((err: unknown) => {
+    // `released`: the fixtures a un-decided line took its winner back out of —
+    // their documents are stale for the same reason (R10h's `alsoFixtureIds`).
+    await invalidatePublicCache(row.org_id, fixtureId, false, undefined, released).catch((err: unknown) => {
       log.error(
         { err, fixture: fixtureId },
         "admin-fixture-config: public cache invalidation failed (the re-snapshot stands)",

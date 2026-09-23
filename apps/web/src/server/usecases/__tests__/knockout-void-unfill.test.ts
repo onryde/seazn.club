@@ -41,6 +41,7 @@ import {
   createStages,
   generateStageFixtures,
 } from "../stages";
+import { resnapshotFixtureConfig } from "../admin-fixture-config";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -111,7 +112,14 @@ interface Rig {
 /** A started four-entrant knockout on the plain generation path — the path
  *  that STAMPS `slot.winner_match` / `slot.loser_match` onto every fed seat.
  *  Everything is read back off the rows the generator wrote, never assumed. */
-async function knockout(config: Record<string, unknown> = {}): Promise<Rig> {
+async function knockout(
+  config: Record<string, unknown> = {},
+  sport: { sport_key: string; variant_key: string; config: Record<string, unknown> } = {
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  },
+): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -122,9 +130,7 @@ async function knockout(config: Record<string, unknown> = {}): Promise<Rig> {
   const division = await createDivision(auth, comp.id, {
     name: "Open",
     slug: "open-" + randomUUID().slice(0, 6),
-    sport_key: "generic",
-    variant_key: "score",
-    config: GENERIC_CONFIG,
+    ...sport,
   });
   await createEntrants(
     auth,
@@ -490,5 +496,92 @@ describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name 
     expect(seat(await row(rig.final.id), line.winner_to_slot), "and the cross-stage seat is untouched").toBe(
       line.home_entrant_id,
     );
+  });
+});
+
+// The staff re-snapshot (`admin-fixture-config.ts`) is the one writer besides
+// the append path that can ERASE a decision: re-folding under a corrected
+// config (tennis best of three → best of five) can un-decide a line that
+// already advanced its winner. It is the same erasure, so it owes the same
+// ruling — found by grepping every writer of `fixtures.outcome`, not by name.
+describe.skipIf(!HAS_DB)("the staff re-snapshot that un-decides a line takes the name back the same way", () => {
+  const TENNIS_BEST_OF_3 = {
+    bestOf: 3,
+    set: { gamesTo: 6, winBy: 2, tiebreakAt: 6, tiebreakTo: 7 },
+    finalSet: "same",
+    game: { noAd: false },
+    tiebreak: { winBy: 2 },
+    points: { win: 2, loss: 0 },
+  } as const;
+  const tennis = () =>
+    knockout({}, { sport_key: "tennis", variant_key: "tour", config: TENNIS_BEST_OF_3 });
+
+  async function superadmin(): Promise<string> {
+    const [{ id }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, is_staff, staff_role)
+      values (${`staff-${randomUUID().slice(0, 8)}@example.test`}, 'Staff', true, 'superadmin')
+      returning id`;
+    return id;
+  }
+
+  /** Two straight sets: decided at best of three, still in play at five. */
+  async function twoSets(auth: AuthCtx, fixtureId: string): Promise<void> {
+    await append(auth, fixtureId, "core.start", {});
+    await append(auth, fixtureId, "tennis.set_summary", { home: 6, away: 4 });
+    const out = await append(auth, fixtureId, "tennis.set_summary", { home: 6, away: 3 });
+    expect(out.outcome, "two straight sets decide a best-of-three").not.toBeNull();
+  }
+
+  async function bestOfFive(divisionId: string): Promise<void> {
+    await sql`update divisions set config = ${sql.json({ ...TENNIS_BEST_OF_3, bestOf: 5 } as never)} where id = ${divisionId}`;
+  }
+
+  async function snapshotOf(fixtureId: string): Promise<unknown> {
+    const [r] = await sql<{ config_snapshot: unknown }[]>`select config_snapshot from fixtures where id = ${fixtureId}`;
+    return r!.config_snapshot;
+  }
+
+  async function auditCount(fixtureId: string): Promise<number> {
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from staff_audit_log where target_id = ${fixtureId}`;
+    return n;
+  }
+
+  it("a re-snapshot that un-decides a line empties the seat it fed and restores the drawn label", async () => {
+    const rig = await tennis();
+    const line = rig.r1[0]!;
+    const drawn = seatLabel(rig.final, line.winner_to_slot);
+    await twoSets(rig.auth, line.id);
+    expect(seat(await row(rig.final.id), line.winner_to_slot), "precondition: advanced").toBe(line.home_entrant_id);
+
+    await bestOfFive(rig.divisionId);
+    await resnapshotFixtureConfig(await superadmin(), line.id, "the cup is best of five");
+
+    expect((await row(line.id)).outcome, "the corrected config un-decided the line").toBeNull();
+    const final = await row(rig.final.id);
+    expect(seat(final, line.winner_to_slot), "the old winner is taken back").toBeNull();
+    expect(seatLabel(final, line.winner_to_slot)).toEqual(drawn);
+  });
+
+  it("refuses the re-snapshot when the next match has started, and rewrites NOTHING — not the config, not the audit trail", async () => {
+    const rig = await tennis();
+    const [line, other] = rig.r1 as [Row, Row];
+    await twoSets(rig.auth, line.id);
+    await twoSets(rig.auth, other.id);
+    await append(rig.auth, rig.final.id, "core.start", {});
+    const snapshotBefore = await snapshotOf(line.id);
+    const lineBefore = await row(line.id);
+
+    await bestOfFive(rig.divisionId);
+    const err = await refusal(resnapshotFixtureConfig(await superadmin(), line.id, "the cup is best of five"));
+
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("NEXT_MATCH_STARTED");
+    expect(await snapshotOf(line.id), "the discarded config was not discarded").toEqual(snapshotBefore);
+    expect(await auditCount(line.id), "no audit row claims a re-snapshot that never happened").toBe(0);
+    const lineAfter = await row(line.id);
+    expect(lineAfter.outcome, "the result stands").toEqual(lineBefore.outcome);
+    expect(lineAfter.status).toBe(lineBefore.status);
+    expect(seat(await row(rig.final.id), line.winner_to_slot), "the winner stays seated").toBe(line.home_entrant_id);
   });
 });
