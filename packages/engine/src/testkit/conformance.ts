@@ -197,6 +197,10 @@ export function conformanceSuite<Cfg, Ev, State>(
     it("§9.3b standingsDelta stays inside matchPointsBounds", () => {
       const b = module.matchPointsBounds(cfg);
       expect(b.min).toBeLessThanOrEqual(b.max);
+      // Counts decided pairs actually CHECKED, not decided streams: a draw
+      // skipped in every ctx proves nothing. This `it` draws its own streams
+      // (no shared fc seed with §9.3), so §9.3's guard does not cover it.
+      let decidedSeen = 0;
       fc.assert(
         fc.property(streamArb, (events) => {
           const decided = decidedOnly(events);
@@ -204,6 +208,7 @@ export function conformanceSuite<Cfg, Ev, State>(
           for (const ctx of stageCtxs) {
             if (decided.outcome.kind === "draw" && !module.supportsDraws(cfg, ctx.kind)) continue;
             const pair = module.standingsDelta(decided.outcome, cfg, ctx, decided.state);
+            decidedSeen++;
             for (const d of pair) {
               expect(d.points).toBeGreaterThanOrEqual(b.min);
               expect(d.points).toBeLessThanOrEqual(b.max);
@@ -214,6 +219,7 @@ export function conformanceSuite<Cfg, Ev, State>(
         }),
         { numRuns },
       );
+      expect(decidedSeen).toBeGreaterThan(0);
     });
 
     // §9.4 — integers or exact rationals, never floats: rational metrics are

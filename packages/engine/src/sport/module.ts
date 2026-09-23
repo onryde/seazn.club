@@ -2,6 +2,7 @@
 // doc 13 §1 (officialLabel) and the conformance kit's needs (PROMPT-03 §4:
 // declaredPointsSets; arbitraryEvent/coarsen hooks from spec 03 §6 + §9.6).
 import { z } from "zod";
+import { EngineError } from "../core/errors.ts";
 import type { CoreEv, EventEnvelope, FoldableModule, FoldContext } from "../core/events.ts";
 import type { LineupPolicy, SquadState } from "../core/lineup.ts";
 import type { MatchPosition } from "../core/position.ts";
@@ -626,8 +627,13 @@ export function stampAttributionRequired(
 
 /** Points ONE side can take from ONE match under a cfg — standings
  *  qualification status (spec 2026-09-22 §3.1, plan P1). `max`/`min` bound
- *  every outcome (a bye included: it scores through `standingsDelta` as a
- *  win). `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
+ *  every outcome `standingsDelta` can return, a bye included: the competition
+ *  layer scores a bye through `standingsDelta` as an `award` win
+ *  (apps/web engine-db/competition.ts `awardByeDelta`). That layer applies a
+ *  stage's PointsRule ON TOP of every pair, byes and played fixtures alike
+ *  (`applyPointsRule`), which overrides these sport bounds; the rule's own
+ *  bounds are `pointsRuleBounds` (standings plan, Task 2).
+ *  `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
  *  `lossCeil` is the most ANY loss can still pay. A forecast that promised
  *  "win and you're through" with `max` would be wrong for an OT win. */
 export interface MatchPointsBounds {
@@ -638,13 +644,26 @@ export interface MatchPointsBounds {
 }
 
 /** Build bounds from a sport's win-type values, loss-type values and every
- *  other per-side value (draw, tie, no-result). `min` never exceeds 0: a
- *  no-result scores 0, and every shipped cfg schema is nonnegative (plan P8). */
+ *  other per-side value its cfg declares (draw, tie, no-result). `min` is
+ *  clamped to at most 0 because an outcome can pay a hard-coded 0 that no cfg
+ *  field declares: boardgame's double forfeit (`no_result`, 0 each side). Every
+ *  other kernel's no-result either pays a cfg value already in `others` (draw
+ *  points in football, period, generic and carrom; `noResult` in cricket) or
+ *  cannot happen (nested and set-based refuse it). Every shipped cfg schema is
+ *  nonnegative, so 0 is always a valid lower bound; it is merely loose (the
+ *  safe direction) for a cfg where every outcome pays above 0. Throws on an
+ *  empty `wins` or `losses`, which would otherwise yield ±Infinity. */
 export function boundsFrom(
   wins: readonly number[],
   losses: readonly number[],
   others: readonly number[] = [],
 ): MatchPointsBounds {
+  if (wins.length === 0) {
+    throw new EngineError("CONFIG_INVALID", "boundsFrom needs at least one WIN payout", { wins, losses });
+  }
+  if (losses.length === 0) {
+    throw new EngineError("CONFIG_INVALID", "boundsFrom needs at least one LOSS payout", { wins, losses });
+  }
   const all = [...wins, ...losses, ...others];
   return {
     max: Math.max(...all),

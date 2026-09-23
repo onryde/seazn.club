@@ -17,6 +17,7 @@ import { carrom } from "../sports/carrom/index.ts";
 import { boardgame } from "../sports/boardgame/index.ts";
 import { hockey } from "../sports/hockey/index.ts";
 import { tennis } from "../sports/tennis/index.ts";
+import { EngineError } from "../core/errors.ts";
 import { boundsFrom, type AnySportModule } from "./module.ts";
 
 describe("boundsFrom", () => {
@@ -29,9 +30,28 @@ describe("boundsFrom", () => {
   it("an `others` value above every win still sets max — a draw can outpay a win", () => {
     expect(boundsFrom([1], [0], [2])).toEqual({ max: 2, min: 0, winFloor: 1, lossCeil: 0 });
   });
+  // Without a guard, `Math.min()` of nothing is Infinity and `Math.max()` of
+  // nothing is -Infinity: a winFloor of Infinity makes "Win and in" provable
+  // for nobody, silently. Each list has its own message so each guard is
+  // witnessed on its own, not covered by the other.
+  it("refuses an empty wins list rather than returning ±Infinity bounds", () => {
+    expect(() => boundsFrom([], [0])).toThrow(EngineError);
+    expect(() => boundsFrom([], [0])).toThrow(/at least one WIN payout/);
+  });
+  it("refuses an empty losses list rather than returning ±Infinity bounds", () => {
+    expect(() => boundsFrom([2], [])).toThrow(EngineError);
+    expect(() => boundsFrom([2], [])).toThrow(/at least one LOSS payout/);
+  });
 });
 
-describe("matchPointsBounds — every shipped module and variant is coherent", () => {
+// Review round 1: the per-module ORDER checks (min ≤ lossCeil ≤ max, min ≤
+// winFloor ≤ max, min ≤ 0) were removed. They hold for any `boundsFrom` output
+// and every kernel builds its bounds through `boundsFrom`, so nothing could red
+// them. The check that stays crosses TWO kernel methods, and it reaches every
+// declared variant — most have no conformance suite. A set-based kernel that
+// read its wins from the loss column (max 1 against a declared total of 3)
+// failed here for all ten set-based variants.
+describe("matchPointsBounds — no declared pair total exceeds what two sides could take (every module and variant)", () => {
   for (const m of builtinModules) {
     // Controller ruling M4: a module whose schema has required fields (generic:
     // `resultMode`, `allowDraws`) cannot parse `{}`, so its "default" sample is
@@ -47,12 +67,6 @@ describe("matchPointsBounds — every shipped module and variant is coherent", (
       it(`${m.key} (${label})`, () => {
         const cfg = m.configSchema.parse(raw);
         const b = m.matchPointsBounds(cfg);
-        expect(b.min).toBeLessThanOrEqual(b.lossCeil);
-        expect(b.lossCeil).toBeLessThanOrEqual(b.max);
-        expect(b.min).toBeLessThanOrEqual(b.winFloor);
-        expect(b.winFloor).toBeLessThanOrEqual(b.max);
-        expect(b.min).toBeLessThanOrEqual(0); // no-result scores 0 (plan P8)
-        // A declared pair total can never exceed what two sides could take.
         for (const total of m.declaredPointsSets(cfg)) expect(total).toBeLessThanOrEqual(2 * b.max);
       });
     }
