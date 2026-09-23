@@ -32,6 +32,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { EngineErrorCode, SquadProvenance, SquadRole } from "@seazn/engine/core";
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
+import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "@/lib/next-match-started";
 
 export type WicketKind =
   | "bowled" | "caught" | "lbw" | "runout" | "stumped"
@@ -1476,15 +1477,32 @@ export function shootoutScoreFromDetail(detail: unknown): { home: number; away: 
  * wins, because its `message` is the engine's own English and is rendered
  * verbatim otherwise; anything else keeps the raw message (HTTP/auth failures
  * already carry localized or user-authored text), and an empty one falls back.
+ *
+ * `extra` is the error body's other fields (`ApiV1Error.extra`). One code reads
+ * it: NEXT_MATCH_STARTED (owner ruling 2026-09-23), whose sentence names the
+ * match to void first. That sentence is rebuilt here from `next_match` in the
+ * reader's language — the server's own is English — composing the ref from
+ * `slot.match_ref`, the key every "R2·1" in the product is built from
+ * (`lib/slot-label.ts`'s `matchRef`, not imported: it pulls the dictionaries
+ * into this dictionary-free module). Without a ref it is still localized,
+ * never the server's English.
  */
 export function scoringErrorText(
   code: string | null | undefined,
   rawMessage: string | null | undefined,
   m: MsgFn,
   fallback: MessageKey,
+  extra?: Record<string, unknown> | null,
 ): string {
   const engine = code ? engineErrorLabel(code, m) : null;
-  return engine ?? (rawMessage || m(fallback));
+  if (engine !== null) return engine;
+  if (code === NEXT_MATCH_STARTED_CODE) {
+    const ref = nextMatchRefOf(extra);
+    return ref
+      ? m("score.nextMatchStarted", { ref: m("slot.match_ref", { round: ref.round, seq: ref.seq }) })
+      : m("scorepad.refusal.nextMatchStarted");
+  }
+  return rawMessage || m(fallback);
 }
 
 /** Every MessageKey this module can emit — used by the exhaustiveness test. */

@@ -1008,6 +1008,31 @@ describe("scoringErrorText keeps engine English off the scorer's screen", () => 
       .not.toContain("high-water");
   });
 
+  // Owner ruling 2026-09-23: the refusal to void a result whose next match has
+  // started NAMES that match. The server's sentence is English; the console and
+  // the device chrome rebuild it from the code and `next_match`.
+  it.each(Object.keys(LOCALES) as (keyof typeof LOCALES)[])(
+    "%s: NEXT_MATCH_STARTED names the next match in the reader's language, never the server's English",
+    (locale) => {
+      const dict = LOCALES[locale];
+      const say: MsgFn = (k, vars) => interpolate(dict[k] ?? k, vars);
+      const english = "The next match (R2·1) has already started. Void that one first.";
+      const extra = { next_match: { fixture_id: "fx-final", round: 2, seq: 1 } };
+      const text = scoringErrorText("NEXT_MATCH_STARTED", english, say, "score.failed", extra);
+      const ref = interpolate(dict["slot.match_ref"]!, { round: 2, seq: 1 });
+      expect(text).toBe(interpolate(dict["score.nextMatchStarted"]!, { ref }));
+      expect(text).toContain(ref);
+      if (locale !== "en") expect(text).not.toBe(english);
+    },
+  );
+
+  it("NEXT_MATCH_STARTED with no ref falls back to localized copy, not the server's English", () => {
+    const say: MsgFn = (k, vars) => interpolate(LOCALES.fr[k] ?? k, vars);
+    const english = "The next match (R2·1) has already started. Void that one first.";
+    const text = scoringErrorText("NEXT_MATCH_STARTED", english, say, "score.failed", {});
+    expect(text).toBe(LOCALES.fr["scorepad.refusal.nextMatchStarted"]);
+  });
+
   it("keeps the raw message for a non-engine failure, and the fallback for none", () => {
     expect(scoringErrorText("RATE_LIMITED", "Slow down", fr, "device.failed")).toBe("Slow down");
     expect(scoringErrorText(null, null, fr, "device.failed")).toBe(uiFr["device.failed"]);

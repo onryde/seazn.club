@@ -13,6 +13,10 @@ import type { MessageKey } from "@/lib/messages";
 import type { MsgFn } from "@/lib/scoring-vocab";
 import { ENGINE_ERROR_KEY } from "@/lib/scoring-vocab";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import { interpolate } from "@/lib/i18n-runtime";
 import { REFUSAL_FALLBACK, REFUSAL_KEY, refusalText } from "../refusal-copy";
 import { isPermanentRefusal } from "../transport";
 
@@ -56,6 +60,29 @@ describe("refusalText", () => {
       expect(text, `code ${code} leaked the server's prose`).not.toBe(prose);
       expect(text, `code ${code} leaked a feature slug`).not.toContain("cricket.dls");
     }
+  });
+});
+
+describe("NEXT_MATCH_STARTED names the match to void first, in the scorer's language", () => {
+  const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
+  const say = (dict: Record<string, string>): MsgFn => (k, vars) => interpolate(dict[k] ?? k, vars);
+  const nextMatch = { fixture_id: "fx-final", round: 2, seq: 1 };
+  const english = "The next match (R2·1) has already started. Void that one first.";
+
+  it.each(Object.keys(LOCALES))("%s: the ref is in the sentence, and it still says NOT RECORDED", (locale) => {
+    const dict = LOCALES[locale]!;
+    const text = refusalText({ code: "NEXT_MATCH_STARTED", message: english, nextMatch }, say(dict));
+    const ref = interpolate(dict["slot.match_ref"]!, { round: 2, seq: 1 });
+    expect(text).toBe(interpolate(dict["scorepad.refusal.nextMatchStartedRef"]!, { ref }));
+    expect(text).toContain(ref);
+    expect(text).not.toContain("{");
+    if (locale !== "en") expect(text).not.toBe(english);
+  });
+
+  it("with no ref (an older server) it falls back to the plain sentence, never a hole", () => {
+    const text = refusalText({ code: "NEXT_MATCH_STARTED", message: english }, say(dict));
+    expect(text).toBe(dict["scorepad.refusal.nextMatchStarted"]);
+    expect(text).not.toContain("{");
   });
 });
 
@@ -118,6 +145,10 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
     const http = read("src/server/api-v1/http.ts");
     const scoring = read("src/server/usecases/scoring.ts");
     const pipeline = read("src/components/v2/scorepad/pipeline.ts");
+    // fed-seats.ts throws under the shared constant from the import-free
+    // `lib/next-match-started.ts`, so the literal lives there.
+    const nextMatch = read("src/lib/next-match-started.ts");
+    const fedSeats = read("src/server/engine-db/fed-seats.ts");
 
     for (const code of Object.keys(REFUSAL_KEY)) {
       const producer = http.includes(`return "${code}"`)
@@ -126,7 +157,9 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
           ? "scoring.ts explicit refusal"
           : pipeline.includes(`code: "${code}"`)
             ? "pipeline.ts (client-minted)"
-            : null;
+            : nextMatch.includes(`NEXT_MATCH_STARTED_CODE = "${code}"`) && fedSeats.includes("NEXT_MATCH_STARTED_CODE,")
+              ? "fed-seats.ts next-match refusal"
+              : null;
       expect(producer, `${code} is minted by nothing: no status map, no usecase throw, no client path`).not.toBeNull();
     }
   });

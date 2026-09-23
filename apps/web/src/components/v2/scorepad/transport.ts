@@ -23,6 +23,7 @@
 import { z } from "zod";
 import type { AppendCallResult, AppendEventBody, ScoringTransport } from "./pipeline";
 import type { AppendSuccess, LedgerSlotEvent } from "./types";
+import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "@/lib/next-match-started";
 
 // Review finding 1: listEventsSince previously cast the ledger JSON straight
 // to LedgerSlotEvent[] with no runtime validation, so an OMITTED
@@ -235,18 +236,24 @@ const RETRYABLE_CLIENT_STATUS: ReadonlySet<number> = new Set([408, 429]);
  * actions behind one already-undone void, while the pad went on showing a
  * score that had stopped being true.
  *
+ * NEXT_MATCH_STARTED (owner ruling 2026-09-23, `server/engine-db/fed-seats.ts`)
+ * is the fifth: a void that would erase a knockout result whose next match has
+ * already started. Only voiding that next match first changes the answer — a
+ * resend never does.
+ *
  * An UNRECOGNISED code stays renegotiable on purpose: an un-migrated server
  * sends a bare `CONFLICT`, and a new client must not wedge against it.
  *
  * Exported for its paired test only — nothing else imports it. That test pins
- * this set against the codes `scoring.ts` actually throws, so a fifth terminal
- * refusal cannot arrive server-side without one here.
+ * this set against the terminal 409s the server actually throws, so a new one
+ * cannot arrive server-side without an entry here.
  */
 export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "UNDO_NOOP",
   "UNDO_TARGET_MISSING",
   "UNDO_ALREADY_VOIDED",
   "UNDO_NOT_UNDOABLE",
+  NEXT_MATCH_STARTED_CODE,
 ]);
 
 /**
@@ -337,7 +344,10 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
       if (res.status === 409) {
         const code = envelope.error?.code;
         if (code !== undefined && TERMINAL_CONFLICT_CODES.has(code)) {
-          return { kind: "rejected", code, message };
+          // The next-match refusal names the match to void first; carried only
+          // when well-formed, so the copy never renders a sentence with a hole.
+          const nextMatch = nextMatchRefOf(envelope.error);
+          return nextMatch ? { kind: "rejected", code, message, nextMatch } : { kind: "rejected", code, message };
         }
         const currentSeq = typeof envelope.error?.current_seq === "number" ? envelope.error.current_seq : null;
         return { kind: "conflict", currentSeq, message };

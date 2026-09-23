@@ -419,6 +419,39 @@ describe("sendOne — the mutation-checked replay contract", () => {
     expect(calls).toHaveLength(1); // and not retried at all — 422 is deterministic poison
   });
 
+  it("a refusal that names the next match keeps that ref in the outcome — first send AND renegotiated resend", async () => {
+    const nextMatch = { fixture_id: "fx-final", round: 2, seq: 1 };
+    const refused = { kind: "rejected" as const, code: "NEXT_MATCH_STARTED", message: "started", nextMatch };
+
+    const store = memoryQueueStore();
+    const pending = event("a", { expectedSeq: 10 });
+    await store.put(pending);
+    const first = fakeTransport({ appendScript: { a: [refused] } });
+    expect(await sendOne(first.transport, store, "fx-1", pending, ME)).toEqual({
+      kind: "rejected",
+      localId: "local-a",
+      idempotencyKey: "a",
+      code: "NEXT_MATCH_STARTED",
+      message: "started",
+      nextMatch,
+    });
+
+    const store2 = memoryQueueStore();
+    const pending2 = event("b", { expectedSeq: 10 });
+    await store2.put(pending2);
+    const second = fakeTransport({
+      appendScript: { b: [{ kind: "conflict", currentSeq: 12, message: "stale" }, refused] },
+      slotsBySinceSeq: {
+        10: [{ seq: 11, type: "core.note", payload: { text: "SOMEONE ELSE" }, recorded_by: "user-2", device_link_id: null }],
+      },
+    });
+    expect(await sendOne(second.transport, store2, "fx-1", pending2, ME)).toMatchObject({
+      kind: "rejected",
+      code: "NEXT_MATCH_STARTED",
+      nextMatch,
+    });
+  });
+
   it("a network failure leaves the event queued with attempts/lastError recorded, and never resends blindly", async () => {
     const store = memoryQueueStore();
     const pending = event("a", { expectedSeq: 10, attempts: 2 });
