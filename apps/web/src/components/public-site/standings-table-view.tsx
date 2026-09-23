@@ -400,11 +400,16 @@ export function StandingsTableView({
                         sentence reached screen readers (as sr-only text) and
                         nobody else. `aria-describedby` on the trigger keeps it
                         spoken on focus without opening anything. */}
-                    <td className="py-2 pl-2 align-middle tabular-nums">
+                    {/* `py-2.5` on every body cell: a 40px row, so the
+                        popover triggers' `-my-2.5 py-2.5` stretch is a 40px
+                        tap target that stays inside its own row. At `py-2`
+                        (a 36px row) two neighbouring rows' targets overlapped
+                        and the lower one took the upper one's taps. */}
+                    <td className="py-2.5 pl-2 align-middle tabular-nums">
                       {r.tieBreakText ? (
                         <StandingsPopover
                           testid={`${testid}-tie-${r.entrantId}`}
-                          className="-my-2 flex items-center gap-px py-2"
+                          className="-my-2.5 flex items-center gap-px py-2.5"
                           trigger={
                             <>
                               {rankChip(r.rank)}
@@ -423,7 +428,7 @@ export function StandingsTableView({
                     {/* The name IS the row's header: without `scope="row"` a
                         screen reader reading "6" out of the Pts column cannot
                         say whose 6 it is. */}
-                    <th scope="row" className="py-2 pr-2 text-left font-medium text-ink">
+                    <th scope="row" className="py-2.5 pr-2 text-left font-medium text-ink">
                       <span className="flex min-w-0 items-center gap-2">
                         {/* `colour` closes the gap `entity-logo.tsx` records as
                             "STILL GREY, KNOWINGLY": the same club rendered as a
@@ -453,7 +458,7 @@ export function StandingsTableView({
                         <td
                           key={c.key}
                           data-col={c.key}
-                          className={`pl-0.5 ${endPad(i)} py-2 text-right ${
+                          className={`pl-0.5 ${endPad(i)} py-2.5 text-right ${
                             c.key === "points"
                               ? "font-display text-base font-bold text-accent-strong"
                               : "text-zinc-600"
@@ -465,7 +470,7 @@ export function StandingsTableView({
                             <StandingsPopover
                               testid={`${testid}-ratio-${c.key}-${r.entrantId}`}
                               align="end"
-                              className="-my-2 py-2 underline decoration-zinc-300 decoration-dotted underline-offset-4"
+                              className="-my-2.5 py-2.5 text-right underline decoration-zinc-300 decoration-dotted underline-offset-4"
                               trigger={r.cells[i]}
                             >
                               {note}

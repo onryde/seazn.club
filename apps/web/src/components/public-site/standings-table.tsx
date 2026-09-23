@@ -132,7 +132,7 @@ export function StandingsTable({
       <StandingsPopover
         testid={`standings-ratio-${key}-${row.entrantId}`}
         align="end"
-        className="-my-2.5 py-2.5 underline decoration-zinc-300 decoration-dotted underline-offset-4"
+        className="-my-2.5 py-2.5 text-right underline decoration-zinc-300 decoration-dotted underline-offset-4"
         trigger={text}
       >
         {note}
@@ -218,7 +218,9 @@ export function StandingsTable({
                   // `-my-2.5 py-2.5`: the button's hit area takes in the cell's
                   // vertical padding (a 40px band, not the 20px chip) without
                   // making the row any taller; a row a wrapped name has made
-                  // taller still has its top and bottom beyond it. VERTICAL only —
+                  // taller still has its top and bottom beyond it. Its 40px of
+                  // width is the popover's own `min-w-10`, inside its box. The
+                  // STRETCH is vertical only —
                   // a horizontal overhang (`-mx-1 px-1`, tried first) widens
                   // the button past its own box, which the public board's
                   // clip scan (`overflowingIn`) rightly reads as clipped

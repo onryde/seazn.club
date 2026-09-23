@@ -38,6 +38,7 @@ import {
   activeOrgSlug,
   dictString,
   division,
+  eventStream,
   leagueFixtures,
   publicCompetition,
   spectator,
@@ -255,7 +256,9 @@ async function coveredPoints(panel: Locator): Promise<{ sampled: number; covered
 
 /** The panel sits wholly inside the table's scroll box. That box is
  *  `overflow-x-auto`, which computes `overflow-y: auto` too, so a panel
- *  hanging past its edge is CLIPPED — no z-index can paint what was cut. */
+ *  hanging past its edge is CLIPPED — no z-index can paint what was cut. Both
+ *  axes: a ratio panel hangs LEFT from its cell, and with the table scrolled
+ *  right its left edge can fall in the part of the box scrolled out of view. */
 async function outsideScrollBox(panel: Locator): Promise<string | null> {
   return panel.evaluate((el) => {
     const box = el.closest('[role="region"]');
@@ -265,6 +268,11 @@ async function outsideScrollBox(panel: Locator): Promise<string | null> {
     const slack = 0.5;
     if (p.top < b.top - slack || p.bottom > b.bottom + slack) {
       return `panel ${Math.round(p.top)}–${Math.round(p.bottom)} vs box ${Math.round(b.top)}–${Math.round(b.bottom)}`;
+    }
+    const left = b.left + box.clientLeft;
+    const right = left + box.clientWidth;
+    if (p.left < left - slack || p.right > right + slack) {
+      return `panel x ${Math.round(p.left)}–${Math.round(p.right)} vs box x ${Math.round(left)}–${Math.round(right)}`;
     }
     // The same clip seen from the box: a panel hanging past its bottom makes
     // it vertically scrollable (`overflow-y` computes to auto). Caught even if
@@ -337,16 +345,70 @@ for (const surface of [DIVISION, HUB]) {
       await trigger.focus();
       await page.keyboard.press("Enter");
       await expectOpen(trigger, panel);
-      // Move focus away first, so "focus returned" cannot be satisfied by
-      // focus never having left.
-      await page.locator("h1").first().click();
+      await page.keyboard.press("Escape");
       await expectClosed(trigger, panel);
+      await expect(trigger, "Esc from the trigger left it").toBeFocused();
+      // From INSIDE the panel: a tap on it moves focus into it (it is
+      // focusable, not tabbable), so "focus returned" cannot be satisfied by
+      // focus never having left the button.
       await trigger.click();
       await expectOpen(trigger, panel);
-      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await panel.click();
+      await expectOpen(trigger, panel);
+      await expect(trigger, "a tap on the panel should have taken focus off the button").not.toBeFocused();
       await page.keyboard.press("Escape");
       await expectClosed(trigger, panel);
       await expect(trigger, "Esc did not return focus to the trigger").toBeFocused();
+    });
+
+    test("focus: tabbing away closes it, an Esc someone else handled is left alone, and Esc never pulls focus in from outside", async ({
+      browser,
+    }) => {
+      const page = await open(browser, surface, 1280);
+      const trigger = surface.tie(page, "a");
+      const panel = await panelOf(trigger);
+
+      // Tabbing away: focus leaves both the trigger and the panel.
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expectOpen(trigger, panel);
+      await page.keyboard.press("Tab");
+      await expectClosed(trigger, panel);
+      expect(
+        await trigger.evaluate((btn) => btn.parentElement!.contains(document.activeElement)),
+        "Tab left focus inside the popover",
+      ).toBe(false);
+
+      // An Esc another handler has already claimed (`preventDefault`, e.g. a
+      // dialog around the table) is not ours: the panel stays open. The next,
+      // unclaimed, Esc closes it.
+      await trigger.focus();
+      await page.keyboard.press("Enter");
+      await expectOpen(trigger, panel);
+      await page.evaluate(() =>
+        window.addEventListener(
+          "keydown",
+          (e) => {
+            if (e.key === "Escape") e.preventDefault();
+          },
+          { capture: true, once: true },
+        ),
+      );
+      await page.keyboard.press("Escape");
+      await expectOpen(trigger, panel);
+      await page.keyboard.press("Escape");
+      await expectClosed(trigger, panel);
+
+      // Opened with focus somewhere else entirely (a synthetic click moves no
+      // focus — as a tap does not on Safari): Esc closes it and leaves focus
+      // where it was rather than yanking it onto the trigger.
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await trigger.dispatchEvent("click");
+      await expectOpen(trigger, panel);
+      await expect(trigger).not.toBeFocused();
+      await page.keyboard.press("Escape");
+      await expectClosed(trigger, panel);
+      await expect(trigger, "Esc pulled focus onto a trigger it was never on").not.toBeFocused();
     });
 
     test("opening the ratio popover closes the tie-break — by tap AND by keyboard", async ({ browser }) => {
@@ -366,11 +428,14 @@ for (const surface of [DIVISION, HUB]) {
       await expect(openPanels, "more than one explanation on screen").toHaveCount(1);
 
       // By keyboard: no pointer event anywhere, so only the "another opened"
-      // announcement can close the first one.
+      // announcement can close the first one. The tie is opened WITHOUT
+      // taking focus (a synthetic click), or focus moving to the ratio would
+      // close it by focusout first and the announcement would go untested.
       await page.locator("h1").first().click();
       await expectClosed(ratio, ratioPanel);
-      await tie.click();
+      await tie.dispatchEvent("click");
       await expectOpen(tie, tiePanel);
+      await expect(tie).not.toBeFocused();
       await ratio.focus();
       await page.keyboard.press("Enter");
       await expectOpen(ratio, ratioPanel);
@@ -427,6 +492,39 @@ for (const surface of [DIVISION, HUB]) {
       }
     });
 
+    test("a panel too tall for either side is clamped inside the table and scrolls — below on the first row, above on the last", async ({
+      browser,
+    }) => {
+      const page = await open(browser, surface, 1280);
+      // Make every note taller than the whole table: neither side can hold it.
+      await page.addStyleTag({ content: '[role="note"]::after { content: ""; display: block; height: 900px; }' });
+      for (const [who, row] of [["a", "first"], ["c", "last"]] as const) {
+        const trigger = surface.tie(page, who);
+        const panel = await panelOf(trigger);
+        await trigger.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
+        await trigger.click();
+        await expectOpen(trigger, panel);
+        expect(await outsideScrollBox(panel), `the ${row} row's over-tall panel is clipped by its box`).toBeNull();
+        const m = await panel.evaluate((el) => ({
+          scrolls: el.scrollHeight - el.clientHeight,
+          overflowY: getComputedStyle(el).overflowY,
+          top: el.getBoundingClientRect().top,
+          bottom: el.getBoundingClientRect().bottom,
+          anchorTop: el.parentElement!.getBoundingClientRect().top,
+          anchorBottom: el.parentElement!.getBoundingClientRect().bottom,
+        }));
+        expect(m.scrolls, `the ${row} row's clamped panel does not scroll its own text`).toBeGreaterThan(0);
+        expect(m.overflowY).toBe("auto");
+        if (row === "first") {
+          expect(m.top, "the first row has more room below: the clamp should hang there").toBeGreaterThanOrEqual(m.anchorBottom - 0.5);
+        } else {
+          expect(m.bottom, "the last row has no room below: the clamp should sit above").toBeLessThanOrEqual(m.anchorTop + 0.5);
+        }
+        await page.keyboard.press("Escape");
+        await expectClosed(trigger, panel);
+      }
+    });
+
     for (const width of [1280, 768, 320]) {
       test(`at ${width}: every row's open panel is painted on top and inside its box — first row down, last row up`, async ({ browser }) => {
         const page = await open(browser, surface, width);
@@ -442,21 +540,28 @@ for (const surface of [DIVISION, HUB]) {
             const panel = await panelOf(trigger);
             // Centre the trigger while everything is closed (see coveredPoints).
             await trigger.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
-            // The tap target is the cell's padding band, not the 20px of chip
-            // or text: the button is stretched over the cell's vertical padding
-            // (36px on the hub, 40px on the division page) without making the
-            // row any taller. Hit-tested 17px above and below the centre of
-            // what it shows — a band a 20px-tall button cannot answer for.
+            // A 40px tap target BOTH ways (owner ruling): taps 19.5px above,
+            // below, left and right of the trigger's centre all land on it —
+            // hit-tested, not measured. Vertically the button is stretched over
+            // its cell's padding (`-my-2.5 py-2.5` on both surfaces, whose
+            // rows are `py-2.5`); horizontally it is `min-w-10`. A 36px
+            // stretch, or the 26px of a bare chip and marker, misses.
             const edgeMisses = await trigger.evaluate((btn) => {
               const b = btn.getBoundingClientRect();
-              const x = b.left + b.width / 2;
-              const mid = b.top + b.height / 2;
-              return [mid - 17, mid + 17]
-                .map((y) => ({ y, hit: document.elementFromPoint(x, y) }))
+              const cx = b.left + b.width / 2;
+              const cy = b.top + b.height / 2;
+              const taps: [string, number, number][] = [
+                ["above", cx, cy - 19.5],
+                ["below", cx, cy + 19.5],
+                ["left of", cx - 19.5, cy],
+                ["right of", cx + 19.5, cy],
+              ];
+              return taps
+                .map(([where, x, y]) => ({ where, hit: document.elementFromPoint(x, y) }))
                 .filter(({ hit }) => !(hit && btn.contains(hit)))
-                .map(({ y, hit }) => `${Math.round(y)} → ${hit ? hit.outerHTML.slice(0, 80) : "nothing"}`);
+                .map(({ where, hit }) => `${where} → ${hit ? hit.outerHTML.slice(0, 80) : "nothing"}`);
             });
-            expect(edgeMisses, `${kind} trigger on the ${row} row: a tap 17px off centre misses it`).toEqual([]);
+            expect(edgeMisses, `${kind} trigger on the ${row} row: a tap 19.5px off centre misses it`).toEqual([]);
             await trigger.click();
             await expectOpen(trigger, panel);
 
@@ -489,3 +594,168 @@ for (const surface of [DIVISION, HUB]) {
     }
   });
 }
+
+// ── carrom: a board-ratio panel over the frozen rank column ─────────────────
+//
+// The one place the panel's own `z-20` is what decides the paint. A ratio
+// panel hangs LEFT from its cell (`align="end"`), 224px wide. Derived columns
+// follow `DERIVED_METRICS` order, so carrom's board ratio sits before its point
+// ratio: at 320, with the table scrolled fully right, a board-ratio panel
+// reaches back over the sticky `z-10` rank column. Its own row's rank cell
+// comes BEFORE the panel in the DOM and loses on order alone; the NEXT row's
+// comes after it, so only the panel's z-index keeps that cell from being
+// painted over the explanation. The badminton seed above never gets there —
+// its last column is point ratio, whose panel stops short of the rank column.
+//
+// Its own competition, so the hub tests above keep reading one table.
+const CARROM = {
+  a: `Ann Board ${TAG}`,
+  b: `Ben Board ${TAG}`,
+  c: `Cal Board ${TAG}`,
+} as const;
+type CWho = keyof typeof CARROM;
+const CFIELD: CWho[] = ["a", "b", "c"];
+/** Winner, loser. Every match 2-0 in games, a strict a > b > c. */
+const CARROM_MATCHES: { w: CWho; l: CWho }[] = [
+  { w: "a", l: "b" },
+  { w: "a", l: "c" },
+  { w: "b", l: "c" },
+];
+/** One game's boards, by who takes each. The loser takes one board, so no
+ *  ratio divides by zero; the winner's three of nine coins make 27, past the
+ *  ICF `gameTo` of 25, which closes the game. */
+const GAME: ("w" | "l")[] = ["w", "l", "w", "w"];
+/** ICF plays best of three: two games decide a 2-0 match. */
+const GAMES_PER_MATCH = 2;
+
+/** Each entrant's board totals, counted from the seed. */
+function boards(who: CWho): { won: number; lost: number } {
+  let won = 0;
+  let lost = 0;
+  for (const m of CARROM_MATCHES) {
+    if (m.w !== who && m.l !== who) continue;
+    for (let g = 0; g < GAMES_PER_MATCH; g++) {
+      for (const b of GAME) {
+        const mine = (b === "w") === (m.w === who);
+        if (mine) won += 1;
+        else lost += 1;
+      }
+    }
+  }
+  return { won, lost };
+}
+
+test.describe("carrom board ratio over the frozen rank column", () => {
+  let carromPath = "";
+  let carromIds = {} as Record<CWho, string>;
+  let carromContext: BrowserContext | undefined;
+
+  test.beforeAll(async ({ browser }) => {
+    // competition, division×2, entrants, stage, generate, start, list = 8, then
+    // per match one state read and a post for core.start and every board.
+    const perMatch = 1 + 1 + GAMES_PER_MATCH * GAME.length;
+    test.setTimeout(Math.max(FLOOR_MS, (8 + CARROM_MATCHES.length * perMatch) * API_CALL_MS));
+    carromContext = await browser.newContext();
+    const request: APIRequestContext = carromContext.request;
+    const org = await activeOrgSlug(request);
+    const competition = await publicCompetition(request, { name: `Board ratio ${TAG}`, orgId: org.id });
+    const div = await division(request, competition.id, { name: "Boards", sport_key: "carrom", variant_key: "icf" });
+    const created = await addEntrantsViaApi(request, div.id, CFIELD.map((k) => CARROM[k]));
+    expect(created.status, "the whole carrom field was created").toBe(201);
+    carromIds = Object.fromEntries(CFIELD.map((k, i) => [k, created.ids[i]!])) as Record<CWho, string>;
+    const fixtures = await leagueFixtures(request, div.id);
+    for (const m of CARROM_MATCHES) {
+      const fx = fixtures.find(
+        (f) =>
+          (f.home_entrant_id === carromIds[m.w] && f.away_entrant_id === carromIds[m.l]) ||
+          (f.home_entrant_id === carromIds[m.l] && f.away_entrant_id === carromIds[m.w]),
+      );
+      expect(fx, `no carrom fixture pairs ${m.w} with ${m.l}`).toBeDefined();
+      const stream = await eventStream(request, fx!.id);
+      await stream.post("core.start", {});
+      for (let g = 0; g < GAMES_PER_MATCH; g++) {
+        for (const b of GAME) {
+          await stream.post("carrom.board.summary", {
+            winner: carromIds[b === "w" ? m.w : m.l],
+            opponentCoinsLeft: b === "w" ? 9 : 1,
+          });
+        }
+      }
+    }
+    carromPath = `/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`;
+  });
+
+  test.afterAll(async () => {
+    await carromContext?.close().catch(() => {});
+  });
+
+  test("at 320, scrolled fully right, the first row's board-ratio panel is painted over the next row's frozen rank cell", async ({
+    browser,
+  }) => {
+    const page = await spectator(browser, { width: 320, height: 900 });
+    await page.goto(carromPath, { waitUntil: "load" });
+    await expect(page.locator("#panel-standings")).toBeVisible();
+    const trigger = page.getByTestId(`standings-ratio-board_ratio-${carromIds.a}`);
+    const panel = await panelOf(trigger);
+    // The first row is a's: two wins against one and none.
+    await expect(page.locator("#panel-standings tbody tr").first()).toContainText(CARROM.a);
+
+    const region = trigger.locator('xpath=ancestor::*[@role="region"][1]');
+    const scrolled = await region.evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+      return { left: el.scrollLeft, max: el.scrollWidth - el.clientWidth };
+    });
+    expect(scrolled.max, "the carrom table must scroll sideways at 320, or this case does not exist").toBeGreaterThan(0);
+    expect(scrolled.max - scrolled.left, "the table did not scroll fully right").toBeLessThanOrEqual(1);
+
+    await trigger.click();
+    await expectOpen(trigger, panel);
+    const { won, lost } = boards("a");
+    await expect(panel).toHaveText(
+      dictString("en", "table.ratioNote.board_ratio", { won, lost, ratio: (won / lost).toFixed(2) }),
+    );
+    expect(
+      await region.evaluate((el) => el.scrollWidth - el.clientWidth - el.scrollLeft),
+      "opening the panel scrolled the table back",
+    ).toBeLessThanOrEqual(1);
+
+    // Where the panel and the NEXT row's rank cell overlap, the panel is what
+    // a finger lands on.
+    const probe = await panel.evaluate((el) => {
+      const rank = el.closest("tr")!.nextElementSibling!.querySelector("td")!;
+      const p = el.getBoundingClientRect();
+      const r = rank.getBoundingClientRect();
+      const x0 = Math.max(p.left, r.left);
+      const x1 = Math.min(p.right, r.right);
+      const y0 = Math.max(p.top, r.top);
+      const y1 = Math.min(p.bottom, r.bottom);
+      const pts: [number, number][] =
+        x1 - x0 > 6 && y1 - y0 > 6
+          ? [
+              [(x0 + x1) / 2, (y0 + y1) / 2],
+              [x0 + 3, y0 + 3],
+              [x1 - 3, y1 - 3],
+            ]
+          : [];
+      return {
+        position: getComputedStyle(rank).position,
+        w: Math.round(x1 - x0),
+        h: Math.round(y1 - y0),
+        covered: pts
+          .map(([x, y]) => document.elementFromPoint(x, y))
+          .filter((hit) => !(hit && el.contains(hit)))
+          .map((hit) => (hit ? hit.outerHTML.slice(0, 90) : "nothing")),
+      };
+    });
+    expect(probe.position, "the next row's rank cell is the frozen column").toBe("sticky");
+    expect(probe.w, "the panel does not reach across the frozen rank column").toBeGreaterThan(6);
+    expect(probe.h, "the panel does not reach down into the next row").toBeGreaterThan(6);
+    expect(probe.covered, "the next row's frozen rank cell is painted over the board-ratio panel").toEqual([]);
+    // And none of it is cut off: hung left from a cell near the box's right
+    // edge, 224px wide, its left edge fell in the columns scrolled out of view
+    // — "Boards won…" lost its first letter — until the popover shifted it back
+    // inside the box on open.
+    expect(await outsideScrollBox(panel), "the board-ratio panel is cut off by the table's box").toBeNull();
+    await expectNoHorizontalScroll(page);
+  });
+});
