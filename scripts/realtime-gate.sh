@@ -22,7 +22,7 @@
 # JwtSignatureError. Measured 2026-09-22 and again 2026-09-23: same build,
 # same DB, 1 failed without the root env file, 8 passed with it.
 #
-# THE THREE WAYS A GATE LIES, each of which this script is built to refuse:
+# THE FOUR WAYS A GATE LIES, each of which this script is built to refuse:
 #
 #   1. It runs nothing. A `--project` that selects zero tests exits 0 and
 #      proves nothing, so every spec/project pair must select >= 1 test.
@@ -38,6 +38,12 @@
 #      mounts, every spec fails on toBeVisible() — and no realtime assertion
 #      is ever reached. Each leg's output is therefore classified, and a
 #      failure carrying no realtime verdict exits 4, not 1.
+#   4. It DENIES a regression it measured. The inverse of 3, and worse: with
+#      one leg failing on a flake and the other on a real refused channel, a
+#      whole-run "not evidence of a realtime regression" buries the finding
+#      and tells the reader to stop looking. Verdicts are therefore tracked
+#      per leg, and a measured realtime failure always outranks a sibling
+#      leg's unrelated one.
 set -uo pipefail
 
 # Exit codes, kept distinct on purpose — "the gate could not be run", "the gate
@@ -48,8 +54,10 @@ set -uo pipefail
 #   2  environment: no server, or no DATABASE_URL — nothing was measured
 #   3  gate integrity: zero tests selected, or the spec set / clause / switch
 #      does not match the tree
-#   4  inconclusive: a leg failed carrying no realtime verdict, so whatever
-#      broke, it was not measured as a realtime failure
+#   4  inconclusive: EVERY failing leg carried no realtime verdict, so whatever
+#      broke, it was not measured as a realtime failure. If any leg DID carry
+#      one, the run is a 1 — a measured regression is never downgraded to a 4
+#      by a sibling leg's unrelated failure.
 
 # Resolved before any cd: this script is routinely invoked from a worktree
 # while the caller's shell cwd has reset to the main checkout, and a relative
@@ -98,8 +106,16 @@ project_for() {
 # symbol in backticks — both of which a bare substring grep accepts, which is
 # how a spec can keep every mention and lose every assertion. The comment
 # filter additionally stops a future `// ... NAME(...)` note from standing in
-# for a call. It is a heuristic, not a parser, and deliberately errs toward
-# refusing.
+# for a call.
+#
+# It is a heuristic, not a parser, and — contrary to what this comment used to
+# claim — it does NOT err uniformly toward refusing. A string or template
+# literal containing `NAME(` on a non-comment line is counted as a call, so it
+# errs toward ACCEPTING in that shape. No such line exists in the gated specs
+# (checked), and the declared-vs-derived cross-check is what stops a miscount
+# from quietly changing WHICH specs run. The other shape worth knowing: a spec
+# that reaches the clause through a shared helper rather than calling it
+# directly derives as "no call" and would refuse — see the doc.
 clause_calls() {
   grep -aE "\b${CLAUSE}\(" "$1" 2>/dev/null \
     | grep -acvE "^[[:space:]]*(//|\*|/\*)" || true
@@ -143,6 +159,18 @@ if [ "${#SPECS[@]}" -eq 0 ]; then
   exit 3
 fi
 
+# Existence BEFORE the cross-check, so the diagnostic matches the fault. A
+# renamed or deleted spec cannot be derived either, so the cross-check below
+# would also refuse it — but it would say "carries no CLAUSE() call", sending
+# the reader to look for a deleted assertion inside a file that is not there.
+for spec in "${SPECS[@]}"; do
+  if [ ! -f "$spec" ]; then
+    echo "realtime-gate: ${spec} does not exist — the gate would run nothing." >&2
+    echo "  Renamed or deleted? Update SPECS. Refusing." >&2
+    exit 3
+  fi
+done
+
 # Cross-check the declared list against the tree. Derivation alone would let a
 # spec that lost its clause drop silently out of the set; a declared list alone
 # lets a new realtime spec sit ungated, and lets someone comment an entry out.
@@ -177,12 +205,6 @@ fi
 SELECTED=0
 for spec in "${SPECS[@]}"; do
   project="$(project_for "$spec")"
-
-  if [ ! -f "$spec" ]; then
-    echo "realtime-gate: ${spec} does not exist — the gate would run nothing." >&2
-    exit 3
-  fi
-
   calls="$(clause_calls "$spec")"
 
   # Playwright prints the listing with paths relative to testDir (`e2e`).
@@ -207,15 +229,18 @@ for spec in "${SPECS[@]}"; do
   SELECTED=$((SELECTED + n))
 done
 
-if [ "$SELECTED" -eq 0 ]; then
-  echo "realtime-gate: 0 tests selected in total. Refusing." >&2
-  exit 3
-fi
+# No total-is-zero check here on purpose: SPECS is non-empty by the check
+# above and every spec already exits 3 at n == 0, so a total of zero is
+# unreachable. A guard nothing can trip is decoration, and this script does not
+# get to keep decoration while refusing it everywhere else.
 echo "  ${SELECTED} realtime-bearing test(s) will run with ${SWITCH}=1"
 
 # --- the gate itself --------------------------------------------------------
 FAILED=0
 NOT_REALTIME=0
+REALTIME_RED=0
+VERDICT_LEGS=""
+SILENT_LEGS=""
 for spec in "${SPECS[@]}"; do
   project="$(project_for "$spec")"
   # `serial` specs are entangled with shared org-level state; apps/web's own
@@ -232,17 +257,42 @@ for spec in "${SPECS[@]}"; do
   rc=${PIPESTATUS[0]}
   if [ "$rc" -ne 0 ]; then
     FAILED=1
-    if ! grep -qaE "$REALTIME_VERDICT_RE" "$leg"; then
+    # Classified PER LEG and remembered per leg. An earlier version tracked
+    # only "something failed without a verdict", which let one leg's unrelated
+    # failure print "this is NOT evidence of a realtime regression" over a
+    # sibling leg that had measured exactly that.
+    if grep -qaE "$REALTIME_VERDICT_RE" "$leg"; then
+      REALTIME_RED=1
+      VERDICT_LEGS="${VERDICT_LEGS} ${spec}"
+      echo "realtime-gate: ${spec} failed WITH a realtime verdict." >&2
+    else
       NOT_REALTIME=1
+      SILENT_LEGS="${SILENT_LEGS} ${spec}"
       echo "realtime-gate: ${spec} failed carrying NO realtime verdict." >&2
-      echo "  Nothing in that output came from ${CLAUSE}(), so the run fell" >&2
+      echo "  Nothing in that output came from ${CLAUSE}(), so that leg fell" >&2
       echo "  over before realtime was measured at all." >&2
     fi
   fi
 done
 
+# Order matters, and this order is the whole point. A measured realtime
+# verdict OUTRANKS a sibling leg's unrelated failure: the alternative prints
+# "not evidence of a realtime regression" while another leg's log says "no
+# websocket ever joined this fixture's channel", which is the one thing a gate
+# must never do — deny a regression it actually measured, and tell the reader
+# to stop looking.
+if [ "$REALTIME_RED" -ne 0 ] && [ "$NOT_REALTIME" -ne 0 ]; then
+  echo "REALTIME GATE: FAILED (MIXED) — a realtime regression WAS measured." >&2
+  echo "  realtime verdict:   ${VERDICT_LEGS# }" >&2
+  echo "  failed without one: ${SILENT_LEGS# }" >&2
+  echo "  The regression is the finding. The other leg is a SECOND problem —" >&2
+  echo "  investigate it too, but it is not a reason to discount the first." >&2
+  echo "  Exit 1, not 4, deliberately." >&2
+  exit 1
+fi
 if [ "$NOT_REALTIME" -ne 0 ]; then
-  echo "REALTIME GATE: INCONCLUSIVE — a leg failed for a non-realtime reason." >&2
+  echo "REALTIME GATE: INCONCLUSIVE — every failing leg failed for a" >&2
+  echo "  non-realtime reason." >&2
   echo "  This is NOT evidence of a realtime regression, and must not be read" >&2
   echo "  as one. Most likely the environment: a server left running against a" >&2
   echo "  since-rebuilt .next serves chunks that 500, the pad never mounts, and" >&2
