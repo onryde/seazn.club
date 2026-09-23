@@ -341,9 +341,15 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   // so this lands well inside the hold. A build that calls `resync()` directly
   // never raises the flag and leaves Forfeit enabled — which is exactly the
   // mutant this assertion exists to kill.
+  // This assertion is tripped by TWO distinct regressions, so its message names
+  // both: the listener may be gone entirely (no refresh at all — mutant M6), or
+  // present but calling `resync()` directly and so raising no flag. Observed
+  // failure text is identical in both cases, which is why the next line of
+  // triage is the headline assertion below: it still moves under the second and
+  // does not under the first.
   await expect(
     forfeit(page),
-    "the controls were left live during a resync — the refresh bypassed `padSyncing`",
+    "the controls stayed live through the return: either no listener fired at all, or it called `resync()` directly and bypassed the `padSyncing` gate",
   ).toBeDisabled({ timeout: HOLD_MS - 2_000 });
 
   await expect(
