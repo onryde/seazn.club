@@ -34,20 +34,17 @@
 //   lose / scenario / latest seat), what-if on closed rows, if-you-lose
 //   labelled with the current status, rounds left over departed rows, no
 //   cutNoRounds, aria from position, headline `{n}`.
-//   Review fix round 1 (14 more) — the one-match gate deleted / `>= 1` /
-//   `=== 2` / placed after `safe`; rival read over departed rows; F2 reverted
-//   / unknown status accepted / in-field accepted / counted result accepted;
-//   the negative-points guard off / always / without `min` / without rows.
+//   Review fix rounds 1–2 — the one-match gate deleted / `>= 1` / `=== 2` /
+//   placed after `safe`; rival read over departed rows; the round-1 seat of a
+//   departed, never-folded member restored (a frozen 0 in place of fail-closed
+//   F2) / restored for any departed member whatever its results.
 //   EQUIVALENT (unkillable, kept as the readable empty case): `qualifyCount
 //   < 1` (the engine refuses cut < 1 itself) and `rows.length === 0` (F3
-//   refuses it: a cut ≥ 0 active rows). Also equivalent: omitting the frozen-0
-//   seat for a departed, never-folded member — once the negative-points guard
-//   holds, a frozen 0 changes no verdict (F3 already leaves ≥ cut rivals at a
-//   best ≥ 0), so it is seated only to keep the engine's membership whole. The
-//   gate made `k === 1` in the loss scenario redundant (k ≤ matches left), so
-//   it went. The DB-backed twin (qualification-view-db.test.ts) kills F1, F2
-//   (both directions), lag-void, Swiss-seated, pool-filter, the forfeited
-//   mapping and the ledgerless reading of a real walkover on real reads too.
+//   refuses it: a cut ≥ 0 active rows). The gate made `k === 1` in the loss
+//   scenario redundant (k ≤ matches left), so it went. The DB-backed twin
+//   (qualification-view-db.test.ts) kills F1, F2 (both directions, incl. the
+//   seat restored), lag-void, Swiss-seated, pool-filter, the forfeited mapping
+//   and the ledgerless reading of a real walkover on real reads too.
 import { describe, expect, it } from "vitest";
 import {
   PointsRule,
@@ -476,43 +473,29 @@ describe("no status — stated first, each with its positive pair", () => {
     expect(view({ ...s, fixtures: [...s.fixtures, open(4, "A", "E")] })).toBeNull();
     expect(view({ ...s, rows: [...s.rows, row("E", 5, 0, 0)], fixtures: [...s.fixtures, open(4, "A", "E")] })).not.toBeNull();
   });
-  it("F2: a member who withdrew having played nothing (every fixture void) is no unknown — the table still shows", () => {
-    // Review fix round 1: a pooled snapshot folds only members with a counted
-    // result, so E (withdrawn, both fixtures voided) is absent from it. E is
-    // seated as a departed row frozen at 0; the pool keeps its status.
+  it("F2: a DEPARTED member the snapshot never folded still hides the table; folded, it shows", () => {
+    // Review fix round 2 (owner-accepted: pools fail closed until every member
+    // has a result). A status-only leaver keeps its place, and its carried
+    // points fold in the moment any of its fixtures gets a result — a frozen
+    // guess could turn a Through false. So E absent from the snapshot → none,
+    // whether its boards are still scheduled (a registrant's self-cancel moves
+    // only the status) or voided without an outcome.
     const s = open4();
-    const eVoid = [voided(open(1, "E", "B")), voided(open(4, "A", "E"))];
-    const v = must(view({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "withdrawn" } }));
-    expect(v.rows.E).toBeUndefined();
-    expect(Object.keys(v.rows).sort()).toEqual(["A", "B", "C", "D"]);
-    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "disqualified" } })).not.toBeNull();
-    // Pairs — each is still an unknown: E in the field; E departed but with a
-    // counted result the snapshot should hold; E's status unreadable.
-    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid] })).toBeNull();
-    // (A bye, so no snapshot row's own count moves and lag stays quiet.)
-    const eCounted = [bye(1, "E"), voided(open(4, "A", "E"))];
-    expect(view({ ...s, fixtures: [...s.fixtures, ...eCounted], statuses: { E: "withdrawn" } })).toBeNull();
-    const statuses = input({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "withdrawn" } }).entrantStatuses;
-    const noE: Record<string, string> = { ...statuses };
-    delete noE.E;
-    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid] }, { entrantStatuses: noE })).toBeNull();
-  });
-  it("F2: a frozen 0 is only safe where no row can finish below 0 — negative points fail closed", () => {
-    // Negative points are legal (points.ts). A departed never-played member
-    // frozen at 0 would out-rank a row whose best is below 0 and print a false
-    // Out — so a negative-paying rule, or a row already below 0, gives none.
-    const s = open4();
-    const eVoid = [voided(open(1, "E", "B")), voided(open(4, "A", "E"))];
-    const departed = { fixtures: [...s.fixtures, ...eVoid], statuses: { E: "withdrawn" } };
-    const negRule = { base: { win: W, draw: 1, loss: -1 }, bonuses: [] };
-    const zeroRule = { base: { win: W, draw: 1, loss: 0 }, bonuses: [] };
-    expect(view({ ...s, ...departed, meta: { pointsRule: negRule } })).toBeNull();
-    expect(view({ ...s, ...departed, meta: { pointsRule: zeroRule } })).not.toBeNull();
-    // Pair: the same negative rule with nobody frozen at 0 shows.
-    expect(view({ ...s, meta: { pointsRule: negRule } })).not.toBeNull();
-    const below = s.rows.map((r) => (r.entrantId === "D" ? { ...r, points: -1 } : r));
-    expect(view({ ...s, ...departed, rows: below })).toBeNull();
-    expect(view({ ...s, rows: below })).not.toBeNull();
+    const eOpen = [open(1, "E", "B"), open(4, "A", "E")];
+    const eVoid = eOpen.map(voided);
+    expect(view({ ...s, fixtures: [...s.fixtures, ...eOpen], statuses: { E: "withdrawn" } })).toBeNull();
+    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "withdrawn" } })).toBeNull();
+    expect(view({ ...s, fixtures: [...s.fixtures, ...eVoid], statuses: { E: "disqualified" } })).toBeNull();
+    // Positive pair: the organiser's expunge cascade voids E's boards as
+    // `abandoned` KEEPING a no_result outcome, so the snapshot folds E (at its
+    // real points, carry-over included) — E is known, and the table shows.
+    const expunged = eOpen.map((f) => ({ ...f, status: "abandoned", outcome: { kind: "no_result" } }));
+    const withE = (points: number) => [...s.rows, row("E", 5, 0, 0, [0, 0], { points })];
+    const folded = must(view({ ...s, rows: withE(0), fixtures: [...s.fixtures, ...expunged], statuses: { E: "withdrawn" } }));
+    expect(folded.rows.E).toBeUndefined();
+    expect(Object.keys(folded.rows).sort()).toEqual(["A", "B", "C", "D"]);
+    // …carried points included: E folded at 3 is a known rival too.
+    expect(view({ ...s, rows: withE(3), fixtures: [...s.fixtures, ...expunged], statuses: { E: "withdrawn" } })).not.toBeNull();
   });
   it("snapshot lag: a row that has played FEWER matches than its settled fixtures → no status; equal or more shows", () => {
     const s = open4();

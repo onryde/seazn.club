@@ -215,24 +215,16 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
 
   // F2: the table's members are its snapshot rows AND everyone seated in its
   // fixtures. A seated member the snapshot never folded has unknown points
-  // (a carry-over opening is folded only with results), so no status — except
-  // one who departed having counted nothing (every fixture void): a pooled
-  // snapshot folds only members with a counted result, so it is absent by
-  // design. It is seated as a departed row frozen at 0. A frozen 0 is sound
-  // only where no row can finish below 0 (negative points are legal): it
-  // would otherwise out-rank a row whose best is below 0 — a false Out.
+  // (a carry-over opening is folded only with results), so no status. That
+  // includes a DEPARTED member: a status-only leaver (a registrant's
+  // self-cancel moves only the entrant status) keeps its place, and its
+  // carried points fold in the moment any of its fixtures gets a result — so
+  // a frozen guess could turn a Through false. Pools fail closed until every
+  // member has a result (owner-accepted, fix round 2).
   const byId = new Map(i.rows.map((r) => [r.entrantId, r]));
-  const departedUnfolded = new Set<string>();
   for (const f of tableFx) {
-    for (const id of [f.home_entrant_id, f.away_entrant_id]) {
-      if (id === null || byId.has(id)) continue;
-      const status = i.entrantStatuses[id];
-      if (status === undefined || inTheField({ status })) return null;
-      if (tableFx.some((g) => seats(g, id) && counted(g))) return null;
-      departedUnfolded.add(id);
-    }
+    for (const id of [f.home_entrant_id, f.away_entrant_id]) if (id !== null && !byId.has(id)) return null;
   }
-  if (departedUnfolded.size > 0 && (perMatch.min < 0 || i.rows.some((r) => r.points < 0))) return null;
   // Snapshot lag: standings recompute after the scoring write commits, so a
   // row can trail its own fixtures. A row that has played fewer matches than
   // the table's fixtures say reads stale points. (More is fine: a "full"
@@ -272,10 +264,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     ...(f.pool_id ? { poolId: f.pool_id } : {}),
   }));
   const engine: QualificationInput = {
-    rows: [
-      ...ordered.map((r) => ({ entrantId: r.entrantId, points: r.points, active: active.get(r.entrantId) === true })),
-      ...[...departedUnfolded].map((entrantId) => ({ entrantId, points: 0, active: false })),
-    ],
+    rows: ordered.map((r) => ({ entrantId: r.entrantId, points: r.points, active: active.get(r.entrantId) === true })),
     remaining: new Map(ordered.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
     perMatch,
     cut,

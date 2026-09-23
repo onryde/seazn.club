@@ -189,9 +189,10 @@ function entrantsOfPool(
     }
     if (fixture.awardDelta !== undefined) ids.add(fixture.awardDelta.entrantId);
   }
-  // Membership is read from COUNTED results only: a declared entrant seated in
-  // this pool with no counted result yet (e.g. all its games void) is NOT a
-  // member here and drops out. Filtering allEntrants only restores its order.
+  // Membership = every entrant on a fixture of this pool carrying a result or
+  // an awardDelta, whatever that fixture's status (a voided fixture that kept
+  // its outcome still counts). A declared entrant with neither is not a member
+  // here; filtering allEntrants only restores the declared order.
   return allEntrants.filter((id) => ids.has(id));
 }
 

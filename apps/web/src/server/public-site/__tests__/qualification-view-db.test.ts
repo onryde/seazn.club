@@ -321,8 +321,8 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expectSameStatuses(full.view!, await engineStatuses(r, full.rows, full.statuses, leagueLeft, 1));
   });
 
-  it("F2 on a real pooled stage: a member who withdrew before playing never hides the pool — cascade run or status only", async () => {
-    // Review fix round 1. Two real ways a pool member leaves before playing:
+  it("F2 on a real pooled stage: a leaver the snapshot FOLDED shows the pool (expunge cascade); a status-only leaver it never folded hides it", async () => {
+    // Review fix rounds 1–2. Two real ways a pool member leaves before playing:
     const EIGHT = [...FOUR, "Eve", "Fay", "Gus", "Hal"];
     const scene = async () => {
       const r = await rig("group", EIGHT);
@@ -350,7 +350,10 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
 
     // (b) a registrant's self-cancel (registrations.ts) moves ONLY the entrant
     // status: the leaver's fixtures stay scheduled with no result, so the
-    // pooled snapshot never folds it — the case F2 used to hide the pool for.
+    // pooled snapshot never folds it. Its place is kept and its carry-over
+    // folds in with any later result (an organiser forfeit: the cascade will
+    // not run on an already-withdrawn entrant), so its points are unknown and
+    // the pool fails closed (owner-accepted, fix round 2).
     const b = await scene();
     await sql`update entrants set status = 'withdrawn' where id = ${b.leaver}`;
     await playRound(b.r, 1, EIGHT, Infinity, b.pool, b.leaver);
@@ -358,11 +361,12 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     const selfCancel = await load(b.r, b.pool);
     expect(selfCancel.statuses[b.leaver]).toBe("withdrawn");
     expect(selfCancel.rows.map((x) => x.entrantId).sort()).toEqual(b.others);
-    expect(selfCancel.view).not.toBeNull();
-    expect(selfCancel.view!.rows[b.leaver]).toBeUndefined();
-    // The leaver's open boards still count as matches left for its opponents.
-    expect(selfCancel.view!.table.label).toBe("Top 1 go through to Finals · 2 rounds left");
-    expectSameStatuses(selfCancel.view!, await engineStatuses(b.r, selfCancel.rows, selfCancel.statuses, leagueLeft, 1));
+    expect((await fixturesOf(b.r)).filter((f) => f.home_entrant_id === b.leaver || f.away_entrant_id === b.leaver).map((f) => f.status)).toEqual([
+      "scheduled",
+      "scheduled",
+      "scheduled",
+    ]);
+    expect(selfCancel.view).toBeNull();
   });
 
   it("F1 award mode through the real cascade: the leaver gets no status, the rest do, walkovers counted", async () => {
