@@ -48,7 +48,7 @@ Every anchor in spec §3 and §4.5, re-read in the tree (`grep -a`, then opened)
 | inner pad mount | :359 | **:487** | moved |
 | chrome `send()` | :175 | **:204** (catch :236) | moved |
 | `DEAD_CODES` | — | :81 | #848 |
-| G1 freshness floor effect | — | :295-311 | #848 |
+| G1 freshness floor effect | — | :295-322 (deps `[handlePadEvents, dead]`) | #848 |
 | `padAuth` memo | — | :356 | stable identity is load-bearing |
 | `onSignal` | use-fixture-stream.ts:168 | **:184** | moved |
 | `POLL_MS` | :21 | :21 (unexported) | unchanged |
@@ -66,7 +66,7 @@ Every anchor in spec §3 and §4.5, re-read in the tree (`grep -a`, then opened)
 | crypto | ✓ | `server/relay/crypto.ts` | reads `RELAY_KEK` only |
 | enc-boundary | ✓ | `server/relay/__tests__/enc-boundary.test.ts` | **derives ENC columns from the stream_sessions migration ONLY** (P2) |
 | schedule page | ✓ | `app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` | gated on `scheduling.multi_division`, which V393 made free for Community — so a Community org DOES reach the page and the `scoring.device_links` UpgradeGate is reachable |
-| migrations | — | `db/migration/deltas/`, tail **V413** | **V414 is claimed** on branch `backup/qualstatus-pre-rebase3` → use **V415** (P9) |
+| migrations | — | `db/migration/deltas/`, tail **V413** | **V414 is claimed** on branch `backup/qualstatus-pre-rebase3` → use **V415** (P9); renumbered **V417** at the rebase onto main `4332ab31c`, which took V414 and V416 |
 
 ### False or incomplete spec premises (record, do not block)
 
@@ -80,7 +80,7 @@ Every anchor in spec §3 and §4.5, re-read in the tree (`grep -a`, then opened)
 | P6 | Waiting "re-checks fixture metadata (sides + labels) every POLL_MS (`cache: "no-store"`)" | A device link may read ONLY `/state` and `/events` (doc 13 §7 `rejectDeviceLink`, fixtures.ts:27); `GET /fixtures/{id}` refuses it. And the inner pad needs each side's members + lineup, which only the server page loads. | Waiting calls `router.refresh()` on the `force-dynamic` scan page every `POLL_MS` (and on tab return). Same cadence, same "only while waiting" rule, no new device-link read surface, and one authority (the page) for side data. |
 | P7 | Row ref examples `R1 M3`, `SF1`, `Round 3 · Board 2` | The one authority for a match reference is `matchRef()` (slot-label.ts:38, key `slot.match_ref`, "R1·2"); the board card and every feeder label use it. | The sheet uses `matchRef(round_no, seq_in_round)` so the printed ref, the board chip and "Winner of R1·2" cannot disagree. **Owner ruling Q6 (2026-09-23): `matchRef()` format.** |
 | P8 | Confirm: "Start match sends `core.start` and opens the pad" | Today the inner pad mounts BEFORE start, and `useFixtureStream` has no fetch on mount (first read is a signal or the 15 s poll). Mounting it only after Start with the server bootstrap's events would show a pre-start pad and send a stale `expected_seq`. | Task 6 seeds the inner pad from the chrome's own post-start `resync()` at the moment it mounts. `e2e/device-links.spec.ts` "reaches its own inner pad faster than the poll" loses its premise (inner pad mounted pre-start) and is re-pointed, never weakened. |
-| P9 | migration | V414 is claimed on `backup/qualstatus-pre-rebase3`. | V415. Re-check at commit time. |
+| P9 | migration | V414 is claimed on `backup/qualstatus-pre-rebase3`. | V415. Re-check at commit time. **Renumbered V417** at the rebase onto main `4332ab31c` (main took V414 and V416). |
 | P10 | (silent) | "Rebuild fixtures" hard-deletes fixtures and cascades `device_links` (stages.ts:2997-3013); the confirm dialog counts device links. A rebuild after printing kills every printed QR on that stage (`LINK_INVALID`). | The rebuild itself is unchanged; **owner ruling Q4 (2026-09-23)**: Task 3 adds one line to the existing confirm. |
 | P11 | "Legacy hash-only links keep working until their `expires_at`" + "(only a legacy hash-only link) → revoke, mint" | Both hold only if nothing calls `ensure` on that fixture. A print or hand-over on a fixture with a live legacy link revokes it — including mid-match. | Built as specified; **owner ruling Q3 (2026-09-23)**: greenfield, no deployed legacy links, no mid-match protection needed. |
 | P12 | "Dead link — existing screen" | `DeadLink` in `app/score/[token]/page.tsx` is hard-coded English, and so are the resolver's messages it prints. | Task 6 touches the file, so it localises them (fix-inline rule). |
@@ -103,9 +103,21 @@ These were open questions in the first draft. The owner has now ruled on each, a
 | Q9 | The owner sets `DEVICE_LINK_KEK` in `.env.local` and on Fly (stg + prod). The plan never runs `fly` commands. | Pre-merge checklist |
 | Q10 | Accepted: no Tamil or CJK glyphs. The Known-limits note stays. | T8, Self-Review |
 
+### Controller rulings from the pre-flight scan (2026-09-23)
+
+These are the controller's rulings on the pre-flight findings (`.superpowers/sdd/2026-09-23-printable-scorer-sheets/preflight.md`). They are NOT owner rulings. They are recorded as the controller gave them.
+
+| Ref | Ruling |
+|---|---|
+| P13 | The route move to `POST /api/v1/competitions/{id}/exports/scorer-sheets` STANDS. The owner was told on 2026-09-23 and did not object. The route gains `proxy.ts`'s Origin check. Cost if wrong: renaming the route. |
+| P6 | Waiting uses `router.refresh()` (a re-render of the force-dynamic page), not a metadata endpoint. No device-link endpoint can read the sides, and this avoids adding one. Cost if wrong: one server render per `POLL_MS`, only while waiting. |
+| §4.4 header line | RESTORED: every sheet page prints "Scan to score. Check names on screen before you start." (`sheets.pdf.checkNames`, all 4 locales). The spec is binding, and no owner ruling dropped the line. → T8 |
+| Process | Execution is sequential only. Every commit is green. Every guard is killed inside its own task. Every verify command is self-contained. → Global Constraints |
+| C7 | Ad-hoc fixtures are excluded from the Swiss next-round check. `addFixture` (stages.ts:5667) writes `ext_key = 'adhoc-' \|\| n` (stages.ts:5776), a prefix nothing else writes, so `ext_key not like 'adhoc-%'` separates pairing boards from ad-hoc matches without a new column. → T4 |
+
 ### What #848 already gives the scan screens — reuse, do not duplicate
 
-- **Freshness floor (G1)**: the `visibilitychange`/`focus` effect at device-score-pad.tsx:295-311. Task 6 extracts it UNCHANGED into `useTabReturn(onReturn, enabled)` so Waiting refreshes on tab return through the same code; `device-score-pad-freshness-floor.test.tsx` must stay green without edits — it is the extraction's regression test.
+- **Freshness floor (G1)**: the `visibilitychange`/`focus` effect at device-score-pad.tsx:295-322. Task 6 extracts it UNCHANGED into `useTabReturn(onReturn, enabled)` so Waiting refreshes on tab return through the same code. `device-score-pad-freshness-floor.test.tsx` is the extraction's regression test. Its only edit is forced by the dead-copy localisation: three expectations (:523/:530/:545) move from the resolver's English to the localised copy, with their meaning kept (pre-flight A24).
 - **Dead-link handling**: `DEAD_CODES` (:81) and the dead screen (:359). Waiting needs nothing new: its `router.refresh()` re-runs `resolveDeviceLinkToken` server-side, so a link revoked while an umpire waits lands on the existing `DeadLink` page. `RESULT_CARRIED_FORWARD` is NOT added to `DEAD_CODES` — the link is alive, the fixture is over.
 - **Server event ids / `lastOwnVoidable`**: unchanged. `handlePadEvents` never sees `RESULT_CARRIED_FORWARD` (it only issues GETs), so the chrome learns it from `send()` and from the new inner-pad callback only.
 
@@ -115,20 +127,20 @@ These were open questions in the first draft. The owner has now ruled on each, a
 
 - **pnpm, never npm.** Every shell command starts `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && …` (the shell cwd resets between calls). Never `git stash` in this worktree. No heredocs in this worktree.
 - **The worktree has no `node_modules`.** First action of the first task: `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm install --frozen-lockfile`. Never symlink `node_modules` from main (it compiles MAIN's engine).
-- **Environment** per the `seazn-local-env` skill: `S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; $S up --label sheets --server` from this worktree; `eval "$($S env --label sheets)"` in every shell that runs tests; `$S rebuild --label sheets` after code changes before any e2e/smoke. `db:apply` alone is not a fresh schema — `up` runs `sync:sports`. Confirm `show data_directory` is the label's own if anything looks odd.
+- **Environment** per the `seazn-local-env` skill. Shell variables do NOT persist between tool calls, so every command spells the script path out in full; no command in this plan relies on a variable set by an earlier call (pre-flight C2). `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label sheets --server` from this worktree; `eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label sheets)"` in every shell that runs tests; `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label sheets` after code changes before any e2e/smoke. `db:apply` alone is not a fresh schema — `up` runs `sync:sports`. Confirm `show data_directory` is the label's own if anything looks odd.
 - **Vitest is judged only by JSON**, run from `apps/web`:
-  `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets/apps/web && rm -f "$TMPDIR/sheets.json" && rtk proxy pnpm exec vitest run <exact paths> --reporter=json --outputFile="$TMPDIR/sheets.json"; echo EXIT=$?`
+  `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets/apps/web && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label sheets)" && rm -f "$TMPDIR/sheets.json" && rtk proxy pnpm exec vitest run <exact paths> --reporter=json --outputFile="$TMPDIR/sheets.json"; echo EXIT=$?`
   then `jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' "$TMPDIR/sheets.json"`. Green = `f == 0`, `p == t`, and `.testResults[].name` lists THIS worktree's paths. Positionals are literal filename filters — a typo runs a subset and reports green; always confirm the file list. DB suites skip silently without `DATABASE_URL` — `pending > 0` on a DB file means the env is missing, not green.
-- **Lint/typecheck:** `$S gate --label sheets` and read the `Cached: N cached, M total` line; `rtk proxy pnpm run lint` if you need the raw `✖ N problems`.
+- **Lint/typecheck:** `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh gate --label sheets` and read the `Cached: N cached, M total` line; `rtk proxy pnpm run lint` if you need the raw `✖ N problems`.
 - **Playwright:** `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets/apps/web && PLAYWRIGHT_BASE=$SMOKE_BASE E2E_PROD_TARGET=1 rtk proxy pnpm exec playwright test --project=walkthrough <file>; echo EXIT=$?`. `PLAYWRIGHT_BASE` host must be `localhost`, never `127.0.0.1`. Run the WHOLE spec file, never a `-g` slice (AGENTS 21). A timeout prints the in-flight poll's mismatch first — check the poll's own timeout before chasing data (AGENTS 20).
-- **Every task ships a test that fails without it.** Write it, run it, SEE it red, then implement.
+- **Every task ships a test that fails without it.** Write it, run it, SEE it red, then implement. **Every commit is green** (controller ruling, pre-flight): no task lands a knowingly red test for a later task to fix. A test and its implementation may share one commit; the RED run goes in the task report. **Every guard a task adds is killed by a test inside that same task**, never by a later task's test.
 - **All four test types across the plan** (RULES): unit, e2e (Playwright), smoke (`scripts/smoke.ts`), regression. A backend-only task names the e2e that exercises it.
 - **Every guard is mutation-tested.** Each task's final step lists `mutant → killing test`; apply each mutant by hand, run the named test, see it red, revert. Report the killer list, not a count.
 - **Seams are proven through their real producer and consumer** (AGENTS 1): the carried-forward refusal is proven by a REAL inner-pad tap in a browser, and the PDF QR by a token extracted from the real PDF bytes and opened in a browser.
 - **Empty case first** in every predicate/rule-table test (spec §4.3, RULES test-design). Include ≥1 case where the right answer differs from the wrong answer's constant.
 - **i18n:** every new/changed user-facing string goes into all four dictionaries `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, then `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run i18n:gen-keys && pnpm run i18n:check` (`apps/web/src/lib/i18n-keys.ts` is GENERATED — never hand-edit). No hard-coded English in anything a customer reads, including the PDF.
 - **OpenAPI:** any v1 route/schema change → `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run openapi:gen && git status --porcelain openapi/` and commit the regenerated `openapi/v1.json` / `openapi/v1.public.json`. CI fails on drift.
-- **Migrations:** Flyway, `db/migration/deltas/V415__device_link_sealed_secret.sql`. Before committing, re-run `git fetch -q origin && for b in $(git for-each-ref --format='%(refname:short)' refs/heads refs/remotes); do git ls-tree -r --name-only $b db/migration | grep -E '/V415__'; done` — a duplicate version survives a clean rebase and breaks Flyway at deploy.
+- **Migrations:** Flyway, `db/migration/deltas/V417__device_link_sealed_secret.sql`. Before committing, re-run `git fetch -q origin && for b in $(git for-each-ref --format='%(refname:short)' refs/heads refs/remotes); do git ls-tree -r --name-only $b db/migration | grep -E '/V417__'; done` — a duplicate version survives a clean rebase and breaks Flyway at deploy.
 - **UI bar:** mobile-first; screenshots at **320, 768, 1280** of every screen this plan adds or changes, no horizontal page scroll at any of them (`expectNoHorizontalScroll` in `e2e/helpers.ts`); `truncate` needs `min-w-0` on the whole ancestor chain; control-set diff (membership + order), not box size, between 320 and 1280. Show ≥2 UI options to the owner before building the print control (RULES).
 - **Walkthrough specs** go in `apps/web/e2e/walkthrough/` and are registered in `WALKTHROUGH_SPECS` (`apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts:159`) in programme order — immediately after `"device-pad-foreign-void.spec.ts",` (the device-link group), before `"entrant-rename-walkthrough.spec.ts",`.
 - **Do NOT touch:** `packages/engine/**`, `fillSlot`/`onDecided` semantics, the Swiss pairing code, `fixture-console.tsx`'s `canHandOver` predicate (D2 is server-side; the console's two-sides UI gate stays), the frozen-competition guard (D8), `maybeAutoAdvance` (spec §6), anything under `apps/web/src/components/v2/scorepad/v3/` except the one prop in Task 5.
@@ -150,7 +162,7 @@ Inputs the spec implies but does not test, most likely to bite first; each line'
 
 | Path | Create/Modify | Responsibility |
 |---|---|---|
-| `db/migration/deltas/V415__device_link_sealed_secret.sql` | Create (T1) | `secret_enc bytea null`, `expires_at` nullable |
+| `db/migration/deltas/V417__device_link_sealed_secret.sql` | Create (T1) | `secret_enc bytea null`, `expires_at` nullable |
 | `apps/web/src/server/relay/crypto.ts` | Modify (T1) | envelope keyed by KEK name: `sealWith`/`openWith`; `seal`/`open` stay RELAY_KEK wrappers |
 | `apps/web/src/server/relay/__tests__/crypto.test.ts` | Modify (T1) | DEVICE_LINK_KEK round-trip, key separation, tamper, missing key |
 | `apps/web/src/server/relay/__tests__/enc-boundary.test.ts` | Modify (T1) | columns from every delta; per-column allow-list |
@@ -189,14 +201,14 @@ Inputs the spec implies but does not test, most likely to bite first; each line'
 | `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` | Modify (T5, T10) | `WALKTHROUGH_SPECS` entries |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, `apps/web/src/lib/i18n-keys.ts` | Modify (T3, T5, T6, T8, T9) | strings + regen |
 
-Task order is strict: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10. T3/T4 and T7 touch disjoint files and MAY run in parallel only in separate worktrees (`isolation: "worktree"`); by default run sequentially.
+Task order is strict and execution is sequential only (controller ruling, pre-flight): T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10. File sets being disjoint is not independence: T7's DB test imports T4's `_sheets-rig.ts`, and T8 extends T7's files.
 
 ---
 
 ### Task 1: Sealed-secret column, `DEVICE_LINK_KEK` envelope, env wiring
 
 **Files:**
-- Create: `db/migration/deltas/V415__device_link_sealed_secret.sql`
+- Create: `db/migration/deltas/V417__device_link_sealed_secret.sql`
 - Modify: `apps/web/src/server/relay/crypto.ts` (whole file — `kek()`, `seal`, `open`)
 - Modify: `apps/web/src/server/relay/__tests__/crypto.test.ts` (append a describe block)
 - Modify: `apps/web/src/server/relay/__tests__/enc-boundary.test.ts:27-58` (column derivation + claims 1–3)
@@ -205,14 +217,13 @@ Task order is strict: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK"`; `sealWith(kek: KekName, plain: string): Buffer`; `openWith(kek: KekName, enc: Uint8Array): string` (both in `@/server/relay/crypto`); `seal`/`open` unchanged in signature and behaviour (RELAY_KEK). Column `device_links.secret_enc bytea null`; `device_links.expires_at timestamptz null`.
+- Produces: `type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK"`; `hasValidKek(name: KekName): boolean`; `sealWith(kek: KekName, plain: string): Buffer`; `openWith(kek: KekName, enc: Uint8Array): string` (both in `@/server/relay/crypto`); `seal`/`open` unchanged in signature and behaviour (RELAY_KEK). Column `device_links.secret_enc bytea null`; `device_links.expires_at timestamptz null`.
 
 - [ ] **Step 0: Worktree + environment**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && git log --oneline -1 && pnpm install --frozen-lockfile
-S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh
-cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && $S up --label sheets --server
+cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label sheets --server
 # Count-only check; NEVER print the value. 0 on either file => STOP and ask the owner to add a 64-hex DEVICE_LINK_KEK (owner action, their secret file).
 grep -a -c '^DEVICE_LINK_KEK=[0-9a-f]\{64\}$' /Users/ashokhein/github/seazn.club/.env.local /Users/ashokhein/github/seazn.club/apps/web/.env.local
 ```
@@ -282,6 +293,13 @@ function kek(name: KekName): Buffer {
   return Buffer.from(hex, "hex");
 }
 
+/** True when `name` holds a usable key: the SAME `KEK_HEX` rule `kek()`
+ *  enforces. It is exported so callers that must fail closed (device-links.ts,
+ *  owner ruling Q1) check it without re-implementing the pattern. */
+export function hasValidKek(name: KekName): boolean {
+  return KEK_HEX.test(process.env[name] ?? "");
+}
+
 export function sealWith(name: KekName, plain: string): Buffer {
   const dek = randomBytes(KEY_LEN);
   const dataIv = randomBytes(IV_LEN);
@@ -331,7 +349,7 @@ Also update the header comment's first line to: `// server/relay/crypto.ts — A
 
 - [ ] **Step 4: Run crypto tests — expect PASS** (same command as Step 2; the pre-existing RELAY_KEK cases must still pass unchanged).
 
-- [ ] **Step 5: Write the migration** `db/migration/deltas/V415__device_link_sealed_secret.sql`:
+- [ ] **Step 5: Write the migration** `db/migration/deltas/V417__device_link_sealed_secret.sql`:
 
 ```sql
 -- =============================================================================
@@ -394,19 +412,10 @@ describe("*_enc columns never leave their owners", () => {
       .map((f) => relative(SRC, f));
     expect(inside).toEqual(["server/relay/secret-columns.ts"]);
   });
-
-  it("outside __tests__, only device-links.ts names secret_enc — and it does", () => {
-    const pattern = new RegExp(`\\b(${DEVICE_LINK_COLUMNS.join("|")})\\b`);
-    const naming = walk(SRC)
-      .map((f) => relative(SRC, f))
-      .filter((f) => !f.split("/").includes("__tests__"))
-      .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
-    expect(naming).toEqual([DEVICE_LINK_OWNER]);
-  });
 });
 ```
 
-Run the boundary test now. Expected: the ownership test FAILS (`naming` is `[]` — `device-links.ts` does not name `secret_enc` until Task 2). That is correct and intended: Task 2 turns it green. Record the red output in the task report; do not weaken it. (If you want this task's own commit green, run only the first three `it`s here by listing the file and reading the per-test statuses — the fourth is owned by Task 2.)
+Run the boundary test now. The first `it` FAILS until the V417 migration from Step 5 exists (`secret_enc` is not declared yet), then passes. The whole file is green at this task's commit. The ownership claim ("only `device-links.ts` names `secret_enc`") is NOT added here: it cannot pass until Task 2 writes that file, and every commit must be green (pre-flight C1). Task 2 adds it together with the code that satisfies it. `DEVICE_LINK_OWNER` is declared here for Task 2 to use.
 
 - [ ] **Step 7: Env wiring — failing test first.** Create `apps/web/src/lib/__tests__/device-link-kek-wiring.test.ts`:
 
@@ -462,7 +471,7 @@ Run the wiring test — expect 5 passes. Note: `e2e.yml` edits change LIVE CI (i
 - [ ] **Step 8: Apply the migration to the label DB and confirm the shape**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && eval "$($S env --label sheets)" && pnpm run db:apply && psql "$DATABASE_URL" -Atc "select column_name, is_nullable from information_schema.columns where table_name='device_links' and column_name in ('secret_enc','expires_at') order by 1"
+cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label sheets)" && pnpm run db:apply && psql "$DATABASE_URL" -Atc "select column_name, is_nullable from information_schema.columns where table_name='device_links' and column_name in ('secret_enc','expires_at') order by 1"
 ```
 Expected: `expires_at|YES` and `secret_enc|YES`. (`db:apply` without the env migrates the DEV db — the `eval` is mandatory.)
 
@@ -475,11 +484,11 @@ Expected: `expires_at|YES` and `secret_enc|YES`. (`db:apply` without the env mig
 - [ ] **Step 10: Duplicate-version check, then commit**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && git fetch -q origin && for b in $(git for-each-ref --format='%(refname:short)' refs/heads refs/remotes); do git ls-tree -r --name-only $b db/migration | grep -E '/V415__' | sed "s#^#$b: #"; done
-git add db/migration/deltas/V415__device_link_sealed_secret.sql apps/web/src/server/relay/crypto.ts apps/web/src/server/relay/__tests__/crypto.test.ts apps/web/src/server/relay/__tests__/enc-boundary.test.ts apps/web/src/lib/__tests__/device-link-kek-wiring.test.ts .env.example .github/workflows/ci.yml .github/workflows/e2e.yml .github/workflows/bench.yml .github/workflows/help-shots.yml
+cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && git fetch -q origin && for b in $(git for-each-ref --format='%(refname:short)' refs/heads refs/remotes); do git ls-tree -r --name-only $b db/migration | grep -E '/V417__' | sed "s#^#$b: #"; done
+git add db/migration/deltas/V417__device_link_sealed_secret.sql apps/web/src/server/relay/crypto.ts apps/web/src/server/relay/__tests__/crypto.test.ts apps/web/src/server/relay/__tests__/enc-boundary.test.ts apps/web/src/lib/__tests__/device-link-kek-wiring.test.ts .env.example .github/workflows/ci.yml .github/workflows/e2e.yml .github/workflows/bench.yml .github/workflows/help-shots.yml
 git commit -m "feat(device-links): sealed secret column and DEVICE_LINK_KEK envelope" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
-The only branch allowed to list V415 is this one.
+The only branch allowed to list V417 is this one.
 
 ---
 
@@ -487,7 +496,8 @@ The only branch allowed to list V415 is this one.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/device-links.ts` (DeviceLinkRow :24-34; `createDeviceLink` :117-163; `getActiveDeviceLink` :183-195; `resolveDeviceLinkToken` :249-263; add new functions after `createDeviceLink`)
-- Modify: `apps/web/src/server/usecases/__tests__/device-links.test.ts` (append a describe), `apps/web/src/server/usecases/__tests__/pass-scope-w2.test.ts:202-216`, `apps/web/src/app/score/[token]/__tests__/page.test.tsx` (KEK line only)
+- Modify: `apps/web/src/server/usecases/__tests__/device-links.test.ts` (append a describe), `apps/web/src/server/usecases/__tests__/pass-scope-w2.test.ts:202-216`, `apps/web/src/app/score/[token]/__tests__/page.test.tsx` (KEK line only), `apps/web/src/server/relay/__tests__/enc-boundary.test.ts` (the ownership `it`, moved here from T1)
+- Modify: `apps/web/src/lib/rate-limit.ts` (export `DEVICE_LINK_MINT_LIMIT` beside `MUTATION_LIMIT`, ~:86)
 - Modify: `apps/web/src/app/api/v1/fixtures/[id]/device-links/route.ts:11-29`
 - Create: `apps/web/src/app/api/v1/fixtures/[id]/device-links/reissue/route.ts`
 - Modify: `apps/web/src/server/api-v1/schemas.ts:1563-1576`, `apps/web/src/server/api-v1/openapi.ts:170-172`, `apps/web/src/server/api-v1/key-scopes.ts:332-334`; regenerate `openapi/v1.json`, `openapi/v1.public.json`
@@ -655,7 +665,18 @@ and in `pass-scope-w2.test.ts`, inside the `scoring.device_links` case after the
     );
 ```
 
-Also make the fourth enc-boundary test (Task 1 Step 6) part of this run.
+Add the ownership claim to `enc-boundary.test.ts`, inside `describe("*_enc columns never leave their owners")`. It lands here, not in Task 1, because this is the task that makes it true (pre-flight C1):
+
+```ts
+  it("outside __tests__, only device-links.ts names secret_enc — and it does", () => {
+    const pattern = new RegExp(`\\b(${DEVICE_LINK_COLUMNS.join("|")})\\b`);
+    const naming = walk(SRC)
+      .map((f) => relative(SRC, f))
+      .filter((f) => !f.split("/").includes("__tests__"))
+      .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
+    expect(naming).toEqual([DEVICE_LINK_OWNER]);
+  });
+```
 
 Append one more case to the `ensureDeviceLink` describe, for **owner ruling Q1: fail closed**. `createDeviceLink`, `resolveDeviceLinkToken` and `sql` are already imported by the file.
 
@@ -688,13 +709,13 @@ Append one more case to the `ensureDeviceLink` describe, for **owner ruling Q1: 
 
 - [ ] **Step 3: Run — expect FAIL**
 
-`cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets/apps/web && eval "$($S env --label sheets)" && rm -f "$TMPDIR/sheets.json" && rtk proxy pnpm exec vitest run src/server/usecases/__tests__/device-links.test.ts src/server/usecases/__tests__/pass-scope-w2.test.ts src/server/relay/__tests__/enc-boundary.test.ts --reporter=json --outputFile="$TMPDIR/sheets.json"; echo EXIT=$?`
+`cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets/apps/web && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label sheets)" && rm -f "$TMPDIR/sheets.json" && rtk proxy pnpm exec vitest run src/server/usecases/__tests__/device-links.test.ts src/server/usecases/__tests__/pass-scope-w2.test.ts src/server/relay/__tests__/enc-boundary.test.ts --reporter=json --outputFile="$TMPDIR/sheets.json"; echo EXIT=$?`
 Expected: collection error on the missing exports (then, once stubs exist, the null-expiry resolve fails with `LINK_EXPIRED`). Confirm `pending == 0` — a skipped DB suite is NOT a red.
 
-- [ ] **Step 4: Implement in `device-links.ts`.** Add imports `import { openWith, sealWith } from "@/server/relay/crypto";` and `import type { Tx } from "@/lib/db";` (merge with the existing `@/lib/db` import). Change `DeviceLinkRow.expires_at` to `string | null`. Replace `createDeviceLink` (:117-163) with:
+- [ ] **Step 4: Implement in `device-links.ts`.** Add imports `import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";` and `import type { Tx } from "@/lib/db";` (merge with the existing `@/lib/db` import). Change `DeviceLinkRow.expires_at` to `string | null`. Replace `createDeviceLink` (:117-163) with:
 
 ```ts
-/** A link is live until its expiry; a sealed link (V415) has none — it lives
+/** A link is live until its expiry; a sealed link (V417) has none — it lives
  *  until the fixture is over, which the SCORING path enforces (scorer sheets
  *  §4.3), not this clock. `new Date(null)` is the epoch, which is why this is
  *  a function and not an inline comparison (P1). */
@@ -737,7 +758,7 @@ function sealSecret(secret: string): Buffer {
 }
 
 function openSecret(enc: Uint8Array): string {
-  if (!/^[0-9a-f]{64}$/i.test(process.env.DEVICE_LINK_KEK ?? "")) {
+  if (!hasValidKek("DEVICE_LINK_KEK")) {
     throw new HttpError(503, KEK_MISSING, "DEVICE_LINK_KEK_MISSING");
   }
   return openWith("DEVICE_LINK_KEK", enc); // a tamper/wrong-key failure stays a 500 — it is not a config gap
@@ -872,7 +893,7 @@ export async function POST(req: Request, { params }: Ctx) {
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
       req.headers.get("x-real-ip") ??
       "unknown";
-    await rateLimit(`dlmint:${ip}`, MINT_LIMIT);
+    await rateLimit(`dlmint:${ip}`, DEVICE_LINK_MINT_LIMIT);
     const body = await parseBody(req, CreateDeviceLink);
     const auth = await requireResourceAuth(req, "fixture", id, "write");
     const { row, secret, minted } = await ensureDeviceLink(auth, id, body.label ?? null);
@@ -880,19 +901,24 @@ export async function POST(req: Request, { params }: Ctx) {
   });
 }
 ```
-(import `ensureDeviceLink` instead of `createDeviceLink`). Create `app/api/v1/fixtures/[id]/device-links/reissue/route.ts`:
+(import `ensureDeviceLink` instead of `createDeviceLink`). Delete the route's local `const MINT_LIMIT` (:10) and import the shared constant instead. Next 16 route files may export only handlers, so the constant lives in `lib/rate-limit.ts`, beside `MUTATION_LIMIT`:
+
+```ts
+/** Device-link mint AND reissue (a reissue IS a mint): one bucket, one number. */
+export const DEVICE_LINK_MINT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
+```
+
+Create `app/api/v1/fixtures/[id]/device-links/reissue/route.ts`:
 
 ```ts
 import { v1, reply, parseBody } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
-import { rateLimit } from "@/lib/rate-limit";
+import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { CreateDeviceLink } from "@/server/api-v1/schemas";
 import { createDeviceLink } from "@/server/usecases/device-links";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-// Shares the mint bucket: a reissue IS a mint.
-const MINT_LIMIT = { max: 10, windowSeconds: 60 };
 
 /** Revoke & reissue (scorer sheets §4.2): every live link for the fixture dies
  *  — including a printed sheet's QR — and a fresh sealed link is minted. */
@@ -903,7 +929,7 @@ export async function POST(req: Request, { params }: Ctx) {
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
       req.headers.get("x-real-ip") ??
       "unknown";
-    await rateLimit(`dlmint:${ip}`, MINT_LIMIT);
+    await rateLimit(`dlmint:${ip}`, DEVICE_LINK_MINT_LIMIT);
     const body = await parseBody(req, CreateDeviceLink);
     const auth = await requireResourceAuth(req, "fixture", id, "write");
     return reply(201, await createDeviceLink(auth, id, body.label ?? null));
@@ -912,10 +938,10 @@ export async function POST(req: Request, { params }: Ctx) {
 ```
 Before writing it, read `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/route.md` (Next 16.2) and confirm a static `reissue/` segment beside the dynamic `[linkId]/` resolves to the static one.
 
-- [ ] **Step 6: Contracts.** `schemas.ts`: `expires_at: z.string().nullable(),` in `DeviceLink`. `openapi.ts:170` summary becomes `"The fixture's device link (editor session only): re-shows the live sealed link (200) or mints one (201); never revokes a sealed link. Lives until the fixture is over."`; add after :172:
+- [ ] **Step 6: Contracts.** `schemas.ts`: `expires_at: z.string().nullable(),` in `DeviceLink`. `openapi.ts:170` summary becomes `"The fixture's device link (editor session only): re-shows the live sealed link (200, same secret) or mints one (201); never revokes a sealed link. Lives until the fixture is over. 503 DEVICE_LINK_KEK_MISSING when the server has no key."`. Its `errors` become `[402, 403, 404, 422, 429, 503]`. `schemas.ts:1574`'s `CreatedDeviceLink.secret` doc comment ("returned exactly once, at mint") is now false: replace it with `/** The dl_ secret. Re-shown unchanged by ensure (sealed, scorer sheets §4.1); replaced only by reissue. QR payload = /score/{secret}. */`. Add after :172:
 
 ```ts
-  { path: "/fixtures/{id}/device-links/reissue", method: "post", summary: "Revoke & reissue: every live device link for the fixture dies (including a printed scorer sheet's QR) and a fresh one is minted", tag: "device-links", request: S.CreateDeviceLink, response: S.CreatedDeviceLink, status: 201, errors: [402, 422, 429] },
+  { path: "/fixtures/{id}/device-links/reissue", method: "post", summary: "Revoke & reissue: every live device link for the fixture dies (including a printed scorer sheet's QR) and a fresh one is minted", tag: "device-links", request: S.CreateDeviceLink, response: S.CreatedDeviceLink, status: 201, errors: [402, 403, 404, 422, 429, 503] },
 ```
 `key-scopes.ts`: add `"POST /fixtures/:id/device-links/reissue",` after :334 (session-only list). Then:
 
@@ -936,8 +962,8 @@ Expected: both `openapi/*.json` modified. Run the route-coverage/key-scope suite
   - delete `requireSessionEditor` in `ensureDeviceLink` → killed by "refuses an API key".
   - `sealSecret` without its try/catch (a bare Error → 500) → killed by the Q1 case's first `MISSING` assertion.
   - `openSecret` without its key check → killed by the Q1 case's re-show assertion (openWith throws a plain Error).
-  - seal AFTER the revoke in `mintInTx` → killed by the Q1 case's "revoked nothing" assertion.
-  - `ensureDeviceLinks` passes `undefined` as competitionId to `requireFeature` → killed by the pass-scope-w2 sibling paywall.
+  - `mintInTx` inserts `secret_enc = null` → killed by "twice returns the SAME secret", because the reuse arm needs `secret_enc`. (Sealing after the revoke is NOT listed: `withTenant` is one transaction, so the 503 rolls the revoke back and that mutant is equivalent; pre-flight T2a.)
+  - `ensureDeviceLinks` passes `undefined` as competitionId to `requireFeature` → killed by the pass-scope-w2 case's mint on the PASSED competition (`sheet.get(sheetFixture)`): an org-wide Community check answers 402 there.
   - drop the `competitionId` comparison in `loadLinkableFixture` → killed by "a foreign fixture 404s".
 
 - [ ] **Step 9: Commit**
@@ -957,6 +983,8 @@ E2E owed by this task: `scorer-sheets-print-scan.spec.ts` "regression: a console
 - Create: `apps/web/src/components/v2/device-link-copy.ts`
 - Create: `apps/web/src/components/v2/__tests__/device-link-copy.test.ts`
 - Modify: `apps/web/src/components/v2/device-link-panel.tsx` (whole component body)
+- Create: `apps/web/src/components/v2/__tests__/device-link-panel.test.tsx` (Show QR vs reissue routing)
+- Modify: `apps/web/src/components/v2/scorepad/v3/__tests__/tap-hooks.test.tsx:445-468`: a forced TEST edit to follow the renamed control, at the same assertion strength (controller ruling). No production file under `scorepad/v3/**` is touched.
 - Modify: `apps/web/src/components/v2/stages-panel.tsx` (`attachmentWarning`, :1618; owner ruling Q4)
 - Modify: `apps/web/src/components/v2/__tests__/stages-panel-roster-drift.test.tsx` (append to the `attachmentWarning` describe, :177)
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` (keys beside the existing `dlink.*`), regenerate `apps/web/src/lib/i18n-keys.ts`
@@ -1015,7 +1043,7 @@ export function liveCopy(expiresAt: string | null, format: (iso: string) => stri
 | `dlink.reissueConfirm` | Yes, reissue | Oui, réémettre | Sí, volver a emitir | Ja, opnieuw uitgeven |
 | `dlink.keep` | Keep this QR | Garder ce QR | Mantener este QR | Deze QR houden |
 
-Delete `dlink.shownOnce` from all four dictionaries (its only reader is the paragraph Step 4 replaces; `grep -a -rn shownOnce apps/web/src apps/web/e2e` must come back empty apart from the dictionaries). Then `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run i18n:gen-keys && pnpm run i18n:check`.
+Delete `dlink.shownOnce` and `dlink.newLink` from all four dictionaries. `dlink.newLink`'s only reader is the active-branch button Step 4 replaces (device-link-panel.tsx:157), and `dlink.shownOnce`'s only reader is the paragraph Step 4 replaces; `grep -a -rn 'shownOnce\|newLink' apps/web/src apps/web/e2e` must come back empty apart from the dictionaries and the tap-hooks edit above). Then `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run i18n:gen-keys && pnpm run i18n:check`.
 
 - [ ] **Step 4: Panel.** In `device-link-panel.tsx`: `ActiveLink.expires_at: string | null`; `minted` state `expires_at: string | null`; rename `mint` → `show` (same POST to `/device-links`, which is now ensure); add:
 
@@ -1069,7 +1097,38 @@ Run it → FAIL. Then, in `attachmentWarning`, replace the final `return msg("pr
 ```
 Before relying on it, re-pin every caller of `rebuildStage` / `attachmentWarning`. Any other Rebuild entry point must build its body the same way, or the line is missing there; report what you find. Run the whole roster-drift test file → PASS.
 
-- [ ] **Step 5: Run** the copy test (PASS), `pnpm run i18n:check` (clean), `$S gate --label sheets` (lint+typecheck clean), and the existing hand-over e2e whole: `apps/web/e2e/device-links.spec.ts` (it clicks `device-link-mint`) — `$S rebuild --label sheets` first.
+- [ ] **Step 4c: Pin the panel's routing inside this task (pre-flight C3, A12).** Two tests:
+
+  1. **`tap-hooks.test.tsx:455-468`** asserts that exactly one `device-link-mint` button, with `dlink.newLink` text, shows once a link is active. The active branch no longer has that button, so edit the test to follow the renamed control at the same strength:
+     - EXACTLY ONE `device-link-show` button, whose text contains `tRuntime(messages, "dlink.showQr")`;
+     - zero `device-link-mint` buttons on that branch;
+     - exactly one `device-link-reissue` button, containing `dlink.reissue`.
+
+     Rename the test title to match, and keep the no-link test above it unchanged (`device-link-mint` + `dlink.create`).
+  2. **New `device-link-panel.test.tsx`.** It uses the same `@/lib/client-v1` mock idiom as `tap-hooks.test.tsx`. `apiV1` returns an active sealed link `{ id: "l1", expires_at: null, … }` for the GET, and records every POST URL.
+
+     ```tsx
+     it("Show QR re-shows through ensure (POST /device-links), never /reissue — a printed sheet survives a hand-over", async () => {
+       const island = renderIsland(DeviceLinkPanel, { fixtureId: "f1", scorerLabel: "Umpire", viewerPlan: "pro" as const });
+       await flush();
+       (propsOf(byTestId(island.tree(), "device-link-show")!).onClick as () => void)();
+       await flush();
+       expect(posts).toEqual(["/api/v1/fixtures/f1/device-links"]);
+     });
+     it("Revoke & reissue asks first, and only the confirm posts to /reissue", async () => {
+       const island = renderIsland(DeviceLinkPanel, { fixtureId: "f1", scorerLabel: "Umpire", viewerPlan: "pro" as const });
+       await flush();
+       (propsOf(byTestId(island.tree(), "device-link-reissue")!).onClick as () => void)();
+       expect(posts).toEqual([]);
+       (propsOf(byTestId(island.tree(), "device-link-reissue-confirm")!).onClick as () => void)();
+       await flush();
+       expect(posts).toEqual(["/api/v1/fixtures/f1/device-links/reissue"]);
+     });
+     ```
+
+     Take `flush`, `byTestId`, `posts` and the mock wiring from `device-score-pad-view-only.test.tsx`'s pattern (T5).
+
+- [ ] **Step 5: Run** the copy test, the two Step 4c files and the roster-drift file via vitest JSON (PASS). Then `pnpm run i18n:check` (clean) and `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh gate --label sheets` (lint and typecheck clean). **Pre-flight T3b:** no e2e references a `device-link-*` testid. The panel's one browser user is `e2e/walkthrough/scorepad-v3-r7-console-chrome.spec.ts:248-254`: it clicks the panel's first button on a fixture with NO link (the Create branch, unchanged), then reads `/score/` from the panel text. Run that whole file after `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label sheets`. It must stay green: the Create branch and the rendered URL text are both kept.
 
 - [ ] **Step 6: Visual** — at 320/768/1280 capture the panel in each state (no link; QR shown; live link with the three buttons; reissue confirmation) with `screenshotAtWidths` from a throwaway spec under `$TMPDIR` or via the Task 10 capture spec; `expectNoHorizontalScroll` at each width; read every string on screen in `en` and one other locale.
 
@@ -1077,7 +1136,8 @@ Before relying on it, re-pin every caller of `rebuildStage` / `attachmentWarning
   - `liveCopy` ignores null (always dated) → killed by "a sealed link (null expiry) says 'until the match is over'".
   - `attachmentWarning` appends the sheets line unconditionally → killed by Step 4b's negative case.
   - the sheets line removed → killed by Step 4b's positive case.
-  - panel's Show QR posts to `/reissue` → killed by Task 10 regression "hand-over after printing keeps the printed QR" (record that the killer lives in Task 10; run it there).
+  - panel's Show QR posts to `/reissue` → killed by Step 4c's "Show QR re-shows through ensure".
+  - the reissue button posts without the confirm step → killed by Step 4c's "asks first" (`posts` is not empty after the first click).
 
 - [ ] **Step 8: Commit** (`git add` the five source paths, the four `ui.json`, `apps/web/src/lib/i18n-keys.ts`) — message `feat(device-links): hand-over panel re-shows the same QR; explicit revoke & reissue`.
 
@@ -1221,6 +1281,9 @@ export async function carriedForwardFacts(
          select 1 from fixtures n
          where n.stage_id = f.stage_id and n.round_no = f.round_no + 1
            and (n.home_entrant_id is not null or n.away_entrant_id is not null)
+           -- C7: an ad-hoc match (addFixture, stages.ts:5776) lands at
+           -- max(round_no)+1 already seated; it is not the next pairing.
+           and coalesce(n.ext_key, '') not like 'adhoc-%'
       )) as swiss_next_round_seated,
       (s.status = 'complete') as stage_complete
     from fixtures f join stages s on s.id = f.stage_id
@@ -1284,6 +1347,8 @@ export async function seedStage(
   kind: RigStageKind,
   names: string[],
   config: Record<string, unknown> = {},
+  /** T7/T8: real roster members (inline `new_person`), so name resolution is exercised. */
+  opts: { entrantKind?: "individual" | "team"; members?: (name: string) => string[] } = {},
 ) {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -1300,7 +1365,12 @@ export async function seedStage(
   await createEntrants(
     auth,
     division.id,
-    names.map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+    names.map((n, i) => ({
+      kind: opts.entrantKind ?? ("individual" as const),
+      display_name: n,
+      seed: i + 1,
+      members: (opts.members?.(n) ?? []).map((full_name) => ({ new_person: { full_name } })),
+    })),
   );
   const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: kind, config });
   await generateStageFixtures(auth, stage!.id);
@@ -1369,8 +1439,10 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOrg } from "./_seed";
 import { decide, deviceFor, fixturesOf, pairNextSwissRound, seedStage, voidEvent } from "./_sheets-rig";
-import { unpairSwissRound } from "../stages";
+import { addFixture, unpairSwissRound } from "../stages";
 import { scoreEvent } from "../scoring";
+import { withTenant } from "@/lib/db";
+import { resultCarriedForward } from "../carried-forward";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1408,19 +1480,50 @@ describe.skipIf(!HAS_DB)("device-link refusal once a result is carried forward (
     await expect(voidEvent(auth, sf1.id, own)).resolves.toBeDefined();
   });
 
-  it("loser feed: carried only once the loser's TARGET side is occupied — slot mapping witnessed both ways", async () => {
+  it("loser feed: carried the INSTANT it is decided (onDecided seats the loser, P5/Q2); slot mapping witnessed both ways", async () => {
     const { auth } = await seedOrg("pro");
     const { stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
     const [f, target] = await fixturesOf(stage.id);
+    // Empty the target's AWAY side and point f's loser at it. onDecided's
+    // fillSlot (scoring.ts:660-668 → stages.ts:3544) seats the loser there at
+    // decide time, for any stage kind: carried immediately (controller ruling).
     await sql`update fixtures set away_entrant_id = null where id = ${target!.id}`;
     await sql`update fixtures set loser_to_fixture = ${target!.id}, loser_to_slot = 2 where id = ${f!.id}`;
     const device = await deviceFor(auth, f!.id);
     const own = await decide(device, f!.id);
-    // Target away side empty → not carried: the void passes, then re-decide.
+    const [seated] = await sql<{ away_entrant_id: string | null }[]>`
+      select away_entrant_id from fixtures where id = ${target!.id}`;
+    expect(seated!.away_entrant_id, "precondition: decide seated the loser").not.toBeNull();
+    await expect(voidEvent(device, f!.id, own)).rejects.toMatchObject(CARRIED);
+    // The differential for the slot mapping: empty the AWAY side (slot 2) and
+    // leave HOME filled. Not carried now, so the void passes. A mapping that
+    // read slot 2 as `home` would still say "filled" and 403 here.
+    await sql`update fixtures set away_entrant_id = null where id = ${target!.id}`;
     await expect(voidEvent(device, f!.id, own)).resolves.toBeDefined();
-    const again = await decide(device, f!.id);
-    await sql`update fixtures set away_entrant_id = ${target!.home_entrant_id} where id = ${target!.id}`;
-    await expect(voidEvent(device, f!.id, again)).rejects.toMatchObject(CARRIED);
+  });
+
+  it("swiss: an ad-hoc match after the LAST round does not carry that round (C7 — ext_key 'adhoc-')", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D"], { rounds: 1 });
+    const r1 = (await fixturesOf(stage.id)).filter((x) => x.round_no === 1 && x.home_entrant_id && x.away_entrant_id);
+    const device = await deviceFor(auth, r1[0]!.id);
+    const own = await decide(device, r1[0]!.id); // one board only: the stage stays open
+    await addFixture(auth, stage.id, { home_entrant_id: r1[1]!.home_entrant_id!, away_entrant_id: r1[1]!.away_entrant_id! });
+    const [adhoc] = await sql<{ round_no: number; ext_key: string }[]>`
+      select round_no, ext_key from fixtures where stage_id = ${stage.id} and ext_key like 'adhoc-%'`;
+    expect(adhoc, "precondition: the ad-hoc match sits at round_no + 1").toMatchObject({ round_no: 2 });
+    await expect(voidEvent(device, r1[0]!.id, own)).resolves.toBeDefined();
+  });
+
+  it("resultCarriedForward owns its status check: a scheduled fixture with a filled feed is NOT carried; decided is", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf2 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    const column = sf2.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = (select home_entrant_id from fixtures where id = ${sf2.id}) where id = ${sf2.winner_to_fixture}`;
+    expect(await withTenant(auth.orgId, (tx) => resultCarriedForward(tx, sf2.id))).toBe(false);
+    await sql`update fixtures set status = 'decided' where id = ${sf2.id}`;
+    expect(await withTenant(auth.orgId, (tx) => resultCarriedForward(tx, sf2.id))).toBe(true);
   });
 
   it("swiss: round N is carried while round N+1 is seated, and re-opens when it is unpaired", async () => {
@@ -1474,7 +1577,8 @@ import {
   RESULT_CARRIED_FORWARD,
   RESULT_CARRIED_FORWARD_MESSAGE,
   SETTLED_OPEN_STATUSES,
-  resultCarriedForward,
+  carriedForwardFacts,
+  isCarriedForward,
 } from "./carried-forward";
 ```
 
@@ -1486,9 +1590,14 @@ and inside `if (auth.via === "device_link") {`, directly after the `core.finaliz
     // device link may do nothing more with this fixture; corrections are the
     // organiser's. Evaluated LIVE (unpairing re-opens it), and only for a
     // settled fixture, so a live tap never pays for the query.
+    // ONE status gate on this path, and it is this one: the facts are read
+    // without resultCarriedForward's own status check, so neither guard
+    // covers for the other (pre-flight A15).
     if (SETTLED_OPEN_STATUSES.has(ctx.fixture_status)) {
-      const carried = await withTenant(auth.orgId, (tx) => resultCarriedForward(tx, fixtureId));
-      if (carried) throw new HttpError(403, RESULT_CARRIED_FORWARD_MESSAGE, RESULT_CARRIED_FORWARD);
+      const loaded = await withTenant(auth.orgId, (tx) => carriedForwardFacts(tx, fixtureId));
+      if (loaded && isCarriedForward(loaded.facts)) {
+        throw new HttpError(403, RESULT_CARRIED_FORWARD_MESSAGE, RESULT_CARRIED_FORWARD);
+      }
     }
 ```
 
@@ -1500,12 +1609,14 @@ Known, accepted window: this check runs before `appendEvent`'s fixture lock, so 
   - `isCarriedForward` → `return true` → killed by "empty case … may void".
   - `isCarriedForward` → `return false` → killed by the knockout case.
   - delete `winnerFeedFilled ||` → knockout case.
-  - delete `loserFeedFilled ||` → loser-feed case (second assertion).
-  - swap `when 1`/`when 2` in the loser CASE → loser-feed case (first assertion: the away side is empty, so a home-side read says "filled").
+  - delete `loserFeedFilled ||` → loser-feed case (the 403 assertion).
+  - swap `when 1`/`when 2` in the loser CASE → loser-feed case (the final assertion: home filled, away empty, so a swapped read says "filled" and 403s).
+  - drop the `ext_key not like 'adhoc-%'` line → killed by "an ad-hoc match after the LAST round".
   - delete `swissNextRoundSeated ||` → Swiss case (first assertion).
   - `n.round_no = f.round_no + 1` → `>= f.round_no` → Swiss case (the board's own round is seated, so the unpair assertion reds).
   - delete `stageComplete` → stage case.
-  - delete the `SETTLED_OPEN_STATUSES.has(...)` gate in scoring.ts (check every status) → killed by "a SCHEDULED fixture whose feed … still scores".
+  - delete the `SETTLED_OPEN_STATUSES.has(...)` gate in scoring.ts (check every status) → killed by "a SCHEDULED fixture whose feed … still scores". Not equivalent now: the scoring path reads the facts directly, with no inner status check.
+  - drop `SETTLED_OPEN_STATUSES.has(loaded.status) &&` from `resultCarriedForward` → killed by "resultCarriedForward owns its status check" (its first assertion).
   - move the check outside the `auth.via === "device_link"` block → killed by the knockout case's organiser-void assertion.
   Report which test killed each.
 
@@ -1541,6 +1652,8 @@ E2E owed: Task 5's `device-pad-carried-forward.spec.ts` drives this refusal from
 - [ ] **Step 1: Failing unit tests.** Append to `transport.test.ts`:
 
 ```ts
+import { readFileSync } from "node:fs"; // add if the file does not already import them
+import { join } from "node:path";
 import { CHROME_TERMINAL_CODES, terminalRefusalOf } from "../transport";
 
 describe("CHROME_TERMINAL_CODES (scorer sheets §4.5)", () => {
@@ -1553,7 +1666,7 @@ describe("CHROME_TERMINAL_CODES (scorer sheets §4.5)", () => {
     expect(terminalRefusalOf(null)).toBeNull();
   });
 
-  it("every chrome-terminal code is one scoring.ts can actually send", () => {
+  it("every chrome-terminal code is one the server declares (usecases/carried-forward.ts)", () => {
     const src = readFileSync(join(process.cwd(), "src/server/usecases/carried-forward.ts"), "utf8");
     for (const code of CHROME_TERMINAL_CODES) expect(src).toContain(`"${code}"`);
   });
@@ -1842,7 +1955,7 @@ Confirm `setFixtureStatusSql` / `setStageStatusSql` signatures at `e2e/helpers.t
   "device-pad-carried-forward.spec.ts",
 ```
 
-Run: `$S rebuild --label sheets && eval "$($S env --label sheets)"`, then the whole file with the Playwright command (Global Constraints), and `e2e-ci-wiring.test.ts` via vitest JSON.
+Run: `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label sheets && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label sheets)"`, then the whole file with the Playwright command (Global Constraints), and `e2e-ci-wiring.test.ts` via vitest JSON.
 
 - [ ] **Step 8: Mutation check**
   - `CHROME_TERMINAL_CODES` emptied → killed by the transport unit test AND the e2e (run the e2e too: it is the only killer of the host-effect mutants below).
@@ -1864,12 +1977,14 @@ Run: `$S rebuild --label sheets && eval "$($S env --label sheets)"`, then the wh
 - Create: `apps/web/src/components/v2/use-tab-return.ts`
 - Create: `apps/web/src/components/v2/scan-waiting.tsx`
 - Create: `apps/web/src/components/v2/__tests__/scan-waiting.test.tsx`
-- Modify: `apps/web/src/components/v2/scorepad/use-fixture-stream.ts:21` (`export const POLL_MS`)
-- Modify: `apps/web/src/components/v2/device-score-pad.tsx` (G1 effect :295-311 → `useTabReturn`; Confirm card; seeded mount; `PadEventIn.recorded_by`; dead copy by code)
+- Modify: `apps/web/src/components/v2/scorepad/use-fixture-stream.ts` (ADD `export { POLL_MS };` below the unchanged `const POLL_MS = 15_000;` at :21)
+- Modify: `apps/web/src/components/v2/__tests__/device-score-pad-freshness-floor.test.tsx` (:523/:530/:545 dead-screen expectations → localised copy)
+- Modify (as the Step 11 sweep forces, each at unchanged assertion strength): the `/score/` e2e specs listed in Step 11, `apps/web/e2e/scorepad-a11y-kit.ts`, `apps/web/e2e/gallery.capture.ts`
+- Modify: `apps/web/src/components/v2/device-score-pad.tsx` (G1 effect :295-322 → `useTabReturn`; Confirm card; seeded mount; `PadEventIn.recorded_by`; dead copy by code)
 - Modify: `apps/web/src/components/v2/__tests__/device-score-pad-view-only.test.tsx` (Confirm cases)
 - Modify: `apps/web/src/app/score/[token]/page.tsx` (whole data section + render)
 - Modify: `apps/web/src/app/score/[token]/__tests__/page.test.tsx` (append)
-- Modify: `apps/web/e2e/device-links.spec.ts` (the "reaches its own inner pad faster than the poll" test, ~:560-660)
+- Modify: `apps/web/e2e/device-links.spec.ts` (the "reaches its own inner pad faster than the poll" test, :525)
 - Modify: 4 × `ui.json`, regenerate `i18n-keys.ts`
 
 **Interfaces:**
@@ -1881,7 +1996,7 @@ Run: `$S rebuild --label sheets && eval "$($S env --label sheets)"`, then the wh
   - `fixtureTimeLabel(iso: string | null, tz: string, intlLocale: string): string | null`
   - `useTabReturn(onReturn: () => void, enabled: boolean): void`
   - `ScanWaiting({ home, away, meta, pollMs? }: { home: string; away: string; meta: string; pollMs?: number })`
-  - `export const POLL_MS = 15_000` (use-fixture-stream.ts)
+  - `POLL_MS` exported from use-fixture-stream.ts through a SEPARATE `export { POLL_MS };`. The declaration line stays `const POLL_MS = 15_000;`, because `e2e/realtime-propagation-kit.ts:48-51` `padPollMs()` parses it with `/^const POLL_MS\s*=/m` and throws on any other shape (pre-flight A21)
   - DeviceScorePad `fixture.match_ref?: string | null`, `fixture.scheduled_label?: string | null`; `PadEventIn.recorded_by?: string | null`; test id `scan-confirm`
 
 - [ ] **Step 1: Failing table test** `apps/web/src/lib/__tests__/scan-screen.test.ts`:
@@ -1937,11 +2052,14 @@ describe("deadLinkKey", () => {
     expect(deadLinkKey("LINK_EXPIRED")).toBe("device.dead.expired");
     expect(deadLinkKey("LINK_INVALID")).toBe("device.dead.invalid");
     expect(deadLinkKey(null)).toBe("device.dead.invalid");
+    // A prototype key is not a resolver code.
+    expect(deadLinkKey("constructor")).toBe("device.dead.invalid");
+    expect(deadLinkKey("toString")).toBe("device.dead.invalid");
   });
 });
 
 describe("fixtureTimeLabel", () => {
-  it("renders in the VENUE tz, not UTC — 23:30 Auckland is the previous UTC day", () => {
+  it("renders in the VENUE tz, not UTC — 10:30Z shows as 22:30 in Auckland", () => {
     const label = fixtureTimeLabel("2026-09-23T10:30:00Z", "Pacific/Auckland", "en-GB");
     expect(label).toContain("22:30");
     expect(fixtureTimeLabel(null, "UTC", "en-GB")).toBeNull();
@@ -1989,7 +2107,7 @@ const DEAD_KEY: Readonly<Record<string, MessageKey>> = {
 /** The resolver's codes → copy. The resolver's own messages are English and
  *  never reach a screen (P12). */
 export function deadLinkKey(code: string | null): MessageKey {
-  return (code !== null && DEAD_KEY[code]) || "device.dead.invalid";
+  return code !== null && Object.hasOwn(DEAD_KEY, code) ? DEAD_KEY[code]! : "device.dead.invalid";
 }
 
 /** "Wed 23 Sep, 22:30" in the fixture's venue tz. */
@@ -2007,7 +2125,7 @@ export function fixtureTimeLabel(iso: string | null, tz: string, intlLocale: str
 ```
 Run Step 1 → PASS.
 
-- [ ] **Step 3: Extract G1 verbatim.** Create `apps/web/src/components/v2/use-tab-return.ts` holding the effect from device-score-pad.tsx:295-311 — MOVE its comment block with it (the "Deliberately not an interval", "BOTH events", "visibilityState guard", SSR-guard paragraphs):
+- [ ] **Step 3: Extract G1 verbatim.** Create `apps/web/src/components/v2/use-tab-return.ts` holding the effect from device-score-pad.tsx:295-322 — MOVE its comment block with it (the "Deliberately not an interval", "BOTH events", "visibilityState guard", SSR-guard paragraphs):
 
 ```ts
 "use client";
@@ -2078,16 +2196,22 @@ describe("ScanWaiting (scorer sheets §4.5.2)", () => {
 Also add to `device-score-pad-view-only.test.tsx` a guard that the chrome itself never polls:
 
 ```tsx
-  it("the pad chrome registers no interval of its own (Waiting's poll must not leak into it)", () => {
+  it("the pad chrome registers no interval of its own (Waiting's poll must not leak into it)", async () => {
     const spy = vi.spyOn(globalThis, "setInterval");
-    renderIsland(DeviceScorePad, props("in_play", null));
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
+    try {
+      const island = renderIsland(DeviceScorePad, props("in_play", null));
+      await flush(); // effects run: a mount-time setInterval would be recorded here
+      island.rerender(props("in_play", null));
+      await flush();
+      expect(spy.mock.calls.map((c) => c[1]), "DeviceScorePad must not poll: the stream owns freshness").toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 ```
-Run → FAIL (module missing).
+This one is a guard, not a red-first test. `device-score-pad.tsx` has no `setInterval` today. Its killer is the mutant in Step 13: paste Waiting's loop into `DeviceScorePad` (`useEffect(() => { const id = setInterval(resync, POLL_MS); return () => clearInterval(id); }, [])`), and this test reds with `[15000]`. Show that red in the report (pre-flight T6d). Run the other Step 4 file → FAIL (module missing).
 
-- [ ] **Step 5: Implement Waiting.** `use-fixture-stream.ts:21` → `export const POLL_MS = 15_000;`. Create `apps/web/src/components/v2/scan-waiting.tsx`:
+- [ ] **Step 5: Implement Waiting.** In `use-fixture-stream.ts`, leave `const POLL_MS = 15_000;` (:21) exactly as it is and add `export { POLL_MS };` directly below it. Then check `padPollMs()` still parses it: run `apps/web/e2e/device-links.spec.ts` once, which calls it at module scope. Create `apps/web/src/components/v2/scan-waiting.tsx`:
 
 ```tsx
 "use client";
@@ -2166,6 +2290,11 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
   it("Start match sends core.start, then mounts the pad SEEDED with the post-start ledger", async () => {
     const island = renderIsland(DeviceScorePad, { ...props("scheduled", null), initialEvents: [] });
     const { apiV1 } = await import("@/lib/client-v1");
+    // Restore the file-level mock afterwards: vitest.config.ts has no
+    // mockReset/restoreMocks, so a replaced implementation would leak into
+    // every later test in this file (pre-flight A18).
+    const original = vi.mocked(apiV1).getMockImplementation()!;
+    onTestFinished(() => void vi.mocked(apiV1).mockImplementation(original));
     const started = { id: "ev-start", seq: 1, type: "core.start", payload: {}, recorded_at: "2026-09-23T10:31:00.000Z", voids_event_id: null, device_link_id: DEVICE_LINK_ID, recorded_by: "u1" };
     vi.mocked(apiV1).mockImplementation(((url: string, options?: { method?: string }) => {
       if (options?.method === "POST") return Promise.resolve({});
@@ -2226,6 +2355,7 @@ Run → FAIL.
     and drop the `!started &&` Start button from the old row (the row now only ever holds "Void my last entry", condition `canAct && scoring && home && away && lastOwnVoidable`).
   - Inner pad section condition gains `&& started`, and its `initialEvents={padSeed}`.
   - Dead copy by code: `setDead(err.code)` in both catch sites and render `msg(deadLinkKey(dead))` in the dead screen (the state now holds a code, not English).
+  - Forced test edit (controller ruling, A24): in `device-score-pad-freshness-floor.test.tsx`, the three expectations that read `refusal.message` / `REVOKED.message` on the dead screen (:523 `not.toContain`, :530 `toContain`, :545 precondition) now read the localised copy: `msgFor("en", deadLinkKey(refusal.code))`, using the fixture's own `code`. Their meaning is kept: the scorer is told the link is dead, and the live screen does not say so. The `message` fields at :510/:515 stay as the server's wire text.
 
 Run Steps 1/4/6 files + freshness-floor + view-only → PASS.
 
@@ -2267,6 +2397,17 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     expect(p.initialViewOnly).toBeNull();
     expect(p.fixture.match_ref).toMatch(/^R1/);
     expect(p.fixture.scheduled_label).not.toBeNull();
+  });
+
+  it("a SCHEDULED semi whose final was hand-seated → Confirm, not View-only (the page's own status gate, A15)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf2 = (await fixturesOf(stage.id)).find((f) => f.round_no === 1 && f.seq_in_round === 2)!;
+    const column = sf2.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = (select home_entrant_id from fixtures where id = ${sf2.id}) where id = ${sf2.winner_to_fixture}`;
+    const { secret } = await ensureDeviceLink(auth, sf2.id);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    expect((find(tree, DeviceScorePad)!.props as { initialViewOnly: string | null }).initialViewOnly).toBeNull();
   });
 
   it("a revoked link → localised dead screen, not the resolver's English", async () => {
@@ -2336,9 +2477,9 @@ Run Step 8 + the existing three page tests → PASS.
 
 - [ ] **Step 11: Re-point the e2e whose premise P8 removed.** In `apps/web/e2e/device-links.spec.ts`, the test "reaches its own inner pad faster than the poll" (search for that title) assumed the inner pad is mounted BEFORE Start. Re-point, never weaken: keep its realtime-join assertions and its "well inside POLL_MS" budget, but make the observed write a SECOND writer's (an organiser `POST /events` via `page.request` after the device has tapped Start and the pad has mounted) and assert THAT paints on the device's inner pad before `POLL_MS`. It still runs only under `E2E_REQUIRE_REALTIME=1`; say in the report whether you could run it.
 
-Then run every e2e file that opens `/score/…`, WHOLE, after `$S rebuild --label sheets`: `e2e/device-links.spec.ts`, `e2e/carrom-pad.spec.ts`, `e2e/scorepad-offline.spec.ts`, `e2e/scorepad-v3-cricket.spec.ts`, `e2e/scorepad-v3-partial-amend.spec.ts`, `e2e/scorepad-a11y-evidence.spec.ts`, `e2e/walkthrough/device-pad-stalled-pipeline.spec.ts`, `e2e/walkthrough/device-pad-foreign-void.spec.ts`, `e2e/walkthrough/console-device-live-sync.spec.ts`, `e2e/walkthrough/scorepad-v3-r7-console-chrome.spec.ts`, `e2e/walkthrough/device-pad-carried-forward.spec.ts` (use each file's own `--project`; read `playwright.config.ts`). Any spec that tapped inner-pad tiles on a SCHEDULED fixture must now tap `score-start-match` first — that is the new product flow, not a weakened assertion. `e2e/gallery.capture.ts` is a capture harness: update its scheduled-fixture step the same way.
+Then run every e2e file that opens `/score/…`, WHOLE, after `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label sheets`: `e2e/device-links.spec.ts`, `e2e/carrom-pad.spec.ts`, `e2e/scorepad-offline.spec.ts`, `e2e/scorepad-v3-cricket.spec.ts`, `e2e/scorepad-v3-partial-amend.spec.ts`, `e2e/scorepad-a11y-evidence.spec.ts`, `e2e/walkthrough/device-pad-stalled-pipeline.spec.ts`, `e2e/walkthrough/device-pad-foreign-void.spec.ts`, `e2e/walkthrough/console-device-live-sync.spec.ts`, `e2e/walkthrough/scorepad-v3-r7-console-chrome.spec.ts`, `e2e/walkthrough/device-pad-carried-forward.spec.ts`, `e2e/scorepad-skins.spec.ts`, `e2e/walkthrough/scorepad-v3-honest-recording.spec.ts`, and every spec that imports `e2e/scorepad-a11y-kit.ts` (use each file's own `--project`; read `playwright.config.ts`). This list is a floor, not the sweep (AGENTS 16). Before running, sweep by behaviour: `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets/apps/web && grep -a -rln "/score/\|score-start-match\|device-score-pad\|scorepad-a11y-kit" e2e`. Add every hit to the run and to the commit's Files if it changes. Any spec that tapped inner-pad tiles on a SCHEDULED fixture must now tap `score-start-match` first — that is the new product flow, not a weakened assertion. `e2e/gallery.capture.ts` is a capture harness: update its scheduled-fixture step the same way.
 
-- [ ] **Step 12: Visual (UI bar).** With `$S rebuild` done, capture Confirm, Waiting, View-only (carried, finalized) and Dead link at 320/768/1280 with `screenshotAtWidths`, assert `expectNoHorizontalScroll` at each, with a 43-character entrant name on Confirm and Waiting (the truncate/min-w-0 chain). Control-set diff at 320 vs 1280 (membership + order of buttons). Keep the capture in Task 10's spec (it owns the visual gate); here, look at them and write per-screen verdicts in the report.
+- [ ] **Step 12: Visual (UI bar).** With `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild` done, capture Confirm, Waiting, View-only (carried, finalized) and Dead link at 320/768/1280 with `screenshotAtWidths`, assert `expectNoHorizontalScroll` at each, with a 43-character entrant name on Confirm and Waiting (the truncate/min-w-0 chain). Control-set diff at 320 vs 1280 (membership + order of buttons). Capture them here from a throwaway spec under `$TMPDIR` (not committed), look at them, and write per-screen verdicts in this task's report. Task 10 commits the permanent visual spec.
 
 - [ ] **Step 13: Mutation check**
   - `scanScreen`: swap the first two `if (i.status === "scheduled")`/TBD checks → killed by "a TBD side while scheduled → Waiting".
@@ -2349,6 +2490,9 @@ Then run every e2e file that opens `/score/…`, WHOLE, after `$S rebuild --labe
   - Confirm: inner pad condition loses `&& started` → killed by "…NO inner pad yet".
   - `setPadSeed` removed → killed by "mounts the pad SEEDED".
   - page `resultCarriedForward` replaced with `false` → killed by the page's carried test.
+  - page computes `carried` from `isCarriedForward(facts)` without the status check → killed by "a SCHEDULED semi whose final was hand-seated → Confirm".
+  - a `setInterval` poll pasted into `DeviceScorePad` → killed by "the pad chrome registers no interval of its own" (T6d).
+  - `deadLinkKey` back to a plain `DEAD_KEY[code] ||` lookup → killed by the `"constructor"` assertion.
 
 - [ ] **Step 14: Commit** — every path in **Files** + `i18n-keys.ts`; message `feat(scan): Confirm, Waiting and View-only screens on the scoring link`.
 
@@ -2357,6 +2501,7 @@ Then run every e2e file that opens `/score/…`, WHOLE, after `$S rebuild --labe
 ### Task 7: Day selection, ordering and pagination (pure) + the candidate query
 
 **Files:**
+- Modify: `apps/web/src/lib/slot-label.ts:21`: re-export the type (`export type { SlotLabel };` below its `import type { SlotLabel } …`). `slot-label.ts` does not export it today, so `import type { SlotLabel } from "@/lib/slot-label"` would be TS2459 (pre-flight T7a).
 - Create: `apps/web/src/lib/scorer-sheets.ts`
 - Create: `apps/web/src/lib/__tests__/scorer-sheets.test.ts`
 - Create: `apps/web/src/server/usecases/scorer-sheets.ts` (query half only; T8 adds the builder)
@@ -2366,7 +2511,7 @@ Then run every e2e file that opens `/score/…`, WHOLE, after `$S rebuild --labe
 - Consumes: `resolveVenueTz` (`@/lib/tz`), `SlotLabel` (`@/lib/slot-label`), `entrantDisplayName` (`@/lib/entrant-name`). Tables: `fixtures.court_id → courts(venue_id, name, sort) → venues(name, sort)` (V367/V374); `fixtures.court_label` is the legacy fallback.
 - Produces (`@/lib/scorer-sheets`, client-safe):
   - `PRINTABLE_STATUSES: ReadonlySet<string>` = scheduled / in_play
-  - `interface SheetSide { name: string; kind: "individual" | "team" | "pair"; members: { name: string }[] }`
+  - `interface SheetSide { name: string; kind: "individual" | "team" | "pair"; members: { person_id: string; full_name: string }[] }`. This is the member shape `entrantDisplayName`'s `EntrantNameSource` reads (entrant-name.ts)
   - `interface SheetCandidate { id; status; scheduled_at: string | null; tz: string; division_name; round_no; seq_in_round; venue_name: string | null; venue_sort: number | null; court_name: string | null; court_sort: number | null; home: SheetSide | null; away: SheetSide | null; home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null }`
   - `localDateOf(iso: string, tz: string): string` (`YYYY-MM-DD`)
   - `selectSheetFixtures(c: readonly SheetCandidate[], day: string): SheetCandidate[]` (filtered AND ordered)
@@ -2391,7 +2536,7 @@ import {
   type SheetCandidate,
 } from "../scorer-sheets";
 
-const side = (name: string) => ({ name, kind: "individual" as const, members: [] });
+const side = (name: string) => ({ name, kind: "individual" as const, members: [] as { person_id: string; full_name: string }[] });
 let n = 0;
 function c(over: Partial<SheetCandidate> = {}): SheetCandidate {
   n += 1;
@@ -2445,12 +2590,15 @@ describe("selectSheetFixtures (scorer sheets §4.4)", () => {
   it("orders by venue, court, time, then round/seq; courtless rows last", () => {
     const rows = [
       c({ id: "none", court_name: null, court_sort: null, venue_name: null, venue_sort: null }),
+      // A court_label-only row: no venue and no court entity, but a court NAME.
+      // Only the courtless-last term puts it ahead of "none" (pre-flight T7e).
+      c({ id: "label", court_name: "Court A", court_sort: null, venue_name: null, venue_sort: null }),
       c({ id: "c2-late", court_name: "Court 2", court_sort: 1, scheduled_at: "2026-09-23T11:00:00Z" }),
       c({ id: "c1-late", court_name: "Court 1", court_sort: 0, scheduled_at: "2026-09-23T11:00:00Z" }),
       c({ id: "c1-early", court_name: "Court 1", court_sort: 0, scheduled_at: "2026-09-23T09:00:00Z" }),
       c({ id: "c2-early", court_name: "Court 2", court_sort: 1, scheduled_at: "2026-09-23T09:00:00Z" }),
     ];
-    expect(selectSheetFixtures(rows, "2026-09-23").map((r) => r.id)).toEqual(["c1-early", "c1-late", "c2-early", "c2-late", "none"]);
+    expect(selectSheetFixtures(rows, "2026-09-23").map((r) => r.id)).toEqual(["c1-early", "c1-late", "c2-early", "c2-late", "label", "none"]);
   });
 
   it("court SORT beats court NAME — the ordering differential", () => {
@@ -2530,7 +2678,7 @@ const BYE_KEY = "bracket.slot.bye";
 export interface SheetSide {
   name: string;
   kind: "individual" | "team" | "pair";
-  members: { name: string }[];
+  members: { person_id: string; full_name: string }[];
 }
 
 export interface SheetCandidate {
@@ -2657,7 +2805,11 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates (scorer sheets §4.4)", () => {
 
   it("loads names, slot labels and the DIVISION tz; the day lands on the local calendar", async () => {
     const { auth } = await seedOrg("pro");
-    const { competition, division, stage } = await seedStage(auth, "knockout", ["Nia Okafor", "Ben Lim", "C", "D"]);
+    // Real members, so name resolution runs: a one-member individual is named
+    // by its PERSON ("Nia Okafor"), not the entrant snapshot ("N. Okafor").
+    const { competition, division, stage } = await seedStage(auth, "knockout", ["N. Okafor", "B. Lim", "C", "D"], {}, {
+      members: (n) => [n === "N. Okafor" ? "Nia Okafor" : `${n} Player`],
+    });
     await sql`update schedule_settings set tz = 'Pacific/Auckland' where division_id = ${division.id}`;
     const fx = await fixturesOf(stage.id);
     const sf = fx.find((f) => f.round_no === 1)!;
@@ -2667,11 +2819,24 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates (scorer sheets §4.4)", () => {
     const rows = await loadSheetCandidates(auth, competition.id, "2026-09-23");
     const sfRow = rows.find((r) => r.id === sf.id)!;
     expect(sfRow.tz).toBe("Pacific/Auckland");
-    expect([sfRow.home?.name, sfRow.away?.name].filter(Boolean).length).toBe(2);
+    expect([sfRow.home?.name, sfRow.away?.name]).toContain("Nia Okafor");
+    expect([sfRow.home?.name, sfRow.away?.name]).not.toContain("N. Okafor");
     const finalRow = rows.find((r) => r.id === final.id)!;
     expect(finalRow.home).toBeNull();
     expect(finalRow.home_slot_label?.key).toBe("slot.winner_match");
     expect(await listSheetDays(auth, competition.id)).toEqual(["2026-09-23"]);
+  });
+
+  it("a team side carries its roster members' names (the sheet prints them under the team)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "league", ["Hawks", "Owls"], {}, {
+      entrantKind: "team",
+      members: (n) => [`${n} Two`, `${n} One`],
+    });
+    const [f] = await fixturesOf(stage.id);
+    await sql`update fixtures set scheduled_at = '2026-09-23T09:00:00Z' where id = ${f!.id}`;
+    const [row] = await loadSheetCandidates(auth, competition.id, "2026-09-23");
+    expect(row!.home!.members.map((m) => m.full_name)).toEqual([`${row!.home!.name} One`, `${row!.home!.name} Two`]);
   });
 
   it("is tenant-scoped: another org cannot load this competition", async () => {
@@ -2704,7 +2869,7 @@ import { sheetDays, type SheetCandidate, type SheetSide } from "@/lib/scorer-she
 interface EntrantJson {
   name: string;
   kind: SheetSide["kind"];
-  members: { name: string }[];
+  members: { person_id: string; full_name: string }[];
 }
 
 interface Row {
@@ -2747,7 +2912,8 @@ export async function loadSheetCandidates(
                  'name', e.display_name,
                  'kind', e.kind,
                  'members', coalesce((
-                   select json_agg(json_build_object('name', p.full_name) order by em.created_at)
+                   select json_agg(json_build_object('person_id', p.id, 'full_name', p.full_name)
+                                   order by em.squad_number nulls last, p.full_name)
                    from entrant_members em join persons p on p.id = em.person_id
                    where em.entrant_id = e.id), '[]'::json)) as j
         from entrants e
@@ -2798,14 +2964,14 @@ export async function listSheetDays(auth: AuthCtx, competitionId: string): Promi
   return sheetDays(await loadSheetCandidates(auth, competitionId));
 }
 ```
-Before running, open `usecases/entrants.ts` ~:240 and copy its exact member join (the column names `display_name`, `full_name` and the member ORDER above are this plan's reading — entrants.ts is the authority; match its ordering so the sheet lists members as the roster does). Run Step 3 → PASS.
+The member join and its order are copied from `usecases/entrants.ts:237-242` (`withMembers`: `order by em.squad_number nulls last, p.full_name`). `entrant_members` has no `created_at` (V213). Run Step 3 → PASS.
 
 - [ ] **Step 5: Mutation check**
   - `PRINTABLE_STATUSES` gains `decided` → killed by "keeps scheduled and in-play; drops …".
   - `isBye` → `false` → killed by "drops a bye".
   - `localDateOf` without `timeZone` → killed by the Auckland case's second assertion.
   - drop the `court_sort` term in `compare` → killed by "court SORT beats court NAME".
-  - drop the courtless-first term → killed by the ordering case (`none` sorts first on its empty venue name).
+  - drop the courtless-last term → killed by the ordering case's `label` row. Without the term, `none` ("") sorts ahead of `label` ("Court A"), since both have null venue and court sort.
   - drop `current.courtHeading !== heading` → killed by the pagination case.
   - number pages globally (`pageInCourt = index + 1`, `pagesInCourt = pages.length`) → killed by the Court 2 row of the pagination case.
   - `d >= today` → `d > today` → killed by the "today" assertion.
@@ -2829,7 +2995,9 @@ E2E owed: Task 10's golden journey prints from a real seeded schedule and assert
 - Modify: `apps/web/src/server/usecases/exports.ts` — `export` on `orgBranding` (no behaviour change)
 - Create: `apps/web/src/server/scorer-sheet-pdf.ts` (renderer)
 - Create: `apps/web/src/server/__tests__/scorer-sheet-pdf.test.ts`
-- Create: `apps/web/src/server/__tests__/_pdf-uris.ts`
+- Create: `apps/web/e2e/pdf-uris.ts` (the ONE PDF link/page parser, shared by this task's vitest files and Task 10's spec; pre-flight A30)
+- Create: `apps/web/src/server/__tests__/scorer-sheet-pdf-fonts.test.ts` (fonts, own file)
+- Create: `apps/web/src/server/__tests__/scorer-sheet-pdf-qr-null.test.ts` (`vi.mock` of `qrBuffer`, own file)
 - Modify: `apps/web/src/server/usecases/scorer-sheets.ts` (add `buildScorerSheet`)
 - Create: `apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/route.ts`
 - Create: `apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/__tests__/route.test.ts`
@@ -2847,14 +3015,14 @@ E2E owed: Task 10's golden journey prints from a real seeded schedule and assert
   - `rateLimit` + `__setRateLimitCounterForTests`, `resolveLocale`, `msgFor`, `intlLocaleFor`.
 - Produces:
   - `interface SheetRow { fixtureId; url; time; matchLine; home; away; homeTbd: boolean; awayTbd: boolean; homeMembers: string[]; awayMembers: string[] }`
-  - `interface SheetModel { header: DocModel; pages: { heading: string; rows: SheetRow[] }[]; labels: { eyebrow; scan; winner; score; signature: string } }`. Page numbering is in each page's `heading` and runs per court (owner ruling Q7). `header` is a DocModel with `kind: "scoresheet"`, `sections: []` and `pageBreaks: "auto"`, used ONLY for the shared masthead and title block. `meta.printedAt` is supplied by the caller, never `Date.now()` in the renderer.
+  - `interface SheetModel { header: DocModel; pages: { heading: string; rows: SheetRow[] }[]; labels: { eyebrow; scan; winner; score; signature; checkNames: string } }`. Page numbering is in each page's `heading` and runs per court (owner ruling Q7). `header` is a DocModel with `kind: "scoresheet"`, `sections: []` and `pageBreaks: "auto"`, used ONLY for the shared masthead and title block. `meta.printedAt` is supplied by the caller, never `Date.now()` in the renderer.
   - `renderScorerSheetPdf(model: SheetModel): Promise<Buffer>`
   - `buildScorerSheet(auth, competitionId: string, day: string, origin: string, locale: Locale, opts: { printedAt: string }): Promise<SheetModel>`. It throws `HttpError(422, …, "NO_FIXTURES_ON_DAY")` when nothing prints, the way `buildAdmitTicketsDoc` refuses an empty ticket run.
   - `POST /api/v1/competitions/{id}/exports/scorer-sheets` with JSON body `{ date: "YYYY-MM-DD" }`. Responses: 200 `application/pdf`, attachment, `private, no-store`, or 400 / 402 / 403 / 422 / 429 in the v1 envelope.
 
 - [ ] **Step 1: Decoder dependency.** Run `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm --filter <apps/web package name> add -D jsqr` (read `"name"` in `apps/web/package.json`). `pdftoppm` is for the local visual check only, never in vitest.
 
-- [ ] **Step 2: Failing renderer test.** `apps/web/src/server/__tests__/_pdf-uris.ts`:
+- [ ] **Step 2: Failing renderer test.** `apps/web/e2e/pdf-uris.ts` is the only copy. Vitest imports it as `../../../e2e/pdf-uris` from `src/server/__tests__`, and Task 10's spec as `../pdf-uris`. pdfkit 0.19.1 writes literal `/URI (…)`, confirmed by the pre-flight probe, so no hex branch is needed:
 
 ```ts
 // pdfkit writes link annotations as uncompressed dictionary objects, so their
@@ -2875,28 +3043,21 @@ Not pinned yet: how pdfkit encodes the URI string. If the first buffer shows `/U
 `apps/web/src/server/__tests__/scorer-sheet-pdf.test.ts`:
 
 ```ts
-import { beforeAll, describe, expect, it } from "vitest";
-import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
 import jsQR from "jsqr";
 import sharp from "sharp";
 import type { DocModel } from "@seazn/engine/exports";
 import { qrBuffer } from "../doc-theme";
 import { renderScorerSheetPdf, type SheetModel, type SheetRow } from "../scorer-sheet-pdf";
-import { pdfLinkUris, pdfPageCount } from "./_pdf-uris";
+import { pdfLinkUris, pdfPageCount } from "../../../e2e/pdf-uris";
 
-// fontDir() defaults to <cwd>/apps/web/assets/fonts, which does not exist when
-// vitest runs from apps/web. Unset, registerFonts SILENTLY falls back to
-// Helvetica and this suite would prove the wrong fonts. Point it at the real dir.
-beforeAll(() => {
-  process.env.DOC_FONT_DIR = resolve(import.meta.dirname, "../../../assets/fonts");
-});
-
-const header: DocModel = {
+export const header: DocModel = {
   kind: "scoresheet", title: "Cup", description: "Wednesday 23 September",
   meta: { printedAt: "2026-09-23 08:00" }, sections: [], pageBreaks: "auto",
 };
-const labels: SheetModel["labels"] = {
+export const labels: SheetModel["labels"] = {
   eyebrow: "SCORER SHEETS", scan: "Scan to score", winner: "Winner", score: "Score", signature: "Umpire",
+  checkNames: "Scan to score. Check names on screen before you start.",
 };
 const row = (i: number, over: Partial<SheetRow> = {}): SheetRow => ({
   fixtureId: `f${i}`, url: `https://example.test/score/dl_token${i}`, time: "10:30",
@@ -2904,7 +3065,7 @@ const row = (i: number, over: Partial<SheetRow> = {}): SheetRow => ({
   homeMembers: [], awayMembers: [], ...over,
 });
 const model = (pages: SheetRow[][]): SheetModel => ({
-  header, labels, pages: pages.map((rows, i) => ({ heading: `Court ${i + 1}`, rows })),
+  header, labels, pages: pages.map((rows, i) => ({ heading: `Court ${i + 1} · page 1 of 1`, rows })),
 });
 
 describe("renderScorerSheetPdf (scorer sheets §4.4)", () => {
@@ -2922,13 +3083,6 @@ describe("renderScorerSheetPdf (scorer sheets §4.4)", () => {
   it("a TBD side keeps its row and QR (D2) — the pen line is no reason to skip the link", async () => {
     expect(pdfLinkUris(await renderScorerSheetPdf(model([[row(1, { home: "Winner of R1·1", homeTbd: true })]])))).toHaveLength(1);
   });
-
-  it("is set in the brand fonts (doc-theme), not the Helvetica fallback", async () => {
-    const bytes = (await renderScorerSheetPdf(model([[row(1)]]))).toString("latin1");
-    expect(bytes).toMatch(/\/BaseFont\s*\/[A-Z]{6}\+Inter/);
-    expect(bytes).toMatch(/\/BaseFont\s*\/[A-Z]{6}\+BarlowCondensed/);
-    expect(bytes).not.toMatch(/\/BaseFont\s*\/Helvetica/);
-  });
 });
 
 describe("the shared qrBuffer, at the size the sheet prints it", () => {
@@ -2941,7 +3095,52 @@ describe("the shared qrBuffer, at the size the sheet prints it", () => {
   });
 });
 ```
-Check the subset-prefix pattern (`ABCDEF+Inter-Regular`) against the first real buffer and match what pdfkit actually writes. Also cross-check `doc-render.test.ts` in case it already asserts embedded fonts, and reuse its matcher. Run → FAIL.
+
+`vi.mock` hoists to the top of its FILE, so the font test and the null-QR test each get their own file (controller ruling; pre-flight T8). If they shared a file with the tests above, they would null `qrBuffer` for the decode test.
+
+`apps/web/src/server/__tests__/scorer-sheet-pdf-fonts.test.ts`. No mocks: it must see the real `registerFonts`.
+
+```ts
+import { beforeAll, expect, it } from "vitest";
+import { resolve } from "node:path";
+import { renderScorerSheetPdf } from "../scorer-sheet-pdf";
+import { header, labels } from "./scorer-sheet-pdf.test";
+
+// fontDir() defaults to <cwd>/apps/web/assets/fonts, which does not exist when
+// vitest runs from apps/web. Unset, registerFonts SILENTLY falls back to
+// Helvetica and this test would prove the wrong fonts.
+beforeAll(() => {
+  process.env.DOC_FONT_DIR = resolve(import.meta.dirname, "../../../assets/fonts");
+});
+
+it("is set in the brand fonts (doc-theme), not the Helvetica fallback", async () => {
+  const row = { fixtureId: "f1", url: "https://example.test/score/dl_x", time: "10:30", matchLine: "Open · R1·1",
+    home: "Nia", away: "Ben", homeTbd: false, awayTbd: false, homeMembers: [], awayMembers: [] };
+  const bytes = (await renderScorerSheetPdf({ header, labels, pages: [{ heading: "Court 1 · page 1 of 1", rows: [row] }] })).toString("latin1");
+  expect(bytes).toMatch(/\/BaseFont\s*\/[A-Z]{6}\+Inter/);
+  expect(bytes).toMatch(/\/BaseFont\s*\/[A-Z]{6}\+BarlowCondensed/);
+  expect(bytes).not.toMatch(/\/BaseFont\s*\/Helvetica/);
+});
+```
+
+`apps/web/src/server/__tests__/scorer-sheet-pdf-qr-null.test.ts`:
+
+```ts
+import { expect, it, vi } from "vitest";
+vi.mock("../doc-theme", async (orig) => ({ ...(await orig<typeof import("../doc-theme")>()), qrBuffer: vi.fn(async () => null) }));
+import { renderScorerSheetPdf } from "../scorer-sheet-pdf";
+import { header, labels } from "./scorer-sheet-pdf.test";
+
+it("a QR that cannot be generated fails the print — never a sheet nobody can scan", async () => {
+  const row = { fixtureId: "f1", url: "https://example.test/score/dl_x", time: "10:30", matchLine: "Open · R1·1",
+    home: "Nia", away: "Ben", homeTbd: false, awayTbd: false, homeMembers: [], awayMembers: [] };
+  await expect(renderScorerSheetPdf({ header, labels, pages: [{ heading: "Court 1 · page 1 of 1", rows: [row] }] }))
+    .rejects.toThrow(/QR generation failed for fixture f1/);
+});
+```
+Importing `header`/`labels` from the sibling test file makes vitest collect that file's `describe`s a second time, so it runs twice. If you see that, move `header`/`labels` into `src/server/__tests__/_sheet-fixtures.ts` and import them from there in all three files.
+
+The pdfkit probe run in pre-flight confirmed the subset-prefix pattern (`ABCDEF+Inter-Regular`) against the first real buffer and match what pdfkit actually writes. Also cross-check `doc-render.test.ts` in case it already asserts embedded fonts, and reuse its matcher. Run → FAIL.
 
 - [ ] **Step 3: Export the shared chrome from `doc-render.ts`.** This is a behaviour-preserving edit:
   - Add `export` to `const MARGIN`, `async function resolveLogo`, `function drawMasthead` and `function drawTitleBlock`.
@@ -2993,7 +3192,8 @@ export interface SheetModel {
   header: DocModel;
   pages: { heading: string; rows: SheetRow[] }[];
   /** No page counter here: numbering is per court and lives in each page's heading (owner ruling Q7). */
-  labels: { eyebrow: string; scan: string; winner: string; score: string; signature: string };
+  /** checkNames: the spec §4.4 page-header line, restored (controller ruling). */
+  labels: { eyebrow: string; scan: string; winner: string; score: string; signature: string; checkNames: string };
 }
 
 const QR = 104;
@@ -3026,6 +3226,9 @@ export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
     drawTitleBlock(doc, model.header, model.labels.eyebrow);
     doc.font(FONT.displayBold).fontSize(16).fillColor(PALETTE.night)
       .text(page.heading.toUpperCase(), MARGIN, doc.y, { width, lineBreak: false, ellipsis: true });
+    // Spec §4.4 page header, restored (controller ruling, pre-flight C5).
+    doc.font(FONT.bodyMed).fontSize(9).fillColor(PALETTE.slate)
+      .text(model.labels.checkNames, MARGIN, doc.y + 2, { width, lineBreak: false, ellipsis: true });
     let y = doc.y + 8;
     for (const r of page.rows) {
       doc.moveTo(MARGIN, y).lineTo(MARGIN + width, y).strokeColor(PALETTE.hairline).lineWidth(0.75).stroke();
@@ -3110,6 +3313,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     const rows = m.pages.flatMap((p) => p.rows);
     expect(rows.map((r) => r.fixtureId).sort()).toEqual(fx.map((f) => f.id).sort());
     expect(m.labels.scan).toBe(msgFor("fr", "sheets.pdf.scan"));
+    expect(m.labels.checkNames).toBe(msgFor("fr", "sheets.pdf.checkNames"));
     expect(m.header.kind).toBe("scoresheet");
     expect(m.pages[0]!.heading).toMatch(/page 1 sur \d+$/); // per-court numbering, Q7
     const final = rows.find((r) => r.fixtureId === fx.find((f) => f.round_no === 2)!.id)!;
@@ -3191,6 +3395,7 @@ export async function buildScorerSheet(
       winner: t("sheets.pdf.winner"),
       score: t("sheets.pdf.score"),
       signature: t("sheets.pdf.signature"),
+      checkNames: t("sheets.pdf.checkNames"),
     },
     pages: paginateSheet(rows, t("sheets.pdf.noCourt")).map((p) => ({
       heading: t("sheets.pdf.courtPage", { court: p.courtHeading ?? "", n: p.pageInCourt, of: p.pagesInCourt }),
@@ -3203,8 +3408,8 @@ export async function buildScorerSheet(
         away: r.away?.name ?? resolveSlotLabel(r.away_slot_label, t, "schedule.tbd"),
         homeTbd: r.home === null,
         awayTbd: r.away === null,
-        homeMembers: r.home && r.home.kind !== "individual" ? r.home.members.map((m) => m.name) : [],
-        awayMembers: r.away && r.away.kind !== "individual" ? r.away.members.map((m) => m.name) : [],
+        homeMembers: r.home && r.home.kind !== "individual" ? r.home.members.map((m) => m.full_name) : [],
+        awayMembers: r.away && r.away.kind !== "individual" ? r.away.members.map((m) => m.full_name) : [],
       })),
     })),
   };
@@ -3218,6 +3423,7 @@ export async function buildScorerSheet(
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/errors";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { baseUrl } from "@/lib/oauth";
 
 const h = vi.hoisted(() => ({
   auth: vi.fn(),
@@ -3250,7 +3456,10 @@ describe("POST /competitions/{id}/exports/scorer-sheets", () => {
     const res = await POST(req({ date: "2026-09-23" }), ctx);
     expect(res.status).toBe(200);
     expect(h.auth).toHaveBeenCalledWith(expect.any(Request), "competition", "c1", "write");
-    expect(h.build).toHaveBeenCalledWith(AUTH, "c1", "2026-09-23", "http://localhost:3000", "en", expect.objectContaining({ printedAt: expect.any(String) }));
+    // baseUrl() prefers OAUTH_BASE_URL / NEXT_PUBLIC_BASE_URL (oauth.ts:21-23), and
+    // vitest loads the root .env.local. Derive the expected origin; never pin it.
+    const expectedOrigin = new URL(baseUrl(req({ date: "2026-09-23" }))).origin;
+    expect(h.build).toHaveBeenCalledWith(AUTH, "c1", "2026-09-23", expectedOrigin, "en", expect.objectContaining({ printedAt: expect.any(String) }));
   });
 
   it("serves a private, uncached attachment (Review Focus 4)", async () => {
@@ -3353,15 +3562,17 @@ Check two things. First, that `requireResourceAuth`'s `"write"` scope means edit
 | `sheets.pdf.signature` | Umpire | Arbitre | Árbitro | Scheidsrechter |
 | `sheets.pdf.courtPage` (owner ruling Q7) | {court} · page {n} of {of} | {court} · page {n} sur {of} | {court} · página {n} de {of} | {court} · pagina {n} van {of} |
 | `sheets.pdf.noCourt` | No court assigned | Aucun terrain attribué | Sin pista asignada | Geen baan toegewezen |
+| `sheets.pdf.checkNames` (spec §4.4, restored) | Scan to score. Check names on screen before you start. | Scannez pour noter. Vérifiez les noms à l'écran avant de commencer. | Escanea para puntuar. Comprueba los nombres en pantalla antes de empezar. | Scan om te scoren. Controleer de namen op het scherm voordat je begint. |
 
-- [ ] **Step 10: Run** the Step 2, 5 and 7 files, plus the six doc-render/doc-theme/exports suites from Step 3, via vitest JSON: PASS, and `pending == 0` on the DB files. Then run `$S gate --label sheets` (clean) and the OpenAPI drift check (`git status --porcelain openapi/` empty after commit).
+- [ ] **Step 10: Run** the Step 2 files (all three), the Step 5 and Step 7 files, plus the six doc-render/doc-theme/exports suites from Step 3, via vitest JSON: PASS, and `pending == 0` on the DB files. Then run `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh gate --label sheets` (clean) and the OpenAPI drift check (`git status --porcelain openapi/` empty after commit).
 
 - [ ] **Step 11: Mutation check**
   - drop `link: r.url` → killed by "every row carries exactly one link".
   - skip TBD rows in the renderer → killed by the TBD case.
-  - skip `registerFonts(doc)` → killed by "is set in the brand fonts".
+  - skip `registerFonts(doc)` → killed by `scorer-sheet-pdf-fonts.test.ts`.
+  - drop the `checkNames` line from the renderer → NOT killable by a byte test (the fonts are embedded, so text is not greppable). Killed at model level by the builder's `labels.checkNames` assertion only if the renderer stops reading the label. Record it as review-checked, and confirm by eye in the Step 4 pdftoppm render.
   - set person names in `FONT.displayBold` → no automatic killer (both fonts embed). This is a documented glyph rule, so review checks it by reading `side()`. Record it as unkillable by test.
-  - `qrBuffer` null tolerated (draw nothing) → killed only by a forced-null case. Add `vi.mock("../doc-theme", …)` returning `null` from `qrBuffer` in a separate `it`, expecting `renderScorerSheetPdf` to reject. Add that case now and record it as the killer.
+  - `qrBuffer` null tolerated (the row is drawn without a QR) → killed by `scorer-sheet-pdf-qr-null.test.ts`.
   - `drawTitleBlock`'s default eyebrow changed → killed by the existing doc-render suites (title bytes differ) only if they snapshot. Say which suite killed it, or record it as a survivor.
   - builder uses `createDeviceLink` per row → killed by "a second build carries the SAME urls".
   - builder throws nothing on an empty day → killed by the 422 case.
@@ -3382,6 +3593,8 @@ E2E owed: Task 10 downloads this through the UI and opens a token taken from the
 - Create: `apps/web/src/components/v2/print-scorer-sheets.tsx`
 - Create: `apps/web/src/components/v2/__tests__/print-scorer-sheets.test.tsx`
 - Modify: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` (data ~:48-60; header block ~:170-176)
+- Create: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/__tests__/print-control.test.tsx` (the page's `printable` guard)
+- Modify (only if Step 4 forces it): `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/__tests__/venues-prop.test.tsx` (add mocks, never weaken)
 - Modify: 4 × `ui.json`, regenerate `i18n-keys.ts`
 
 **Interfaces:**
@@ -3629,7 +3842,30 @@ and in the header, turn `<div className="mb-4">` into `<div className="mb-4 flex
 | `sheets.error.noFixtures` | No matches to print on that day. | Aucun match à imprimer ce jour-là. | No hay partidos que imprimir ese día. | Geen wedstrijden om af te drukken op die dag. |
 | `sheets.error.generic` | The sheets could not be prepared. Try again. | Impossible de préparer les feuilles. Réessayez. | No se han podido preparar las hojas. Inténtalo de nuevo. | De formulieren konden niet worden gemaakt. Probeer het opnieuw. |
 
-- [ ] **Step 4: Run** the harness test and the page's existing `schedule/__tests__/venues-prop.test.tsx` (it may need `listSheetDays`/`hasFeature` mocked — add mocks, do not weaken its assertions) → PASS; gate clean.
+- [ ] **Step 3b: The page guard, inside this task (pre-flight C3).** Create `schedule/__tests__/print-control.test.tsx` by copying `venues-prop.test.tsx`'s mock block (:19-66) and its `find()` helper. Make two changes:
+  - `@/server/page-auth` returns a hoisted mutable `page` with `canEdit`;
+  - `@/server/usecases/scorer-sheets` is mocked as `{ listSheetDays: vi.fn(async () => ["2026-09-23"]) }`.
+
+  The competition mock gets a mutable `frozen`. Three cases:
+
+  ```tsx
+  it("an editor on a live competition gets the print control, opening at the default day", async () => {
+    state.canEdit = true; state.frozen = false;
+    const el = find(await renderPage(), PrintScorerSheets);
+    expect(el).not.toBeNull();
+    expect((el!.props as { defaultDay: string }).defaultDay).toBe("2026-09-23");
+  });
+  it("a member who cannot edit gets no print control", async () => {
+    state.canEdit = false; state.frozen = false;
+    expect(find(await renderPage(), PrintScorerSheets)).toBeNull();
+  });
+  it("a billing-frozen competition gets no print control (D8)", async () => {
+    state.canEdit = true; state.frozen = true;
+    expect(find(await renderPage(), PrintScorerSheets)).toBeNull();
+  });
+  ```
+
+- [ ] **Step 4: Run** the harness test, `print-control.test.tsx` and the page's existing `schedule/__tests__/venues-prop.test.tsx` (it may need `listSheetDays`/`hasFeature` mocked — add mocks, do not weaken its assertions) → PASS; gate clean.
 
 - [ ] **Step 5: Mutation check**
   - `useState(defaultDay ?? "")` → `useState(days[0])` → killed by "OPENS AT the default day".
@@ -3637,7 +3873,7 @@ and in the header, turn `<div className="mb-4">` into `<div className="mb-4 flex
   - `!allowed` branch removed → killed by "not allowed → the upgrade gate".
   - error shows the server message → killed by the 422 case's localised-text assertion.
   - `downloadBlob` skips `revokeObjectURL` → killed by the downloader case.
-  - page `printable` → `true` → no unit killer (server component); killed by Task 10's "a viewer sees no print control". Record.
+  - page `printable` → `true` → killed by `print-control.test.tsx` (the "cannot edit" and "billing-frozen" cases).
 
 - [ ] **Step 6: Commit** — paths + `i18n-keys.ts`; message `feat(schedule): print scorer sheets for a day`.
 
@@ -3663,18 +3899,15 @@ import { readFileSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 import { apiJson, competitionPath, expectNoHorizontalScroll, screenshotAtWidths, seedScoredDivision, TAG } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
+import { padPollMs } from "../realtime-propagation-kit";
+import { pdfLinkUris as pdfUris } from "../pdf-uris";
 
 // seedScoredDivision schedules from 2026-09-15 09:00Z at +90 min steps.
 const DAY = "2026-09-15";
-// The Waiting screen re-renders every POLL_MS (15 s, use-fixture-stream.ts);
-// e2e cannot import it, so the budget is that plus slack — keep them in step.
-const WAITING_BUDGET_MS = 25_000;
-
-function pdfUris(pdf: Buffer): string[] {
-  return [...pdf.toString("latin1").matchAll(/\/URI\s*\(((?:\\.|[^\\)])*)\)/g)].map((m) =>
-    m[1]!.replace(/\\([()\\])/g, "$1"),
-  );
-}
+// The Waiting screen re-renders every POLL_MS. Derived from its declaration
+// (padPollMs(), the kit's reader) plus one render's slack, never a literal, so
+// moving the constant moves this budget with it (AGENTS 20; pre-flight A23).
+const WAITING_BUDGET_MS = padPollMs() + 10_000;
 
 async function printDay(page: Page, schedulePath: string): Promise<Buffer> {
   await page.goto(schedulePath);
@@ -3684,12 +3917,19 @@ async function printDay(page: Page, schedulePath: string): Promise<Buffer> {
 }
 
 test("golden: print the day, scan a QR taken from the PDF bytes, confirm, score to a result", async ({ page, browser }) => {
+  // seedScoredDivision → { competitionId, divisionId, stageId } (helpers.ts:2177);
+  // competitionPath is async (request, competitionId, tail) (helpers.ts:1727).
   const seeded = await seedScoredDivision(page.request, [`Nia ${TAG}`, `Ben ${TAG}`, `Cai ${TAG}`, `Dev ${TAG}`], { decide: false });
-  const schedulePath = `${competitionPath(seeded)}/schedule`;
+  const schedulePath = await competitionPath(page.request, seeded.competitionId, "/schedule");
+  const listed = await apiJson<{ id: string; scheduled_at: string | null; status: string }[]>(
+    page.request, `/api/v1/divisions/${seeded.divisionId}/fixtures`,
+  );
+  const onDay = (listed.data ?? []).filter((f) => f.scheduled_at?.startsWith(DAY) && f.status === "scheduled");
   const pdf = await printDay(page, schedulePath);
   expect(pdf.subarray(0, 5).toString("latin1")).toBe("%PDF-");
   const links = pdfUris(pdf);
-  expect(links.length, "one QR per scheduled fixture on the day").toBe(/* fixtures seeded on DAY */ seeded.fixtureIds.length);
+  expect(onDay.length, "precondition: the seed scheduled fixtures on DAY").toBeGreaterThan(0);
+  expect(links.length, "one QR per scheduled fixture on the day").toBe(onDay.length);
   expect(pdfUris(await printDay(page, schedulePath)).sort(), "a reprint keeps every printed QR alive").toEqual([...links].sort());
 
   const device = await browser.newContext({ storageState: await consentedAnonymousState() });
@@ -3729,8 +3969,11 @@ test("regression: a console hand-over after printing re-shows the SAME QR; only 
 });
 
 test("regression: a member without edit rights sees no print control", async ({ browser }) => {
-  // Non-editor context on /schedule → expect(getByTestId("print-sheets")).toHaveCount(0),
-  // positive pair: the organiser's context on the same page → toHaveCount(1).
+  // Non-editor context on /schedule. FIRST a positive marker that the page
+  // rendered FOR THIS VIEWER (the schedule <h1> is visible; a redirect or an
+  // error page would have none), THEN expect(getByTestId("print-sheets")).toHaveCount(0).
+  // Without the marker, "no control" also passes on a 404 (pre-flight T10).
+  // Positive pair: the organiser's context on the same page → toHaveCount(1).
 });
 
 test("visual: Confirm, Waiting, View-only, Dead link and the print control at 320 / 768 / 1280", async ({ page, browser }) => {
@@ -3757,9 +4000,9 @@ Each commented body is a REQUIRED test body whose assertions are fixed above; th
   - `check` URI count equals the scheduled fixtures that day; POST again → `check` the same URI set.
   - Decide a knockout SF with a bearer taken from the PDF, then `core.void` it with that bearer → `check` 403 and code `RESULT_CARRIED_FORWARD`.
   - A Community org → `check` 402.
-  Run `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && eval "$($S env --label sheets)" && pnpm run test:smoke; echo EXIT=$?` and paste the new checks' lines.
+  Run `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label sheets)" && pnpm run test:smoke; echo EXIT=$?` and paste the new checks' lines.
 
-- [ ] **Step 5: Run** — `$S rebuild --label sheets`; the WHOLE spec file three times (AGENTS 8); `e2e-ci-wiring.test.ts` via vitest JSON; the smoke. Then `pdftoppm -r 80 -png <downloaded>.pdf $TMPDIR/sheets` and look at every page.
+- [ ] **Step 5: Run** — `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label sheets`; the WHOLE spec file three times (AGENTS 8); `e2e-ci-wiring.test.ts` via vitest JSON; the smoke. Then `pdftoppm -r 80 -png <downloaded>.pdf $TMPDIR/sheets` and look at every page.
 
 - [ ] **Step 6: Mutation check (journey level)**
   - `buildScorerSheet` → `createDeviceLink` per fixture → killed by the golden reprint assertion.
@@ -3777,7 +4020,7 @@ Each commented body is a REQUIRED test body whose assertions are fixed above; th
 ## Pre-merge checklist (owner actions — the plan never runs them)
 
 - [ ] **Owner ruling Q9 (2026-09-23):** the owner has set `DEVICE_LINK_KEK` (64 hex, `openssl rand -hex 32`) in `.env.local` and as a Fly secret on **stg and prod**. Nobody on this branch runs `fly` commands. The implementer confirms only by asking the owner; the local `.env.local` check stays count-only and never prints the value. Without it, the Q1 fail-closed path turns every print and hand-over into a 503 the moment this merges.
-- [ ] Flyway: `V415` is still unclaimed on every branch (Global Constraints loop) at merge time.
+- [ ] Flyway: `V417` is still unclaimed on every branch (Global Constraints loop) at merge time.
 - [ ] Owner ruling Q2's follow-up (console void does not empty the downstream slot) is tracked by the owner separately. It is NOT part of this branch.
 
 ## Self-Review
@@ -3789,6 +4032,7 @@ Each commented body is a REQUIRED test body whose assertions are fixed above; th
 - **Right answer ≠ the wrong one's constant:** Auckland day (T7), court sort vs name (T7), default day ≠ first option (T9), scheduled fixture with a hand-filled feed (T4), finalised vs carried copy (T6).
 - **Shared document system (T8):** the renderer reuses `doc-theme`'s `registerFonts`/`FONT`/`PALETTE`/`qrBuffer` and `doc-render`'s masthead/title block — no second QR helper, palette or font set; the route follows the timetable/tickets exports. Glyph coverage was MEASURED (fontkit, 2026-09-23): Inter covers Latin, Vietnamese, Greek, Cyrillic; Barlow Condensed covers Latin/Vietnamese only; neither covers Tamil, Devanagari, Arabic, Hebrew, Thai or CJK — person names are therefore set in Inter, and non-covered scripts print as missing glyphs (a known limit shared with every existing export).
 - **Owner rulings folded in (2026-09-23):** Q1 fail-closed 503 plus the `.env.example` generator line (T1/T2, tested with the negative pair: resolve-by-hash still works). Q2 zero undo window kept; the console-void gap is recorded, not built. Q3 no legacy-only branches: T3's dated "shown once" copy is gone. Q4 rebuild warning in T3 Step 4b. Q5 option A only. Q6 `matchRef`. Q7 per-court numbering (T7 test's Court 2 row is the differential against a global counter). Q8 fixed QR copy. Q9 pre-merge checklist. Q10 Known-limits kept.
+- **Pre-flight scan folded in (2026-09-23, controller rulings):** C1 (no red commit: enc-boundary ownership moved to T2), C2 (script path spelled out in every command), C3 (T3 panel routing and T9 page guard killed in-task), C6 (`hasValidKek`, `DEVICE_LINK_MINT_LIMIT`), C7 (ad-hoc Swiss fixtures excluded via `ext_key`), C8 (anchors), A12/A14/A15/A17/A18/A21/A23/A24/A25/A30/A32, T2a-d, T3b, T4 loser feed, T6d-f, T7a-e, T8 (split test files, `checkNames` restored, origin derived), T10 (real helper signatures, derived budget, viewer marker).
 - **Type consistency:** `EnsuredDeviceLink { row, secret, minted }` is the same in T2/T6/T8; `ViewOnlyReason` is defined in T5 and extended in T6, never redefined; `SheetCandidate` is shared by T7/T8; the wire code `RESULT_CARRIED_FORWARD` is pinned against its server source in T5.
 - **Accepted survivors, recorded:** the SQL ±1-day window (T7) is an optimisation, not a guard. The carried-forward check runs before the fixture lock (T4), so a Swiss pairing committing in the same instant can let one void through.
 - **Where the plan gives assertions rather than code:** T10's five non-golden test bodies and the golden test's pad taps. They depend on e2e helper return shapes and desk testids that Step 1 reads first. Every assertion is named, and review rejects a body that drops one.
