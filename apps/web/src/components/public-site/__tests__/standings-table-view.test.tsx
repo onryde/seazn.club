@@ -82,6 +82,7 @@ const view: TableViewT = {
       colour: null,
       cells: ["2", "2", "0", "4", "6"],
       tieBreakText: null,
+      qual: null,
       champion: true,
     },
     {
@@ -92,9 +93,11 @@ const view: TableViewT = {
       colour: null,
       cells: ["2", "0", "2", "-4", "0"],
       tieBreakText: "Level with Alpha — separated on GD",
+      qual: null,
       champion: false,
     },
   ],
+  qualification: null,
 };
 
 type Props = Parameters<typeof StandingsTableView>[0];

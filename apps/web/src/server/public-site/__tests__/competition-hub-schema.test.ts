@@ -289,3 +289,47 @@ describe("CompetitionHubDoc — squads, suspensions, division prose (division-pa
     expect(issuesOf(brokenMember)).toContainEqual({ path: "teams.0.members.0.suspendedRemaining", code: "invalid_type" });
   });
 });
+
+// Standings qualification status (spec 2026-09-22 §4.1, plan Task 5). Every
+// string is resolved by `buildQualificationView` before it reaches the
+// document; the schema's job is to keep the vocabulary closed and the cut
+// index a real place count. Mutants, each killed by the case named:
+//  13 `QualStatusKind` → `z.string()` .......... "a status outside the four is refused"
+//  14 `cutIndex` loses `.positive()` ........... "the cut index is a whole positive place count"
+//  15 `cutIndex` loses `.int()` ................ "the cut index is a whole positive place count"
+//  16 `qual` made `.optional()` ................ "qual and qualification are required keys"
+//  17 `qualification` made `.optional()` ....... "qual and qualification are required keys"
+//  18 `ifYouLose` loses `.nullable()` .......... the round-trip case (+ the premise below)
+describe("CompetitionHubDoc — standings qualification (spec 2026-09-22 §4.1)", () => {
+  it("the complete fixture really exercises it: a row WITH a status beside one without, and a cut line", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const rows = doc.tables[0]!.rows;
+    expect(rows.map((r) => r.qual?.status ?? null)).toEqual(["win_k", null]);
+    expect(rows[0]!.qual!.ifYouLose).toBeNull();
+    expect(doc.tables[0]!.qualification!.cutIndex).toBe(1);
+    expect(issuesOf(doc)).toEqual([]);
+  });
+
+  it("a status outside the four is refused: the marker and the legend know exactly four", () => {
+    const doc = structuredClone(validDoc() as CompetitionHubDocT);
+    (doc.tables[0]!.rows[0]!.qual as { status: string }).status = "maybe";
+    expect(issuesOf(doc)).toContainEqual({ path: "tables.0.rows.0.qual.status", code: "invalid_value" });
+  });
+
+  it("the cut index is a whole positive place count — 0 would draw the line above the first row", () => {
+    for (const bad of [0, -1, 1.5]) {
+      const doc = structuredClone(validDoc() as CompetitionHubDocT);
+      doc.tables[0]!.qualification!.cutIndex = bad;
+      expect(issuesOf(doc).map((i) => i.path), String(bad)).toEqual(["tables.0.qualification.cutIndex"]);
+    }
+  });
+
+  it("qual and qualification are required keys (null = no status): a builder that forgets them fails the parse", () => {
+    const noQual = structuredClone(validDoc() as CompetitionHubDocT);
+    delete (noQual.tables[0]!.rows[1] as Partial<(typeof noQual.tables)[0]["rows"][0]>).qual;
+    expect(issuesOf(noQual)).toContainEqual({ path: "tables.0.rows.1.qual", code: "invalid_type" });
+    const noTable = structuredClone(validDoc() as CompetitionHubDocT);
+    delete (noTable.tables[0] as Partial<(typeof noTable.tables)[0]>).qualification;
+    expect(issuesOf(noTable)).toContainEqual({ path: "tables.0.qualification", code: "invalid_type" });
+  });
+});

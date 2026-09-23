@@ -332,7 +332,11 @@ export function buildTableView(input: TableViewInput): TableViewT {
             rule: tieBreakRule(r.tieBreak.key, input.msg),
           })
         : null,
+      // Task 6 wires `buildQualificationView` in; until then no table carries
+      // a status, which the schema states as null (never an absent key).
+      qual: null,
       champion: input.championId === r.entrantId,
     })),
+    qualification: null,
   };
 }

@@ -245,6 +245,8 @@ export function tableRow(
     // by position, never by key.
     cells: ["2", "2", "0", "6"],
     tieBreakText: null,
+    // No qualification status unless a case asks for one (`over.qual`).
+    qual: null,
     champion: false,
     ...over,
   };
@@ -274,6 +276,7 @@ export function tableView(
     caption: "League",
     columns: [...COMPACT_COLUMNS],
     rows: [tableRow("alpha", 1), tableRow("beta", 2)],
+    qualification: null,
     updatedAt: "2026-09-05T12:00:00.000Z",
     // The division's own page, on its standings tab — carried BY the view, so
     // nothing downstream re-derives it.
