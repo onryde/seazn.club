@@ -373,6 +373,12 @@ const WALKTHROUGH_SPECS: string[] = [
   // registered handler against a stubbed document; only this sees a browser
   // deliver the event.
   "device-pad-stalled-pipeline.spec.ts",
+  // Device-link pad, owner-reported: the chrome's "Void my last entry" names
+  // the rally by the SERVER's row id, and the inner pad — which held it under
+  // its own client-minted key and polls strictly past its count — never
+  // reverted. Read off the PAD's own scoreboard, never the chrome's header
+  // (which was right all along). No unit test can see the two writers meet.
+  "device-pad-foreign-void.spec.ts",
 
   // Entrant rename (2026-09-22, reported from production: a pair swapped a
   // partner and kept the old partner's name). One organiser renames one pair
