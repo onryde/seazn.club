@@ -184,9 +184,14 @@ export const FIXTURE_COLS = [
  *  bronze match reads as a second final. They are NOT back at the old cost:
  *  listDivisionFixturesForBoard puts each on a row only when it is not its
  *  column default, so a round-robin row (the budget board's whole population)
- *  carries none of them. `ext_key` and `is_final` stay out: `roundRole()`
- *  never reads `isFinal`, and `ext_key` only serves page-playoff roles, which
- *  the board does not code. */
+ *  carries none of them. `ext_key` stays out: it only serves page-playoff
+ *  roles, which the board does not code.
+ *
+ *  Review M2 (same day): `is_final` came back too, on the same terms (sent
+ *  only when true — one key per bracket). `roundRole()` never reads it; it is
+ *  the presence test for all four V368 columns. A stage generated before V368
+ *  has every row at the defaults, so a coded stage with no `is_final` row is a
+ *  legacy one and keeps its plain R{n} rather than a guessed code. */
 /** P9: what the BOARD actually receives — identity, no derived names and no
  *  frozen legacy text. The board resolves display names client-side from the
  *  venues prop; sending them per row duplicated ~330 rows' worth of bytes.
@@ -202,7 +207,7 @@ export const BOARD_FIXTURE_COLS = [
   "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label",
   "scheduled_at", "venue", "court_label", "court_id", "venue_id",
   "officials", "status", "outcome", "schedule_source", "schedule_locked", "created_at",
-  "lane", "third_place", "conditional",
+  "lane", "is_final", "third_place", "conditional",
 ] as const;
 
 export interface FixtureRow {

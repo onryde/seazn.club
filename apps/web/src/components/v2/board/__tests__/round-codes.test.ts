@@ -33,27 +33,46 @@ function fx(over: Partial<BoardFixture> & { stage_id: string; round_no: number; 
 }
 
 /** An 8-entrant single elimination as `bracketToGen` persists it: QF r1 ×4,
- *  SF r2 ×2, final r3 seq 1, and the bronze match sharing the final's round
- *  as its seq 2 — lane null throughout. */
+ *  SF r2 ×2, final r3 seq 1 (`is_final`), and the bronze match sharing the
+ *  final's round as its seq 2 — lane null throughout. */
 function ko8(stage_id = "ko", thirdPlace = true): BoardFixture[] {
   return [
     ...[1, 2, 3, 4].map((s) => fx({ stage_id, round_no: 1, seq_in_round: s })),
     ...[1, 2].map((s) => fx({ stage_id, round_no: 2, seq_in_round: s })),
-    fx({ stage_id, round_no: 3, seq_in_round: 1 }),
+    fx({ stage_id, round_no: 3, seq_in_round: 1, is_final: true }),
     ...(thirdPlace ? [fx({ stage_id, round_no: 3, seq_in_round: 2, third_place: true })] : []),
   ];
 }
 
+/** A 16-entrant single elimination, one match per round (enough to name). */
+function ko16(stage_id = "ko"): BoardFixture[] {
+  return [1, 2, 3, 4].map((r) => fx({ stage_id, round_no: r, seq_in_round: 1, ...(r === 4 ? { is_final: true } : {}) }));
+}
+
 /** An 8-entrant double elimination with a bracket reset — WB 1-3, LB 7-10,
- *  GF 14 and its conditional reset 15 (the lane-offset numbering). */
+ *  GF 14 and its conditional reset 15 (the lane-offset numbering); both grand
+ *  final games carry `is_final`, as V368's column comment says. */
 function de8(stage_id = "de"): BoardFixture[] {
   return [
     ...[1, 2, 3].map((r) => fx({ stage_id, round_no: r, seq_in_round: 1, lane: "WB" })),
     ...[7, 8, 9, 10].map((r) => fx({ stage_id, round_no: r, seq_in_round: 1, lane: "LB" })),
-    fx({ stage_id, round_no: 14, seq_in_round: 1, lane: "GF" }),
-    fx({ stage_id, round_no: 15, seq_in_round: 1, lane: "GF", conditional: true }),
+    fx({ stage_id, round_no: 14, seq_in_round: 1, lane: "GF", is_final: true }),
+    fx({ stage_id, round_no: 15, seq_in_round: 1, lane: "GF", conditional: true, is_final: true }),
   ];
 }
+
+/** The SAME bracket as a stage generated before V368 (2026-08-17) reads today:
+ *  V368 added lane / is_final / third_place / conditional with no backfill, so
+ *  every older row sits at the column defaults — lane null, every flag false. */
+const legacy = (rows: BoardFixture[]): BoardFixture[] =>
+  rows.map((f) => {
+    const copy = { ...f };
+    delete copy.lane;
+    delete copy.is_final;
+    delete copy.third_place;
+    delete copy.conditional;
+    return copy;
+  });
 
 const codesOf = (fixtures: BoardFixture[], codes: ReturnType<typeof boardRoundCodes>) =>
   fixtures.map((f) => codes.get(f.id)?.code ?? null);
@@ -85,7 +104,7 @@ describe("boardRoundCodes", () => {
   });
 
   it("16 entrants: the first round is R16", () => {
-    const rows = [1, 2, 3, 4].map((r) => fx({ stage_id: "ko", round_no: r, seq_in_round: 1 }));
+    const rows = ko16();
     const codes = boardRoundCodes(rows, [{ id: "ko", kind: "knockout" }], en);
     expect(codesOf(rows, codes)).toEqual(["R16", "QF", "SF", "F"]);
   });
@@ -94,6 +113,54 @@ describe("boardRoundCodes", () => {
     const rows = de8();
     const codes = boardRoundCodes(rows, [{ id: "de", kind: "double_elim" }], en);
     expect(codesOf(rows, codes)).toEqual(["WB1", "WB2", "WB3", "LB1", "LB2", "LB3", "LB4", "GF", "GF2"]);
+  });
+
+  it("double elimination: the WB rounds carry the WINNERS' names, not the tournament's quarter/semi (review M1)", () => {
+    const rows = de8();
+    const codes = boardRoundCodes(rows, [{ id: "de", kind: "double_elim" }], en);
+    expect(rows.map((f) => codes.get(f.id)?.label)).toEqual([
+      en("bracket.round.winnersRound", { n: 1 }),
+      en("bracket.round.winnersRound", { n: 2 }),
+      en("bracket.round.winnersFinal"),
+      en("bracket.round.losersRound", { n: 1 }),
+      en("bracket.round.losersRound", { n: 2 }),
+      en("bracket.round.losersRound", { n: 3 }),
+      en("bracket.round.losersFinal"),
+      en("bracket.round.grandFinal"),
+      en("bracket.round.grandFinalReset"),
+    ]);
+  });
+
+  // Review M2 (2026-09-23). AGENTS.md class 19: a wrongly-seeded value is WORSE
+  // than an absent one. A pre-V368 row cannot say which match is the bronze or
+  // which lane a round is in, so any code computed from it is a guess dressed as
+  // a fact — the plain R{n} it had before is the honest answer.
+  it("a pre-V368 knockout (no is_final anywhere) keeps R{n} for the WHOLE stage — its bronze never reads as a second F", () => {
+    const old = legacy(ko8("old"));
+    const fresh = ko8("new");
+    const codes = boardRoundCodes([...old, ...fresh], [
+      { id: "old", kind: "knockout" },
+      { id: "new", kind: "knockout" },
+    ], en);
+    expect(codesOf(old, codes)).toEqual([null, null, null, null, null, null, null, null]);
+    // Positive pair: the same bracket WITH its role columns is coded as ever.
+    expect(codesOf(fresh, codes)).toEqual(["QF", "QF", "QF", "QF", "SF", "SF", "F", "3rd"]);
+  });
+
+  it("a pre-V368 double elimination (no lanes, no is_final) keeps R{n} — never one pooled lane read as R512…F", () => {
+    const old = legacy(de8("old"));
+    const codes = boardRoundCodes(old, [{ id: "old", kind: "double_elim" }], en);
+    expect(codesOf(old, codes)).toEqual(old.map(() => null));
+    expect(codes.size).toBe(0);
+  });
+
+  it("a legacy stage's placeholders keep their plain refs: 'Winner of R1·3', not a guessed code", () => {
+    const old = legacy(ko8("ko"));
+    const sf2 = { ...old.find((f) => f.id === "ko-r2-2")!, home_entrant_id: null };
+    const board = old.map((f) => (f.id === sf2.id ? sf2 : f));
+    const input = { [sf2.id]: { home: { key: "slot.winner_match", params: { round: 1, seq: 3 } } as SlotLabel } };
+    const feeds = withRoundCodeRefs(board, input, boardRoundCodes(board, [{ id: "ko", kind: "knockout" }], en));
+    expect(cardTitle(sf2, { e2: "Bea" }, feeds, en)).toBe("Winner of R1·3 vs Bea");
   });
 
   it("a league keeps no code (the chip stays R{n}); an unknown stage and a page playoff too", () => {
@@ -277,16 +344,83 @@ describe("roundLegendEntries", () => {
     expect(roundLegendEntries(rows.filter((f) => f.id === "ko-r3-1"), codes)).toEqual([{ code: "F", label: "Final" }]);
   });
 
-  it("orders a bigger bracket's opening round first, then a double elimination's lanes WB, LB, GF", () => {
-    const ko16 = [1, 2, 3, 4].map((r) => fx({ stage_id: "ko", round_no: r, seq_in_round: 1 }));
+  it("lists a single bracket's rounds first, then a double elimination's lanes in order WB, LB, GF", () => {
     const de = de8();
-    const board = [...de, ...ko16].reverse();
+    const board = [...de, ...ko16()].reverse();
     const codes = boardRoundCodes(board, [
       { id: "ko", kind: "knockout" },
       { id: "de", kind: "double_elim" },
     ], en);
     expect(roundLegendEntries(board, codes).map((e) => e.code)).toEqual([
       "R16", "QF", "SF", "F", "WB1", "WB2", "WB3", "LB1", "LB2", "LB3", "LB4", "GF", "GF2",
+    ]);
+  });
+
+  // Review M5 (2026-09-23): the order and the de-duplication, each pinned by a
+  // case where the fixture INPUT order differs from the expected legend order,
+  // and where the tempting shortcut gives a different answer.
+  it("orders by distance from the FINAL across brackets: an 8-knockout's QF follows a 16-knockout's R16", () => {
+    // Both are round 1 of their bracket. Ranked by round-in-lane instead of
+    // distance from the final they tie, and "Quarter-finals" sorts before
+    // "Round of 16" — so the input leads with the QFs to make that visible.
+    const small = ko8("small", false);
+    const big = ko16("big");
+    const stages = [
+      { id: "small", kind: "knockout" },
+      { id: "big", kind: "knockout" },
+    ];
+    const codes = boardRoundCodes([...small, ...big], stages, en);
+    const shown = [...small.filter((f) => f.round_no === 1), big[0]!];
+    expect(roundLegendEntries(shown, codes)).toEqual([
+      { code: "R16", label: "Round of 16" },
+      { code: "QF", label: "Quarter-finals" },
+    ]);
+    // The whole of both brackets, in EITHER input order: R16, QF, SF, F.
+    for (const board of [
+      [...small, ...big],
+      [...big, ...small],
+    ]) {
+      expect(roundLegendEntries(board, codes).map((e) => e.code)).toEqual(["R16", "QF", "SF", "F"]);
+    }
+  });
+
+  it("nl: the bronze match follows the final even where its NAME sorts first ('Derde plaats' < 'Finale')", () => {
+    const nl = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("nl", key, vars);
+    expect(nl("bracket.round.thirdPlace").localeCompare(nl("bracket.round.final"))).toBeLessThan(0);
+    const rows = [...ko8()].reverse(); // bronze and final first in the input
+    const codes = boardRoundCodes(rows, [{ id: "ko", kind: "knockout" }], nl);
+    expect(roundLegendEntries(rows, codes).map((e) => e.code)).toEqual([
+      nl("bracket.roundShort.quarter"),
+      nl("bracket.roundShort.semi"),
+      nl("bracket.roundShort.final"),
+      nl("bracket.roundShort.thirdPlace"),
+    ]);
+  });
+
+  it("the bracket reset follows its grand final, and GF/GF2 follow every LB round", () => {
+    const rows = [...de8()].reverse();
+    const codes = boardRoundCodes(rows, [{ id: "de", kind: "double_elim" }], en);
+    expect(roundLegendEntries(rows, codes).map((e) => e.code).slice(-3)).toEqual(["LB4", "GF", "GF2"]);
+  });
+
+  it("de-duplicates on code AND name: two knockouts' QF list once, but two rounds sharing one code in some locale both list", () => {
+    const twoKnockouts = [...ko8("a"), ...ko8("b")];
+    const codes = boardRoundCodes(twoKnockouts, [
+      { id: "a", kind: "knockout" },
+      { id: "b", kind: "knockout" },
+    ], en);
+    expect(roundLegendEntries(twoKnockouts, codes).map((e) => e.code)).toEqual(["QF", "SF", "F", "3rd"]);
+    // A dictionary that abbreviates the quarter- and semi-final alike ("KO"):
+    // one entry per CODE would silently explain only one of the two rounds.
+    const sharing = (key: MessageKey, vars?: Record<string, string | number>) =>
+      key === "bracket.roundShort.quarter" || key === "bracket.roundShort.semi" ? "KO" : en(key, vars);
+    const rows = ko8();
+    const shared = boardRoundCodes(rows, [{ id: "ko", kind: "knockout" }], sharing);
+    expect(roundLegendEntries(rows, shared)).toEqual([
+      { code: "KO", label: "Quarter-finals" },
+      { code: "KO", label: "Semi-finals" },
+      { code: "F", label: "Final" },
+      { code: "3rd", label: "Third place" },
     ]);
   });
 

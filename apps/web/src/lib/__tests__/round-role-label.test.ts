@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RoundRole } from "@seazn/engine/competition";
-import { laneRoundRank, roundRoleFor, roundRoleLabel, roundRoleShort } from "../round-role-label.ts";
+import { laneRoundRank, roundRoleBoardLabel, roundRoleFor, roundRoleLabel, roundRoleShort } from "../round-role-label.ts";
 import { msgFor } from "@/lib/messages-i18n";
 import { LOCALES } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -218,6 +218,118 @@ describe("roundRoleShort", () => {
           expect(code, `${role.kind}/${lane}`).not.toMatch(/\{[a-zA-Z]+\}/);
           expect(code, `${role.kind}/${lane}`).not.toMatch(/^bracket\./);
           expect(code.length, `${role.kind}/${lane}`).toBeGreaterThan(0);
+        }
+      }
+    });
+  }
+});
+
+// Review M1 (2026-09-23): the board's LONG name must be lane-aware exactly where
+// its short code is. `roundRole()` hands a winners'-bracket round the
+// single-elimination names — an 8-entrant double elimination's WB1/WB2 come back
+// as `quarter_final`/`semi_final` — so `roundRoleLabel` alone put "Semi-finals"
+// beside a "WB2" chip, and a screen reader announced a winners' round as THE
+// semi-final.
+describe("roundRoleBoardLabel", () => {
+  const en = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
+  type Lane = "WB" | "LB" | "GF" | null;
+  const labelAt = (
+    rows: readonly { round_no: number; lane: Lane }[],
+    round_no: number,
+    lane: Lane,
+    kind: string,
+    flags: { third_place?: boolean; conditional?: boolean } = {},
+  ) => {
+    const role = roundRoleFor(
+      rows,
+      { round_no, lane, is_final: false, third_place: flags.third_place ?? false, conditional: flags.conditional ?? false },
+      kind,
+    );
+    return {
+      role,
+      label: roundRoleBoardLabel(en, role, { lane, roundInLane: laneRoundRank(rows, lane, round_no).roundInLane }),
+    };
+  };
+  const de = (wbRounds: number, lbRounds: number) => [
+    ...Array.from({ length: wbRounds }, (_, i) => ({ round_no: i + 1, lane: "WB" as const })),
+    ...Array.from({ length: lbRounds }, (_, i) => ({ round_no: 20 + i, lane: "LB" as const })),
+    { round_no: 40, lane: "GF" as const },
+    { round_no: 41, lane: "GF" as const },
+  ];
+
+  it("8-entrant double elimination: WB rounds are the WINNERS' rounds, never the tournament's quarter/semi", () => {
+    const rows = de(3, 4);
+    const wb = [1, 2, 3].map((r) => labelAt(rows, r, "WB", "double_elim"));
+    expect(wb.map((x) => x.label)).toEqual([
+      en("bracket.round.winnersRound", { n: 1 }),
+      en("bracket.round.winnersRound", { n: 2 }),
+      en("bracket.round.winnersFinal"),
+    ]);
+    // The wrong answer this replaces: what the lane-blind name says for WB1/WB2.
+    expect(wb.map((x) => roundRoleLabel(en, x.role)).slice(0, 2)).toEqual([
+      en("bracket.round.quarter"),
+      en("bracket.round.semi"),
+    ]);
+  });
+
+  it("16-entrant double elimination: WB2 carries the SAME name as in an 8-entrant one (it is round 2 of the lane in both)", () => {
+    const rows = de(4, 6);
+    expect([1, 2, 3, 4].map((r) => labelAt(rows, r, "WB", "double_elim").label)).toEqual([
+      en("bracket.round.winnersRound", { n: 1 }),
+      en("bracket.round.winnersRound", { n: 2 }),
+      en("bracket.round.winnersRound", { n: 3 }),
+      en("bracket.round.winnersFinal"),
+    ]);
+  });
+
+  it("losers' lane and grand final keep the double-elim names the engine already gives them", () => {
+    const rows = de(3, 4);
+    for (const [r, lane, flags] of [
+      [20, "LB", {}],
+      [23, "LB", {}],
+      [40, "GF", {}],
+      [41, "GF", { conditional: true }],
+    ] as const) {
+      const { role, label } = labelAt(rows, r, lane, "double_elim", flags);
+      expect(label, `${lane}${r}`).toBe(roundRoleLabel(en, role));
+    }
+    expect(labelAt(rows, 23, "LB", "double_elim").label).toBe(en("bracket.round.losersFinal"));
+    expect(labelAt(rows, 41, "GF", "double_elim", { conditional: true }).label).toBe(
+      en("bracket.round.grandFinalReset"),
+    );
+  });
+
+  it("single elimination is unchanged: QF/SF/F/3rd read exactly roundRoleLabel's names", () => {
+    const ko8 = [1, 2, 3].map((round_no) => ({ round_no, lane: null }));
+    expect([1, 2, 3].map((r) => labelAt(ko8, r, null, "knockout").label)).toEqual([
+      en("bracket.round.quarter"),
+      en("bracket.round.semi"),
+      en("bracket.round.final"),
+    ]);
+    expect(labelAt(ko8, 3, null, "knockout", { third_place: true }).label).toBe(en("bracket.round.thirdPlace"));
+  });
+
+  for (const locale of LOCALES) {
+    it(`${locale}: every role in every lane resolves to a real dictionary string`, () => {
+      const lookup = (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars);
+      const roles: RoundRole[] = [
+        { kind: "round_of", entrants: 16 },
+        { kind: "quarter_final" },
+        { kind: "semi_final" },
+        { kind: "final" },
+        { kind: "winners_final" },
+        { kind: "losers_round", n: 2 },
+        { kind: "losers_final" },
+        { kind: "grand_final" },
+        { kind: "grand_final_reset" },
+        { kind: "third_place" },
+      ];
+      for (const role of roles) {
+        for (const lane of [null, "WB", "LB", "GF"] as const) {
+          const label = roundRoleBoardLabel(lookup, role, { lane, roundInLane: 1 });
+          expect(label, `${role.kind}/${lane}`).not.toMatch(/\{[a-zA-Z]+\}/);
+          expect(label, `${role.kind}/${lane}`).not.toMatch(/^bracket\./);
+          expect(label.length, `${role.kind}/${lane}`).toBeGreaterThan(0);
         }
       }
     });

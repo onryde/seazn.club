@@ -14,7 +14,13 @@ import { FixtureBlock } from "../fixture-block";
 import { boardRoundCodes } from "../round-codes";
 import type { BoardFixture } from "../types";
 
-const fx = (id: string, stage_id: string, round_no: number, seq_in_round: number, third_place = false): BoardFixture => ({
+const fx = (
+  id: string,
+  stage_id: string,
+  round_no: number,
+  seq_in_round: number,
+  flags: { third_place?: boolean; is_final?: boolean } = {},
+): BoardFixture => ({
   id,
   stage_id,
   division_id: "d1",
@@ -28,15 +34,16 @@ const fx = (id: string, stage_id: string, round_no: number, seq_in_round: number
   schedule_source: "none",
   schedule_locked: false,
   outcome: null,
-  ...(third_place ? { third_place: true } : {}),
+  ...(flags.third_place ? { third_place: true } : {}),
+  ...(flags.is_final ? { is_final: true } : {}),
 });
 
 const knockout = [
   fx("qf1", "ko", 1, 1),
   fx("qf2", "ko", 1, 2),
   fx("sf1", "ko", 2, 1),
-  fx("f", "ko", 3, 1),
-  fx("bronze", "ko", 3, 2, true),
+  fx("f", "ko", 3, 1, { is_final: true }),
+  fx("bronze", "ko", 3, 2, { third_place: true }),
 ];
 const league = [fx("l1", "lg", 1, 1), fx("l2", "lg", 2, 1)];
 const stages = [
@@ -105,6 +112,20 @@ describe("BoardRoundLegend", () => {
     expect(legendChip).toEqual(cardChip);
     // …and the legend chip is not the card's testid (e2e counts cards by it).
     expect(legend).not.toContain('data-testid="board-round-code"');
+  });
+
+  // Review M4 (2026-09-23): Tailwind's preflight sets `list-style: none`, and
+  // WebKit/VoiceOver then drops the list role unless it is explicit; and each
+  // entry's text must read "QF Quarter-finals", not the run-together
+  // "QFQuarter-finals" two adjacent spans produce (a CSS gap is visual only).
+  it("is an explicit, named list whose every entry reads as two words: 'QF Quarter-finals'", () => {
+    const codes = boardRoundCodes(knockout, stages, en);
+    const html = renderToStaticMarkup(<BoardRoundLegend fixtures={knockout} tray={[]} codes={codes} />);
+    expect(html).toMatch(/<ul [^>]*role="list"/);
+    expect(html).toMatch(/<ul [^>]*aria-label="Round codes"/);
+    // Tags stripped WITHOUT inserting anything: the text a reader actually gets.
+    const items = [...html.matchAll(/<li[^>]*>(.*?)<\/li>/g)].map((m) => m[1]!.replace(/<[^>]+>/g, ""));
+    expect(items).toEqual(["QF Quarter-finals", "SF Semi-finals", "F Final", "3rd Third place"]);
   });
 
   it("renders NOTHING when no shown card carries a code (a round-robin board)", () => {

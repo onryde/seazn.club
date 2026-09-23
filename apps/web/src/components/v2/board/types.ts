@@ -67,10 +67,18 @@ export interface BoardFixture {
    *  card's knockout round code (board/round-codes.ts). OPTIONAL and sent only
    *  when they say something (`listDivisionFixturesForBoard`): absent means
    *  the column default — lane null, flag false — which is every round-robin
-   *  row, so a league board pays no bytes for them. `is_final`/`ext_key` are
-   *  not sent at all: `roundRole()` never reads `isFinal`, and the one reader
-   *  of `ext_key` (page playoff) is not coded on the board. */
+   *  row, so a league board pays no bytes for them. `ext_key` is not sent at
+   *  all: its one reader (page playoff) is not coded on the board.
+   *
+   *  `is_final` is sent (when true) for a different reason: `roundRole()`
+   *  never reads it, but it is the PRESENCE test for all four columns. V368
+   *  added them with no backfill, so a stage generated before it has every row
+   *  at the defaults — and every stage generated since flags its final (the
+   *  single-elimination final, the grand-final games). A coded stage with no
+   *  `is_final` row is therefore a legacy one, and keeps its plain R{n}
+   *  (review M2 — board/round-codes.ts). One key per bracket, not per row. */
   lane?: "WB" | "LB" | "GF" | null;
+  is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
 }

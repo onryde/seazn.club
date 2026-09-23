@@ -15,7 +15,7 @@
 //
 // Pure and client-safe: the board computes this ONCE per fixture list
 // (schedule-board.tsx, memoised), never per card per render.
-import { laneRoundRank, roundRoleFor, roundRoleLabel, roundRoleShort } from "@/lib/round-role-label";
+import { laneRoundRank, roundRoleBoardLabel, roundRoleFor, roundRoleShort } from "@/lib/round-role-label";
 import type { MessageKey } from "@/lib/messages";
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -27,8 +27,9 @@ type Lane = "WB" | "LB" | "GF" | null;
 export interface BoardRoundCode {
   /** The chip text — "QF", "WB2". */
   code: string;
-  /** The round's full name — "Quarter-finals" — for the card's accessible
-   *  name, its tooltip and the legend. `roundRoleLabel`'s, verbatim. */
+  /** The round's full name — "Quarter-finals", "Winners' round 2" — for the
+   *  card's accessible name, its tooltip and the legend.
+   *  `roundRoleBoardLabel`'s: lane-aware wherever the code is. */
   label: string;
   /** Legend order, compared left to right: lane (single bracket, WB, LB, GF);
    *  then position — distance from the final for a single bracket (so a
@@ -51,6 +52,16 @@ const LANE_ORDER: Record<string, number> = { null: 0, WB: 1, LB: 2, GF: 3 };
  * only and `lane` is null for a league and a single-elimination bracket alike,
  * so a pooled rank puts a league's rounds in front of a knockout's and prints
  * its final as a semi-final (the defect `feeder-slot-label.ts` records).
+ *
+ * A stage generated before V368 (2026-08-17) is left uncoded — every one of its
+ * fixtures keeps `R{n}` (review M2). V368 added lane / is_final / third_place /
+ * conditional with no backfill, so such a stage reads as the column defaults
+ * throughout: its bronze match is indistinguishable from its final (a second
+ * "F") and a double elimination's three lanes collapse into one (its opening
+ * round an "R512"). A guessed code is worse than the plain one (AGENTS.md
+ * class 19). The discriminator is `is_final`: NOT NULL DEFAULT FALSE, and set
+ * by every bracket writer since (stages.ts) on the single-elimination final and
+ * the grand-final games — so a coded stage with no `is_final` row is legacy.
  */
 export function boardRoundCodes(
   fixtures: readonly BoardFixture[],
@@ -69,6 +80,8 @@ export function boardRoundCodes(
 
   const out = new Map<string, BoardRoundCode>();
   for (const [stageId, rows] of byStage) {
+    // Pre-V368: no role metadata to name its rounds by — see above.
+    if (!rows.some((f) => f.is_final === true)) continue;
     const kind = kindOf.get(stageId)!;
     const laneRows = rows.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
     // One role per distinct (lane, round, flags) — a round's matches share it.
@@ -83,9 +96,9 @@ export function boardRoundCodes(
         const { roundInLane, lastRoundInLane } = laneRoundRank(laneRows, lane, f.round_no);
         const role = roundRoleFor(
           laneRows,
-          // `is_final` is not on the board payload and `roundRole()` never
-          // reads it (round-role.ts destructures everything BUT `isFinal`).
-          { round_no: f.round_no, lane, is_final: false, third_place: thirdPlace, conditional },
+          // `roundRole()` never reads `is_final` (round-role.ts destructures
+          // everything BUT `isFinal`); it is only the legacy test above.
+          { round_no: f.round_no, lane, is_final: f.is_final === true, third_place: thirdPlace, conditional },
           kind,
         );
         const code = roundRoleShort(msg, role, { lane, roundInLane });
@@ -94,7 +107,7 @@ export function boardRoundCodes(
             ? null
             : {
                 code,
-                label: roundRoleLabel(msg, role),
+                label: roundRoleBoardLabel(msg, role, { lane, roundInLane }),
                 order: [
                   LANE_ORDER[String(lane)] ?? 0,
                   lane === null ? roundInLane - lastRoundInLane : roundInLane,
@@ -169,9 +182,15 @@ export interface RoundLegendEntry {
  * view), once, in bracket order. Empty when no card is coded — the legend then
  * renders nothing.
  *
- * Deduplicated on code AND name together: a `WB2` is the semi-final of an
- * 8-entrant double elimination but the quarter-final of a 16-entrant one, and
- * a competition board can show both — one entry would mislabel the other.
+ * Ordered by `BoardRoundCode.order`: lane, then distance from the final for a
+ * single bracket (so a 16-knockout's R16 precedes an 8-knockout's QF on one
+ * competition board), then the third-place match / bracket reset after the
+ * round it shares — and only then by name, so a locale whose "third place"
+ * sorts before its "final" (nl) still lists F first.
+ *
+ * Deduplicated on code AND name together: two knockouts' QF list once, but a
+ * locale that ever abbreviated two different rounds alike would list both
+ * rather than explain one of them with the other's name.
  */
 export function roundLegendEntries(
   fixtures: readonly Pick<BoardFixture, "id">[],

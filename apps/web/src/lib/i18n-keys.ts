@@ -1041,6 +1041,7 @@ export type DictionaryKey =
   | "bracket.round.semi"
   | "bracket.round.thirdPlace"
   | "bracket.round.winnersFinal"
+  | "bracket.round.winnersRound"
   | "bracket.roundShort.final"
   | "bracket.roundShort.grandFinal"
   | "bracket.roundShort.grandFinalReset"

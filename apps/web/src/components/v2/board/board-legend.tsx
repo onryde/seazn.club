@@ -96,17 +96,24 @@ export function BoardRoundLegend({
   const entries = roundLegendEntries([...fixtures, ...tray], codes);
   if (entries.length === 0) return null;
   return (
+    // `role="list"` is explicit (review M4): Tailwind's preflight sets
+    // `list-style: none`, and WebKit/VoiceOver then drops an unstyled list's
+    // role — and with it this aria-label.
     <ul
       data-testid="board-legend-rounds"
+      role="list"
       aria-label={msg("board.roundLegend.aria")}
       className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-[11px] leading-tight text-slate-600"
     >
       {/* Design review 2026-09-23: each entry is the card's own chip, then
-          its long name; entries are separated by gap alone — no dots. */}
+          its long name; entries are separated by gap alone — no dots. The
+          entry is plain inline flow, NOT a flex row, so the space between
+          chip and name is a real rendered one: its text reads "QF
+          Quarter-finals" to a screen reader, never "QFQuarter-finals" (a flex
+          gap is visual only, and a flex row drops the whitespace node). */}
       {entries.map((e) => (
-        <li key={`${e.code}|${e.label}`} className="inline-flex items-baseline gap-1">
-          <RoundCodeChip code={e.code} knockout />
-          <span>{e.label}</span>
+        <li key={`${e.code}|${e.label}`}>
+          <RoundCodeChip code={e.code} knockout /> <span>{e.label}</span>
         </li>
       ))}
     </ul>

@@ -325,7 +325,9 @@ describe("anti-drift: board card ref code vs feed label {ext} (P7/F1, required)"
         boardFixture("qf2", 1, 2),
         boardFixture("qf4", 1, 4),
         boardFixture("sf1", 2, 1),
-        boardFixture("f", 3, 1),
+        // `is_final` as a post-V368 generator writes it — a stage with no final
+        // flagged is a legacy one and keeps its plain refs (round-codes.ts).
+        { ...boardFixture("f", 3, 1), is_final: true },
       ];
       const board = [qf, sf, ...others];
       const codes = boardRoundCodes(board, [{ id: "st-1", kind: "knockout" }], lookup);

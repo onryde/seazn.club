@@ -125,6 +125,8 @@ describe.skipIf(!HAS_DB)("board round codes over a real generated bracket, read 
     expect(bronze.third_place).toBe(true);
     expect(bronze.round_no).toBe(final.round_no);
     expect(Object.prototype.hasOwnProperty.call(final, "third_place")).toBe(false);
+    // `is_final` — the V368 presence test — arrives on the final and ONLY there.
+    expect(board.filter((f) => f.is_final === true).map((f) => f.id)).toEqual([final.id]);
   });
 
   it("knockout of 16: the opening round is R16", async () => {
@@ -142,14 +144,24 @@ describe.skipIf(!HAS_DB)("board round codes over a real generated bracket, read 
     expect(got.filter((c) => c === "GF2")).toHaveLength(1);
     for (const f of board) expect(codes.get(f.id)?.code ?? null, f.id).toBe(expected.get(f.id));
     expect(board.every((f) => f.lane === "WB" || f.lane === "LB" || f.lane === "GF")).toBe(true);
+    // Review M1: a winners'-bracket round is named as one — never borrowing the
+    // single-elimination "Quarter-finals"/"Semi-finals" the engine role carries.
+    const wbLabels = new Set(board.filter((f) => f.lane === "WB").map((f) => codes.get(f.id)!.label));
+    expect(wbLabels).toEqual(
+      new Set([
+        en("bracket.round.winnersRound", { n: 1 }),
+        en("bracket.round.winnersRound", { n: 2 }),
+        en("bracket.round.winnersFinal"),
+      ]),
+    );
   });
 
-  it("a league keeps R{n}: no codes, and its rows ship none of the three round-role keys", async () => {
+  it("a league keeps R{n}: no codes, and its rows ship none of the four round-role keys", async () => {
     const { board, codes, expected } = await readBoth(await seedGeneratedStage("league", 4, {}));
     expect(codes.size).toBe(0);
     expect([...expected.values()].every((c) => c === null)).toBe(true);
     for (const f of board) {
-      for (const col of ["lane", "third_place", "conditional"]) {
+      for (const col of ["lane", "is_final", "third_place", "conditional"]) {
         expect(Object.prototype.hasOwnProperty.call(f, col), `${f.id} ${col}`).toBe(false);
       }
     }
@@ -173,5 +185,63 @@ describe.skipIf(!HAS_DB)("board round codes over a real generated bracket, read 
     for (const t of titleOf("SF")) expect(t).toMatch(/^Winner of QF·[1-4] vs Winner of QF·[1-4]$/);
     expect(titleOf("F")).toEqual([expect.stringMatching(/^Winner of SF·[12] vs Winner of SF·[12]$/)]);
     expect(titleOf("3rd")).toEqual([expect.stringMatching(/^Loser of SF·[12] vs Loser of SF·[12]$/)]);
+  });
+
+  // Review M2 (2026-09-23). V368 added lane / is_final / third_place /
+  // conditional with NO backfill, so a stage generated before 2026-08-17 reads
+  // back with every row at the column defaults. Reproduced here exactly that
+  // way — generate, then put the four columns back to their defaults — rather
+  // than with a hand-built fixture list, so the legacy shape is the one the
+  // board read really returns for it.
+  async function toPreV368(divisionId: string) {
+    await sql`
+      update fixtures set lane = null, is_final = false, third_place = false, conditional = false
+      where division_id = ${divisionId}`;
+  }
+
+  it("a PRE-V368 knockout with a bronze match keeps R{n} on every card — never a second F", async () => {
+    const seed = await seedGeneratedStage("knockout", 8, { thirdPlace: true });
+    await toPreV368(seed.divisionId);
+    const { board, codes, expected } = await readBoth(seed);
+    // The legacy shape arrived: none of the four keys on any row.
+    for (const f of board) {
+      for (const col of ["lane", "is_final", "third_place", "conditional"]) {
+        expect(Object.prototype.hasOwnProperty.call(f, col), `${f.id} ${col}`).toBe(false);
+      }
+    }
+    // The wrong answer the fallback exists to refuse: the engine, fed these
+    // rows, names BOTH round-3 matches the final.
+    expect([...expected.values()].filter((c) => c === "F")).toHaveLength(2);
+    expect(codes.size).toBe(0);
+  });
+
+  it("a PRE-V368 double elimination keeps R{n} — its three lanes are never read as one R512…F bracket", async () => {
+    const seed = await seedGeneratedStage("double_elim", 8, { bracketReset: true });
+    await toPreV368(seed.divisionId);
+    const { board, codes, expected } = await readBoth(seed);
+    expect(board.length).toBeGreaterThan(0);
+    // What a lane-blind read would print: every round named, none of them a WB/LB/GF code.
+    expect([...expected.values()].some((c) => c !== null && /^R\d+$/.test(c))).toBe(true);
+    expect(codes.size).toBe(0);
+  });
+
+  it("a PRE-V368 knockout's placeholders keep their plain refs over the REAL feed edges: 'Winner of R1·n'", async () => {
+    const { auth, divisionId } = await seedGeneratedStage("knockout", 8, {});
+    await toPreV368(divisionId);
+    const [board, stages] = await Promise.all([
+      listDivisionFixturesForBoard(auth, divisionId),
+      listStages(auth, divisionId),
+    ]);
+    const feedRows = await sql<FeedRow[]>`
+      select id, stage_id, round_no, seq_in_round, winner_to_fixture, winner_to_slot,
+             loser_to_fixture, loser_to_slot
+      from fixtures where division_id = ${divisionId}`;
+    const codes = boardRoundCodes(board, stages, en);
+    const feeds = withRoundCodeRefs(board, feedLabels(feedRows), codes);
+    const round2 = board.filter((f) => f.round_no === Math.min(...board.map((x) => x.round_no)) + 1);
+    expect(round2.length).toBe(2);
+    for (const f of round2) {
+      expect(cardTitle(f, {}, feeds, en)).toMatch(/^Winner of R1·[1-4] vs Winner of R1·[1-4]$/);
+    }
   });
 });

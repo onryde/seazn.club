@@ -157,18 +157,21 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
 
 /** The schedule board's fixture read (F1 follow-up, payload budget "gap
  *  15" — board-v3.spec.ts). Same query as listDivisionFixtures above, but
- *  projected onto BOARD_FIXTURE_COLS: the board never reads `ext_key` or
- *  `is_final`, so those are not selected at all. Callers that need them (the
- *  division page's bracket/stages panel) keep using listDivisionFixtures.
+ *  projected onto BOARD_FIXTURE_COLS: the board never reads `ext_key`, so it
+ *  is not selected at all. Callers that need it (the division page's
+ *  bracket/stages panel) keep using listDivisionFixtures.
  *
- *  `lane`/`third_place`/`conditional` ARE read now — they are what the card's
- *  knockout round code is computed from (board/round-codes.ts, 2026-09-23) —
- *  but each is put on a row only when it differs from its column default
- *  (lane null, flag false). Every round-robin row, i.e. nearly every row on
- *  the 5x66 budget board, carries none of the three keys and costs exactly
- *  what it did before; a single-elimination bracket pays for its one bronze
- *  match's flag, a double elimination for its lane. Absent means default —
- *  `BoardFixture` declares all three optional for exactly that reading. */
+ *  `lane`/`is_final`/`third_place`/`conditional` ARE read now — the card's
+ *  knockout round code is computed from them (board/round-codes.ts,
+ *  2026-09-23), and `is_final` is what tells a stage generated before V368
+ *  (no role metadata, keeps R{n}) from one generated since — but each is put
+ *  on a row only when it differs from its column default (lane null, flag
+ *  false). Every round-robin row, i.e. nearly every row on the 5x66 budget
+ *  board, carries none of the four keys and costs exactly what it did before;
+ *  a single-elimination bracket pays for its final's flag and its bronze
+ *  match's, a double elimination for its lanes and its grand-final flags.
+ *  Absent means default — `BoardFixture` declares all four optional for
+ *  exactly that reading. */
 export async function listDivisionFixturesForBoard(
   auth: AuthCtx,
   divisionId: string,
@@ -189,22 +192,28 @@ export async function listDivisionFixturesForBoard(
     // already determines it, and measured across this database every one of
     // 10,681 fixtures has it null — it was pure weight on every row.
     const rows = await tx<
-      (BoardFixtureRow & { lane: "WB" | "LB" | "GF" | null; third_place: boolean; conditional: boolean })[]
+      (BoardFixtureRow & {
+        lane: "WB" | "LB" | "GF" | null;
+        is_final: boolean;
+        third_place: boolean;
+        conditional: boolean;
+      })[]
     >`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
              f.scheduled_at, f.court_id,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.lane, f.third_place, f.conditional
+             f.lane, f.is_final, f.third_place, f.conditional
       from fixtures f
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
     // Omitted, not nulled: the RSC flight serialises an undefined value as
     // "$undefined" and a null/false as the key plus its value — only a key
     // that is not there costs nothing.
-    return rows.map(({ lane, third_place, conditional, ...row }) => ({
+    return rows.map(({ lane, is_final, third_place, conditional, ...row }) => ({
       ...row,
       ...(lane !== null ? { lane } : {}),
+      ...(is_final ? { is_final } : {}),
       ...(third_place ? { third_place } : {}),
       ...(conditional ? { conditional } : {}),
     }));

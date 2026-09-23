@@ -117,7 +117,7 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role columns only when set, ext_key/is_final never", () => {
+describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role columns only when set, ext_key never", () => {
   it("listDivisionFixtures (bracket/stages panel) still carries all five columns", async () => {
     const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
     const rows = await listDivisionFixtures(auth, divisionId);
@@ -131,22 +131,22 @@ describe.skipIf(!HAS_DB)("F1 follow-up — board fixture read: round-role column
   });
 
   // Schedule-board knockout round codes (2026-09-23): the board now READS
-  // three of the five — `lane`, `third_place`, `conditional` feed the card's
-  // round code (board/round-codes.ts) — so the contract changed from "never
-  // selected" to "carried only when it says something". `ext_key` and
-  // `is_final` stay off entirely: `roundRole()` never reads `isFinal`, and
-  // the page-playoff codes that would need `ext_key` are out of scope.
-  it("listDivisionFixturesForBoard carries lane/third_place/conditional when set, and never ext_key/is_final", async () => {
+  // four of the five — `lane`, `third_place`, `conditional` feed the card's
+  // round code (board/round-codes.ts), and `is_final` is the presence test
+  // that keeps a pre-V368 stage on its plain R{n} (review M2) — so the
+  // contract changed from "never selected" to "carried only when it says
+  // something". `ext_key` stays off entirely: only the page-playoff codes
+  // would need it, and they are out of scope.
+  it("listDivisionFixturesForBoard carries lane/is_final/third_place/conditional when set, and never ext_key", async () => {
     const { auth, divisionId, fixtureId } = await seedFixtureWithRoundRole();
     const rows = await listDivisionFixturesForBoard(auth, divisionId);
     const row = rows.find((f) => f.id === fixtureId);
     expect(row).toBeDefined();
     expect(row!.lane).toBe("WB");
+    expect(row!.is_final).toBe(true);
     expect(row!.third_place).toBe(true);
     expect(row!.conditional).toBe(true);
-    for (const col of ["ext_key", "is_final"] as const) {
-      expect(Object.prototype.hasOwnProperty.call(row, col), `row should not have "${col}"`).toBe(false);
-    }
+    expect(Object.prototype.hasOwnProperty.call(row, "ext_key"), 'row should not have "ext_key"').toBe(false);
     // Everything the board actually renders is still there.
     expect(row!.home_entrant_id).toBeDefined();
     expect(row!.status).toBeDefined();

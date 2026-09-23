@@ -4896,6 +4896,7 @@
   "bracket.round.semi": "Demi-finales",
   "bracket.round.final": "Finale",
   "bracket.round.winnersFinal": "Finale des vainqueurs",
+  "bracket.round.winnersRound": "Ronde des vainqueurs {n}",
   "bracket.round.losersRound": "Ronde des perdants {n}",
   "bracket.round.losersFinal": "Finale des perdants",
   "bracket.round.grandFinal": "Grande finale",

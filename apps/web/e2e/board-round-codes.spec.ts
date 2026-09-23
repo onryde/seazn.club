@@ -155,7 +155,7 @@ test.describe("schedule board — knockout round codes", () => {
     // GRID mount: the placed first quarter-final reads QF, its title the long name.
     const placedChip = page.getByTestId("board-tray").locator(`[data-fixture-id="${placedId}"]`);
     await expect(placedChip).toHaveCount(0);
-    await expect(chip(page, placedId)).toHaveText("QF");
+    await expect(chip(page, placedId)).toHaveText(fill("bracket.roundShort.quarter"));
     await expect(chip(page, placedId)).toHaveAttribute("title", fill("bracket.round.quarter"));
 
     // TRAY mount: the other seven, and never a generic "R{n}" among them.
@@ -174,8 +174,8 @@ test.describe("schedule board — knockout round codes", () => {
       ].sort(),
     );
     // The seam the bronze match rides on: `third_place` reached the chip.
-    await expect(chip(page, bronze.id)).toHaveText("3rd");
-    await expect(chip(page, final.id)).toHaveText("F");
+    await expect(chip(page, bronze.id)).toHaveText(fill("bracket.roundShort.thirdPlace"));
+    await expect(chip(page, final.id)).toHaveText(fill("bracket.roundShort.final"));
 
     // Placeholders: an empty semi seat names its feeder by CODE, not "R1·1".
     const sf1Card = page.locator(`[data-fixture-id="${sf1.id}"]`);
@@ -200,12 +200,19 @@ test.describe("schedule board — knockout round codes", () => {
     const legend = page.getByTestId("board-legend-rounds");
     await expect(legend).toBeVisible();
     await expect(legend).toHaveAttribute("aria-label", fill("board.roundLegend.aria"));
-    await expect(legend.locator("li")).toHaveText([
-      `${fill("bracket.roundShort.quarter")}${fill("bracket.round.quarter")}`,
-      `${fill("bracket.roundShort.semi")}${fill("bracket.round.semi")}`,
-      `${fill("bracket.roundShort.final")}${fill("bracket.round.final")}`,
-      `${fill("bracket.roundShort.thirdPlace")}${fill("bracket.round.thirdPlace")}`,
+    // Exposed as a LIST by its accessible name (review M4: an unstyled list
+    // loses its role in WebKit without the explicit `role="list"`).
+    await expect(page.getByRole("list", { name: fill("board.roundLegend.aria") })).toBeVisible();
+    // Each entry reads code, a real space, then the name — "QF Quarter-finals".
+    await expect(legend.getByRole("listitem")).toHaveText([
+      `${fill("bracket.roundShort.quarter")} ${fill("bracket.round.quarter")}`,
+      `${fill("bracket.roundShort.semi")} ${fill("bracket.round.semi")}`,
+      `${fill("bracket.roundShort.final")} ${fill("bracket.round.final")}`,
+      `${fill("bracket.roundShort.thirdPlace")} ${fill("bracket.round.thirdPlace")}`,
     ]);
+    expect(await legend.getByRole("listitem").first().textContent()).toBe(
+      `${fill("bracket.roundShort.quarter")} ${fill("bracket.round.quarter")}`,
+    );
     expect(await legend.textContent()).not.toContain("·");
     // Same chip as the card: the identical class attribute on both.
     const legendChipClass = await legend.locator('[data-round-code-chip="knockout"]').first().getAttribute("class");
@@ -227,7 +234,7 @@ test.describe("schedule board — knockout round codes", () => {
       await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
 
       // The placed card is on the board at every width (agenda on phones).
-      await expect(chip(page, placedId)).toHaveText("QF");
+      await expect(chip(page, placedId)).toHaveText(fill("bracket.roundShort.quarter"));
       const legend = page.getByTestId("board-legend-rounds");
       await expect(legend).toBeVisible();
       // The tray is a closed sheet below `lg`, but its codes are still listed.

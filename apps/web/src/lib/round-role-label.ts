@@ -115,6 +115,26 @@ export function roundRoleShort(msg: Msg, role: RoundRole, at: RoundPlacement): s
   }
 }
 
+/**
+ * Role -> the schedule board's LONG round name — the card's accessible name,
+ * its chip tooltip and the legend entry beside the short code. Lane-aware
+ * exactly where `roundRoleShort` is (review M1, 2026-09-23): a winners'-bracket
+ * round is "Winners' round {n}" (its final "Winners' final"), never the
+ * single-elimination "Quarter-finals"/"Semi-finals" `roundRole()` hands it —
+ * the chip already says WB2 because the winners' semi is not the tournament's,
+ * and the name beside it must not say otherwise. Every other role — single
+ * elimination, the losers' lane, the grand final — is `roundRoleLabel`'s,
+ * verbatim, which is what every other bracket surface prints.
+ */
+export function roundRoleBoardLabel(msg: Msg, role: RoundRole, at: RoundPlacement): string {
+  if (at.lane === "WB" && role.kind !== "third_place") {
+    return role.kind === "winners_final"
+      ? msg("bracket.round.winnersFinal")
+      : msg("bracket.round.winnersRound", { n: at.roundInLane + 1 });
+  }
+  return roundRoleLabel(msg, role);
+}
+
 /** Shape every bracket-fixture reader needs for `laneRoundRank` below —
  *  structural, so a `PublicFixture`/`FixtureRow`/`FixtureLike` row satisfies
  *  it without a cast. */
