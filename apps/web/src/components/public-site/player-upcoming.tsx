@@ -37,8 +37,9 @@ export interface PlayerUpcomingProps {
   locale: Locale;
 }
 
-/** The competition › division line. Another competition's row is accented, so
- *  the competition NAME is what stands out; this competition's stays muted. */
+/** The competition › division line. On another competition's row the WHOLE
+ *  line — competition, separator and division — takes the accent (semibold,
+ *  `text-accent-strong`); on this competition's rows it stays muted. */
 const WHERE = "min-w-0 truncate";
 const WHERE_OTHER = `${WHERE} font-semibold text-accent-strong`;
 
