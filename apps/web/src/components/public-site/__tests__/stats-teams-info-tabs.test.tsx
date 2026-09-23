@@ -41,7 +41,9 @@
 //     12 must not write a name-scoped anchor locator — the `<a>` is the row.
 //  6. The brief's Teams card says "seed chip when `seed`". Shipped as
 //     `seed !== null`, which keeps the chip for a zero-seeded entrant; the
-//     literal truthiness silently drops it. Tested both ways below.
+//     literal truthiness silently drops it. Tested both ways below. Loosened
+//     to `seed != null` with V416 (a division can hide its seeds), so an
+//     ABSENT seed is no chip either rather than "Seed {seed}".
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -636,6 +638,25 @@ describe("TeamsTab", () => {
     // is full of the word "Seed", so this is unreadable off the whole markup.
     expect(rowHtml(h, "mh-team-e2")).not.toContain("Seed");
     expect(rowHtml(h, "mh-team-e4")).not.toContain("Seed");
+  });
+
+  it("an ABSENT seed (a document without the field) is no chip — `!= null`, never `!== null` — beside a seeded card that keeps its chip", () => {
+    // V416: a division that hides its seeds is served `seed: null`, which the
+    // case above covers. The hub PAGE renders its cached document without
+    // re-parsing it (`getPublicCompetitionHub`), so an entry that reaches the
+    // tab WITHOUT the key reads `undefined` — and `undefined !== null` would
+    // print a chip with no number. Deleted after `hubDoc`, whose own parse
+    // (rightly) refuses the shape.
+    const doc = hubDoc({
+      teams: [
+        team("e1", "Southend Blue Blazers", null, null, { seed: 1 }),
+        team("e7", "Hadleigh Hawks", null, null),
+      ],
+    });
+    delete (doc.teams[1] as { seed?: unknown }).seed;
+    const h = render(doc);
+    expect(rowHtml(h, "mh-team-e1")).toContain("Seed 1");
+    expect(rowHtml(h, "mh-team-e7")).not.toContain("Seed");
   });
 
   it("the root, every grid cell and the name span carry the truncate chain", () => {

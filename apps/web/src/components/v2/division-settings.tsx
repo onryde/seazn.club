@@ -304,6 +304,7 @@ export function DivisionSettings({
   entrantModelSource,
   autoPosts,
   canAutoPost,
+  showSeeds,
   viewerPlan,
 }: {
   division: DivisionSettingsInfo;
@@ -344,6 +345,9 @@ export function DivisionSettings({
   autoPosts: boolean;
   /** news.auto entitlement (Pro) — off → the toggle shows the PlusReveal. */
   canAutoPost: boolean;
+  /** V416: seeds on the public site (divisions.show_seeds). Not a paid
+   *  layer — every organiser can hide their seeds. */
+  showSeeds: boolean;
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
@@ -419,6 +423,7 @@ export function DivisionSettings({
   const [squadNumbers, setSquadNumbers] = useState<boolean>(entrantModel.squadNumbers);
   const [captain, setCaptain] = useState<boolean>(entrantModel.captain);
   const [autoPostsOn, setAutoPostsOn] = useState<boolean>(autoPosts);
+  const [showSeedsOn, setShowSeedsOn] = useState<boolean>(showSeeds);
   // D5/P8 required-court-tags picker (design doc §"Division settings:
   // required-tags picker"). Staged locally, explicit Save — same shape as
   // the Entrants block above, not autosave-per-chip like venues-panel's
@@ -665,6 +670,25 @@ export function DivisionSettings({
         throw err;
       }
     }, msg("divset.news.saved"));
+  };
+
+  // V416: toggle divisions.show_seeds. Same optimistic-then-revert shape as
+  // auto_posts above; no entitlement gate. The server expires the division's
+  // public pages on a flip (patchDivision), so spectators see the change on
+  // their next load, not after a cache TTL.
+  const toggleShowSeeds = (next: boolean) => {
+    setShowSeedsOn(next); // optimistic
+    void run(async () => {
+      try {
+        await apiV1(`/api/v1/divisions/${division.id}`, {
+          method: "PATCH",
+          json: { show_seeds: next },
+        });
+      } catch (err) {
+        setShowSeedsOn(!next); // revert on failure
+        throw err;
+      }
+    }, msg("divset.publicPage.saved"));
   };
 
   // D5/P8 gap closed: PatchDivision (server/api-v1/schemas.ts) and COLS
@@ -1136,6 +1160,26 @@ export function DivisionSettings({
           {msg("divset.news.timing")}
         </p>
         <p className="text-[11px] text-slate-400">{msg("divset.news.note")}</p>
+      </Group>
+
+      <Group
+        title={msg("divset.publicPage.title")}
+        summary={showSeedsOn ? msg("divset.publicPage.seedsShown") : msg("divset.publicPage.seedsHidden")}
+      >
+        <label className="flex items-start gap-2 text-sm text-slate-600" data-testid="show-seeds-toggle">
+          <input
+            type="checkbox"
+            checked={showSeedsOn}
+            disabled={!canEdit || busy}
+            onChange={(e) => toggleShowSeeds(e.target.checked)}
+            aria-describedby={`show-seeds-help-${division.id}`}
+            className="mt-0.5"
+          />
+          {msg("divset.publicPage.seedsToggle")}
+        </label>
+        <p id={`show-seeds-help-${division.id}`} className="text-xs text-slate-500">
+          {msg("divset.publicPage.seedsHelp")}
+        </p>
       </Group>
 
       <Group title={msg("divset.sharing")} summary={msg("divset.sharingSummary")}>

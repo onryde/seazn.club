@@ -346,9 +346,10 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                                 {tm.name}
                               </span>
                             )}
-                            {/* `!== null`, never truthiness: seed 0 is a seed,
-                                and a singles entrant can be seeded. */}
-                            {tm.seed !== null ? (
+                            {/* `!= null`, never truthiness: seed 0 is a seed,
+                                and a singles entrant can be seeded. Loose, so
+                                an absent seed (V416 hides it) is no chip too. */}
+                            {tm.seed != null ? (
                               <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                                 <span className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
                                   {t(dict, "teams.seed", { seed: tm.seed })}
@@ -399,15 +400,15 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                               Spanish, "Cabeza de serie 1"). Neither can wrap
                               inside itself; the chip drops below the count
                               before either would. */}
-                          {members !== undefined || tm.seed !== null ? (
+                          {members !== undefined || tm.seed != null ? (
                             <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                               {members !== undefined ? (
                                 <span className="whitespace-nowrap text-xs text-ink-muted">
                                   {plural(dict, "teams.members", members.length, locale)}
                                 </span>
                               ) : null}
-                              {/* `!== null`, never truthiness: seed 0 is a seed. */}
-                              {tm.seed !== null ? (
+                              {/* `!= null`, never truthiness: seed 0 is a seed. */}
+                              {tm.seed != null ? (
                                 <span className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
                                   {t(dict, "teams.seed", { seed: tm.seed })}
                                 </span>

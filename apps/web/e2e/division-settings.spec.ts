@@ -1,5 +1,7 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, activeOrg } from "./helpers";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { TAG, apiJson, activeOrg, expectNoHorizontalScroll } from "./helpers";
+import { closeOpenContexts } from "./spectator-public-helpers";
+import { dictString, publicJson, spectator, uiString } from "./spectator-w2-kit";
 
 // v8 acceptance (spec 2026-07-13): the division Settings tab collects
 // general/format/sharing/danger; the format locks once fixtures exist (UI
@@ -26,6 +28,10 @@ async function seedRig(request: APIRequestContext) {
   );
   return { compSlug: comp.data!.slug, divisionId: div.data!.id, divSlug: div.data!.slug };
 }
+
+test.afterEach(async () => {
+  await closeOpenContexts();
+});
 
 test("settings tab: sections render, rename works, format locks with fixtures", async ({
   page,
@@ -126,4 +132,135 @@ test("cards wear their identity: sport banner on comps, sport-emoji avatar on di
   await expect(avatar).toBeVisible();
   await expect(avatar).not.toHaveText("T"); // never a letter monogram
   await expect(avatar.locator("img")).toHaveCount(0); // no logo uploaded — falls to the sport emoji, not a broken <img>
+});
+
+// V416 — `divisions.show_seeds`. An organiser turns "Show seed numbers on the
+// public page" OFF in the division's Settings tab, and an anonymous spectator
+// then sees no seed chip on the competition hub's Teams tab or the division
+// page's Entrants tab, and the entrants come back in NAME order — the seed
+// order would publish the seeding without a single number. The anonymous
+// entrants document is read too: the redaction is a server one, not CSS.
+//
+// Seed order is the REVERSE of alphabetical, so the order assertion cannot
+// pass on the seed sort. The positive pair runs first on the SAME pages: the
+// chips are really there while the setting is on, so "no chip" afterwards is
+// the setting and not a page that never drew one.
+test("show seeds OFF: no seed chip on the public Teams and Entrants tabs, and the field reads alphabetically", async ({
+  page,
+  request,
+  browser,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const org = await activeOrg(page);
+  const rig = await seedRig(request);
+  const SEEDED = [
+    { name: "Zara Top", seed: 1 },
+    { name: "Mo Middle", seed: 2 },
+    { name: "Abe Bottom", seed: 3 },
+  ];
+  const created = await apiJson(
+    request,
+    `/api/v1/divisions/${rig.divisionId}/entrants`,
+    "POST",
+    SEEDED.map((e) => ({ kind: "individual", display_name: e.name, seed: e.seed })),
+  );
+  expect(created.status, JSON.stringify(created.error)).toBeLessThan(300);
+  const bySeed = SEEDED.map((e) => e.name);
+  const byName = [...bySeed].sort();
+  expect(byName, "premise: the two orders disagree").not.toEqual(bySeed);
+
+  const hubUrl = `/shared/${org.slug}/${rig.compSlug}?tab=teams`;
+  const entrantsUrl = `/shared/${org.slug}/${rig.compSlug}/${rig.divSlug}?tab=entrants`;
+  const apiPath = `/api/v1/public/orgs/${org.slug}/competitions/${rig.compSlug}/divisions/${rig.divSlug}/entrants`;
+  /** A spectator's view of both pages: which of OUR names appear, in DOM
+   *  order, and every seed chip the org's own dictionary would print. */
+  const spectate = async () => {
+    const viewer = await spectator(browser, { width: 1280 });
+    await viewer.goto(hubUrl);
+    const cards = viewer.locator('[data-testid^="mh-team-"]');
+    await expect(cards.first()).toBeVisible({ timeout: 20_000 });
+    const hubTexts = await cards.allInnerTexts();
+    await viewer.goto(entrantsUrl);
+    const panel = viewer.locator("#panel-entrants");
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    const pageTexts = await panel.locator("li").allInnerTexts();
+    const namesIn = (texts: string[]) =>
+      texts.map((t) => bySeed.find((n) => t.includes(n))).filter((n): n is string => !!n);
+    const chipsIn = (texts: string[], key: string) =>
+      SEEDED.filter((e) => texts.some((t) => t.includes(dictString("en", key, { seed: e.seed })))).map((e) => e.seed);
+    return {
+      hubNames: namesIn(hubTexts),
+      hubChips: chipsIn(hubTexts, "teams.seed"),
+      pageNames: namesIn(pageTexts),
+      pageChips: chipsIn(pageTexts, "division.seed"),
+    };
+  };
+  const apiSeeds = async () => {
+    const res = await publicJson<{ entrants: { display_name: string; seed: number | null }[] }>(apiPath);
+    expect(res.status).toBe(200);
+    return res.data!.entrants.map((e) => [e.display_name, e.seed]);
+  };
+
+  // ON (the default): the chips are there, in seed order.
+  expect(await spectate(), "seeds shown").toEqual({
+    hubNames: bySeed,
+    hubChips: [1, 2, 3],
+    pageNames: bySeed,
+    pageChips: [1, 2, 3],
+  });
+  expect(await apiSeeds()).toEqual(SEEDED.map((e) => [e.name, e.seed]));
+
+  // The organiser turns it off, through the real control.
+  const settings = `/o/${org.slug}/c/${rig.compSlug}/d/${rig.divSlug}?tab=settings`;
+  const openPublicPage = async (p: Page) => {
+    await p.goto(settings);
+    await expect(p.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
+    await p.getByRole("button", { name: new RegExp(uiString("en", "divset.publicPage.title")) }).click();
+    return p.getByTestId("show-seeds-toggle").getByRole("checkbox");
+  };
+  const box = await openPublicPage(page);
+  await expect(box, "the control opens at the stored value (on)").toBeChecked();
+  await box.uncheck();
+  await expect(page.getByText(uiString("en", "divset.publicPage.saved"))).toBeVisible({ timeout: 15_000 });
+  // It stuck: a fresh load opens at OFF, and the collapsed summary says so.
+  await page.goto(settings);
+  await expect(page.getByText(uiString("en", "divset.publicPage.seedsHidden"))).toBeVisible({ timeout: 20_000 });
+  await expect(await openPublicPage(page)).not.toBeChecked();
+
+  // OFF: no chip on either page, the same names, alphabetical — and the API
+  // sends no number at all.
+  expect(await spectate(), "seeds hidden").toEqual({
+    hubNames: byName,
+    hubChips: [],
+    pageNames: byName,
+    pageChips: [],
+  });
+  expect(await apiSeeds()).toEqual(byName.map((n) => [n, null]));
+
+  // The organiser's own Entrants tab still carries every seed (admin reads
+  // never go through the public view).
+  const own = await apiJson<{ display_name: string; seed: number | null }[]>(
+    request,
+    `/api/v1/divisions/${rig.divisionId}/entrants`,
+  );
+  expect(own.data!.map((e) => [e.display_name, e.seed]).sort()).toEqual(
+    SEEDED.map((e) => [e.name, e.seed]).sort(),
+  );
+
+  // The house widths: the Public page block, open, with no page-level
+  // horizontal scroll. Element shots only — the block, not the page. The
+  // settings column is `max-w-2xl` (672px), so the 768 and 1280 shots are
+  // expected to be identical; the viewport and the block's own right edge are
+  // asserted so an identical pair cannot mean "the resize never happened".
+  for (const width of [320, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    const toggle = await openPublicPage(page);
+    await expect(toggle).toBeVisible();
+    expect(await page.evaluate(() => window.innerWidth)).toBe(width);
+    await expectNoHorizontalScroll(page);
+    const block = page.getByTestId("show-seeds-toggle").locator("xpath=ancestor::section[1]");
+    const rect = (await block.boundingBox())!;
+    expect(rect.x + rect.width, `the block fits a ${width}px viewport`).toBeLessThanOrEqual(width);
+    await block.screenshot({ path: testInfo.outputPath(`division-settings-public-page-${width}.png`) });
+  }
 });

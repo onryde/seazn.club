@@ -445,6 +445,10 @@ export const PatchDivision = z
     auto_progress: z.boolean(),
     /** SPEC-2: draft a news post when results land (Pro `news.auto` on write). */
     auto_posts: z.boolean(),
+    /** V416: publish entrants' seed numbers on the public site. Off redacts
+     *  `seed` in `public_entrants_v` (so every public reader gets null and
+     *  sorts by name); the organiser's own reads keep every seed. */
+    show_seeds: z.boolean(),
     /** Youth flag (v3/11 gap 8): auto-set from U-age eligibility, this is
      *  the organiser override. */
     youth: z.boolean(),
@@ -498,6 +502,7 @@ export const Division = z.object({
   scheduling_mode: z.enum(["timed", "flexible"]),
   auto_progress: z.boolean(),
   auto_posts: z.boolean(),
+  show_seeds: z.boolean(), // V416 — seeds on the public site; see PatchDivision above
   archived_at: z.string().nullable(), // v3/09 §4 — set = archived (hidden, restorable)
   created_at: z.string(),
   required_court_tags: z.array(z.string()), // D5/P8 candidate-court filter; see PatchDivision above

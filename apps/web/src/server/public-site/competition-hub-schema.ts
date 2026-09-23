@@ -346,6 +346,8 @@ export const TeamCard = z.object({
   name: z.string(),
   badgeUrl: z.string().nullable(),
   colour: z.string().nullable(),
+  /** Null for an unseeded entrant AND for every entrant of a division that
+   *  hides its seeds (V416 `show_seeds`, redacted in `public_entrants_v`). */
   seed: z.number().nullable(),
   /** Team, pair or one person — the difference between a card that has a
    *  SQUAD and a card that is somebody. The Teams tab renders a squad

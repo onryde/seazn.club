@@ -3295,6 +3295,9 @@
                           "auto_posts": {
                             "type": "boolean"
                           },
+                          "show_seeds": {
+                            "type": "boolean"
+                          },
                           "archived_at": {
                             "anyOf": [
                               {
@@ -3337,6 +3340,7 @@
                           "scheduling_mode",
                           "auto_progress",
                           "auto_posts",
+                          "show_seeds",
                           "archived_at",
                           "created_at",
                           "required_court_tags"
@@ -3377,6 +3381,7 @@
                       "scheduling_mode": "timed",
                       "auto_progress": true,
                       "auto_posts": true,
+                      "show_seeds": true,
                       "archived_at": "example",
                       "created_at": "example",
                       "required_court_tags": [
@@ -3899,6 +3904,9 @@
                         "auto_posts": {
                           "type": "boolean"
                         },
+                        "show_seeds": {
+                          "type": "boolean"
+                        },
                         "archived_at": {
                           "anyOf": [
                             {
@@ -3941,6 +3949,7 @@
                         "scheduling_mode",
                         "auto_progress",
                         "auto_posts",
+                        "show_seeds",
                         "archived_at",
                         "created_at",
                         "required_court_tags"
@@ -3979,6 +3988,7 @@
                     "scheduling_mode": "timed",
                     "auto_progress": true,
                     "auto_posts": true,
+                    "show_seeds": true,
                     "archived_at": "example",
                     "created_at": "example",
                     "required_court_tags": [
@@ -4428,6 +4438,9 @@
                         "auto_posts": {
                           "type": "boolean"
                         },
+                        "show_seeds": {
+                          "type": "boolean"
+                        },
                         "archived_at": {
                           "anyOf": [
                             {
@@ -4470,6 +4483,7 @@
                         "scheduling_mode",
                         "auto_progress",
                         "auto_posts",
+                        "show_seeds",
                         "archived_at",
                         "created_at",
                         "required_court_tags"
@@ -4508,6 +4522,7 @@
                     "scheduling_mode": "timed",
                     "auto_progress": true,
                     "auto_posts": true,
+                    "show_seeds": true,
                     "archived_at": "example",
                     "created_at": "example",
                     "required_court_tags": [
@@ -4828,6 +4843,9 @@
                   "auto_posts": {
                     "type": "boolean"
                   },
+                  "show_seeds": {
+                    "type": "boolean"
+                  },
                   "youth": {
                     "type": "boolean"
                   },
@@ -5080,6 +5098,9 @@
                         "auto_posts": {
                           "type": "boolean"
                         },
+                        "show_seeds": {
+                          "type": "boolean"
+                        },
                         "archived_at": {
                           "anyOf": [
                             {
@@ -5122,6 +5143,7 @@
                         "scheduling_mode",
                         "auto_progress",
                         "auto_posts",
+                        "show_seeds",
                         "archived_at",
                         "created_at",
                         "required_court_tags"
@@ -5160,6 +5182,7 @@
                     "scheduling_mode": "timed",
                     "auto_progress": true,
                     "auto_posts": true,
+                    "show_seeds": true,
                     "archived_at": "example",
                     "created_at": "example",
                     "required_court_tags": [
@@ -6079,6 +6102,9 @@
                         "auto_posts": {
                           "type": "boolean"
                         },
+                        "show_seeds": {
+                          "type": "boolean"
+                        },
                         "archived_at": {
                           "anyOf": [
                             {
@@ -6121,6 +6147,7 @@
                         "scheduling_mode",
                         "auto_progress",
                         "auto_posts",
+                        "show_seeds",
                         "archived_at",
                         "created_at",
                         "required_court_tags"
@@ -6159,6 +6186,7 @@
                     "scheduling_mode": "timed",
                     "auto_progress": true,
                     "auto_posts": true,
+                    "show_seeds": true,
                     "archived_at": "example",
                     "created_at": "example",
                     "required_court_tags": [
@@ -6562,6 +6590,9 @@
                         "auto_posts": {
                           "type": "boolean"
                         },
+                        "show_seeds": {
+                          "type": "boolean"
+                        },
                         "archived_at": {
                           "anyOf": [
                             {
@@ -6604,6 +6635,7 @@
                         "scheduling_mode",
                         "auto_progress",
                         "auto_posts",
+                        "show_seeds",
                         "archived_at",
                         "created_at",
                         "required_court_tags"
@@ -6642,6 +6674,7 @@
                     "scheduling_mode": "timed",
                     "auto_progress": true,
                     "auto_posts": true,
+                    "show_seeds": true,
                     "archived_at": "example",
                     "created_at": "example",
                     "required_court_tags": [
