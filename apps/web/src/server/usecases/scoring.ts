@@ -263,16 +263,18 @@ export async function scoreEvent(
     );
   }
 
-  // Owner ruling 2026-09-23: a write that erased a knockout decision has
-  // ALREADY emptied the seats that decision filled, inside the append's own
-  // transaction (`result.released`). Those fixtures changed exactly the way an
-  // advanced-into fixture does — a name became "Winner of …" — so they seed
-  // the same list, and ride the same DEL and push, even if a hook below throws.
+  // Owner ruling 2026-09-23: a write that erased a knockout decision — or,
+  // since fix round 1, FLIPPED it to the other side — has ALREADY emptied the
+  // seats that decision filled, inside the append's own transaction
+  // (`result.released`). Those fixtures changed exactly the way an
+  // advanced-into fixture does — a name became "Winner of …" (and, on a flip,
+  // `onDecided` below seats the new winner there) — so they seed the same list,
+  // and ride the same DEL and push, even if a hook below throws.
   let advanced: readonly string[] = result.released;
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
     if (result.outcome !== null || input.type === "core.void") {
-      const filled = await onDecided(auth, fixtureId, result.outcome);
+      const filled = await onDecided(auth, fixtureId);
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       await refreshDiscipline(auth, fixtureId);
       await refreshNews(auth, fixtureId);
@@ -639,13 +641,22 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 // slot that was already filled (the update touches no row) is not reported as
 // changed. `scoreEvent` DELs and pushes them beside the decided fixture; the
 // batch importer ignores them, as it ignores its own pushes.
-export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<string[]> {
-  // outcome may be null here (a void erased the decision) — recompute only.
-  const o = (outcome ?? {}) as { kind?: string; winner?: string; loser?: string };
+//
+// Review M2 (fix round 2): it reads the result it acts on ITSELF, under the
+// fixture's own append lock, and never takes one from its caller. It runs
+// after the append committed, so a void can commit in between: that void's
+// un-fill (fed-seats.ts) finds the seat still empty — this fill has not run —
+// and a fill from the caller's copy would then seat the very winner the void
+// took away. Under the lock, the void has either committed (and this reads
+// its erased or flipped outcome) or not started (and its un-fill will find
+// the name this writes and take it back).
+export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<string[]> {
   const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
     const [fixture] = await tx<
       {
+        outcome: unknown;
         stage_id: string;
         pool_id: string | null;
         winner_to_fixture: string | null;
@@ -658,7 +669,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
         division_id: string;
       }[]
     >`
-      select f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
+      select f.outcome, f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
              f.loser_to_fixture, f.loser_to_slot, s.kind, f.ext_key,
              s.config as stage_config, s.division_id
       from fixtures f join stages s on s.id = f.stage_id
@@ -666,7 +677,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
     if (!fixture) return null;
     // One reading of who advances, shared with the un-fill (fed-seats.ts), so
     // the two can never disagree about which name a decision put where.
-    const { winner, loser } = advancingSides(outcome);
+    const { winner, loser } = advancingSides(fixture.outcome);
     if (winner && fixture.winner_to_fixture && fixture.winner_to_slot) {
       const filled = await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
       if (filled !== null) advanced.push(filled);
@@ -740,7 +751,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
   }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
   // finished, progression fires without a button.
-  if (context && o.kind !== undefined) {
+  if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
   // Only ever reached once the transaction above COMMITTED: a rollback throws

@@ -31,7 +31,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { generateSingleElim } from "@seazn/engine/scheduling";
 import { cricket } from "@seazn/engine/sports/cricket";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { scriptLedger, type Delivery } from "@/server/public-site/__tests__/cricket-ledger";
@@ -39,8 +39,9 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
-import { scoreEvent } from "../scoring";
+import { onDecided, scoreEvent } from "../scoring";
 import { appendEvent } from "@/server/engine-db";
+import { releaseFedSeats } from "@/server/engine-db/fed-seats";
 import { fixtureAwaitsSeedDraw } from "@/lib/division-phase";
 import {
   completeStage,
@@ -1083,5 +1084,211 @@ describe.skipIf(!HAS_DB)("fix round 1: a void that FLIPS the winner without pass
     expect(await eventCount(line.id), "no void was written").toBe(eventsBefore);
     expect((await row(line.id)).outcome, "the result stands").toEqual(lineBefore.outcome);
     expect(seat(await row(rig.final.id), line.winner_to_slot), "the seat is kept").toBe(line.away_entrant_id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 2 (review 2026-09-23): the locks.
+//
+// Every append holds its own fixture's lock (append-event.ts) for the length
+// of its transaction, and the un-fill takes each next match's lock on top. Two
+// voids that each hold one and want the other's deadlock, and Postgres kills
+// one of them with 40P01 — a 500 to an organiser who did nothing wrong. The
+// rest of this block pins the other two lock rules the review found: a
+// cross-stage target is never locked at all, and the POST-commit fill reads
+// the result that stands when it runs, not the one it was handed.
+// ---------------------------------------------------------------------------
+
+/** Wait until a backend is queued behind `holderPid` on an advisory lock — or
+ *  until `settled()` says the call under test finished without queueing.
+ *  Returns whether it queued. */
+async function queuedBehind(holderPid: number, settled: () => boolean): Promise<boolean> {
+  for (let i = 0; i < 500; i++) {
+    if (settled()) return false;
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_locks
+      where locktype = 'advisory' and not granted and ${holderPid} = any(pg_blocking_pids(pid))`;
+    if (n > 0) return true;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error("neither queued nor settled in 5s");
+}
+
+/** A side transaction holding `fixture:<id>` — the lock an append to that
+ *  fixture holds — until `release()`; `then` runs inside it before commit. */
+function holdFixtureLock<T>(id: string, then: (tx: Tx) => Promise<T>) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const state = { pid: 0 };
+  const done = sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+    const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+    state.pid = pid;
+    await gate;
+    return then(tx as unknown as Tx);
+  }) as Promise<T>;
+  const ready = (async () => {
+    for (let i = 0; state.pid === 0 && i < 200; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(state.pid, "the stand-in holds the lock").not.toBe(0);
+    return state.pid;
+  })();
+  return { ready, release: () => release(), done };
+}
+
+/** A page playoff (the IPL shape), generated for real: pp-q1 sends its winner
+ *  to the final and its LOSER to pp-q2, and pp-q2 sends its winner to the
+ *  final too. Rows are found by the generator's own ids (`ext_key`). */
+async function pagePlayoff() {
+  const { auth } = await seedOrg("pro");
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "Page Cup " + randomUUID().slice(0, 6),
+    visibility: "private",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open-" + randomUUID().slice(0, 6),
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  await createEntrants(
+    auth,
+    division.id,
+    ["A", "B", "C", "D"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
+  );
+  const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "page_playoff", name: "Playoffs", config: {} }]);
+  await generateStageFixtures(auth, stage!.id);
+  await sql`update divisions set status = 'active' where id = ${division.id}`;
+  const byKey = async (key: string) => {
+    const [r] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id} and ext_key = ${key}`;
+    expect(r, `the generator wrote ${key}`).toBeDefined();
+    return row(r!.id);
+  };
+  const [q1, elim, q2, final] = await Promise.all(["pp-q1", "pp-elim", "pp-q2", "pp-final"].map(byKey));
+  expect(q1!.winner_to_fixture, "premise: pp-q1's winner goes to the final").toBe(final!.id);
+  expect(q1!.loser_to_fixture, "premise: pp-q1's LOSER goes to pp-q2").toBe(q2!.id);
+  expect(q2!.winner_to_fixture, "premise: pp-q2's winner goes to the final too").toBe(final!.id);
+  expect(q2!.round_no, "premise: pp-q2 plays before the final").toBeLessThan(final!.round_no);
+  return { auth, q1: q1!, elim: elim!, q2: q2!, final: final! };
+}
+
+describe.skipIf(!HAS_DB)("fix round 2: the un-fill's locks", () => {
+  // M1. pp-q1's void wants the final (its winner edge) AND pp-q2 (its loser
+  // edge); pp-q2's void holds pp-q2 and wants the final. Locking pp-q1's
+  // targets winner-edge first takes the final and then queues on pp-q2 while
+  // pp-q2's void queues on the final: a cycle. In bracket order (round, then
+  // id) pp-q1's void asks for pp-q2 FIRST, so it queues holding nothing
+  // pp-q2's void needs. The stand-in plays pp-q2's void exactly: it holds
+  // pp-q2's append lock from the start, then runs the un-fill.
+  it("two voids that each need the other's lock both finish — pp-q1's void takes pp-q2 before the final, so a page playoff cannot deadlock", async () => {
+    const pp = await pagePlayoff();
+    const q1Decider = await decide(pp.auth, pp.q1.id);
+    await decide(pp.auth, pp.elim.id);
+    await decide(pp.auth, pp.q2.id);
+    const q2 = await row(pp.q2.id);
+    const before = await row(pp.final.id);
+    expect(before.home_entrant_id && before.away_entrant_id, "premise: both finalists are seated").toBeTruthy();
+
+    const q2Void = holdFixtureLock(pp.q2.id, (tx) => releaseFedSeats(tx, pp.q2.id, q2.outcome, null));
+    const q2VoidPid = await q2Void.ready;
+    let settled = false;
+    const q1Void = voidEvent(pp.auth, pp.q1.id, q1Decider).then(
+      () => { settled = true; return null; },
+      (e: unknown) => { settled = true; return e; },
+    );
+    expect(await queuedBehind(q2VoidPid, () => settled), "pp-q1's void waits for pp-q2's").toBe(true);
+    q2Void.release();
+    const [released, q1Err] = await Promise.all([
+      q2Void.done.then((ids) => ids, (e: unknown) => e),
+      q1Void,
+    ]);
+
+    expect(released, "pp-q2's void went through — it was not the deadlock victim").toEqual([pp.final.id]);
+    expect(q1Err, "pp-q1's void was refused, not killed").toBeInstanceOf(HttpError);
+    expect((q1Err as HttpError).code, "…because pp-q2 has been played").toBe("NEXT_MATCH_STARTED");
+    expect((q1Err as HttpError).extra?.next_match, "…and it names pp-q2").toMatchObject({ fixture_id: pp.q2.id });
+    const after = await row(pp.final.id);
+    expect(after.home_entrant_id, "pp-q1's winner keeps the final seat (its void rolled back)").toBe(before.home_entrant_id);
+    expect(after.away_entrant_id, "pp-q2's winner was taken back").toBeNull();
+  });
+
+  // M3. A cross-stage target is never un-filled, so its lock buys nothing —
+  // and taking it before reading its stage made a void wait on (or deadlock
+  // with) a match in another stage that it will not touch.
+  it("never takes a CROSS-STAGE target's lock: the stage is read first, so the void does not queue on a match it will not touch", async () => {
+    const rig = await knockout();
+    const [line, other] = rig.r1 as [Row, Row];
+    const [elsewhere] = await createStages(rig.auth, rig.divisionId, [
+      { seq: 2, kind: "knockout", name: "Elsewhere", config: {} },
+    ]);
+    await sql`update fixtures set stage_id = ${elsewhere!.id} where id = ${rig.final.id}`;
+    const decider = await decide(rig.auth, line.id);
+    await decide(rig.auth, other.id);
+
+    const holder = holdFixtureLock(rig.final.id, async () => null);
+    const holderPid = await holder.ready;
+    let settled = false;
+    const voiding = voidEvent(rig.auth, line.id, decider).then(
+      () => { settled = true; return null; },
+      (e: unknown) => { settled = true; return e; },
+    );
+    const queued = await queuedBehind(holderPid, () => settled);
+    holder.release();
+    await holder.done;
+
+    expect(queued, "the void never waited on the other stage's match").toBe(false);
+    expect(await voiding, "and it went through").toBeNull();
+    expect(seat(await row(rig.final.id), line.winner_to_slot), "the cross-stage seat is untouched").toBe(
+      line.home_entrant_id,
+    );
+  });
+
+  // M2. `onDecided` runs AFTER the append commits. A void can commit in that
+  // gap: its un-fill finds the seat still empty (the fill has not run), and
+  // then the late fill seats the winner the void just took away — the very
+  // name this whole fix exists to take back. The stand-in below is that void:
+  // it holds the line's append lock and, at commit, writes what a void that
+  // erases the decision writes. The late fill must wait for it and read the
+  // outcome that stands.
+  it("the post-commit fill waits on the line's own lock and fills from the outcome that STANDS: a void committing in the gap leaves the seat empty", async () => {
+    const rig = await knockout();
+    const line = rig.r1[0]!;
+    await decide(rig.auth, line.id);
+    // The scene inside the gap: the decision has committed, its fill has not.
+    const column = line.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = null where id = ${rig.final.id}`;
+
+    const theVoid = holdFixtureLock(line.id, async (tx) => {
+      await tx`update fixtures set outcome = null, status = 'in_play' where id = ${line.id}`;
+    });
+    const voidPid = await theVoid.ready;
+    let settled = false;
+    const lateFill = onDecided(rig.auth, line.id).then(
+      (ids) => { settled = true; return ids; },
+      (e: unknown) => { settled = true; throw e; },
+    );
+    const queued = await queuedBehind(voidPid, () => settled);
+    theVoid.release();
+    await theVoid.done;
+    const filled = await lateFill;
+
+    expect(queued, "the late fill queued behind the void").toBe(true);
+    expect(filled, "it seated nobody").not.toContain(rig.final.id);
+    expect(seat(await row(rig.final.id), line.winner_to_slot), "the voided winner is NOT put back").toBeNull();
+  });
+
+  it("and a late fill for a result that still stands seats its winner as before", async () => {
+    const rig = await knockout();
+    const line = rig.r1[0]!;
+    await decide(rig.auth, line.id);
+    const column = line.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = null where id = ${rig.final.id}`;
+
+    const filled = await onDecided(rig.auth, line.id);
+
+    expect(filled).toContain(rig.final.id);
+    expect(seat(await row(rig.final.id), line.winner_to_slot)).toBe(line.home_entrant_id);
   });
 });

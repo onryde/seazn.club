@@ -145,32 +145,77 @@ async function readNode(tx: Tx, id: string): Promise<Node | undefined> {
   return n;
 }
 
+interface Edge {
+  side: Side;
+  target: string;
+  slot: 1 | 2;
+}
+
+/** The feed edges a change to `src` can reach: its winner edge when the winner
+ *  moved, its loser edge when the loser did, each only when it is wired. */
+function movedEdges(src: Node, moved: Record<Side, boolean>): Edge[] {
+  const edges: Edge[] = [];
+  const wired = (side: Side, target: string | null, slot: number | null) => {
+    if (moved[side] && target !== null && (slot === 1 || slot === 2)) edges.push({ side, target, slot });
+  };
+  wired("winner", src.winner_to_fixture, src.winner_to_slot);
+  wired("loser", src.loser_to_fixture, src.loser_to_slot);
+  return edges;
+}
+
+/** Every SAME-STAGE fixture the plan below could reach from `src`, read
+ *  WITHOUT a lock, into `out` — so the locks can all be taken in one global
+ *  order before any of them is judged. A cross-stage target is dropped here,
+ *  before it is ever locked (review M3): it is never un-filled, so its lock
+ *  would only make this void wait on, or deadlock with, a match in another
+ *  stage. `stage_id` never changes on a fixture, so this unlocked read of it is
+ *  final. The walk follows a cascade walkover the way the plan does. */
+async function reachable(tx: Tx, src: Node, moved: Record<Side, boolean>, out: Map<string, Node>): Promise<void> {
+  for (const edge of movedEdges(src, moved)) {
+    const t = await readNode(tx, edge.target);
+    if (!t || t.stage_id !== src.stage_id || out.has(t.id)) continue;
+    out.set(t.id, t);
+    if (isCascadeWalkover(t)) {
+      const was = advancingSides(t.outcome);
+      await reachable(tx, t, { winner: was.winner !== undefined, loser: was.loser !== undefined }, out);
+    }
+  }
+}
+
+/** The SAME lock every append to that fixture takes (append-event.ts), held
+ *  to commit. Without it the next match's first event could commit between
+ *  the "not started" check and the write after it, and a match in play would
+ *  lose a player; with it, that event waits for this transaction and then
+ *  finds the seat empty. */
+async function lockFixture(tx: Tx, id: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+}
+
 /** Plan the seats `src` must give back when its winner and/or loser `moved`,
- *  appending to `plan`; throws the refusal the moment one seat cannot be. */
+ *  appending to `plan`; throws the refusal the moment one seat cannot be.
+ *  Every node is read here UNDER its lock — `locked` holds the ids already
+ *  locked in bracket order by `releaseFedSeats`. */
 async function planRelease(
   tx: Tx,
   src: Node,
   moved: Record<Side, boolean>,
   plan: Step[],
+  locked: Set<string>,
 ): Promise<void> {
   const mine = new Set([src.home_entrant_id, src.away_entrant_id].filter((id): id is string => id !== null));
-  const edges: { side: Side; target: string | null; slot: number | null }[] = [
-    { side: "winner", target: src.winner_to_fixture, slot: src.winner_to_slot },
-    { side: "loser", target: src.loser_to_fixture, slot: src.loser_to_slot },
-  ];
-  for (const edge of edges) {
-    if (!moved[edge.side]) continue;
-    if (edge.target === null || (edge.slot !== 1 && edge.slot !== 2)) continue;
-    // The SAME lock every append to that fixture takes (append-event.ts), held
-    // to commit. Without it the next match's first event could commit between
-    // the check below and the write after it: the check reads "not started",
-    // the event lands, and a match in play loses a player. With it, that event
-    // waits for this transaction and then finds the seat empty. Taken in bracket
-    // order (a feed edge always points forward), so the chain cannot deadlock
-    // against another un-fill.
-    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + edge.target}))`;
+  for (const edge of movedEdges(src, moved)) {
+    if (!locked.has(edge.target)) {
+      // Not reached by the unlocked walk: a cross-stage target (never locked,
+      // never touched), or a walkover the cascade awarded in the moment
+      // between that walk and the locks. Only the second is locked, late and
+      // so out of order — a window a concurrent cascade must hit exactly.
+      const peek = await readNode(tx, edge.target);
+      if (!peek || peek.stage_id !== src.stage_id) continue;
+      await lockFixture(tx, edge.target);
+      locked.add(edge.target);
+    }
     const t = await readNode(tx, edge.target);
-    if (!t || t.stage_id !== src.stage_id) continue;
+    if (!t) continue;
     const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
     if (occupant === null || !mine.has(occupant)) continue;
     const reset = isCascadeWalkover(t);
@@ -182,7 +227,7 @@ async function planRelease(
     if (reset) {
       // The walkover goes back to undecided, so whatever IT advanced moves too.
       const was = advancingSides(t.outcome);
-      await planRelease(tx, t, { winner: was.winner !== undefined, loser: was.loser !== undefined }, plan);
+      await planRelease(tx, t, { winner: was.winner !== undefined, loser: was.loser !== undefined }, plan, locked);
     }
   }
 }
@@ -215,8 +260,25 @@ export async function releaseFedSeats(
   const src = await readNode(tx, fixtureId);
   if (!src) return [];
 
+  // LOCK ORDER (review M1). This transaction already holds `src`'s own lock —
+  // the append took it first. Taking the targets edge by edge (winner, then
+  // loser) deadlocked a page playoff: pp-q1's void took the final, then queued
+  // on pp-q2, while pp-q2's void held pp-q2 and queued on the final; a double
+  // elimination's winners' final and losers' final do the same over the grand
+  // final. So every target is found first without a lock, then locked in ONE
+  // global order — ascending (round_no, id). Every generator numbers rounds so
+  // a feed edge always points to a LATER round (bracket.ts: a double
+  // elimination's losers' lane is numbered after the winners' lane), so that
+  // order is also bracket order: a transaction never holds a later match's
+  // lock while it asks for an earlier one's, including the source lock it
+  // started with. That is what rules the cycle out.
+  const reach = new Map<string, Node>();
+  await reachable(tx, src, moved, reach);
+  const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const t of order) await lockFixture(tx, t.id);
+
   const plan: Step[] = [];
-  await planRelease(tx, src, moved, plan);
+  await planRelease(tx, src, moved, plan, new Set(reach.keys()));
 
   const released: string[] = [];
   for (const p of plan) {
