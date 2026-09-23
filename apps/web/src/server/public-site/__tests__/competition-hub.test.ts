@@ -2659,7 +2659,7 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     expect(byId.e4).toMatchObject({
       status: "needs_help",
       label: "Needs help",
-      ifYouLose: "If you lose your next match: Out.",
+      ifYouLose: "If you lose your next match, you're out.",
     });
     // Every row of this table has a status — none is keyed to the wrong row.
     expect(table.rows.map((r) => [r.entrantId, r.qual?.status])).toEqual([
@@ -2758,9 +2758,9 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
 
     expect(a.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 2 rounds left" });
     expect(a.rows.map((x) => [x.entrantId, x.qual?.label ?? null, x.qual?.ifYouLose ?? null])).toEqual([
-      ["e1", "Needs help", "If you lose your next match: Needs help."],
-      ["e2", "Needs help", "If you lose your next match: Out."],
-      ["e3", "Needs help", "If you lose your next match: Needs help."],
+      ["e1", "Needs help", "If you lose your next match, you'll need other results to go your way."],
+      ["e2", "Needs help", "If you lose your next match, you're out."],
+      ["e3", "Needs help", "If you lose your next match, you'll need other results to go your way."],
     ]);
 
     expect(b.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 1 round left" });

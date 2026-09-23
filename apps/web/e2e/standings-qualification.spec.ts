@@ -267,6 +267,27 @@ function statusText(s: QualStatus): string {
   }
 }
 
+/** What losing the next match leaves, as the public dictionary words it (en):
+ *  one sentence per post-loss status, never a status chip glued into one; a
+ *  win_k counted over the matches left AFTER that loss (the engine's r − 1). */
+function ifYouLoseText(s: QualStatus, left: number): string {
+  switch (s.kind) {
+    case "through":
+      return dictString("en", "table.qual.ifYouLose.through");
+    case "win_k":
+      return s.k >= left
+        ? dictString("en", left === 1 ? "table.qual.ifYouLose.winAll.one" : "table.qual.ifYouLose.winAll.other", { count: left })
+        : dictString("en", s.k === 1 ? "table.qual.ifYouLose.winKOf.one" : "table.qual.ifYouLose.winKOf.other", {
+            count: s.k,
+            r: left,
+          });
+    case "needs_help":
+      return dictString("en", "table.qual.ifYouLose.needsHelp");
+    case "out":
+      return dictString("en", "table.qual.ifYouLose.out");
+  }
+}
+
 /** The cut line's words for a table the engine has read: the cut sentence
  *  agrees with N, the rounds left with the rounds (final review COPY — one
  *  key pluralised on the rounds printed "Top 1 go through"). */
@@ -449,7 +470,7 @@ test("division page: the leader's popover reads Win and in with the loss case, a
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
   await expect(panel.getByTestId("qual-headline")).toHaveText(dictString("en", "table.qual.headline.winK.one", { next: NEXT }));
   await expect(panel.getByTestId("qual-if-lose")).toHaveText(
-    dictString("en", "table.qual.ifYouLose", { status: statusText(leader.ifYouLose!) }),
+    ifYouLoseText(leader.ifYouLose!, e.input.remaining.get(e.order[0]!)! - 1),
   );
 
   // An outside tap: the legend, a plain paragraph under the box (a corner of

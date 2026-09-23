@@ -211,6 +211,38 @@ function statusLabel(s: QualStatus, i: QualificationViewInput): string {
   }
 }
 
+/** What losing the next match leaves — one sentence per post-loss status
+ *  (owner copy fix, 2026-09-23), never a status chip's words glued into a
+ *  sentence ("If you lose your next match: Win and in."). `left` is the
+ *  matches left AFTER that loss — the engine's own `r - 1` — so win_k reads as
+ *  the engine means it: win `k` of those. Where `k` is all of them the
+ *  sentence says so ("your last one", "all of your last 2"); otherwise it
+ *  names both numbers, because "your last one" would claim a particular match.
+ *
+ *  `through` is unreachable from `buildQualificationView`: a loss moves the
+ *  floor by the per-match min and takes one match away, so the worst case the
+ *  through test reads is unchanged, and it was already not through (only the
+ *  two open statuses get a loss case). It has a sentence all the same, so an
+ *  engine change could never print a key. */
+export function ifYouLoseSentence(
+  s: QualStatus,
+  left: number,
+  i: Pick<QualificationViewInput, "msg" | "plural">,
+): string {
+  switch (s.kind) {
+    case "through":
+      return i.msg("table.qual.ifYouLose.through");
+    case "win_k":
+      return s.k >= left
+        ? i.plural("table.qual.ifYouLose.winAll", left)
+        : i.plural("table.qual.ifYouLose.winKOf", s.k, { r: left });
+    case "needs_help":
+      return i.msg("table.qual.ifYouLose.needsHelp");
+    case "out":
+      return i.msg("table.qual.ifYouLose.out");
+  }
+}
+
 function headline(s: QualStatus, i: QualificationViewInput, next: string, n: number): string {
   switch (s.kind) {
     case "through":
@@ -460,7 +492,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
       headline: headline(res.status, i, next, cut),
       ifYouLose:
         res.ifYouLose && !nextIsBye(r.entrantId)
-          ? i.msg("table.qual.ifYouLose", { status: statusLabel(res.ifYouLose, i) })
+          ? ifYouLoseSentence(res.ifYouLose, (engine.remaining.get(r.entrantId) ?? 0) - 1, i)
           : null,
       whatIf: w?.text ?? null,
       whatIfAssumption: w?.assumption ?? null,
