@@ -6,10 +6,12 @@
 //
 // What this pins:
 //  * parity — for a public division, the usecase returns, stage by stage,
-//    EXACTLY the six columns `public_stages_v` publishes. The scenes between
-//    them give every column a non-default value (a points rule, per-group,
-//    Swiss rounds, an organiser rank override), and a coverage check says so:
-//    a column dropped from the usecase's select cannot hide behind a default;
+//    EXACTLY the columns `stage_qualification_meta` returns, with the values
+//    `public_stages_v` publishes for them. The column set is read off the
+//    function's own result, never typed here, so a column a later migration
+//    adds moves this test with it. The scenes between them give each of
+//    today's columns a non-default value (a points rule, per-group, Swiss
+//    rounds, an organiser rank override), and a coverage check says so;
 //  * a private competition, which `public_stages_v` hides, still gets its meta
 //    in the console;
 //  * tenant scope — the function is SECURITY DEFINER, so the usecase must read
@@ -17,7 +19,8 @@
 //    with nothing;
 //  * only the stages asked for come back.
 //
-// Mutants killed (task-9 report): the select losing any one column (→ parity);
+// Mutants killed (task-9 report): the select losing any one column (→ parity,
+// and the private case);
 // the function called on the raw ids instead of through `stages` (→ the
 // other-org case); the `where` on the ids dropped (→ the private case's
 // exact key set).
@@ -40,17 +43,20 @@ import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** The six V414 columns, in the function's order. */
-const COLUMNS = [
-  "qualify_count",
-  "qualify_per_group",
-  "next_stage_name",
-  "swiss_rounds",
-  "points_rule",
-  "has_rank_overrides",
-] as const;
+/** The columns `stage_qualification_meta` returns, read off its own result:
+ *  a null id matches no stage, so no row, but the result still describes its
+ *  columns. Whatever V414 or a later migration makes it return is what the
+ *  console must return. */
+async function functionColumns(): Promise<string[]> {
+  const res = await sql`select * from stage_qualification_meta(null::uuid)`;
+  return res.columns.map((c) => c.name);
+}
 
-type ViewRow = { id: string } & Record<(typeof COLUMNS)[number], unknown>;
+/** The function's columns, picked off a row (a view row, or its own). */
+const pick = (row: Record<string, unknown>, columns: readonly string[]) =>
+  Object.fromEntries(columns.map((c) => [c, row[c]]));
+
+type ViewRow = { id: string } & Record<string, unknown>;
 
 const prog = (take: unknown[]) => ({
   sources: [{ stage: "previous", take }],
@@ -111,10 +117,7 @@ async function groupScene() {
 }
 
 const published = (divisionId: string) =>
-  sql<ViewRow[]>`
-    select id, qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-           has_rank_overrides
-    from public_stages_v where division_id = ${divisionId} order by seq`;
+  sql<ViewRow[]>`select * from public_stages_v where division_id = ${divisionId} order by seq`;
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -131,16 +134,21 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
   });
 
   it("parity: for a public division, each stage's meta is EXACTLY what public_stages_v publishes", async () => {
+    const columns = await functionColumns();
+    expect(columns.length, "premise: the function describes its columns").toBeGreaterThan(0);
     const compared: ViewRow[] = [];
     for (const scene of [await swissScene("public"), await groupScene()]) {
       const pub = await published(scene.divisionId);
       expect(pub.map((r) => r.id), "premise: the view publishes every stage").toEqual(scene.stages.map((s) => s.id));
       const console_ = await listStageQualificationMeta(scene.auth, scene.stages.map((s) => s.id));
       expect([...console_.keys()].sort()).toEqual(pub.map((r) => r.id).sort());
-      for (const { id, ...row } of pub) {
-        expect(console_.get(id), `stage ${id}`).toEqual(row);
-        // Exactly the six columns — no extra key, no missing one.
-        expect(Object.keys(console_.get(id)!).sort(), `stage ${id}`).toEqual([...COLUMNS].sort());
+      for (const row of pub) {
+        // The view publishes every one of the function's columns…
+        expect(Object.keys(row), `stage ${row.id}`).toEqual(expect.arrayContaining(columns));
+        // …and the console returns exactly those, with the same values: no
+        // extra key, no missing one.
+        expect(Object.keys(console_.get(row.id) ?? {}).sort(), `stage ${row.id}`).toEqual([...columns].sort());
+        expect(console_.get(row.id), `stage ${row.id}`).toEqual(pick(row, columns));
       }
       compared.push(...pub);
     }
@@ -161,13 +169,15 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
     const [swiss] = scene.stages;
     const got = await listStageQualificationMeta(scene.auth, [swiss!.id]);
     expect([...got.keys()]).toEqual([swiss!.id]);
-    expect(got.get(swiss!.id)).toEqual({
+    // Exactly the function's own row for the stage…
+    const [own] = await sql<Record<string, unknown>[]>`select * from stage_qualification_meta(${swiss!.id})`;
+    expect(got.get(swiss!.id)).toEqual(pick(own!, await functionColumns()));
+    // …which is the scene's cut, not an empty one.
+    expect(got.get(swiss!.id)).toMatchObject({
       qualify_count: 4,
-      qualify_per_group: false,
       next_stage_name: "Finals",
       swiss_rounds: 4,
       points_rule: POINTS,
-      has_rank_overrides: false,
     });
   });
 

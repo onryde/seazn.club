@@ -14,9 +14,13 @@ import "server-only";
 // Its own module, not `usecases/stages.ts`: the console page's tests mock that
 // module wholesale.
 //
-// Returned RAW — the six columns exactly as `public_stages_v` publishes them —
-// so the console hands them to the same `divisionQualification` helper the
-// public surfaces use, and `stageQualMeta` stays the one mapper.
+// Returned RAW — every column the function returns, exactly as
+// `public_stages_v` publishes them — so the console hands them to the same
+// `divisionQualification` helper the public surfaces use, and `stageQualMeta`
+// stays the one mapper. `q.*`, never a hand list: a column a later migration
+// adds to the function reaches the console without an edit here (the view
+// selects its columns by name, and the DB test's parity pins that the two
+// agree).
 import { withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { QualStage } from "@/server/public-site/division-qualification";
@@ -33,9 +37,7 @@ export async function listStageQualificationMeta(
   if (stageIds.length === 0) return new Map();
   const rows = await withTenant(auth.orgId, (tx) =>
     tx<({ stage_id: string } & StageQualMetaRow)[]>`
-      select s.id as stage_id,
-             q.qualify_count, q.qualify_per_group, q.next_stage_name, q.swiss_rounds, q.points_rule,
-             q.has_rank_overrides
+      select s.id as stage_id, q.*
       from stages s
       cross join lateral stage_qualification_meta(s.id) q
       where s.id = any(${[...stageIds]}::uuid[])`,

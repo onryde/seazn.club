@@ -23,7 +23,8 @@
 // call assertion and the view); the page passing `qualification={null}` (→
 // the cut and pool tests); the table's pool dropped (→ the pool test: a
 // per-group cut on no pool is no view); the ORG's or English words used
-// instead of the viewer's locale (→ the French case).
+// instead of the viewer's locale (→ the French case); the entrant names not
+// handed to the builder (→ the cut test's what-if lines, which name the rival).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -292,6 +293,14 @@ describe("organiser console — the standings tables get the same qualification 
     expect(qualification!.table.label).toBe("Top 2 go through to Finals · 1 round left");
     // The engine's statuses for this scene — the same as the public page's.
     expect(statuses(qualification!)).toEqual({ A: "win_k", B: "needs_help", C: "needs_help", D: "needs_help" });
+    // The popover's what-if names the RIVAL by the page's entrant names — an
+    // entrant id here means the page handed the builder no names.
+    expect(qualification!.rows.A!.whatIf).toBe(
+      "If you finish level on points with Cy Swiss, you stay ahead on goal/run difference even after a heavy defeat.",
+    );
+    expect(qualification!.rows.C!.whatIf).toBe(
+      "If you finish level on points with Bo Swiss, goal/run difference decides. Now: you -1, Bo Swiss 0.",
+    );
     // …and the table draws it.
     expect(html).toContain('data-testid="qual-cut"');
     expect(html).toContain('data-testid="qual-legend"');
