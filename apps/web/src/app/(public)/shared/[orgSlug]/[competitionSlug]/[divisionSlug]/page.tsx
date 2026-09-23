@@ -364,7 +364,9 @@ export default async function DivisionHomePage({ params }: Props) {
         >
           <p className="flex min-w-0 items-baseline justify-between gap-2 font-display text-lg font-semibold text-ink">
             <span className="min-w-0 truncate">{e.display_name}</span>
-            {e.seed ? (
+            {/* `!= null`, never truthiness: seed 0 is a seed. A division that
+                hides its seeds (V416) is served `seed: null`, so no chip. */}
+            {e.seed != null ? (
               <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 font-sans text-[11px] font-medium text-accent-strong">
                 {t(dict, "division.seed", { seed: e.seed })}
               </span>
