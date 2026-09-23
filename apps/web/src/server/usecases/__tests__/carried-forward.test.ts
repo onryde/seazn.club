@@ -16,7 +16,7 @@ describe("the scoring endpoint documents the carried-forward refusal", () => {
   it.each([
     ["full", buildOpenApiDocument()],
     ["published", buildOpenApiDocument({ published: true })],
-  ] as const)("%s spec: POST …/fixtures/{id}/events lists 403 and names %s", (_, doc) => {
+  ] as const)("%s spec: POST …/fixtures/{id}/events lists 403 and names RESULT_CARRIED_FORWARD", (_, doc) => {
     const paths = (doc as { paths: Record<string, Record<string, { summary?: string; responses: Record<string, unknown> }>> }).paths;
     const key = Object.keys(paths).find((p) => p.endsWith("/fixtures/{id}/events"));
     expect(key, "the events route is in the spec").toBeDefined();

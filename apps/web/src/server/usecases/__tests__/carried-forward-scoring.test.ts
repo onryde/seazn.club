@@ -176,6 +176,32 @@ describe.skipIf(!HAS_DB)("device-link refusal once a result is carried forward (
     expect(total, "core.start + the one result — the retry wrote nothing").toBe(2);
   });
 
+  // The replay is RETURNED at the refusal, not left for appendEvent's catch to
+  // find. The difference shows on a void: falling through would re-run the undo
+  // checks against a target the original void already took back (409
+  // UNDO_ALREADY_VOIDED). A device may void its own post-decision note while the
+  // result stands; the stage then completes; the lost ack's retry arrives.
+  it("a keyed retry of the device's own VOID, after the stage completes, gets the original answer — not an undo re-check", async () => {
+    expect(cacheEnabled(), "precondition: no Redis — the ledger replay is the path under test").toBe(false);
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const [f] = await fixturesOf(stage.id);
+    const device = await deviceFor(auth, f!.id);
+    await decide(device, f!.id);
+    const note = await scoreEvent(device, f!.id, { expected_seq: 2, type: "core.note", payload: { text: "shuttle change" } });
+    const undo = {
+      expected_seq: note.seq,
+      type: "core.void",
+      payload: { event_id: note.event_id },
+      idempotency_key: `idem-${randomUUID()}`,
+    };
+    const first = await scoreEvent(device, f!.id, undo); // not carried yet: allowed
+    await sql`update stages set status = 'complete' where id = ${stage.id}`;
+    const retry = await scoreEvent(device, f!.id, undo);
+    expect(retry.event_id, "the retry names the void the original tap wrote").toBe(first.event_id);
+    expect(retry).toEqual(first);
+  });
+
   it("a SCHEDULED fixture whose feed an organiser filled by hand still scores (Review Focus 2)", async () => {
     const { auth } = await seedOrg("pro");
     const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
