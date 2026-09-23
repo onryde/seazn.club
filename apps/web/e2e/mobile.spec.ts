@@ -4860,7 +4860,7 @@ test("2048 (mobile swipe bug): touch-action is disabled at rest, and a swipe mov
   // the row's far edge (0-3) and scores 8. Nothing else can put an 8 there:
   // left merges at 0-0, down slides both to row 3 unmerged, up is a no-op, and
   // applyMove's spawn only ever writes a 2 or a 4 -- so this also pins the
-  // gesture's direction mapping, and does not depend on the RNG at all.
+  // right-swipe mapping, and does not depend on the RNG at all.
   // useGameStore reads storage on mount (the game is client-only), so an init
   // script is early enough.
   const seeded: Game2048State = {
@@ -4927,4 +4927,25 @@ test("2048 (mobile swipe bug): touch-action is disabled at rest, and a swipe mov
     "8",
   );
   await expect(score).toHaveText(/^Score: 8 /);
+});
+
+// 2048 first visit: with nothing stored, useGameStore hands back
+// INITIAL_STATE's EMPTY board (it skips `migrate` when the key is unset), and
+// only index.tsx's mount effect turns that into a playable game by dealing
+// newGame()'s two opening tiles. The swipe test above seeds its own board, so
+// it never reaches that path. The effect runs only in a browser -- the
+// server-only index.test.tsx can't see it -- so this test is its only
+// coverage. No pointer input at all, so it cannot hit the swipe test's old
+// mouse-drag hang.
+test("2048 (first visit): empty storage deals the opening two tiles", async ({ page }) => {
+  // Explicitly empty, whatever the project's storageState carries.
+  await page.addInitScript((key) => window.localStorage.removeItem(key), GAME_2048_STORAGE_KEY);
+  await page.goto("/games/2048", { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await expect(page.getByTestId("2048-board")).toBeVisible();
+  await expect(
+    page.locator('[data-testid="2048-board"] [data-value]:not([data-value="0"])'),
+    "an empty store never got its opening deal -- the board stays empty and unplayable",
+  ).toHaveCount(2);
+  await expect(page.getByText(/^Score: \d+/)).toHaveText(/^Score: 0 /);
 });
