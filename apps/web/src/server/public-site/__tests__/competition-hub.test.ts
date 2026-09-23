@@ -2520,6 +2520,145 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Standings qualification status (spec 2026-09-22, plan Task 6) — through the
+// hub's REAL call site (AGENTS.md #1, the inert seam), never `buildTableView`
+// or `buildQualificationView` directly: the stage's V414 meta, the division's
+// fixtures and entrant statuses, the PINNED module's bounds and forfeit-score
+// declaration, the cascade and the org's locale all have to reach the builder
+// from `loadCompetitionHub` for these tables to carry a status.
+//
+// Mutants killed (Task 6): the call site deleted (`qualification` omitted) →
+// both cut tests; `awardAddsToLedger` hard-wired false (or read off anything
+// but the division's module) → the football walkover what-if.
+// ---------------------------------------------------------------------------
+describe("loadCompetitionHub — standings qualification status (spec 2026-09-22)", () => {
+  const E4: PublicEntrant = { ...ENTRANTS[2]!, id: "e4", display_name: "Gold Gulls", seed: 4 };
+  const CUT_STAGE: PublicStage = { ...STAGE, qualify_count: 2, next_stage_name: "Finals" };
+  const GENERIC_DIV: PublicDivision = {
+    ...DIV,
+    sport_key: "generic",
+    variant_key: "score",
+    sport_name: "Generic",
+    module_version: resolveLatestModule("generic").version,
+    config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  };
+
+  /** A league of four (the builder suite's `open4`): r1 e1>e4, e3>e2; r2
+   *  e1>e3, and e4 FORFEITS to e2 (a walkover); r3 e1–e2 and e3–e4 to play.
+   *  Points e1 6, e2 3, e3 3, e4 0; cut 2. Goals as the sport's snapshot keys
+   *  them — football's walkover is inside e4's 6–8 and e2's 7–2. */
+  function scene(sport: "football" | "generic") {
+    const g = (gf: number, ga: number): Record<string, number> =>
+      sport === "football" ? { gf, ga, gd: gf - ga } : { for: gf, against: ga, diff: gf - ga };
+    const r = (entrantId: string, rank: number, won: number, goals: [number, number]) => ({
+      entrantId,
+      played: 2,
+      won,
+      drawn: 0,
+      lost: 2 - won,
+      points: 3 * won,
+      metrics: g(...goals),
+      rank,
+    });
+    const win = (id: string, round: number, winner: string, loser: string) =>
+      F({ id, status: "decided", round_no: round, home_entrant_id: winner, away_entrant_id: loser, outcome: { kind: "win", winner, loser } });
+    const fixtures = [
+      win("q1", 1, "e1", "e4"),
+      win("q2", 1, "e3", "e2"),
+      win("q3", 2, "e1", "e3"),
+      F({ id: "q4", status: "forfeited", round_no: 2, home_entrant_id: "e2", away_entrant_id: "e4", outcome: { kind: "award", winner: "e2" } }),
+      F({ id: "q5", status: "scheduled", round_no: 3, home_entrant_id: "e1", away_entrant_id: "e2" }),
+      F({ id: "q6", status: "scheduled", round_no: 3, home_entrant_id: "e3", away_entrant_id: "e4" }),
+    ];
+    const standings: PublicStandings[] = [
+      {
+        stage_id: "st1",
+        pool_id: null,
+        updated_at: "2026-09-04T16:00:00.000Z",
+        rows: [r("e1", 1, 2, [2, 0]), r("e2", 2, 1, [7, 2]), r("e3", 3, 1, [1, 1]), r("e4", 4, 0, [6, 8])],
+      },
+    ];
+    // `divisions` on the shell drives the loop and `division` on the detail is
+    // what the reader returned; the hub reads the SHELL's row for the module.
+    const division: PublicDivision =
+      sport === "football" ? { ...DIV, tiebreakers: ["points", "diff", "for"] } : GENERIC_DIV;
+    getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [division], liveNow: [] });
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ division, stages: [CUT_STAGE], fixtures, standings, entrants: [...ENTRANTS, E4] }),
+    );
+  }
+
+  it("empty case first: a stage with no cut publishes qualification null and a null qual on every row", async () => {
+    // The default division detail (STAGE: V414 gave no cut).
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables).toHaveLength(1);
+    expect(doc.tables[0]!.qualification).toBeNull();
+    expect(doc.tables[0]!.rows.map((r) => r.qual)).toEqual([null, null]);
+    // …and the same league WITH a cut does carry one (its positive pair).
+    scene("football");
+    const cut = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(cut.tables[0]!.qualification).not.toBeNull();
+  });
+
+  it("a cut table carries the cut line, the legend and each entrant's status, in the org's locale", async () => {
+    scene("football");
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    const table = doc.tables[0]!;
+    expect(table.qualification).toEqual({
+      cutIndex: 2,
+      label: "Top 2 go through to Finals · 1 round left",
+      legend: { through: "Through", open: "Still open", out: "Out", hint: "Tap a rank for details." },
+    });
+    const byId = Object.fromEntries(table.rows.map((r) => [r.entrantId, r.qual]));
+    expect(byId.e1).toMatchObject({
+      status: "win_k",
+      label: "Win and in",
+      ariaLabel: "Rank 1, Win and in, show details",
+      headline: "Win your next match and you're through to Finals.",
+    });
+    expect(byId.e4).toMatchObject({
+      status: "needs_help",
+      label: "Needs help",
+      ifYouLose: "If you lose your next match: Out.",
+    });
+    // Every row of this table has a status — none is keyed to the wrong row.
+    expect(table.rows.map((r) => [r.entrantId, r.qual?.status])).toEqual([
+      ["e1", "win_k"],
+      ["e2", "needs_help"],
+      ["e3", "needs_help"],
+      ["e4", "needs_help"],
+    ]);
+  });
+
+  it("the average match reads the PINNED module: football's walkover scores 3–0, so it counts; generic's does not", async () => {
+    // e4 is −2 over 14 goals and its rival e2 is +5, so a win by 8 draws it
+    // level on goal difference. Football writes its forfeit score into the
+    // ledger (cfg.awardScore), so those 14 goals are TWO matches' — an average
+    // of 7, no single match holds a win by 8, and the what-if gives the rule
+    // and today's values.
+    scene("football");
+    const football = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
+    const e4 = football.rows.find((r) => r.entrantId === "e4")!.qual!;
+    expect(e4.whatIf).toBe(
+      "If you finish level on points with Red Rockets, goal/run difference decides. Now: you -2, Red Rockets +5.",
+    );
+    expect(e4.whatIfAssumption).toBeNull();
+    // Its pair: the generic module's walkover adds no goals — one real match
+    // of 14, and the target stands.
+    scene("generic");
+    const generic = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
+    const g4 = generic.rows.find((r) => r.entrantId === "e4")!.qual!;
+    expect(g4.whatIf).toBe(
+      "If you finish level on points with Red Rockets, goal/run difference decides: win your next match by 8 or more to finish ahead.",
+    );
+    expect(g4.whatIfAssumption).toBe(
+      "Assumes Red Rockets's figures stay the same and your next match is an average one.",
+    );
+  });
+});
+
 describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
   it("keys on the competition id and tags the org, the competition and its division", async () => {
     const doc = await getPublicCompetitionHub("riverside", "autumn-cup");
@@ -2527,8 +2666,10 @@ describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
     expect(cacheCalls).toHaveLength(1);
     // v2 since the Knockout tab (plan R4): the page renders this cached
     // document WITHOUT re-parsing it, so a v1 entry — which has no
-    // `knockouts` — must never be served to a renderer that reads one.
-    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v3", "comp-1"]);
+    // `knockouts` — must never be served to a renderer that reads one. v4
+    // since standings qualification status (a v3 table has no
+    // `qualification` and its rows no `qual`).
+    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v4", "comp-1"]);
     // Derived from the SAME tag helpers the writers use, so the two halves of
     // the invalidation story cannot drift: `fireDivisionRevalidate` fires
     // `divisionTag` and `competitionTag`, and both are declared here.

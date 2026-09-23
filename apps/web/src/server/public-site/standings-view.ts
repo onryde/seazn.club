@@ -31,6 +31,7 @@ import type { TiebreakerKey } from "@seazn/engine/sport";
 import { standingsColumns, formatMetric, type MetricSpecLike } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { TableViewT } from "./competition-hub-schema";
+import type { QualificationView } from "./qualification-view";
 
 /** The columns a phone shows without asking: played, won, lost, points.
  *  Everything else — draws, the sport's own metrics, the cascade's derived
@@ -287,12 +288,17 @@ export interface TableViewInput {
   /** `t(dict, …)` bound by the caller, in the ORG's locale. The builder resolves
    *  every string it emits; nothing downstream re-derives one. */
   msg: (key: TKey, vars?: Record<string, string | number>) => string;
+  /** Standings qualification (spec 2026-09-22), already resolved by
+   *  `buildQualificationView`; null/absent = no cut to show. Carried, never
+   *  derived: the table line as is, and each row's status by entrant id. */
+  qualification?: QualificationView | null;
 }
 
 export function buildTableView(input: TableViewInput): TableViewT {
   const columns = standingsColumns(input.metricSpecs, input.cascade, input.rows, DERIVED_METRICS);
   const ranked = [...input.rows].sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
   const name = (id: string) => input.entrantNames[id] ?? id;
+  const qual = input.qualification ?? null;
 
   return {
     id: input.id,
@@ -332,11 +338,12 @@ export function buildTableView(input: TableViewInput): TableViewT {
             rule: tieBreakRule(r.tieBreak.key, input.msg),
           })
         : null,
-      // Task 6 wires `buildQualificationView` in; until then no table carries
-      // a status, which the schema states as null (never an absent key).
-      qual: null,
+      // Keyed by entrant id, never by rank or position: a shared rank is two
+      // rows, and the view's row order is its own. No status = null, which the
+      // schema states as a required key (never an absent one).
+      qual: qual !== null && Object.hasOwn(qual.rows, r.entrantId) ? qual.rows[r.entrantId]! : null,
       champion: input.championId === r.entrantId,
     })),
-    qualification: null,
+    qualification: qual?.table ?? null,
   };
 }

@@ -47,7 +47,7 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
  *     competition they are not rostered in (`public_players_v` is org-scoped);
  *   - the division tag of every division they are rostered in, deduped,
  *     EXPIRED: the entries that mask their name for others (`pub-div-v3`,
- *     `pub-fixture-v3`, `pub-hub-v3`, and other players' cards through
+ *     `pub-fixture-v3`, `pub-hub-v4`, and other players' cards through
  *     `pub-player-v17`), and the pages built on them. It used to be 'max',
  *     which serves the PREVIOUS render while the rebuild runs (measured after
  *     a consent OFF: 2.8–4.3s, 2–3 loads, in a local prod build at load 16–40).
@@ -198,7 +198,7 @@ export function dropNamedPublicDocuments(
  *  read-your-own-writes (the smoke hub champion check reads a single time; a
  *  realtime push triggers one refresh). Every spectator
  *  entry a score changes carries the division tag: `pub-div-v3`,
- *  `pub-fixture-v3` and `pub-hub-v3` carry their own division's, and the
+ *  `pub-fixture-v3` and `pub-hub-v4` carry their own division's, and the
  *  player card's `pub-player-v17` carries every division of its competition,
  *  because its match lines can come from any of them (final review I1). An
  *  expired tag beats a stale one on an entry carrying both. The competition

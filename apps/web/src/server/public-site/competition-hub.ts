@@ -32,7 +32,7 @@ import { sql } from "@/lib/db";
 import { inTheField } from "@/lib/entrant-field";
 import { hasFeature } from "@/lib/entitlements";
 import { toLocale } from "@/lib/i18n-constants";
-import { getDictionary, t, type TKey } from "@/lib/i18n";
+import { getDictionary, plural, t, type TKey } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/lib/public-site";
@@ -73,6 +73,12 @@ import {
 import { statusOf } from "./match-centre";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
+import {
+  buildQualificationView,
+  divisionAwardAddsToLedger,
+  divisionPointsBounds,
+  stageQualMeta,
+} from "./qualification-view";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
 import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
@@ -570,6 +576,8 @@ export async function loadCompetitionHub(
   const locale = toLocale(org.default_locale);
   const dict = await getDictionary(locale, "public");
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
+  const pluralMsg = (key: string, count: number, vars?: Record<string, string | number>) =>
+    plural(dict, key, count, locale, vars);
   const ui = (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars);
   const base = `/shared/${org.slug}/${competition.slug}`;
   const generatedAt = now.toISOString();
@@ -771,6 +779,14 @@ export async function loadCompetitionHub(
       (a, b) =>
         (a.status === "complete" ? 1 : 0) - (b.status === "complete" ? 1 : 0) || a.seq - b.seq,
     );
+    // Standings qualification status (spec 2026-09-22): the division-wide
+    // inputs, once. Bounds, the walkover's ledger and the cascade all come
+    // from the division's PINNED module and live cfg — the same cascade the
+    // table is ranked and captioned by.
+    const cascade = d.tiebreakers ?? module_?.defaultTiebreakers ?? [];
+    const bounds = divisionPointsBounds(module_, d.config);
+    const awardAddsToLedger = divisionAwardAddsToLedger(module_, d.config);
+    const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
     for (const stage of orderedStages) {
       if (BRACKET_KINDS.has(stage.kind)) continue;
       const snapshots = standings
@@ -787,13 +803,26 @@ export async function loadCompetitionHub(
             fullHref: `${divHref}?tab=standings`,
             rows: snap.rows,
             metricSpecs: module_?.metrics ?? [],
-            cascade: d.tiebreakers ?? module_?.defaultTiebreakers ?? [],
+            cascade,
             entrantNames: names,
             entrantLogos: badges,
             entrantColours: colours,
             championId,
             updatedAt: snap.updated_at,
             msg,
+            qualification: buildQualificationView({
+              stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
+              poolId: snap.pool_id ?? null,
+              rows: snap.rows,
+              fixtures,
+              entrantStatuses,
+              bounds,
+              awardAddsToLedger,
+              cascade,
+              entrantNames: names,
+              msg,
+              plural: pluralMsg,
+            }),
           }),
         );
       }
@@ -1059,12 +1088,15 @@ export async function getPublicCompetitionHub(
   const shell = await getPublicCompetition(orgSlug, compSlug);
   if (!shell) return null;
   // v2 since the Knockout tab added `knockouts`; v3 since squads, bans and
-  // division prose (division-page parity, 2026-09-16). The page renders this
-  // cached document WITHOUT re-parsing it (unlike `usecases/public.ts`, whose
-  // Redis hit goes back through `CompetitionHubDoc.safeParse`), so an older
-  // entry must never reach a renderer that reads the new fields. Bump again on
-  // any shape change a cached hit cannot satisfy.
-  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v3", shell.competition.id], {
+  // division prose (division-page parity, 2026-09-16); v4 since standings
+  // qualification status (`qualification` on a table, `qual` on its rows,
+  // 2026-09-22). The page renders this cached document WITHOUT re-parsing it
+  // (unlike `usecases/public.ts`, whose Redis hit goes back through
+  // `CompetitionHubDoc.safeParse` — so that key, `pub:v1:hub:{id}`, needs no
+  // bump: `hub-cache-poisoned-entry.test.ts` pins an old-shape hit as a miss),
+  // so an older entry must never reach a renderer that reads the new fields.
+  // Bump again on any shape change a cached hit cannot satisfy.
+  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v4", shell.competition.id], {
     tags: [
       orgTag(orgSlug),
       competitionTag(shell.competition.id),
