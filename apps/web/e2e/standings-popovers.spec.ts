@@ -320,20 +320,31 @@ for (const surface of [DIVISION, HUB]) {
       // A tap on the panel itself is NOT outside: it stays open.
       await panel.click();
       await expectOpen(trigger, panel);
-      // Outside, on the page's own heading — nothing interactive there.
-      await page.locator("h1").first().click();
-      await expectClosed(trigger, panel);
-
-      // And outside INSIDE the table: another row's name cell.
-      await trigger.click();
-      await expectOpen(trigger, panel);
-      await page.locator('th[scope="row"]').filter({ hasText: NAMES.d }).first().click();
-      await expectClosed(trigger, panel);
-
       // Its own trigger still toggles it shut, as the <details> did.
       await trigger.click();
-      await expectOpen(trigger, panel);
-      await trigger.click();
+      await expectClosed(trigger, panel);
+
+      // The outside tap itself, with focus NOWHERE in the popover. On iOS
+      // Safari a tap does not focus a button, so the document `pointerdown`
+      // listener is the ONLY thing that closes it there. Opened by a real
+      // click, focus would sit on the button and the outside tap would close
+      // it by focusout first — green with the pointerdown close deleted.
+      const openWithoutFocus = async () => {
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await trigger.dispatchEvent("click");
+        await expectOpen(trigger, panel);
+        expect(
+          await trigger.evaluate((btn) => btn.parentElement!.contains(document.activeElement)),
+          "focus is in the popover, so focusout alone could close it",
+        ).toBe(false);
+      };
+      // Outside, on the page's own heading — nothing interactive there.
+      await openWithoutFocus();
+      await page.locator("h1").first().click();
+      await expectClosed(trigger, panel);
+      // And outside INSIDE the table: another row's name cell.
+      await openWithoutFocus();
+      await page.locator('th[scope="row"]').filter({ hasText: NAMES.d }).first().click();
       await expectClosed(trigger, panel);
     });
 
@@ -492,31 +503,50 @@ for (const surface of [DIVISION, HUB]) {
       }
     });
 
-    test("a panel too tall for either side is clamped inside the table and scrolls — below on the first row, above on the last", async ({
+    test("a panel too tall for either side is clamped inside the table and scrolls — on the roomier side, and above on the last row", async ({
       browser,
     }) => {
       const page = await open(browser, surface, 1280);
       // Make every note taller than the whole table: neither side can hold it.
       await page.addStyleTag({ content: '[role="note"]::after { content: ""; display: block; height: 900px; }' });
-      for (const [who, row] of [["a", "first"], ["c", "last"]] as const) {
+      // Rank order is a, b, d, c (see the seed). a: first row, more room below.
+      // d: a MIDDLE row with more room above than below — the only case where
+      // "the roomier side" and "the last-row rule" disagree with "below",
+      // so the only one that pins the roomier-side choice itself. c: last row.
+      for (const [who, row] of [["a", "first"], ["d", "middle"], ["c", "last"]] as const) {
         const trigger = surface.tie(page, who);
         const panel = await panelOf(trigger);
         await trigger.evaluate((el) => el.scrollIntoView({ block: "center", inline: "center" }));
         await trigger.click();
         await expectOpen(trigger, panel);
         expect(await outsideScrollBox(panel), `the ${row} row's over-tall panel is clipped by its box`).toBeNull();
-        const m = await panel.evaluate((el) => ({
-          scrolls: el.scrollHeight - el.clientHeight,
-          overflowY: getComputedStyle(el).overflowY,
-          top: el.getBoundingClientRect().top,
-          bottom: el.getBoundingClientRect().bottom,
-          anchorTop: el.parentElement!.getBoundingClientRect().top,
-          anchorBottom: el.parentElement!.getBoundingClientRect().bottom,
-        }));
+        const m = await panel.evaluate((el) => {
+          const anchor = el.parentElement!.getBoundingClientRect();
+          const box = el.closest('[role="region"]')!;
+          const top = box.getBoundingClientRect().top + box.clientTop;
+          return {
+            scrolls: el.scrollHeight - el.clientHeight,
+            overflowY: getComputedStyle(el).overflowY,
+            top: el.getBoundingClientRect().top,
+            bottom: el.getBoundingClientRect().bottom,
+            anchorTop: anchor.top,
+            anchorBottom: anchor.bottom,
+            roomAbove: anchor.top - top,
+            roomBelow: top + box.clientHeight - anchor.bottom,
+            lastRow: el.closest("tr")!.matches(":last-child"),
+          };
+        });
         expect(m.scrolls, `the ${row} row's clamped panel does not scroll its own text`).toBeGreaterThan(0);
         expect(m.overflowY).toBe("auto");
         if (row === "first") {
+          expect(m.roomBelow, "seed: the first row should have more room below").toBeGreaterThan(m.roomAbove);
           expect(m.top, "the first row has more room below: the clamp should hang there").toBeGreaterThanOrEqual(m.anchorBottom - 0.5);
+        } else if (row === "middle") {
+          // The premise, so a reshaped table cannot turn this into a second
+          // "below" case or a second last-row case without saying so.
+          expect(m.lastRow, "seed: d should not be the last row").toBe(false);
+          expect(m.roomAbove, "seed: d should have more room above than below").toBeGreaterThan(m.roomBelow + 8);
+          expect(m.bottom, "a middle row with more room above: the clamp should sit above").toBeLessThanOrEqual(m.anchorTop + 0.5);
         } else {
           expect(m.bottom, "the last row has no room below: the clamp should sit above").toBeLessThanOrEqual(m.anchorTop + 0.5);
         }

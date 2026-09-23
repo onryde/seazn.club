@@ -154,6 +154,9 @@ export function StandingsPopover({
 
   useEffect(() => {
     if (!open) return;
+    // The outside-tap close. Not redundant with the focusout close below: on
+    // iOS Safari a tap does not focus the button, so no focusout ever fires
+    // and this is the ONLY thing that closes it there.
     const onPointerDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
