@@ -23,7 +23,7 @@
 import { z } from "zod";
 import type { AppendCallResult, AppendEventBody, ScoringTransport } from "./pipeline";
 import type { AppendSuccess, LedgerSlotEvent } from "./types";
-import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "@/lib/next-match-started";
+import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "../../../lib/next-match-started";
 
 // Review finding 1: listEventsSince previously cast the ledger JSON straight
 // to LedgerSlotEvent[] with no runtime validation, so an OMITTED
