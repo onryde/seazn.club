@@ -13,7 +13,8 @@
 // wire), a confirmed reissue minting a new secret whose predecessor no longer
 // opens a pad, a confirmed "Revoke now" sending exactly ONE DELETE; the
 // ensure route's REAL 422 on a finalized match rendered as the localised
-// dlink.error.matchOver, never the server's English; and the Rebuild confirm
+// dlink.error.matchOver, never the server's English, with every hand-over
+// control gone (owner ruling 2026-09-23); and the Rebuild confirm
 // naming printed sheets only when the stage has device links (owner Q4).
 // Every panel state is checked at 320/768/1280: no horizontal page scroll,
 // nothing overflowing the panel, every button hit-tested at its centre and at
@@ -385,11 +386,17 @@ test("a real 422 on a finalized match renders the localised refusal, never the s
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(res.status(), "the ensure route's own refusal").toBe(422);
     expect(body.error.message, "the server really sent English").toMatch(/nothing left to score/);
-    await expect(panel).toContainText(d["dlink.error.matchOver"]!);
+    await expect(panel.getByTestId("device-link-match-over")).toHaveText(d["dlink.error.matchOver"]!);
     await expect(panel).not.toContainText(body.error.message);
     await expect(panel).not.toContainText("fixture is finalized");
     // en's own copy shares "nothing left to score"; any other locale must not.
     if (locale !== "en") await expect(panel).not.toContainText("nothing left to score");
+    // Owner ruling 2026-09-23: a finished match offers nothing to hand over —
+    // Create is gone (not disabled), and so is every other control; the line
+    // above is all the panel says. Waited on the line first, so these counts
+    // run after the state they prove.
+    await expect(panel.getByTestId("device-link-mint")).toHaveCount(0);
+    await expect(panel.getByRole("button")).toHaveCount(0);
     await capture(page, panel, testInfo, `${locale}-8-refused`);
   }
 });

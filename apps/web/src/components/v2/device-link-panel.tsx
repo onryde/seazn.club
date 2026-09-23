@@ -56,9 +56,27 @@ export function DeviceLinkPanel({
   const [busy, setBusy] = useState(false);
   /** The open "this kills the QR" question, if any. */
   const [confirm, setConfirm] = useState<"reissue" | "revoke" | null>(null);
+  /** The fixture is finalized or cancelled: nothing left to hand over. */
+  const [over, setOver] = useState(false);
   const fmtDate = (iso: string) => new Date(iso).toLocaleString();
-  // Every refusal below is shown as `msg(failureKey(err))` — localised by code
-  // and status, never the server's English (T3 review finding 3).
+
+  /** Every refusal below lands here, localised by code and status — never the
+   *  server's English (T3 review finding 3). A match that is over is not an
+   *  error to retry: the routes' only 422 means finalized or cancelled, and
+   *  from then on the panel offers no control at all, only that line (owner
+   *  ruling 2026-09-23). The console unmounts this panel on its OWN status, so
+   *  the refusal is how a finalize from another session reaches it. */
+  function refused(err: unknown) {
+    const key = failureKey(err);
+    if (key === "dlink.error.matchOver") {
+      setOver(true);
+      setMinted(null);
+      setConfirm(null);
+      setError(null);
+    } else {
+      setError(msg(key));
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -94,7 +112,7 @@ export function DeviceLinkPanel({
       await refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
-      else setError(msg(failureKey(err)));
+      else refused(err);
     } finally {
       setBusy(false);
     }
@@ -115,7 +133,7 @@ export function DeviceLinkPanel({
       await refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
-      else setError(msg(failureKey(err)));
+      else refused(err);
     } finally {
       setBusy(false);
     }
@@ -132,7 +150,7 @@ export function DeviceLinkPanel({
       setConfirm(null);
       await refresh();
     } catch (err) {
-      setError(msg(failureKey(err)));
+      refused(err);
     } finally {
       setBusy(false);
     }
@@ -171,6 +189,24 @@ export function DeviceLinkPanel({
         </div>
       </div>
     ) : null;
+
+  if (over) {
+    return (
+      <section
+        className={embedded ? "rounded-xl border border-purple-100 bg-purple-50/40 p-4" : "card p-5"}
+        data-role="device-link-panel"
+      >
+        {!embedded && <h2 className="text-sm font-semibold text-slate-700">{msg("dlink.title")}</h2>}
+        <p
+          data-testid="device-link-match-over"
+          role="status"
+          className={`text-xs text-slate-600 ${embedded ? "" : "mt-1"}`}
+        >
+          {msg("dlink.error.matchOver")}
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section

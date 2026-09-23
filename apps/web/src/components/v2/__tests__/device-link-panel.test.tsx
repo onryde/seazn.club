@@ -398,3 +398,70 @@ describe("device-link panel — every refusal is localised, never the server's E
     expect(island.text()).not.toContain("Failed to fetch");
   });
 });
+
+// Owner ruling (2026-09-23): once the fixture is finalized or cancelled there
+// is nothing to hand over. The panel learns it from the hand-over routes' own
+// refusal (their only 422 — a match that is over, see `failureKey`), because
+// the console unmounts the panel on its OWN status and a finalize from another
+// session is not seen until then. From that moment it offers no control at all
+// — no Create, no Show QR, no Revoke — and says only the match-over line.
+describe("device-link panel — a finished match offers nothing to hand over (owner ruling 2026-09-23)", () => {
+  const HAND_OVER_CONTROLS = [
+    "device-link-mint",
+    "device-link-show",
+    "device-link-revoke",
+    "device-link-reissue",
+    "device-link-revoke-now",
+  ];
+  const MATCH_OVER = { status: 422, code: "ERROR", message: "fixture is finalized — nothing left to score" };
+
+  it("a live match: Create scoring link is offered, and no match-over line shows", async () => {
+    api.active = null;
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    expect(byTestId(island.tree(), "device-link-mint")).toBeDefined();
+    expect(byTestId(island.tree(), "device-link-match-over")).toBeUndefined();
+  });
+
+  it.each([
+    ["Create (no link yet)", null, "device-link-mint"],
+    ["Show QR (a live link)", SEALED, "device-link-show"],
+  ] as const)("%s answered 422: every hand-over control is gone, only the localised match-over line remains", async (_, active, control) => {
+    api.active = active;
+    api.refuse = { ...MATCH_OVER };
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), control));
+    await flush();
+    for (const id of HAND_OVER_CONTROLS) expect(byTestId(island.tree(), id), id).toBeUndefined();
+    expect(buttons(island.tree()), "no button of any kind").toEqual([]);
+    const line = byTestId(island.tree(), "device-link-match-over");
+    expect(line, "the match-over line renders").toBeDefined();
+    expect(textOf(line!)).toBe(t("dlink.error.matchOver"));
+    // "Only" the line: the card's own heading, then the line — no description,
+    // no error box repeating it, no server English.
+    expect(island.text()).toBe(`${t("dlink.title")} ${t("dlink.error.matchOver")}`);
+  });
+
+  it("embedded in the console card: the line alone, with no heading", async () => {
+    api.active = null;
+    api.refuse = { ...MATCH_OVER };
+    const island = renderIsland(DeviceLinkPanel, { ...PROPS, embedded: true });
+    await flush();
+    click(byTestId(island.tree(), "device-link-mint"));
+    await flush();
+    expect(island.text()).toBe(t("dlink.error.matchOver"));
+  });
+
+  it("a refusal that is NOT the match being over (429) keeps every control — the terminal state is only for a finished match", async () => {
+    api.active = null;
+    api.refuse = { status: 429, code: "RATE_LIMITED", message: "Too many requests — slow down and try again." };
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-mint"));
+    await flush();
+    expect(byTestId(island.tree(), "device-link-mint"), "Create is still offered").toBeDefined();
+    expect(byTestId(island.tree(), "device-link-match-over")).toBeUndefined();
+    expect(island.text()).toContain(t("dlink.error.rateLimited"));
+  });
+});
