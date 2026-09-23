@@ -4153,6 +4153,7 @@ export type DictionaryKey =
   | "player.stats"
   | "player.upcoming"
   | "player.upcoming.otherEvent"
+  | "player.upcoming.showLess"
   | "player.upcoming.showMore"
   | "player.upcoming.timeTbd"
   | "poster.drawTitle"

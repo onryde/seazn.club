@@ -10,6 +10,7 @@ import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { interpolate } from "@/lib/i18n-runtime";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { PlayerUpcomingRow } from "@/server/public-site/public-player-matches";
 import { PlayerUpcoming, UPCOMING_VISIBLE } from "../player-upcoming";
 
@@ -37,6 +38,10 @@ const render = (rows: PlayerUpcomingRow[], dict: Dict = en as Dict, locale: Loca
 
 const rowIds = (html: string) => [...html.matchAll(/data-testid="mh-player-upcoming-row-([^"]+)"/g)].map((m) => m[1]);
 const seven = ["a", "b", "c", "d", "e", "f", "g"].map((id) => row(id));
+
+/** The text a screen reader gets: aria-hidden subtrees dropped, then every tag. */
+const spokenText = (html: string) =>
+  html.replace(/<span aria-hidden="true"[^>]*>[^<]*<\/span>/g, "").replace(/<[^>]+>/g, "");
 
 describe("PlayerUpcoming", () => {
   it("EMPTY: renders nothing at all (the page shows no section)", () => {
@@ -94,7 +99,49 @@ describe("PlayerUpcoming", () => {
   it("the truncation chain: the link and the text column carry min-w-0, long text truncates", () => {
     const html = render([row("x")]);
     expect(html).toMatch(/data-testid="mh-player-upcoming-row-x" class="[^"]*\bmin-w-0\b/);
+    // The text column: the grid's second cell, whose first child is the opponent line.
+    expect(html).toMatch(/<span class="[^"]*\bmin-w-0\b[^"]*"><span class="[^"]*\btruncate\b[^"]*">[^<]*Opponent x</);
     expect(html).toMatch(/class="[^"]*\btruncate\b[^"]*"[^>]*>[^<]*Opponent x</);
+  });
+
+  it("the date tile writes day and month in the VENUE zone (20:00Z is 2 Jul 01:30 in Kolkata, still 1 Jul in UTC)", () => {
+    const ISO = "2030-07-01T20:00:00.000Z";
+    const at = (timeZone: string, opts: Intl.DateTimeFormatOptions) =>
+      new Intl.DateTimeFormat(intlLocaleFor("en"), { timeZone, ...opts }).format(Date.parse(ISO));
+    const day = at("Asia/Kolkata", { day: "numeric" });
+    const month = at("Asia/Kolkata", { month: "short" });
+    expect(day, "premise: the venue day differs from the UTC day").not.toBe(at("UTC", { day: "numeric" }));
+    const html = render([row("late", { scheduledAt: ISO })]);
+    const late = html.slice(html.indexOf('mh-player-upcoming-row-late"'));
+    expect(late).toContain(`>${esc(day)}<`);
+    expect(late).toContain(`>${esc(month)}<`);
+    expect(late).toContain(">01:30<");
+  });
+
+  it("competition and division are spoken as two words: the separator is aria-hidden, the spaces are not", () => {
+    const html = render([row("x")]);
+    const where = html.slice(html.indexOf('data-testid="mh-player-upcoming-where"'));
+    expect(where).toContain('aria-hidden="true"');
+    expect(spokenText(where)).toMatch(/Autumn Cup\s+Premier/);
+  });
+
+  it("the summary stays visible when open (it holds focus) and swaps its label: Show N more closed, Show less open", () => {
+    const html = render(seven);
+    expect(html).toMatch(/data-testid="mh-player-upcoming-rest" class="[^"]*\bgroup\b/); // group-open: is inert without it
+    const summary = html.slice(html.indexOf('data-testid="mh-player-upcoming-more"'), html.indexOf("</summary>"));
+    expect(summary).not.toMatch(/^data-testid="mh-player-upcoming-more" class="[^"]*group-open:hidden/);
+    expect(summary).toContain(`class="group-open:hidden">${esc(interpolate(en["player.upcoming.showMore"], { count: 2 }))}<`);
+    expect(summary).toContain(`class="hidden group-open:inline">${esc(en["player.upcoming.showLess"])}<`);
+  });
+
+  it.each([
+    ["en", en],
+    ["es", es],
+    ["fr", fr],
+    ["nl", nl],
+  ] as const)("%s: Time TBD is the SAME words the match centre and the matches hub already use", (_locale, dict) => {
+    expect(dict["player.upcoming.timeTbd"]).toBe(dict["matchesHub.timeTbd"]);
+    expect(dict["player.upcoming.timeTbd"]).toBe(dict["matchCentre.status.timeTbd"]);
   });
 
   it.each([
@@ -111,6 +158,7 @@ describe("PlayerUpcoming", () => {
     expect(html).toContain(`>${esc(dict["player.upcoming.timeTbd"])}<`);
     expect(html).toContain(`>${esc(dict["player.upcoming.otherEvent"])}<`);
     expect(html).toContain(`>${esc(interpolate(dict["player.upcoming.showMore"], { count: 2 }))}<`);
+    expect(html).toContain(`>${esc(dict["player.upcoming.showLess"])}<`);
     expect(html).not.toContain("player.upcoming.");
   });
 });

@@ -5,15 +5,18 @@
 // competition carries the Other event chip.
 //
 // "Show N more" is a native <details> (plan D2): no JS and no dictionary
-// slice sent to the client. `player-matches-dict.ts` exists because an
-// island's props are serialised; a server component's are not.
+// slice sent to the client. Open, its summary reads "Show less" (a CSS label
+// swap on `group-open:`) rather than disappearing. `player-matches-dict.ts`
+// exists because an island's props are serialised; a server component's are
+// not.
 //
 // Every subpart is a plain function called inline (the `player-matches.tsx`
 // convention), so a static-markup test sees every word.
 //
 // No middle-dot meta (§3 copy rules): time, court and venue are separate
 // elements; the "›" between competition and division is the spec's own
-// separator, aria-hidden.
+// separator, aria-hidden — so the spaces around it sit OUTSIDE the hidden
+// span, or a screen reader reads "Autumn CupPremier".
 import Link from "next/link";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -91,8 +94,8 @@ function upcomingRow(row: PlayerUpcomingRow, dict: Dict, locale: Locale) {
               </span>
             ) : null}
             <span data-testid="mh-player-upcoming-where" className="min-w-0 truncate">
-              <span>{row.competitionName}</span>
-              <span aria-hidden> › </span>
+              <span>{row.competitionName}</span>{" "}
+              <span aria-hidden="true">›</span>{" "}
               <span>{row.divisionName}</span>
             </span>
           </span>
@@ -114,9 +117,12 @@ export function PlayerUpcoming({ rows, dict, locale }: PlayerUpcomingProps) {
         <details data-testid="mh-player-upcoming-rest" className="group min-w-0 space-y-2">
           <summary
             data-testid="mh-player-upcoming-more"
-            className="flex min-h-11 cursor-pointer list-none items-center justify-center rounded-xl text-sm font-semibold text-accent-strong hover:underline group-open:hidden [&::-webkit-details-marker]:hidden"
+            className="flex min-h-11 cursor-pointer list-none items-center justify-center rounded-xl text-sm font-semibold text-accent-strong hover:underline [&::-webkit-details-marker]:hidden"
           >
-            {t(dict, "player.upcoming.showMore", { count: rest.length })}
+            {/* The summary stays visible when open: it holds keyboard focus, and
+                hiding it would drop focus to <body>. Its LABEL swaps instead. */}
+            <span className="group-open:hidden">{t(dict, "player.upcoming.showMore", { count: rest.length })}</span>
+            <span className="hidden group-open:inline">{t(dict, "player.upcoming.showLess")}</span>
           </summary>
           <ul className={LIST}>{rest.map((r) => upcomingRow(r, dict, locale))}</ul>
         </details>
