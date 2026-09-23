@@ -67,12 +67,27 @@ function statusFor(input: QualificationInput, entrantId: EntrantId, own: Own): Q
   return { kind: "needs_help" };
 }
 
+/** Malformed input fails CLOSED (review fix 1, controller ruling). Read
+ *  leniently, each of these prints a false status: a missing count reads as
+ *  "final", NaN as "never reaches" (every comparison false), a negative count
+ *  as points taken away. A withdrawn row's count is never read (it is frozen),
+ *  but its points are — it is still a rival. */
+function wellFormed(input: QualificationInput): boolean {
+  return input.rows.every((row) => {
+    if (!Number.isFinite(row.points)) return false;
+    if (!row.active) return true;
+    const r = input.remaining.get(row.entrantId) ?? Number.NaN; // missing → not a count
+    return Number.isInteger(r) && r >= 0;
+  });
+}
+
 /** Per-row status for one table, or null when the table shows none (§3.3). */
 export function qualificationStatus(
   input: QualificationInput,
 ): ReadonlyMap<EntrantId, QualRowResult | null> | null {
   if (!input.anyPlayed || input.complete) return null;
   if (!Number.isInteger(input.cut) || input.cut < 1 || input.rows.length === 0) return null;
+  if (!wellFormed(input)) return null;
   const out = new Map<EntrantId, QualRowResult | null>();
   for (const row of input.rows) {
     if (!row.active) {

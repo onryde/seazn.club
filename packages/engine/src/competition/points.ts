@@ -236,25 +236,35 @@ export function applyRankLocks(
 // module's. Bonuses are summed per outcome class — an over-approximation when
 // two bonuses of one class exclude each other, which is safe (R3: cautious,
 // never wrong).
-const WIN_BONUS = new Set(["win_margin_gte", "forfeit_win"]);
-const LOSS_BONUS = new Set(["loss_margin_lte", "score_ratio_gte", "forfeit_loss"]);
+//
+// Which outcome each bonus can land on, as `bonusesFor` applies it. A Record
+// over the zod enum, not a Set of strings (review fix 1): a new `when` kind is
+// then a tsc error here until someone classifies it, instead of a bonus that
+// silently falls outside every bound.
+type BonusWhen = PointsRule["bonuses"][number]["when"];
+type BonusClass = "win" | "loss" | "draw" | "no_result";
+const BONUS_CLASS: Record<BonusWhen, BonusClass> = {
+  win_margin_gte: "win",
+  forfeit_win: "win",
+  loss_margin_lte: "loss",
+  score_ratio_gte: "loss",
+  forfeit_loss: "loss",
+  draw: "draw",
+  no_result: "no_result",
+};
 
 export function pointsRuleBounds(rule: PointsRule): MatchPointsBounds {
-  const sum = (kinds: (when: string) => boolean, sign: 1 | -1) =>
+  const sum = (cls: BonusClass, sign: 1 | -1) =>
     rule.bonuses
-      .filter((b) => kinds(b.when))
+      .filter((b) => BONUS_CLASS[b.when] === cls)
       .reduce((s, b) => s + (sign === 1 ? Math.max(0, b.points) : Math.min(0, b.points)), 0);
-  const win = (w: string) => WIN_BONUS.has(w);
-  const loss = (w: string) => LOSS_BONUS.has(w);
-  const draw = (w: string) => w === "draw";
-  const noResult = (w: string) => w === "no_result";
   const wins = [rule.base.win, ...(rule.forfeit ? [rule.forfeit.winnerPoints] : [])];
   const losses = [rule.base.loss, ...(rule.forfeit ? [rule.forfeit.loserPoints] : [])];
-  const winFloor = Math.min(...wins) + sum(win, -1);
-  const lossCeil = Math.max(...losses) + sum(loss, 1);
+  const winFloor = Math.min(...wins) + sum("win", -1);
+  const lossCeil = Math.max(...losses) + sum("loss", 1);
   return {
-    max: Math.max(Math.max(...wins) + sum(win, 1), lossCeil, rule.base.draw + sum(draw, 1), sum(noResult, 1)),
-    min: Math.min(winFloor, Math.min(...losses) + sum(loss, -1), rule.base.draw + sum(draw, -1), sum(noResult, -1)),
+    max: Math.max(Math.max(...wins) + sum("win", 1), lossCeil, rule.base.draw + sum("draw", 1), sum("no_result", 1)),
+    min: Math.min(winFloor, Math.min(...losses) + sum("loss", -1), rule.base.draw + sum("draw", -1), sum("no_result", -1)),
     winFloor,
     lossCeil,
   };

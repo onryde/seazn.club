@@ -202,8 +202,10 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
   // from max — the RUGBY case and the any-rule property. The property alone
   // kills: winFloor without negative win bonuses; min without negative loss
   // bonuses; the draw term without its bonus (max or min); the no-result term
-  // dropped (max or min); score_ratio_gte / forfeit_loss / forfeit_win left out
-  // of their class; lossCeil dropped from max; winFloor dropped from min. The
+  // dropped (max or min); lossCeil dropped from max; winFloor dropped from min;
+  // and (review fix 1, BONUS_CLASS is a Record) each of the 7 `when` kinds moved
+  // to a wrong class, or the class filter inverted — RUGBY also kills the two
+  // margin kinds. A NEW kind is a tsc error (TS2741) until it is classified. The
   // forfeit case kills: forfeit points left out of wins or losses, and
   // winFloor/lossCeil read from the wrong end. RUGBY kills lossCeil without
   // its bonuses and a bonus summed with its sign kept.
