@@ -563,6 +563,8 @@ jobs:
       DATABASE_SSL: disable
       # Session signing secret (jose HS256) — CI-only dummy.
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_TELEMETRY_DISABLED: "1"
       # v4 AI smoke (scripts/smoke.ts v4AiSuite): point the server's
@@ -940,6 +942,8 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_TELEMETRY_DISABLED: "1"
       # NOT set here, deliberately, unlike smoke-db: no STRIPE_SECRET_KEY and no
@@ -1211,6 +1215,8 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_TELEMETRY_DISABLED: "1"
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
