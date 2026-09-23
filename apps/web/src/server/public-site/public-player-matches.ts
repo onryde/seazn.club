@@ -57,14 +57,18 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { deriveCricketScorecard, type CricketCfg, type CricketScorecard } from "@seazn/engine/sports/cricket";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
+import { msgFor } from "@/lib/messages-i18n";
 import { isoDateTime } from "@/lib/public-site";
 import { routes } from "@/lib/routes";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { resolveVenueTz } from "@/lib/tz";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
 import { COMPLETED_FIXTURE_STATUSES } from "@/server/usecases/player-stats";
-import { maskPublicEntrantNames } from "./data";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { maskPublicEntrantNames, playerCardNameMask, withCourtVenueNames } from "./data";
+import { publicRoundNamer, type NamedFixture } from "./feeder-slot-label";
 
 export type Sql = ReturnType<typeof postgres>;
 
@@ -637,9 +641,16 @@ async function asRecorded(
   };
 }
 
+/** The six fields the masking pass reads — a Matches seed row and an Upcoming
+ *  row both carry them, so both go through the ONE masking decision. */
+type OpponentPolicyRow = Pick<
+  MatchRow,
+  "my_entrant_id" | "home_entrant_id" | "away_entrant_id" | "division_id" | "youth" | "player_name_display"
+>;
+
 /** Opponent display names through the shared masking pass, one division at a
  *  time — the pass takes that division's own youth / name-display policy. */
-async function maskedOpponentNames(sql: Sql, rows: readonly MatchRow[]): Promise<Map<string, string>> {
+async function maskedOpponentNames(sql: Sql, rows: readonly OpponentPolicyRow[]): Promise<Map<string, string>> {
   const opponentIds = new Set<string>();
   for (const r of rows) {
     const id = r.my_entrant_id === r.home_entrant_id ? r.away_entrant_id : r.home_entrant_id;
@@ -666,4 +677,212 @@ async function maskedOpponentNames(sql: Sql, rows: readonly MatchRow[]): Promise
     for (const e of masked) names.set(e.id, e.display_name);
   }
   return names;
+}
+
+// ---------------------------------------------------------------------------
+// UPCOMING — docs/superpowers/specs/2026-09-23-player-profile-upcoming-matches-design.md
+//
+// The person's next SCHEDULED fixtures across every public competition of the
+// card's org, plus the card's own competition whatever its visibility (R2: an
+// unlisted sibling on another card would publish its link; private is already
+// gone from the views). The visibility gate is the JOIN, as in the reader
+// above: `public_fixtures_v` AND `public_divisions_v` (the fixture view alone
+// keeps an archived division). A finished place is not upcoming (plan D1): a
+// completed/archived competition or a completed division contributes nothing,
+// or its undated leftovers would read "Time TBD" forever. A person whose card
+// is NAME-MASKED (youth policy, `playerCardNameMask`) gets the card's own
+// competition only (owner 2026-09-23).
+//
+// Membership is the ROSTER (`entrant_members` of a registered/confirmed
+// entrant): a future fixture is nobody's by lineup yet. V412 moved the status
+// filter out of `public_entrants_v`, so it is applied to `entrants` here.
+//
+// Court and venue are the NAMES behind `court_id`/`venue_id`, through
+// `withCourtVenueNames` (data.ts) — the one derivation the hub, the match
+// centre, the calendar and the embeds share, with its org-wide "Name (Venue)"
+// disambiguation and its setup redaction. The view's `court_label`/`venue` are
+// the retired free-text columns, frozen since the P9 cutover: nothing writes
+// them, so reading them showed no court for any fixture placed since.
+//
+// Plain JSON and folds nothing. The caller (`getPublicPlayerUpcoming`) holds no
+// cache of it: see plan D3.
+// ---------------------------------------------------------------------------
+
+/** One scheduled fixture on the player card's Upcoming list. */
+export interface PlayerUpcomingRow {
+  fixtureId: string;
+  /** The fixture's public match centre, under ITS OWN competition's slug. */
+  href: string;
+  /** ISO instant; null when undated or its division has not released its schedule. */
+  scheduledAt: string | null;
+  /** The VENUE zone (`resolveVenueTz`), for formatting `scheduledAt`. */
+  tz: string;
+  /** The venue's NAME (from `venue_id`); null when unassigned or its division is in setup. */
+  venue: string | null;
+  /** The court's display label (from `court_id`, venue-qualified only when its
+   *  bare name is ambiguous in the org); null when unassigned or in setup. */
+  courtLabel: string | null;
+  /** The other side: its masked public name, else its seat's public label, else the localised TBD. */
+  opponentLabel: string;
+  competitionName: string;
+  competitionSlug: string;
+  divisionName: string;
+  divisionSlug: string;
+  /** True when the fixture belongs to a competition other than the card's. */
+  isOtherCompetition: boolean;
+}
+
+export type UpcomingArgs = {
+  orgId: string;
+  orgSlug: string;
+  personId: string;
+  /** The competition whose card is being rendered (R2's exception). */
+  currentCompetitionId: string;
+  /** The ORG's locale — seat labels are rendered in it, like every word on the card. */
+  locale: Locale;
+  now: Date;
+};
+
+/** A scheduled fixture whose slot passed this long ago without being scored is not "upcoming". */
+export const UPCOMING_STALE_AFTER_MS = 3 * 60 * 60 * 1000;
+/** A safety cap on the read. The five-row cut is the component's. */
+export const UPCOMING_SAFETY_CAP = 50;
+
+/**
+ * The slot-label key `stages.ts` stores on a bye's phantom side — the ONLY
+ * record of a bye (`competition-hub.ts`' `hubByeSides` reads the same key). A
+ * bye is nobody's next match, but a bye line can sit `scheduled` with no
+ * outcome: every line generated before 2026-09-17, and a seeded or dead-feeder
+ * bye until `awardSeededByes` settles it. Matched with its seat EMPTY, never by
+ * "one side is null", which is also every seat still waiting on a feeder. The
+ * `coalesce` keeps an unlabelled empty seat (a null key) from turning the
+ * whole `not (...)` null and dropping the row.
+ */
+const BYE_SLOT_KEY = "bracket.slot.bye";
+
+interface UpcomingDbRow {
+  id: string;
+  stage_id: string;
+  scheduled_at: unknown;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  home_slot_label: SlotLabel | null;
+  away_slot_label: SlotLabel | null;
+  division_id: string;
+  division_name: string;
+  division_slug: string;
+  youth: boolean;
+  player_name_display: string | null;
+  division_tz: string | null;
+  org_tz: string | null;
+  competition_id: string;
+  competition_name: string;
+  competition_slug: string;
+  my_entrant_id: string;
+}
+
+/** Every scheduled fixture the person is rostered into across the org, soonest
+ *  first, undated last. Empty → []. */
+export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<PlayerUpcomingRow[]> {
+  const { orgId, orgSlug, personId, currentCompetitionId, locale, now } = args;
+  const cutoff = new Date(now.getTime() - UPCOMING_STALE_AFTER_MS);
+  // Owner 2026-09-23: a person whose CARD is name-masked is listed on this
+  // card's competition only — no other competition's rows at all, so a young
+  // player's card is not an itinerary across the org. The decision is the
+  // card's own (`playerCardNameMask`: any youth or name-display policy across
+  // the org's rosters), never a second rule. Adults are unchanged.
+  const ownOnly = (await playerCardNameMask(personId, orgId)) !== null;
+  const rows = await sql<UpcomingDbRow[]>`
+    with mine as (
+      select e.id
+      from entrant_members em
+      join entrants e on e.id = em.entrant_id
+      where em.person_id = ${personId}
+        and e.status in ('registered','confirmed')
+    )
+    select f.id, f.stage_id, f.scheduled_at,
+           f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+           d.id as division_id, d.name as division_name, d.slug as division_slug,
+           dv.youth, dv.player_name_display,
+           ss.tz as division_tz, o.timezone as org_tz,
+           c.id as competition_id, c.name as competition_name, c.slug as competition_slug,
+           case when f.home_entrant_id in (select id from mine) then f.home_entrant_id
+                else f.away_entrant_id end as my_entrant_id
+    from public_fixtures_v f
+    join public_divisions_v d    on d.id = f.division_id
+    join divisions dv            on dv.id = d.id
+    join public_competitions_v c on c.id = d.competition_id
+    left join schedule_settings ss on ss.division_id = d.id
+    left join organizations o      on o.id = c.org_id
+    where (f.home_entrant_id in (select id from mine) or f.away_entrant_id in (select id from mine))
+      and c.org_id = ${orgId}
+      and (c.visibility = 'public' or c.id = ${currentCompetitionId})
+      and (not ${ownOnly}::boolean or c.id = ${currentCompetitionId})
+      and c.status not in ('completed','archived')
+      and d.status <> 'completed'
+      and f.status = 'scheduled'
+      and not (f.home_entrant_id is null and coalesce(f.home_slot_label->>'key', '') = ${BYE_SLOT_KEY})
+      and not (f.away_entrant_id is null and coalesce(f.away_slot_label->>'key', '') = ${BYE_SLOT_KEY})
+      and (f.scheduled_at is null or f.scheduled_at >= ${cutoff.toISOString()})
+    order by f.scheduled_at asc nulls last, f.round_no, f.seq_in_round, f.id
+    limit ${UPCOMING_SAFETY_CAP}`;
+  if (rows.length === 0) return [];
+
+  const names = await maskedOpponentNames(sql, rows);
+  const seatOf = await opponentSeatNamer(sql, rows, locale);
+  // P9: names from `court_id`/`venue_id`, null while the division is in setup.
+  const located = await withCourtVenueNames(rows);
+  return located.map((r) => {
+    const mineHome = r.my_entrant_id === r.home_entrant_id;
+    const opponentId = mineHome ? r.away_entrant_id : r.home_entrant_id;
+    const named = opponentId !== null ? names.get(opponentId) : undefined;
+    return {
+      fixtureId: r.id,
+      href: routes.sharedFixture(orgSlug, r.competition_slug, r.division_slug, r.id),
+      scheduledAt: isoDateTime(r.scheduled_at),
+      tz: resolveVenueTz(r.division_tz, r.org_tz),
+      venue: r.venue_name,
+      courtLabel: r.court_name,
+      opponentLabel: named ?? seatOf(r, mineHome ? "away" : "home"),
+      competitionName: r.competition_name,
+      competitionSlug: r.competition_slug,
+      divisionName: r.division_name,
+      divisionSlug: r.division_slug,
+      isOtherCompetition: r.competition_id !== currentCompetitionId,
+    };
+  });
+}
+
+/**
+ * A waiting seat's PUBLIC text: the match centre's rule (`match-centre-load.ts`,
+ * fix round N1), which is `publicRoundNamer(...).seat()` over the seat's own
+ * stage rows. That gives "Winner of Semi-finals, match 2", never the organiser
+ * board's "R1·2", with the `schedule.tbd` fallback. Stage rows are read only
+ * for fixtures that actually have an empty seat.
+ */
+async function opponentSeatNamer(
+  sql: Sql,
+  rows: readonly UpcomingDbRow[],
+  locale: Locale,
+): Promise<(row: UpcomingDbRow, seat: "home" | "away") => string> {
+  const ui: SlotLabelLookup = (key, vars) => msgFor(locale, key, vars);
+  const stored = (r: UpcomingDbRow, seat: "home" | "away") => (seat === "home" ? r.home_slot_label : r.away_slot_label);
+  const waiting = rows.filter((r) => r.home_entrant_id === null || r.away_entrant_id === null);
+  if (waiting.length === 0) return (r, seat) => resolveSlotLabel(stored(r, seat), ui, "schedule.tbd");
+  const stageIds = [...new Set(waiting.map((r) => r.stage_id))];
+  const stageRows = await sql<NamedFixture[]>`
+    select f.id, f.stage_id, f.round_no, f.seq_in_round, f.lane, f.is_final, f.third_place, f.conditional,
+           x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot
+    from public_fixtures_v f
+    join fixtures x on x.id = f.id
+    where f.stage_id in ${sql(stageIds)}`;
+  const kinds = await sql<{ id: string; kind: string }[]>`select id, kind from stages where id in ${sql(stageIds)}`;
+  const kindOf = new Map(kinds.map((k) => [k.id, k.kind]));
+  const namer = publicRoundNamer({
+    ui,
+    dict: await getDictionary(locale, "public"),
+    fixtures: stageRows,
+    stageKind: (id) => kindOf.get(id),
+  });
+  return (r, seat) => namer.seat(r.id, seat, stored(r, seat));
 }

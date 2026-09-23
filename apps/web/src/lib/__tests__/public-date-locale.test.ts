@@ -5,7 +5,7 @@
 // the match centre's start time (`match-centre.ts`) all format through it.
 import { describe, expect, it } from "vitest";
 import { LOCALES } from "@/lib/i18n-constants";
-import { intlLocaleFor } from "@/lib/public-date-locale";
+import { formatPublicInstant, intlLocaleFor } from "@/lib/public-date-locale";
 
 const AT = new Date(Date.UTC(2026, 8, 1, 12));
 const fmt = (tag: string) =>
@@ -24,5 +24,32 @@ describe("intlLocaleFor", () => {
     const others = LOCALES.filter((l) => l !== "en");
     expect(others.length, "premise: the repo has non-English locales").toBeGreaterThan(0);
     for (const locale of others) expect(intlLocaleFor(locale), locale).toBe(locale);
+  });
+});
+
+describe("formatPublicInstant", () => {
+  const ISO = "2030-07-01T10:00:00.000Z";
+  const HM = { hour: "2-digit", minute: "2-digit" } as const;
+
+  it("formats in the VENUE zone, never the runtime's", () => {
+    expect(formatPublicInstant("en", "Asia/Kolkata", ISO, HM)).toBe("15:30");
+    expect(formatPublicInstant("en", "UTC", ISO, HM)).toBe("10:00");
+  });
+
+  it("an unknown zone falls back to UTC instead of throwing into a render", () => {
+    expect(formatPublicInstant("en", "Not/AZone", ISO, HM)).toBe("10:00");
+  });
+
+  it("null and unparseable instants format to null", () => {
+    expect(formatPublicInstant("en", "UTC", null, { day: "numeric" })).toBeNull();
+    expect(formatPublicInstant("en", "UTC", "not a date", { day: "numeric" })).toBeNull();
+  });
+
+  it("English is day-month through intlLocaleFor, not bare en's US order", () => {
+    const opts = { day: "numeric", month: "short" } as const;
+    const gb = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", ...opts }).format(Date.parse(ISO));
+    const us = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", ...opts }).format(Date.parse(ISO));
+    expect(gb, "premise: the two orders differ").not.toBe(us);
+    expect(formatPublicInstant("en", "UTC", ISO, opts)).toBe(gb);
   });
 });
