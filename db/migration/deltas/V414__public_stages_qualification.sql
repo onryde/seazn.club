@@ -25,7 +25,12 @@
 --     whatever the table says. StageConfig (api-v1/schemas.ts) accepts it on
 --     any stage kind, and every generated fixture carries the ext_key that
 --     wireCrossFeeds (usecases/stages.ts) matches on, so a table stage can
---     carry one.
+--     carry one;
+--   * the cut's destination takes nobody else by RESULT: if ANY stage in the
+--     division has a `cross_feeds` entry whose `to_stage_seq` is the
+--     destination's seq, a fed seat can take a place the ranking would have
+--     filled (controller ruling, R3 "when in doubt, null"). The match is jsonb
+--     number equality, the same thing wireCrossFeeds' `bySeq.get` sees.
 -- `"previous"` means the same-division stage with the largest seq below the
 -- destination's (usecases/stage-seeding.ts resolveProgressionSource).
 --
@@ -84,6 +89,7 @@ returns table (
   ),
   rules as (
     select d.id as dest_id,
+           d.seq as dest_seq,
            d.name as dest_name,
            r.value ->> 'kind' as kind,
            case when jsonb_typeof(r.value -> 'from') = 'number' and (r.value ->> 'from') ~ '^[0-9]{1,6}$'
@@ -122,6 +128,15 @@ returns table (
           (w.kind = 'rankRange' and w.from_n >= 1 and w.to_n >= w.from_n)
           or (w.kind = 'topNPerGroup' and w.n_n >= 1),
           false))
+      and not exists (
+        select 1
+        from stages o
+        cross join lateral jsonb_array_elements(
+          case when jsonb_typeof(o.config -> 'cross_feeds') = 'array' then o.config -> 'cross_feeds'
+               else '[]'::jsonb end
+        ) as xf(value)
+        where o.division_id = (select s.division_id from src s)
+          and xf.value -> 'to_stage_seq' = to_jsonb(c.dest_seq))
   )
   select f.qualify_count,
          coalesce(f.qualify_per_group, false),

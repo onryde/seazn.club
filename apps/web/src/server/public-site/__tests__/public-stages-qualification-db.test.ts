@@ -385,13 +385,17 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     expect((await view(d.divisionId))[0]!.points_rule).toEqual(clean);
   });
 
-  // Cross-stage feeds (Jul3/08 §9) wire a source FIXTURE's winner or loser
-  // into a destination slot by result, whatever the table says. StageConfig
-  // accepts `cross_feeds` on any kind, and the shared generator gives every
-  // fixture an ext_key that wireCrossFeeds matches on, so a table stage can
-  // send an entrant through by a result. A rank cut there is not a forecast.
+  // Cross-stage feeds (Jul3/08 §9) wire a FIXTURE's winner or loser into a
+  // destination slot by result, whatever the table says. StageConfig accepts
+  // `cross_feeds` on any kind, and the shared generator gives every fixture an
+  // ext_key that wireCrossFeeds matches on, so a table stage can carry them.
+  // Two guards, one per side, each with its own killer:
+  //
+  // SOURCE side: the league itself sends entrants on by result. Its feed here
+  // targets a PLATE (seq 3), not the cut's destination, so the destination
+  // guard below cannot stand in for this one.
   it("a source stage with cross_feeds has no cut; an empty cross_feeds list changes nothing", async () => {
-    const feed = { from_ext_key: "r1-m1", side: "winner", to_stage_seq: 2, to_ext_key: "r1-m1", slot: 1 };
+    const feed = { from_ext_key: "r1-m1", side: "winner", to_stage_seq: 3, to_ext_key: "r1-m1", slot: 1 };
     for (const [feeds, expected] of [
       [[feed], ["League", null, false, null]],
       [[], ["League", 4, false, "KO"]],
@@ -400,9 +404,44 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
       await createStages(d.auth, d.divisionId, [
         { seq: 1, kind: "league", name: "League", config: { cross_feeds: feeds } },
         { seq: 2, kind: "knockout", name: "KO", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 4 }]) },
+        { seq: 3, kind: "knockout", name: "Plate", config: {} },
       ] as never);
-      expect(await cuts(d.divisionId), `cross_feeds ${JSON.stringify(feeds)}`).toEqual([
+      expect(await cuts(d.divisionId), `source cross_feeds ${JSON.stringify(feeds)}`).toEqual([
         expected,
+        ["KO", null, false, null],
+        ["Plate", null, false, null],
+      ]);
+    }
+  });
+
+  // DESTINATION side (controller ruling, R3 "when in doubt, null"): the KO
+  // takes the league's top 4 by rank AND a seat from another stage's fixture
+  // result. A fed seat can take a place the ranking would have filled, so the
+  // league's cut is not a forecast. The league itself carries no feed here, so
+  // the source guard above cannot stand in for this one.
+  it("a destination that another stage also feeds by cross_feeds takes the cut away; without the feed the cut stands", async () => {
+    const feed = { from_ext_key: "r1-m1", side: "winner", to_stage_seq: 3, to_ext_key: "r1-m1", slot: 1 };
+    for (const [feeds, expected] of [
+      [[feed], ["League", null, false, null]],
+      [[], ["League", 4, false, "KO"]],
+    ] as const) {
+      const d = await division();
+      const [league] = await createStages(d.auth, d.divisionId, [
+        { seq: 1, kind: "league", name: "League", config: {} },
+        { seq: 2, kind: "knockout", name: "Qualifier", config: { cross_feeds: feeds } },
+      ] as never);
+      await createStages(d.auth, d.divisionId, [
+        {
+          seq: 3,
+          kind: "knockout",
+          name: "KO",
+          config: {},
+          progression: prog([{ kind: "rankRange", from: 1, to: 4 }], { stageId: league!.id }),
+        },
+      ] as never);
+      expect(await cuts(d.divisionId), `destination fed by cross_feeds ${JSON.stringify(feeds)}`).toEqual([
+        expected,
+        ["Qualifier", null, false, null],
         ["KO", null, false, null],
       ]);
     }
