@@ -443,6 +443,57 @@ describe("409 classification", () => {
     expect(outcome).toMatchObject({ kind: "conflict", currentSeq: 9 });
   });
 
+  // Owner ruling 2026-09-23 (`server/engine-db/fed-seats.ts`): voiding a
+  // decided knockout result whose next match has already started is refused
+  // whatever seq is sent. Renegotiating it would park the void at the queue
+  // head forever — and the refusal names the match, so the pad can say which
+  // one to void first in the scorer's own language.
+  it("NEXT_MATCH_STARTED is terminal, and carries the next match's ref through", async () => {
+    const next_match = { fixture_id: "fx-final", round: 2, seq: 1 };
+    const { fn } = fakeFetch(() => fakeResponse(409, body("NEXT_MATCH_STARTED", { next_match })));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", {
+      expected_seq: 3,
+      type: "core.void",
+      payload: {},
+      idempotency_key: "k",
+    });
+    expect(outcome).toEqual({ kind: "rejected", code: "NEXT_MATCH_STARTED", message: "nope", nextMatch: next_match });
+  });
+
+  it("carries the board's round code through with the ref (fix round 2)", async () => {
+    const next_match = { fixture_id: "fx-final", round: 2, seq: 1, code: { key: "bracket.roundShort.final", params: {}, ref_seq: 1 } };
+    const { fn } = fakeFetch(() => fakeResponse(409, body("NEXT_MATCH_STARTED", { next_match })));
+    const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", {
+      expected_seq: 3,
+      type: "core.void",
+      payload: {},
+      idempotency_key: "k",
+    });
+    expect(outcome).toEqual({ kind: "rejected", code: "NEXT_MATCH_STARTED", message: "nope", nextMatch: next_match });
+  });
+
+  it("a terminal refusal with no (or a malformed) next_match carries no ref rather than a hole", async () => {
+    const ref = { fixture_id: "fx", round: 2, seq: 1 };
+    for (const extra of [
+      {},
+      { next_match: { ...ref, round: "2" } },
+      // A code must be one of the board's round-code keys: any other key would
+      // print whatever sentence that key holds in the middle of this one.
+      { next_match: { ...ref, code: { key: "auth.signOut", params: {}, ref_seq: 1 } } },
+      { next_match: { ...ref, code: { key: "bracket.roundShort.roundOf", params: { n: { x: 1 } }, ref_seq: 1 } } },
+      { next_match: { ...ref, code: "bracket.roundShort.final" } },
+    ]) {
+      const { fn } = fakeFetch(() => fakeResponse(409, body("NEXT_MATCH_STARTED", extra)));
+      const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", {
+        expected_seq: 3,
+        type: "core.void",
+        payload: {},
+        idempotency_key: "k",
+      });
+      expect(outcome).toEqual({ kind: "rejected", code: "NEXT_MATCH_STARTED", message: "nope" });
+    }
+  });
+
   // An un-migrated server sends 409 with no explicit code. It must keep
   // today's behaviour, or a new client would wedge against an old server.
   it("a 409 with no recognised code stays renegotiable", async () => {
@@ -457,15 +508,26 @@ describe("409 classification", () => {
   });
 
   // The list is not a hand-typed table: it is pinned against the codes the
-  // server's own undo path throws, so a fifth terminal refusal added there
-  // without a client entry fails HERE rather than wedging a queue in a venue.
-  it("TERMINAL_CONFLICT_CODES is exactly the set scoring.ts refuses an undo with", () => {
+  // server actually throws as terminal 409s, so a new terminal refusal added
+  // there without a client entry fails HERE rather than wedging a queue in a
+  // venue. Two producers: scoring.ts's undo path (the UNDO_* codes), and
+  // fed-seats.ts's next-match refusal (its code lives in the import-free
+  // `lib/next-match-started.ts`, so it is read from THERE, and fed-seats.ts is
+  // checked to throw it as a 409).
+  it("TERMINAL_CONFLICT_CODES is exactly the set of terminal 409s the server throws", () => {
     // Read as TEXT, not imported: `@/server/**` is banned from this bundle by
     // the pad's purity gate (`__tests__/server-boundary.test.ts`) — the same
     // trick `refusal-copy.test.ts` uses to pin against `http.ts`.
-    const src = readFileSync(join(process.cwd(), "src/server/usecases/scoring.ts"), "utf8");
-    const thrown = new Set([...src.matchAll(/"(UNDO_[A-Z_]+)"/g)].map((m) => m[1]!));
+    const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
+    const thrown = new Set([...read("src/server/usecases/scoring.ts").matchAll(/"(UNDO_[A-Z_]+)"/g)].map((m) => m[1]!));
     expect(thrown.size).toBeGreaterThan(0);
+    const fedSeats = read("src/server/engine-db/fed-seats.ts");
+    expect(fedSeats, "fed-seats.ts throws its refusal as a 409 under the shared code").toMatch(
+      /new HttpError\(409, [^;]*NEXT_MATCH_STARTED_CODE/,
+    );
+    const code = /NEXT_MATCH_STARTED_CODE = "([A-Z_]+)"/.exec(read("src/lib/next-match-started.ts"))?.[1];
+    expect(code).toBeDefined();
+    thrown.add(code!);
     expect([...TERMINAL_CONFLICT_CODES].sort()).toEqual([...thrown].sort());
   });
 });

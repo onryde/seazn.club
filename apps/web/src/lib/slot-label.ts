@@ -19,6 +19,7 @@
 import { msg } from "@/lib/messages";
 import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { composeMatchRef } from "@/lib/match-ref";
 
 export type SlotLabelLookup = (
   key: MessageKey,
@@ -47,8 +48,9 @@ export function matchRef(
   lookup: SlotLabelLookup = msg,
   code?: string,
 ): string {
-  if (code !== undefined) return lookup("slot.match_ref_code" as MessageKey, { code, seq });
-  return lookup("slot.match_ref" as MessageKey, { round, seq });
+  // The composition itself lives in the dictionary-free `match-ref.ts`, so the
+  // refusal copy can name a match the same way without the dictionaries.
+  return composeMatchRef(round, seq, lookup, code);
 }
 
 /** `SlotLabel | null` → display string. Never builds text itself — every

@@ -7,6 +7,8 @@
 // server/usecases/fixtures.ts (see module-client.ts / pipeline.ts headers
 // for the exact line refs measured on main @ ae22e299).
 
+import type { NextMatchRef } from "@/lib/next-match-started";
+
 /**
  * One event queued for append, durable across tab death (queue-store.ts).
  * `idempotencyKey` and `expectedSeq` are captured ONCE at enqueue time and
@@ -263,7 +265,16 @@ export type ConflictResolution =
 export type SendOutcome =
   | { kind: "acked"; localId: string; idempotencyKey: string; result: AppendSuccess }
   | { kind: "already-applied"; localId: string; idempotencyKey: string }
-  | { kind: "rejected"; localId: string; idempotencyKey: string; code: string; message: string }
+  | {
+      kind: "rejected";
+      localId: string;
+      idempotencyKey: string;
+      code: string;
+      message: string;
+      /** NEXT_MATCH_STARTED only: the match to void first, so the pad can
+       *  name it in the scorer's language (`refusal-copy.ts`). */
+      nextMatch?: NextMatchRef;
+    }
   | {
       kind: "stayed-queued";
       localId: string;

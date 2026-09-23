@@ -50,6 +50,10 @@ const probe = vi.hoisted(() => ({
    *  while the ones before it stay committed. */
   failAtLock: null as number | null,
   locks: 0,
+  /** When set, the first statement whose SQL text contains it throws
+   *  `injected` — for a failure INSIDE a post-commit hook that takes no
+   *  advisory lock of its own (e.g. `onDecided`'s read on a knockout void). */
+  failOnSql: null as string | null,
   injected: new Error("injected: a later transaction of this write failed"),
   /** M2 r1: when set, `fireScoreRevalidate` throws it. That is one of the two
    *  points at which `invalidatePublicCache` itself can reject (the other is
@@ -95,12 +99,21 @@ vi.mock("@/lib/db", async (importOriginal) => {
         // that takes a division's advisory lock throws, and the transaction
         // that sent it rolls back. Every other call, and every other case,
         // gets the real `tx`.
-        const handed = probe.failAtLock === null ? tx : new Proxy(tx, {
+        const handed = probe.failAtLock === null && probe.failOnSql === null ? tx : new Proxy(tx, {
           apply(target, thisArg, args: unknown[]) {
             const strings = args[0];
             if (Array.isArray(strings) && "raw" in strings && strings.join("").includes("pg_advisory_xact_lock")) {
               probe.locks += 1;
               if (probe.locks === probe.failAtLock) throw probe.injected;
+            }
+            if (
+              probe.failOnSql !== null &&
+              Array.isArray(strings) &&
+              "raw" in strings &&
+              strings.join("").includes(probe.failOnSql)
+            ) {
+              probe.failOnSql = null;
+              throw probe.injected;
             }
             return Reflect.apply(target, thisArg, args);
           },
@@ -206,6 +219,7 @@ const orgLiveKey = (orgId: string) => `pub:v1:org-live:${orgId}`;
 async function quiesce(): Promise<void> {
   probe.hold = false;
   probe.failAtLock = null;
+  probe.failOnSql = null;
   probe.failRevalidate = null;
   probe.locks = 0;
   for (const release of probe.gates.splice(0)) release();
@@ -1228,30 +1242,23 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
   }, 120_000);
 
   // The ids are the FILL's own result, not the bracket link: `fillSlot` only
-  // touches a slot that is still open, and reports the row it touched. Undoing
-  // a decision does not empty the slot it filled (a pre-existing gap, R10h
-  // report), so re-deciding the fixture runs a fill that touches nothing —
-  // and a fixture nothing was written into owes no DEL and no push.
-  it("re-deciding a fixture whose destination slot is already taken advances nobody: the DEL and the pushes are scoring's own again", async () => {
+  // touches a slot that is still open, and reports the row it touched. A score
+  // on a fixture whose decision still stands (a post-decision note) runs a fill
+  // that touches nothing — and a fixture nothing was written into owes no DEL
+  // and no push.
+  it("a score on a fixture whose decision stands advances nobody: the DEL and the pushes are scoring's own again", async () => {
     const rig = await bracketRig();
     const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
     expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
     await start(rig, semi!.id);
     await decide(rig, semi!.id, 1);
-    const filled = await lineups(rig.divisionId);
-    const [decider] = await sql<{ id: string; seq: number }[]>`
-      select id, seq from score_events where fixture_id = ${semi!.id} and type = 'generic.result'`;
-    await scoreEvent(rig.auth, semi!.id, {
-      expected_seq: decider!.seq, type: "core.void", payload: { event_id: decider!.id },
-    });
     await quiesce();
     const before = await lineups(rig.divisionId);
-    expect(before.get(semi!.winner_to!), "undoing the result leaves the name it advanced in place")
-      .toBe(filled.get(semi!.winner_to!));
+    expect(before.get(semi!.winner_to!), "the decision advanced its winner").not.toBe("-|-");
 
     probe.hold = true;
     await scoreEvent(rig.auth, semi!.id, {
-      expected_seq: decider!.seq + 1, type: "generic.result", payload: { p1Score: 0, p2Score: 2 },
+      expected_seq: 2, type: "core.note", payload: { text: "shirt colours swapped" },
     });
     expect(diff(before, await lineups(rig.divisionId)), "the slot was already taken, so this score named nobody")
       .toEqual({ moved: [], deleted: [], created: [] });
@@ -1261,6 +1268,113 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
     ]);
     await releaseDel();
     expect(probe.fixturePushes, "no second push: the fill touched no row").toEqual([[semi!.id, "event"]]);
+    expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
+  }, 120_000);
+
+  // Owner ruling 2026-09-23 (`engine-db/fed-seats.ts`): a void that ERASES the
+  // decision takes back the name it advanced. That is a write to the next
+  // fixture as much as the fill was, so it owes the same publication: its key
+  // in the void's one DEL, and its push after that DEL settles.
+  it("voiding the decision takes the advanced name back: the next fixture's key rides the void's one DEL and is pushed after it", async () => {
+    const rig = await bracketRig();
+    const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
+    expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
+    await start(rig, semi!.id);
+    await decide(rig, semi!.id, 1);
+    const [decider] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${semi!.id} and type = 'generic.result'`;
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+    expect(before.get(semi!.winner_to!), "the decision advanced its winner").toContain(semi!.home!);
+
+    probe.hold = true;
+    await scoreEvent(rig.auth, semi!.id, {
+      expected_seq: decider!.seq, type: "core.void", payload: { event_id: decider!.id },
+    });
+    const { moved: released, deleted, created } = diff(before, await lineups(rig.divisionId));
+    expect([deleted, created]).toEqual([[], []]);
+    expect(released, "the void emptied exactly the seat the decision had filled").toEqual([semi!.winner_to]);
+    expect((await lineups(rig.divisionId)).get(semi!.winner_to!), "the old winner is gone from the next fixture")
+      .not.toContain(semi!.home!);
+
+    expect(probe.dels, "scoring's own keys, plus the emptied fixture's, in ONE DEL").toEqual([
+      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId), fixtureKey(semi!.winner_to!)],
+    ]);
+    expect(probe.inTxAtDel, "the DEL went out after the void committed").toEqual([false]);
+    await sleep(20);
+    expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
+
+    await releaseDel();
+    expect(probe.fixturePushes, "scoring's own push, plus one for the fixture the name was taken out of").toEqual([
+      [semi!.id, "event"],
+      [semi!.winner_to, "schedule"],
+    ]);
+    expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
+  }, 120_000);
+
+  // The emptied fixture is known from the APPEND, before any post-commit hook
+  // runs — so a hook that throws after the void committed (R10 M3's shape)
+  // must still publish it. `onDecided` itself is made to throw, on its first
+  // read (the one statement carrying `s.config as stage_config`), which is
+  // the throw that would skip every assignment after it.
+  it("a hook that throws AFTER the void committed still publishes the fixture the void emptied", async () => {
+    const rig = await bracketRig();
+    const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
+    expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
+    await start(rig, semi!.id);
+    await decide(rig, semi!.id, 1);
+    const [decider] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${semi!.id} and type = 'generic.result'`;
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    probe.failOnSql = "s.config as stage_config, s.division_id";
+    await expect(
+      scoreEvent(rig.auth, semi!.id, { expected_seq: decider!.seq, type: "core.void", payload: { event_id: decider!.id } }),
+      "the hook's own error reaches the caller",
+    ).rejects.toBe(probe.injected);
+    expect(probe.failOnSql, "the injection fired (it disarms itself)").toBeNull();
+    expect(diff(before, await lineups(rig.divisionId)).moved, "the void committed and emptied the seat").toEqual([
+      semi!.winner_to,
+    ]);
+    await sleep(20);
+    expect(probe.dels, "the emptied fixture still rides the one DEL").toEqual([
+      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId), fixtureKey(semi!.winner_to!)],
+    ]);
+  }, 120_000);
+
+  it("re-deciding the other way after the void advances the NEW winner, published like any first decision", async () => {
+    const rig = await bracketRig();
+    const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
+    expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
+    await start(rig, semi!.id);
+    await decide(rig, semi!.id, 1);
+    const [decider] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${semi!.id} and type = 'generic.result'`;
+    await scoreEvent(rig.auth, semi!.id, {
+      expected_seq: decider!.seq, type: "core.void", payload: { event_id: decider!.id },
+    });
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    probe.hold = true;
+    await scoreEvent(rig.auth, semi!.id, {
+      expected_seq: decider!.seq + 1, type: "generic.result", payload: { p1Score: 0, p2Score: 2 },
+    });
+    const { moved: advanced } = diff(before, await lineups(rig.divisionId));
+    expect(advanced, "the new winner was named into the fixture this one feeds").toEqual([semi!.winner_to]);
+    const seated = (await lineups(rig.divisionId)).get(semi!.winner_to!);
+    expect(seated, "it is the AWAY side that now stands in the next fixture").toContain(semi!.away!);
+    expect(seated).not.toContain(semi!.home!);
+
+    expect(probe.dels).toEqual([
+      [fixtureKey(semi!.id), hubKey(rig.competitionId), playerMatchesGenKey(rig.competitionId), orgLiveKey(rig.auth.orgId), ...divisionKeys(rig.divisionId), fixtureKey(semi!.winner_to!)],
+    ]);
+    await releaseDel();
+    expect(probe.fixturePushes).toEqual([
+      [semi!.id, "event"],
+      [semi!.winner_to, "schedule"],
+    ]);
     expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
   }, 120_000);
 

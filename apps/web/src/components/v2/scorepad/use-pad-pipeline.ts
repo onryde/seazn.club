@@ -339,6 +339,7 @@ import type { QueueStore } from "./queue-store";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
 import type { PadAuthMode, PadTransport } from "./transport";
+import type { NextMatchRef } from "@/lib/next-match-started";
 import { useFixtureStream, type RealtimeConnector } from "./use-fixture-stream";
 
 // Review finding 2: submit() minted a fresh idempotency key/expected_seq on
@@ -437,6 +438,9 @@ export interface UsePadPipelineParams {
 export interface RejectionInfo {
   code: string;
   message: string;
+  /** NEXT_MATCH_STARTED only: the match to void first (`refusal-copy.ts`
+   *  names it). Absent on every other refusal. */
+  nextMatch?: NextMatchRef;
 }
 
 export interface UsePadPipelineResult {
@@ -1708,7 +1712,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // Cleared on every resolved outcome, exactly like `offline` — a
           // chip that latches "Catching up" forever lies the other way.
           setThrottled(false);
-          setLastRejection({ code: outcome.code, message: outcome.message });
+          setLastRejection(
+            outcome.nextMatch
+              ? { code: outcome.code, message: outcome.message, nextMatch: outcome.nextMatch }
+              : { code: outcome.code, message: outcome.message },
+          );
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
           commitPendingEnvelopes(remaining);

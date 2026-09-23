@@ -25,6 +25,7 @@ import type {
   SendOutcome,
 } from "./types";
 import type { QueueStore } from "./queue-store";
+import type { NextMatchRef } from "@/lib/next-match-started";
 import { markAcked, markDropped, peekInOrder, recordAttempt, renegotiateExpectedSeq } from "./queue";
 
 // ---------------------------------------------------------------------------
@@ -163,7 +164,7 @@ export type AppendCallResult =
   /** Any other rejection (422-class: INVALID_EVENT, WRONG_PHASE, …) — the
    *  module deterministically refused this payload. Retrying it verbatim
    *  gets the same refusal, so this is permanent, not transient. */
-  | { kind: "rejected"; code: string; message: string }
+  | { kind: "rejected"; code: string; message: string; nextMatch?: NextMatchRef }
   /** 429. Transient by the server's own definition, so the tap is KEPT — but
    *  it is not a connectivity failure, and telling the scorer they are offline
    *  when the venue wifi is fine sends them to fix the wrong thing. The bucket
@@ -337,6 +338,12 @@ export function throttleBackoffMs(sendsAlreadyMade: number, retryAfterMs: number
   return Math.min(THROTTLE_BASE_MS * 2 ** doublings, THROTTLE_MAX_MS);
 }
 
+
+/** A rejection's `nextMatch`, spread in only when present — so every other
+ *  refusal keeps exactly its old shape (no `nextMatch: undefined` key). */
+function refOf(r: { nextMatch?: NextMatchRef }): { nextMatch?: NextMatchRef } {
+  return r.nextMatch ? { nextMatch: r.nextMatch } : {};
+}
 /**
  * Drive ONE pending event through the transport, applying the full
  * append/replay protocol, and leave the queue in the right state for
@@ -409,7 +416,8 @@ export async function sendOne(
   }
   if (first.kind === "rejected") {
     await markDropped(store, event.idempotencyKey); // poison: not retried forever…
-    return { kind: "rejected", ...base, code: first.code, message: first.message }; // …but surfaced here
+    // …but surfaced here, with the next match's ref when the refusal named one.
+    return { kind: "rejected", ...base, code: first.code, message: first.message, ...refOf(first) };
   }
   if (first.kind === "throttled") {
     await recordAttempt(store, event.idempotencyKey, {
@@ -458,7 +466,7 @@ export async function sendOne(
   }
   if (second.kind === "rejected") {
     await markDropped(store, event.idempotencyKey);
-    return { kind: "rejected", ...base, code: second.code, message: second.message };
+    return { kind: "rejected", ...base, code: second.code, message: second.message, ...refOf(second) };
   }
   // Conflicting AGAIN after a renegotiation, past the pass ceiling: this
   // event is no longer losing a race, and another pass would only re-block the

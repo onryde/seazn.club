@@ -433,7 +433,7 @@ async function runStream(
   // that fails is a stale standings table, not a failed import; log it and
   // report the truth.
   try {
-    await onDecided(auth, fixtureId, last.outcome);
+    await onDecided(auth, fixtureId);
     await refreshDiscipline(auth, fixtureId);
     await refreshNews(auth, fixtureId);
     if (firstResult) {

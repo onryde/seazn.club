@@ -547,6 +547,17 @@ describe("usePadPipeline — lastRejection", () => {
     await pad.current.submit("generic.score", { by: "A", points: 1 });
     expect(pad.current.lastRejection).toBeNull();
   });
+
+  it("keeps the next match's ref on a NEXT_MATCH_STARTED refusal, so the pad can name it", async () => {
+    const nextMatch = { fixture_id: "fx-final", round: 2, seq: 1 };
+    const { transport } = fakeTransport({
+      appendResults: [{ kind: "rejected", code: "NEXT_MATCH_STARTED", message: "started", nextMatch }],
+    });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(pad.current.lastRejection).toEqual({ code: "NEXT_MATCH_STARTED", message: "started", nextMatch });
+  });
 });
 
 describe("usePadPipeline — core.void envelope translation", () => {
