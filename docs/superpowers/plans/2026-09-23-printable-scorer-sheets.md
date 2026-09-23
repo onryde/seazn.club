@@ -4,7 +4,7 @@
 
 **Goal:** An organiser prints one PDF per competition day — one section per court, five fixtures per page, one QR per fixture — and an umpire scans a row, confirms the match, taps **Start match** and scores it on their phone; the QR stays the same across reprints and goes view-only once the result has moved the competition on.
 
-**Architecture:** `device_links` gains a sealed copy of the secret (`secret_enc`, AES-256-GCM under a new `DEVICE_LINK_KEK`) and a nullable expiry, so `ensureDeviceLink` can hand back the SAME secret on every reprint and every console hand-over. A pure carried-forward predicate, evaluated live at request time, refuses device-link writes with `403 RESULT_CARRIED_FORWARD`; that refusal travels transport → pipeline → a new registry callback → `DeviceScorePad`, which switches to a View-only screen. The scan page gains Confirm / Waiting / View-only screens chosen by one pure `scanScreen()` table. The PDF is pdfkit + qrcode in the `poster.pdf` style, fed by a pure day-selection + pagination model.
+**Architecture:** `device_links` gains a sealed copy of the secret (`secret_enc`, AES-256-GCM under a new `DEVICE_LINK_KEK`) and a nullable expiry, so `ensureDeviceLink` can hand back the SAME secret on every reprint and every console hand-over. A pure carried-forward predicate, evaluated live at request time, refuses device-link writes with `403 RESULT_CARRIED_FORWARD`; that refusal travels transport → pipeline → a new registry callback → `DeviceScorePad`, which switches to a View-only screen. The scan page gains Confirm / Waiting / View-only screens chosen by one pure `scanScreen()` table. The PDF is rendered on the shared document system (`doc-theme.ts` fonts/palette/`qrBuffer`, `doc-render.ts` masthead + title block) by a renderer beside `doc-render.ts`, served like the timetable/tickets exports from `POST /api/v1/competitions/{id}/exports/scorer-sheets`, and fed by a pure day-selection + pagination model.
 
 **Tech Stack:** Next.js 16.2 App Router (read `node_modules/next/dist/docs/` before touching routes — this is NOT the Next.js in training data), React 19.2, TypeScript 7, Node 26, postgres.js, Flyway, pdfkit 0.19, qrcode 1.5, sharp, vitest 4 (`environment: "node"`, no jsdom), Playwright, pnpm.
 
@@ -60,6 +60,8 @@ Every anchor in spec §3 and §4.5, re-read in the tree (`grep -a`, then opened)
 | pipeline `lastRejection` | — | `use-pad-pipeline.ts:462`, set :1711 | already surfaced |
 | refusal copy map | — | `scorepad/refusal-copy.ts:55-66` | add the new code here |
 | poster.pdf pattern | ✓ | `app/(public)/shared/[orgSlug]/[competitionSlug]/poster.pdf/route.ts` | `bufferPages: true` is REQUIRED for a footer loop |
+| shared document system | ✓ | `server/doc-theme.ts` (`PALETTE`, `FONT`, `registerFonts` → Barlow Condensed + Inter from `assets/fonts`, `qrBuffer(url)` 180 px, null on failure), `server/doc-render.ts` (`docModelToPdf`, private `drawMasthead`/`drawTitleBlock`/`resolveLogo`, English footer, `EYEBROW.scoresheet = "MATCH SHEET"`) | T8 reuses these; `DocModel` is engine-owned (Do NOT touch) |
+| export route analogue | ✓ | `api/v1/competitions/[id]/exports/timetable/route.ts` + `exports/tickets/route.ts` (`requireResourceAuth` → use-case → renderer → attachment, errors via `v1()`); `me/rota.pdf` is session-personal/cross-org — not the shape | T8 follows timetable/tickets |
 | doc-render / doc-theme | ✓ | `server/doc-render.ts`, `server/doc-theme.ts` (`qrBuffer` :76) | |
 | crypto | ✓ | `server/relay/crypto.ts` | reads `RELAY_KEK` only |
 | enc-boundary | ✓ | `server/relay/__tests__/enc-boundary.test.ts` | **derives ENC columns from the stream_sessions migration ONLY** (P2) |
@@ -82,7 +84,7 @@ Every anchor in spec §3 and §4.5, re-read in the tree (`grep -a`, then opened)
 | P10 | (silent) | "Rebuild fixtures" hard-deletes fixtures and cascades `device_links` (stages.ts:2997-3013); the confirm dialog counts device links. A rebuild after printing kills every printed QR on that stage (`LINK_INVALID`). | Out of scope to change; **owner question Q4**. |
 | P11 | "Legacy hash-only links keep working until their `expires_at`" + "(only a legacy hash-only link) → revoke, mint" | Both hold only if nothing calls `ensure` on that fixture. A print or hand-over on a fixture with a live legacy link revokes it — including mid-match. | Built as specified; **owner question Q3**. |
 | P12 | "Dead link — existing screen" | `DeadLink` in `app/score/[token]/page.tsx` is hard-coded English, and so are the resolver's messages it prints. | Task 6 touches the file, so it localises them (fix-inline rule). |
-| P13 | (silent) | `proxy.ts`'s Origin check covers `/api/**` only; a POST under `/o/**` is protected by `SameSite=Lax` alone. | Task 8's route asserts same-origin itself. |
+| P13 | (silent) | `proxy.ts`'s Origin check covers `/api/**` only; a POST under `/o/**` is protected by `SameSite=Lax` alone. | Task 8 serves the PDF from `/api/v1/competitions/{id}/exports/scorer-sheets`, inside `proxy.ts`'s check (no bespoke guard). |
 
 ### What #848 already gives the scan screens — reuse, do not duplicate
 
@@ -159,8 +161,10 @@ Inputs the spec implies but does not test, most likely to bite first; each line'
 | `apps/web/src/app/score/[token]/page.tsx` | Modify (T6) | labels/ref/time/status/carried; screen choice; localised DeadLink |
 | `apps/web/src/lib/scorer-sheets.ts` | Create (T7) | pure day selection, ordering, default day, pagination |
 | `apps/web/src/server/usecases/scorer-sheets.ts` | Create (T7) | the query + `listSheetDays` |
-| `apps/web/src/server/scorer-sheet-pdf.ts` | Create (T8) | pdfkit renderer |
-| `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/scorer-sheets.pdf/route.ts` | Create (T8) | POST route |
+| `apps/web/src/server/scorer-sheet-pdf.ts` | Create (T8) | sheet renderer on `doc-theme` (fonts, palette, `qrBuffer`) + `doc-render`'s masthead/title block |
+| `apps/web/src/server/doc-render.ts` | Modify (T8) | export `MARGIN`/`resolveLogo`/`drawMasthead`/`drawTitleBlock`; optional `eyebrow` param (no behaviour change) |
+| `apps/web/src/server/usecases/exports.ts` | Modify (T8) | export `orgBranding` (no behaviour change) |
+| `apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/route.ts` | Create (T8) | POST route, timetable/tickets pattern; + `openapi.ts`, `key-scopes.ts`, `openapi/*.json` |
 | `apps/web/src/components/v2/print-scorer-sheets.tsx` | Create (T9) | day picker + button + gate |
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` | Modify (T9) | mounts it |
 | `apps/web/e2e/walkthrough/scorer-sheets-print-scan.spec.ts` | Create (T10) | print → scan journeys, regression, visual |
@@ -2716,37 +2720,48 @@ E2E owed: Task 10's golden journey prints from a real seeded schedule and assert
 
 ---
 
-### Task 8: The PDF and its route
+### Task 8: The PDF and its route — on the shared document system
+
+**Analogue chosen: `api/v1/competitions/[id]/exports/timetable/route.ts` (with `exports/tickets` for the QR half), not `me/rota.pdf`.** Both were read. Rota is session-personal and cross-org, with no tenant and no entitlement gate (`requireUser`, `buildMyRotaDoc(userId)`). A scorer sheet is the opposite: it belongs to one competition, it is entitled, and it is tenant-scoped. Timetable has exactly that shape. A use-case builds the model with `auth` + `competitionId` + `{ printedAt }`, a renderer turns it into bytes, and the handler returns `NextResponse` with an attachment, with errors in the `v1()` envelope. Tickets is the same shape and is the only export that carries a QR per section (`qrBuffer` pre-pass, 422 on nothing to print). This changes where the route lives. It moves from `/o/…/schedule/scorer-sheets.pdf` to **`POST /api/v1/competitions/{id}/exports/scorer-sheets`**. That places it behind `proxy.ts`'s CSRF Origin check for `/api/**`, so P13 is solved by where the route sits, and the separate `scorer-sheet-guard.ts` is dropped. It also puts the route in `openapi.ts` + `key-scopes.ts` beside its siblings.
+
+**Why not a DocModel.** `DocModel` lives in `packages/engine/src/exports/types.ts`, which is on this plan's Do-NOT-touch list. Its only section that carries a QR is `ticket`, whose fields are admission-specific (`maskedName`, `ref`, `status`). Its QR is drawn without a link annotation, and its footer strings (`printed …`, `page N of M`) are hard-coded English. Expressing a match block would need a new `DocSection` payload in the engine. So the sheet gets **its own renderer beside `doc-render.ts`**, on the same theme. It uses `registerFonts`, `FONT`, `PALETTE` and `qrBuffer` from `doc-theme.ts`, and `drawMasthead` / `drawTitleBlock` / `resolveLogo` exported from `doc-render.ts` with no behaviour change. There is no second QR helper and no second palette.
 
 **Files:**
-- Create: `apps/web/src/server/scorer-sheet-pdf.ts`
+- Modify: `apps/web/src/server/doc-render.ts` — `export` on `resolveLogo`, `drawMasthead`, `drawTitleBlock`, `MARGIN`. `drawTitleBlock` gains an optional third parameter `eyebrow = eyebrowFor(model.kind)`, so every existing call is byte-identical.
+- Modify: `apps/web/src/server/usecases/exports.ts` — `export` on `orgBranding` (no behaviour change)
+- Create: `apps/web/src/server/scorer-sheet-pdf.ts` (renderer)
 - Create: `apps/web/src/server/__tests__/scorer-sheet-pdf.test.ts`
 - Create: `apps/web/src/server/__tests__/_pdf-uris.ts`
 - Modify: `apps/web/src/server/usecases/scorer-sheets.ts` (add `buildScorerSheet`)
-- Create: `apps/web/src/server/scorer-sheet-guard.ts`
-- Create: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/scorer-sheets.pdf/route.ts`
-- Create: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/scorer-sheets.pdf/__tests__/route.test.ts`
+- Create: `apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/route.ts`
+- Create: `apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/__tests__/route.test.ts`
+- Modify: `apps/web/src/server/api-v1/openapi.ts` (entry beside `/competitions/{id}/exports/tickets`, ~:365), `apps/web/src/server/api-v1/key-scopes.ts` (session-only list beside `"GET /me/rota.pdf"`, ~:371), then `pnpm run openapi:gen` → `openapi/v1.json`, `openapi/v1.public.json`
 - Modify: `apps/web/package.json` (devDependency `jsqr`), `pnpm-lock.yaml`
 - Modify: 4 × `ui.json`, regenerate `i18n-keys.ts`
 
 **Interfaces:**
-- Consumes: `ensureDeviceLinks` (T2), `loadSheetCandidates`/`selectSheetFixtures`/`paginateSheet` (T7), `matchRef`/`resolveSlotLabel` (`@/lib/slot-label`), `requireCompetitionPage` (`@/server/page-auth:223`), `rateLimit(key, { max, windowSeconds })` + `__setRateLimitCounterForTests` (`@/lib/rate-limit`), `baseUrl(req)` (`@/lib/oauth:20`), `resolveLocale`, `msgFor`, `intlLocaleFor`.
+- Consumes:
+  - `ensureDeviceLinks` (T2), plus `loadSheetCandidates` / `selectSheetFixtures` / `paginateSheet` (T7).
+  - `matchRef` / `resolveSlotLabel`.
+  - From `@/server/doc-theme`: `registerFonts`, `FONT`, `PALETTE`, `qrBuffer`. From `@/server/doc-render`: `drawMasthead`, `drawTitleBlock`, `resolveLogo`, `MARGIN`.
+  - `orgBranding` (`@/server/usecases/exports`), `type DocModel` (`@seazn/engine/exports`, a type import only).
+  - `requireResourceAuth(req, "competition", id, "write")`, `v1()` (`@/server/api-v1/http`).
+  - `rateLimit` + `__setRateLimitCounterForTests`, `resolveLocale`, `msgFor`, `intlLocaleFor`.
 - Produces:
   - `interface SheetRow { fixtureId; url; time; matchLine; home; away; homeTbd: boolean; awayTbd: boolean; homeMembers: string[]; awayMembers: string[] }`
-  - `interface SheetModel { title: string; subtitle: string; pages: { heading: string; rows: SheetRow[] }[]; labels: { scan; winner; score; signature: string; page: (n: number, of: number) => string } }`
-  - `renderScorerSheetPdf(model: SheetModel): Promise<Buffer>`; `sheetQrPng(url: string): Promise<Buffer>`
-  - `buildScorerSheet(auth, competition: { id: string; name: string }, day: string, origin: string, locale: Locale): Promise<SheetModel | null>` (null = nothing to print)
-  - `assertSameOrigin(req: Request): void` → 403 `CROSS_ORIGIN`
-  - route `POST /o/{org}/c/{comp}/schedule/scorer-sheets.pdf`, JSON body `{ date: "YYYY-MM-DD" }` → 200 PDF / 400 / 402 / 403 / 422 `NO_FIXTURES_ON_DAY` / 429
+  - `interface SheetModel { header: DocModel; pages: { heading: string; rows: SheetRow[] }[]; labels: { eyebrow; scan; winner; score; signature: string; page: (n: number, of: number) => string } }`. `header` is a DocModel with `kind: "scoresheet"`, `sections: []` and `pageBreaks: "auto"`, used ONLY for the shared masthead and title block. `meta.printedAt` is supplied by the caller, never `Date.now()` in the renderer.
+  - `renderScorerSheetPdf(model: SheetModel): Promise<Buffer>`
+  - `buildScorerSheet(auth, competitionId: string, day: string, origin: string, locale: Locale, opts: { printedAt: string }): Promise<SheetModel>`. It throws `HttpError(422, …, "NO_FIXTURES_ON_DAY")` when nothing prints, the way `buildAdmitTicketsDoc` refuses an empty ticket run.
+  - `POST /api/v1/competitions/{id}/exports/scorer-sheets` with JSON body `{ date: "YYYY-MM-DD" }`. Responses: 200 `application/pdf`, attachment, `private, no-store`, or 400 / 402 / 403 / 422 / 429 in the v1 envelope.
 
-- [ ] **Step 1: Decoder dependency** — `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm --filter <apps/web package name> add -D jsqr` (read `"name"` in `apps/web/package.json`). `pdftoppm` is for the local eyeball check only, never in vitest.
+- [ ] **Step 1: Decoder dependency.** Run `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm --filter <apps/web package name> add -D jsqr` (read `"name"` in `apps/web/package.json`). `pdftoppm` is for the local visual check only, never in vitest.
 
 - [ ] **Step 2: Failing renderer test.** `apps/web/src/server/__tests__/_pdf-uris.ts`:
 
 ```ts
 // pdfkit writes link annotations as uncompressed dictionary objects, so their
 // /URI strings are readable in the raw bytes even though content streams are
-// FlateDecoded (see poster.pdf's route.test.ts). Literal escapes are undone.
+// FlateDecoded and the brand fonts are embedded. Literal escapes are undone.
 export function pdfLinkUris(pdf: Buffer): string[] {
   const text = pdf.toString("latin1");
   return [...text.matchAll(/\/URI\s*\(((?:\\.|[^\\)])*)\)/g)].map((m) => m[1]!.replace(/\\([()\\])/g, "$1"));
@@ -2757,19 +2772,33 @@ export function pdfPageCount(pdf: Buffer): number {
   return m ? Number(m[1]) : 0;
 }
 ```
-Unpinned: pdfkit's exact URI string encoding. If the first rendered buffer shows `/URI <hex>` instead of `(…)`, add a hex branch to the extractor — never weaken the count/equality assertions. Cross-check `pdfPageCount` against poster.pdf's `decodePdfPageCount` and reuse it if it is exported.
+Not pinned yet: how pdfkit encodes the URI string. If the first buffer shows `/URI <hex>`, add a hex branch to the extractor. Never weaken the count or equality assertions. Text in the content streams is NOT decodable here: Inter/Barlow are embedded, so the hex operands are glyph ids (see poster.pdf's route.test.ts header). The tests therefore prove links, pages and fonts, not strings. The strings are proven on the plain model by the builder's DB test.
 
 `apps/web/src/server/__tests__/scorer-sheet-pdf.test.ts`:
 
 ```ts
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { resolve } from "node:path";
 import jsQR from "jsqr";
 import sharp from "sharp";
-import { renderScorerSheetPdf, sheetQrPng, type SheetModel, type SheetRow } from "../scorer-sheet-pdf";
+import type { DocModel } from "@seazn/engine/exports";
+import { qrBuffer } from "../doc-theme";
+import { renderScorerSheetPdf, type SheetModel, type SheetRow } from "../scorer-sheet-pdf";
 import { pdfLinkUris, pdfPageCount } from "./_pdf-uris";
 
+// fontDir() defaults to <cwd>/apps/web/assets/fonts, which does not exist when
+// vitest runs from apps/web. Unset, registerFonts SILENTLY falls back to
+// Helvetica and this suite would prove the wrong fonts. Point it at the real dir.
+beforeAll(() => {
+  process.env.DOC_FONT_DIR = resolve(import.meta.dirname, "../../../assets/fonts");
+});
+
+const header: DocModel = {
+  kind: "scoresheet", title: "Cup", description: "Wednesday 23 September",
+  meta: { printedAt: "2026-09-23 08:00" }, sections: [], pageBreaks: "auto",
+};
 const labels: SheetModel["labels"] = {
-  scan: "Scan to score", winner: "Winner", score: "Score", signature: "Umpire",
+  eyebrow: "SCORER SHEETS", scan: "Scan to score", winner: "Winner", score: "Score", signature: "Umpire",
   page: (n, of) => `Page ${n} of ${of}`,
 };
 const row = (i: number, over: Partial<SheetRow> = {}): SheetRow => ({
@@ -2778,8 +2807,7 @@ const row = (i: number, over: Partial<SheetRow> = {}): SheetRow => ({
   homeMembers: [], awayMembers: [], ...over,
 });
 const model = (pages: SheetRow[][]): SheetModel => ({
-  title: "Cup", subtitle: "Wednesday 23 September", labels,
-  pages: pages.map((rows, i) => ({ heading: `Court ${i + 1}`, rows })),
+  header, labels, pages: pages.map((rows, i) => ({ heading: `Court ${i + 1}`, rows })),
 });
 
 describe("renderScorerSheetPdf (scorer sheets §4.4)", () => {
@@ -2797,32 +2825,58 @@ describe("renderScorerSheetPdf (scorer sheets §4.4)", () => {
   it("a TBD side keeps its row and QR (D2) — the pen line is no reason to skip the link", async () => {
     expect(pdfLinkUris(await renderScorerSheetPdf(model([[row(1, { home: "Winner of R1·1", homeTbd: true })]])))).toHaveLength(1);
   });
+
+  it("is set in the brand fonts (doc-theme), not the Helvetica fallback", async () => {
+    const bytes = (await renderScorerSheetPdf(model([[row(1)]]))).toString("latin1");
+    expect(bytes).toMatch(/\/BaseFont\s*\/[A-Z]{6}\+Inter/);
+    expect(bytes).toMatch(/\/BaseFont\s*\/[A-Z]{6}\+BarlowCondensed/);
+    expect(bytes).not.toMatch(/\/BaseFont\s*\/Helvetica/);
+  });
 });
 
-describe("sheetQrPng", () => {
+describe("the shared qrBuffer, at the size the sheet prints it", () => {
   it("decodes back to the exact URL (real encoder, real decoder)", async () => {
     const url = "https://example.test/score/dl_AbC-_123";
-    const { data, info } = await sharp(await sheetQrPng(url)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const png = await qrBuffer(url);
+    expect(png).not.toBeNull();
+    const { data, info } = await sharp(png!).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     expect(jsQR(new Uint8ClampedArray(data), info.width, info.height)?.data).toBe(url);
   });
 });
 ```
-Run → FAIL.
+Check the subset-prefix pattern (`ABCDEF+Inter-Regular`) against the first real buffer and match what pdfkit actually writes. Also cross-check `doc-render.test.ts` in case it already asserts embedded fonts, and reuse its matcher. Run → FAIL.
 
-- [ ] **Step 3: Implement** `apps/web/src/server/scorer-sheet-pdf.ts`:
+- [ ] **Step 3: Export the shared chrome from `doc-render.ts`.** This is a behaviour-preserving edit:
+  - Add `export` to `const MARGIN`, `async function resolveLogo`, `function drawMasthead` and `function drawTitleBlock`.
+  - Change the title block's signature to `export function drawTitleBlock(doc: PDFKit.PDFDocument, model: DocModel, eyebrow: string = eyebrowFor(model.kind)): void` and use `eyebrow` in place of `eyebrowFor(model.kind)` in its body. EYEBROW's `scoresheet: "MATCH SHEET"` is hard-coded English, and the sheet passes its localised eyebrow instead.
+  - In `usecases/exports.ts`, add `export` to `async function orgBranding`.
+
+  Run the existing `doc-render.test.ts`, `doc-render-ticket-layout.test.ts`, `doc-render-footer-qr.test.ts`, `doc-render-bracket.test.ts`, `doc-theme.test.ts` and `exports.test.ts` UNCHANGED. They must stay green, because they are this refactor's regression test.
+
+- [ ] **Step 4: Implement** `apps/web/src/server/scorer-sheet-pdf.ts`:
 
 ```ts
 import "server-only";
-// Scorer sheets §4.4 — A4 portrait. Per page: competition, day, court (and
-// "continued"), up to ROWS_PER_PAGE match blocks. Each QR image is ALSO a link
-// annotation, so an organiser who opens the PDF on a phone can tap it. A TBD
-// side prints its slot label ("Winner of R1·2") over a pen line.
-// Helvetica (the 14 standard fonts), as poster.pdf does: the four UI locales
-// are all WinAnsi. A name outside WinAnsi (Tamil, CJK…) prints as missing
-// glyphs, which is the poster's limit too; an embedded Unicode font is a follow-up.
-// bufferPages: true is REQUIRED for the footer loop (see poster.pdf's route).
+// Scorer sheets §4.4 — A4 portrait, on the shared document system:
+// doc-theme's fonts, palette and QR helper, and doc-render's masthead (Pro
+// `exports.branded` only) and title block. Its own body, because a match
+// block is not a DocModel section (the engine type is out of scope, and the
+// ticket section's QR has no link and its footer is English). Per page: the
+// court heading (and "continued"), then up to ROWS_PER_PAGE match blocks.
+// Each QR image is ALSO a link annotation, so a phone that opens the PDF can
+// tap it. A TBD side prints its slot label over a pen line.
+//
+// Glyphs, measured with fontkit against assets/fonts on 2026-09-23:
+// Inter (FONT.body/bodyMed) covers Latin-1, Latin Extended-A, Vietnamese,
+// Greek and Cyrillic. It has none of Tamil, Devanagari, Arabic, Hebrew, Thai
+// or CJK. Barlow Condensed (FONT.display*) covers Latin and Vietnamese only:
+// 4/57 Greek, 0/64 Cyrillic. So every PERSON name is set in Inter, never in
+// Barlow. Barlow is used only for our own chrome (court heading), where the
+// four UI locales are all Latin.
 import PDFDocument from "pdfkit";
-import QRCode from "qrcode";
+import type { DocModel } from "@seazn/engine/exports";
+import { FONT, PALETTE, qrBuffer, registerFonts } from "./doc-theme";
+import { MARGIN, drawMasthead, drawTitleBlock, resolveLogo } from "./doc-render";
 
 export interface SheetRow {
   fixtureId: string;
@@ -2838,214 +2892,156 @@ export interface SheetRow {
 }
 
 export interface SheetModel {
-  title: string;
-  subtitle: string;
+  /** Masthead + title block only — `sections` stays empty. */
+  header: DocModel;
   pages: { heading: string; rows: SheetRow[] }[];
-  labels: { scan: string; winner: string; score: string; signature: string; page: (n: number, of: number) => string };
+  labels: { eyebrow: string; scan: string; winner: string; score: string; signature: string; page: (n: number, of: number) => string };
 }
 
-const INK = "#18181b";
-const MUTED = "#52525b";
-const RULE = "#d4d4d8";
-const MARGIN = 36;
 const QR = 104;
-const BLOCK = 140;
-
-export function sheetQrPng(url: string): Promise<Buffer> {
-  return QRCode.toBuffer(url, { width: 480, margin: 1, errorCorrectionLevel: "M" });
-}
+const BLOCK = 132;
 
 export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
-  const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true, info: { Title: model.title } });
+  // QR pre-pass, as docModelToPdf does it: pdfkit draws synchronously. A null
+  // QR is a sheet nobody can scan, so fail the print rather than ship it.
+  const qrs = new Map<string, Buffer>();
+  for (const page of model.pages) {
+    for (const r of page.rows) {
+      const png = await qrBuffer(r.url);
+      if (!png) throw new Error(`QR generation failed for fixture ${r.fixtureId}`);
+      qrs.set(r.fixtureId, png);
+    }
+  }
+  const logo = model.header.branding ? await resolveLogo(model.header.branding.logos?.[0]) : null;
+
+  const doc = new PDFDocument({ size: "A4", layout: "portrait", margin: MARGIN, bufferPages: true, info: { Title: model.header.title } });
   const chunks: Buffer[] = [];
   doc.on("data", (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+  registerFonts(doc);
   const width = doc.page.width - MARGIN * 2;
 
   for (const [p, page] of model.pages.entries()) {
     if (p > 0) doc.addPage();
-    doc.fillColor(INK).font("Helvetica-Bold").fontSize(16)
-      .text(model.title, MARGIN, MARGIN, { width, lineBreak: false, ellipsis: true });
-    doc.font("Helvetica").fontSize(10).fillColor(MUTED)
-      .text(`${model.subtitle} · ${page.heading}`, MARGIN, MARGIN + 22, { width, lineBreak: false, ellipsis: true });
-    let y = MARGIN + 48;
+    if (model.header.branding) drawMasthead(doc, model.header, logo);
+    else doc.y = MARGIN;
+    drawTitleBlock(doc, model.header, model.labels.eyebrow);
+    doc.font(FONT.displayBold).fontSize(16).fillColor(PALETTE.night)
+      .text(page.heading.toUpperCase(), MARGIN, doc.y, { width, lineBreak: false, ellipsis: true });
+    let y = doc.y + 8;
     for (const r of page.rows) {
-      doc.moveTo(MARGIN, y).lineTo(MARGIN + width, y).strokeColor(RULE).lineWidth(0.5).stroke();
-      doc.image(await sheetQrPng(r.url), MARGIN, y + 12, { width: QR, height: QR, link: r.url });
-      doc.font("Helvetica").fontSize(7).fillColor(MUTED)
-        .text(model.labels.scan, MARGIN, y + 14 + QR, { width: QR, align: "center", lineBreak: false });
+      doc.moveTo(MARGIN, y).lineTo(MARGIN + width, y).strokeColor(PALETTE.hairline).lineWidth(0.75).stroke();
+      doc.image(qrs.get(r.fixtureId)!, MARGIN, y + 10, { width: QR, height: QR, link: r.url });
+      doc.font(FONT.bodyMed).fontSize(7).fillColor(PALETTE.mute)
+        .text(model.labels.scan, MARGIN, y + 12 + QR, { width: QR, align: "center", lineBreak: false });
       const x = MARGIN + QR + 16;
       const w = width - QR - 16;
-      doc.font("Helvetica").fontSize(9).fillColor(MUTED)
-        .text(`${r.time} · ${r.matchLine}`, x, y + 12, { width: w, lineBreak: false, ellipsis: true });
-      side(doc, r.home, r.homeTbd, r.homeMembers, x, y + 28, w);
-      side(doc, r.away, r.awayTbd, r.awayMembers, x, y + 60, w);
-      doc.font("Helvetica").fontSize(8).fillColor(MUTED).text(
+      doc.font(FONT.bodyMed).fontSize(9).fillColor(PALETTE.slate)
+        .text(`${r.time} · ${r.matchLine}`, x, y + 10, { width: w, lineBreak: false, ellipsis: true });
+      side(doc, r.home, r.homeTbd, r.homeMembers, x, y + 26, w);
+      side(doc, r.away, r.awayTbd, r.awayMembers, x, y + 58, w);
+      doc.font(FONT.body).fontSize(8).fillColor(PALETTE.slate).text(
         `${model.labels.score} ____________   ${model.labels.winner} ____________   ${model.labels.signature} ____________`,
-        x, y + 104, { width: w, lineBreak: false },
+        x, y + 100, { width: w, lineBreak: false },
       );
       y += BLOCK;
     }
   }
+
+  // Own footer: doc-render's says "printed … page N of M" in English.
+  // Keep it inside the content box — text at or below page.height - MARGIN
+  // is suppressed by pdfkit (doc-render's note).
   const range = doc.bufferedPageRange();
   for (let i = range.start; i < range.start + range.count; i++) {
     doc.switchToPage(i);
-    doc.font("Helvetica").fontSize(8).fillColor(MUTED)
-      .text(model.labels.page(i + 1, range.count), MARGIN, doc.page.height - MARGIN, { width, align: "right", lineBreak: false });
+    const fy = doc.page.height - MARGIN - 10;
+    doc.font(FONT.body).fontSize(7).fillColor(PALETTE.mute).text(
+      `${model.header.meta.printedAt} · ${model.labels.page(i - range.start + 1, range.count)}`,
+      MARGIN, fy, { width: width - 90, lineBreak: false },
+    );
+    doc.font(FONT.body).fontSize(7).fillColor(PALETTE.mute)
+      .text("seazn.club", MARGIN, fy, { width, align: "right", lineBreak: false });
   }
   doc.end();
   return done;
 }
 
 function side(doc: PDFKit.PDFDocument, name: string, tbd: boolean, members: string[], x: number, y: number, w: number) {
-  doc.font(tbd ? "Helvetica-Oblique" : "Helvetica-Bold").fontSize(12).fillColor(INK)
+  // Person names in Inter (FONT.bodyMed) — Barlow has no Cyrillic/Greek.
+  doc.font(FONT.bodyMed).fontSize(12).fillColor(tbd ? PALETTE.slate : PALETTE.ink)
     .text(name, x, y, { width: w, lineBreak: false, ellipsis: true });
   if (tbd) {
-    doc.moveTo(x, y + 26).lineTo(x + Math.min(w, 220), y + 26).strokeColor(MUTED).lineWidth(0.6).stroke();
+    doc.moveTo(x, y + 26).lineTo(x + Math.min(w, 220), y + 26).strokeColor(PALETTE.slate).lineWidth(0.6).stroke();
   } else if (members.length > 0) {
-    doc.font("Helvetica").fontSize(8).fillColor(MUTED)
-      .text(members.join(", "), x, y + 15, { width: w, lineBreak: false, ellipsis: true });
+    doc.font(FONT.body).fontSize(8).fillColor(PALETTE.slate)
+      .text(members.join(", "), x, y + 16, { width: w, lineBreak: false, ellipsis: true });
   }
 }
 ```
-Run Step 2 → PASS. Then render a 7-row model to `$TMPDIR/sheet.pdf` (a throwaway `pnpm exec tsx -e` from `apps/web`), `pdftoppm -r 80 -png $TMPDIR/sheet.pdf $TMPDIR/sheet`, and LOOK at each page: header, five blocks, footer clear of the fifth block (48 + 5×140 = 748 < 806). Record the final geometry.
+Run Step 2 → PASS.
 
-- [ ] **Step 4: Failing route test** — `…/schedule/scorer-sheets.pdf/__tests__/route.test.ts` (DB):
+Then render a 7-row model to `$TMPDIR/sheet.pdf`: a throwaway `pnpm exec tsx -e` from `apps/web` with `DOC_FONT_DIR` set, one branded run and one unbranded. Run `pdftoppm -r 80 -png $TMPDIR/sheet.pdf $TMPDIR/sheet` and LOOK at each page:
+- masthead only on the branded run;
+- title block, then court heading;
+- five blocks, with the fifth clear of the footer.
+
+The page-1 masthead pushes the body down by MAST_H + 18. If five blocks do not fit under it, lower `BLOCK` or `QR`. Do not lower `ROWS_PER_PAGE`: it is T7's contract, and changing it moves T7's test. Record the final geometry, and a phone scan of one printed QR at 104 pt (qrBuffer renders 180 px).
+
+- [ ] **Step 5: Builder — failing DB test** appended to T7's `apps/web/src/server/usecases/__tests__/scorer-sheets.test.ts`:
 
 ```ts
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { sql } from "@/lib/db";
-import { seedOrg } from "@/server/usecases/__tests__/_seed";
-import { fixturesOf, seedStage } from "@/server/usecases/__tests__/_sheets-rig";
-import { pdfLinkUris } from "@/server/__tests__/_pdf-uris";
-import { hashDeviceLinkToken } from "@/server/usecases/device-links";
-import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { buildScorerSheet } from "../scorer-sheets";
 
-const page = vi.hoisted(() => ({ value: null as null | Record<string, unknown> }));
-vi.mock("@/server/page-auth", () => ({ requireCompetitionPage: async () => page.value }));
-vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
-
-import { POST } from "../route";
-
-const HAS_DB = !!process.env.DATABASE_URL;
-afterAll(async () => {
-  __setRateLimitCounterForTests(null);
-  if (!HAS_DB) return;
-  const g = globalThis as { _sql?: { end(): Promise<void> } };
-  const client = g._sql;
-  g._sql = undefined;
-  await client?.end();
-});
-
-const ORIGIN = "http://localhost:3000";
-function req(body: unknown, origin: string | null = ORIGIN) {
-  const headers: Record<string, string> = { "content-type": "application/json", host: "localhost:3000" };
-  if (origin) headers.origin = origin;
-  return new Request(`${ORIGIN}/o/x/c/y/schedule/scorer-sheets.pdf`, { method: "POST", headers, body: JSON.stringify(body) });
-}
-const ctx = { params: Promise.resolve({ orgSlug: "x", compSlug: "y" }) };
-
-async function seeded(plan: "pro" | "community" = "pro") {
-  const { auth } = await seedOrg(plan);
-  const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
-  const fx = await fixturesOf(stage.id);
-  await sql`update fixtures set scheduled_at = '2026-09-23T09:00:00Z' where id = any(${fx.map((f) => f.id)})`;
-  page.value = { auth, canEdit: true, competition: { id: competition.id, slug: competition.slug, name: competition.name } };
-  return { auth, competition, fx };
-}
-
-beforeEach(() => {
-  page.value = null;
-  __setRateLimitCounterForTests(null);
-});
-
-describe.skipIf(!HAS_DB)("POST scorer-sheets.pdf (scorer sheets §4.4)", () => {
-  it("one link per printable fixture, each a live link of THAT fixture; private, no-store, attachment", async () => {
-    const { fx } = await seeded();
-    const res = await POST(req({ date: "2026-09-23" }), ctx);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("application/pdf");
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect(res.headers.get("content-disposition")).toMatch(/^attachment; filename="[^"]+-2026-09-23\.pdf"$/);
-    const uris = pdfLinkUris(Buffer.from(await res.arrayBuffer()));
-    expect(uris).toHaveLength(fx.length);
-    const seen = new Set<string>();
-    for (const uri of uris) {
-      expect(uri.startsWith(`${ORIGIN}/score/dl_`)).toBe(true);
-      const [link] = await sql<{ fixture_id: string; revoked_at: string | null }[]>`
-        select fixture_id, revoked_at from device_links where token_hash = ${hashDeviceLinkToken(uri.split("/score/")[1]!)}`;
-      expect(link?.revoked_at).toBeNull();
-      seen.add(link!.fixture_id);
-    }
-    expect([...seen].sort()).toEqual(fx.map((f) => f.id).sort());
-  });
-
-  it("a reprint carries the SAME links (a sheet on court stays alive)", async () => {
-    await seeded();
-    const a = pdfLinkUris(Buffer.from(await (await POST(req({ date: "2026-09-23" }), ctx)).arrayBuffer()));
-    const b = pdfLinkUris(Buffer.from(await (await POST(req({ date: "2026-09-23" }), ctx)).arrayBuffer()));
-    expect([...b].sort()).toEqual([...a].sort());
-  });
-
-  it("empty day → 422 NO_FIXTURES_ON_DAY; malformed date → 400", async () => {
-    await seeded();
-    const empty = await POST(req({ date: "2026-10-01" }), ctx);
-    expect(empty.status).toBe(422);
-    expect((await empty.json()).error.code).toBe("NO_FIXTURES_ON_DAY");
-    expect((await POST(req({ date: "23/09/2026" }), ctx)).status).toBe(400);
-  });
-
-  it("a viewer who cannot edit → 403, and nothing is minted", async () => {
-    const { competition } = await seeded();
-    page.value = { ...page.value!, canEdit: false };
-    expect((await POST(req({ date: "2026-09-23" }), ctx)).status).toBe(403);
-    const [{ n }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from device_links dl join fixtures f on f.id = dl.fixture_id
-      join divisions d on d.id = f.division_id where d.competition_id = ${competition.id}`;
+describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
+  it("empty day → 422 NO_FIXTURES_ON_DAY, and nothing is minted", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    await expect(buildScorerSheet(auth, competition.id, "2026-10-01", "http://localhost:3000", "en", { printedAt: "x" }))
+      .rejects.toMatchObject({ status: 422, code: "NO_FIXTURES_ON_DAY" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from device_links where org_id = ${auth.orgId}`;
     expect(n).toBe(0);
   });
 
-  it("cross-origin → 403; missing Origin → 403 (P13: proxy.ts guards /api only)", async () => {
-    await seeded();
-    expect((await POST(req({ date: "2026-09-23" }, "https://evil.example"), ctx)).status).toBe(403);
-    expect((await POST(req({ date: "2026-09-23" }, null), ctx)).status).toBe(403);
+  it("one row per printable fixture, each URL a live link of THAT fixture; strings localised; TBD side is a slot label", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const fx = await fixturesOf(stage.id);
+    await sql`update fixtures set scheduled_at = '2026-09-23T09:00:00Z' where id = any(${fx.map((f) => f.id)})`;
+    const m = await buildScorerSheet(auth, competition.id, "2026-09-23", "http://localhost:3000", "fr", { printedAt: "x" });
+    const rows = m.pages.flatMap((p) => p.rows);
+    expect(rows.map((r) => r.fixtureId).sort()).toEqual(fx.map((f) => f.id).sort());
+    expect(m.labels.scan).toBe(msgFor("fr", "sheets.pdf.scan"));
+    expect(m.header.kind).toBe("scoresheet");
+    const final = rows.find((r) => r.fixtureId === fx.find((f) => f.round_no === 2)!.id)!;
+    expect(final.homeTbd).toBe(true);
+    expect(final.home).toBe(resolveSlotLabel({ key: "slot.winner_match", params: { round: 1, seq: 1 } }, (k, v) => msgFor("fr", k, v), "schedule.tbd"));
+    for (const r of rows) {
+      const [link] = await sql<{ fixture_id: string; revoked_at: string | null }[]>`
+        select fixture_id, revoked_at from device_links where token_hash = ${hashDeviceLinkToken(r.url.split("/score/")[1]!)}`;
+      expect([link?.fixture_id, link?.revoked_at]).toEqual([r.fixtureId, null]);
+    }
   });
 
-  it("Community without a pass → 402", async () => {
-    await seeded("community");
-    expect((await POST(req({ date: "2026-09-23" }), ctx)).status).toBe(402);
-  });
-
-  it("over the per-user limit → 429 (the limiter is inert without Redis, so the counter is forced)", async () => {
-    await seeded();
-    __setRateLimitCounterForTests(async () => 7);
-    expect((await POST(req({ date: "2026-09-23" }), ctx)).status).toBe(429);
+  it("a second build carries the SAME urls (a sheet on court stays alive)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const fx = await fixturesOf(stage.id);
+    await sql`update fixtures set scheduled_at = '2026-09-23T09:00:00Z' where id = any(${fx.map((f) => f.id)})`;
+    const urls = async () =>
+      (await buildScorerSheet(auth, competition.id, "2026-09-23", "http://localhost:3000", "en", { printedAt: "x" }))
+        .pages.flatMap((p) => p.rows.map((r) => r.url)).sort();
+    expect(await urls()).toEqual(await urls());
   });
 });
 ```
-Confirm `seedOrg` accepts `"community"` and that a Community org can create a league stage in the rig (if a gate stops it, seed as Pro and `setOrgPlan` down — mind that `setOrgPlan` is GROUP-scoped). Confirm `baseUrl(req)` yields `http://localhost:3000` from the `host` header (read `lib/oauth.ts:20`; set whatever header it reads). Run → FAIL.
+Add the imports: `msgFor`, `resolveSlotLabel`, `hashDeviceLinkToken`. Run → FAIL.
 
-- [ ] **Step 5: Implement.** `apps/web/src/server/scorer-sheet-guard.ts`:
-
-```ts
-import "server-only";
-// P13: proxy.ts's CSRF Origin check covers /api only, and this POST lives
-// under /o/… and MINTS scoring credentials. A cross-site form must not be able
-// to make an organiser's browser mint them.
-import { HttpError } from "@/lib/errors";
-import { baseUrl } from "@/lib/oauth";
-
-export function assertSameOrigin(req: Request): void {
-  const origin = req.headers.get("origin");
-  if (!origin || origin !== new URL(baseUrl(req)).origin) {
-    throw new HttpError(403, "Cross-origin request refused", "CROSS_ORIGIN");
-  }
-}
-```
-Append to `usecases/scorer-sheets.ts`:
+- [ ] **Step 6: Implement the builder.** Append to `usecases/scorer-sheets.ts`:
 
 ```ts
 import { ensureDeviceLinks } from "./device-links";
+import { orgBranding } from "./exports";
+import { sql } from "@/lib/db";
 import { msgFor } from "@/lib/messages-i18n";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { matchRef, resolveSlotLabel } from "@/lib/slot-label";
@@ -3053,29 +3049,44 @@ import { paginateSheet, selectSheetFixtures } from "@/lib/scorer-sheets";
 import type { Locale } from "@/lib/i18n-constants";
 import type { SheetModel } from "@/server/scorer-sheet-pdf";
 
-/** The printable model for one day, or null when nothing prints. Links are
- *  ENSURED (re-shown, never rotated) in one transaction — T2. */
+/** The printable model for one day (§4.4). Shaped like exports.ts's
+ *  buildAdmitTicketsDoc: branding resolved OUTSIDE the tenant transaction,
+ *  422 on nothing to print rather than an empty 200. Links are ENSURED —
+ *  re-shown, never rotated (T2). */
 export async function buildScorerSheet(
   auth: AuthCtx,
-  competition: { id: string; name: string },
+  competitionId: string,
   day: string,
   origin: string,
   locale: Locale,
-): Promise<SheetModel | null> {
-  const rows = selectSheetFixtures(await loadSheetCandidates(auth, competition.id, day), day);
-  if (rows.length === 0) return null;
+  opts: { printedAt: string },
+): Promise<SheetModel> {
+  const rows = selectSheetFixtures(await loadSheetCandidates(auth, competitionId, day), day);
+  if (rows.length === 0) throw new HttpError(422, "No fixtures to print on that day", "NO_FIXTURES_ON_DAY");
   const t = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
-  const links = await ensureDeviceLinks(auth, competition.id, rows.map((r) => r.id));
+  const [comp] = await sql<{ name: string; org_id: string; org_name: string }[]>`
+    select c.name, c.org_id, org.name as org_name
+    from competitions c join organizations org on org.id = c.org_id where c.id = ${competitionId}`;
+  const branding = await orgBranding(comp!.org_id, comp!.org_name, competitionId);
+  const links = await ensureDeviceLinks(auth, competitionId, rows.map((r) => r.id));
   const intl = intlLocaleFor(locale);
   const time = (iso: string, tz: string) =>
     new Intl.DateTimeFormat(intl, { timeZone: tz, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
   // A calendar day, formatted at UTC noon so no zone shifts it (poster.pdf's rule).
-  const subtitle = new Intl.DateTimeFormat(intl, { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" })
+  const dayLabel = new Intl.DateTimeFormat(intl, { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" })
     .format(new Date(`${day}T12:00:00Z`));
   return {
-    title: competition.name,
-    subtitle,
+    header: {
+      kind: "scoresheet",
+      title: comp!.name,
+      description: dayLabel,
+      meta: { printedAt: opts.printedAt },
+      branding,
+      sections: [],
+      pageBreaks: "auto",
+    },
     labels: {
+      eyebrow: t("sheets.pdf.eyebrow"),
       scan: t("sheets.pdf.scan"),
       winner: t("sheets.pdf.winner"),
       score: t("sheets.pdf.score"),
@@ -3100,69 +3111,143 @@ export async function buildScorerSheet(
   };
 }
 ```
-Route `apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/scorer-sheets.pdf/route.ts` (Next 16: a route file exports ONLY handlers):
+`orgBranding` already nulls branding for plans without `exports.branded`; confirm that at exports.ts:166 before relying on it. `loadSheetCandidates` runs first so a foreign competition 404s before anything is minted. Run Step 5 → PASS.
+
+- [ ] **Step 7: Route — failing test** `apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/__tests__/route.test.ts`. The use-case is proven by Step 5 against the DB. The route test pins only the route's own duties: the auth scope it asks for, the body, the headers, the limiter, and the envelope.
 
 ```ts
-// Scorer sheets §4.4 — POST, never GET: printing MINTS scoring links (a
-// prefetch or crawler must not), and the response is a bundle of live
-// credentials, so it is never cached (Review Focus 4).
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HttpError } from "@/lib/errors";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+
+const h = vi.hoisted(() => ({
+  auth: vi.fn(),
+  build: vi.fn(),
+  render: vi.fn(async () => Buffer.from("%PDF-1.3 test")),
+}));
+vi.mock("@/server/api-v1/auth", async (orig) => ({ ...(await orig<object>()), requireResourceAuth: h.auth }));
+vi.mock("@/server/usecases/scorer-sheets", () => ({ buildScorerSheet: h.build }));
+vi.mock("@/server/scorer-sheet-pdf", () => ({ renderScorerSheetPdf: h.render }));
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
+
+import { POST } from "../route";
+
+const AUTH = { orgId: "o1", userId: "u1", via: "session" };
+const ctx = { params: Promise.resolve({ id: "c1" }) };
+const req = (body: unknown) =>
+  new Request("http://localhost:3000/api/v1/competitions/c1/exports/scorer-sheets", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  __setRateLimitCounterForTests(null);
+  h.auth.mockResolvedValue(AUTH);
+  h.build.mockResolvedValue({ header: {}, pages: [], labels: {} });
+});
+
+describe("POST /competitions/{id}/exports/scorer-sheets", () => {
+  it("asks for WRITE on the competition (printing mints credentials) and passes the day through", async () => {
+    const res = await POST(req({ date: "2026-09-23" }), ctx);
+    expect(res.status).toBe(200);
+    expect(h.auth).toHaveBeenCalledWith(expect.any(Request), "competition", "c1", "write");
+    expect(h.build).toHaveBeenCalledWith(AUTH, "c1", "2026-09-23", "http://localhost:3000", "en", expect.objectContaining({ printedAt: expect.any(String) }));
+  });
+
+  it("serves a private, uncached attachment (Review Focus 4)", async () => {
+    const res = await POST(req({ date: "2026-09-23" }), ctx);
+    expect(res.headers.get("content-type")).toBe("application/pdf");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="scorer-sheets-2026-09-23.pdf"');
+  });
+
+  it("malformed date → 400 before anything is built", async () => {
+    expect((await POST(req({ date: "23/09/2026" }), ctx)).status).toBe(400);
+    expect(h.build).not.toHaveBeenCalled();
+  });
+
+  it("the use-case's 422 and the auth 403 come back in the v1 envelope", async () => {
+    h.build.mockRejectedValueOnce(new HttpError(422, "No fixtures to print on that day", "NO_FIXTURES_ON_DAY"));
+    const r422 = await POST(req({ date: "2026-10-01" }), ctx);
+    expect(r422.status).toBe(422);
+    expect((await r422.json()).error.code).toBe("NO_FIXTURES_ON_DAY");
+    h.auth.mockRejectedValueOnce(new HttpError(403, "Forbidden"));
+    expect((await POST(req({ date: "2026-09-23" }), ctx)).status).toBe(403);
+  });
+
+  it("over the per-user limit → 429 (the limiter is inert without Redis, so the counter is forced)", async () => {
+    __setRateLimitCounterForTests(async () => 7);
+    expect((await POST(req({ date: "2026-09-23" }), ctx)).status).toBe(429);
+    expect(h.build).not.toHaveBeenCalled();
+  });
+});
+```
+Also pin the envelope shape `{ ok:false, error:{ code } }` against what `v1()` actually emits: read `server/api-v1/http.ts` and use its shape. Some pieces are proven elsewhere and are not re-proven here with a real session:
+- The cross-origin refusal is `proxy.ts`'s. Its existing tests cover `/api/**` POSTs, so confirm one exists and name it in the report.
+- The viewer 403 is `requireResourceAuth`'s.
+- The Community 402 is proven by T2's pass-scope sibling and T10's smoke.
+
+Run → FAIL.
+
+- [ ] **Step 8: Implement the route** `apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/route.ts`. It follows timetable/tickets line for line, and adds the body, the limiter and no-store:
+
+```ts
+import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireCompetitionPage } from "@/server/page-auth";
-import { assertSameOrigin } from "@/server/scorer-sheet-guard";
-import { buildScorerSheet } from "@/server/usecases/scorer-sheets";
-import { renderScorerSheetPdf } from "@/server/scorer-sheet-pdf";
+import { v1 } from "@/server/api-v1/http";
+import { requireResourceAuth } from "@/server/api-v1/auth";
+import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
 import { baseUrl } from "@/lib/oauth";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { buildScorerSheet } from "@/server/usecases/scorer-sheets";
+import { renderScorerSheetPdf } from "@/server/scorer-sheet-pdf";
 
-type Ctx = { params: Promise<{ orgSlug: string; compSlug: string }> };
+type Ctx = { params: Promise<{ id: string }> };
 const Body = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
-const NO_STORE = { "Cache-Control": "private, no-store" };
 
-function fail(status: number, code: string, message: string): Response {
-  return Response.json({ ok: false, error: { code, message } }, { status, headers: NO_STORE });
-}
-
-export async function POST(req: Request, { params }: Ctx): Promise<Response> {
+/** POST /competitions/{id}/exports/scorer-sheets — one A4 scorer sheet per
+ *  court for a day, a scan-to-score QR per match (scorer sheets §4.4). POST,
+ *  not GET like its timetable/tickets siblings: printing MINTS scoring links
+ *  (a prefetch or crawler must not), and the bytes are live credentials, so
+ *  never cached. Session editors only — ensureDeviceLinks refuses API keys.
+ *  Under /api so proxy.ts's CSRF Origin check covers it (P13). */
+export async function POST(req: Request, { params }: Ctx) {
   try {
-    assertSameOrigin(req);
-    const { orgSlug, compSlug } = await params;
-    const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/schedule" });
-    if (!page.canEdit) return fail(403, "FORBIDDEN", "Only organisers can print scorer sheets");
-    await rateLimit(`sheets:${page.auth.userId}`, { max: 6, windowSeconds: 60 });
+    const { id } = await params;
+    const auth = await requireResourceAuth(req, "competition", id, "write");
+    await rateLimit(`sheets:${auth.userId}`, { max: 6, windowSeconds: 60 });
     const parsed = Body.safeParse(await req.json().catch(() => null));
-    if (!parsed.success) return fail(400, "BAD_REQUEST", "date must be YYYY-MM-DD");
-    const model = await buildScorerSheet(
-      page.auth,
-      { id: page.competition.id, name: page.competition.name },
-      parsed.data.date,
-      new URL(baseUrl(req)).origin,
-      await resolveLocale(),
-    );
-    if (!model) return fail(422, "NO_FIXTURES_ON_DAY", "No fixtures to print on that day");
-    const pdf = await renderScorerSheetPdf(model);
-    return new Response(new Uint8Array(pdf), {
-      status: 200,
+    if (!parsed.success) throw new HttpError(400, "date must be YYYY-MM-DD");
+    const model = await buildScorerSheet(auth, id, parsed.data.date, new URL(baseUrl(req)).origin, await resolveLocale(), {
+      printedAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+    });
+    const bytes = await renderScorerSheetPdf(model);
+    return new NextResponse(new Uint8Array(bytes), {
       headers: {
-        ...NO_STORE,
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="scorer-sheets-${page.competition.slug}-${parsed.data.date}.pdf"`,
+        "Content-Disposition": `attachment; filename="scorer-sheets-${parsed.data.date}.pdf"`,
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (err) {
-    if (err instanceof PaymentRequiredError) return fail(402, "PAYMENT_REQUIRED", err.message);
-    if (err instanceof HttpError) return fail(err.status, err.code ?? "ERROR", err.message);
-    throw err;
+    return v1(async () => {
+      throw err;
+    });
   }
 }
 ```
-Confirm: `ResolvedEntity` carries `name` and `slug` (else load via `getCompetition(page.auth, id)` as the schedule page does); `PaymentRequiredError`'s module, and whether it extends `HttpError` (keep it caught first either way); `requireCompetitionPage`'s redirect/notFound throws must propagate (they do — only `HttpError`/`PaymentRequiredError` are caught).
+Check two things. First, that `requireResourceAuth`'s `"write"` scope means editor for a session: read `auth.ts:352`, and if editor is a different scope name, use that one and fix the test. Second, that `v1()`'s error response also carries `no-store`; if not, it is only an error body with no credentials in it, so say so and leave it. Then register the route:
+  - `openapi.ts`: add `{ path: "/competitions/{id}/exports/scorer-sheets", method: "post", summary: "Printable scorer sheets PDF for one day — one QR per match, each a live device link (re-shown, never rotated); session editors only (`scoring.device_links`)", tag: "exports", errors: [400, 402, 403, 422, 429] }` beside the tickets entry. Copy how a neighbouring POST entry declares its JSON body.
+  - `key-scopes.ts`: add `"POST /competitions/:id/exports/scorer-sheets"` to the session-only list beside `"GET /me/rota.pdf"`, with a comment that printing mints device links, which are session-editor only (doc 13 §7).
+  - `cd /Users/ashokhein/github/seazn.club-worktrees/scorer-sheets && pnpm run openapi:gen && git status --porcelain openapi/`, then commit the regenerated files.
+  - Run the key-scopes coverage test (grep `key-scopes` under `src/server/api-v1/__tests__`): every v1 route must be classified.
 
-- [ ] **Step 6: Strings** (4 dictionaries, then `pnpm run i18n:gen-keys && pnpm run i18n:check`):
+- [ ] **Step 9: Strings** (4 dictionaries, then `pnpm run i18n:gen-keys && pnpm run i18n:check`):
 
 | key | en | fr | es | nl |
 |---|---|---|---|---|
+| `sheets.pdf.eyebrow` | SCORER SHEETS | FEUILLES DE SCORE | HOJAS DE PUNTUACIÓN | SCOREFORMULIEREN |
 | `sheets.pdf.scan` | Scan to score | Scannez pour noter | Escanea para puntuar | Scan om te scoren |
 | `sheets.pdf.winner` | Winner | Vainqueur | Ganador | Winnaar |
 | `sheets.pdf.score` | Score | Score | Resultado | Score |
@@ -3171,20 +3256,23 @@ Confirm: `ResolvedEntity` carries `name` and `slug` (else load via `getCompetiti
 | `sheets.pdf.noCourt` | No court assigned | Aucun terrain attribué | Sin pista asignada | Geen baan toegewezen |
 | `sheets.pdf.continued` | {court} (continued) | {court} (suite) | {court} (continuación) | {court} (vervolg) |
 
-- [ ] **Step 7: Run** Steps 2 + 4 files via vitest JSON → PASS, `pending == 0` on the DB file; `$S gate --label sheets` clean.
+- [ ] **Step 10: Run** the Step 2, 5 and 7 files, plus the six doc-render/doc-theme/exports suites from Step 3, via vitest JSON: PASS, and `pending == 0` on the DB files. Then run `$S gate --label sheets` (clean) and the OpenAPI drift check (`git status --porcelain openapi/` empty after commit).
 
-- [ ] **Step 8: Mutation check**
+- [ ] **Step 11: Mutation check**
   - drop `link: r.url` → killed by "every row carries exactly one link".
   - skip TBD rows in the renderer → killed by the TBD case.
-  - `Cache-Control` removed from the 200 → killed by the header assertion (Review Focus 4).
-  - `assertSameOrigin` → no-op → killed by the cross-origin case; `!origin ||` removed → killed by the missing-Origin assertion.
-  - `canEdit` check removed → killed by "a viewer who cannot edit → 403, and nothing is minted".
-  - `buildScorerSheet` mints with `createDeviceLink` per row → killed by "a reprint carries the SAME links".
-  - URL built from `r.id` instead of the secret → killed by the hash lookup.
+  - skip `registerFonts(doc)` → killed by "is set in the brand fonts".
+  - set person names in `FONT.displayBold` → no automatic killer (both fonts embed). This is a documented glyph rule, so review checks it by reading `side()`. Record it as unkillable by test.
+  - `qrBuffer` null tolerated (draw nothing) → killed only by a forced-null case. Add `vi.mock("../doc-theme", …)` returning `null` from `qrBuffer` in a separate `it`, expecting `renderScorerSheetPdf` to reject. Add that case now and record it as the killer.
+  - `drawTitleBlock`'s default eyebrow changed → killed by the existing doc-render suites (title bytes differ) only if they snapshot. Say which suite killed it, or record it as a survivor.
+  - builder uses `createDeviceLink` per row → killed by "a second build carries the SAME urls".
+  - builder throws nothing on an empty day → killed by the 422 case.
+  - URL from `r.id` instead of the secret → killed by the hash lookup.
+  - route asks `"read"` → killed by the WRITE assertion.
+  - `Cache-Control` removed → killed by the header case (Review Focus 4).
   - `rateLimit` call deleted → killed by the 429 case.
-  - `ensureDeviceLinks(auth, competition.id, …)` → `requireFeature` without the competition → killed by the 402 case only on the Pass path — covered by T2's pass-scope sibling; record.
 
-- [ ] **Step 9: Commit** — every path in **Files** + `i18n-keys.ts`; message `feat(sheets): printable scorer sheets PDF with one QR per match`.
+- [ ] **Step 12: Commit.** Stage every path in **Files**, plus `i18n-keys.ts` and `openapi/*.json`. Message: `feat(sheets): printable scorer sheets PDF on the shared document theme`.
 
 E2E owed: Task 10 downloads this through the UI and opens a token taken from the bytes.
 
@@ -3220,7 +3308,7 @@ import { PrintScorerSheets, downloadBlob } from "@/components/v2/print-scorer-sh
 
 const byTestId = (tree: ReactElement[], id: string) => tree.find((e) => propsOf(e)["data-testid"] === id);
 const base = {
-  action: "/o/x/c/y/schedule/scorer-sheets.pdf",
+  action: "/api/v1/competitions/c1/exports/scorer-sheets",
   days: ["2026-09-23", "2026-09-24"],
   defaultDay: "2026-09-24",
   allowed: true,
@@ -3426,7 +3514,7 @@ and in the header, turn `<div className="mb-4">` into `<div className="mb-4 flex
 ```tsx
           {printable && (
             <PrintScorerSheets
-              action={`${routes.competition(orgSlug, compSlug)}/schedule/scorer-sheets.pdf`}
+              action={`/api/v1/competitions/${id}/exports/scorer-sheets`}
               days={sheetDayList}
               defaultDay={defaultDay}
               allowed={sheetsAllowed}
@@ -3434,7 +3522,7 @@ and in the header, turn `<div className="mb-4">` into `<div className="mb-4 flex
             />
           )}
 ```
-(`routes` — import from wherever `page-auth.ts` imports it. `billingFrozen` is declared below the current insertion point; move the `printable` block after it.) "Today" uses the org's venue clock (`orgTz`), as the board does; a division with its own tz still shows its fixtures on its own local day (T7) — the default is a convenience only.
+(`billingFrozen` is declared below the current insertion point; move the `printable` block after it.) "Today" uses the org's venue clock (`orgTz`), as the board does; a division with its own tz still shows its fixtures on its own local day (T7) — the default is a convenience only.
 
 - [ ] **Step 3: Strings**
 
@@ -3570,7 +3658,7 @@ Each commented body is a REQUIRED test body whose assertions are fixed above; th
 ```
 
 - [ ] **Step 4: Smoke** — in `scripts/smoke.ts`, beside the device-links check, reusing its session and seeding helpers exactly:
-  - POST the sheets route for a seeded day with a same-origin `Origin` → `check` status 200, `application/pdf`, bytes start `%PDF-`, `private, no-store`.
+  - POST `/api/v1/competitions/{id}/exports/scorer-sheets` for a seeded day with a same-origin `Origin` (and once with a foreign `Origin` → `check` 403 from `proxy.ts`) → `check` status 200, `application/pdf`, bytes start `%PDF-`, `private, no-store`.
   - `check` URI count equals the scheduled fixtures that day; POST again → `check` the same URI set.
   - Decide a knockout SF with a bearer taken from the PDF, then `core.void` it with that bearer → `check` 403 and code `RESULT_CARRIED_FORWARD`.
   - A Community org → `check` 402.
@@ -3598,6 +3686,7 @@ Each commented body is a REQUIRED test body whose assertions are fixed above; th
 - **Seams proven through real producer and consumer.** Refusal: a real inner-pad tap in a browser (T5). QR: URLs read from real PDF bytes and decoded by a real QR decoder (T8), then opened on a phone context (T10). Seeded pad mount: harness test on the real `send()` path (T6) plus the re-pointed realtime e2e.
 - **Empty case first:** carried-forward, `scanScreen`, `selectSheetFixtures`, `sheetDays`, `paginateSheet`, `PrintScorerSheets`.
 - **Right answer ≠ the wrong one's constant:** Auckland day (T7), court sort vs name (T7), default day ≠ first option (T9), scheduled fixture with a hand-filled feed (T4), finalised vs carried copy (T6).
+- **Shared document system (T8):** the renderer reuses `doc-theme`'s `registerFonts`/`FONT`/`PALETTE`/`qrBuffer` and `doc-render`'s masthead/title block — no second QR helper, palette or font set; the route follows the timetable/tickets exports. Glyph coverage was MEASURED (fontkit, 2026-09-23): Inter covers Latin, Vietnamese, Greek, Cyrillic; Barlow Condensed covers Latin/Vietnamese only; neither covers Tamil, Devanagari, Arabic, Hebrew, Thai or CJK — person names are therefore set in Inter, and non-covered scripts print as missing glyphs (a known limit shared with every existing export).
 - **Type consistency:** `EnsuredDeviceLink { row, secret, minted }` is the same in T2/T6/T8; `ViewOnlyReason` is defined in T5 and extended in T6, never redefined; `SheetCandidate` is shared by T7/T8; the wire code `RESULT_CARRIED_FORWARD` is pinned against its server source in T5.
 - **Accepted survivors, recorded:** the SQL ±1-day window (T7) is an optimisation, not a guard. The carried-forward check runs before the fixture lock (T4), so a Swiss pairing committing in the same instant can let one void through.
 - **Where the plan gives assertions rather than code:** T10's five non-golden test bodies and the golden test's pad taps. They depend on e2e helper return shapes and desk testids that Step 1 reads first. Every assertion is named, and review rejects a body that drops one.
