@@ -339,6 +339,159 @@ Cross-pad lag is the **measurement** W1 and W2 must move (worst case
 today ≈ `HOLD_MS` 10s + `POLL_MS` 15s), not a separate fix. Re-measure
 after; do not design against the number.
 
+### As built (2026-09-23) — and the bullet above whose conclusion was false
+
+Shipped as three tasks on `worktree-w3-realtime-seam`; the review record
+is `docs/superpowers/reviews/2026-09-22-w3-round-1.md`. Every line number
+below was re-pinned against the branch tip on 2026-09-23 — the ones in
+the bullets above predate W1 and no longer resolve.
+
+**1. "`auth` is never forwarded" — was true, is FIXED, and by W1 alone.**
+Pulled forward under the §7b ruling and shipped in #823 (squashed
+`df892fac2`). `git log -S` over every member of the chain names that one
+commit and no other, so the natural reading — that a seam this wave
+inherited got finished off somewhere along the way — is wrong: W2 (#825,
+`ae94280cb`) touched none of these files. The chain is continuous:
+
+`device-score-pad.tsx:229` (`padAuth`) → `:370` → `registry.tsx:205,296`
+→ `pad-host.tsx:1528,1566` → `use-pad-pipeline.ts:396,1206`
+(`params.auth ?? SESSION_AUTH`) → `use-fixture-stream.ts:74,166`, where
+`authHeadersFor` (`transport.ts:85-87`) puts the `Bearer dl_` on the
+realtime-token request that the route's bypass at
+`realtime-token/route.ts:46` requires before it will mint anything.
+
+`padAuth` being a `useMemo` is load-bearing rather than tidy: `auth` is a
+dependency of the subscribe effect (`use-fixture-stream.ts:217`), so an
+inline literal tore the channel down and re-handshook it on every render
+— and restarted the polling interval with it, so while the component was
+re-rendering NEITHER transport delivered. That is constant while someone
+is scoring. Measured both ways against a real prod build and a real
+Supabase project; `device-score-pad.tsx:208-229` carries the result.
+
+**2. "One-way resync" — the clause is TRUE, the CONCLUSION is false, and
+the false half pointed two waves at the wrong component.**
+`device-score-pad.tsx:119` does still resync only after this component's
+own send (`:171`) or its own pad's ledger change (`:135`). What the
+bullet then assumed *about* "its own pad's ledger change" is the error:
+`handlePadEvents` is wired as `onEvents` at `:373`, `registry.tsx:299`
+forwards it, and `pad-host.tsx:1575-1578` fires it on ANY change to
+`pipeline.events` — including a foreign write merged in by the poll or
+the socket. A score entered on the console therefore does reach the
+device-link header with nobody tapping anything, provided the pad's own
+stream is delivering.
+
+This is the exact twin of the §6b correction already recorded for
+`fixture-console.tsx`, and both have one shape: a component's resync
+triggers were read, and the `onEvents` edge leading out of it was not
+followed. What actually kept a console score from landing was upstream of
+this file in both directions — the unauthenticated stream (bullet 1) and
+the cursor (bullet 4). Neither lives in `device-score-pad.tsx`. A premise
+that names the wrong file survives review precisely because every
+sentence in it is true.
+
+**3. "No independent refresh" — true, and closed.** The console now has a
+freshness floor of its own at `fixture-console.tsx:598-639`: on
+`visibilitychange` → visible and on `window.focus`, routed through
+`handlePadEvents` (`:501`) and **not** `resync` (`:457`). Only the former
+raises `padSyncing`, and a refresh that bypassed it would leave
+Undo/Void/Forfeit clickable over a half-refreshed ledger — a stale
+`expected_seq` and a 409 on what should have been a clean undo — at
+exactly the moment the operator is back at the keyboard, which is the
+most reachable moment that window has. Deliberately not an interval, for
+the reasons at `:504-508`. Proven in a browser by
+`e2e/walkthrough/console-stalled-pipeline.spec.ts:118`, which stalls the
+pad pipeline by blocking its cursor specifically.
+
+Two things to know before editing it. A real tab return fires BOTH
+events, so the handler runs twice and costs four requests, not one;
+deduping is wrong because the two do not always co-occur, and coalescing
+on the existing in-flight state is queued rather than built. And the
+effect sits on the always-mounted root, so it must keep its `typeof
+document` / `typeof window` guard at `:565`: without it, three
+node-environment suites crash at mount. See the review record — that one
+escaped every gate this wave ran.
+
+**4. "`sinceSeq` is an array count — unverified" — now VERIFIED, the
+defect is CONFIRMED, and there were THREE cursors, not one.** Reproduced
+red before the fix (`expected 3 to be 4` over a sparse ledger), so this
+is a measured defect rather than a reasoned one. There were three cursor
+sites, and the design named one while the plan named two: the stream
+cursor that this bullet names, and the `expected_seq` derivations in
+`submit` and `submitHeld`. `submitHeld` is the copy every real v3 tap
+routes through, so a literal reading of either document would have left
+the compounding-409 half of the defect live on the only path a scorer
+actually hits.
+
+**CORRECTED in fix round 1 — only TWO of those three cursors wanted the
+tip.** The first build put `ledgerTipSeq` on all three at once, and for
+the poll that was a regression this branch introduced. A read cursor and
+a write cursor want opposite errors. `listEvents` is strict
+(`seq > since_seq`), and over a ledger of distinct ascending positive
+seqs the tip is always at least the count — so a count cursor asks for a
+strict SUPERSET of what a tip cursor asks for. It over-fetches rather
+than skipping, and that over-fetch recovers any row the ledger is missing
+above the count. Over `{1,2,5}` the count asks `> 3` and the organiser's
+seq 4 comes home; the tip asks `> 5` and seq 4 is stranded for the rest
+of the match, which is a rally the pad's fold never applies with nothing
+on screen to say so. The two `expected_seq` sites keep the tip, because
+there a count claims a slot the server has already filled. `sinceSeq` is
+the count again, and the case that witnesses the difference holds the
+missing rows on the server rather than running against an empty one —
+every sparse case in the first build ran empty, so none of them could see
+what the cursor FAILED to fetch.
+
+The sparseness is driven through its real producer rather than seeded: a
+pad holding `{1,2}` submits at `expected_seq 2`, the organiser commits
+seq 3 after the pad's last poll, the 409 renegotiates, the ack lands at
+4 — observed `expected_seq` `[2, 3]` and the ledger at exactly `[1,2,4]`
+with seq 3 absent.
+
+**Residual — an owner decision, owed in writing, and not a defect.** The
+`expected_seq` fix PREVENTS new gaps; nothing here HEALS the OLDEST row
+of an existing one. Over `{1,2,4}` the poll asks for `seq > 3`, which
+excludes seq 3 itself, so an `initialEvents` re-seed remains the only
+thing that closes a hole's first row. Healing that would mean polling
+from the first MISSING seq, which needs its own design and is ruled out
+of W3's scope deliberately. The regression test PINS the stranded seq as
+expected: correct under that ruling, and **not** to be read as sign-off
+on the residual.
+
+Stated at its true width, which the first build's wording did not: the
+poll's under-shoot heals every missing row ABOVE the count and never the
+one AT it, so a hole of any width shrinks to exactly its oldest row. The
+superseded sentence generalised a one-wide example (`{1,2,4}`, where tip
+and count+1 coincide) to every gap, and the tip cursor it described would
+have stranded a two-wide hole entire. That is the reading the fix-round
+test now pins with a populated server ledger.
+
+**Realtime works, and the number is now a gate rather than a
+measurement.** Measured both ways on 2026-09-23, same build and same
+database — §6b carries the table. With the channel joined, the two
+realtime-bearing specs pass in ~14s legs (8 + 3 tests, exit 0). Without
+it nothing fails on its own: the value still arrives, at 12,955ms and
+13,774ms against a 15s `POLL_MS`, by poll. That is precisely why a
+realtime regression here reads as a green suite and a shrug.
+
+The local cause is one variable. The env script passes only
+`apps/web/.env.local`, and a key-name diff of the two files shows exactly
+one difference — `SUPABASE_JWT_PRIVATE_KEY`, present in the ROOT
+`.env.local` and absent from `apps/web`'s. Without it the server falls
+back to HS256, the token door still answers 200 (so the device-link token
+specs pass), and live Supabase then refuses the join. Start the gate's
+server with **both** `--env-file` flags.
+
+So §5's closing note is satisfied, with one qualification that matters
+more than the number did. `scripts/realtime-gate.sh` (§6b) replaces
+"re-measure after" with a pass/fail, which is strictly better than a
+figure nobody re-reads. But it is a LOCAL gate: CI cannot join a channel
+by construction (§6b; §7 item 4 is the open owner question). A green CI
+run says nothing whatever about realtime, so this wave's realtime
+evidence must be QUOTED from a local gate run and never inferred from CI.
+
+W1's inherited constraint held: W3 adds no drain retry timer, and the
+console's new floor is event-driven rather than a second interval partly
+for that reason.
+
 ## 6. W2 — durable idempotency (design level)
 
 Answers the owner question at `_INDEX.md:1808-13`, asked 2026-08-12 and
@@ -500,8 +653,8 @@ survey above was a hypothesis and these two rows did not survive the tree:
 - **The §6b(c) citation of `scoring.spec.ts:532-542` looks stale.** That
   comment claims the console's `events` are "only ever refreshed by
   fixture-console's OWN send() calls — never by the pad's independent
-  submission". But `fixture-console.tsx:442`'s `handlePadEvents` is wired as
-  `onEvents` at `:905`, and `pad-host.tsx:1575-1577` fires `onEvents` on any
+  submission". But `fixture-console.tsx:501`'s `handlePadEvents` is wired as
+  `onEvents` at `:1055`, and `pad-host.tsx:1575-1577` fires `onEvents` on any
   pipeline ledger change including a foreign-write merge. Read, not run —
   recorded as suspect rather than corrected.
 
@@ -543,12 +696,169 @@ cookie-consent so the banner cannot race the pad.
   red-fails in every CI leg otherwise. Append at the END in wave order;
   the list is grouped by programme, never alphabetical.
 
+### The switch existed and was never thrown — `scripts/realtime-gate.sh` (W3 T3, 2026-09-23)
+
+`E2E_REQUIRE_REALTIME=1` has been honoured since the kit was written
+(`e2e/realtime-propagation-kit.ts`, `const REQUIRE_REALTIME =
+process.env.E2E_REQUIRE_REALTIME === "1"`). Nothing has ever set it.
+Re-verified against the tree on 2026-09-23: `grep -rn E2E_REQUIRE_REALTIME
+.github/` still returns **nothing** — not in `e2e.yml`, not in `ci.yml`, not in
+any of the twelve workflow files.
+
+**CI structurally cannot join a channel**, so this is not an oversight that CI
+could absorb. Both halves re-read on 2026-09-23 and both still stand:
+
+- `e2e.yml` sets `NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"` — a
+  stub host, chosen because `publicStorageUrl("")` "hides every badge/crest,
+  making logo assertions untestable", with the file's own note that "No real
+  Supabase call rides on it in e2e."
+- The realtime signing key is a "CI-only dummy keypair (kid
+  `e2e-ci-dummy-es256`) — generated for this workflow, **never imported into a
+  real Supabase JWKS**."
+
+So in CI the pad asks the token door, is answered 200, and then no socket ever
+joins. The kit degrades by design and annotates the run; nothing reds.
+
+**The local prod-target run can join, and it is the only thing that can.** The
+gate is therefore a local command, not a CI job:
+
+```bash
+DATABASE_URL=<test db> DATABASE_SSL=disable \
+  REALTIME_GATE_PORT=3371 scripts/realtime-gate.sh
+```
+
+It runs the two realtime-bearing specs in their own projects
+(`e2e/device-links.spec.ts` under `serial`,
+`e2e/walkthrough/console-device-live-sync.spec.ts` under `walkthrough`) with
+`E2E_REQUIRE_REALTIME=1`, and it refuses to report a pass it did not earn.
+Five exit codes, because "the gate could not run", "the gate ran nothing" and
+"the gate red for an unrelated reason" must none of them read as a pass — nor
+as a realtime regression:
+
+| code | meaning |
+|---|---|
+| 0 | every realtime-bearing spec joined a channel and beat the poll |
+| 1 | realtime regression — at least one pad sat on the poll |
+| 2 | environment — no server, or no `DATABASE_URL`; nothing was measured |
+| 3 | gate integrity — zero tests selected, or the spec set / clause / switch does not match the tree |
+| 4 | inconclusive — **every** failing leg carried no realtime verdict at all |
+
+Four things that guard are worth stating because each was a real hole:
+
+- **The clause check counts CALL-shaped occurrences only.** In
+  `device-links.spec.ts` the symbol appears three times — an import at `:5`,
+  a prose comment at `:477`, and exactly **one** call at `:661`. A substring
+  grep is satisfied by the comment alone, so every call site could be deleted
+  and the gate would still run six tests, assert nothing about realtime, and
+  exit 0. Measured: with the call commented out and the import and comment
+  left in place, `grep -qa` is still satisfied.
+- **The declared spec list is cross-checked against the tree**, in both
+  directions: a declared spec with no call refuses, and a spec that calls the
+  clause but is not declared refuses. That closes commenting an entry out,
+  emptying the list, and adding a realtime spec nobody gated.
+- **A failing leg is classified before the verdict is printed.** "At least one
+  pad sat on the poll" is a claim about a cause, and it used to be printed on
+  any non-zero leg — demonstrably wrongly (see the stale-server note below).
+  Each failing leg is now matched against `assertPropagatedUnderPoll`'s four
+  verdicts, and the run is judged on the whole set rather than leg by leg: it
+  exits **4** only when **every** failing leg carried no verdict. If even one
+  carried a verdict the run is a **1**, whatever the other legs did — the next
+  bullet is why that direction matters, not a qualification of this one.
+- **A measured realtime verdict outranks a sibling leg's unrelated failure.**
+  Classification is per leg *and remembered* per leg. One leg failing on a
+  flake while another fails on a genuinely refused channel is not an
+  inconclusive run — it is a regression plus a second problem, and it exits
+  **1** with both legs named. The intermediate version tracked only "something
+  failed without a verdict", which printed *"This is NOT evidence of a realtime
+  regression"* over a sibling log containing "no websocket ever joined this
+  fixture's channel". Driven, not argued: a keyless server taken down between
+  the two legs produced exactly that state, and the two orderings give exit 1
+  and exit 4 on the same run. An absent symptom that means *suppressed* rather
+  than *safe* is the worst shape a gate can have, because the text tells the
+  reader to stop looking.
+
+One consequence worth knowing before you add a spec: the derivation looks for
+a **direct** `assertPropagatedUnderPoll(` call. A spec that reaches the clause
+through a shared helper is declared-but-not-derived and exits 3. Either call
+the clause in the spec, or extend the derivation deliberately — do not delete
+the cross-check to get past it.
+
+Measured both ways on 2026-09-23, same build, same DB, same specs — the only
+variable being whether the server got the ROOT `.env.local`:
+
+| server | root `.env.local` | result |
+|---|---|---|
+| `:3371` | yes | **exit 0** — 8 passed (serial, 14.5s) + 3 passed (walkthrough, 12.9s) |
+| `:3381` | no | **exit 1** — 1 failed / 7 passed, and 1 failed / 2 passed |
+
+"Same DB" there is measured, not assumed — both repo `.env.local` files point
+`DATABASE_URL` at the **dev** database, so a server on the test DB is on it
+because something overrode them. `lsof` on the green server's pid shows its
+pool connected to `127.0.0.1:54609`, and `pg_stat_activity` on that cluster
+names those exact client ports as `seazn_w3rt` — the same database the
+Playwright process and the red server used.
+
+Both reds name the seam exactly:
+
+> flow (c) device chrome -> its own inner pad: no websocket ever joined this
+> fixture's channel, so the "under 15000ms" clause was NOT exercised. The value
+> did arrive (13774ms, "0" -> "1"), by poll.
+
+> flow (a) device-link pad -> organiser console screen: no websocket ever
+> joined this fixture's channel ... The value did arrive (12955ms ...), by
+> poll.
+
+13.8s and 13.0s against a 15s poll: the value always arrives, which is why a
+realtime regression here reads as a green suite and a lag rather than a
+failure. The timings are also the fastest check that the gate ran for real —
+the green legs finish in ~14s and ~13s, the red ones take 30s and 24s because
+every measured write waits out the poll.
+
+**The one thing every hand-rolled version gets wrong** is the server. The env
+script passes only `apps/web/.env.local`; a key-name diff of the two files
+shows exactly one difference, `SUPABASE_JWT_PRIVATE_KEY`, present in the root
+file and absent from `apps/web`'s. Without it the server falls back to HS256
+(`src/lib/realtime.ts` mints fine, and the token door still answers 200 — the
+device-link token specs pass), and live Supabase then refuses the join. Start
+the gate's server with **both** `--env-file` flags.
+
+**A stale server reads as a realtime red, and the message does not say so.**
+Found while proving this gate: a server left running from the previous day
+(15h39m old) against a since-rebuilt `.next` serves HTML referencing chunks
+that no longer exist — `/_next/static/chunks/<name>.js` answers **500
+`text/plain`**, the browser raises `ChunkLoadError`, and the pad never mounts.
+The specs fail on `toBeVisible()` for the pad, the page reads "Something went
+wrong", and **no realtime message appears at all** — an environment fault
+wearing a realtime costume.
+
+The gate's first version printed "at least one pad sat on the poll" over
+exactly that, which is why the classification in the table above exists: this
+case now exits **4**, not 1, and says the run fell over before realtime was
+measured. Verified against that same stale server, which was deliberately left
+running as the fixture for it; a genuine no-root-`.env.local` server on the
+current build still exits 1 on the same code, so the classifier discriminates
+rather than merely suppressing. If you see exit 4, compare the server's start
+time with the build's and restart it.
+
+**Still OPEN for the owner, and not settled by this wave:** whether to give
+Actions a real Supabase JWKS so CI can join a channel. It has its own cost and
+its own secret-handling decision (note `e2e.yml`'s standing instruction not to
+introduce a var whose name contains `PRIVATE_KEY`, because Actions strips
+job-env vars by name match). Until that is decided, realtime is proven
+**locally, deliberately, by running this script** — and nowhere else.
+
 ## 7. Open questions for the owner
 
 1. ~~Durable idempotency~~ — **answered 2026-09-21**, see §6.
 2. ~~W3's blast radius~~ — **answered 2026-09-21**, see §4.8.
 3. **Ceiling value** — to be derived during implementation (§4.4) and
    brought back if the derivation is contested.
+4. **A real Supabase JWKS for CI** — raised 2026-09-23, **not settled by
+   W3**. CI cannot join a realtime channel by construction (stub host, dummy
+   keypair — §6b), so `E2E_REQUIRE_REALTIME=1` can only ever be thrown
+   locally, via `scripts/realtime-gate.sh`. Giving Actions a real JWKS would
+   put realtime under CI, at the cost of a real signing key in the workflow
+   and the name-matching secret-stripping problem `e2e.yml` documents.
 
 ## 7b. Wave sequence (owner-approved 2026-09-21)
 

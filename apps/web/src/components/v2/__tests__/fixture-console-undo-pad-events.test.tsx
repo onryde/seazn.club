@@ -28,19 +28,33 @@ vi.mock("next/navigation", () => ({
 }));
 
 const api = vi.hoisted(() => ({
-  calls: [] as { url: string; options?: { method?: string; json?: unknown } }[],
+  calls: [] as { url: string; options?: { method?: string; json?: unknown; signal?: AbortSignal } }[],
   /** What the events GET returns — mutated mid-test to simulate the server
    *  ledger gaining the pad's just-scored row. */
   events: [] as EventIn[],
+  /** W3 fix round 1 (S2) — a HALF-OPEN socket, the shape a laptop waking from
+   *  sleep or a Wi-Fi switch actually presents: the request is accepted and
+   *  then never answers. A GET in this mode settles ONLY if the caller handed
+   *  down an `AbortSignal` that fires; with no signal it hangs forever, which
+   *  is precisely the unbounded case. So a test that drives this mode reds on
+   *  the real defect rather than on a stubbed rejection. */
+  hang: false,
 }));
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
   return {
     ...actual, // ApiV1Error stays the REAL class.
-    apiV1: vi.fn((url: string, options?: { method?: string; json?: unknown }) => {
+    apiV1: vi.fn((url: string, options?: { method?: string; json?: unknown; signal?: AbortSignal }) => {
       api.calls.push({ url, options });
       if (options?.method === "POST") return Promise.resolve({});
+      if (api.hang) {
+        return new Promise((_resolve, reject) => {
+          const signal = options?.signal;
+          if (signal === undefined || signal === null) return; // never settles
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
       if (url.includes("/events")) return Promise.resolve(api.events);
       return Promise.resolve({
         status: "in_play",
@@ -163,6 +177,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   api.calls.length = 0;
   api.events = [SEEDED];
+  api.hang = false;
 });
 
 afterEach(() => {
@@ -252,6 +267,66 @@ describe("FixtureConsole — Undo last after a pad-driven submit", () => {
 
     const settledUndo = findUndoLast(island.tree());
     expect(propsOf(settledUndo).disabled).toBe(false);
+  });
+
+  // W3 fix round 1 (S2) — THE GATE NEEDS AN UPPER BOUND, NOT JUST A `finally`.
+  //
+  // `padSyncing` is cleared in a `finally`, which is only as bounded as the
+  // promise it hangs off. `apiV1` sets no timeout, so a resync whose fetches
+  // never settle never reaches that `finally` and Undo/Void/Forfeit stay
+  // greyed out with no error, no explanation and no limit but the browser's
+  // own TCP timeout.
+  //
+  // That exposure is NEW. Before the tab-return listener, `padSyncing` could
+  // only be raised by a pad ledger change — which cannot happen while the
+  // network is down, because the pad delivers nothing. The listener raises it
+  // on `visibilitychange`/`focus`: a laptop waking from sleep, a Wi-Fi switch,
+  // a captive portal. Those are exactly the returns where the socket is
+  // half-open and `fetch` hangs rather than rejecting.
+  //
+  // Driven through the component's own `onEvents` seam, not by calling
+  // `resync` directly, so the gate that reopens is the real one the operator
+  // taps into. The e2e cannot see this: it holds the resync for a scripted 6s
+  // and then asserts the gate reopens, which a hang of any length also does
+  // not do.
+  it("reopens the gate on its own when an opportunistic refresh never answers", async () => {
+    const island = renderIsland(FixtureConsole, baseProps());
+
+    // Discriminating baseline: the control is offered and ENABLED at rest, so
+    // the assertion below cannot pass by the button being absent or always
+    // disabled.
+    expect(propsOf(findUndoLast(island.tree())).disabled).toBe(false);
+
+    const onEvents = propsOf(findScorePad(island.tree())).onEvents as (
+      events: readonly EventEnvelope[],
+    ) => void;
+
+    api.hang = true;
+    onEvents([
+      {
+        id: "idem-client-fabricated",
+        fixtureId: "f1",
+        seq: 2,
+        type: "football.goal",
+        payload: {},
+        recordedAt: "2026-08-14T10:05:00.000Z",
+        recordedBy: null,
+      },
+    ]);
+
+    // The refresh really is in flight and really is gating — otherwise the
+    // recovery below would be proving nothing.
+    expect(api.calls.some((c) => c.url.includes("/events"))).toBe(true);
+    expect(propsOf(findUndoLast(island.tree())).disabled).toBe(true);
+
+    // A full minute of a socket that will never answer. Well past any bound a
+    // human would wait through, and far short of a browser's TCP timeout.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(
+      propsOf(findUndoLast(island.tree())).disabled,
+      "a refresh that never answers must not gate the controls forever",
+    ).toBe(false);
   });
 });
 

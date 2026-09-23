@@ -705,6 +705,42 @@ function mergeEnvelopesIntoLedger(
 }
 
 /**
+ * The ledger's highest known seq — NOT `events.length`. This is the WRITE
+ * cursor: both `expected_seq` sites below take it, and the poll's READ cursor
+ * deliberately does not (see `useFixtureStream`'s `sinceSeq` below, which
+ * explains why the two want opposite errors).
+ *
+ * `mergeEnvelopesIntoLedger` above keys by seq into a Map and returns the
+ * values sorted ascending, so the ledger is legitimately SPARSE after a 409
+ * renegotiation: our ack is merged at the server's own seq (`runDrain`'s
+ * `confirmedSeq`) while the foreign row that caused the conflict was only
+ * read inside `resolveConflict` and never committed. `{1,2,4}` then has
+ * length 3 — and a write that claims `expected_seq` 3 is claiming a slot the
+ * server already filled. It earns a 409 it did not need, renegotiates into
+ * another gap, and the next write repeats it from a count that is now one
+ * further behind. It compounds, and that compounding is the whole reason this
+ * helper exists.
+ *
+ * On the READ side that same under-count is not a skip but an OVER-fetch, and
+ * a useful one, so the poll keeps it. Fix round 1 had moved all three cursors
+ * onto the tip together; the read cursor is corrected back at its call site.
+ *
+ * Reads the LAST element rather than scanning for a max: the sort order is
+ * that function's contract, and duplicating a max() here would let the two
+ * drift apart silently.
+ *
+ * That contract is only worth leaning on because EVERY writer into
+ * `ledgerEvents` now reduces to `mergeEnvelopesIntoLedger` — the poll/realtime
+ * path, the `initialEvents`-adoption effect, `runDrain`'s ack append, AND (fix
+ * round 1) the mount-time `useState` seed, which used to be a raw spread that
+ * preserved the caller's order. If a future writer is added that does not go
+ * through it, this function is the thing that breaks, quietly.
+ */
+function ledgerTipSeq(events: readonly EventEnvelope[]): number {
+  return events.length === 0 ? 0 : (events[events.length - 1]?.seq ?? 0);
+}
+
+/**
  * Merge a polled/realtime batch of ledger ROWS into the known ledger —
  * S12/#421 pass C. Widens each row first (dropping any this hook cannot
  * reconstruct — a row missing `id`/`recorded_at`, per `ledgerSlotToEnvelope`
@@ -968,7 +1004,22 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
 
   const store = useMemo(() => indexedDbQueueStore(dbName), [dbName]);
 
-  const [ledgerEvents, setLedgerEvents] = useState<EventEnvelope[]>(() => [...(params.initialEvents ?? [])]);
+  // W3 task 1 fix round 1 — seeded THROUGH `mergeEnvelopesIntoLedger`, not by
+  // a raw spread. This was the one writer into `ledgerEvents` that bypassed
+  // that primitive, and a raw spread preserves whatever order the caller
+  // handed down. `.length` did not care; `ledgerTipSeq` does — it reads the
+  // LAST element on the strength of that function's ascending-sort contract,
+  // so a seed that never touched it left the tip resting on an invariant
+  // nothing enforced. Both real loaders order by seq
+  // (`server/usecases/fixtures.ts` `listEvents`), so this is not live today —
+  // but `v3/pad-host.tsx` takes `initialEvents` from any caller, and an
+  // unsorted batch would have made the tip silently wrong rather than loudly.
+  // Seeding through the primitive closes it at the source, which is better
+  // than a max() fallback inside `ledgerTipSeq`: a second max here is exactly
+  // the duplicated-sort-logic drift that helper's own doc warns against.
+  const [ledgerEvents, setLedgerEvents] = useState<EventEnvelope[]>(() =>
+    mergeEnvelopesIntoLedger([], params.initialEvents ?? []),
+  );
   // Mirrors `ledgerEvents` for synchronous reads inside `runDrain`/`submit`
   // (stable useCallbacks that must see the LATEST ledger without churning
   // their own identity on every ack — see the file header for why a plain
@@ -1153,6 +1204,30 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   useFixtureStream({
     fixtureId,
     auth: params.auth ?? SESSION_AUTH,
+    // W3 task 1, fix round 1 — the COUNT here, on purpose, where both
+    // `expected_seq` sites below take the TIP. A read cursor and a write
+    // cursor want OPPOSITE errors, and reading this line as an oversight is
+    // how round 1 got it wrong.
+    //
+    // `listEvents` is strict — `seq > since_seq`
+    // (`server/usecases/fixtures.ts`) — and over a ledger of distinct
+    // ascending positive seqs `tip >= length` ALWAYS, with equality only while
+    // it is gapless from 1. So a count cursor asks for a strict SUPERSET of
+    // what a tip cursor asks for: it under-shoots by exactly the width of the
+    // gaps, re-requests the window `(length, tip]` on every tick, and any row
+    // this pad is missing inside that window comes home. Over `{1,2,5}` it
+    // asks `> 3` and recovers the organiser's seq 4. A tip cursor asks `> 5`
+    // and strands seq 4 for the rest of the match — a rally the pad's fold
+    // never applies, with nothing on screen to say so.
+    //
+    // What the under-shoot costs: while the ledger is sparse, every tick
+    // re-fetches that window and runs one `reconcileAfterAck` round trip.
+    // Bounded by the gap's own width, and it stops the moment the gap closes.
+    //
+    // What it does NOT do: heal the OLDEST missing row. `> length` still
+    // excludes seq `length` itself, so a hole's first row needs an
+    // `initialEvents` re-seed. Polling from `firstMissingSeq - 1` would close
+    // that too; that is a separate design and deliberately not taken here.
     sinceSeq: ledgerEvents.length,
     listEventsSince: transport.listEventsSince,
     onEvents: onStreamEvents,
@@ -1339,8 +1414,10 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           const acked = pendingToEnvelope(fixtureId, identity, pendingWithLocalVoidTarget(next, ledgerEventsRef.current), confirmedSeq);
           // S12/#421 pass F — was a raw spread
           // (`[...ledgerEventsRef.current, acked]`), never routed through
-          // mergeEnvelopesIntoLedger like the other two writers into
-          // ledgerEvents. ledgerEventsRef.current can ALREADY hold an entry
+          // mergeEnvelopesIntoLedger like the other writers into
+          // ledgerEvents (the poll path, the initialEvents effect, and — since
+          // W3 task 1 fix round 1 — the mount seed too).
+          // ledgerEventsRef.current can ALREADY hold an entry
           // at acked.seq if a poll tick (onStreamEvents) or an initialEvents
           // re-seed observed the server's committed row for this SAME event
           // before this append's own HTTP response made it back -
@@ -1552,7 +1629,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       submitInFlight.current = { type, payload };
       lastAccepted.current = { type, payload, at: now };
       try {
-        const nextExpectedSeq = ledgerEventsRef.current.length + pendingEnvelopesRef.current.size;
+        // W3 task 1 — the TIP plus what is already in flight, never the
+        // count. See `ledgerTipSeq` above: over a sparse {1,2,4} the count
+        // claims seq 3, a slot the server already filled, and earns a 409
+        // this write did not need — which renegotiates into another gap.
+        const nextExpectedSeq = ledgerTipSeq(ledgerEventsRef.current) + pendingEnvelopesRef.current.size;
         // S12/#421 pass H — captured HERE, not derived later at drain time,
         // so it is correct even if this exact void is still sitting in the
         // queue after a reload wipes ownEventIds. See voidTargetSeqAtSubmit's
@@ -1655,7 +1736,13 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       submitInFlight.current = { type, payload };
       lastAccepted.current = { type, payload, at: now };
       try {
-        const nextExpectedSeq = ledgerEventsRef.current.length + pendingEnvelopesRef.current.size;
+        // W3 task 1 — the SECOND `expected_seq` copy of this cursor, and the
+        // one that matters most: `submitHeld` is what `createSkinDispatch`'s
+        // `heldSubmit` routes every real v3 tap through (see the R7-42 note
+        // on the guard just above, which records the same trap once already),
+        // so a fix that reached only `submit()` would fix nothing a scorer
+        // ever hits. Same reasoning as there — see `ledgerTipSeq` above.
+        const nextExpectedSeq = ledgerTipSeq(ledgerEventsRef.current) + pendingEnvelopesRef.current.size;
         const voidTargetSeq = voidTargetSeqAtSubmit(type, payload, ownEventIdsRef.current, ledgerEventsRef.current);
         const pending: PendingEvent = {
           localId: newId(),
