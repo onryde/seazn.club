@@ -17,18 +17,20 @@ import { carrom } from "../sports/carrom/index.ts";
 import { boardgame } from "../sports/boardgame/index.ts";
 import { hockey } from "../sports/hockey/index.ts";
 import { tennis } from "../sports/tennis/index.ts";
+import { badminton } from "../sports/setbased/badminton.ts";
+import { tabletennis } from "../sports/setbased/tabletennis.ts";
 import { EngineError } from "../core/errors.ts";
 import { boundsFrom, type AnySportModule } from "./module.ts";
 
 describe("boundsFrom", () => {
   it("states the empty-`others` case: max/min come from wins and losses alone, min never above 0", () => {
-    expect(boundsFrom([3], [1])).toEqual({ max: 3, min: 0, winFloor: 3, lossCeil: 1 });
+    expect(boundsFrom([3], [1])).toEqual({ max: 3, min: 0, winFloor: 3, lossCeil: 1, winsOnly: false });
   });
   it("winFloor is the SMALLEST win, lossCeil the LARGEST loss", () => {
-    expect(boundsFrom([3, 2], [0, 1], [1])).toEqual({ max: 3, min: 0, winFloor: 2, lossCeil: 1 });
+    expect(boundsFrom([3, 2], [0, 1], [1])).toEqual({ max: 3, min: 0, winFloor: 2, lossCeil: 1, winsOnly: false });
   });
   it("an `others` value above every win still sets max — a draw can outpay a win", () => {
-    expect(boundsFrom([1], [0], [2])).toEqual({ max: 2, min: 0, winFloor: 1, lossCeil: 0 });
+    expect(boundsFrom([1], [0], [2])).toEqual({ max: 2, min: 0, winFloor: 1, lossCeil: 0, winsOnly: false });
   });
   // Without a guard, `Math.min()` of nothing is Infinity and `Math.max()` of
   // nothing is -Infinity: a winFloor of Infinity makes "Win and in" provable
@@ -93,7 +95,13 @@ describe("matchPointsBounds — the cases a single 'win' constant gets wrong", (
   });
   it("generic: win/draw/loss read from `points.w/d/l`", () => {
     const cfg = generic.configSchema.parse({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false });
-    expect(generic.matchPointsBounds(cfg)).toEqual({ max: cfg.points.w, min: 0, winFloor: cfg.points.w, lossCeil: cfg.points.l });
+    expect(generic.matchPointsBounds(cfg)).toEqual({
+      max: cfg.points.w,
+      min: 0,
+      winFloor: cfg.points.w,
+      lossCeil: cfg.points.l,
+      winsOnly: false, // the draw pays
+    });
   });
 });
 
@@ -171,4 +179,96 @@ describe("matchPointsBounds — a draw-like payout above a win still reaches `ma
       expect(b.max).toBeGreaterThan(b.winFloor); // the differential: max ≠ the win
     });
   }
+});
+
+// Standings what-if (spec 2026-09-22 §3.4; controller rulings OQ1/M11): the
+// tie-break `wins` cannot separate two rows level on points exactly when
+// points = winFloor × won — every win pays ONE amount and every other outcome
+// pays 0. Then level points ARE level wins. One case per conjunct, and each
+// case is the one input that conjunct alone refuses.
+describe("boundsFrom — winsOnly: points are winFloor × won, so level points mean level wins", () => {
+  it("one win payout and nothing else pays → true, a declared draw that pays 0 included", () => {
+    expect(boundsFrom([2], [0]).winsOnly).toBe(true);
+    expect(boundsFrom([2, 2], [0, 0]).winsOnly).toBe(true);
+    expect(boundsFrom([2], [0], [0]).winsOnly).toBe(true);
+  });
+  it("two win payouts (an OT or 3-2 win pays less, winFloor < max) → false", () => {
+    expect(boundsFrom([3, 2], [0]).winsOnly).toBe(false);
+  });
+  it("a loss that pays → false: on 2/1, two wins and one win plus two losses both make 4", () => {
+    expect(boundsFrom([2], [1]).winsOnly).toBe(false);
+    expect(boundsFrom([2], [0, 1]).winsOnly).toBe(false);
+  });
+  it("a draw, tie or no-result that pays → false", () => {
+    expect(boundsFrom([2], [0], [1]).winsOnly).toBe(false);
+    expect(boundsFrom([2], [0], [0, 1]).winsOnly).toBe(false);
+  });
+  it("nothing pays at all → false: everyone level on 0 says nothing about wins", () => {
+    expect(boundsFrom([0], [0]).winsOnly).toBe(false);
+  });
+});
+
+// The same fact per shipped module, read off each parsed default cfg. Carrom
+// and limited-overs cricket are the differential against `supportsDraws`: both
+// say a league match cannot be drawn, and both still pay a no-result, so a
+// row can be level on points with FEWER wins there. `winsOnly` must say false.
+// That real standingsDelta output agrees is conformance §9.3b's job.
+describe("matchPointsBounds — winsOnly per module (the fact, not supportsDraws)", () => {
+  it("badminton and table tennis: every pointsMap pair pays one win amount and a 0 loss → true", () => {
+    for (const m of [badminton, tabletennis]) {
+      const cfg = m.configSchema.parse({});
+      const pairs = Object.values(cfg.pointsMap) as readonly (readonly [number, number])[];
+      expect(pairs.every(([w, l]) => w === pairs[0]![0] && w !== 0 && l === 0), m.key).toBe(true);
+      expect(m.matchPointsBounds(cfg).winsOnly, m.key).toBe(true);
+    }
+  });
+  it("tennis: a win pays `points.win`, a loss `points.loss` = 0 → true", () => {
+    const cfg = tennis.configSchema.parse({});
+    expect(cfg.points.loss).toBe(0);
+    expect(tennis.matchPointsBounds(cfg).winsOnly).toBe(true);
+  });
+  it("volleyball FIVB: a 3-2 win pays less than a 3-0 and a 2-3 loss pays → false", () => {
+    const cfg = volleyball.configSchema.parse({});
+    expect(volleyball.matchPointsBounds(cfg).winsOnly).toBe(false);
+  });
+  it("carrom and limited-overs cricket: no draws, yet a no-result pays → false", () => {
+    const carromCfg = carrom.configSchema.parse({});
+    expect(carrom.supportsDraws(carromCfg, "league")).toBe(false);
+    expect(carromCfg.points.draw).toBeGreaterThan(0);
+    expect(carrom.matchPointsBounds(carromCfg).winsOnly).toBe(false);
+    const cricketCfg = cricket.configSchema.parse({});
+    expect(cricket.supportsDraws(cricketCfg, "league")).toBe(false);
+    expect(cricketCfg.points.noResult).toBeGreaterThan(0);
+    expect(cricket.matchPointsBounds(cricketCfg).winsOnly).toBe(false);
+  });
+});
+
+// Conformance §9.3b checks `winsOnly` on played matches only; its generators
+// never make a bye. A Swiss bye is scored through the module's own
+// `standingsDelta` as an `award` win (apps/web engine-db/competition.ts
+// `awardByeDelta`, phantom opponent, init state) — the path replayed here, for
+// every module and variant that claims winsOnly.
+describe("matchPointsBounds — winsOnly holds on the bye path too (an award through standingsDelta)", () => {
+  let claimed = 0;
+  for (const m of builtinModules) {
+    const cfgs: [string, unknown][] = [
+      ...(m.configSchema.safeParse({}).success ? [["default", {}] as [string, unknown]] : []),
+      ...Object.entries(m.variants ?? {}),
+    ];
+    for (const [label, raw] of cfgs) {
+      const cfg = m.configSchema.parse(raw);
+      const b = m.matchPointsBounds(cfg);
+      if (!b.winsOnly) continue;
+      claimed++;
+      it(`${m.key} (${label}): a bye pays winFloor to the winner, 0 to the phantom`, () => {
+        const state = m.init(cfg, { home: { entrantId: "W", slots: [] }, away: { entrantId: "BYE", slots: [] } });
+        const pair = m.standingsDelta({ kind: "award", winner: "W" }, cfg, { kind: "swiss" }, state);
+        for (const d of pair) expect(d.points, d.entrantId).toBe(d.won * b.winFloor);
+        expect(pair.find((d) => d.entrantId === "W")?.won).toBe(1);
+      });
+    }
+  }
+  it("at least the set-based and tennis defaults claim winsOnly (the sweep is not empty)", () => {
+    expect(claimed).toBeGreaterThanOrEqual(3);
+  });
 });

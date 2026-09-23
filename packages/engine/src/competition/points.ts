@@ -262,10 +262,18 @@ export function pointsRuleBounds(rule: PointsRule): MatchPointsBounds {
   const losses = [rule.base.loss, ...(rule.forfeit ? [rule.forfeit.loserPoints] : [])];
   const winFloor = Math.min(...wins) + sum("win", -1);
   const lossCeil = Math.max(...losses) + sum("loss", 1);
+  // Only wins pay, at one amount (MatchPointsBounds.winsOnly): a bonus that
+  // can pay anything makes some outcome pay off-rate, so any one turns it off.
+  const winsOnly =
+    rule.bonuses.every((b) => b.points === 0) &&
+    wins.every((v) => v === rule.base.win) &&
+    rule.base.win !== 0 &&
+    [rule.base.draw, ...losses].every((v) => v === 0);
   return {
     max: Math.max(Math.max(...wins) + sum("win", 1), lossCeil, rule.base.draw + sum("draw", 1), sum("no_result", 1)),
     min: Math.min(winFloor, Math.min(...losses) + sum("loss", -1), rule.base.draw + sum("draw", -1), sum("no_result", -1)),
     winFloor,
     lossCeil,
+    winsOnly,
   };
 }

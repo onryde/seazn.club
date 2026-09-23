@@ -193,7 +193,8 @@ export function conformanceSuite<Cfg, Ev, State>(
 
     // §9.3b — each SIDE's points sit inside matchPointsBounds; a win pays at
     // least winFloor, a loss at most lossCeil (standings qualification, spec
-    // 2026-09-22 §3.1). This is what makes "Win and in" never wrong.
+    // 2026-09-22 §3.1). This is what makes "Win and in" never wrong. Where the
+    // bounds claim `winsOnly`, every side pays exactly winFloor × won.
     it("§9.3b standingsDelta stays inside matchPointsBounds", () => {
       const b = module.matchPointsBounds(cfg);
       expect(b.min).toBeLessThanOrEqual(b.max);
@@ -214,6 +215,10 @@ export function conformanceSuite<Cfg, Ev, State>(
               expect(d.points).toBeLessThanOrEqual(b.max);
               if (d.won === 1) expect(d.points).toBeGreaterThanOrEqual(b.winFloor);
               if (d.lost === 1) expect(d.points).toBeLessThanOrEqual(b.lossCeil);
+              // `winsOnly` claims points = winFloor × won on EVERY outcome —
+              // the fact that lets the standings what-if skip `wins` (spec
+              // 2026-09-22 §3.4, OQ1). A paying draw, OT or bonus breaks it.
+              if (b.winsOnly) expect(d.points).toBe(d.won * b.winFloor);
             }
           }
         }),

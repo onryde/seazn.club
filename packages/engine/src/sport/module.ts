@@ -641,6 +641,14 @@ export interface MatchPointsBounds {
   min: number;
   winFloor: number;
   lossCeil: number;
+  /** Points are `winFloor × won` on every outcome: every win pays ONE
+   *  non-zero amount and everything else (loss, draw, tie, no-result) pays 0,
+   *  so two rows level on points are level on wins and the tie-break `wins`
+   *  cannot separate them (standings what-if, spec 2026-09-22 §3.4, OQ1).
+   *  NOT `supportsDraws`: carrom and limited-overs cricket draw nothing and
+   *  still pay a no-result. Checked against real deltas by conformance §9.3b
+   *  (played matches) and match-points-bounds.test.ts (the bye/award path). */
+  winsOnly: boolean;
 }
 
 /** Build bounds from a sport's win-type values, loss-type values and every
@@ -651,8 +659,10 @@ export interface MatchPointsBounds {
  *  points in football, period, generic and carrom; `noResult` in cricket) or
  *  cannot happen (nested and set-based refuse it). Every shipped cfg schema is
  *  nonnegative, so 0 is always a valid lower bound; it is merely loose (the
- *  safe direction) for a cfg where every outcome pays above 0. Throws on an
- *  empty `wins` or `losses`, which would otherwise yield ±Infinity. */
+ *  safe direction) for a cfg where every outcome pays above 0 — and a
+ *  hard-coded 0 is consistent with `winsOnly`, which only asks that nothing
+ *  but a win pays. Throws on an empty `wins` or `losses`, which would
+ *  otherwise yield ±Infinity. */
 export function boundsFrom(
   wins: readonly number[],
   losses: readonly number[],
@@ -665,11 +675,13 @@ export function boundsFrom(
     throw new EngineError("CONFIG_INVALID", "boundsFrom needs at least one LOSS payout", { wins, losses });
   }
   const all = [...wins, ...losses, ...others];
+  const zero = (v: number) => v === 0;
   return {
     max: Math.max(...all),
     min: Math.min(0, ...all),
     winFloor: Math.min(...wins),
     lossCeil: Math.max(...losses),
+    winsOnly: wins.every((v) => v === wins[0]) && wins[0] !== 0 && losses.every(zero) && others.every(zero),
   };
 }
 

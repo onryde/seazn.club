@@ -369,6 +369,7 @@ describe("brute force — statuses hold over every real outcome", () => {
       min: Math.min(...all),
       winFloor: Math.min(...s.dec.map((d) => d[0]), s.bye),
       lossCeil: Math.max(...s.dec.map((d) => d[1])),
+      winsOnly: false, // not read by qualificationStatus
     };
   };
   it("5 000 random tables", () => {

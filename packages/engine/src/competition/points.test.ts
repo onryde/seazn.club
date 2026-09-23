@@ -192,6 +192,26 @@ describe("rank locks (Jul3/05 §4)", () => {
   });
 });
 
+// Every delta shape a sport module hands to applyPointsRule (see the property
+// below). Shared by the bounds property and the winsOnly check.
+function ruleCorpus(): { outcome: MatchOutcome; pair: FixtureResult }[] {
+  const blank = (id: string, w: number, d: number, l: number): StandingsDelta => ({
+    entrantId: id, played: 1, won: w, drawn: d, lost: l, points: 0, metrics: {},
+  });
+  const corpus: { outcome: MatchOutcome; pair: FixtureResult }[] = [];
+  const scores = [0, 1, 3, 7, 10, 21, 40];
+  for (const hs of scores) for (const as_ of scores) corpus.push(result("H", "A", hs, as_));
+  corpus.push(
+    { outcome: { kind: "win", winner: "H", loser: "A", method: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
+    { outcome: { kind: "win", winner: "H", loser: "A", method: "forfeit" }, pair: [delta("H", 1, 0, 0, 21, 3), delta("A", 0, 0, 1, 3, 21)] },
+    { outcome: { kind: "award", winner: "H" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
+    { outcome: { kind: "tie" }, pair: [delta("H", 0, 1, 0, 5, 5), delta("A", 0, 1, 0, 5, 5)] },
+    { outcome: { kind: "tie" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
+    { outcome: { kind: "no_result" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
+  );
+  return corpus;
+}
+
 describe("pointsRuleBounds — safe per-side bounds for a custom points rule", () => {
   // Oracle: applyPointsRule itself, over every outcome shape and a spread of
   // margins. The bounds must CONTAIN every observed value, and for this rule be
@@ -233,13 +253,14 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
       min: Math.min(...seen.all, 0), // no_result scores 0
       winFloor: Math.min(...seen.win),
       lossCeil: Math.max(...seen.loss),
+      winsOnly: false, // the margin bonuses pay on some wins and some losses
     });
     expect(b.max).toBeGreaterThan(RUGBY.base.win); // the differential: base.win alone is wrong
     expect(b.lossCeil).toBeGreaterThan(RUGBY.base.loss);
   });
   it("a forfeit rule widens the win floor and loss ceiling", () => {
     const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1 } });
-    expect(pointsRuleBounds(rule)).toEqual({ max: 3, min: -1, winFloor: 2, lossCeil: 0 });
+    expect(pointsRuleBounds(rule)).toEqual({ max: 3, min: -1, winFloor: 2, lossCeil: 0, winsOnly: false });
   });
 
   // The two cases above pin exact values for two rules; they cannot see a bonus
@@ -262,20 +283,7 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
       bonuses: fc.array(bonus, { maxLength: 5 }),
       forfeit: fc.option(fc.record({ winnerPoints: n, loserPoints: n }), { nil: undefined }),
     });
-    const blank = (id: string, w: number, d: number, l: number): StandingsDelta => ({
-      entrantId: id, played: 1, won: w, drawn: d, lost: l, points: 0, metrics: {},
-    });
-    const corpus: { outcome: MatchOutcome; pair: FixtureResult }[] = [];
-    const scores = [0, 1, 3, 7, 10, 21, 40];
-    for (const hs of scores) for (const as_ of scores) corpus.push(result("H", "A", hs, as_));
-    corpus.push(
-      { outcome: { kind: "win", winner: "H", loser: "A", method: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
-      { outcome: { kind: "win", winner: "H", loser: "A", method: "forfeit" }, pair: [delta("H", 1, 0, 0, 21, 3), delta("A", 0, 0, 1, 3, 21)] },
-      { outcome: { kind: "award", winner: "H" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
-      { outcome: { kind: "tie" }, pair: [delta("H", 0, 1, 0, 5, 5), delta("A", 0, 1, 0, 5, 5)] },
-      { outcome: { kind: "tie" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
-      { outcome: { kind: "no_result" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
-    );
+    const corpus = ruleCorpus();
     fc.assert(
       fc.property(rule, (raw) => {
         const r = PointsRule.parse(raw);
@@ -295,5 +303,60 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
       }),
       { numRuns: 400, seed: 20260922 },
     );
+  });
+});
+
+// Standings what-if (spec 2026-09-22 §3.4; controller rulings OQ1/M11). A
+// stage PointsRule REPLACES the sport's points, so under a rule the skip of
+// `wins` reads the RULE's winsOnly, never the sport's. True exactly when every
+// win pays one non-zero amount and every other outcome pays 0 — so any bonus
+// that can pay, a paying draw or loss, or a forfeit that pays differently
+// turns it off. One case per conjunct.
+describe("pointsRuleBounds — winsOnly: only wins pay, at one amount", () => {
+  const bounds = (raw: unknown) => pointsRuleBounds(PointsRule.parse(raw));
+  const BASE = { win: 2, draw: 0, loss: 0 };
+  it("one win amount, 0 for everything else → true (a forfeit at the same amount, a 0-point bonus)", () => {
+    expect(bounds({ base: BASE }).winsOnly).toBe(true);
+    expect(bounds({ base: BASE, forfeit: { winnerPoints: 2, loserPoints: 0 } }).winsOnly).toBe(true);
+    expect(bounds({ base: BASE, bonuses: [{ when: "win_margin_gte", param: 3, points: 0 }] }).winsOnly).toBe(true);
+  });
+  it("a paying draw, a paying loss, or a win that pays 0 → false", () => {
+    expect(bounds({ base: { ...BASE, draw: 1 } }).winsOnly).toBe(false);
+    expect(bounds({ base: { ...BASE, loss: 1 } }).winsOnly).toBe(false);
+    expect(bounds({ base: { ...BASE, loss: -1 } }).winsOnly).toBe(false);
+    expect(bounds({ base: { ...BASE, win: 0 } }).winsOnly).toBe(false);
+  });
+  it("a forfeit that pays the winner differently, or the loser anything → false", () => {
+    expect(bounds({ base: BASE, forfeit: { winnerPoints: 1, loserPoints: 0 } }).winsOnly).toBe(false);
+    expect(bounds({ base: BASE, forfeit: { winnerPoints: 2, loserPoints: -1 } }).winsOnly).toBe(false);
+  });
+  for (const when of PointsRule.shape.bonuses.unwrap().element.shape.when.options) {
+    it(`a "${when}" bonus that pays → false`, () => {
+      expect(bounds({ base: BASE, bonuses: [{ when, param: 0, points: 1 }] }).winsOnly).toBe(false);
+    });
+  }
+  // Oracle: applyPointsRule itself. Under every rule that claims winsOnly,
+  // every delta of every outcome shape pays exactly won × winFloor.
+  it("agrees with applyPointsRule: a winsOnly rule pays won × winFloor on every outcome shape", () => {
+    const rules = [
+      { base: BASE },
+      { base: { win: 3, draw: 0, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } },
+      { base: { win: 1.5, draw: 0, loss: 0 }, bonuses: [{ when: "no_result", points: 0 }] },
+    ];
+    let checked = 0;
+    const off: string[] = [];
+    for (const raw of rules) {
+      const r = PointsRule.parse(raw);
+      const b = pointsRuleBounds(r);
+      expect(b.winsOnly, JSON.stringify(raw)).toBe(true);
+      for (const { outcome, pair } of ruleCorpus()) {
+        for (const d of applyPointsRule(outcome, pair, r)) {
+          checked++;
+          if (d.points !== d.won * b.winFloor) off.push(`${JSON.stringify(raw)} ${outcome.kind} ${d.entrantId} → ${d.points}`);
+        }
+      }
+    }
+    expect(off).toEqual([]);
+    expect(checked).toBe(rules.length * ruleCorpus().length * 2);
   });
 });
