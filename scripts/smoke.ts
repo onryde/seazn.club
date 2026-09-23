@@ -3179,6 +3179,21 @@ async function passGrantsSuite(): Promise<void> {
     "pass grants/profiles: the UNPASSED sibling stays dark (404) — V396 made profiles paid again",
     plainCard.status === 404,
   );
+  // Player profile — upcoming across the org (spec 2026-09-23). The passed
+  // card's board fixture was generated and never started, so it is SCHEDULED
+  // and upcoming. The plain competition is UNLISTED and is not this card's,
+  // so its board fixture must never reach this card (R2). Positive and
+  // negative read the same page body; both anchor on `="`.
+  const passCardHtml = await passCard.text();
+  check(
+    "player upcoming: the passed card lists its own scheduled board fixture under Upcoming",
+    passCardHtml.includes('data-testid="mh-player-upcoming"') &&
+      passCardHtml.includes(`data-testid="mh-player-upcoming-row-${board.pass.fixtureId}"`),
+  );
+  check(
+    "player upcoming: the sibling UNLISTED competition's fixture never reaches this card (R2)",
+    !passCardHtml.includes(board.plain.fixtureId),
+  );
   // Spectator W2 (Task 17, SM2) — the card's open page polls its match lines
   // from a public API. That API must refuse exactly where the card does, or a
   // Community org's paid-only lines are one curl away from the 404 above.
