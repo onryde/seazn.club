@@ -506,7 +506,7 @@ export function useBoardActions(
           });
 
         const applyOnce = (assignments: Proposal["assignments"], expectedSeq: number | undefined) =>
-          apiV1<{ applied: number; conflicts: BoardConflict[] }>(
+          apiV1<{ applied: number; conflicts: BoardConflict[]; seq: number }>(
             `/api/v1/stages/${stageId}/schedule/apply`,
             {
               method: "POST",
@@ -542,7 +542,7 @@ export function useBoardActions(
         if (!out) return;
 
         let expectedSeq = seqRef.current[divisionId];
-        let applied: { applied: number; conflicts: BoardConflict[] };
+        let applied: { applied: number; conflicts: BoardConflict[]; seq: number };
         try {
           applied = await applyOnce(out.assignments, expectedSeq);
         } catch (err) {
@@ -571,7 +571,10 @@ export function useBoardActions(
           // one automatic retry, per owner ruling.
           applied = await applyOnce(retryOut.assignments, expectedSeq);
         }
-        seqRef.current[divisionId] = (expectedSeq ?? 0) + 1;
+        // The apply's own answer, never `expectedSeq + 1`: one that moved
+        // nothing (every fixture held a result) writes no ledger step and
+        // leaves the seq where it was (review 4 of #857, Minor 1).
+        seqRef.current[divisionId] = applied.seq;
         setConflicts(applied.conflicts);
         setNotice(
           applied.conflicts.length > 0

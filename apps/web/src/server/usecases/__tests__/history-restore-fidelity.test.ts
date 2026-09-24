@@ -843,6 +843,46 @@ describe.skipIf(!HAS_DB)("a fixture in play or finalized is never taken away by 
     expect(await rowOf(voided)).toEqual(before);
   });
 
+  // Review 4 of #857, Minor 1. An apply whose every listed fixture was skipped
+  // wrote no step and did not bump the seq, but the board and the AI apply
+  // assumed +1 — so the organiser's next write was refused as stale. The apply
+  // now answers the division's seq either way, and writes a step only when it
+  // moved something.
+  it("an apply that moves nothing writes no step and answers the current seq; one that moves answers the new seq", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const venue = await createVenue(auth, { name: "Hall", sort: 0 });
+    const court = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+    const fixtures = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no`;
+    const t = (i: number) => new Date(Date.UTC(2026, 6, 12, 9 + i)).toISOString();
+    for (let i = 0; i < fixtures.length; i++) await patchFixture(auth, fixtures[i]!.id, { scheduled_at: t(i) });
+    await startDivision(auth, divisionId);
+    const [voided, other] = [fixtures[0]!.id, fixtures[1]!.id];
+    await record(auth, voided, "voided start");
+    const division = async () =>
+      (await sql<{ seq: number; steps: number }[]>`
+        select d.seq::int as seq, (select count(*)::int from division_events e where e.division_id = d.id) as steps
+        from divisions d where d.id = ${divisionId}`)[0]!;
+    const before = await division();
+
+    const none = await applySchedule(auth, mainId, {
+      source: "manual",
+      expected_seq: before.seq,
+      assignments: [{ fixture_id: voided, scheduled_at: t(0), court_id: court.id }],
+    });
+    expect(none).toEqual({ applied: 0, skipped: 1, conflicts: [], seq: before.seq });
+    expect(await division()).toEqual(before);
+
+    // The seq it answered is the one the next write is judged against.
+    const moved = await applySchedule(auth, mainId, {
+      source: "manual",
+      expected_seq: none.seq,
+      assignments: [{ fixture_id: other, scheduled_at: t(1), court_id: court.id }],
+    });
+    expect(moved).toMatchObject({ applied: 1, skipped: 0, seq: before.seq + 1 });
+    expect(await division()).toEqual({ seq: before.seq + 1, steps: before.steps + 1 });
+  });
+
   // Review 4 of #857. The board could not tell that card apart: it offered the
   // drag and the pin the server refuses, and its bulk tools sent it. The board
   // read now flags it — and only it: a walkover's own status already says so,

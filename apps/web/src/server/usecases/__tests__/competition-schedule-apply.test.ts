@@ -574,6 +574,49 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     expect((await undoDivision(auth, board.alpha.id)).applied.type).toBe("schedule_applied");
   }, 60_000);
 
+  // Review 4 of #857, Minor 1. A division whose every listed fixture was
+  // skipped still got an empty `schedule_applied` step and a seq bump, while
+  // the per-stage apply wrote none — two answers to one question. Neither
+  // writes a step now, and each division's current seq comes back.
+  it("a division whose every listed fixture holds a result writes no step, and its seq comes back unchanged", async () => {
+    const { alpha, bravo } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, { divisions: [alpha], source: "ai", ai: AI });
+    await startDivision(auth, board.alpha.id);
+    const voided = board.alpha.fixtureIds[0]!;
+    await scoreEvent(auth, voided, { expected_seq: 0, type: "core.start", payload: {} });
+    const [start] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${voided} and seq = 1`;
+    await scoreEvent(auth, voided, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+    const alphaSeq = await divisionSeq(board.alpha.id);
+    const steps = async (divisionId: string) =>
+      Number((await sql<{ n: number }[]>`
+        select count(*)::int as n from division_events where division_id = ${divisionId}`)[0]!.n);
+    const alphaSteps = await steps(board.alpha.id);
+
+    const onlyVoided: CompetitionApplyDivision = {
+      division_id: board.alpha.id,
+      expected_seq: alphaSeq,
+      assignments: [alpha.assignments[0]!].map((a) => ({ ...a, court_id: board.courts.court2 })),
+    };
+    const bravoNow = { ...bravo, expected_seq: await divisionSeq(board.bravo.id) };
+    const out = await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [onlyVoided, bravoNow],
+      source: "ai",
+      ai: AI,
+    });
+
+    expect(out).toMatchObject({ applied: bravo.assignments.length, skipped: 1 });
+    expect(await steps(board.alpha.id)).toBe(alphaSteps);
+    expect(await divisionSeq(board.alpha.id)).toBe(alphaSeq);
+    expect(out.divisions).toEqual([
+      { division_id: board.alpha.id, seq: alphaSeq },
+      { division_id: board.bravo.id, seq: await divisionSeq(board.bravo.id) },
+    ]);
+    expect(out.divisions[1]!.seq).toBe(bravoNow.expected_seq + 1);
+    // The published shape carries it.
+    expect(ApplyCompetitionScheduleResult.parse(out).divisions).toEqual(out.divisions);
+  }, 60_000);
+
   it("a stale expected_seq on the SECOND division rolls back the FIRST", async () => {
     // Run BOTH directions. Whichever division the implementation happens to
     // write first, one of these two cases is a genuine rollback assertion — a
@@ -854,6 +897,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     const parsed = ApplyCompetitionScheduleResult.parse({
       applied: 0,
       skipped: 0,
+      divisions: [],
       conflicts: blocking.conflicts,
     });
     expect(parsed.conflicts.some((c) => c.direct === true)).toBe(true);

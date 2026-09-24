@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 const net = vi.hoisted(() => ({
   calls: [] as { url: string; json: Record<string, unknown> }[],
   refuse: new Map<string, () => Error>(),
+  answers: new Map<string, unknown>(),
   refresh: vi.fn(),
 }));
 
@@ -21,7 +22,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   return {
     ...actual,
     apiV1: (url: string, options?: { method?: string; json?: Record<string, unknown> }) => {
-      if (options?.method !== "PATCH") return Promise.resolve({ conflicts: [] });
+      if (options?.method !== "PATCH") {
+        for (const [pat, answer] of net.answers) if (url.endsWith(pat)) return Promise.resolve(answer);
+        return Promise.resolve({ conflicts: [] });
+      }
       net.calls.push({ url, json: options.json ?? {} });
       const refuse = net.refuse.get(url);
       return refuse ? Promise.reject(refuse()) : Promise.resolve({ conflicts: [] });
@@ -73,6 +77,7 @@ function driveHook(fixtures: BoardFixture[]) {
 function reset(refused: string[] = []) {
   net.calls.length = 0;
   net.refuse.clear();
+  net.answers.clear();
   for (const id of refused) net.refuse.set(`/api/v1/fixtures/${id}`, played);
   net.refresh.mockClear();
 }
@@ -164,5 +169,25 @@ describe("useBoardActions — a bulk tool passes over a match that holds a resul
     expect(patched()).toEqual(["f1", "f2"]);
     expect(actions().error).not.toBeNull();
     expect(net.refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Review 4 of #857, Minor 1. An Auto-schedule apply whose every fixture holds a
+// result moves nothing and leaves the seq where it was; the board assumed +1,
+// so the organiser's next edit was refused as stale.
+describe("useBoardActions — the board adopts the apply's own seq", () => {
+  it("after an apply that moved nothing, the next write carries the seq the server answered", async () => {
+    reset();
+    net.answers.set("/schedule/auto", {
+      assignments: [{ fixture_id: "f2", scheduled_at: AT(15), court_id: "crt-b" }],
+      conflicts: [],
+    });
+    net.answers.set("/schedule/apply", { applied: 0, skipped: 1, conflicts: [], seq: 3 });
+    const actions = driveHook(THREE);
+    await actions().autoRun("st-1", "d1", true);
+    expect(actions().error).toBeNull();
+
+    await actions().togglePin(THREE[0]!);
+    expect(net.calls.map((c) => c.json.expected_seq)).toEqual([3]);
   });
 });

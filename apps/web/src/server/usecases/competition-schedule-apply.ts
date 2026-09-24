@@ -201,6 +201,10 @@ export interface CompetitionApplyInput {
 
 export interface CompetitionApplyOut {
   applied: number;
+  /** Each listed division's seq after this call, in domain order: advanced by
+   *  the one `schedule_applied` step a division gets when something of it
+   *  moved, unchanged when nothing did (review 4 of #857, Minor 1). */
+  divisions: { division_id: string; seq: number }[];
   /** Listed fixtures left where they are because they hold a result
    *  (`heldInPlace`, schedule.ts), across every division. */
   skipped: number;
@@ -783,10 +787,19 @@ export async function applyCompetitionSchedule(
     // court, never accepted from the client (see `courtVenueIds`' own note).
     const courtVenues = await courtVenueIds(tx);
     let applied = 0;
+    const seqs: { division_id: string; seq: number }[] = [];
     for (const d of order) {
       // Interleaved with the writes on purpose — see the module header. A
       // pre-pass here would make the rollback test pass without atomicity.
       await assertFreshSeq(tx, d.id, d.input.expected_seq);
+      if (d.input.assignments.length === 0) {
+        // Every fixture listed for it holds a result and was skipped: nothing
+        // written, so no ledger step and no seq bump — as `applySchedule`.
+        const [current] = await tx<{ seq: string | number }[]>`
+          select seq from divisions where id = ${d.id}`;
+        seqs.push({ division_id: d.id, seq: Number(current!.seq) });
+        continue;
+      }
       const moves: { fixture: string; from: unknown; to: unknown }[] = [];
       for (const a of d.input.assignments) {
         const f = d.byId.get(a.fixture_id)!;
@@ -842,6 +855,7 @@ export async function applyCompetitionSchedule(
         ...(ai !== undefined ? { ai } : {}),
       });
       await tx`update divisions set seq = ${seq} where id = ${d.id}`;
+      seqs.push({ division_id: d.id, seq });
       applied += d.input.assignments.length;
     }
 
@@ -863,6 +877,7 @@ export async function applyCompetitionSchedule(
     return {
       applied,
       skipped,
+      divisions: seqs,
       // #461's contract (schedule.ts's `applySchedule`/`moveFixture`),
       // generalized to N divisions: a widened sibling exists so the GATE
       // above can see it, not so its own — possibly pre-existing and
@@ -878,7 +893,9 @@ export async function applyCompetitionSchedule(
         .filter((c) => !allSiblingIds.has(c.fixtureId))
         .map((c) => withLegacyDetail(withJointCourtNames(c))),
       // R10d n2: each written division, with the fixtures its input assigned.
-      written: order.map((d) => ({ divisionId: d.id, fixtureIds: d.input.assignments.map((a) => a.fixture_id) })),
+      written: order
+        .filter((d) => d.input.assignments.length > 0)
+        .map((d) => ({ divisionId: d.id, fixtureIds: d.input.assignments.map((a) => a.fixture_id) })),
     };
   });
 
@@ -886,7 +903,7 @@ export async function applyCompetitionSchedule(
   for (const { divisionId, fixtureIds } of out.written) {
     afterScheduleWrite(divisionId, competitionId, "schedule", fixtureIds);
   }
-  return { applied: out.applied, skipped: out.skipped, conflicts: out.conflicts };
+  return { applied: out.applied, skipped: out.skipped, divisions: out.divisions, conflicts: out.conflicts };
 }
 
 /** Conflicts in reading order: division (domain order), then playing order

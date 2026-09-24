@@ -242,8 +242,10 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
   }
 
   // 2. Schedule apply, grouped by stage (the route rejects cross-stage sets).
-  //    Each apply appends one division event and bumps divisions.seq, so the
-  //    expected_seq walks forward across stages.
+  //    Each apply answers the division's seq after it, and the next stage's
+  //    expected_seq is that answer: an apply that moved something advanced it
+  //    by one ledger step, and one that moved nothing (every fixture held a
+  //    result) left it where it was (review 4 of #857, Minor 1).
   const wanted = input.scheduleAssignments.filter((a) => !excluded.has(a.fixture_id));
   const byStage = new Map<string, ScheduleAssignmentInput[]>();
   for (const a of wanted) {
@@ -257,7 +259,7 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
   let stagesApplied = 0;
   for (const [stageId, group] of byStage) {
     try {
-      await api(`/api/v1/stages/${stageId}/schedule/apply`, {
+      const res = await api<{ seq: number }>(`/api/v1/stages/${stageId}/schedule/apply`, {
         method: "POST",
         json: {
           assignments: group.map((a) => ({
@@ -270,7 +272,7 @@ export async function applyAiPlans(input: ApplyAiInput, api: ApplyApi = apiV1): 
           ai: input.scheduleAudit,
         },
       });
-      seq += 1;
+      seq = res.seq;
       stagesApplied += 1;
     } catch (err) {
       const code = codeOf(err);

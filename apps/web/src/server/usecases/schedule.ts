@@ -2582,6 +2582,10 @@ export interface ApplyScheduleOut {
    *  (`heldInPlace`). */
   skipped: number;
   conflicts: ScheduleConflict[];
+  /** The division's seq after this call: advanced by the one ledger step an
+   *  apply that moved something writes, unchanged when it moved nothing
+   *  (review 4 of #857, Minor 1). A client adopts it rather than assuming +1. */
+  seq: number;
 }
 
 export async function applySchedule(
@@ -2652,13 +2656,17 @@ export async function applySchedule(
     }
 
     if (assignments.length === 0) {
-      // Everything listed was skipped: nothing written, so no ledger step.
+      // Everything listed was skipped: nothing written, so no ledger step and
+      // no seq bump — the seq the caller holds is still the current one.
+      const [current] = await tx<{ seq: string | number }[]>`
+        select seq from divisions where id = ${stage.division_id}`;
       return {
         divisionId: stage.division_id,
         competitionId: stage.competition_id,
         applied: 0,
         skipped,
         conflicts: [],
+        seq: Number(current!.seq),
         fixtureIds: [],
       };
     }
@@ -2878,6 +2886,7 @@ export async function applySchedule(
       applied: assignments.length,
       skipped,
       conflicts,
+      seq,
       // R10d n2: the fixtures this apply wrote, and only those.
       fixtureIds: assignments.map((a) => a.fixture_id),
     };
@@ -2885,7 +2894,7 @@ export async function applySchedule(
   if (out.fixtureIds.length > 0) {
     afterScheduleWrite(out.divisionId, out.competitionId, "schedule", out.fixtureIds);
   }
-  return { applied: out.applied, skipped: out.skipped, conflicts: out.conflicts };
+  return { applied: out.applied, skipped: out.skipped, conflicts: out.conflicts, seq: out.seq };
 }
 
 /** GET /divisions/{id}/schedule/ai-last — recall the most recent AI-sourced

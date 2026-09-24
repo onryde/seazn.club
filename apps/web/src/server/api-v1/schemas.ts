@@ -2541,6 +2541,10 @@ export const ApplyScheduleResult = z.object({
    *  taken back leaves a match `scheduled` with its scoring). */
   skipped: z.number().int(),
   conflicts: z.array(ScheduleConflict),
+  /** The division's seq after this call — the next write's `expected_seq`.
+   *  Advanced when the apply moved something, unchanged when it moved
+   *  nothing (every listed fixture skipped): adopt it, never assume +1. */
+  seq: z.number().int().nonnegative(),
 });
 
 export const ValidateScheduleResult = z.object({
@@ -4562,6 +4566,9 @@ export const ApplyCompetitionScheduleResult = z.object({
   /** Listed fixtures left where they are because they hold a result, across
    *  every division. */
   skipped: z.number().int(),
+  /** Each listed division's seq after this call, in domain order: advanced
+   *  when something of it moved, unchanged when nothing did. */
+  divisions: z.array(z.object({ division_id: Uuid, seq: z.number().int().nonnegative() })),
   /** The ENGINE verifier's camelCase `Conflict`, exactly as the joint ai-plan
    *  response carries it — NOT the snake_case `ScheduleConflict` of the
    *  per-stage apply. `applyCompetitionSchedule` returns `Conflict[]` verbatim,
