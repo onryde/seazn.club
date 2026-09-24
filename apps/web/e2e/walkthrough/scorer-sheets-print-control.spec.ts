@@ -44,14 +44,18 @@ import {
 } from "../helpers";
 import { dismissConsent, freshOrg, waitForHydration } from "../directory-kit";
 
-const dict = (locale: "en" | "fr") =>
+const dict = (locale: "en" | "fr" | "es") =>
   JSON.parse(
     readFileSync(fileURLToPath(new URL(`../../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8"),
   ) as Record<string, string>;
 const EN = dict("en");
 const FR = dict("fr");
+const ES = dict("es");
 
 const WIDTHS = [320, 768, 1280] as const;
+/** The pill's width cap holds until xl; 1024 is where releasing it early
+ *  left the Spanish title (the longest reason) under 40% of the header. */
+const PILL_WIDTHS = [320, 768, 1024, 1280] as const;
 /** A page load, a seed, or a poll of the server's own record. */
 const STEP_MS = 20_000;
 /** A click or a local assertion: a fraction of a page load. */
@@ -66,7 +70,7 @@ const DAY_MS = 86_400_000;
 const localDate = (at: Date, tz: string) =>
   new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
 
-async function setLocale(page: Page, locale: "en" | "fr") {
+async function setLocale(page: Page, locale: "en" | "fr" | "es") {
   await page.context().addCookies([
     { name: "seazn_locale", value: locale, url: new URL(test.info().project.use.baseURL!).origin },
   ]);
@@ -124,10 +128,20 @@ async function rowBoxes(page: Page, control: Locator) {
 /** One state at every width: layout checks, hit-tests, the header shot and
  *  the first screenful attached, and the control-set parity 320 vs 1280.
  *  Option A as ruled: the control on the title's row, right-aligned, from 768
- *  up; under the title on a phone. */
-async function capture(page: Page, control: Locator, testInfo: TestInfo, name: string, targets: Locator[]) {
+ *  up; under the title on a phone.
+ *  `error` — a refusal line on screen: from 768 it belongs to the control's
+ *  column, below the control's row, never under the title.
+ *  `widths` — the Community pill adds 1024, the width its cap is sized for. */
+async function capture(
+  page: Page,
+  control: Locator,
+  testInfo: TestInfo,
+  name: string,
+  targets: Locator[],
+  { error, widths = WIDTHS }: { error?: Locator; widths?: readonly number[] } = {},
+) {
   const perWidth: { w: number; controls: string[] }[] = [];
-  for (const w of WIDTHS) {
+  for (const w of widths) {
     await page.setViewportSize({ width: w, height: 900 });
     await expect(control).toBeVisible();
     await expectNoHorizontalScroll(page);
@@ -163,6 +177,16 @@ async function capture(page: Page, control: Locator, testInfo: TestInfo, name: s
       expect(title!.width, `${name} ${w}: the title keeps at least 40% of the header`).toBeGreaterThanOrEqual(
         head!.width * 0.4,
       );
+      if (error) {
+        const line = await error.boundingBox();
+        expect(line, `${name} ${w}: the refusal line has a box`).not.toBeNull();
+        expect(line!.x, `${name} ${w}: the refusal line starts in the control's column, not under the title`).toBeGreaterThanOrEqual(
+          box!.x - 1,
+        );
+        expect(line!.y, `${name} ${w}: the refusal line sits below the control's row`).toBeGreaterThanOrEqual(
+          box!.y + box!.height - 1,
+        );
+      }
     }
     for (const [i, t] of targets.entries()) await hitTest(t, `${name} ${w} target ${i}`);
     perWidth.push({ w, controls: await controlSet(control) });
@@ -175,7 +199,9 @@ async function capture(page: Page, control: Locator, testInfo: TestInfo, name: s
     await testInfo.attach(`${name}-${w}-view`, { path: viewPath, contentType: "image/png" });
   }
   expect(perWidth[0]!.controls.length, `${name}: the control set is not empty`).toBeGreaterThan(0);
-  expect(perWidth[0]!.controls, `${name}: same controls, same order at 320 and 1280`).toEqual(perWidth[2]!.controls);
+  expect(perWidth[0]!.controls, `${name}: same controls, same order at 320 and 1280`).toEqual(
+    perWidth.at(-1)!.controls,
+  );
   await page.setViewportSize({ width: 1280, height: 900 });
 }
 
@@ -312,7 +338,7 @@ test.describe("an organiser on a plan with device links", () => {
     await expect(submit).toHaveText(EN["sheets.print"]!);
     expect(downloads).toBe(0);
     expect(await rowBoxes(page, control), "en: a refusal moves neither the title nor the control").toEqual(idleEn);
-    await capture(page, control, testInfo, "en-2-refused", [day, submit]);
+    await capture(page, control, testInfo, "en-2-refused", [day, submit], { error });
 
     // 5. French: the same states read in French.
     answer = "pdf";
@@ -333,7 +359,7 @@ test.describe("an organiser on a plan with device links", () => {
     // The longer French line is the one that used to push the control off
     // the title's row.
     expect(await rowBoxes(page, control), "fr: a refusal moves neither the title nor the control").toEqual(idleFr);
-    await capture(page, control, testInfo, "fr-2-refused", [day, submit]);
+    await capture(page, control, testInfo, "fr-2-refused", [day, submit], { error });
     expect(sent.length, "every click sent exactly one POST").toBe(4);
   });
 });
@@ -343,11 +369,12 @@ test.describe("a Community organiser without an Event Pass", () => {
   // shared Pro org cannot be moved to Community without moving its whole group.
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test("sees the upgrade pill where the Print button would be, saying what it sells (en + fr)", async ({
+  test("sees the upgrade pill where the Print button would be, saying what it sells (en + fr + es)", async ({
     page,
   }, testInfo) => {
-    // Navs: login + org (2), seed (~3), 2 page loads. Acts: ~8. Captures: 2.
-    test.setTimeout(budgetFor(7, 8, 2));
+    // Navs: login + org (2), seed (~3), 3 page loads. Acts: ~10. Captures: 3,
+    // each at four widths — costed as 4 captures at the standard three.
+    test.setTimeout(budgetFor(8, 10, 4));
     await freshOrg(page, "sheets9");
     await dismissConsent(page);
     const seeded = await seedScoredDivision(page.request, [`Eli ${TAG}`, `Fay ${TAG}`], { decide: false });
@@ -361,12 +388,19 @@ test.describe("a Community organiser without an Event Pass", () => {
     await expect(gate).toContainText(EN["sheets.gate.reason"]!);
     await expect(page.getByTestId("print-sheets-submit")).toHaveCount(0);
     await expect(page.getByTestId("print-sheets-day")).toHaveCount(0);
-    await capture(page, gate, testInfo, "community-gate-en", []);
+    await capture(page, gate, testInfo, "community-gate-en", [], { widths: PILL_WIDTHS });
 
     await setLocale(page, "fr");
     await page.reload();
     await expect(gate).toBeVisible({ timeout: STEP_MS });
     await expect(gate).toContainText(FR["sheets.gate.reason"]!);
-    await capture(page, gate, testInfo, "community-gate-fr", []);
+    await capture(page, gate, testInfo, "community-gate-fr", [], { widths: PILL_WIDTHS });
+
+    // Spanish carries the longest reason: the width where the cap matters.
+    await setLocale(page, "es");
+    await page.reload();
+    await expect(gate).toBeVisible({ timeout: STEP_MS });
+    await expect(gate).toContainText(ES["sheets.gate.reason"]!);
+    await capture(page, gate, testInfo, "community-gate-es", [], { widths: PILL_WIDTHS });
   });
 });

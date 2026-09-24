@@ -58,9 +58,10 @@ export function PrintScorerSheets({
   // The empty case first: with nothing to print there is nothing to sell.
   if (!allowed) {
     return (
-      // Capped between md and lg: at its natural width the French pill took
-      // three quarters of a 768 header and left the title six lines tall.
-      <div className="md:max-w-sm lg:max-w-none">
+      // Capped from md until xl: at its natural width the French pill took
+      // three quarters of a 768 header and left the title six lines tall, and
+      // released at lg the Spanish one still left the title 37% at 1024.
+      <div className="md:max-w-sm xl:max-w-none">
         <UpgradeGate
           feature="scoring.device_links"
           // The feature's own sentence is about hand-over scoring links; this
