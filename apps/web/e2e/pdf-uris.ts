@@ -10,7 +10,9 @@
 //    it, so its text IS recoverable; a standard font (the Helvetica fallback)
 //    encodes WinAnsi bytes directly;
 //  - an image with alpha (every qrcode PNG) is inflated to raw pixels with an
-//    /SMask, placed by `w 0 0 -h x bottom cm /In Do` in top-down coordinates.
+//    /SMask, placed by `w 0 0 -h x bottom cm /In Do` in top-down coordinates;
+//  - a stroked segment is `x1 y1 m`, `x2 y2 l`, colour/width ops, `S` — one
+//    op per line, also top-down.
 // Anything outside that shape throws rather than reading as "no text".
 import zlib from "node:zlib";
 
@@ -150,6 +152,28 @@ export function pdfTextRuns(pdf: Buffer): PdfTextRun[] {
     }
   }
   return runs;
+}
+
+export interface PdfLine {
+  page: number;
+  /** Top-down, like the renderer's own coordinates (pdfkit's page flip). */
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** Every stroked single segment (`moveTo(…).lineTo(…).stroke()`), in drawing order. */
+export function pdfLines(pdf: Buffer): PdfLine[] {
+  const lines: PdfLine[] = [];
+  for (const page of readPages(readObjects(pdf))) {
+    // pdfkit writes the stroke colour and width between the path and its `S`.
+    const segment = /([\d.-]+) ([\d.-]+) m\n([\d.-]+) ([\d.-]+) l\n(?:[^\n]* (?:CS|SCN|cs|scn|RG|rg|w)\n)*S\n/g;
+    for (const m of page.content.matchAll(segment)) {
+      lines.push({ page: page.n, x1: Number(m[1]), y1: Number(m[2]), x2: Number(m[3]), y2: Number(m[4]) });
+    }
+  }
+  return lines;
 }
 
 export interface PdfImage {

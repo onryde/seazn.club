@@ -8,7 +8,7 @@ import sharp from "sharp";
 import { ROWS_PER_PAGE } from "@/lib/scorer-sheets";
 import { qrBuffer } from "../doc-theme";
 import { renderScorerSheetPdf } from "../scorer-sheet-pdf";
-import { pdfImages, pdfLinkUris, pdfPageCount, pdfTextRuns } from "../../../e2e/pdf-uris";
+import { pdfImages, pdfLines, pdfLinkUris, pdfPageCount, pdfTextRuns } from "../../../e2e/pdf-uris";
 import { header, labels, model, row, token, useBrandFonts } from "./_sheet-fixtures";
 
 beforeAll(useBrandFonts);
@@ -35,11 +35,19 @@ describe("renderScorerSheetPdf (scorer sheets §4.4)", () => {
     expect(images.map(decode)).toEqual(pages.flat().map((r) => r.url));
   });
 
-  it("a TBD side keeps its row and its QR (D2), and prints its slot label", async () => {
+  it("a TBD side keeps its row and its QR (D2), and prints its slot label over a pen line", async () => {
     const pdf = await renderScorerSheetPdf(model([[row(1, { home: "Winner of QF·2", homeTbd: true })]]));
     expect(pdfLinkUris(pdf)).toHaveLength(1);
     expect(pdfImages(pdf).map(decode)).toEqual([row(1).url]);
-    expect(pdfTextRuns(pdf).map((r) => r.text)).toContain("Winner of QF·2");
+    const runs = pdfTextRuns(pdf);
+    const label = runs.find((r) => r.text === "Winner of QF·2")!;
+    const named = runs.find((r) => r.text === "Away 1")!;
+    // A line to write the name on, starting under the label and close below
+    // it — the named side opposite gets none.
+    const under = (run: { x: number; y: number }) =>
+      pdfLines(pdf).filter((l) => l.y1 === l.y2 && l.x1 === run.x && l.y1 - run.y > 8 && l.y1 - run.y < 30);
+    expect(under(label).map((l) => l.x2 - l.x1 >= 200)).toEqual([true]);
+    expect(under(named)).toEqual([]);
   });
 
   it("prints the QR only — never the scan URL or its token as text (the token is a bearer secret)", async () => {
