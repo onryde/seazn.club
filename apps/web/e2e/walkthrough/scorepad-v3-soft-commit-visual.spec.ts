@@ -119,9 +119,10 @@ async function armStartMatchProbe(page: Page): Promise<void> {
  *  Clicks only once the pad has run its mount effects, not merely painted:
  *  `goto` returns at `load` and the pad is server-rendered, so "visible" is
  *  true long before React owns the tree. The signal is the pad's FIRST client
- *  act — `use-fixture-stream.ts` asks the realtime-token door from the same
- *  effect flush in which `PadHostV3` reports its ledger, so once that request
- *  is on the wire the tree is hydrated and every mount effect has already run. */
+ *  act — `use-fixture-stream.ts` asks the realtime-token door from the pad's
+ *  own passive-effect flush (the same one in which `useReportLedgerChanges`
+ *  records the seed without reporting it), so once that request is on the
+ *  wire the tree is hydrated and every mount effect has already run. */
 async function openAndStart(page: Page, fixtureId: string): Promise<void> {
   const padMounted = page.waitForRequest(
     (req) => req.url().includes(`/api/v1/public/fixtures/${fixtureId}/realtime-token`),
