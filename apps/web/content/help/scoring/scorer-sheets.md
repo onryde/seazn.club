@@ -8,13 +8,15 @@ A **scorer sheet** puts one day's matches on paper as cut-out cards, sorted by c
 
 ## Print a day
 
-On the competition's **Schedule** page, choose **Print scorer sheets**, pick the day and press **Print**. You get one PDF with the day's matches from every division together, sorted by court.
+On the competition's **Schedule** page, pick the **Day** beside the page title and press **Print scorer sheets**. You get one PDF with the day's matches from every division together, sorted by court.
+
+The control shows up once at least one match still to play has a time. The **Day** list offers only the days that have matches to print.
 
 - **Who can print:** owners and admins.
-- **Plans:** scorer sheets are made of device links, so they come with **Pro**, or with an [Event Pass](/help/billing/event-pass) for that competition. On Community you see an upgrade prompt instead.
+- **Plans:** scorer sheets are made of device links, so they come with **Pro**, or with an [Event Pass](/help/billing/event-pass) for that competition. On Community you see an upgrade prompt in its place, once a match has a time.
 - **Which matches:** every match that day that has a time and is still to play or already in play. Matches with no time yet, byes, and matches that are already over are left off.
 - **Which day:** days and times on the sheet follow [your organisation's time zone](/help/scheduling/timezones), whatever the clock on the computer you print from.
-- **Start the division first.** Scoring opens once a division is started, so a card scanned before then can't score yet.
+- **Start the division first.** A division that hasn't been [started](/help/divisions/lifecycle) can't be scored yet, so a card scanned before then can't score.
 
 The sheet never prints a card without a working QR. If a scoring link can't be made for a match, the download stops with an error instead.
 
@@ -32,9 +34,9 @@ There's no box for the score. The score goes in on the phone. The scoring link i
 
 ## When a side isn't decided yet
 
-You can print before the draw fills in. A side that isn't known yet prints as its place in the draw, like "Winner of QF·2", with a line under it to write the name in. The card belongs to the match, not to the players, so it works as soon as the side is filled. An umpire who scans early sees **Waiting for** both sides as they stand, and "This page updates by itself." When the other result comes in, the screen moves on to the match. There's no need to scan again.
+You can print before the draw fills in. A side that isn't known yet prints as its place in the draw, like "Winner of QF·2", with a line under it to write the name in. An unpaired Swiss board prints **TBD** for both sides, with the same lines. The card belongs to the match, not to the players, so it works as soon as the side is filled. An umpire who scans early sees **Waiting for** both sides as they stand, and "This page updates by itself." When the other result comes in, the screen moves on to the match. There's no need to scan again.
 
-In Swiss, a card belongs to its board. Unpairing a round doesn't delete the board, so after you pair again the same card scores whoever is now on that board. That is why every sheet reminds the umpire to check the names on screen before starting: the phone always shows the match as it stands now.
+In Swiss, a card belongs to its board. Unpairing a round does not delete its boards, so after you pair again the same card scores whoever is now on that board. That is why every sheet reminds the umpire to check the names on screen before starting: the phone always shows the match as it stands now.
 
 ## What the umpire does
 
@@ -64,6 +66,6 @@ Printing again is safe. A match keeps the same QR every time you print, and **Sh
 
 **Can one phone score a whole court?** Yes. Scan each card as its match comes up. Each scan opens only that match.
 
-**Two phones scanned the same card.** Both can score that match. If they tap at the same moment, one refreshes to the latest score ([score conflicts](/help/scoring/conflicts)). Keep to one phone per match.
+**Two phones scanned the same card.** Both can score that match, and they share one link, so either can undo the other's entries. If they tap at the same moment, one refreshes to the latest score ([score conflicts](/help/scoring/conflicts)). Keep to one phone per match.
 
 **The names on the card are out of date.** Trust the phone. It always shows who is in the match now.

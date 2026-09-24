@@ -196,3 +196,30 @@ describe("every way a device link ends is on the page, and no plan it lacks is c
     expect(offending).toEqual([]);
   });
 });
+
+// Scorer sheets help, fix round 1. A device's undo is scoped to its LINK, not
+// its phone: usecases/scoring.ts refuses a device-link `core.void` unless the
+// target event's `device_link_id` equals the caller's `auth.deviceLinkId`.
+// Since Task 2 re-shows the same QR, two phones that scanned one card hold the
+// SAME link — so "never another device's entries" was false, and a pair of
+// umpires sharing a card could undo each other's taps without being told so.
+const SHEETS = readFileSync(join(process.cwd(), "content/help/scoring/scorer-sheets.md"), "utf8");
+const UNDO_SCOPED_PAGES: ReadonlyArray<readonly [string, string]> = [
+  ["device-links.md", ARTICLE],
+  ["corrections.md", CORRECTIONS],
+  ["scorer-sheets.md", SHEETS],
+];
+
+describe("a device's undo is scoped to its link, not its phone", () => {
+  for (const [name, md] of UNDO_SCOPED_PAGES) {
+    it(`${name}: never says a device cannot undo another device's entries`, () => {
+      expect(sentencesOf(md).filter((s) => /\banother device's\b|\bother devices'/i.test(s))).toEqual([]);
+    });
+
+    it(`${name}: says phones sharing one QR can undo each other's entries`, () => {
+      const hits = sentencesOf(md).filter((s) => /\b(?:each|the) other's\b/i.test(s));
+      expect(hits, `${name} never says who else can undo`).not.toHaveLength(0);
+      expect(hits.some((s) => /\bundo\b/i.test(s) && /\bsame (?:QR|card)\b|\bshare\b/i.test(s)), hits.join(" | ")).toBe(true);
+    });
+  }
+});

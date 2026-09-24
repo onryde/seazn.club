@@ -17,10 +17,13 @@
 // deletes the match, so the link cascades), the pin is that the article names
 // the control AND says the card stops working in the same sentence.
 //
-// NOT PINNED HERE, because the code does not exist on this branch yet: the
-// print control's own label ("Print scorer sheets") and the "No court
-// assigned" heading. When the print control lands with dictionary keys, pin the
-// article's wording to them here.
+// NOT PINNED HERE, because the keys do not exist on this branch yet: the print
+// control's labels `en["sheets.day"]` ("Day") and `en["sheets.print"]` ("Print
+// scorer sheets"), which live on feat/scorer-sheets-print-control
+// (print-scorer-sheets.tsx) and are pinned here at the fold, and the PDF's
+// "No court assigned" heading, which has no key on either branch yet. Until
+// then the only pin on the control is the NEGATIVE one below: there is no
+// separate "Print" button to press.
 //
 // The article is read lazily so a missing file reds each assertion by name
 // rather than failing the whole file at collection.
@@ -109,10 +112,43 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
     expect(sentences().filter((s) => everyPlan.test(s))).toEqual([]);
   });
 
+  it("names ONE print button — there is no bare \"Print\" to press after picking the day", () => {
+    // The control is a Day select and a single button (print-scorer-sheets.tsx
+    // on the print-control branch); the article once said "choose Print scorer
+    // sheets, pick the day and press Print", a two-step control that never existed.
+    const bare = /\b(?:press|tap|click|choose|hit)\s+Print\b(?!\s+scorer)/i;
+    expect(sentences().filter((s) => bare.test(s))).toEqual([]);
+  });
+
+  it("says the control appears only once a match has a time — and the upgrade prompt only then too", () => {
+    // print-scorer-sheets.tsx returns null with no printable day BEFORE its
+    // UpgradeGate branch, so a Community organiser with nothing timed sees
+    // neither the button nor the prompt.
+    const HAS_TIME = /\bhas a time\b/i;
+    expect(sentences().some((s) => /\bcontrol\b/i.test(s) && /\bshows? up\b|\bappears?\b/i.test(s) && HAS_TIME.test(s))).toBe(true);
+    const prompt = sentences().filter((s) => /\bupgrade prompt\b/i.test(s));
+    expect(prompt, "the upgrade prompt is never mentioned").not.toHaveLength(0);
+    expect(prompt.every((s) => HAS_TIME.test(s)), prompt.join(" | ")).toBe(true);
+  });
+
+  it("links 'start the division first' to the division lifecycle, as batch-import.md does", () => {
+    expect(sentences().some((s) => s.includes("](/help/divisions/lifecycle)") && /\bstart/i.test(s))).toBe(true);
+  });
+
   it("an undecided side prints as its place in the draw — the board's own 'Winner of' wording", () => {
     const winnerOf = en["slot.winner_match"].replace(/\s*\{ext\}.*$/, "");
     expect(winnerOf).toMatch(/\w/);
     expect(article()).toContain(winnerOf);
+  });
+
+  it("an unpaired Swiss board prints the board's TBD (a Swiss shell has no slot label)", () => {
+    // scan-match-names.ts `boardMatchNamer`: an empty seat with no feed and no
+    // stored label resolves to `schedule.tbd`.
+    const tbd = en["schedule.tbd"];
+    expect(tbd).toMatch(/\w/);
+    const hits = sentences().filter((s) => /\bunpaired\b/i.test(s) && /\bSwiss\b/.test(s));
+    expect(hits, "unpaired Swiss boards are never described").not.toHaveLength(0);
+    expect(hits.some((s) => new RegExp(`\\b${tbd}\\b`).test(s)), hits.join(" | ")).toBe(true);
   });
 });
 
@@ -147,7 +183,11 @@ describe("scorer-sheets.md says when a printed card stops working — and when i
 
   it("a result that moves the competition on turns the card read-only, by each route", () => {
     const body = parts().body;
-    expect(body).toMatch(/moves? the competition on/i);
+    // The CONSEQUENCE, in the sentence that states the cause: matching only
+    // the vocabulary held with "read-only" gone from the page's claim.
+    const movesOn = sentencesOf(body).filter((s) => /moves? the competition on/i.test(s));
+    expect(movesOn, "the article never says a result moves the competition on").not.toHaveLength(0);
+    expect(movesOn.some((s) => /\bread-only\b/i.test(s)), movesOn.join(" | ")).toBe(true);
     expect(body).toMatch(/next match/i);
     expect(body).toMatch(/next (?:Swiss )?round (?:is|was) paired/i);
     expect(body).toMatch(/stage (?:is|was) completed/i);
@@ -165,18 +205,31 @@ describe("scorer-sheets.md says when a printed card stops working — and when i
     expect(hits.some((s) => DIES.test(s)), hits.join(" | ")).toBe(true);
   });
 
-  it("deleting a stage, and a Swiss round losing a board, are named too", () => {
-    expect(sentences().some((s) => /\bdelet\w*\b[^.]*\bstage\b/i.test(s))).toBe(true);
-    expect(sentences().some((s) => /\bSwiss\b/.test(s) && /\bremov\w*\b|\bloses?\b|\blosing\b/i.test(s))).toBe(true);
+  it("deleting the stage, and a Swiss round losing a board, are named too", () => {
+    // The STAGE must be the thing deleted: a looser `delet…stage` also matched
+    // the Rebuild sentence ("deletes every match in the stage") and held with
+    // the stage-delete clause gone.
+    expect(sentences().some((s) => /\bdelet(?:e|es|ing)\s+(?:its|the)\s+stage\b/i.test(s))).toBe(true);
+    expect(
+      sentences().some((s) => /\bSwiss\b/.test(s) && /\b(?:loses?|losing)\s+a\s+board\b|\bremov\w*\s+(?:a\s+)?(?:boards?|match(?:es)?)\b/i.test(s)),
+    ).toBe(true);
   });
 
   it("reprinting gives the same QR codes", () => {
-    const hits = sentences().filter((s) => /\b(?:reprint\w*|print\w* (?:it |the day )?again)\b/i.test(s));
+    const PRINT_AGAIN = /\b(?:reprint\w*|print\w* (?:it |the day )?again|every time you print)\b/i;
+    const hits = sentences().filter((s) => PRINT_AGAIN.test(s));
     expect(hits, "reprinting is never described").not.toHaveLength(0);
-    expect(sentences().some((s) => /\bsame\b/i.test(s) && /\bQR\b/.test(s) && /\bprint/i.test(s))).toBe(true);
+    // ONE sentence carries both halves. "same" + "QR" + "print" anywhere held
+    // with the reprint sentence saying "a new QR", because the next clause's
+    // "Show QR … shows that same code" supplied the words.
+    expect(hits.some((s) => /\bsame\s+QRs?\b/i.test(s)), hits.join(" | ")).toBe(true);
+    expect(hits.filter((s) => /\b(?:new|fresh|different|another)\s+(?:QRs?|codes?)\b/i.test(s))).toEqual([]);
   });
 
-  it("a Swiss card belongs to its board: unpairing does not kill it", () => {
-    expect(sentences().some((s) => /\bunpair\w*\b/i.test(s) && /\bboard\b/i.test(s))).toBe(true);
+  it("a Swiss card belongs to its board: unpairing does NOT delete it", () => {
+    const unpair = sentences().filter((s) => /\bunpair\w*\b/i.test(s) && /\bboards?\b/i.test(s));
+    expect(unpair, "unpairing is never described").not.toHaveLength(0);
+    expect(unpair.some((s) => /\b(?:does not|doesn't|never)\s+delete/i.test(s)), unpair.join(" | ")).toBe(true);
+    expect(unpair.filter((s) => /\bunpair\w*\b[^.]*\b(?:deletes|removes)\b/i.test(s))).toEqual([]);
   });
 });

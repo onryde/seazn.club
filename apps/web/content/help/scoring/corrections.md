@@ -10,7 +10,7 @@ Every recorded entry shows up in the pad's **Activity** feed with its own **Undo
 
 Tap **Undo** on any entry that hasn't already been undone. It doesn't erase the original — it records a new event that cancels it, so the full history stays visible (struck through, marked *undone*) rather than disappearing. The match's score and state recompute immediately as if the undone entry had never happened.
 
-**Who can undo what:** a signed-in scorer can undo any entry on a match they're assigned to, until the match is finalized; after that, an organiser has to reopen it first. A [device link](/help/scoring/device-links) can only undo entries it recorded itself — never another device's or another scorer's — and only until the result moves the competition on (in a knockout, that is the moment the result is entered); after that, corrections are the organiser's.
+**Who can undo what:** a signed-in scorer can undo any entry on a match they're assigned to, until the match is finalized; after that, an organiser has to reopen it first. A [device link](/help/scoring/device-links) can only undo entries made through that same link — never a signed-in scorer's entry or one made through a different link — and only until the result moves the competition on (in a knockout, that is the moment the result is entered); after that, corrections are the organiser's. Two phones that scanned the same QR share one link, so either can undo the other's entries.
 
 ## The ordering caveat
 
