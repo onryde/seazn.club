@@ -123,6 +123,7 @@ import {
   type SlotDescriptor,
   type SlotLabel,
 } from "./stage-seeding";
+import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
 
 type Tx = postgres.TransactionSql;
 type StageInput = z.infer<typeof CreateStage>;
@@ -1989,34 +1990,7 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
   return (await generateStageFixturesWrite(auth, stageId, {})).outcome;
 }
 
-/**
- * The result-evidence tables EVERY destructive fixture path must consult,
- * as one SQL fragment. `f` must be the `fixtures` alias in the enclosing
- * query; the caller supplies its own status clause and its own row scope.
- *
- * Shared deliberately (2026-09-20 review, C1): `unpairSwissRound` shipped
- * with a subset of this list — `score_events` only — and a bye predicate that
- * excluded real results from even that. A subset guard on a destructive path
- * is exactly how the defect happened, so the list is written once and both
- * callers read it.
- *
- * Why `config_snapshot` is in here and not only the event tables: V347 freezes
- * the resolved cfg onto the fixture when the FIRST event lands
- * (`append-event.ts`), and `fixture-cfg.ts`'s own header states that
- * `config_snapshot is null` is precisely "not scored yet". It is monotonic,
- * which `fixtures.status` is NOT — `fixtureStatusFromFold` walks a fixture
- * back to `scheduled` when a `core.start` is voided, so a status test alone
- * can silently stop refusing.
- */
-function fixtureEvidenceSql(tx: Tx) {
-  return tx`
-    f.config_snapshot is not null
-    or exists (select 1 from score_events se where se.fixture_id = f.id)
-    or exists (select 1 from match_states ms where ms.fixture_id = f.id)
-    or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
-    or exists (select 1 from official_marks om where om.fixture_id = f.id)
-    or exists (select 1 from suspensions s where s.fixture_id = f.id)`;
-}
+// `fixtureEvidenceSql` / `fixtureHasResultSql`: ./fixture-results-sql.ts.
 
 /**
  * THE clear-onto-shells write — the one place a seated swiss row is put back
@@ -3100,15 +3074,13 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     // implied by `exists(score_events)` for this guard — nothing in apps/web
     // ever deletes a score event — so it adds no refusal here, only
     // monotonicity where status is unreliable.)
+    //
+    // This guard's whole set — status clause and evidence — is
+    // `fixtureHasResultSql`, which history reads as its played set (review 2
+    // of #857, I3), so what rebuild refuses history never deletes.
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
-      where f.stage_id = ${stageId}
-        and (
-          f.status in ('in_play', 'decided', 'finalized')
-          or (f.status = 'abandoned' and f.outcome is not null)
-          or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
-          or (${fixtureEvidenceSql(tx)})
-        )
+      where f.stage_id = ${stageId} and ${fixtureHasResultSql(tx)}
       limit 1`;
     if (blocked) {
       throw new HttpError(

@@ -10,7 +10,9 @@ Schedule edits are a **history**, like a document: undo steps back one change, r
 
 A **save point** bookmarks the timetable exactly as it is now — every kick-off time and court. Made a mess experimenting? **Restore** rewinds the schedule to the bookmark by undoing each change since, one by one.
 
-Match results are never touched by either: if rewinding would erase a played result, the restore stops right there and tells you. **Community keeps 2 save points per division and Pro keeps 10.**
+Match results are never touched by either. A match counts as played once anything has been recorded on it: it is under way or finished, it was awarded as a walkover, it was abandoned, or it was started and the start was taken back. If undoing, redoing or restoring would move or erase a played match, it stops right there and tells you. **Community keeps 2 save points per division and Pro keeps 10.**
+
+Clearing the schedule and shifting kick-offs work around played matches instead: they keep their slots, and the clear tells you how many it left in place.
 
 When you're already at your plan's number, saving a new one **replaces the oldest** rather than refusing. The panel names the one that went, so you're never left hunting for a bookmark that quietly disappeared — and because a save point is only a bookmark, undo still rewinds past it.
 

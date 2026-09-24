@@ -12,7 +12,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendDivisionEvent } from "@/server/engine-db";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
-import { isPlayedFixtureStatus } from "@/lib/played-fixture-statuses";
+import { playedFixtureIds } from "./fixture-results-sql";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 
 const MS_PER_MIN = 60_000;
@@ -69,11 +69,16 @@ export async function shiftDivisionSchedule(
     // scope filter requires non-null `f.court` — see report.ts).
     const rows = await tx<{
       id: string; stage_id: string; pool_id: string | null; court_id: string | null;
-      scheduled_at: string | null; schedule_locked: boolean; status: string;
+      scheduled_at: string | null; schedule_locked: boolean;
     }[]>`
       select id, stage_id, pool_id, court_id, scheduled_at::text as scheduled_at,
-             schedule_locked, status
+             schedule_locked
       from fixtures where division_id = ${divisionId}`;
+    // History's played set (`fixtureHasResultSql`), not `decided` alone: a
+    // shift that moved an in-play kick-off, or a walkover's, could then be
+    // neither undone nor redone — the results-guard refuses any history step
+    // that touches a played row.
+    const played = await playedFixtureIds(tx, divisionId);
     const { moves, skipped } = shiftSchedule(
       rows.map((f) => ({
         id: f.id,
@@ -82,10 +87,7 @@ export async function shiftDivisionSchedule(
         stageId: f.stage_id,
         poolId: f.pool_id ?? undefined,
         locked: f.schedule_locked,
-        // History's played set, not `decided` alone: a shift that moved an
-        // in-play kick-off could then be neither undone nor redone — the
-        // results-guard refuses any history step that touches a played row.
-        decided: isPlayedFixtureStatus(f.status),
+        decided: played.has(f.id),
       })),
       input.scope,
       input.delta_minutes,

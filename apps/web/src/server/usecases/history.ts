@@ -25,7 +25,7 @@ import { sql, withTenant } from "@/lib/db";
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
-import { PLAYED_FIXTURE_STATUSES, isPlayedFixtureStatus } from "@/lib/played-fixture-statuses";
+import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -55,25 +55,21 @@ async function loadLedger(tx: Tx, divisionId: string): Promise<LedgerEvent[]> {
   return rows.map((r) => ({ seq: Number(r.seq), type: r.type, payload: r.payload }));
 }
 
-// The statuses history treats as PLAYED (`@/lib/played-fixture-statuses`,
-// shared with the bulk shift). It used to be `'decided'` alone, so undoing a
-// generation, and redoing or making a pool clear, deleted an `in_play` or
-// `finalized` fixture outright, its score events cascading with it — the
-// results-guard ("never silently discard a scoresheet", engine history.ts)
-// only ever saw half the scoresheets.
-const PLAYED_STATUSES = [...PLAYED_FIXTURE_STATUSES];
-
-/** The engine's results-guard input: any undo/redo whose op touches one of
- *  these is refused whole (`UNDO_BLOCKED_HAS_RESULTS`). */
-async function playedFixtureIds(tx: Tx, divisionId: string): Promise<Set<string>> {
-  const rows = await tx<{ id: string }[]>`
-    select id from fixtures where division_id = ${divisionId} and status in ${tx(PLAYED_STATUSES)}`;
-  return new Set(rows.map((r) => r.id));
-}
+// What history treats as PLAYED is rebuild's refusal set,
+// `fixtureHasResultSql` (./fixture-results-sql.ts; review 2 of #857, I3). It
+// was `'decided'` alone, then three statuses: undoing a generation, and
+// redoing or making a pool clear, deleted an in-play, a finalized, an
+// abandoned or a walkover fixture outright, its score events cascading with
+// it — the results-guard ("never silently discard a scoresheet", engine
+// history.ts) never saw those scoresheets. `playedFixtureIds` is the guard's
+// input: any undo/redo whose op touches one is refused whole
+// (`UNDO_BLOCKED_HAS_RESULTS`).
 
 /** The same rule at the row, for every write `execute()` makes: the engine
- *  refuses first, and this still skips a row that started playing since. */
-const unplayed = (tx: Tx) => tx`status not in ${tx(PLAYED_STATUSES)}`;
+ *  refuses first, and this still skips a row that started playing since. On
+ *  the target row itself (`fixtures`, unaliased), not a re-read of it, so a
+ *  write parked on the row's lock re-checks the row it finally gets. */
+const unplayed = (tx: Tx) => tx`not ${fixtureHasResultSql(tx, "fixtures")}`;
 
 interface DivisionMeta {
   seq: number;
@@ -1152,11 +1148,12 @@ export type ClearScheduleInput = z.infer<typeof ClearScheduleInput>;
 async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableFixture[]> {
   const rows = await tx<{
     id: string; stage_id: string; pool_id: string | null; round_no: number | null;
-    court_id: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
+    court_id: string | null; scheduled_at: string | null; schedule_locked: boolean;
   }[]>`
     select id, stage_id, pool_id, round_no, court_id, scheduled_at::text as scheduled_at,
-           schedule_locked, status
+           schedule_locked
     from fixtures where division_id = ${divisionId}`;
+  const played = await playedFixtureIds(tx, divisionId);
   return rows.map((f) => ({
     id: f.id,
     stageId: f.stage_id,
@@ -1165,7 +1162,7 @@ async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableF
     court: f.court_id,
     at: f.scheduled_at,
     locked: f.schedule_locked,
-    decided: isPlayedFixtureStatus(f.status),
+    decided: played.has(f.id),
   }));
 }
 
@@ -1256,6 +1253,7 @@ export async function clearPoolEntrants(
     // The snapshot IS the read: the same row `pool_entrants_restored` puts
     // back on Undo (`snapshotFixtures` / `restoreFixtures` above).
     const rows = await snapshotFixtures(tx, { poolId });
+    const played = await playedFixtureIds(tx, divisionId);
     let result;
     try {
       result = engineRemovePool(
@@ -1267,7 +1265,7 @@ export async function clearPoolEntrants(
           court: f.court,
           at: f.at,
           locked: f.locked,
-          decided: isPlayedFixtureStatus(f.status),
+          decided: played.has(f.id),
           snapshot: f,
         })),
         poolId,

@@ -291,12 +291,12 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
     expect(await codesOf()).toEqual(generated);
   });
 
-  // The other side of the knockout-of-6 case: a verdict recorded by PLAY is not
-  // the generator's. Its score events went with the undo's delete, so the row
-  // returns unplayed — status, outcome and the config frozen at match start —
-  // while every other row comes back whole.
-  it("a walkover recorded by play is not restored: its score events went with the undo, so that row returns unplayed", async () => {
-    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(4, "league", {});
+  // The other side of the knockout-of-6 case: a verdict recorded by PLAY is a
+  // RESULT. History's played set is rebuild's (`fixtureHasResultSql`, review 2
+  // of #857, I3), so the undo that would delete it is refused and nothing is
+  // taken; it used to go, its score events cascading with it.
+  it("a walkover recorded by play is a result: undoing its generation is refused, and every row and score event stands", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
     await startDivision(auth, divisionId);
     const [played] = await sql<{ id: string; away_entrant_id: string }[]>`
       select id, away_entrant_id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
@@ -310,16 +310,12 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
     const walkover = generated.find((r) => r.id === played!.id)!;
     expect(walkover.status).toBe("forfeited");
     expect(walkover.outcome).not.toBeNull();
+    const events = await scoreEventsIn("stage_id", mainId);
 
-    await undoThenRestore(auth, divisionId, mainId, laterId);
+    await expect(undoDivision(auth, divisionId)).rejects.toSatisfy(refusedAsPlayed);
 
-    expect(await wholeRows("stage_id", mainId)).toEqual(
-      generated.map((r) =>
-        r.id === played!.id
-          ? { ...r, status: "scheduled", outcome: null, config_snapshot: null, config_snapshot_at: null }
-          : r,
-      ),
-    );
+    expect(await wholeRows("stage_id", mainId)).toEqual(generated);
+    expect(await scoreEventsIn("stage_id", mainId)).toEqual(events);
   });
 
   // Minor 1 (review of #857). A row minted OUTSIDE the ledger can take a key
@@ -543,8 +539,9 @@ describe.skipIf(!HAS_DB)("snapshots the ledger already holds, and snapshots that
 // G1 (gap hunt, #857). History treated only `decided` as played, so undoing a
 // generation — or making or redoing a pool clear — deleted an `in_play` or
 // `finalized` fixture outright and its score events cascaded away with it. The
-// played set is now `deleteStage`'s: in_play, decided, finalized. One status per
-// case, so dropping either from the set reds its own case.
+// played set is rebuild's refusal set now (`fixtureHasResultSql`, review 2 of
+// #857, I3). One status per case, so dropping either from the set reds its own
+// case.
 type Played = "in_play" | "finalized";
 
 /** Drive a fixture to `to` through the real scoring path (the same events a
@@ -554,6 +551,29 @@ async function play(auth: AuthCtx, fixtureId: string, to: Played): Promise<void>
   if (to === "in_play") return;
   await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
   await scoreEvent(auth, fixtureId, { expected_seq: 2, type: "core.finalize", payload: {} });
+}
+
+/** Something recorded on a fixture that leaves it OUTSIDE the three played
+ *  statuses — through the real scoring path, after `startDivision`. */
+type Recorded = "forfeited" | "abandoned" | "voided start";
+const RECORDED_STATUS: Record<Recorded, string> = {
+  forfeited: "forfeited",
+  abandoned: "abandoned",
+  "voided start": "scheduled",
+};
+async function record(auth: AuthCtx, fixtureId: string, kind: Recorded): Promise<void> {
+  await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+  if (kind === "forfeited") {
+    const [f] = await sql<{ away_entrant_id: string }[]>`select away_entrant_id from fixtures where id = ${fixtureId}`;
+    await scoreEvent(auth, fixtureId, {
+      expected_seq: 1, type: "core.forfeit", payload: { by: f!.away_entrant_id, reason: "no-show" },
+    });
+  } else if (kind === "abandoned") {
+    await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "core.abandon", payload: { reason: "waterlogged" } });
+  } else {
+    const [start] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${fixtureId} and seq = 1`;
+    await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+  }
 }
 
 /** Every score event of every fixture in `column` = `id`, whole. */
@@ -674,6 +694,82 @@ describe.skipIf(!HAS_DB)("a fixture in play or finalized is never taken away by 
     for (const id of [inPlay, finalized]) {
       expect(after.find((r) => r.id === id)).toEqual(before.find((r) => r.id === id));
     }
+  });
+
+  // Review 2 of #857, I3 (owner ruling). The played set is rebuild's refusal
+  // set (`fixtureHasResultSql`): a row with anything recorded on it, whatever
+  // its status says now. Each of these passed the old three-status test —
+  // an abandoned match, a start taken back (the fold walks the status back to
+  // `scheduled`, the events stay) — and history deleted it with its events.
+  it.each(["abandoned", "voided start"] as const)(
+    "undoing a generation is refused while one of its fixtures is %s — every row and every score event survives",
+    async (kind) => {
+      const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+      await startDivision(auth, divisionId);
+      const [target] = await sql<{ id: string }[]>`
+        select id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
+      await record(auth, target!.id, kind);
+      const rows = await wholeRows("stage_id", mainId);
+      expect(rows.find((r) => r.id === target!.id)?.status).toBe(RECORDED_STATUS[kind]);
+      const events = await scoreEventsIn("stage_id", mainId);
+
+      await expect(undoDivision(auth, divisionId)).rejects.toSatisfy(refusedAsPlayed);
+
+      expect(await wholeRows("stage_id", mainId)).toEqual(rows);
+      expect(await scoreEventsIn("stage_id", mainId)).toEqual(events);
+    },
+  );
+
+  it("a pool clear is refused while one of the pool's fixtures had its start taken back — the row and its events survive", async () => {
+    const { auth, divisionId } = await seedDivision(8);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } },
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await startDivision(auth, divisionId);
+    const [pool] = await sql<{ id: string }[]>`
+      select id from pools where stage_id = ${stage!.id} order by id limit 1`;
+    const [target] = await sql<{ id: string }[]>`
+      select id from fixtures where pool_id = ${pool!.id} order by fixture_no limit 1`;
+    await record(auth, target!.id, "voided start");
+    const rows = await wholeRows("pool_id", pool!.id);
+    const events = await scoreEventsIn("pool_id", pool!.id);
+
+    await expect(clearPoolEntrants(auth, pool!.id, true)).rejects.toSatisfy(refusedAsPlayed);
+
+    expect(await wholeRows("pool_id", pool!.id)).toEqual(rows);
+    expect(await scoreEventsIn("pool_id", pool!.id)).toEqual(events);
+  });
+
+  it("a rain-delay shift and a schedule clear leave a walkover, an abandoned match and a voided start where they are — and the shift's Undo completes", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const fixtures = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no`;
+    for (let i = 0; i < fixtures.length; i++) {
+      await patchFixture(auth, fixtures[i]!.id, { scheduled_at: new Date(Date.UTC(2026, 6, 12, 9 + i)).toISOString() });
+    }
+    await startDivision(auth, divisionId);
+    const kinds = ["forfeited", "abandoned", "voided start"] as const;
+    const recorded = kinds.map((_, i) => fixtures[i]!.id);
+    for (const [i, kind] of kinds.entries()) await record(auth, recorded[i]!, kind);
+    const before = await wholeRows("stage_id", mainId);
+    const unmoved = async () => {
+      const after = await wholeRows("stage_id", mainId);
+      for (const id of recorded) expect(after.find((r) => r.id === id)).toEqual(before.find((r) => r.id === id));
+    };
+
+    const shift = await shiftDivisionSchedule(auth, {
+      division_id: divisionId, scope: { excludeLocked: true }, delta_minutes: 60,
+    });
+    expect(shift).toMatchObject({ shifted: fixtures.length - 3, skipped: { decided: 3 } });
+    await unmoved();
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("schedule_shifted");
+
+    const cleared = await clearScheduleScoped(auth, {
+      division_id: divisionId, scope: { excludeLocked: true }, confirm: true,
+    });
+    expect(cleared).toMatchObject({ cleared: fixtures.length - 3, skipped: { decided: 3 } });
+    await unmoved();
   });
 
   // The row filter behind the engine's refusal: a fixture that starts playing

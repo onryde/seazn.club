@@ -132,7 +132,7 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
   // touches an in-play, decided or finalized fixture; the shift skipped only
   // `decided`, so a rain delay moved a live or finalized kick-off and the
   // shift itself could then be neither undone nor redone. Both read ONE
-  // played set now (`@/lib/played-fixture-statuses`).
+  // played set now (`fixtureHasResultSql`, ./fixture-results-sql.ts).
   it("a rain-delay shift leaves an in-play and a finalized fixture where they are — and its Undo and Redo complete", async () => {
     const { auth } = await seedOrg();
     const { division, fixtures } = await seedDivision(auth);

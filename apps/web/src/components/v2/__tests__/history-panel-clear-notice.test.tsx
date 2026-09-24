@@ -2,8 +2,8 @@
 //
 // `clearScheduleScoped` (usecases/history.ts) never clears a match that has
 // started or finished, and answers `{ cleared, skipped: { locked, decided } }`
-// — where `decided` counts every PLAYED fixture it skipped (in play, decided,
-// finalized; `@/lib/played-fixture-statuses`). The panel threw that answer
+// — where `decided` counts every PLAYED fixture it skipped (anything with a
+// result recorded; `fixtureHasResultSql`). The panel threw that answer
 // away, so an organiser who cleared a board mid-event saw live matches keep
 // their slots with nothing to say why, under a danger-zone sentence that named
 // only locked and decided ones. The notice only exists AFTER a click, so this
