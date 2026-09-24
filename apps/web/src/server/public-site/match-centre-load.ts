@@ -23,11 +23,12 @@ import { disambiguatedShorts } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { resolvePersonDisplayName, anyOptedOut } from "@/lib/name-display";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
-import { getDictionary, toLocale } from "@/lib/i18n";
+import { getDictionary, t, toLocale } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { readPublicLineups } from "./public-lineups";
 import { buildMatchCentre, type MatchCentreInput } from "./match-centre";
+import { effectiveRulesLine } from "./describe-rules";
 import type { MatchCentreDocT, SideT } from "./match-centre-schema";
 import type { PublicFixture } from "./data";
 
@@ -40,6 +41,12 @@ export interface MatchCentreLoadDivision {
    *  dictionary's word for an engine-declared variant, in the org's locale,
    *  the stored catalog name only for a variant the map lacks. The history
    *  below predates that.
+   *
+   *  2026-09-24: this is the PRESET name, and `loadMatchCentre` uses it only
+   *  when the fixture plays the division's own rules. A fixture whose stage
+   *  overrides them (or whose frozen snapshot differs) is labelled with its
+   *  effective rules instead (`describe-rules.ts`), decided in the loader so
+   *  the page and the poll cannot disagree.
    *
    *  The division's own variant/format key, printed verbatim as the Info
    *  tab's "format" row (fix round 1 ruling — `match-centre.ts`'s own doc
@@ -321,6 +328,23 @@ export async function loadMatchCentre(
   const parsedCfg = sportModule.configSchema.safeParse(rawCfg);
   const cfg = parsedCfg.success ? parsedCfg.data : rawCfg;
 
+  // Per-stage match rules (brief 2026-09-24): the division's preset name is the
+  // wrong label for a fixture whose STAGE overrides the format — prod printed
+  // "Short (11 points)" over a Best-of-1 to 15. Decided HERE, from the same
+  // `rawCfg` the fixture is scored against, because both loaders (the page's
+  // `getPublicFixture` and the poll's `publicFixture`) flow through this one
+  // function; deciding it in either caller would let the two disagree on every
+  // poll. When the effective rules match the division's, the caller's preset
+  // name stands unchanged. The line is resolved in the ORG's locale
+  // (`ctx.locale`), exactly as the preset name it replaces is — through the
+  // PUBLIC dictionary, where the describer's keys live so the hub can resolve
+  // the same `Msg` client-side.
+  const rulesLine = effectiveRulesLine(ctx.division.sportKey, sportModule, rawCfg, divisionRow?.config);
+  const formatLabel =
+    rulesLine === null
+      ? ctx.division.formatLabel
+      : t(await getDictionary(toLocale(ctx.locale), "public"), rulesLine.key, rulesLine.params);
+
   const lineups = await readPublicLineups(sql, fixture.id, {
     youth: ctx.division.youth,
     player_name_display: ctx.division.playerNameDisplay,
@@ -407,7 +431,7 @@ export async function loadMatchCentre(
     hrefs: ctx.hrefs,
     stage: ctx.stage,
     moduleVersion: ctx.division.moduleVersion,
-    formatLabel: ctx.division.formatLabel,
+    formatLabel,
   };
   return buildMatchCentre(input);
 }
