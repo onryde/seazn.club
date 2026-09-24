@@ -40,6 +40,9 @@ import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
 import type { MessageKey } from "@/lib/messages";
+import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import type { ReactNode } from "react";
 
 export default async function ScorePadPage({
   params,
@@ -182,6 +185,21 @@ export default async function ScorePadPage({
   const tz = await venueTzForDivision(fixture.division_id);
   const scheduledLabel = fixtureTimeLabel(fixture.scheduled_at, tz, intlLocaleFor(locale));
   const ref = matchRef(fixture.round_no, fixture.seq_in_round, t);
+  // Both screens below are CLIENT islands, and their copy (Confirm, Waiting,
+  // View-only, the pad) reads through `useMsg`, which outside a provider falls
+  // back to English — so a French phone got French server lines around English
+  // screens. English needs no provider: that fallback IS the English catalog
+  // the bundle already carries, and wrapping it would ship ui.json again in
+  // every scan's payload.
+  const ui = locale === DEFAULT_LOCALE ? null : await getDictionary(locale, "ui");
+  const inLocale = (node: ReactNode) =>
+    ui ? (
+      <DictProvider dict={ui} locale={locale}>
+        {node}
+      </DictProvider>
+    ) : (
+      node
+    );
   if (screen.screen === "waiting") {
     // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
     // until both sides exist, when it renders the pad fresh — the Waiting →
@@ -192,11 +210,13 @@ export default async function ScorePadPage({
     return (
       <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
         <div className="mx-auto max-w-2xl">
-          <ScanWaiting
-            home={home ? entrantDisplayName(home) : resolveSlotLabel(fixture.home_slot_label, t, "schedule.tbd")}
-            away={away ? entrantDisplayName(away) : resolveSlotLabel(fixture.away_slot_label, t, "schedule.tbd")}
-            meta={meta}
-          />
+          {inLocale(
+            <ScanWaiting
+              home={home ? entrantDisplayName(home) : resolveSlotLabel(fixture.home_slot_label, t, "schedule.tbd")}
+              away={away ? entrantDisplayName(away) : resolveSlotLabel(fixture.away_slot_label, t, "schedule.tbd")}
+              meta={meta}
+            />,
+          )}
         </div>
       </main>
     );
@@ -222,6 +242,7 @@ export default async function ScorePadPage({
   return (
     <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
       <div className="mx-auto max-w-2xl">
+        {inLocale(
         <DeviceScorePad
         token={token}
         logo={chrome.logo}
@@ -266,7 +287,8 @@ export default async function ScorePadPage({
         }))}
         scorePadV2={scorePadV2}
         initialViewOnly={screen.screen === "view_only" ? screen.reason : null}
-        />
+        />,
+        )}
       </div>
     </main>
   );

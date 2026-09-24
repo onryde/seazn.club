@@ -21,6 +21,7 @@ import { seedCourts, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { decide, deviceFor, fixturesOf, seedStage } from "@/server/usecases/__tests__/_sheets-rig";
 import { DeviceScorePad } from "@/components/v2/device-score-pad";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import fr from "@/dictionaries/fr/ui.json";
 import ScorePadPage from "../page";
 
@@ -256,5 +257,52 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
   it("an unknown token → the 'not valid' screen", async () => {
     const text = JSON.stringify(await ScorePadPage({ params: Promise.resolve({ token: "dl_nope" }) }));
     expect(text).toContain("This scoring link is not valid.");
+  });
+
+  // Found by the scan walkthrough (Task 6): the page's CLIENT screens — the
+  // Confirm card, View-only, Waiting, the pad itself — read their copy through
+  // `useMsg`, which outside a <DictProvider> falls back to English. The page
+  // mounted none, so a French phone got French server lines around English
+  // screens. The viewer's dictionary must reach both client islands.
+  it("a French viewer's client screens get the French dictionary — the pad and Waiting", async () => {
+    locale.value = "fr";
+    try {
+      const { auth, fixtureId } = await seedScorableFixture();
+      const { secret } = await ensureDeviceLink(auth, fixtureId);
+      const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+      const provider = find(tree, DictProvider);
+      expect(provider, "the pad's screens need the viewer's dictionary").not.toBeNull();
+      const { dict, locale: given, children } = provider!.props as {
+        dict: Record<string, string>;
+        locale: string;
+        children: ReactNode;
+      };
+      expect(given).toBe("fr");
+      expect(dict["device.scan.confirmTitle"]).toBe(fr["device.scan.confirmTitle"]);
+      expect(dict["device.scan.viewOnly.cancelled"]).toBe(fr["device.scan.viewOnly.cancelled"]);
+      expect(find(children, DeviceScorePad), "the pad renders INSIDE the provider").not.toBeNull();
+
+      const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+      const final = (await fixturesOf(stage.id)).find((f) => f.round_no === 2)!;
+      const waitingLink = await ensureDeviceLink(auth, final.id);
+      const waitingTree = await ScorePadPage({ params: Promise.resolve({ token: waitingLink.secret }) });
+      const waitingProvider = find(waitingTree, DictProvider);
+      expect(waitingProvider).not.toBeNull();
+      expect((waitingProvider!.props as { locale: string }).locale).toBe("fr");
+      expect(
+        find((waitingProvider!.props as { children: ReactNode }).children, ScanWaiting),
+        "Waiting renders inside it too",
+      ).not.toBeNull();
+    } finally {
+      locale.value = "en";
+    }
+  });
+
+  it("an English viewer gets no provider: the English catalog already ships in the bundle", async () => {
+    const { auth, fixtureId } = await seedScorableFixture();
+    const { secret } = await ensureDeviceLink(auth, fixtureId);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    expect(find(tree, DeviceScorePad), "precondition: the pad renders").not.toBeNull();
+    expect(find(tree, DictProvider), "no second copy of ui.json in every English scan's payload").toBeNull();
   });
 });
