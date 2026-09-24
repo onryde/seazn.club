@@ -1580,6 +1580,12 @@ export const CreatedDeviceLink = DeviceLink.extend({
   secret: z.string(),
 });
 
+/** POST /competitions/{id}/exports/scorer-sheets (scorer sheets §4.4). */
+export const ScorerSheetsRequest = z.object({
+  /** The day to print, `YYYY-MM-DD` on the organisation's clock. */
+  date: z.iso.date(),
+});
+
 // ---------------------------------------------------------------------------
 // Generate (fixtures) response
 // ---------------------------------------------------------------------------
