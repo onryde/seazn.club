@@ -2499,7 +2499,7 @@
   "device.courtsideFooter": "Panel {scorer} junto a la cancha",
   "device.undoMine": "Anular mi última entrada",
   "device.resultRecorded": "Resultado registrado — el organizador lo finaliza. ¿Detectas un error en tus propias entradas? Usa «Anular mi última».",
-  "device.scan.viewOnly.carried": "Partido terminado — el resultado ya ha hecho avanzar la competición. Pide al organizador que lo corrija.",
+  "device.scan.viewOnly.carried": "Partido terminado — el resultado ya cuenta para el siguiente partido. Pide al organizador que lo corrija.",
   "device.scan.viewOnly.finalized": "Partido terminado — resultado cerrado. Pide al organizador que lo corrija.",
   "device.scan.viewOnly.cancelled": "Este partido se ha cancelado.",
   "device.scan.viewOnly.noOpponent": "Aquí no hay partido que puntuar — un lado no tiene rival.",

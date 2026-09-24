@@ -98,3 +98,29 @@ describe("fixtureTimeLabel", () => {
     expect(fixtureTimeLabel(null, "UTC", "en-GB")).toBeNull();
   });
 });
+
+// OWNER RULING 2026-09-24 (copy): "carried forward" is organiser jargon; the
+// umpire reads where the result went. The ruling IS the source, so the English
+// is pinned verbatim here; the other locales are translations of it and must
+// not fall back to the old wording's jargon.
+describe("the carried-forward View-only copy (owner ruling 2026-09-24)", () => {
+  const load = (locale: string) =>
+    JSON.parse(readFileSync(resolve(import.meta.dirname, `../../dictionaries/${locale}/ui.json`), "utf8")) as Record<
+      string,
+      string
+    >;
+  it("English says where the result went, in the owner's words", () => {
+    expect(load("en")["device.scan.viewOnly.carried"]).toBe(
+      "Match over — the result has already moved to the next match. Ask the organiser to correct it.",
+    );
+  });
+  it.each(["fr", "es", "nl"])("%s names the next match, never the old 'carried forward' wording", (locale) => {
+    const text = load(locale)["device.scan.viewOnly.carried"]!;
+    expect(text).not.toBe(load("en")["device.scan.viewOnly.carried"]);
+    expect(text.toLowerCase(), "no English jargon left behind").not.toContain("carried");
+    const nextMatch = ({ fr: "match suivant", es: "siguiente partido", nl: "volgende wedstrijd" } as Record<string, string>)[
+      locale
+    ]!;
+    expect(text, "the translation names the next match").toContain(nextMatch);
+  });
+});

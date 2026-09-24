@@ -2544,7 +2544,7 @@
   "device.courtsideFooter": "Courtside {scorer} pad",
   "device.undoMine": "Void my last entry",
   "device.resultRecorded": "Result recorded — the organiser finalizes it. Spot a mistake in your own entries? Use “Void my last”.",
-  "device.scan.viewOnly.carried": "Match over — result carried forward. Ask the organiser to correct it.",
+  "device.scan.viewOnly.carried": "Match over — the result has already moved to the next match. Ask the organiser to correct it.",
   "device.scan.viewOnly.finalized": "Match over — result finalised. Ask the organiser to correct it.",
   "device.scan.viewOnly.cancelled": "This match was cancelled.",
   "device.scan.viewOnly.noOpponent": "There is no match to score here — one side has no opponent.",

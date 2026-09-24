@@ -2499,7 +2499,7 @@
   "device.courtsideFooter": "Courtside {scorer} pad",
   "device.undoMine": "Mijn laatste invoer vernietigen",
   "device.resultRecorded": "Resultaat vastgelegd — de organisator maakt het definitief. Fout in je eigen invoer opgemerkt? Gebruik “Mijn laatste vernietigen”.",
-  "device.scan.viewOnly.carried": "Wedstrijd voorbij — uitslag doorgezet. Vraag de organisator om het te corrigeren.",
+  "device.scan.viewOnly.carried": "Wedstrijd voorbij — de uitslag is al doorgeschoven naar de volgende wedstrijd. Vraag de organisator om het te corrigeren.",
   "device.scan.viewOnly.finalized": "Wedstrijd voorbij — uitslag definitief. Vraag de organisator om het te corrigeren.",
   "device.scan.viewOnly.cancelled": "Deze wedstrijd is geannuleerd.",
   "device.scan.viewOnly.noOpponent": "Hier valt geen wedstrijd te scoren — één kant heeft geen tegenstander.",

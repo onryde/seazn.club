@@ -2544,7 +2544,7 @@
   "device.courtsideFooter": "Tablette {scorer} bord de terrain",
   "device.undoMine": "Annuler ma dernière entrée",
   "device.resultRecorded": "Résultat enregistré — l'organisateur le finalise. Vous repérez une erreur dans vos propres saisies ? Utilisez « Annuler ma dernière ».",
-  "device.scan.viewOnly.carried": "Match terminé — résultat déjà pris en compte pour la suite. Demandez à l'organisateur de le corriger.",
+  "device.scan.viewOnly.carried": "Match terminé — le résultat a déjà été pris en compte pour le match suivant. Demandez à l'organisateur de le corriger.",
   "device.scan.viewOnly.finalized": "Match terminé — résultat validé. Demandez à l'organisateur de le corriger.",
   "device.scan.viewOnly.cancelled": "Ce match a été annulé.",
   "device.scan.viewOnly.noOpponent": "Il n'y a pas de match à noter ici — un côté n'a pas d'adversaire.",
