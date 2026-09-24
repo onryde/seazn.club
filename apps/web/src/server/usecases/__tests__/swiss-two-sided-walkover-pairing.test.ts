@@ -23,6 +23,10 @@
 //      colours show that a forfeited game assigns no colour (the engine's own
 //      rule: tiebreakers.ts colour history skips byes/forfeits, boardgame
 //      DOMAIN.md "A forfeited game is excluded from colour history").
+//
+// The walkover winner is also ineligible for a LATER pairing-allocated bye
+// (FIDE C.04.1(d), owner-approved 2026-09-24): eligibility only — no bye
+// score, and the walkover stays a played match. See the last describe.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -72,8 +76,9 @@ interface Rig {
   name: (id: string | null) => string;
 }
 
-/** Six individuals seeded S1..S6 in a 3-round swiss, started, round 1 paired. */
-async function pairedRoundOne(config: Record<string, unknown>): Promise<Rig> {
+/** `count` individuals seeded S1..S<count> in a 3-round swiss, started,
+ *  round 1 paired. */
+async function pairedRoundOne(config: Record<string, unknown>, count = 6): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -91,7 +96,7 @@ async function pairedRoundOne(config: Record<string, unknown>): Promise<Rig> {
   const entrants = await createEntrants(
     auth,
     division.id,
-    Array.from({ length: 6 }, (_, i) => ({
+    Array.from({ length: count }, (_, i) => ({
       kind: "individual" as const,
       display_name: `S${i + 1}`,
       seed: i + 1,
@@ -135,6 +140,19 @@ async function homeWins(auth: AuthCtx, fixtureId: string): Promise<void> {
       expected_seq: seq,
       type: "badminton.game.summary",
       payload: { home: 21, away: 10 },
+    });
+  }
+}
+
+/** The quick result, won by `winner` whichever side it sits on. */
+async function wins(auth: AuthCtx, f: FixtureRow, winner: string): Promise<void> {
+  const home = f.home_entrant_id === winner;
+  await scoreEvent(auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+  for (const seq of [1, 2]) {
+    await scoreEvent(auth, f.id, {
+      expected_seq: seq,
+      type: "badminton.game.summary",
+      payload: home ? { home: 21, away: 10 } : { home: 10, away: 21 },
     });
   }
 }
@@ -231,5 +249,40 @@ describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a played mat
     //             the upper board S6 would take it (S6 v S4).
     //   S5 v S3 — S5 (Black in R1) takes White; S3 has no colour either.
     expect(shape(rig, r2)).toEqual(["S2 v S1", "S4 v S6", "S5 v S3"]);
+  });
+});
+
+// FIDE C.04.1(d), owner-approved 2026-09-24: "A player who has already
+// received a pairing-allocated bye, or has already scored a (forfeit) win due
+// to an opponent not appearing in time, shall not receive the pairing-allocated
+// bye." The two-sided award's winner joins the bye-ELIGIBILITY set only.
+describe.runIf(HAS_DB)("swiss Pair next — a walkover winner is not eligible for a later bye", () => {
+  it("5 players, fold: the round-3 bye skips S4 (won by walkover) and goes to S2; S4 scores nothing extra", async () => {
+    const rig = await pairedRoundOne({}, 5);
+    const [S1, S2, S4] = ["S1", "S2", "S4"].map(rig.id) as [string, string, string];
+
+    // Round 1 (fold): S1 v S3, S2 v S4, S5 bye. S2 no-shows: S4 wins by walkover.
+    const r1 = (await fixturesOf(rig.stageId)).filter((f) => f.round_no === 1);
+    expect(shape(rig, r1)).toEqual(["S1 v S3", "S2 v S4", "S5 v -"]);
+    await forfeitBy(rig.auth, boardOf(r1, 1, S4).id, S2);
+    await wins(rig.auth, boardOf(r1, 1, S1), S1);
+
+    // Round 2: S3 (bottom, never byed) sits out; S5 floats onto S2.
+    const r2 = await pairRoundTwo(rig);
+    expect(shape(rig, r2)).toEqual(["S1 v S4", "S5 v S2", "S3 v -"]);
+    await wins(rig.auth, boardOf(r2, 2, S1), S1);
+    await wins(rig.auth, boardOf(r2, 2, S2), S2);
+
+    // Round 3 order: S1 2 | S2, S3, S4, S5 on 1 (seed order). Bottom-up, S5
+    // and S3 have had a bye, so the pick reaches S4 — whose only point is the
+    // walkover, so FIDE skips S4 and the bye goes to S2. (Without the rule:
+    // S4 bye, S1 v S2, S3 v S5.) S4 stays on 1, not 2: S1 cannot meet S4
+    // again, so a phantom bye point on S4 would reshape this round.
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const r3 = (await fixturesOf(rig.stageId)).filter((f) => f.round_no === 3);
+    const bye = r3.find((f) => f.away_entrant_id === null)!;
+    expect(rig.name(bye.home_entrant_id), "the walkover winner is not the bye").not.toBe("S4");
+    expect(bye).toMatchObject({ home_entrant_id: S2, status: "forfeited", outcome: { kind: "award", winner: S2 } });
+    expect(shape(rig, r3)).toEqual(["S1 v S5", "S3 v S4", "S2 v -"]);
   });
 });

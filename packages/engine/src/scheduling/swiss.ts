@@ -26,7 +26,7 @@ export interface SwissStanding {
 export interface SwissHistory {
   played: ReadonlySet<string>; // pairKey(a,b) of every fixture already contested — no rematch (hard)
   colours?: ReadonlyMap<EntrantId, readonly Colour[]>; // colour sequence per entrant (chess)
-  byes?: ReadonlySet<EntrantId>; // entrants who already had a bye
+  byes?: ReadonlySet<EntrantId>; // entrants NOT eligible for the bye: already had one, or (FIDE C.04.1(d)) won a walkover. Read only by the bye pick.
   floats?: ReadonlyMap<EntrantId, number>; // downfloat count (avoid repeat floats — soft)
 }
 
