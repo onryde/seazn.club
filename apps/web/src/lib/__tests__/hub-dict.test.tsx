@@ -52,6 +52,11 @@ const doc = hubDoc({
     division("premier", {
       description: "<p>Prose</p>",
       suspensions: [suspension("Arjun Mehta", 2, { entrantName: "Riverside FC" }), suspension("Dev P.", 1)],
+      // A stage on its own rules (per-stage rules, T7): the Info tab resolves
+      // its `format.` line client-side, so the slice must carry it.
+      stageFormatLines: [
+        { stageName: "Swiss", line: { key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } } },
+      ],
     }),
     division("sunday-league"),
   ],

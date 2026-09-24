@@ -482,6 +482,7 @@
   "teams.squadEmpty": "No squad listed yet",
   "info.divisions": "Divisions",
   "info.suspensions": "Suspensions",
+  "info.stageFormats": "Format by stage",
   "info.toServe.one": "{count} to serve",
   "info.toServe.other": "{count} to serve",
   "division.tab.schedule": "Schedule",

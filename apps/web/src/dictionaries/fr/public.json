@@ -482,6 +482,7 @@
   "teams.squadEmpty": "Aucun effectif indiqué pour l'instant",
   "info.divisions": "Divisions",
   "info.suspensions": "Suspensions",
+  "info.stageFormats": "Format par phase",
   "info.toServe.one": "{count} match à purger",
   "info.toServe.other": "{count} matchs à purger",
   "division.tab.schedule": "Calendrier",

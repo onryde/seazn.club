@@ -2504,6 +2504,7 @@ export type DictionaryKey =
   | "info.registration.closed"
   | "info.registration.open"
   | "info.share"
+  | "info.stageFormats"
   | "info.suspensions"
   | "info.title"
   | "info.toServe.one"

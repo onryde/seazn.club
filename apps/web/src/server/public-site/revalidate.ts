@@ -46,13 +46,13 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
  *     entries at every competition URL, allowed or refused, including a
  *     competition they are not rostered in (`public_players_v` is org-scoped);
  *   - the division tag of every division they are rostered in, deduped,
- *     EXPIRED: the entries that mask their name for others (`pub-div-v3`,
- *     `pub-fixture-v3`, `pub-hub-v4`, and other players' cards through
+ *     EXPIRED: the entries that mask their name for others (`pub-div-v4`,
+ *     `pub-fixture-v3`, `pub-hub-v5`, and other players' cards through
  *     `pub-player-v17`), and the pages built on them. It used to be 'max',
  *     which serves the PREVIOUS render while the rebuild runs (measured after
  *     a consent OFF: 2.8–4.3s, 2–3 loads, in a local prod build at load 16–40).
  *     Final review I2 closed that: the hub's Redis document is dropped below
- *     and rebuilt through `pub-div-v3`, so a stale entry baked the old names
+ *     and rebuilt through `pub-div-v4`, so a stale entry baked the old names
  *     back into the hub for its 15s TTL;
  *   - the competition tag of each, deduped, still 'max' (as a score write
  *     fires it): no name is baked only under the competition tag, and an
@@ -190,15 +190,15 @@ export function dropNamedPublicDocuments(
 /** A SCORE write — `invalidatePublicCache` (usecases/scoring.ts) — and a
  *  division NAME-POLICY change (`patchDivision`, final review I2), which needs
  *  exactly the same two tags: a route rebuilding a dropped Redis document must
- *  not read a stale `pub-div-v3` and bake the old names back in. The division tag EXPIRES (`{ expire: 0 }`, not 'max') for the reason
+ *  not read a stale `pub-div-v4` and bake the old names back in. The division tag EXPIRES (`{ expire: 0 }`, not 'max') for the reason
  *  `fireOrgRevalidate` below gives: 'max' keeps serving the previous render
  *  while the rebuild runs (same SWR mechanism; measured once, for the
  *  consent-OFF pages — a few seconds and several loads, see
  *  `firePersonRevalidate` — never for a score write), and the reads that follow a score are
  *  read-your-own-writes (the smoke hub champion check reads a single time; a
  *  realtime push triggers one refresh). Every spectator
- *  entry a score changes carries the division tag: `pub-div-v3`,
- *  `pub-fixture-v3` and `pub-hub-v4` carry their own division's, and the
+ *  entry a score changes carries the division tag: `pub-div-v4`,
+ *  `pub-fixture-v3` and `pub-hub-v5` carry their own division's, and the
  *  player card's `pub-player-v17` carries every division of its competition,
  *  because its match lines can come from any of them (final review I1). An
  *  expired tag beats a stale one on an entry carrying both. The competition

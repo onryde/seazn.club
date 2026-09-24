@@ -482,6 +482,7 @@
   "teams.squadEmpty": "Aún no hay plantilla registrada",
   "info.divisions": "Divisiones",
   "info.suspensions": "Sanciones",
+  "info.stageFormats": "Formato por fase",
   "info.toServe.one": "{count} partido por cumplir",
   "info.toServe.other": "{count} partidos por cumplir",
   "division.tab.schedule": "Calendario",

@@ -36,6 +36,9 @@ import type { Dict } from "@/lib/i18n-constants";
  * `division.` is here because the Teams tab reuses `division.entrantsEmpty`
  * rather than owning a duplicate `teams.empty` — the same sentence about the
  * same thing, translated once.
+ *
+ * `format.` is the Info tab's per-stage rules lines (`HubDivision.
+ * stageFormatLines`), built server-side as `Msg`s and resolved here.
  */
 export const HUB_DICT_PREFIXES = [
   "landing.",
@@ -46,6 +49,7 @@ export const HUB_DICT_PREFIXES = [
   "teams.",
   "info.",
   "division.",
+  "format.",
 ] as const;
 
 /**

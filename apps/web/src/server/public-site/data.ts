@@ -407,6 +407,15 @@ export interface PublicStage {
    *  (`config.rank_overrides`). NOT the same as a row's `rankLocked`, which
    *  the engine also sets on every tie it settles by lots. */
   has_rank_overrides: boolean;
+  /** Per-stage match rules (design 2026-09-17 §D3/T7): the stage's own
+   *  `config.rules` FRAGMENT — `{bestOf: 1, setTo: 15}`, never a materialised
+   *  config; null/absent means the stage plays the division's format. Read off
+   *  `stages` by the VIEW row's id (the view keeps the rest of `config`
+   *  private), and ONLY this key, so progression and cross-feeds stay
+   *  unpublished. The hub's `stageFormatLines` and the division page's stage
+   *  chips describe it through `stage-format-lines.ts`. Optional so a
+   *  hand-built `PublicStage` in an existing test still type-checks. */
+  rules?: unknown;
 }
 
 export interface PublicStandings {
@@ -916,7 +925,12 @@ export async function getPublicDivision(
       const stages = await sql<PublicStage[]>`
         select id, division_id, seq, kind, name, status,
                qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-               has_rank_overrides
+               has_rank_overrides,
+               -- Per-stage match rules (design 2026-09-17 T7): the rules
+               -- FRAGMENT only, read off stages by the VIEW row's own id so the
+               -- view still decides which rows exist and the rest of config
+               -- (progression, cross-feeds) stays private.
+               (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
         from public_stages_v where division_id = ${division.id} order by seq`;
       const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
         select p.id, p.stage_id, p.key, p.name
@@ -976,7 +990,10 @@ export async function getPublicDivision(
     // masks now carries no `person_id` and no `photo` (maskPublicEntrantNames).
     // v3 (V414): every stage carries the qualification columns; a v2 entry
     // would hand the standings builder `undefined` for all six.
-    ["pub-div-v3", division.id],
+    // v4 (per-stage format lines, 2026-09-24): every stage carries `rules`; a
+    // v3 entry would read as "no stage overrides" and hide every stage line on
+    // the hub and the division page until it expired.
+    ["pub-div-v4", division.id],
     {
       tags: [divisionTag(division.id), competitionTag(division.competition_id)],
       revalidate: REVALIDATE_FAST,

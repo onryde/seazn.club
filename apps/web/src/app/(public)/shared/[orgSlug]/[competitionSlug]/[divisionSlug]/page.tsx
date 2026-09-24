@@ -35,6 +35,7 @@ import { divisionQualification } from "@/server/public-site/division-qualificati
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { variantLabel } from "@/server/public-site/variant-label";
+import { stageFormatLines } from "@/server/public-site/stage-format-lines";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
 
@@ -135,6 +136,17 @@ export default async function DivisionHomePage({ params }: Props) {
   // Accept-Language — a per-visitor choice would need a request-scoped read and
   // would make every cached copy wrong for somebody.
   const dict = await getDictionary(orgLocale, "public");
+  // Per-stage match rules (T7): a stage whose effective rules differ from the
+  // division's names them on its chip, in the org's words — the same line the
+  // hub's Info tab prints and the match page labels its fixtures with. A stage
+  // that plays the division's format gets nothing, so a division without
+  // overrides reads exactly as before.
+  const stageFormat = new Map(
+    stageFormatLines(division.sport_key, module_, division.config, stages).map((s) => [
+      s.stageId,
+      t(dict, s.line.key, s.line.params),
+    ]),
+  );
   // Standings qualification status (spec 2026-09-22 §4.2): the same assembly
   // the embed and the competition hub use — bounds and the walkover's ledger
   // from the PINNED module and live cfg (a retired module gives no bounds, so
@@ -478,6 +490,7 @@ export default async function DivisionHomePage({ params }: Props) {
           {stages.map((s) => (
             <span
               key={s.id}
+              data-stage-id={s.id}
               className={`rounded-full px-2 py-0.5 ${
                 s.status === "complete"
                   ? "bg-emerald-50 text-emerald-700"
@@ -485,6 +498,9 @@ export default async function DivisionHomePage({ params }: Props) {
               }`}
             >
               {stageById.get(s.id)?.name}
+              {stageFormat.has(s.id) ? (
+                <span data-testid="division-stage-format"> · {stageFormat.get(s.id)}</span>
+              ) : null}
               {s.status === "complete" ? " ✓" : ""}
             </span>
           ))}

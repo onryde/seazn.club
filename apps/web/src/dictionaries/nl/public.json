@@ -482,6 +482,7 @@
   "teams.squadEmpty": "Nog geen selectie vermeld",
   "info.divisions": "Divisies",
   "info.suspensions": "Schorsingen",
+  "info.stageFormats": "Formaat per fase",
   "info.toServe.one": "nog {count} wedstrijd",
   "info.toServe.other": "nog {count} wedstrijden",
   "division.tab.schedule": "Programma",

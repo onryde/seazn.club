@@ -59,6 +59,7 @@ import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import { deriveHubTabs } from "@/lib/matches-hub";
 import type { CompetitionHubDocT, HubDivisionT, TeamCardT } from "@/server/public-site/competition-hub-schema";
 import { InfoTab, calendarSlug, competitionDateLine } from "../matches-hub/info-tab";
@@ -2121,6 +2122,79 @@ describe("InfoTab — divisions: prose, calendar and suspensions (division-page 
     for (const english of [">Divisions<", ">Suspensions<", "to serve", "Add to calendar"]) {
       expect(h).not.toContain(english);
     }
+  });
+});
+
+describe("InfoTab — a stage that plays different rules names them (per-stage rules, T7)", () => {
+  const render = (d: CompetitionHubDocT, dd: Dict = dict) =>
+    renderToStaticMarkup(<InfoTab doc={d} dict={dd} locale="en" />);
+  const boxes = (h: string) => [...h.matchAll(/<article data-testid="mh-info-division-([a-z0-9-]+)"/g)].map((x) => x[1]);
+  // The prod shape: a Swiss stage at 1 game to 15 (cap 21) over a division
+  // that plays best of 3. The builder omits the field unless a stage differs.
+  const swiss = {
+    stageName: "Swiss",
+    line: { key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } },
+  };
+  const knockout = { stageName: "Knockout", line: { key: "format.rules.bestOfPoints", params: { n: 5, points: 11 } } };
+  const doc = hubDoc({
+    divisions: [division("premier", { stageFormatLines: [swiss, knockout] }), division("vets")],
+    info: info({ calendars: [] }),
+  });
+
+  it("EMPTY FIRST: absent or empty lines → no box, no heading — a division with nothing else says nothing", () => {
+    const absent = hubDoc({ divisions: [division("premier")], info: info({ calendars: [] }) });
+    delete (absent.divisions[0] as Partial<HubDivisionT>).stageFormatLines;
+    const empty = hubDoc({ divisions: [division("premier", { stageFormatLines: [] })], info: info({ calendars: [] }) });
+    for (const h of [render(absent), render(empty)]) {
+      expect(h).not.toContain(`data-testid="mh-info-divisions"`);
+      expect(h).not.toContain("mh-info-formats-");
+      expect(h).not.toContain(">Format by stage<");
+    }
+  });
+
+  it("stage lines ALONE earn a division its box, and only that division's", () => {
+    expect(boxes(render(doc))).toEqual(["premier"]);
+  });
+
+  it("one row per stage, in document order: the stage's name, then its rules resolved from the dictionary", () => {
+    const h = render(doc);
+    const at = h.indexOf(`data-testid="mh-info-formats-premier"`);
+    expect(at).toBeGreaterThan(-1);
+    const section = h.slice(at, h.indexOf("</article>", at));
+    expect(section).toMatch(/<h4 [^>]*>Format by stage<\/h4>/);
+    const rows = [...section.matchAll(/data-testid="(mh-info-format-premier-\d+)"/g)].map((x) => x[1]!);
+    expect(rows).toEqual(["mh-info-format-premier-0", "mh-info-format-premier-1"]);
+    const expected = [
+      ["Swiss", t(dict, "format.rules.oneGamePointsCap", { points: 15, cap: 21 })],
+      ["Knockout", t(dict, "format.rules.bestOfPoints", { n: 5, points: 11 })],
+    ];
+    // A `<dl>` row is a `<div>`, not an `<li>` — read to its own close.
+    const formatRow = (id: string) => {
+      const at = h.indexOf(`data-testid="${id}"`);
+      return h.slice(at, h.indexOf("</div>", at));
+    };
+    rows.forEach((id, i) => {
+      const row = formatRow(id);
+      expect(row).toMatch(new RegExp(`<dt [^>]*>${expected[i]![0]}</dt>`));
+      expect(row).toContain(`>${expected[i]![1]}</dd>`);
+    });
+    // The resolved sentence, never the key.
+    expect(section).not.toContain("format.rules.");
+    // A long stage name or line wraps inside the box rather than widening the
+    // page at 320: every row and both cells may shrink.
+    for (const id of rows) {
+      expect(tagOf(h, id).match(/class="([^"]*)"/)?.[1]?.split(" ")).toEqual(
+        expect.arrayContaining(["min-w-0", "flex-wrap"]),
+      );
+    }
+  });
+
+  it("in the dictionary's language — Spanish heading and Spanish rules", () => {
+    const h = render(doc, es as Dict);
+    expect(h).toContain(">Formato por fase<");
+    expect(h).toContain(`>${t(es as Dict, "format.rules.oneGamePointsCap", { points: 15, cap: 21 })}</dd>`);
+    expect(h).not.toContain("Format by stage");
+    expect(h).not.toContain("1 game");
   });
 });
 
