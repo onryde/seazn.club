@@ -1141,7 +1141,9 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
       expect(doc.divisions[0]!.stageFormatLines).toEqual([
         {
           stageName: "Swiss",
-          line: { key: "format.rules.oneGamePointsCap", params: { points: SWISS_RULES.setTo, cap: SWISS_RULES.cap } },
+          line: [
+            { key: "format.rules.oneGamePointsCap", params: { points: SWISS_RULES.setTo, cap: SWISS_RULES.cap } },
+          ],
         },
       ]);
       // The division's own sentence is unchanged — it is the default.
@@ -1153,6 +1155,27 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
       const leagueBo5: PublicStage = { ...league, rules: { bestOf: 5 } };
       const doc = await load([leagueBo5, swiss]);
       expect(doc.divisions[0]!.stageFormatLines?.map((l) => l.stageName)).toEqual(["Swiss", "League"]);
+    });
+
+    it("a stage whose rule keys differ gets a line even where the words are vague (winBy alone) — never the preset (review round 2)", async () => {
+      const winByOnly: PublicStage = { ...league, rules: { winBy: (SHORT.winBy as number) - 1 } };
+      const doc = await load([winByOnly]);
+      expect(doc.divisions[0]!.stageFormatLines).toEqual([
+        {
+          stageName: "League",
+          line: [
+            {
+              key: "format.rules.bestOfPointsCap",
+              params: { n: SHORT.bestOf, points: SHORT.setTo, cap: SHORT.cap },
+            },
+          ],
+        },
+      ]);
+      // A line is at least one clause: the schema refuses an empty one.
+      const empty = structuredClone(doc);
+      empty.divisions[0]!.stageFormatLines![0]!.line = [];
+      expect(CompetitionHubDoc.safeParse(empty).success).toBe(false);
+      expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
     });
 
     it("a division with no overriding stage carries NO field at all — not an empty list", async () => {

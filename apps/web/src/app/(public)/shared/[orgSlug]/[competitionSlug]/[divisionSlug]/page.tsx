@@ -33,6 +33,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { divisionQualification } from "@/server/public-site/division-qualification";
 import { msgFor } from "@/lib/messages-i18n";
+import { rulesLineText } from "@/lib/rules-line";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { variantLabel } from "@/server/public-site/variant-label";
 import { stageFormatLines } from "@/server/public-site/stage-format-lines";
@@ -144,7 +145,7 @@ export default async function DivisionHomePage({ params }: Props) {
   const stageFormat = new Map(
     stageFormatLines(division.sport_key, module_, division.config, stages).map((s) => [
       s.stageId,
-      t(dict, s.line.key, s.line.params),
+      rulesLineText(dict, s.line),
     ]),
   );
   // Standings qualification status (spec 2026-09-22 §4.2): the same assembly

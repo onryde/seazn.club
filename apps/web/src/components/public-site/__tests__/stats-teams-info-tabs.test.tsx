@@ -2131,11 +2131,21 @@ describe("InfoTab — a stage that plays different rules names them (per-stage r
   const boxes = (h: string) => [...h.matchAll(/<article data-testid="mh-info-division-([a-z0-9-]+)"/g)].map((x) => x[1]);
   // The prod shape: a Swiss stage at 1 game to 15 (cap 21) over a division
   // that plays best of 3. The builder omits the field unless a stage differs.
-  const swiss = {
+  // A line is a list of clauses: the set kernel says its rules in one, tennis
+  // in several (review round 2) — the renderer must join them, not print one.
+  type StageLine = NonNullable<HubDivisionT["stageFormatLines"]>[number];
+  const swiss: StageLine = {
     stageName: "Swiss",
-    line: { key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } },
+    line: [{ key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } }],
   };
-  const knockout = { stageName: "Knockout", line: { key: "format.rules.bestOfPoints", params: { n: 5, points: 11 } } };
+  const knockout: StageLine = {
+    stageName: "Knockout",
+    line: [
+      { key: "format.sets.bestOf", params: { n: 3 } },
+      { key: "format.rules.tennis.setsTo", params: { games: 4 } },
+      { key: "format.rules.tennis.noAd" },
+    ],
+  };
   const doc = hubDoc({
     divisions: [division("premier", { stageFormatLines: [swiss, knockout] }), division("vets")],
     info: info({ calendars: [] }),
@@ -2166,7 +2176,14 @@ describe("InfoTab — a stage that plays different rules names them (per-stage r
     expect(rows).toEqual(["mh-info-format-premier-0", "mh-info-format-premier-1"]);
     const expected = [
       ["Swiss", t(dict, "format.rules.oneGamePointsCap", { points: 15, cap: 21 })],
-      ["Knockout", t(dict, "format.rules.bestOfPoints", { n: 5, points: 11 })],
+      [
+        "Knockout",
+        [
+          t(dict, "format.sets.bestOf", { n: 3 }),
+          t(dict, "format.rules.tennis.setsTo", { games: 4 }),
+          t(dict, "format.rules.tennis.noAd"),
+        ].join(", "),
+      ],
     ];
     // A `<dl>` row is a `<div>`, not an `<li>` — read to its own close.
     const formatRow = (id: string) => {

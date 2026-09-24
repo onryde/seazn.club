@@ -6311,7 +6311,8 @@ async function stageRulesFormatSmoke(): Promise<void> {
     leagueMeta.includes(preset) && !leagueMeta.includes(line),
   );
 
-  type HubLine = { stageName: string; line: { key: string; params?: Record<string, unknown> } };
+  // A line is a list of clauses; the set kernel says its rules in ONE.
+  type HubLine = { stageName: string; line: { key: string; params?: Record<string, unknown> }[] };
   const hub = v1data<{ divisions?: { slug: string; stageFormatLines?: HubLine[] }[] } | undefined>(
     await v1(anon, `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/hub`),
   );
@@ -6320,9 +6321,10 @@ async function stageRulesFormatSmoke(): Promise<void> {
     `stage rules smoke: the hub names the Swiss stage's rules and ONLY it — got ${JSON.stringify(lines)}`,
     lines.length === 1 &&
       lines[0].stageName === "Swiss" &&
-      lines[0].line.key === "format.rules.oneGamePointsCap" &&
-      lines[0].line.params?.points === rules.setTo &&
-      lines[0].line.params?.cap === rules.cap,
+      lines[0].line.length === 1 &&
+      lines[0].line[0].key === "format.rules.oneGamePointsCap" &&
+      lines[0].line[0].params?.points === rules.setTo &&
+      lines[0].line[0].params?.cap === rules.cap,
   );
 
   const page = await html(anon, `/shared/${orgSlug}/${comp.slug}/${divRow.slug}`);

@@ -38439,32 +38439,36 @@
                                       "type": "string"
                                     },
                                     "line": {
-                                      "type": "object",
-                                      "properties": {
-                                        "key": {
-                                          "type": "string"
-                                        },
-                                        "params": {
-                                          "type": "object",
-                                          "propertyNames": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
                                             "type": "string"
                                           },
-                                          "additionalProperties": {
-                                            "anyOf": [
-                                              {
-                                                "type": "string"
-                                              },
-                                              {
-                                                "type": "number"
-                                              }
-                                            ]
+                                          "params": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
                                           }
-                                        }
-                                      },
-                                      "required": [
-                                        "key"
-                                      ],
-                                      "additionalProperties": false
+                                        },
+                                        "required": [
+                                          "key"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [

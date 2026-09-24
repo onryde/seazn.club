@@ -57,7 +57,7 @@ describe.skipIf(!HAS_DB)("stage rules reach the hub and the division page throug
     expect(division?.stageFormatLines).toEqual([
       {
         stageName: "Swiss",
-        line: { key: "format.rules.oneGamePointsCap", params: { points: SWISS_RULES.setTo, cap: SWISS_RULES.cap } },
+        line: [{ key: "format.rules.oneGamePointsCap", params: { points: SWISS_RULES.setTo, cap: SWISS_RULES.cap } }],
       },
     ]);
   }, 60_000);

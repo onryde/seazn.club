@@ -19,6 +19,7 @@ import type { ReactNode } from "react";
 import { UTC, fmtPublicDate } from "@/lib/format";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
+import { rulesLineText } from "@/lib/rules-line";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { CompetitionProse } from "../competition-prose";
 
@@ -325,7 +326,7 @@ export function InfoTab({
                               {s.stageName}
                             </dt>
                             <dd className="min-w-0 text-sm tabular-nums text-ink [overflow-wrap:anywhere]">
-                              {t(dict, s.line.key, s.line.params)}
+                              {rulesLineText(dict, s.line)}
                             </dd>
                           </div>
                         ))}

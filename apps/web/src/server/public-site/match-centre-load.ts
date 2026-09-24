@@ -23,11 +23,12 @@ import { disambiguatedShorts } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { resolvePersonDisplayName, anyOptedOut } from "@/lib/name-display";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
-import { getDictionary, t, toLocale } from "@/lib/i18n";
+import { getDictionary, toLocale } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { readPublicLineups } from "./public-lineups";
 import { buildMatchCentre, type MatchCentreInput } from "./match-centre";
+import { rulesLineText } from "@/lib/rules-line";
 import { effectiveRulesLine } from "./describe-rules";
 import type { MatchCentreDocT, SideT } from "./match-centre-schema";
 import type { PublicFixture } from "./data";
@@ -339,12 +340,12 @@ export async function loadMatchCentre(
   // name stands unchanged. The line is resolved in the ORG's locale
   // (`ctx.locale`), exactly as the preset name it replaces is — through the
   // PUBLIC dictionary, where the describer's keys live so the hub can resolve
-  // the same `Msg` client-side.
+  // the same clauses client-side — and joined by the one `rulesLineText`.
   const rulesLine = effectiveRulesLine(ctx.division.sportKey, sportModule, rawCfg, divisionRow?.config);
   const formatLabel =
     rulesLine === null
       ? ctx.division.formatLabel
-      : t(await getDictionary(toLocale(ctx.locale), "public"), rulesLine.key, rulesLine.params);
+      : rulesLineText(await getDictionary(toLocale(ctx.locale), "public"), rulesLine);
 
   const lineups = await readPublicLineups(sql, fixture.id, {
     youth: ctx.division.youth,

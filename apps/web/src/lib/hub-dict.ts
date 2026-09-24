@@ -38,7 +38,8 @@ import type { Dict } from "@/lib/i18n-constants";
  * same thing, translated once.
  *
  * `format.` is the Info tab's per-stage rules lines (`HubDivision.
- * stageFormatLines`), built server-side as `Msg`s and resolved here.
+ * stageFormatLines`), built server-side as `Msg` clauses and resolved here
+ * (`rulesLineText`).
  */
 export const HUB_DICT_PREFIXES = [
   "landing.",

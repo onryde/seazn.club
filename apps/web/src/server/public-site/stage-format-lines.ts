@@ -12,22 +12,23 @@ import "server-only";
 // its "null inherits" rule is exactly the kind of thing that drifts.
 import type { AnySportModule } from "@seazn/engine/sport";
 import { stageScopedCfg } from "@/server/engine-db/stage-cfg";
-import { effectiveRulesLine } from "./describe-rules";
-import type { MsgT } from "./match-centre-schema";
+import { effectiveRulesLine, type RulesLineT } from "./describe-rules";
 
 export interface StageFormatLine {
   stageId: string;
   stageName: string;
-  line: MsgT;
+  /** Clauses — resolve and join with `rulesLineText` (`lib/rules-line.ts`). */
+  line: RulesLineT;
 }
 
 /**
- * A line for each stage, in STAGE order (`seq`), whose rules DESCRIBE
- * differently from the division's — and nothing for the rest: an identical
- * line per stage is noise (brief decision). A stage whose stored rules merely
- * restate the division's own values, or differ only where the describer has no
- * words (tennis `finalSet`, badminton `winBy`), gets no line
- * (`effectiveRulesLine`).
+ * A line for each stage, in STAGE order (`seq`), whose rule keys DIFFER from
+ * the division's — and nothing for the rest: an identical line per stage is
+ * noise (brief decision). A stage whose stored rules merely restate the
+ * division's own values gets no line; one whose rules differ ALWAYS gets one,
+ * even where the describer's words are vague about the difference (badminton
+ * `winBy`) — never the division's preset, which would be false for it
+ * (`effectiveRulesLine`, review round 2).
  *
  * `stages[].rules` is the stored FRAGMENT (`PublicStage.rules`); only it is
  * overlaid, so the decider keys (`shootout`/`extraTime`) that also live on a
