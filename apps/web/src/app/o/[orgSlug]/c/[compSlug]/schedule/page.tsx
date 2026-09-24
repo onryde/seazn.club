@@ -187,8 +187,12 @@ export default async function CompetitionSchedulePage({
   return (
     <>
       <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="mb-4 flex min-w-0 flex-wrap items-end justify-between gap-3">
-          <h1 className="page-title mt-1 min-w-0">
+        {/* Phones stack the print control under the title; from md it sits
+            beside it. A grid rather than a wrapping row: the control's refusal
+            line lands in the row BELOW it (print-scorer-sheets.tsx), so it can
+            neither widen the control's column nor move the title. */}
+        <div className="mb-4 flex min-w-0 flex-col items-start gap-3 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-end md:gap-x-4 md:gap-y-1">
+          <h1 className="page-title mt-1 min-w-0 max-w-full">
             {t(dict, "comp.schedule.title", { name: competition.name })}
           </h1>
           {printable && (

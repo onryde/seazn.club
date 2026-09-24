@@ -262,6 +262,6 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     );
     expect(FR["sheets.gate.reason"]).toBeTruthy();
     expect(FR["sheets.gate.reason"]).not.toBe(EN["sheets.gate.reason"]);
-    expect(html).toBe(`<span data-reason="">${FR["sheets.gate.reason"]!.replaceAll("'", "&#x27;")}</span>`);
+    expect(html).toContain(`<span data-reason="">${FR["sheets.gate.reason"]!.replaceAll("'", "&#x27;")}</span>`);
   });
 });

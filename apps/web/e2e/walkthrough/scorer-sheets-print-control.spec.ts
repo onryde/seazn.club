@@ -13,10 +13,13 @@
 // the file lands as a browser download under the server's filename; a 422
 // "nothing on that day" renders the LOCALISED line (en, fr), never the
 // server's English; a Community org without an Event Pass gets the
-// device-links upgrade pill instead of the button. Every state is checked at
-// 320/768/1280: no horizontal page scroll, both controls hit-tested at their
-// centre and at least 44px, the same controls in the same order at 320 and
-// 1280, beside the title at 1280 and under it at 320.
+// device-links upgrade pill, saying what it sells in the page's language,
+// instead of the button. Every state is checked at 320/768/1280: no
+// horizontal page scroll, both controls hit-tested at their centre and at
+// least 44px, the same controls in the same order at 320 and 1280, BESIDE the
+// title from 768 up (the phone composition is below 768 only) and under it at
+// 320. A refusal hands the button back and moves neither the title nor the
+// control (page-relative boxes, idle vs refused, at 768 and 1280).
 //
 // ── THE ROUTE IS STUBBED HERE, DELIBERATELY ─────────────────────────────────
 // `POST /api/v1/competitions/{id}/exports/scorer-sheets` is Task 8's, built in
@@ -97,18 +100,32 @@ const controlSet = (scope: Locator) =>
       .map((el) => `${el.tagName.toLowerCase()}:${(el as HTMLElement).innerText.split("\n")[0]!.trim()}`),
   );
 
+/** A box in PAGE coordinates, so two reads either side of a state change
+ *  compare even if the window scrolled between them. */
+const pageBox = (el: Locator) =>
+  el.evaluate((node) => {
+    const r = node.getBoundingClientRect();
+    return { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height };
+  });
+
+/** The title's and the control's page boxes at each width the control sits
+ *  beside the title — read idle, then again once a refusal has landed. */
+async function rowBoxes(page: Page, control: Locator) {
+  const out: Record<number, { title: Awaited<ReturnType<typeof pageBox>>; control: Awaited<ReturnType<typeof pageBox>> }> =
+    {};
+  for (const w of [768, 1280]) {
+    await page.setViewportSize({ width: w, height: 900 });
+    out[w] = { title: await pageBox(page.locator("main h1.page-title")), control: await pageBox(control) };
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  return out;
+}
+
 /** One state at every width: layout checks, hit-tests, the header shot and
  *  the first screenful attached, and the control-set parity 320 vs 1280.
- *  `beside` — option A puts the print control on the title's row at desktop
- *  width; the stock upgrade pill carries a sentence and may take its own row. */
-async function capture(
-  page: Page,
-  control: Locator,
-  testInfo: TestInfo,
-  name: string,
-  targets: Locator[],
-  { beside = true } = {},
-) {
+ *  Option A as ruled: the control on the title's row, right-aligned, from 768
+ *  up; under the title on a phone. */
+async function capture(page: Page, control: Locator, testInfo: TestInfo, name: string, targets: Locator[]) {
   const perWidth: { w: number; controls: string[] }[] = [];
   for (const w of WIDTHS) {
     await page.setViewportSize({ width: w, height: 900 });
@@ -124,14 +141,28 @@ async function capture(
         title!.y + title!.height - 1,
       );
     }
-    if (w === 1280 && beside) {
-      expect(box!.y, `${name} 1280: the control sits BESIDE the title, on its row`).toBeLessThan(
+    if (w >= 768) {
+      // On the title's row: the two overlap vertically, and the control starts
+      // where the title's column ends.
+      expect(box!.y, `${name} ${w}: the control sits BESIDE the title, on its row`).toBeLessThan(
         title!.y + title!.height,
+      );
+      expect(box!.y + box!.height, `${name} ${w}: the control sits BESIDE the title, on its row`).toBeGreaterThan(
+        title!.y,
+      );
+      expect(box!.x, `${name} ${w}: the control is right of the title`).toBeGreaterThanOrEqual(
+        title!.x + title!.width - 1,
       );
       expect(
         Math.abs(box!.x + box!.width - (head!.x + head!.width)),
-        `${name} 1280: the control is right-aligned in the header`,
+        `${name} ${w}: the control is right-aligned in the header`,
       ).toBeLessThanOrEqual(1);
+      // Beside, not crowding: the title keeps a real share of the row. The
+      // French upgrade pill at its natural width left the title 20% of the
+      // row at 768 — six lines of a two-line title.
+      expect(title!.width, `${name} ${w}: the title keeps at least 40% of the header`).toBeGreaterThanOrEqual(
+        head!.width * 0.4,
+      );
     }
     for (const [i, t] of targets.entries()) await hitTest(t, `${name} ${w} target ${i}`);
     perWidth.push({ w, controls: await controlSet(control) });
@@ -266,15 +297,21 @@ test.describe("an organiser on a plan with device links", () => {
     expect(sent.at(-1)).toEqual({ date: earlier });
 
     // 4. The route refuses (nothing left on that day): the LOCALISED line,
-    //    never the server's English, and no download.
+    //    never the server's English, no download — and the button handed back,
+    //    with neither the title nor the control moved by the sentence.
+    const idleEn = await rowBoxes(page, control);
     answer = "none";
     let downloads = 0;
     page.on("download", () => downloads++);
     await submit.click();
     const error = page.getByTestId("print-sheets-error");
     await expect(error).toHaveText(EN["sheets.error.noFixtures"]!);
-    await expect(control).not.toContainText("No fixtures to print on that day");
+    await expect(error).toHaveAttribute("role", "alert");
+    await expect(page.locator("main")).not.toContainText("No fixtures to print on that day");
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveText(EN["sheets.print"]!);
     expect(downloads).toBe(0);
+    expect(await rowBoxes(page, control), "en: a refusal moves neither the title nor the control").toEqual(idleEn);
     await capture(page, control, testInfo, "en-2-refused", [day, submit]);
 
     // 5. French: the same states read in French.
@@ -287,9 +324,15 @@ test.describe("an organiser on a plan with device links", () => {
     await expect(submit).toHaveText(FR["sheets.print"]!);
     await expect(control).toContainText(FR["sheets.day"]!);
     await capture(page, control, testInfo, "fr-1-idle", [day, submit]);
+    const idleFr = await rowBoxes(page, control);
     answer = "none";
     await submit.click();
     await expect(error).toHaveText(FR["sheets.error.noFixtures"]!);
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveText(FR["sheets.print"]!);
+    // The longer French line is the one that used to push the control off
+    // the title's row.
+    expect(await rowBoxes(page, control), "fr: a refusal moves neither the title nor the control").toEqual(idleFr);
     await capture(page, control, testInfo, "fr-2-refused", [day, submit]);
     expect(sent.length, "every click sent exactly one POST").toBe(4);
   });
@@ -300,9 +343,11 @@ test.describe("a Community organiser without an Event Pass", () => {
   // shared Pro org cannot be moved to Community without moving its whole group.
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test("sees the device-links upgrade pill where the Print button would be", async ({ page }, testInfo) => {
-    // Navs: login + org (2), seed (~3), 1 page load. Acts: ~6. Captures: 1.
-    test.setTimeout(budgetFor(6, 6, 1));
+  test("sees the upgrade pill where the Print button would be, saying what it sells (en + fr)", async ({
+    page,
+  }, testInfo) => {
+    // Navs: login + org (2), seed (~3), 2 page loads. Acts: ~8. Captures: 2.
+    test.setTimeout(budgetFor(7, 8, 2));
     await freshOrg(page, "sheets9");
     await dismissConsent(page);
     const seeded = await seedScoredDivision(page.request, [`Eli ${TAG}`, `Fay ${TAG}`], { decide: false });
@@ -312,8 +357,16 @@ test.describe("a Community organiser without an Event Pass", () => {
     await expect(page.locator("main h1.page-title")).toBeVisible({ timeout: STEP_MS });
     const gate = header(page).locator('a[data-feature="scoring.device_links"]');
     await expect(gate).toBeVisible();
+    // The print control's own sentence, not the feature's hand-over-links one.
+    await expect(gate).toContainText(EN["sheets.gate.reason"]!);
     await expect(page.getByTestId("print-sheets-submit")).toHaveCount(0);
     await expect(page.getByTestId("print-sheets-day")).toHaveCount(0);
-    await capture(page, gate, testInfo, "community-gate", [], { beside: false });
+    await capture(page, gate, testInfo, "community-gate-en", []);
+
+    await setLocale(page, "fr");
+    await page.reload();
+    await expect(gate).toBeVisible({ timeout: STEP_MS });
+    await expect(gate).toContainText(FR["sheets.gate.reason"]!);
+    await capture(page, gate, testInfo, "community-gate-fr", []);
   });
 });

@@ -58,14 +58,18 @@ export function PrintScorerSheets({
   // The empty case first: with nothing to print there is nothing to sell.
   if (!allowed) {
     return (
-      <UpgradeGate
-        feature="scoring.device_links"
-        // The feature's own sentence is about hand-over scoring links; this
-        // gate is selling printing.
-        reason={msg("sheets.gate.reason")}
-        viewerPlan={viewerPlan}
-        compact
-      />
+      // Capped between md and lg: at its natural width the French pill took
+      // three quarters of a 768 header and left the title six lines tall.
+      <div className="md:max-w-sm lg:max-w-none">
+        <UpgradeGate
+          feature="scoring.device_links"
+          // The feature's own sentence is about hand-over scoring links; this
+          // gate is selling printing.
+          reason={msg("sheets.gate.reason")}
+          viewerPlan={viewerPlan}
+          compact
+        />
+      </div>
     );
   }
 
@@ -103,9 +107,12 @@ export function PrintScorerSheets({
     }
   }
 
+  // Two siblings, laid out by the page header's grid (schedule/page.tsx): the
+  // control row beside the title, and a refusal in the row BELOW it — so the
+  // sentence can neither widen the control nor move the title when it lands.
   return (
-    <div data-testid="print-sheets" className="min-w-0">
-      <div className="flex min-w-0 flex-wrap items-end gap-2">
+    <>
+      <div data-testid="print-sheets" className="flex min-w-0 max-w-full flex-wrap items-end gap-2">
         <label className="flex min-w-0 flex-col text-xs font-medium text-slate-600">
           {msg("sheets.day")}
           <select
@@ -134,14 +141,17 @@ export function PrintScorerSheets({
           {busy ? msg("sheets.preparing") : msg("sheets.print")}
         </button>
       </div>
-      {/* Under the row, and `w-0 min-w-full` so the sentence adds nothing to
-          the control's intrinsic width: inside the wrapping row it widened
-          the control until a French refusal pushed it off the title's line. */}
+      {/* `w-0 min-w-full`: as wide as its cell and no wider, so the sentence
+          adds nothing to the column's intrinsic width. */}
       {error && (
-        <p data-testid="print-sheets-error" role="alert" className="mt-1 w-0 min-w-full text-sm text-red-700">
+        <p
+          data-testid="print-sheets-error"
+          role="alert"
+          className="w-0 min-w-full text-sm text-red-700 max-md:-mt-2 md:col-start-2"
+        >
           {error}
         </p>
       )}
-    </div>
+    </>
   );
 }
