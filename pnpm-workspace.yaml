@@ -38,3 +38,19 @@ packages:
 publicHoistPattern:
   - pdfkit
   - exceljs
+
+# Security floors for transitive deps whose parents pin a vulnerable patch
+# (Dependabot alerts, 2026-09-24). Each selector only matches the vulnerable
+# range and lifts it to a patched release in the SAME major, so nothing
+# crosses a breaking boundary. Drop an entry once its parent ships the fix.
+overrides:
+  "browserslist@<4.28.7": "^4.29.1"
+  "postcss@<8.5.23": "^8.5.28"
+  "nanoid@<3.3.18": "^3.3.19"
+  "js-yaml@>=4.0.0 <4.3.2": "^4.3.2"
+  "brace-expansion@<1.1.16": "^1.1.21"
+  "brace-expansion@>=2.0.0 <2.1.2": "^2.1.7"
+  "dompurify@<3.4.13": "^3.4.16"
+  "baseline-browser-mapping@<2.11.0": "^2.11.26"
+  "fflate@>=0.4.5 <0.4.9": "^0.4.9"
+  "@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33": "^4.0.54"
