@@ -40,11 +40,14 @@
 //      DECIDED set has no `abandoned`), Unpair refuses ("played results"), and
 //      the Forfeit button refuses the abandoned board too (WRONG_PHASE,
 //      "match already over").
-//   S3 never withdraw: Pair next re-pairs A against H in round 2 — a rematch.
-//      Read, not run: the pairer credits a two-sided walkover like a bye
-//      (`o.kind === "award"` → winner into `byes`, pair never added to
-//      `played`), and the implicit-bye pass then credits H a point for a round
-//      H never played, which lifts H into A's score group.
+//   S3 never withdraw: first recorded Pair next re-pairing A against H in
+//      round 2 — a rematch — because the pairer credited a two-sided walkover
+//      like a bye (winner into `byes`, pair never added to `played`) and the
+//      implicit-bye pass then credited the absent H a point, lifting H into
+//      A's score group. FIXED 2026-09-24 (swissGen now counts only
+//      `isOneSidedAwardBye` rows as byes; focused regression in
+//      `swiss-two-sided-walkover-pairing.test.ts`): R2 is S1 v S2, A v S4,
+//      S5 v H, and the knockout matches S1's.
 //   S4 pre-start pair → withdraw → unpair → pair: works. Both rounds reshape to
 //      2 boards + bye; surviving boards keep id, time and court; the removed
 //      board's slot is gone and the new bye rows carry no time or court.
@@ -520,7 +523,7 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
   });
 
   // ─── S3 — never withdraw ────────────────────────────────────────────────
-  it("S3 forfeit A-v-H and never withdraw: Pair next re-pairs A against H in round 2", async () => {
+  it("S3 forfeit A-v-H and never withdraw: Pair next does not re-pair A against H, and H pairs among the round-1 losers", async () => {
     const o: Record<string, unknown> = {};
     OBS.S3 = o;
     const rig = await seedRig();
@@ -537,17 +540,19 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     expect(pairNext.reshaped, "six active entrants — no reshape").toBeUndefined();
     const r2 = await fixturesOf(rig.swissId);
     o.afterPairNext = record(rig, r2);
-    // OBSERVED DEFECT: a rematch. H (0 points in the table) is paired with the
-    // round-1 winner A, and A meets H twice. Mechanism, from READING
-    // `stages.ts` swissGen (not run): a two-sided walkover takes the
-    // `kind === "award"` branch, so the pair is never added to `played` and A
-    // is recorded as having had a BYE; the implicit-bye pass then finds H in no
-    // round-1 row and credits H a pairing point too, lifting H into A's group.
-    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-b2: A v H", "sw-r2-b3: S4 v S5"]);
+    // Fixed 2026-09-24 — this probe first recorded `A v H` here, a rematch:
+    // swissGen read every `award` as a bye, so the pair never reached `played`
+    // and the implicit-bye pass credited the absent H a pairing point. A
+    // two-sided walkover is now a played match: S1, S2 and A are on 1, S4, S5
+    // and H on 0; A, the lowest-ranked winner, floats down onto S4 and H meets
+    // S5.
+    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-b2: A v S4", "sw-r2-b3: S5 v H"]);
     const hBoard = inRound(r2, 2).find((f) => f.home_entrant_id === H || f.away_entrant_id === H)!;
-    expect([hBoard.home_entrant_id, hBoard.away_entrant_id]).toContain(A);
+    expect([hBoard.home_entrant_id, hBoard.away_entrant_id], "A meets H once only").not.toContain(A);
+    const hOpponent = hBoard.home_entrant_id === H ? hBoard.away_entrant_id : hBoard.home_entrant_id;
+    expect(["S4", "S5"], "H is not in the winners' score group").toContain(rig.who(hOpponent));
 
-    // H no-shows again.
+    // H no-shows again — this time handing S5 the walkover.
     await forfeitBy(rig.auth, hBoard.id, H);
     await decideRound(rig, 2, new Set([hBoard.id]));
     const table = await swissTable(rig);
@@ -556,18 +561,21 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
       "1 S1 P2 W2 L0 4pts",
       "2 A P2 W2 L0 4pts",
       "3 S2 P2 W1 L1 2pts",
-      "4 S4 P2 W1 L1 2pts",
-      "5 S5 P2 W0 L2 0pts",
+      "4 S5 P2 W1 L1 2pts",
+      "5 S4 P2 W0 L2 0pts",
       "6 H P2 W0 L2 0pts",
     ]);
 
     const ko = await seedKnockout(rig);
     o.knockout = ko;
-    // A qualifies 2nd on two walkovers without striking a shuttle.
-    expect(ko.proposalRanks).toEqual(["1 S1", "2 A", "3 S2", "4 S4"]);
-    expect(ko.ties).toEqual([{ reason: "seed", who: ["S2", "S4"] }]);
+    // The same four qualifiers, tie and semis as S1, where H withdrew instead:
+    // A earns its second win on court against S4 (the probe first recorded A
+    // qualifying on two walkovers against H). S2 and S5 are separated by the
+    // table's tie-break (not flagged), so only S1/A is a flagged tie.
+    expect(ko.proposalRanks).toEqual(["1 S1", "2 A", "3 S2", "4 S5"]);
+    expect(ko.ties).toEqual([{ reason: "seed", who: ["A", "S1"] }]);
     expect(ko.bareConfirm).toMatchObject({ http: 422, code: "SEEDING_TIE_UNRESOLVED" });
-    expect(ko.semis).toEqual(["S1 v S4", "S2 v A"]);
+    expect(ko.semis).toEqual(["S1 v S5", "S2 v A"]);
     expect(ko.semis.join(" ")).not.toContain("H");
   });
 
