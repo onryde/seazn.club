@@ -113,9 +113,11 @@ function describeSetKernel(sportKey: string, c: Record<string, unknown>, bestOf:
  *    (no tie-break at all). A best-of-1 folds it into its head ("1 set to 6");
  *  - the deciding set, when it is not "same": a match tie-break REPLACES the
  *    set (so a best-of-1 with one is "1 match tie-break to 10"), a final-set
- *    tie-break extends it;
+ *    tie-break extends it — only over tie-break sets, since advantage sets
+ *    play none, decider included;
  *  - no-ad games and sudden-death tie-breaks only when ON — the standard
- *    (advantage games, win by two) goes unsaid.
+ *    (advantage games, win by two) goes unsaid — and sudden death only when
+ *    some tie-break is actually played.
  */
 function describeNested(c: Record<string, unknown>, bestOf: number): RulesLineT {
   const set = record(c.set);
@@ -147,11 +149,19 @@ function describeNested(c: Record<string, unknown>, bestOf: number): RulesLineT 
   }
   if (matchTiebreak !== undefined) {
     out.push({ key: "format.rules.tennis.matchTiebreak", params: { n: matchTiebreak } });
-  } else if (finalTiebreak !== undefined) {
+  } else if (finalTiebreak !== undefined && !advantage) {
+    // Over advantage sets the decider keeps `tiebreakAt: null` (engine
+    // `rulesFor`), so its tie-break target is never played — saying it would
+    // be false.
     out.push({ key: "format.rules.tennis.finalSetTiebreak", params: { n: finalTiebreak } });
   }
   if (record(c.game)?.noAd === true) out.push({ key: "format.rules.tennis.noAd" });
-  if (record(c.tiebreak)?.winBy === 1) out.push({ key: "format.rules.tennis.suddenDeathTiebreaks" });
+  // The tie-break margin only means something when a tie-break is played: in
+  // tie-break sets, or the match tie-break (which the kernel plays to it too).
+  const playsTiebreak = !advantage || matchTiebreak !== undefined;
+  if (record(c.tiebreak)?.winBy === 1 && playsTiebreak) {
+    out.push({ key: "format.rules.tennis.suddenDeathTiebreaks" });
+  }
   return out;
 }
 

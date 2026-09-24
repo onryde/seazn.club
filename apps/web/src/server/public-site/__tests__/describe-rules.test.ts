@@ -251,14 +251,60 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
     ]);
   });
 
-  it("advantage sets (no tie-break at all) are named; sudden-death tie-breaks are named; win-by-two goes unsaid", () => {
-    const advantage = tennis.configSchema.parse({
-      set: { gamesTo: 6, winBy: 2, tiebreakAt: null, tiebreakTo: 7 },
-      tiebreak: { winBy: 1 },
-    });
-    expect(describeMatchRules("tennis", tennis, advantage)).toEqual([
+  // Advantage sets (`tiebreakAt: null`) play NO tie-break — and the engine's
+  // `rulesFor` (engine `sports/nested/kernel.ts`) keeps `tiebreakAt: null` in
+  // the deciding set too, so a final-set tie-break target never comes into
+  // play. The per-stage editor offers set type and deciding set as separate
+  // selects, so an organiser can reach these combinations (review round 3).
+  const advantageSet = { gamesTo: 6, winBy: 2, tiebreakAt: null, tiebreakTo: 7 };
+  const tiebreakSet = { gamesTo: 6, winBy: 2, tiebreakAt: 6, tiebreakTo: 7 };
+
+  it("advantage sets are named, and win-by-two goes unsaid", () => {
+    expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: advantageSet }))).toEqual([
       { key: "format.sets.bestOf", params: { n: 3 } },
       { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+    ]);
+  });
+
+  it("a final-set tie-break is stated only when sets HAVE tie-breaks — never over advantage sets, where none is played", () => {
+    const finalSet = { tiebreakTo: 10 };
+    expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: advantageSet, finalSet }))).toEqual([
+      { key: "format.sets.bestOf", params: { n: 3 } },
+      { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+    ]);
+    // The positive pair: the same deciding set over tie-break sets is named.
+    expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: tiebreakSet, finalSet }))).toEqual([
+      { key: "format.sets.bestOf", params: { n: 3 } },
+      { key: "format.rules.tennis.setsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.finalSetTiebreak", params: { n: 10 } },
+    ]);
+  });
+
+  it("sudden-death tie-breaks are stated only when a tie-break is played: tie-break sets or a match tie-break", () => {
+    const tiebreak = { winBy: 1 };
+    // Tie-break sets — named.
+    expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: tiebreakSet, tiebreak }))).toEqual([
+      { key: "format.sets.bestOf", params: { n: 3 } },
+      { key: "format.rules.tennis.setsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.suddenDeathTiebreaks" },
+    ]);
+    // Advantage sets, no match tie-break — no tie-break exists, so no clause.
+    expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: advantageSet, tiebreak }))).toEqual([
+      { key: "format.sets.bestOf", params: { n: 3 } },
+      { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+    ]);
+    // Advantage sets decided by a MATCH tie-break — that one tie-break is
+    // played to the tie-break margin (the kernel's `tiebreak.winBy`), so named.
+    expect(
+      describeMatchRules(
+        "tennis",
+        tennis,
+        tennis.configSchema.parse({ set: advantageSet, finalSet: { matchTiebreakTo: 10 }, tiebreak }),
+      ),
+    ).toEqual([
+      { key: "format.sets.bestOf", params: { n: 3 } },
+      { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.matchTiebreak", params: { n: 10 } },
       { key: "format.rules.tennis.suddenDeathTiebreaks" },
     ]);
   });
