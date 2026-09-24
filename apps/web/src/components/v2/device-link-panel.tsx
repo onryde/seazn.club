@@ -132,8 +132,12 @@ export function DeviceLinkPanel({
       setConfirm(null);
       await refresh();
     } catch (err) {
+      // Same rule as a refused revoke: never leave "Yes, reissue" on screen
+      // after the server said no. Close the question and re-read what is live.
+      setConfirm(null);
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
       else refused(err);
+      await refresh();
     } finally {
       setBusy(false);
     }

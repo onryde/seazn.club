@@ -432,6 +432,29 @@ describe("device-link panel — every refusal is localised, never the server's E
     expect(island.text()).not.toContain("connection reset");
   });
 
+  // Task 6 review minor (b): Revoke & reissue is the other destructive door on
+  // the same question, and a refusal there left "Yes, reissue" on screen.
+  it("a refused reissue closes its question too, keeps the live line, and re-reads it", async () => {
+    const { apiV1 } = await import("@/lib/client-v1");
+    const reads = () => vi.mocked(apiV1).mock.calls.filter(([, o]) => o?.method === undefined).length;
+    api.refuse = { status: 500, code: "INTERNAL", message: "connection reset" };
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-reissue"));
+    expect(byTestId(island.tree(), "device-link-reissue-confirm"), "precondition: the question is open").toBeDefined();
+    const readsBefore = reads();
+    click(byTestId(island.tree(), "device-link-reissue-confirm"));
+    await flush();
+
+    expect(api.posts).toEqual(["/api/v1/fixtures/f1/device-links/reissue"]);
+    expect(byTestId(island.tree(), "device-link-show"), "precondition: the link is still live").toBeDefined();
+    expect(byTestId(island.tree(), "device-link-reissue-confirm"), "the question closes on any refusal").toBeUndefined();
+    expect(island.text()).not.toContain(t("dlink.reissueWarn"));
+    expect(reads(), "the panel re-reads the live line").toBeGreaterThan(readsBefore);
+    expect(island.text(), "the refusal is said").toContain(t("dlink.failed"));
+    expect(island.text()).not.toContain("connection reset");
+  });
+
   it("a dropped connection (fetch TypeError) gets the generic line, not the browser's English", async () => {
     const { apiV1 } = await import("@/lib/client-v1");
     const island = renderIsland(DeviceLinkPanel, PROPS);
