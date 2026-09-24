@@ -80,6 +80,10 @@ describe("games share images — route contracts", () => {
       expect(mod.alt.length).toBeGreaterThan(10);
     }
   });
+
+  it("the per-game card is prerendered for every live game, and only those", async () => {
+    expect(await GameModule.generateStaticParams()).toEqual(liveGames().map(({ slug }) => ({ slug })));
+  });
 });
 
 describe("/games share image (hub)", () => {
@@ -128,12 +132,13 @@ describe("/games/[slug] share image", () => {
     expect(distinct.size).toBe(liveGames().length);
   });
 
-  // A metadata image route has no 404 to give: the page's <meta> points at it
-  // before any request is made (same ruling as the fixture OG card beside
-  // poster-dimensions.test.tsx). An unknown slug draws the hub card instead.
-  it("an unknown slug falls back to the hub picture, byte for byte, still a 200 PNG", async () => {
-    const unknown = await game("not-a-real-game");
-    expect(unknown.equals(await hub())).toBe(true);
+  // /games/<unknown> is itself a 404 whose <meta> advertises the ROOT share
+  // image, so nothing legitimate ever links here: no picture to draw, a 404
+  // (Next's route handler turns notFound() into an empty 404 response).
+  it("an unknown slug is not found — no picture is drawn, nothing is fetched", async () => {
+    await expect(GameOg({ params: Promise.resolve({ slug: "not-a-real-game" }) })).rejects.toThrow(
+      /NEXT_HTTP_ERROR_FALLBACK;404|NEXT_NOT_FOUND/,
+    );
     expect(remote()).toEqual([]);
   });
 });

@@ -17,7 +17,8 @@
 // the page, where the card's width is unknown to the server. Fluid art sizes
 // its fixed-size tile clusters for a 320px box, so they fit the listing's
 // narrowest card (288px: a 320px phone minus its gutters), and draws the chess
-// strip wider than any card, sliced to the card's width, centred. Nothing ever
+// strip wider than any card, sliced to the card's width, centred on the
+// knight. Nothing ever
 // overhangs the box (see chessBoard for why that matters to satori), and the
 // root still clips, so the art can never push the page sideways.
 import type { ReactNode } from "react";
@@ -87,44 +88,85 @@ function knightOn(x: number, y: number) {
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
+/** The mockup's strip: three squares tall. */
+const ROWS = 3;
+/** The move, in squares from the knight: the square it came from… */
+const LAST_MOVE = { dc: -1, dr: 1 };
+/** …and two squares it can go to next (knight moves: two across, one down/up). */
+const MOVE_DOTS = [
+  { dc: 2, dr: -1 },
+  { dc: 2, dr: 1 },
+];
+/** A move dot's radius, in squares. */
+const DOT_R = 0.14;
+/** Clear board kept between the move and the art's side edges, in squares. */
+const SIDE_MARGIN = 0.12;
+/**
+ * The fewest squares the art may show across. The window is centred on the
+ * knight, so each half must reach from the knight square's centre past the far
+ * edge of everything the move draws — the last-move square on the left (1.5),
+ * a dot on the right (2.14) — plus the margin: 2 × 2.26 = 4.52. Down, the
+ * mockup's three rows already frame the move (last-move square flush with the
+ * bottom edge, as drawn there).
+ */
+const MIN_ACROSS =
+  2 *
+  (Math.max(Math.abs(LAST_MOVE.dc) + 0.5, ...MOVE_DOTS.map(({ dc }) => Math.abs(dc) + DOT_R)) + SIDE_MARGIN);
+
 // The board is ONE <svg>, not a grid of divs: satori rasterises an svg as a
 // single image, so the per-game card's rotate(-5deg) tilts it as one piece.
 // Built from ~45 divs it drifted off its tilted frame by a few px — satori
 // composes a transform element by element, and its overflow clip does not
 // follow the transform at all.
 //
-// The strip is wider than the box and shown centred, cropped at the sides —
-// the mockup's "strip of board". HOW it is cropped differs by renderer:
-//   - fluid (the page, in a browser): the viewBox is the whole strip and
-//     `preserveAspectRatio="xMidYMid slice"` covers the card with it, centred,
-//     at whatever width the card turns out to be;
+// What shows is a window onto the board CENTRED ON THE KNIGHT — so the knight
+// sits mid-art and the whole move (last-move square, both dots) is in view at
+// every size. The window is three squares tall (the mockup's strip) unless the
+// box is too narrow to show MIN_ACROSS squares that way — the 430px square
+// share-card art — and then the squares shrink until it can. The board drawn
+// is every square the window touches, so it is always covered.
+//
+// HOW the window is cut differs by renderer:
+//   - fluid (the page, in a browser): the window is a strip wider than any
+//     card (a whole, odd number of squares, so centred on the knight it ends
+//     on square edges), and `preserveAspectRatio="xMidYMid slice"` covers the
+//     card with it, about its centre — the knight — at whatever width the card
+//     turns out to be;
 //   - numeric (satori): satori ignores preserveAspectRatio and stretches the
-//     svg to its box, so the viewBox is cut to the centred window at the box's
-//     own aspect, and the svg viewport does the cropping. A rounded box is
-//     rounded INSIDE the svg too (a clipPath resvg applies itself), because
-//     the art root does not clip at a satori size — see GameArt.
+//     svg to its box, so the viewBox IS the window, at the box's own aspect,
+//     and the svg viewport does the cropping. A rounded box is rounded INSIDE
+//     the svg too (a clipPath resvg applies itself), because the art root does
+//     not clip at a satori size — see GameArt.
 function chessBoard({ width, height, radius }: Box): ReactNode {
-  const rows = 3;
-  const sq = height / rows;
   const fluid = typeof width !== "number";
-  const span = fluid ? FLUID_STRIP_WIDTH : width;
-  const cols = Math.ceil(span / sq) + 1;
-  const knight = { c: Math.floor(cols / 2) - 1, r: 1 };
-  const last = { c: knight.c - 1, r: 2 };
-  const dots = [
-    { c: knight.c + 2, r: 0 },
-    { c: knight.c + 2, r: 2 },
-  ];
-  const stripW = cols * UNIT;
-  const stripH = rows * UNIT;
-  const windowW = fluid ? stripW : round3((width / height) * stripH);
-  const windowX = fluid ? 0 : round3((stripW - windowW) / 2);
+  // The window's size in squares, down and across.
+  const down = fluid ? ROWS : Math.max(ROWS, (MIN_ACROSS * height) / width);
+  const across = fluid
+    ? 2 * Math.ceil((FLUID_STRIP_WIDTH / (height / down) - 1) / 2) + 1
+    : (down * width) / height;
+  // In squares from the knight square's top-left corner, the window runs
+  // 0.5 ± across/2 and 0.5 ± down/2. The board: every square it touches.
+  const c0 = Math.floor(0.5 - across / 2);
+  const r0 = Math.floor(0.5 - down / 2);
+  const cols = Math.ceil(0.5 + across / 2) - c0;
+  const rows = Math.ceil(0.5 + down / 2) - r0;
+  const knight = { c: -c0, r: -r0 };
+  const last = { c: knight.c + LAST_MOVE.dc, r: knight.r + LAST_MOVE.dr };
+  const dots = MOVE_DOTS.map(({ dc, dr }) => ({ c: knight.c + dc, r: knight.r + dr }));
+  const view = {
+    x: round3((0.5 - across / 2 - c0) * UNIT),
+    y: round3((0.5 - down / 2 - r0) * UNIT),
+    w: round3(across * UNIT),
+    h: round3(down * UNIT),
+  };
   const clipId = !fluid && radius > 0 ? `cq-art-${width}x${height}r${radius}` : null;
-  const rx = round3((radius * stripH) / height);
+  const rx = round3((radius * view.h) / height);
   const squares = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const light = (r + c) % 2 === 0;
+      // Coloured relative to the knight, which always stands on a dark square
+      // (as on the mockup's 320×196 card), whatever board the window needs.
+      const light = (r + c + knight.r + knight.c) % 2 === 1;
       const isLast = c === last.c && r === last.r;
       squares.push(
         <rect
@@ -142,13 +184,13 @@ function chessBoard({ width, height, radius }: Box): ReactNode {
     <svg
       width={width}
       height={height}
-      viewBox={`${windowX} 0 ${windowW} ${stripH}`}
+      viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
       preserveAspectRatio="xMidYMid slice"
     >
       {clipId ? (
         <defs>
           <clipPath id={clipId}>
-            <rect x={windowX} y={0} width={windowW} height={stripH} rx={rx} ry={rx} />
+            <rect x={view.x} y={view.y} width={view.w} height={view.h} rx={rx} ry={rx} />
           </clipPath>
         </defs>
       ) : null}
@@ -160,7 +202,7 @@ function chessBoard({ width, height, radius }: Box): ReactNode {
             key={`${r}-${c}`}
             cx={c * UNIT + UNIT / 2}
             cy={r * UNIT + UNIT / 2}
-            r={UNIT * 0.14}
+            r={UNIT * DOT_R}
             fill="#000000"
             fillOpacity={0.16}
           />

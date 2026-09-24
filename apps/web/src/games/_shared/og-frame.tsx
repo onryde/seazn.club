@@ -29,6 +29,34 @@ export const nightFrame = {
   backgroundImage: `radial-gradient(720px 420px at 10% -10%, rgba(163,230,53,0.14), transparent 60%), radial-gradient(780px 460px at 90% -10%, rgba(124,58,237,0.30), transparent 62%), linear-gradient(180deg, ${NIGHT2}, ${NIGHT})`,
 } as const;
 
+/** The per-game card's art: a square this many px (gen.py og_game). */
+export const GAME_CARD_ART = 430;
+
+/** The hub card's row of game tiles (gen.py og_hub). */
+export const HUB_TILES = {
+  /** The row's width: the 1200px card (OG_SIZE — not imported: that module is
+   *  server-only, and GameArt's tests read these sizes) less 64px each side. */
+  rowWidth: 1200 - 2 * 64,
+  gap: 28,
+  border: 3,
+  radius: 22,
+  /** The mockup's tile, and so its aspect. */
+  width: 320,
+  height: 196,
+} as const;
+
+/**
+ * The art size of each hub tile when `count` games are live: the mockup's
+ * 320×196 while they fit the row, shrunk in proportion once they would not —
+ * a fourth live game shrinks every tile rather than spilling off the card.
+ */
+export function hubTileSize(count: number): { width: number; height: number } {
+  const { rowWidth, gap, border } = HUB_TILES;
+  const fit = Math.floor((rowWidth - gap * (count - 1)) / count) - 2 * border;
+  const width = Math.min(HUB_TILES.width, fit);
+  return { width, height: Math.round((width * HUB_TILES.height) / HUB_TILES.width) };
+}
+
 /** "SEAZN GAMES" — the root card's wordmark with GAMES in lime. */
 export function GamesWordmark({ size }: { size: number }) {
   return (

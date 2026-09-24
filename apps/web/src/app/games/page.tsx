@@ -108,8 +108,12 @@ export default function GamesPage() {
                     {g.title}
                   </h2>
                   <p className="mb-2 flex-1 text-[15px] leading-[1.45] text-slate-600">{g.tagline}</p>
-                  <span className="inline-flex h-11 items-center self-start rounded-full bg-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))] px-[18px] text-[15px] font-semibold text-white transition group-hover:bg-[color:var(--cq-accent-strong,oklch(43.8%_0.218_303.724))]">
-                    Play →
+                  {/* The arrow is decoration, hidden from assistive tech so the
+                      link is not announced as "… Play right arrow"; the pill's
+                      text is still "Play →". gap-1 stands in for the space,
+                      which inline-flex drops between its two items. */}
+                  <span className="inline-flex h-11 items-center gap-1 self-start rounded-full bg-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))] px-[18px] text-[15px] font-semibold text-white transition group-hover:bg-[color:var(--cq-accent-strong,oklch(43.8%_0.218_303.724))]">
+                    Play <span aria-hidden="true">→</span>
                   </span>
                 </div>
               </Link>

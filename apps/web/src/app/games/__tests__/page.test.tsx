@@ -131,6 +131,11 @@ describe("GamesPage — Option A cards", () => {
     expect(html).toMatch(/<span class="whitespace-nowrap">no sign-up,<\/span>/);
   });
 
+  // The pill reads "Play →", but the arrow is decoration: aria-hidden, so the
+  // card link is not announced as "… Play right arrow". Its text content is
+  // still "Play →" — what e2e/games.spec.ts's card.getByText("Play →") matches.
+  const CTA = 'Play <span aria-hidden="true">→</span></span>';
+
   for (const game of liveGames()) {
     it(`${game.slug}: one link holding its own art, title, tagline and the "Play →" pill`, () => {
       const card = cardFor(renderToStaticMarkup(<GamesPage />), game.slug);
@@ -138,8 +143,15 @@ describe("GamesPage — Option A cards", () => {
       expect(card).not.toContain("data-game-art-fallback=");
       expect(card).toContain(`>${game.title}</h2>`);
       expect(card).toContain(`>${game.tagline}</p>`);
-      // One text node, exactly — e2e finds it with getByText("Play →").
-      expect(card).toContain(">Play →</span>");
+      expect(card).toContain(`>${CTA}`);
+      // Its text, tags stripped, is exactly "Play →" (what getByText sees).
+      const pill = card.slice(card.lastIndexOf("<span", card.indexOf(`>${CTA}`)), card.indexOf(`>${CTA}`) + CTA.length + 1);
+      expect(pill.replace(/<[^>]+>/g, "")).toBe("Play →");
+      // inline-flex drops the space between "Play" and the arrow (two flex
+      // items; measured in Chromium): the gap draws it instead.
+      expect(pill).toMatch(/^<span class="[^"]*\binline-flex\b[^"]*\sgap-1\s/);
+      // Nothing else in the card hides from assistive tech but the art and the arrow.
+      expect(card.match(/aria-hidden="true"/g)).toHaveLength(3);
       // …and exactly one card per game: no second link to the same game.
       const html = renderToStaticMarkup(<GamesPage />);
       expect(html.split(`href="/games/${game.slug}"`)).toHaveLength(2);
@@ -163,7 +175,7 @@ describe("GamesPage — Option A cards", () => {
       const art = card.indexOf("data-game-art=");
       const title = card.indexOf(`>${game.title}</h2>`);
       const tagline = card.indexOf(`>${game.tagline}</p>`);
-      const cta = card.indexOf(">Play →</span>");
+      const cta = card.indexOf(`>${CTA}`);
       expect(art).toBeGreaterThan(-1);
       expect(art).toBeLessThan(title);
       expect(title).toBeLessThan(tagline);
@@ -183,6 +195,6 @@ describe("GamesPage — Option A cards", () => {
     expect(card).toContain('data-game-art-fallback="true"');
     expect(card).toContain(COMING_SOON.thumbnail);
     expect(card).toContain(`>${COMING_SOON.title}</h2>`);
-    expect(card).not.toContain("Play →");
+    expect(card).not.toContain(">Play ");
   });
 });

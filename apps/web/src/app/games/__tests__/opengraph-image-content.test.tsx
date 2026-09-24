@@ -45,7 +45,7 @@ async function withGames(extra: GameMeta[], body: () => Promise<void>) {
 }
 
 import HubOg from "../opengraph-image";
-import GameOg from "../[slug]/opengraph-image";
+import GameOg, { generateStaticParams } from "../[slug]/opengraph-image";
 import { GAMES, liveGames } from "@/games/registry";
 
 const esc = (s: string) =>
@@ -137,11 +137,12 @@ describe("/games/[slug] share image — content", () => {
     });
   }
 
-  it("an unknown slug draws the hub card (every live game's tile, no game title)", async () => {
-    const html = await draw(() => GameOg({ params: Promise.resolve({ slug: "not-a-real-game" }) }));
-    expect(html).toContain(">FREE GAMES IN YOUR BROWSER.<");
-    expect(arts(html)).toEqual(liveGames().map((g) => g.slug));
-    expect(html).not.toContain(">Play free<");
+  it("an unknown slug is not found: no card is drawn at all", async () => {
+    captured.tree = null;
+    await expect(GameOg({ params: Promise.resolve({ slug: "not-a-real-game" }) })).rejects.toThrow(
+      /NEXT_HTTP_ERROR_FALLBACK;404|NEXT_NOT_FOUND/,
+    );
+    expect(captured.tree).toBeNull();
   });
 
   it("a coming-soon game draws the hub card too — it has no art, and 'Play free' would be untrue", async () => {
@@ -156,8 +157,26 @@ describe("/games/[slug] share image — content", () => {
     await withGames([soon], async () => {
       const html = await draw(() => GameOg({ params: Promise.resolve({ slug: "soon-probe" }) }));
       expect(html).toContain(">FREE GAMES IN YOUR BROWSER.<");
+      expect(arts(html)).toEqual(liveGames().map((g) => g.slug));
       expect(html).not.toContain("SOON GAME");
       expect(html).not.toContain("🧩");
+    });
+  });
+
+  it("prerenders a card per LIVE game only — a coming-soon game is not prerendered (liveGames, not GAMES)", async () => {
+    const soon: GameMeta = {
+      slug: "soon-probe",
+      title: "Soon Game",
+      tagline: "t",
+      description: "d",
+      thumbnail: "🧩",
+      status: "coming-soon",
+    };
+    await withGames([soon], async () => {
+      expect(GAMES.map((g) => g.slug)).toContain("soon-probe");
+      const params = await generateStaticParams();
+      expect(params).toEqual(liveGames().map(({ slug }) => ({ slug })));
+      expect(params.length).toBeGreaterThan(0);
     });
   });
 });

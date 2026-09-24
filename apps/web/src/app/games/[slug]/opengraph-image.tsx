@@ -8,10 +8,11 @@
 // Condensed, so the title is sized to fit the 596px column and wraps onto a
 // second line for a two-word title rather than running under the art.
 import { ImageResponse } from "next/og";
+import { notFound } from "next/navigation";
 import { OG_SIZE } from "@/server/og/card";
 import { GameArt } from "@/games/_shared/game-art";
-import { CREAM_SOFT, GamesWordmark, LIME, NIGHT, nightFrame } from "@/games/_shared/og-frame";
-import { getGame } from "@/games/registry";
+import { CREAM_SOFT, GAME_CARD_ART, GamesWordmark, LIME, NIGHT, nightFrame } from "@/games/_shared/og-frame";
+import { getGame, liveGames } from "@/games/registry";
 import HubImage from "../opengraph-image";
 
 export const alt = "Seazn Games — play free in your browser. No sign-up, no ads.";
@@ -20,16 +21,22 @@ export const contentType = "image/png";
 
 type Props = { params: Promise<{ slug: string }> };
 
+/** Every live game's card is drawn once, at build — the registry is static. */
+export function generateStaticParams() {
+  return liveGames().map(({ slug }) => ({ slug }));
+}
+
 export default async function Image({ params }: Props) {
   const { slug } = await params;
   const game = getGame(slug);
-  // No 404 here, by choice: a metadata image route has none worth giving —
-  // the <meta> pointing at it is emitted before the image is ever requested
-  // (same ruling as the /shared fixture card, poster-dimensions.test.tsx). An
-  // unknown slug — and a coming-soon game, which has no art yet and for which
-  // "Play free" would be untrue — gets the /games hub card instead: still a
-  // real picture of what the link leads towards.
-  if (!game || game.status !== "live") return HubImage();
+  // An unknown slug is a 404, like its page: /games/<unknown> 404s and its
+  // <meta> advertises the ROOT share image, not this one, so nothing
+  // legitimate links here. (Next's route handler answers notFound() with an
+  // empty 404.)
+  if (!game) notFound();
+  // A coming-soon game has a real page but no art yet, and "Play free" would
+  // be untrue: its link previews as the /games hub card instead.
+  if (game.status !== "live") return HubImage();
 
   return new ImageResponse(
     (
@@ -84,7 +91,7 @@ export default async function Image({ params }: Props) {
                 cut the board along a steeper edge than its frame's. The art
                 draws its own rounded panel at the border's inner curve
                 (32 - 4 = 28) and never overflows it. */}
-            <GameArt slug={game.slug} width={430} height={430} radius={28} />
+            <GameArt slug={game.slug} width={GAME_CARD_ART} height={GAME_CARD_ART} radius={28} />
           </div>
         </div>
       </div>
