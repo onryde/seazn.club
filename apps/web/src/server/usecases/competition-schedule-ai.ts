@@ -53,6 +53,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assessCapacity, type CapacityReport } from "@seazn/engine/scheduling/capacity";
 import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, peopleByEntrant, toSlotConfig } from "./schedule";
+import { fixtureHasResultSql } from "./fixture-results-sql";
 import { CAPACITY_IMPOSSIBLE_CODE, capacityInputForFixtures, logCapacityAssessed } from "./capacity-guard";
 import {
   AI_VERIFY_POLICY,
@@ -580,7 +581,10 @@ export async function buildCompetitionPack(
       from fixtures f
       left join schedule_settings s on s.division_id = f.division_id
       where f.division_id in ${tx(requested)}
-        and f.status in ${tx(FIXED_OCCUPYING)}
+        and (f.status in ${tx(FIXED_OCCUPYING)}
+             -- A scheduled fixture that holds a result is fixed too: no
+             -- builder may move it (isMovable, schedule.ts).
+             or (f.status = ${MOVABLE_STATUS} and ${fixtureHasResultSql(tx)}))
         and f.scheduled_at is not null
         and f.court_id is not null`;
     // …and the run's PEOPLE, entrant by entrant, over every entrant named on any

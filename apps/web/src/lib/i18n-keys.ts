@@ -5190,6 +5190,7 @@ export type DictionaryKey =
   | "schedule.error.completedSeedingFailed"
   | "schedule.error.conflict"
   | "schedule.error.failed"
+  | "schedule.error.played"
   | "schedule.error.tooFewEntrants"
   | "schedule.error.tooFewGroupEntrants"
   | "schedule.error.tooFewQualifiers"

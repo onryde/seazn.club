@@ -1881,6 +1881,7 @@
   "schedule.error.failed": "Error",
   "schedule.error.unpairFailed": "No se pudo desemparejar esa ronda",
   "schedule.error.conflict": "Esa hora y esa cancha chocan con el resto del calendario: elige otra hora u otra cancha y guarda de nuevo.",
+  "schedule.error.played": "Este partido ya tiene un resultado o una puntuación registrados, así que no se puede mover ni bloquear.",
   "schedule.error.completedSeedingFailed": "Fase completada, pero no se pudo preparar la clasificación de la siguiente fase: {reason}",
   "schedule.notice.nothingToSchedule": "Nada que programar: no hay huecos libres o no queda nada sin programar.",
   "schedule.notice.placed": "Se colocaron {n} enfrentamiento(s).",

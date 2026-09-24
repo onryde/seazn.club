@@ -44,6 +44,9 @@ import {
   type CompetitionApplyDivision,
   type CompetitionApplyOut,
 } from "../competition-schedule-apply";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
+import { undoDivision } from "../history";
 import { seedCourts, seedOrg } from "./_seed";
 
 /**
@@ -525,6 +528,30 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     expect(out.conflicts).toEqual([]);
   }, 60_000);
 
+  // Review 3 of #857, N1. A start taken back leaves the row `scheduled` WITH its
+  // events. Written by an apply, it made a ledger step the results-guard
+  // refuses, and the division's Undo stuck on it.
+  it("a voided start in the plan is skipped and counted, and the division's Undo still completes", async () => {
+    const { alpha } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, { divisions: [alpha], source: "ai", ai: AI });
+    await startDivision(auth, board.alpha.id);
+    const voided = board.alpha.fixtureIds[0]!;
+    await scoreEvent(auth, voided, { expected_seq: 0, type: "core.start", payload: {} });
+    const [start] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${voided} and seq = 1`;
+    await scoreEvent(auth, voided, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+    const before = (await slots(board.alpha.id)).find((r) => r.id === voided);
+    expect(before?.court).toBe(board.courts.court1);
+
+    // The same times on Alpha's own second court: a legal board either way.
+    const again = lineUp(board.alpha, await divisionSeq(board.alpha.id), board.courts.court2, 0);
+    const out = await applyCompetitionSchedule(auth, board.competitionId, { divisions: [again], source: "ai", ai: AI });
+
+    expect(out).toMatchObject({ applied: board.alpha.fixtureIds.length - 1, skipped: 1 });
+    expect((await slots(board.alpha.id)).find((r) => r.id === voided)).toEqual(before);
+    expect((await undoDivision(auth, board.alpha.id)).applied.type).toBe("schedule_applied");
+  }, 60_000);
+
   it("a stale expected_seq on the SECOND division rolls back the FIRST", async () => {
     // Run BOTH directions. Whichever division the implementation happens to
     // write first, one of these two cases is a genuine rollback assertion — a
@@ -804,6 +831,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // Real engine conflicts, carrying `direct`, through the published shape.
     const parsed = ApplyCompetitionScheduleResult.parse({
       applied: 0,
+      skipped: 0,
       conflicts: blocking.conflicts,
     });
     expect(parsed.conflicts.some((c) => c.direct === true)).toBe(true);

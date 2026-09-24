@@ -25487,6 +25487,11 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "skipped": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "conflicts": {
                           "type": "array",
                           "items": {
@@ -25671,6 +25676,7 @@
                       },
                       "required": [
                         "applied",
+                        "skipped",
                         "conflicts"
                       ],
                       "additionalProperties": false
@@ -25685,6 +25691,7 @@
                   "ok": true,
                   "data": {
                     "applied": -9007199254740991,
+                    "skipped": -9007199254740991,
                     "conflicts": [
                       {
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -75646,6 +75653,11 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "skipped": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
                         "conflicts": {
                           "type": "array",
                           "items": {
@@ -75808,6 +75820,7 @@
                       },
                       "required": [
                         "applied",
+                        "skipped",
                         "conflicts"
                       ],
                       "additionalProperties": false
@@ -75822,6 +75835,7 @@
                   "ok": true,
                   "data": {
                     "applied": -9007199254740991,
+                    "skipped": -9007199254740991,
                     "conflicts": [
                       {
                         "fixtureId": "example",

@@ -4,6 +4,7 @@ import { RunSheetRow, SCHEDULE_ERROR_FALLBACK_KEY, scheduleErrorKey } from "@/co
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import { hasAssignedScorer } from "@/lib/fixture-row-action";
 import { ApiV1Error } from "@/lib/client-v1";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import type { RunSheetFixture } from "@/lib/run-sheet-groups";
 import { messages } from "@/lib/messages";
 
@@ -259,6 +260,16 @@ describe("the inline editor maps a wire code to organiser copy, never a raw mess
     expect(scheduleErrorKey(err)).toBe("schedule.error.conflict");
     // The differential that kills a "return the fallback for everything" mutant.
     expect(scheduleErrorKey(err)).not.toBe(SCHEDULE_ERROR_FALLBACK_KEY);
+  });
+
+  // Review 3 of #857, N1: a start taken back leaves the row `scheduled`, so the
+  // editor opens on it and the server refuses the move. The organiser reads why.
+  it("the played refusal gets its own key, with copy of its own", () => {
+    const err = new ApiV1Error("this match has a result or scoring recorded", 422, PLAYED_REFUSAL_CODE);
+    expect(scheduleErrorKey(err)).toBe("schedule.error.played");
+    const copy = (messages as Record<string, string>)["schedule.error.played"];
+    expect(copy).toBeTruthy();
+    expect(copy).not.toBe((messages as Record<string, string>)[SCHEDULE_ERROR_FALLBACK_KEY]);
   });
 
   it("every other wire code falls back — nothing unmapped invents copy", () => {

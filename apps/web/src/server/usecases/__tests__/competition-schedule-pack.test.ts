@@ -21,6 +21,8 @@ import {
 } from "../competition-schedule-ai";
 import { buildSchedulePack, isBlocking, OTHER_DIVISION_LABEL } from "../schedule-ai";
 import { createVenue, createCourt } from "../venues";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { seedOrg } from "./_seed";
 
 // A pass-through spy over the real implementation — it changes no behaviour and
@@ -752,6 +754,45 @@ describe.skipIf(!HAS_DB)("buildCompetitionPack (#350)", () => {
       if (from < T0 + 30 * MIN && T0 < to) {
         overlaps.push(`${a.fixture_id} @ ${new Date(from).toISOString()}`);
       }
+    }
+    expect(overlaps).toEqual([]);
+  }, 60_000);
+
+  // Review 3 of #857, N1. A start taken back leaves the row `scheduled` WITH its
+  // events: no builder may move it, so it is fixed court time for every OTHER
+  // division's draft too — the case above with a voided start for the finalized one.
+  it("no division's draft sits on another division's voided start", async () => {
+    const cup = await seedCompetition(auth, `Voided Cup ${randomUUID().slice(0, 6)}`, [
+      { name: "Alpha3", courts: ["Court 1"], matchMinutes: 30, entrants: 4, place: false, startOffsetMin: 0 },
+      { name: "Bravo3", courts: ["Court 1"], matchMinutes: 30, entrants: 4, place: true, startOffsetMin: 0 },
+    ]);
+    const [alpha3, bravo3] = cup.divisions as [SeededDivision, SeededDivision];
+    await startDivision(auth, bravo3.id, { acknowledge_warnings: true });
+    const voided = bravo3.fixtureIds[0]!;
+    await scoreEvent(auth, voided, { expected_seq: 0, type: "core.start", payload: {} });
+    const [start] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${voided} and seq = 1`;
+    await scoreEvent(auth, voided, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+
+    const { pack, movableIds } = await buildCompetitionPack(
+      auth,
+      cup.competitionId,
+      cup.divisions.map((d) => d.id),
+      { now: NOW_W2, mode: "generate", instruction: "x" },
+    );
+    expect(movableIds.has(voided)).toBe(false);
+    const court1 = await courtId(auth, "Court 1");
+    // Alpha3 is built first and drafts a full board, so it competed for 09:00.
+    expect(pack.divisions[0]!.id).toBe(alpha3.id);
+    expect(pack.divisions[0]!.draftPlaced).toBe(RR);
+
+    const minutes = new Map(pack.divisions.map((d) => [d.id, d.settings.matchMinutes]));
+    const overlaps: string[] = [];
+    for (const a of pack.draft) {
+      if (a.court_label !== court1) continue;
+      const from = Date.parse(a.scheduled_at!);
+      const to = from + minutes.get(a.division_id)! * MIN;
+      if (from < T0 + 30 * MIN && T0 < to) overlaps.push(`${a.fixture_id} @ ${new Date(from).toISOString()}`);
     }
     expect(overlaps).toEqual([]);
   }, 60_000);

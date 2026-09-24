@@ -50,7 +50,7 @@ import {
   listStages,
 } from "../stages";
 import { listDivisionFixturesForBoard, patchFixture } from "../fixtures";
-import { applySchedule, startDivision } from "../schedule";
+import { applySchedule, autoSchedule, putScheduleSettings, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { shiftDivisionSchedule } from "../schedule-plus";
 import { createCourt, createVenue, deleteCourt } from "../venues";
@@ -770,6 +770,77 @@ describe.skipIf(!HAS_DB)("a fixture in play or finalized is never taken away by 
     });
     expect(cleared).toMatchObject({ cleared: fixtures.length - 3, skipped: { decided: 3 } });
     await unmoved();
+  });
+
+  // Review 3 of #857, N1. A start taken back leaves the row `scheduled` WITH its
+  // events, so the board, every apply and the solver took it for movable — and
+  // the step that moved it is one the results-guard refuses. Undo then stuck on
+  // that step, and nothing older could be undone past it.
+  it("a voided start stays where it is: a drag and a pin are refused, the solver and an apply skip it — and Undo still walks back past it", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const venue = await createVenue(auth, { name: "Hall", sort: 0 });
+    const c1 = await createCourt(auth, venue.id, { name: "C1", sort: 0, tags: [] });
+    const c2 = await createCourt(auth, venue.id, { name: "C2", sort: 1, tags: [] });
+    await putScheduleSettings(auth, divisionId, {
+      config: {
+        startAt: "2026-07-12T09:00:00.000Z",
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: [c1.id, c2.id],
+        perEntrantMinRest: 0,
+        blackouts: [],
+        sessionWindows: [],
+      },
+      tz: "UTC",
+    });
+    const fixtures = await sql<{ id: string; scheduled_at: Date }[]>`
+      select id, scheduled_at from fixtures where stage_id = ${mainId} order by fixture_no`;
+    // The older steps: every fixture placed by hand, one ledger step each.
+    for (let i = 0; i < fixtures.length; i++) {
+      await patchFixture(auth, fixtures[i]!.id, {
+        scheduled_at: new Date(Date.UTC(2026, 6, 12, 9 + i)).toISOString(),
+        court_id: c1.id,
+      });
+    }
+    await startDivision(auth, divisionId);
+    const [voided, other] = [fixtures[0]!.id, fixtures[1]!.id];
+    await record(auth, voided, "voided start");
+    const rowOf = async (id: string) => (await wholeRows("stage_id", mainId)).find((r) => r.id === id);
+    const before = await rowOf(voided);
+    expect(before?.status).toBe("scheduled");
+
+    // A legal drag (its own time, the other court): only the played guard refuses it.
+    const ownTime = (before!.scheduled_at as Date).toISOString();
+    await expect(patchFixture(auth, voided, { scheduled_at: ownTime, court_id: c2.id })).rejects.toMatchObject({
+      status: 422, code: PLAYED_REFUSAL_CODE,
+    });
+    await expect(patchFixture(auth, voided, { schedule_locked: true })).rejects.toMatchObject({
+      status: 422, code: PLAYED_REFUSAL_CODE,
+    });
+
+    const proposal = await autoSchedule(auth, mainId, { only_unlocked: false, mode: "build" });
+    expect(proposal.assignments.map((a) => a.fixture_id).sort()).toEqual(
+      fixtures.slice(1).map((f) => f.id).sort(),
+    );
+
+    // Both to the other court at their own times: a legal board either way, so
+    // only the skip keeps the voided start's row out of the ledger step.
+    const at = async (id: string) =>
+      (await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${id}`)[0]!.scheduled_at.toISOString();
+    const applied = await applySchedule(auth, mainId, {
+      source: "manual",
+      assignments: [
+        { fixture_id: voided, scheduled_at: await at(voided), court_id: c2.id },
+        { fixture_id: other, scheduled_at: await at(other), court_id: c2.id },
+      ],
+    });
+    expect(applied).toMatchObject({ applied: 1, skipped: 1 });
+    expect(await rowOf(voided)).toEqual(before);
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("schedule_applied");
+    // …and past it, into the hand placements made before the start.
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("schedule_edited");
+    expect(await rowOf(voided)).toEqual(before);
   });
 
   // The row filter behind the engine's refusal: a fixture that starts playing

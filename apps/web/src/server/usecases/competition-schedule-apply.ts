@@ -115,6 +115,7 @@ import {
 } from "@seazn/engine/scheduling";
 import {
   MOVABLE_STATUS,
+  heldInPlace,
   afterScheduleWrite,
   applyWindow,
   assertFreshSeq,
@@ -144,6 +145,7 @@ import {
   type CompetitionPackDivision,
 } from "./competition-schedule-ai";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
+import { playedFixtureIds } from "./fixture-results-sql";
 
 type Tx = postgres.TransactionSql;
 
@@ -199,6 +201,9 @@ export interface CompetitionApplyInput {
 
 export interface CompetitionApplyOut {
   applied: number;
+  /** Listed fixtures left where they are because they hold a result
+   *  (`heldInPlace`, schedule.ts), across every division. */
+  skipped: number;
   /**
    * The ENGINE verifier's `Conflict`, verbatim — the same camelCase shape the
    * joint ai-plan response carries, NOT the snake_case `ScheduleConflict` the
@@ -416,6 +421,7 @@ export async function applyCompetitionSchedule(
     }
 
     const loaded: LoadedDivision[] = [];
+    let skipped = 0;
     for (const d of input.divisions) {
       const row = rowById.get(d.division_id)!;
       const lockState = await divisionLockState(tx, d.division_id);
@@ -432,6 +438,16 @@ export async function applyCompetitionSchedule(
       }
       const settings = await loadSettings(tx, d.division_id);
       const fixtures = await divisionFixtures(tx, d.division_id);
+      const byId = new Map(fixtures.map((f) => [f.id, f]));
+      // A `scheduled` row that holds a result is SKIPPED here, before
+      // anything reads the assignments, exactly as the per-stage apply
+      // skips it (`heldInPlace`).
+      const played = await playedFixtureIds(tx, d.division_id);
+      const assignments = d.assignments.filter((a) => {
+        const f = byId.get(a.fixture_id);
+        return !(f && heldInPlace(f, played));
+      });
+      skipped += d.assignments.length - assignments.length;
       loaded.push({
         id: d.division_id,
         name: row.name,
@@ -439,9 +455,9 @@ export async function applyCompetitionSchedule(
         sport: row.sport_key,
         settings,
         fixtures,
-        byId: new Map(fixtures.map((f) => [f.id, f])),
+        byId,
         scopes: lockState.scopes,
-        input: d,
+        input: { ...d, assignments },
       });
     }
 
@@ -840,6 +856,7 @@ export async function applyCompetitionSchedule(
 
     return {
       applied,
+      skipped,
       // #461's contract (schedule.ts's `applySchedule`/`moveFixture`),
       // generalized to N divisions: a widened sibling exists so the GATE
       // above can see it, not so its own — possibly pre-existing and
@@ -863,7 +880,7 @@ export async function applyCompetitionSchedule(
   for (const { divisionId, fixtureIds } of out.written) {
     afterScheduleWrite(divisionId, competitionId, "schedule", fixtureIds);
   }
-  return { applied: out.applied, conflicts: out.conflicts };
+  return { applied: out.applied, skipped: out.skipped, conflicts: out.conflicts };
 }
 
 /** Conflicts in reading order: division (domain order), then playing order

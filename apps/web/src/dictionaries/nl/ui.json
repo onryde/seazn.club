@@ -1881,6 +1881,7 @@
   "schedule.error.failed": "Mislukt",
   "schedule.error.unpairFailed": "Die ronde kon niet worden ontkoppeld",
   "schedule.error.conflict": "Deze tijd en baan botsen met de rest van het schema — kies een andere tijd of baan en sla opnieuw op.",
+  "schedule.error.played": "Voor deze wedstrijd is al een uitslag of score geregistreerd, dus die kan niet worden verplaatst of vergrendeld.",
   "schedule.error.completedSeedingFailed": "Fase afgerond, maar de plaatsing voor de volgende fase kon niet worden voorbereid: {reason}",
   "schedule.notice.nothingToSchedule": "Niets in te plannen — geen vrije plekken of niets ongepland.",
   "schedule.notice.placed": "{n} wedstrijd(en) geplaatst.",

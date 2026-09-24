@@ -8,6 +8,8 @@ import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
 import { requireFeature } from "@/lib/entitlements";
 import { cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
@@ -171,6 +173,26 @@ export const OCCUPYING = ["scheduled", "in_play", "decided", "finalized", "forfe
  *  (`competition-schedule-ai.ts`) and the court-removal guard below import
  *  this one, so there is no way for them to disagree about what "fixed" means. */
 export const FIXED_OCCUPYING = OCCUPYING.filter((s) => s !== MOVABLE_STATUS);
+
+/** Whether the board, the solver and an apply may move `f`: `scheduled`, and
+ *  holding no result. `played` is history's played set (`playedFixtureIds`,
+ *  ./fixture-results-sql.ts). The status alone cannot say it: a start taken
+ *  back walks the status to `scheduled` and leaves its events behind. History
+ *  refuses to undo any step that touches such a row, so a move written to one
+ *  would leave an Undo that nothing can get past (review 3 of #857, N1). */
+export function isMovable(f: { id: string; status: string }, played: ReadonlySet<string>): boolean {
+  return f.status === MOVABLE_STATUS && !played.has(f.id);
+}
+
+/** A `scheduled` fixture that holds a result all the same. An apply skips it
+ *  silently, the way a rain-delay shift does, and counts it. */
+export function heldInPlace(f: { id: string; status: string }, played: ReadonlySet<string>): boolean {
+  return f.status === MOVABLE_STATUS && !isMovable(f, played);
+}
+
+/** The English sentence behind a refused board move or pin. Clients say it in
+ *  the reader's own language off `PLAYED_REFUSAL_CODE`. */
+export const PLAYED_MOVE_MESSAGE = "this match has a result or scoring recorded, so it can't be moved or locked";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -1490,7 +1512,10 @@ export async function autoSchedule(
     // Movable: this stage's undecided fixtures. Fixed obstacles: everything
     // already on the timetable elsewhere in the division (other stages,
     // decided fixtures) plus sibling divisions.
-    const movable = all.filter((f) => f.stage_id === stageId && f.status === MOVABLE_STATUS);
+    // A fixture holding a result is fixed like a decided one (`isMovable`), so
+    // it lands in `obstacles` below and keeps its slot.
+    const played = await playedFixtureIds(tx, stage.division_id);
+    const movable = all.filter((f) => f.stage_id === stageId && isMovable(f, played));
     const obstacles = all
       .filter((f) => !movable.includes(f))
       .filter((f) => f.scheduled_at !== null && f.court_id !== null)
@@ -2553,6 +2578,9 @@ const roundToMinute = (t: number): number => Math.ceil(t / MS_PER_MIN) * MS_PER_
 
 export interface ApplyScheduleOut {
   applied: number;
+  /** Listed fixtures left where they are because they hold a result
+   *  (`heldInPlace`). */
+  skipped: number;
   conflicts: ScheduleConflict[];
 }
 
@@ -2601,7 +2629,16 @@ export async function applySchedule(
     // auto-schedule preview. See `toAssignment`'s own doc comment.
     const roundRobin = await roundRobinStageIds(tx, stage.division_id);
     const byId = new Map(all.map((f) => [f.id, f]));
-    for (const a of input.assignments) {
+    // A `scheduled` row that holds a result is SKIPPED, not refused
+    // (`heldInPlace`), the way a rain-delay shift skips it: neither the board
+    // nor the solver's proposal can tell it from a movable one by its status.
+    const played = await playedFixtureIds(tx, stage.division_id);
+    const assignments = input.assignments.filter((a) => {
+      const f = byId.get(a.fixture_id);
+      return !(f && f.stage_id === stageId && heldInPlace(f, played));
+    });
+    const skipped = input.assignments.length - assignments.length;
+    for (const a of assignments) {
       const f = byId.get(a.fixture_id);
       if (!f || f.stage_id !== stageId) {
         throw new HttpError(422, `fixture ${a.fixture_id} is not part of this stage`);
@@ -2614,12 +2651,24 @@ export async function applySchedule(
       }
     }
 
+    if (assignments.length === 0) {
+      // Everything listed was skipped: nothing written, so no ledger step.
+      return {
+        divisionId: stage.division_id,
+        competitionId: stage.competition_id,
+        applied: 0,
+        skipped,
+        conflicts: [],
+        fixtureIds: [],
+      };
+    }
+
     const entrantIds = [
       ...new Set(all.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])),
     ].filter((e): e is string => e !== null);
     const people = await peopleByEntrant(tx, entrantIds);
 
-    const proposed: Assignment[] = input.assignments.map((a) => {
+    const proposed: Assignment[] = assignments.map((a) => {
       const f = byId.get(a.fixture_id) as FixtureLite;
       const start = ms(a.scheduled_at);
       return {
@@ -2655,7 +2704,7 @@ export async function applySchedule(
         movable: true,
       };
     });
-    const listed = new Set(input.assignments.map((a) => a.fixture_id));
+    const listed = new Set(assignments.map((a) => a.fixture_id));
     // C1 fix-loop (G2/3rd instance, re-scoped by the round-order-widening
     // fix-loop below). This apply's own round-robin siblings — same
     // (division, stage, pool) sequence as any LISTED fixture, already placed,
@@ -2675,7 +2724,7 @@ export async function applySchedule(
     // as fixed CONTEXT via `board`/`existing` below — so their verdicts stay
     // byte-identical to the pre-round-order gate.
     const widenKeys = new Set(
-      input.assignments
+      assignments
         .map((a) => byId.get(a.fixture_id) as FixtureLite)
         .filter((f) => roundRobin.has(f.stage_id))
         .map(roundRobinSequenceKey),
@@ -2740,7 +2789,7 @@ export async function applySchedule(
     // able to edit it, which is the only way they can ever fix it.
     // A fixture with no slot yet contributes nothing, so every conflict its
     // placement causes reads as introduced. Correct: it is.
-    const currentSlots = input.assignments
+    const currentSlots = assignments
       .map((a) => byId.get(a.fixture_id) as FixtureLite)
       .filter((f) => f.scheduled_at !== null && f.court_id !== null)
       .map((f) => toAssignment(f, settings.config.matchMinutes, people, roundRobin));
@@ -2767,7 +2816,7 @@ export async function applySchedule(
     const conflicts = mapConflicts(found.filter((c) => !siblingIds.has(c.fixtureId)), courtNames);
 
     const moves: { fixture: string; from: unknown; to: unknown }[] = [];
-    for (const a of input.assignments) {
+    for (const a of assignments) {
       const f = byId.get(a.fixture_id) as FixtureLite;
       // P9 pass 3a: writers stop writing court_label/venue (owner ruling,
       // FULL cutover) — court_id/venue_id only.
@@ -2822,14 +2871,17 @@ export async function applySchedule(
     return {
       divisionId: stage.division_id,
       competitionId: stage.competition_id,
-      applied: input.assignments.length,
+      applied: assignments.length,
+      skipped,
       conflicts,
       // R10d n2: the fixtures this apply wrote, and only those.
-      fixtureIds: input.assignments.map((a) => a.fixture_id),
+      fixtureIds: assignments.map((a) => a.fixture_id),
     };
   });
-  afterScheduleWrite(out.divisionId, out.competitionId, "schedule", out.fixtureIds);
-  return { applied: out.applied, conflicts: out.conflicts };
+  if (out.fixtureIds.length > 0) {
+    afterScheduleWrite(out.divisionId, out.competitionId, "schedule", out.fixtureIds);
+  }
+  return { applied: out.applied, skipped: out.skipped, conflicts: out.conflicts };
 }
 
 /** GET /divisions/{id}/schedule/ai-last — recall the most recent AI-sourced
@@ -2983,6 +3035,18 @@ export async function moveFixture(
     const movesTimetable = patch.scheduled_at !== undefined || patch.court_id !== undefined;
     if (movesTimetable && fixture.status !== MOVABLE_STATUS) {
       throw new HttpError(422, `fixture is ${fixture.status} — decided fixtures are immutable`);
+    }
+    // A fixture holding a result stays where it is, pin included: history
+    // refuses any step that touches one (`fixtureHasResultSql`), so an edit
+    // written here would leave an Undo that nothing can get past. The status
+    // gate above cannot see it: a start taken back leaves `scheduled` behind.
+    // A pin is REFUSED rather than written without its ledger step: a played
+    // row is never moved by the solver, so its pin changes nothing, and a
+    // board edit that Undo cannot see would be a second kind of edit.
+    if (movesTimetable || patch.schedule_locked !== undefined) {
+      const [held] = await tx<{ id: string }[]>`
+        select f.id from fixtures f where f.id = ${fixture.id} and ${fixtureHasResultSql(tx)}`;
+      if (held) throw new HttpError(422, PLAYED_MOVE_MESSAGE, PLAYED_REFUSAL_CODE);
     }
 
     const settings = await loadSettings(tx, fixture.division_id);

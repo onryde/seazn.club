@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
@@ -333,6 +334,10 @@ export function useBoardActions(
         // hardcoded English. The board is the only surface that calls a limited
         // endpoint, so the code is unambiguous here.
         setNotice(msg("board.action.cooldown"));
+      } else if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) {
+        // A drag or pin on a match that holds a result (schedule.ts
+        // `moveFixture`). The server's sentence is English.
+        setError(msg("schedule.error.played"));
       } else if (err instanceof ApiV1Error && err.code === "SCHEDULE_CONFLICT") {
         const list = (err.extra.conflicts as BoardConflict[] | undefined) ?? [];
         const titleOf = (id: string) => {

@@ -1881,6 +1881,7 @@
   "schedule.error.failed": "Failed",
   "schedule.error.unpairFailed": "Could not unpair that round",
   "schedule.error.conflict": "That time and court clash with the rest of the schedule — pick a different time or court, then save again.",
+  "schedule.error.played": "This match has a result or scoring recorded, so it can't be moved or locked.",
   "schedule.error.completedSeedingFailed": "Stage completed — but the next stage's seeding couldn't be prepared: {reason}",
   "schedule.notice.nothingToSchedule": "Nothing to schedule — no free slots or nothing unscheduled.",
   "schedule.notice.placed": "Placed {n} fixture(s).",

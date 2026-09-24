@@ -2537,6 +2537,9 @@ export type AiLastResult = z.infer<typeof AiLastResult>;
 
 export const ApplyScheduleResult = z.object({
   applied: z.number().int(),
+  /** Listed fixtures left where they are because they hold a result (a start
+   *  taken back leaves a match `scheduled` with its scoring). */
+  skipped: z.number().int(),
   conflicts: z.array(ScheduleConflict),
 });
 
@@ -4556,6 +4559,9 @@ export type ApplyCompetitionScheduleRequest = z.infer<typeof ApplyCompetitionSch
 
 export const ApplyCompetitionScheduleResult = z.object({
   applied: z.number().int(),
+  /** Listed fixtures left where they are because they hold a result, across
+   *  every division. */
+  skipped: z.number().int(),
   /** The ENGINE verifier's camelCase `Conflict`, exactly as the joint ai-plan
    *  response carries it — NOT the snake_case `ScheduleConflict` of the
    *  per-stage apply. `applyCompetitionSchedule` returns `Conflict[]` verbatim,

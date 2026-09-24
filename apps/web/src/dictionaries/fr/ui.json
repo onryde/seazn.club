@@ -1881,6 +1881,7 @@
   "schedule.error.failed": "Échec",
   "schedule.error.unpairFailed": "Impossible de désapparier ce tour",
   "schedule.error.conflict": "Cet horaire et ce terrain entrent en conflit avec le reste du calendrier — choisissez un autre horaire ou un autre terrain, puis enregistrez à nouveau.",
+  "schedule.error.played": "Cette rencontre a déjà un résultat ou un score enregistré : elle ne peut être ni déplacée ni verrouillée.",
   "schedule.error.completedSeedingFailed": "Phase terminée, mais la qualification de la phase suivante n'a pas pu être préparée : {reason}",
   "schedule.notice.nothingToSchedule": "Rien à planifier — aucun créneau libre ou rien à programmer.",
   "schedule.notice.placed": "{n} match(s) placé(s).",
