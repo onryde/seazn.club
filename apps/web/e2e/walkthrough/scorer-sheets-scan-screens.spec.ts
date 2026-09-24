@@ -330,6 +330,19 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
   /** The round-number form the board does NOT print for a knockout. */
   const roundForm = (dict: Dict, f: Fx) => say(dict, "slot.match_ref", { round: f.round_no, seq: f.seq_in_round });
   expect(refOf(EN, final.id), "the differential: the board codes the final").not.toBe(roundForm(EN, final));
+  /** The scorebug's round, as the board's legend names it ("Final"). */
+  const roundLabelOf = (dict: Dict, f: Fx) => {
+    const label = boardRoundCodes(drawn, [cup], lookup(dict)).get(f.id)?.label;
+    expect(label, "the board labels every knockout round").toBeDefined();
+    expect(label, "…by name, not by number").not.toBe(say(dict, "schedule.round", { n: f.round_no }));
+    return label!;
+  };
+  /** The scorebug's first line: the division, then the board's round. */
+  const scorebugRound = (page: Page, dict: Dict, f: Fx) =>
+    expect(
+      page.getByText(`Scan Cup ${TAG} · ${roundLabelOf(dict, f)}`),
+      "the scorebug names the round as the board does",
+    ).toBeVisible();
 
   const mint = async (fixtureId: string) => {
     const res = await apiJson<{ id: string; secret: string }>(
@@ -414,10 +427,12 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     const carried = other.getByTestId("scan-view-only");
     await expect(carried).toHaveText(say(EN, "device.scan.viewOnly.carried"), { timeout: STEP_MS });
     await expect(other.locator('[data-role="pad-v3"]'), "View-only has no pad").toHaveCount(0);
+    await scorebugRound(other, EN, longSemi);
     shots.push(...(await capture(other, carried, testInfo, "en-view-only-carried")));
     await frPhone.goto(`/score/${longSemiLink.secret}`);
     const frCarried = frPhone.getByTestId("scan-view-only");
     await expect(frCarried).toHaveText(say(FR, "device.scan.viewOnly.carried"), { timeout: STEP_MS });
+    await scorebugRound(frPhone, FR, longSemi);
     shots.push(...(await capture(frPhone, frCarried, testInfo, "fr-view-only-carried")));
 
     // ---- 4. The other semi is decided: the final's phone moves to Confirm -----
@@ -438,6 +453,7 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     await expect(confirm).toContainText(say(EN, "device.scan.time"));
     await expect(confirm, "the Match line is the board's name for it").toContainText(refOf(EN, final.id));
     await expect(confirm).not.toContainText(roundForm(EN, final));
+    await scorebugRound(phone, EN, final);
     await expect(confirm.getByTestId("score-start-match")).toHaveText(say(EN, "score.startMatch"));
     await expect(phone.locator('[data-role="pad-v3"]'), "no pad before Start").toHaveCount(0);
     shots.push(...(await capture(phone, confirm, testInfo, "en-confirm")));
@@ -446,6 +462,7 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     await expect(frConfirm).toContainText(say(FR, "device.scan.confirmTitle"), { timeout: STEP_MS });
     await expect(frConfirm.getByTestId("score-start-match")).toHaveText(say(FR, "score.startMatch"));
     await expect(frConfirm, "the Match line, in French board codes").toContainText(refOf(FR, final.id));
+    await scorebugRound(frPhone, FR, final);
     shots.push(...(await capture(frPhone, frConfirm, testInfo, "fr-confirm")));
 
     // ---- 5. The other semi is finalised: its sheet says so -------------------

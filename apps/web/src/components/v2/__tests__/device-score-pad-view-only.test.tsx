@@ -236,6 +236,23 @@ describe("DeviceScorePad — View-only (scorer sheets §4.5)", () => {
 });
 
 describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
+  // Owner ruling (naming, #851/#854): the scorebug names the round the way the
+  // board does. The page resolves that label (`scanMatchNames`); the chrome
+  // prints what it is handed, on Confirm and View-only alike.
+  it("the scorebug prints the round label it was handed, never its own 'Round N'", () => {
+    const roundN = dict["schedule.round"]!.replace("{n}", "1");
+    for (const [status, viewOnly] of [["scheduled", null], ["decided", "carried_forward"]] as const) {
+      const text = renderIsland(DeviceScorePad, {
+        ...props(status, null),
+        initialEvents: [],
+        initialViewOnly: viewOnly,
+        fixture: { ...props(status, null).fixture, round_label: "«board round»" },
+      }).text();
+      expect(text, `${status}: the handed label, after the division`).toMatch(/Open\s+·\s+«board round»/);
+      expect(text, `${status}: not the round number`).not.toContain(roundN);
+    }
+  });
+
   it("scheduled with both sides: the Confirm card with Start, and NO inner pad yet", () => {
     const island = renderIsland(DeviceScorePad, {
       ...props("scheduled", null),

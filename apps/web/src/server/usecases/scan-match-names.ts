@@ -29,6 +29,9 @@ export interface ScanMatchNames {
    *  empty seat: a seated one prints its entrant's name. */
   home: string;
   away: string;
+  /** The round, as the board's legend names it ("Final", "Semi-finals");
+   *  "Round n" where the board codes no round and prints its number. */
+  roundLabel: string;
 }
 
 type Row = RoundCodeFixture & SeatLabelFixture;
@@ -55,5 +58,6 @@ export async function scanMatchNames(tx: Tx, fixtureId: string, lookup: SlotLabe
     ref: matchRef(self.round_no, rc?.refSeq ?? self.seq_in_round, lookup, rc?.code),
     home: seat("home"),
     away: seat("away"),
+    roundLabel: rc?.label ?? lookup("schedule.round", { n: self.round_no }),
   };
 }

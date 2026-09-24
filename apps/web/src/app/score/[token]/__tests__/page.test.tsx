@@ -54,8 +54,15 @@ async function boardNames(stageId: string, dict: Record<string, string>) {
     ref,
     code: (id: string) => codes.get(id)?.code,
     winnerOf: (id: string) => lookup("slot.winner_match", { ext: ref(id) }),
+    /** The round as the board's legend names it ("Final"); undefined where
+     *  the board codes no round (a league, Swiss). */
+    label: (id: string) => codes.get(id)?.label,
+    /** What the board prints for a round it does not code. */
+    roundN: (id: string) => lookup("schedule.round", { n: rows.find((r) => r.id === id)!.round_no }),
   };
 }
+
+type PadFixture = { fixture: { match_ref: string; round_label: string } };
 
 type WaitingProps = {
   home: string;
@@ -306,8 +313,12 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     };
     expect(p.initialViewOnly).toBeNull();
     // A league: the board codes no round, so it prints "R1·n" — and so does this.
-    expect(p.fixture.match_ref).toBe((await boardNames(leagueStage!, en)).ref(fixtureId));
+    const leagueBoard = await boardNames(leagueStage!, en);
+    expect(p.fixture.match_ref).toBe(leagueBoard.ref(fixtureId));
     expect(p.fixture.match_ref).toMatch(/^R1·\d+$/);
+    // …and its scorebug keeps the round number, as the board does.
+    expect(leagueBoard.label(fixtureId), "precondition: the board codes no league round").toBeUndefined();
+    expect((p.fixture as { round_label?: string }).round_label).toBe(leagueBoard.roundN(fixtureId));
     expect(p.fixture.scheduled_label).toContain("22:30");
   });
 
@@ -320,6 +331,41 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     const ref = (find(tree, DeviceScorePad)!.props as { fixture: { match_ref: string } }).fixture.match_ref;
     expect(ref).toBe((await boardNames(stage.id, en)).ref(sf1.id));
     expect(ref, "the differential: a semi is coded").not.toMatch(/^R\d/);
+  });
+
+  // Owner ruling (naming, #851/#854): the scorebug's round is the board's
+  // round label, never "Round N" where the board names the round. Expected
+  // values from the board's own `boardRoundCodes` labels, in each language.
+  it("the scorebug names the round the way the board does — Final, Semi-finals — in the viewer's language", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const fixtures = await fixturesOf(stage.id);
+    const sf1 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const final = fixtures.find((f) => f.round_no === 2)!;
+    // The final needs both sides to reach the pad: decide both semis.
+    for (const s of fixtures.filter((f) => f.round_no === 1)) await decide(auth, s.id);
+    const roundLabelOf = async (fixtureId: string) => {
+      const tree = await ScorePadPage({ params: Promise.resolve({ token: (await ensureDeviceLink(auth, fixtureId)).secret }) });
+      const pad = find(tree, DeviceScorePad);
+      expect(pad, "precondition: the pad (Confirm or View-only) renders").not.toBeNull();
+      return (pad!.props as PadFixture).fixture.round_label;
+    };
+    const enBoard = await boardNames(stage.id, en);
+    for (const f of [sf1, final]) {
+      expect(enBoard.label(f.id), "precondition: the board labels every knockout round").toBeDefined();
+      const label = await roundLabelOf(f.id);
+      expect(label).toBe(enBoard.label(f.id));
+      expect(label, "the differential: never the round number the board does not print").not.toBe(enBoard.roundN(f.id));
+    }
+    locale.value = "fr";
+    try {
+      const frBoard = await boardNames(stage.id, fr);
+      const frLabel = await roundLabelOf(final.id);
+      expect(frLabel).toBe(frBoard.label(final.id));
+      expect(frLabel, "French, not the English label").not.toBe(enBoard.label(final.id));
+    } finally {
+      locale.value = "en";
+    }
   });
 
   // The page playoff is where the board's number is not the row's: the

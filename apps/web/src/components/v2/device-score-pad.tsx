@@ -76,6 +76,11 @@ interface Props {
      *  start time in the venue's zone, both resolved server-side. */
     match_ref?: string | null;
     scheduled_label?: string | null;
+    /** The scorebug's round, as the schedule board names it ("Final",
+     *  "Semi-finals"), or "Round n" where the board prints numbers (a league,
+     *  Swiss) — resolved server-side by `scanMatchNames`. The page always sends
+     *  it; "Round n" below is only for a caller that has no board to ask. */
+    round_label?: string | null;
   };
   sport: SportInfo;
   home: PadSideInfo | null;
@@ -456,7 +461,7 @@ export function DeviceScorePad({
               <img src={logo} alt="" className="h-5 w-5 shrink-0 rounded bg-white/10 object-cover" />
             )}
             <span className="truncate">
-              {fixture.division_name} · {msg("schedule.round", { n: fixture.round_no })}
+              {fixture.division_name} · {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
               {fixture.court_label ? ` · ${fixture.court_label}` : ""}
             </span>
           </p>

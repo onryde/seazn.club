@@ -261,6 +261,7 @@ export default async function ScorePadPage({
           division_name: fixture.division_name,
           match_ref: ref,
           scheduled_label: scheduledLabel,
+          round_label: names.roundLabel,
         }}
         sport={{
           key: fixture.sport_key,
