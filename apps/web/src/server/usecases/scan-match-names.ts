@@ -7,12 +7,19 @@ import "server-only";
 //
 // The board's own functions over the board's own columns, the same path the
 // next-match refusal takes (engine-db/fed-seats.ts `boardRef`): `boardRoundCodes`
-// over every row of the fixture's stage, `matchRef` (→ `composeMatchRef`) with
-// the board's `refSeq`, and `withRoundCodeRefs` for the seats. Unlike that
-// refusal, this page knows its reader, so the codes render in the viewer's
-// language here (`lookup`) instead of travelling as dictionary keys. Stored
-// seat labels name a feeder in the SAME stage (`{round, seq}`, stages.ts), so
-// that stage's rows are all the lookup needs.
+// over the rows, `matchRef` (→ `composeMatchRef`) with the board's `refSeq`,
+// and for the seats `withRoundCodeRefs` over the board's own feed map
+// (`feedLabels`) — the feed edge first, the stored label when there is none,
+// in `cardTitle`'s order. Unlike that refusal, this page knows its reader, so
+// the codes render in the viewer's language here (`lookup`) instead of
+// travelling as dictionary keys.
+//
+// The WHOLE DIVISION's rows, not the stage's (review round 2): a seat fed from
+// another stage has no stored label naming its feeder — `wireCrossFeeds`
+// (stages.ts) writes only the source row's link — so its name comes from the
+// feed edge, whose source row lives in the other stage. Cross feeds never
+// leave their division (`wireCrossFeeds` reads one division's stages), which
+// is what makes the division enough; the board reads the whole competition.
 import type { Tx } from "@/lib/db";
 import {
   boardRoundCodes,
@@ -20,6 +27,7 @@ import {
   type RoundCodeFixture,
   type SeatLabelFixture,
 } from "@/components/v2/board/round-codes";
+import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { matchRef, resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 
 export interface ScanMatchNames {
@@ -34,20 +42,22 @@ export interface ScanMatchNames {
   roundLabel: string;
 }
 
-type Row = RoundCodeFixture & SeatLabelFixture;
+type Row = RoundCodeFixture & SeatLabelFixture & FeedRow & { stage_id: string };
 
 export async function scanMatchNames(tx: Tx, fixtureId: string, lookup: SlotLabelLookup): Promise<ScanMatchNames> {
   const rows = await tx<Row[]>`
     select id, stage_id, round_no, seq_in_round, ext_key, lane, is_final, third_place, conditional,
-           home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
+           home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+           winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot
     from fixtures
-    where stage_id = (select stage_id from fixtures where id = ${fixtureId})`;
+    where division_id = (select division_id from fixtures where id = ${fixtureId})`;
   const self = rows.find((r) => r.id === fixtureId);
   if (self === undefined) throw new Error(`scanMatchNames: fixture ${fixtureId} not found`);
-  const stages = await tx<{ id: string; kind: string }[]>`select id, kind from stages where id = ${self.stage_id}`;
+  const stages = await tx<{ id: string; kind: string }[]>`
+    select id, kind from stages where division_id = (select division_id from fixtures where id = ${fixtureId})`;
   const codes = boardRoundCodes(rows, stages, lookup);
   const rc = codes.get(fixtureId);
-  const seats = withRoundCodeRefs(rows, {}, codes)[fixtureId];
+  const seats = withRoundCodeRefs(rows, feedLabels(rows), codes)[fixtureId];
   const seat = (side: "home" | "away") =>
     resolveSlotLabel(
       seats?.[side] ?? (side === "home" ? self.home_slot_label : self.away_slot_label) ?? null,

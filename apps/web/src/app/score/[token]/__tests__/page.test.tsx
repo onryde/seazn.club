@@ -23,7 +23,15 @@ import { DeviceScorePad } from "@/components/v2/device-score-pad";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
-import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
+import {
+  boardRoundCodes,
+  withRoundCodeRefs,
+  type RoundCodeFixture,
+  type SeatLabelFixture,
+} from "@/components/v2/board/round-codes";
+import { cardTitle, type BoardFixture } from "@/components/v2/board/types";
+import { feedLabels, type FeedRow } from "@/lib/schedule-board";
+import { resolveSlotLabel } from "@/lib/slot-label";
 import { composeMatchRef } from "@/lib/match-ref";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 import en from "@/dictionaries/en/ui.json";
@@ -400,6 +408,101 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     const seats = [home, away];
     expect(seats, "Qualifier 2 waits on the Eliminator's winner, by the board's code").toContain(board.winnerOf(elim.id));
     expect(seats, "and on Qualifier 1's loser").toContain(lookup("slot.loser_match", { ext: board.ref(q1.id) }));
+  });
+
+  // Task 6 review round 2 (item 3): a seat fed from ANOTHER stage.
+  // `wireCrossFeeds` (usecases/stages.ts) writes only the source row's link,
+  // so the seat's name comes from the feed edge, and the board builds its feed
+  // map from the whole division's rows. Waiting used to pass no feed map at
+  // all, so it fell through to the seat's stored label while the board card
+  // said "Winner of …". Real producer end to end: real stages, the real setup
+  // generator, the real `wireCrossFeeds`; the only hand-set value is the
+  // league's `cross_feeds` config (what the format gates would write), exactly
+  // as division-fixtures-feed-edges.test.ts drives it.
+  // Two source kinds: a league (uncoded — the feeder prints "R1·1") and a
+  // knockout (coded in ITS OWN stage — "Loser of SF·1", which only a lookup
+  // that codes the other stage's rows can produce). The knockout feeds its
+  // semi's LOSER: the winner already has its own final to go to, and
+  // `wireCrossFeeds` never overwrites a link.
+  it.each([
+    ["league", { legs: 1 }, "winner"],
+    ["knockout", {}, "loser"],
+  ] as const)("a seat fed from ANOTHER stage (%s) waits on the feeder the board names, not its stored label (review round 2)", async (sourceKind, sourceConfig, side) => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Cross " + Math.random().toString(36).slice(2, 8),
+      visibility: "private",
+      branding: {},
+    });
+    const div = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(
+      auth,
+      div.id,
+      ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+    );
+    const stages = await createStages(auth, div.id, [
+      { seq: 1, kind: sourceKind, name: "Source", config: sourceConfig },
+      {
+        seq: 2,
+        kind: "knockout",
+        name: "Cup",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      },
+    ]);
+    const league = stages.find((s) => s.seq === 1)!;
+    const cup = stages.find((s) => s.seq === 2)!;
+    await generateStageFixtures(auth, cup.id);
+    await generateStageFixtures(auth, league.id);
+    const [source] = await sql<{ id: string; ext_key: string }[]>`
+      select id, ext_key from fixtures where stage_id = ${league.id} order by round_no, seq_in_round limit 1`;
+    const [target] = await sql<{ id: string; ext_key: string }[]>`
+      select id, ext_key from fixtures where stage_id = ${cup.id} order by round_no, seq_in_round limit 1`;
+    await sql`
+      update stages set config = config || ${sql.json({
+        cross_feeds: [{ from_ext_key: source!.ext_key, side, to_stage_seq: 2, to_ext_key: target!.ext_key, slot: 2 }],
+      } as never)}
+      where id = ${league.id}`;
+    // The second generate is the one that finds both ends and wires the edge
+    // (`wireCrossFeeds` is re-entrant: "wired once both stages generated").
+    await generateStageFixtures(auth, league.id);
+
+    // The board's own path, over the board's own selects (schedule/page.tsx's
+    // feed rows, the board projection's code columns), for the whole division.
+    const lookup = lookupFor(en);
+    const feedRows = await sql<FeedRow[]>`
+      select id, stage_id, round_no, seq_in_round, winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot
+      from fixtures where division_id = ${div.id}`;
+    const rows = await sql<(RoundCodeFixture & SeatLabelFixture & BoardFixture)[]>`
+      select * from fixtures where division_id = ${div.id}`;
+    const stageKinds = await sql<{ id: string; kind: string }[]>`select id, kind from stages where division_id = ${div.id}`;
+    const feeds = withRoundCodeRefs(rows, feedLabels(feedRows), boardRoundCodes(rows, stageKinds, lookup));
+    const row = rows.find((r) => r.id === target!.id)!;
+    expect(row.away_entrant_id, "precondition: the cross-fed seat is empty").toBeNull();
+    expect(feeds[row.id]?.away?.params.stage, "precondition: the board sees a CROSS-stage edge").toBe(league.id);
+    const boardAway = resolveSlotLabel(feeds[row.id]!.away!, lookup, "schedule.tbd");
+    const storedAway = resolveSlotLabel(row.away_slot_label ?? null, lookup, "schedule.tbd");
+    expect(boardAway, "precondition: the feed and the stored label read differently").not.toBe(storedAway);
+
+    const waiting = find(
+      await ScorePadPage({ params: Promise.resolve({ token: (await ensureDeviceLink(auth, target!.id)).secret }) }),
+      ScanWaiting,
+    );
+    expect(waiting, "precondition: the cross-fed match waits").not.toBeNull();
+    const { home, away } = waiting!.props as WaitingProps;
+    expect(away, "the seat names the feeder in the other stage, as the board card does").toBe(boardAway);
+    expect(`${home} vs ${away}`, "…and the whole title is the board card's").toBe(cardTitle(row, {}, feeds, lookup));
   });
 
   it("a SCHEDULED semi whose final was hand-seated → Confirm, not View-only (the page's own status gate, A15)", async () => {
