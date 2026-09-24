@@ -33,8 +33,9 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { undoDivision } from "../history";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -220,6 +221,30 @@ describe.runIf(HAS_DB)("a qualifier who departs before Generate — walkover, no
       (r) => r.home_entrant_id === survivor || r.away_entrant_id === survivor,
     );
     expect(advanced, "the walkover did not advance the survivor").toBe(true);
+  });
+
+  // Review 3 of #857, N2 (owner ruling): a walkover counts as a result only
+  // with evidence. The generator's F14 walkover has none — nobody played it —
+  // and counting it refused Undo of the generation and Rebuild, both with
+  // "started or finished" copy that was false.
+  it("an F14 walkover is not a result: Undo of the generation completes, and Rebuild is allowed", async () => {
+    const rig = await seedQualifiedStage(8, "knockout");
+    await withdrawEntrantCascade(rig.auth, rig.idOf("E3"));
+    const walkovers = async () =>
+      (await fixturesOf(rig.stageId)).filter(
+        (r) => r.status === "forfeited" && r.home_entrant_id !== null && r.away_entrant_id !== null,
+      );
+
+    await generateStageFixtures(rig.auth, rig.stageId);
+    expect(await walkovers()).toHaveLength(1);
+    expect((await undoDivision(rig.auth, rig.divisionId)).applied.type).toBe("fixtures_cleared");
+    expect(await fixturesOf(rig.stageId)).toEqual([]);
+
+    await generateStageFixtures(rig.auth, rig.stageId);
+    expect(await walkovers()).toHaveLength(1);
+    const rebuilt = await rebuildStageFixtures(rig.auth, rig.stageId);
+    expect(rebuilt.removed).toBeGreaterThan(0);
+    expect(await walkovers()).toHaveLength(1);
   });
 
   it("promotes nobody: no qualifier inherits another's seed", async () => {

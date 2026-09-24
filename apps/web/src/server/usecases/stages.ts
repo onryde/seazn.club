@@ -3077,7 +3077,10 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     //
     // This guard's whole set — status clause and evidence — is
     // `fixtureHasResultSql`, which history reads as its played set (review 2
-    // of #857, I3), so what rebuild refuses history never deletes.
+    // of #857, I3), so what rebuild refuses history never deletes. A walkover
+    // blocks only through its evidence (review 3 of #857, N2): the one a
+    // scorer records posts `core.forfeit`; the generator's F14 walkover has
+    // nothing played behind it, so a stage holding one rebuilds.
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.stage_id = ${stageId} and ${fixtureHasResultSql(tx)}

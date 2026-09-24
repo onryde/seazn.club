@@ -38,10 +38,17 @@ export function fixtureEvidenceSql(tx: Tx, on = "f") {
 
 /**
  * A fixture that holds a result: `rebuildStageFixtures`' refusal set, which
- * reads it. In play, decided or finalized; a walkover with both seats filled
- * (a one-sided forfeit is the generator's bye); an abandonment that carries
- * an outcome (a no-result); or anything recorded at all (`fixtureEvidenceSql`
- * — a start taken back leaves `scheduled` behind, and its events).
+ * reads it. In play, decided or finalized; an abandonment that carries an
+ * outcome (a no-result); or anything recorded at all (`fixtureEvidenceSql` —
+ * a start taken back leaves `scheduled` behind, and its events).
+ *
+ * A walkover counts ONLY through its evidence (review 3 of #857, N2, owner
+ * ruling). One recorded in play posts `core.forfeit`, a score event. The
+ * generator's own lines carry none: a bye, and the F14 walkover it writes for
+ * a qualifier who departed before the draw (`walkoverDepartedQualifiers`,
+ * stages.ts) — both seats filled, `forfeited`, an award, and nothing played.
+ * Counting that one refused Undo of the generation and Rebuild with "started
+ * or finished" copy that was false, leaving Delete stage as the only exit.
  *
  * ONE predicate (review 2 of #857, I3, owner ruling: history's played set IS
  * the rebuild predicate). History's results-guard (`playedFixtureIds`), its
@@ -56,7 +63,6 @@ export function fixtureHasResultSql(tx: Tx, on = "f") {
   return tx`(
     ${f}.status in ('in_play', 'decided', 'finalized')
     or (${f}.status = 'abandoned' and ${f}.outcome is not null)
-    or (${f}.status = 'forfeited' and ${f}.home_entrant_id is not null and ${f}.away_entrant_id is not null)
     or (${fixtureEvidenceSql(tx, on)})
   )`;
 }
