@@ -18,6 +18,7 @@ import { getDictionary } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
+import { isRestBye } from "@/lib/fixture-bye";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
@@ -266,12 +267,18 @@ export async function buildDivisionSlides(
     round: f.round_no,
   });
 
-  const live = fixtures.filter((f) => f.status === "in_play").map(item);
-  const results = fixtures
+  // #850 (owner ruling 2026-09-24): a round-robin REST bye is no match and
+  // never a result — settled `forfeited` at generation, it headed "Latest
+  // results" as "X vs Bye" before anything was played. The fixture slides list
+  // MATCHES. Swiss and bracket byes are unchanged.
+  const kindOf = new Map(stages.map((s) => [s.id, s.kind]));
+  const matches = fixtures.filter((f) => !isRestBye(f, kindOf.get(f.stage_id) ?? ""));
+  const live = matches.filter((f) => f.status === "in_play").map(item);
+  const results = matches
     .filter((f) => ["decided", "finalized", "forfeited"].includes(f.status))
     .slice(-8)
     .map(item);
-  const upcoming = fixtures.filter((f) => f.status === "scheduled").slice(0, 8).map(item);
+  const upcoming = matches.filter((f) => f.status === "scheduled").slice(0, 8).map(item);
 
   if (live.length > 0)
     slides.push({
@@ -358,6 +365,11 @@ export interface PublicSlideInput {
     away_slot_label?: SlotLabel | null;
     status: string;
     summary: { headline?: string } | null;
+    /** #850 — with `ext_key` below (the rest-bye MARKER), tells a round-robin
+     *  rest bye (`isRestBye`) from a match, so the kiosk never lists one as a
+     *  result. Optional: hand-built inputs predate it; both real callers spread
+     *  `getPublicDivision`'s rows, which carry both. */
+    outcome?: unknown;
     /** N1c c3 — the round ROLE the public round namer reads to name a waiting
      *  side's feeder round (`getPublicDivision` carries all five). Optional:
      *  hand-built inputs predate them, and absent reads as a plain lane. */
@@ -510,11 +522,25 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     // "R{round}" code over the raw round_no (a losers' round 1 read "R3").
     roundName: namer.roundLabel(f.id) ?? "",
   });
-  const live = data.fixtures.filter((f) => f.status === "in_play").map(item);
-  const results = data.fixtures
+  // #850 — the kiosk's twin of the organiser deck's rule above: a round-robin
+  // rest bye is never a result, so "Latest results" lists MATCHES only.
+  const matches = data.fixtures.filter(
+    (f) =>
+      !isRestBye(
+        {
+          outcome: f.outcome ?? null,
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          ext_key: f.ext_key ?? null,
+        },
+        stageById.get(f.stage_id)?.kind ?? "",
+      ),
+  );
+  const live = matches.filter((f) => f.status === "in_play").map(item);
+  const results = matches
     .filter((f) => ["decided", "finalized", "forfeited"].includes(f.status))
     .slice(-8).map(item);
-  const upcoming = data.fixtures.filter((f) => f.status === "scheduled").slice(0, 8).map(item);
+  const upcoming = matches.filter((f) => f.status === "scheduled").slice(0, 8).map(item);
   if (live.length > 0)
     slides.push({ kind: "fixtures", division: data.division.name, title: lookup("slideshow.slide.inPlay"), items: live, pinned: true });
   if (results.length > 0)

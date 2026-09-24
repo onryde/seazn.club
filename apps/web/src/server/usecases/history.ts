@@ -29,11 +29,52 @@ import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
-import { generateStageFixtures } from "./stages";
+import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { generateStageFixtures, reconcileDivisionRestByes } from "./stages";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
 type Tx = postgres.TransactionSql;
+
+/**
+ * A pool fixture's snapshot on `pool_entrants_cleared` — the engine's
+ * `FixtureSnapshot` plus what `pool_entrants_restored` needs to put the row
+ * back AS IT WAS (#850 review, finding 3). The engine copies `p.fixtures`
+ * through its inverse verbatim and never parses it, so the extra fields ride
+ * the ledger untouched.
+ *
+ *  - `ext_key`: the generator's idempotency key. Without it a restored row is
+ *    invisible to the next Generate, which then writes the whole pool again.
+ *  - `home_slot_label`/`away_slot_label`: the stored side labels — a bye's
+ *    phantom "Bye" side, a fed pool's seed reference.
+ *  - `bye_outcome`: set ONLY on a genuine one-sided award bye
+ *    (`isOneSidedAwardBye`) — a round-robin rest bye is settled at
+ *    generation (`forfeited` + `{kind:"award", winner}`), and restoring it as
+ *    a `scheduled` one-seat row made an unscoreable "match" the stage could
+ *    never complete. Nothing else's status or outcome is snapshotted: every
+ *    other row that reaches this path is unplayed (a `decided` one refuses
+ *    the clear), and restoring a live status without its score events would
+ *    be worse than restoring it fresh.
+ */
+type PoolFixtureSnapshot = FixtureSnapshot & {
+  ext_key?: string | null;
+  home_slot_label?: unknown;
+  away_slot_label?: unknown;
+  bye_outcome?: { kind: "award"; winner: string };
+};
+
+/** The `bye_outcome` a restore may write back: re-checked against the ONE bye
+ *  predicate, so a hand-edited or stale ledger payload cannot settle a row
+ *  that is not a one-sided bye. */
+function restorableByeOutcome(s: PoolFixtureSnapshot): { kind: "award"; winner: string } | null {
+  if (!s.bye_outcome) return null;
+  const row = {
+    outcome: s.bye_outcome,
+    home_entrant_id: s.home_entrant_id ?? null,
+    away_entrant_id: s.away_entrant_id ?? null,
+  };
+  return isOneSidedAwardBye(row) ? s.bye_outcome : null;
+}
 
 // EngineError codes for the doc 08 §1 map: 409 for stale clients, 422 rest.
 function toEngineError(err: unknown): never {
@@ -91,6 +132,16 @@ async function appendEvent(
             ${tx.json(event.payload as never)}, ${actorId})`;
   return last + 1;
 }
+
+/** History events whose executor inserts or deletes fixture ROWS (as opposed
+ *  to moving a fixture in time) — the ones after which a round-robin stage's
+ *  rest byes are re-derived (#850). */
+const ROW_EVENTS: ReadonlySet<string> = new Set([
+  "fixtures_cleared",
+  "fixtures_generated",
+  "pool_entrants_cleared",
+  "pool_entrants_restored",
+]);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -230,15 +281,34 @@ async function execute(
       // "unresolvable -> insert without a court, log it" fallback; there is
       // no existing row to "leave untouched" the way an UPDATE can, so the
       // safe fallback for a fresh INSERT is court_id = null.
-      for (const s of (p.fixtures as FixtureSnapshot[]) ?? []) {
+      //
+      // #850 review, finding 3: the row comes back as it WAS, not as a fresh
+      // `scheduled` shell — its `ext_key` (so a later Generate recognises it
+      // instead of writing the pool twice), its stored side labels, and, for a
+      // rest bye only, its settled `forfeited` + award outcome. See
+      // `PoolFixtureSnapshot`. Snapshots written before these fields existed
+      // simply lack them and restore exactly as before.
+      for (const s of (p.fixtures as PoolFixtureSnapshot[]) ?? []) {
         const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
+        const bye = restorableByeOutcome(s);
         wrote(await tx<{ id: string }[]>`
           insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
-                                home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
+                                home_entrant_id, away_entrant_id, scheduled_at, court_id, status,
+                                outcome, ext_key, home_slot_label, away_slot_label)
           values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
                   ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
-                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
-          on conflict (id) do nothing returning id`);
+                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null},
+                  ${bye ? "forfeited" : "scheduled"},
+                  ${bye ? tx.json(bye as never) : null},
+                  ${s.ext_key ?? null},
+                  ${s.home_slot_label ? tx.json(s.home_slot_label as never) : null},
+                  ${s.away_slot_label ? tx.json(s.away_slot_label as never) : null})
+          -- No conflict target: the id AND the (stage_id, ext_key) key both
+          -- skip. A twin already carrying this ext_key means the generator has
+          -- rewritten the line since; a second copy is the duplicate this
+          -- restore must never write, and a raised unique violation would
+          -- abort the whole undo.
+          on conflict do nothing returning id`);
       }
       break;
     }
@@ -378,6 +448,17 @@ async function stepWrite(
                   ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
           on conflict (id) do nothing returning id`).map((row) => row.id));
       }
+    }
+    // #850 — a step that adds or removes fixture ROWS can leave a round-robin
+    // stage's rest-bye rows disagreeing with its matches: a bye the ledger
+    // never listed (written by `reconcileRestByes` after a later Generate, or
+    // by a draw) outlives the matches it described, or a bye that pass deleted
+    // is missing once its matches come back. Re-derive them here, in the same
+    // transaction, and publish what changed with the rest of the step. Time
+    // moves (`schedule_*`) seat nobody and are skipped.
+    if (ROW_EVENTS.has(result.event.type)) {
+      const byes = await reconcileDivisionRestByes(tx, divisionId);
+      fixtureIds.push(...byes.inserted, ...byes.deleted);
     }
     return {
       out: {
@@ -941,23 +1022,17 @@ export async function clearPoolEntrants(
       id: string; stage_id: string; pool_id: string | null; round_no: number | null;
       seq_in_round: number | null; home_entrant_id: string | null; away_entrant_id: string | null;
       court_id: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
+      outcome: unknown; ext_key: string | null; home_slot_label: unknown; away_slot_label: unknown;
     }[]>`
       select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id, away_entrant_id,
-             court_id, scheduled_at::text as scheduled_at, schedule_locked, status
+             court_id, scheduled_at::text as scheduled_at, schedule_locked, status,
+             outcome, ext_key, home_slot_label, away_slot_label
       from fixtures where pool_id = ${poolId}`;
     let result;
     try {
       result = engineRemovePool(
-        rows.map((f) => ({
-          id: f.id,
-          stageId: f.stage_id,
-          poolId: f.pool_id,
-          roundNo: f.round_no,
-          court: f.court_id,
-          at: f.scheduled_at,
-          locked: f.schedule_locked,
-          decided: f.status === "decided",
-          snapshot: {
+        rows.map((f) => {
+          const snapshot: PoolFixtureSnapshot = {
             id: f.id,
             stage_id: f.stage_id,
             pool_id: f.pool_id,
@@ -967,8 +1042,24 @@ export async function clearPoolEntrants(
             away_entrant_id: f.away_entrant_id,
             at: f.scheduled_at,
             court: f.court_id,
-          },
-        })),
+            // #850 review, finding 3 — see `PoolFixtureSnapshot`.
+            ext_key: f.ext_key,
+            home_slot_label: f.home_slot_label,
+            away_slot_label: f.away_slot_label,
+            ...(isOneSidedAwardBye(f) ? { bye_outcome: f.outcome as { kind: "award"; winner: string } } : {}),
+          };
+          return {
+            id: f.id,
+            stageId: f.stage_id,
+            poolId: f.pool_id,
+            roundNo: f.round_no,
+            court: f.court_id,
+            at: f.scheduled_at,
+            locked: f.schedule_locked,
+            decided: f.status === "decided",
+            snapshot,
+          };
+        }),
         poolId,
       );
     } catch (err) {

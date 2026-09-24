@@ -63,6 +63,7 @@ import {
   CompetitionHubDoc,
   type CompetitionHubDocT,
 } from "@/server/public-site/competition-hub-schema";
+import { isRestBye } from "@/lib/fixture-bye";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -393,7 +394,7 @@ export async function publicSchedule(
     // consumer saw nothing where the HTML schedule page (public-site/data.ts)
     // already shows a label.
     const rawFixtures = await sql<
-      Pick<
+      (Pick<
         PublicFixture,
         | "id"
         | "stage_id"
@@ -410,11 +411,15 @@ export async function publicSchedule(
         | "status"
         | "outcome"
         | "summary"
-      >[]
+      > & { ext_key: string | null })[]
     >`
       select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
              away_entrant_id, home_slot_label, away_slot_label,
-             scheduled_at, venue, court_label, status, outcome, summary
+             scheduled_at, venue, court_label, status, outcome, summary,
+             -- #850: the rest-bye MARKER (lib/fixture-bye.ts), read off
+             -- fixtures by the VIEW row's own id exactly as getPublicDivision
+             -- reads it; used for the filter below and never served.
+             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
       from public_fixtures_v where division_id = ${division.id}
       order by round_no, seq_in_round`;
     // P9 cutover (finding #2): venue/court_label are frozen since the
@@ -422,7 +427,25 @@ export async function publicSchedule(
     // null for both. venue_name/court_name (derived, disambiguated via
     // public-site/data.ts's withCourtVenueNames — same helper the HTML
     // schedule page uses) are what a consumer should render instead.
-    const fixtures = await withCourtVenueNames(rawFixtures);
+    // #850 (owner ruling 2026-09-24): a round-robin REST bye is never a
+    // result on a public surface, and this feed carries results — a consumer
+    // listing its settled rows would print "X vs — forfeit" for a round
+    // nobody played. It lists the division's MATCHES; a Swiss or bracket bye
+    // stays, as before (it is a result there).
+    const kinds = new Map(
+      (await sql<{ id: string; kind: string }[]>`
+        select id, kind from stages where division_id = ${division.id}`).map((s) => [s.id, s.kind]),
+    );
+    const fixtures = await withCourtVenueNames(
+      rawFixtures
+        .filter((f) => !isRestBye(f, kinds.get(f.stage_id) ?? ""))
+        // The marker is an internal key, not part of this feed's contract.
+        .map((f) => {
+          const served: Partial<typeof f> = { ...f };
+          delete served.ext_key;
+          return served as Omit<typeof f, "ext_key">;
+        }),
+    );
     return { division_id: division.id, fixtures };
   });
 }

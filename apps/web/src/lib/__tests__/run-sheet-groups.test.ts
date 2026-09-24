@@ -3,6 +3,7 @@
 // rows; run-sheet.spec.ts drives the same seam through the browser so the
 // builder is proven by its REAL producer and consumer, not by a fixture on
 // both ends (_RULES.md, "the inert seam").
+import { restByeExtKey } from "@/lib/fixture-bye";
 import { describe, expect, it } from "vitest";
 import { buildRunSheet, type RunSheetInput } from "../run-sheet-groups";
 
@@ -424,8 +425,22 @@ describe("buildRunSheet — byes are structural, never schedulable (R7)", () => 
       ...over,
     });
 
-  it("an untimed bye NEVER reaches the unscheduled group — no 'Set time' on a match nobody plays", () => {
-    const out = buildRunSheet(input({ fixtures: [bye(), fx({ id: "real", scheduled_at: null })] }));
+  // Since #850 this is true of every bye EXCEPT a round-robin rest bye, which
+  // rides inside its round — and a fresh league's rounds are all untimed, so
+  // that bye does sit in the "Not yet scheduled" block (pinned below, and never
+  // counted or offered a time: run-sheet-filters / run-sheet-row). The case is
+  // therefore stated on a Swiss sit-out, where it still holds literally.
+  it("an untimed Swiss bye NEVER reaches the unscheduled group — no 'Set time' on a match nobody plays", () => {
+    const SWISS = { id: "sw", seq: 1, kind: "swiss" };
+    const out = buildRunSheet(
+      input({
+        stages: [SWISS],
+        fixtures: [
+          bye({ stage_id: "sw", home_entrant_id: "h1", outcome: { kind: "award", winner: "h1" }, status: "forfeited" }),
+          fx({ id: "real", stage_id: "sw", scheduled_at: null }),
+        ],
+      }),
+    );
     const tail = out.find((b) => b.kind === "unscheduled");
     expect(tail?.kind === "unscheduled" && tail.fixtures.map((f) => f.id)).toEqual(["real"]);
   });
@@ -495,13 +510,240 @@ describe("buildRunSheet — byes are structural, never schedulable (R7)", () => 
     ]);
   });
 
-  it("a league awarded bye still leaves the sheet (R7c unchanged)", () => {
+  // #850 (owner rulings 2026-09-23) RETIRE R7(c) for league/group. The first
+  // build of this sent every league bye to the settled tail, and these cases
+  // ASSERTED that wrong placement (review 2026-09-23, O1 / finding 1). The
+  // owner's ruling is "inside its round (and pool)", so every case below pins
+  // the ROUND a bye sits in positively: the exact row order of the block, bye
+  // after its round's last match — never just "which block".
+  // A rest bye carries the generator's MARKER (`restByeExtKey`, owner ruling
+  // 2026-09-24, fourth round) — the same function the generator spells it with.
+  const restBye = (id: string, holder: string, over: Partial<RunSheetInput["fixtures"][number]> = {}) =>
+    bye({
+      id,
+      status: "forfeited",
+      home_entrant_id: holder,
+      away_entrant_id: null,
+      outcome: { kind: "award", winner: holder },
+      ext_key: restByeExtKey(over.pool_id ? `${over.pool_id}-` : "", over.round_no ?? 1),
+      ...over,
+    });
+
+  it("#850: a league bye sits inside its round — after the round's last match, in whichever block the round is", () => {
     const out = buildRunSheet(
       input({
         stages: [LEAGUE],
-        fixtures: [bye({ id: "lgbye", stage_id: "s1", status: "forfeited" })],
+        fixtures: [
+          // Round 1 is timed on Sat; round 2 is not timed yet; round 3 was
+          // played without ever being timed.
+          restBye("bye-r1", "e5", { round_no: 1, seq_in_round: 3 }),
+          restBye("bye-r2", "e4", { round_no: 2, seq_in_round: 3 }),
+          restBye("bye-r3", "e3", { round_no: 3, seq_in_round: 3 }),
+          fx({ id: "r1-a", round_no: 1, seq_in_round: 1, scheduled_at: "2026-09-05T09:00:00.000Z" }),
+          fx({ id: "r1-b", round_no: 1, seq_in_round: 2, scheduled_at: "2026-09-05T10:00:00.000Z" }),
+          fx({ id: "r2-a", round_no: 2, seq_in_round: 1, scheduled_at: null }),
+          fx({ id: "r2-b", round_no: 2, seq_in_round: 2, scheduled_at: null }),
+          fx({ id: "r3-a", round_no: 3, seq_in_round: 1, scheduled_at: null, status: "decided" }),
+          fx({ id: "r3-b", round_no: 3, seq_in_round: 2, scheduled_at: null, status: "decided" }),
+        ],
       }),
     );
-    expect(out).toEqual([]);
+    expect(out.map((b) => b.kind)).toEqual(["day", "unscheduled", "settled"]);
+    const ids = (k: string) => {
+      const b = out.find((x) => x.kind === k);
+      return b && b.kind !== "bracket" ? b.fixtures.map((f) => f.id) : null;
+    };
+    expect(ids("day")).toEqual(["r1-a", "r1-b", "bye-r1"]);
+    expect(ids("unscheduled")).toEqual(["r2-a", "r2-b", "bye-r2"]);
+    expect(ids("settled")).toEqual(["r3-a", "r3-b", "bye-r3"]);
+  });
+
+  it("#850: a fresh, untimed odd league reads round by round — every bye closes its own round", () => {
+    const rounds = [1, 2, 3];
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        // Arrival order scrambled: the generator writes every match before any bye.
+        fixtures: [
+          ...rounds.map((r) => restBye(`bye-r${r}`, "e1", { round_no: r, seq_in_round: 3 })),
+          ...rounds.flatMap((r) => [
+            fx({ id: `r${r}-b`, round_no: r, seq_in_round: 2, scheduled_at: null }),
+            fx({ id: `r${r}-a`, round_no: r, seq_in_round: 1, scheduled_at: null }),
+          ]),
+        ],
+      }),
+    );
+    expect(out.map((b) => b.kind)).toEqual(["unscheduled"]);
+    expect(out[0]!.kind === "unscheduled" && out[0]!.fixtures.map((f) => f.id)).toEqual([
+      "r1-a", "r1-b", "bye-r1", "r2-a", "r2-b", "bye-r2", "r3-a", "r3-b", "bye-r3",
+    ]);
+  });
+
+  it("#850: a group stage's bye sits inside its own POOL's round, not the other pool's", () => {
+    const GROUPS = { id: "g", seq: 1, kind: "group" };
+    const out = buildRunSheet(
+      input({
+        stages: [GROUPS],
+        fixtures: [
+          // Pool A's round 1 runs 09:00 and 11:00; pool B's at 10:00. Both
+          // pools are odd, so both rest someone in round 1.
+          restBye("A-bye", "a3", { stage_id: "g", pool_id: "pA", round_no: 1, seq_in_round: 2 }),
+          restBye("B-bye", "b3", { stage_id: "g", pool_id: "pB", round_no: 1, seq_in_round: 2 }),
+          fx({ id: "A-09", stage_id: "g", pool_id: "pA", round_no: 1, seq_in_round: 1, scheduled_at: "2026-09-05T09:00:00.000Z" }),
+          fx({ id: "B-10", stage_id: "g", pool_id: "pB", round_no: 1, seq_in_round: 1, scheduled_at: "2026-09-05T10:00:00.000Z" }),
+          fx({ id: "A-11", stage_id: "g", pool_id: "pA", round_no: 1, seq_in_round: 3, scheduled_at: "2026-09-05T11:00:00.000Z" }),
+        ],
+      }),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]!.kind === "day" && out[0]!.fixtures.map((f) => f.id)).toEqual(["A-09", "B-10", "B-bye", "A-11", "A-bye"]);
+  });
+
+  it("#850: a round split across two days closes with its bye on the day it finishes", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [
+          restBye("bye-r1", "e5", { round_no: 1, seq_in_round: 3 }),
+          fx({ id: "sat", round_no: 1, seq_in_round: 1, scheduled_at: "2026-09-05T09:00:00.000Z" }),
+          fx({ id: "sun", round_no: 1, seq_in_round: 2, scheduled_at: "2026-09-06T09:00:00.000Z" }),
+        ],
+      }),
+    );
+    expect(out.map((b) => (b.kind === "day" ? [b.dayKey, b.fixtures.map((f) => f.id)] : b.kind))).toEqual([
+      ["2026-09-05", ["sat"]],
+      ["2026-09-06", ["sun", "bye-r1"]],
+    ]);
+  });
+
+  it("#850: the NOW rule skips an untimed bye — it rides with its round, never 'after now'", () => {
+    // NOW is 14:00 London (13:00Z) on Thu 3 Sep.
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [
+          restBye("bye-r1", "e5", { round_no: 1, seq_in_round: 2 }),
+          fx({ id: "r1", round_no: 1, seq_in_round: 1, scheduled_at: "2026-09-03T09:00:00.000Z" }),
+          fx({ id: "r2", round_no: 2, seq_in_round: 1, scheduled_at: "2026-09-03T15:00:00.000Z" }),
+        ],
+      }),
+    );
+    const day = out[0]!;
+    expect(day.kind === "day" && day.fixtures.map((f) => f.id)).toEqual(["r1", "bye-r1", "r2"]);
+    expect(day.kind === "day" && day.nowIndex).toBe(2);
+  });
+
+  it("#850: a rest bye whose round has no match on the sheet falls back to the settled tail, never dropped", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [
+          restBye("orphan", "e5", { round_no: 4, seq_in_round: 3 }),
+          fx({ id: "r1", round_no: 1, seq_in_round: 1, scheduled_at: null }),
+        ],
+      }),
+    );
+    expect(out.map((b) => (b.kind === "bracket" ? b.kind : [b.kind, b.fixtures.map((f) => f.id)]))).toEqual([
+      ["unscheduled", ["r1"]],
+      ["settled", ["orphan"]],
+    ]);
+  });
+
+  // Review round 2, R2-5: a rest bye must never sit in a different block from
+  // an UNPLAYED match of its own round. "After the round's last match" put it
+  // under "Played, not scheduled" (the settled tail sorts after "Not yet
+  // scheduled") while a match of its round still waited for a time. The rule:
+  // the block of the round's first not-yet-settled match; else its last.
+  it("#850 R2-5: a partly played UNTIMED round — the bye waits with its unplayed match, not under 'Played, not scheduled'", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [
+          restBye("bye-r1", "e5", { round_no: 1, seq_in_round: 3 }),
+          fx({ id: "r1-a", round_no: 1, seq_in_round: 1, scheduled_at: null, status: "decided" }),
+          fx({ id: "r1-b", round_no: 1, seq_in_round: 2, scheduled_at: null }),
+        ],
+      }),
+    );
+    expect(out.map((b) => (b.kind === "bracket" ? b.kind : [b.kind, b.fixtures.map((f) => f.id)]))).toEqual([
+      ["unscheduled", ["r1-b", "bye-r1"]],
+      ["settled", ["r1-a"]],
+    ]);
+  });
+
+  it("#850 R2-5: a TIMED unplayed match pulls the bye onto its day, away from the round's played-untimed match", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [
+          restBye("bye-r1", "e5", { round_no: 1, seq_in_round: 3 }),
+          fx({ id: "r1-a", round_no: 1, seq_in_round: 1, scheduled_at: null, status: "decided" }),
+          fx({ id: "r1-b", round_no: 1, seq_in_round: 2, scheduled_at: "2026-09-05T09:00:00.000Z" }),
+        ],
+      }),
+    );
+    expect(out.map((b) => (b.kind === "bracket" ? b.kind : [b.kind, b.fixtures.map((f) => f.id)]))).toEqual([
+      ["day", ["r1-b", "bye-r1"]],
+      ["settled", ["r1-a"]],
+    ]);
+  });
+
+  it("#850 R2-5, the other direction: once EVERY match of the round is played, the bye goes to the round's last block", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [
+          restBye("bye-r1", "e5", { round_no: 1, seq_in_round: 3 }),
+          fx({ id: "r1-a", round_no: 1, seq_in_round: 1, scheduled_at: "2026-09-05T09:00:00.000Z", status: "decided" }),
+          fx({ id: "r1-b", round_no: 1, seq_in_round: 2, scheduled_at: null, status: "decided" }),
+          fx({ id: "r2-a", round_no: 2, seq_in_round: 1, scheduled_at: null }),
+        ],
+      }),
+    );
+    expect(out.map((b) => (b.kind === "bracket" ? b.kind : [b.kind, b.fixtures.map((f) => f.id)]))).toEqual([
+      ["day", ["r1-a"]],
+      ["unscheduled", ["r2-a"]],
+      ["settled", ["r1-b", "bye-r1"]],
+    ]);
+  });
+
+  // Owner ruling 2026-09-24 (fourth round): a fed league's WALKOVER (a
+  // qualifier left before the draw; `awardSeededByes` settled the line) has a
+  // rest bye's shape in the same league but its MATCH key. It keeps its
+  // pre-#850 display, and on the run sheet that is R7(c): a non-bracket,
+  // non-Swiss one-sided award is not on the sheet at all — neither a rest-bye
+  // ghost inside its round nor a row in the settled tail.
+  it("#850: a fed league's walkover (bye shape, match key) keeps R7(c) — off the sheet, unlike the marked rest bye beside it", () => {
+    const out = buildRunSheet(
+      input({
+        stages: [LEAGUE],
+        fixtures: [
+          restBye("wo", "e5", { round_no: 1, seq_in_round: 2, ext_key: "rr-r1-c2" }),
+          restBye("bye-r2", "e4", { round_no: 2, seq_in_round: 2 }),
+          fx({ id: "r1-a", round_no: 1, seq_in_round: 1, scheduled_at: null }),
+          fx({ id: "r2-a", round_no: 2, seq_in_round: 1, scheduled_at: null }),
+        ],
+      }),
+    );
+    expect(out.map((b) => (b.kind === "bracket" ? b.kind : [b.kind, b.fixtures.map((f) => f.id)]))).toEqual([
+      ["unscheduled", ["r1-a", "r2-a", "bye-r2"]],
+    ]);
+  });
+
+  it("#850: Swiss placement is unchanged — its sit-out stays in the settled tail even beside an untimed round", () => {
+    const SWISS = { id: "sw", seq: 1, kind: "swiss" };
+    const out = buildRunSheet(
+      input({
+        stages: [SWISS],
+        fixtures: [
+          restBye("swbye", "gus", { stage_id: "sw", round_no: 1, seq_in_round: 2 }),
+          fx({ id: "swboard", stage_id: "sw", round_no: 1, seq_in_round: 1, scheduled_at: null }),
+        ],
+      }),
+    );
+    expect(out.map((b) => (b.kind === "bracket" ? b.kind : [b.kind, b.fixtures.map((f) => f.id)]))).toEqual([
+      ["unscheduled", ["swboard"]],
+      ["settled", ["swbye"]],
+    ]);
   });
 });

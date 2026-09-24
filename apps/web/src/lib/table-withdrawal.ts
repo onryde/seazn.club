@@ -10,6 +10,7 @@
 //
 // Pure, type-only engine import, no `server-only`.
 import type { TableFixture } from "@seazn/engine/competition";
+import { isRestBye } from "@/lib/fixture-bye";
 
 /** DB statuses whose fixture counts as PLAYED when it carries a result. */
 export const WITHDRAWAL_PLAYED_STATUSES: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
@@ -22,19 +23,29 @@ export interface WithdrawalFixtureRow {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;
+  /** #850 — the rest-bye MARKER (lib/fixture-bye.ts) `isRestBye` reads; a row
+   *  without it is never a rest bye. Optional in the type only because
+   *  hand-built inputs predate it; every production reader selects it. */
+  ext_key?: string | null;
 }
 
 /** `withdrawTableEntrant`'s `fixtures` argument for `entrantId`, from the rows
- *  of ONE stage that seat it. The policy only counts involvement, so each
- *  played fixture carries a minimal zero delta per side. */
+ *  of ONE stage (of kind `stageKind`) that seat it. The policy only counts
+ *  involvement, so each played fixture carries a minimal zero delta per side.
+ *
+ *  #850: a round-robin REST bye (`isRestBye`) is not a match played — it is
+ *  settled at generation and would otherwise move the 50% line in the
+ *  entrant's favour for every round it sat out. A Swiss sit-out still counts,
+ *  as it always has (it is a win there). */
 export function tableWithdrawalInputs(
   entrantId: string,
+  stageKind: string,
   mine: readonly WithdrawalFixtureRow[],
 ): { played: TableFixture[]; pending: { id: string; opponent: string }[] } {
   const zero = (id: string) => ({ entrantId: id, played: 1, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} });
   return {
     played: mine
-      .filter((f) => WITHDRAWAL_PLAYED_STATUSES.has(f.status) && f.outcome !== null)
+      .filter((f) => WITHDRAWAL_PLAYED_STATUSES.has(f.status) && f.outcome !== null && !isRestBye(f, stageKind))
       .map((f) => ({
         id: f.id,
         status: "decided" as const,

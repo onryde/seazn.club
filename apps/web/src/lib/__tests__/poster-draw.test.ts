@@ -8,6 +8,7 @@
 // or three highest-value strings, a real decompress-and-decode round trip.
 import { describe, expect, it } from "vitest";
 import { msgFor } from "@/lib/messages-i18n";
+import { restByeExtKey } from "@/lib/fixture-bye";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import type { SlotLabelLookup } from "@/lib/slot-label";
@@ -329,5 +330,76 @@ describe("buildDrawModel — a final and its 3rd-place playoff sharing a round s
       lookupFor("fr"),
     );
     expect(out[0]!.pools[0]!.rounds.map((r) => r.label)).toEqual(["Finale", "Troisième place"]);
+  });
+});
+
+// #850 (owner ruling 2026-09-24): on the printed draw a round-robin REST bye
+// is a NOTE in its round — "X has a bye" — never "X vs Bye". The same row in a
+// knockout or Swiss stage prints as it always did (the twin that keeps the
+// note from passing by dropping every bye).
+describe("buildDrawModel — a round-robin rest bye prints as a note in its round (#850)", () => {
+  const rest = (id: string, stage: string, round: number, holder: string) =>
+    F({
+      id,
+      stage_id: stage,
+      round_no: round,
+      seq_in_round: 2,
+      home_entrant_id: holder,
+      away_slot_label: { key: "bracket.slot.bye", params: {} },
+      status: "forfeited",
+      outcome: { kind: "award", winner: holder },
+      // The rest-bye MARKER, spelled by the generator's own function.
+      ext_key: restByeExtKey("", round),
+    });
+  const match = (id: string, stage: string, round: number) =>
+    F({ id, stage_id: stage, round_no: round, home_entrant_id: "a", away_entrant_id: "b" });
+  const names = { a: "Alder", b: "Birch", e: "Elm" };
+
+  it.each(["en", "es", "fr", "nl"] as const)("%s: under its round's heading, after the match, in the org's words", (locale) => {
+    const out = buildDrawModel(
+      baseInput({
+        stages: [{ id: "lg", seq: 1, name: "League", kind: "league" }],
+        fixtures: [rest("bye1", "lg", 1, "e"), match("m1", "lg", 1), match("m2", "lg", 2)],
+        entrantNames: names,
+      }),
+      lookupFor(locale),
+    );
+    const rounds = out[0]!.pools[0]!.rounds;
+    expect(rounds.map((r) => r.label)).toEqual([1, 2].map((n) => msgFor(locale, "schedule.round", { n })));
+    expect(rounds[0]!.fixtures.map((f) => f.id)).toEqual(["m1", "bye1"]);
+    expect(rounds[0]!.fixtures[1]!.note).toBe(msgFor(locale, "schedule.bye", { name: "Elm" }));
+    expect(rounds[0]!.fixtures[0]!.note).toBeUndefined();
+  });
+
+  // Owner ruling 2026-09-24 (fourth round): a fed league's WALKOVER — a
+  // qualifier left before the draw, `awardSeededByes` settled the line — has
+  // the rest bye's shape in the same league but its MATCH key. It prints as it
+  // did before #850: a line, never the "has a bye" note.
+  it("the walkover twin: the same row shape in the same league, unmarked, prints as a line — no note", () => {
+    const walkover = { ...rest("wo", "lg", 1, "e"), ext_key: "rr-r1-c2" };
+    const out = buildDrawModel(
+      baseInput({
+        stages: [{ id: "lg", seq: 1, name: "League", kind: "league" }],
+        fixtures: [walkover, match("m1", "lg", 1)],
+        entrantNames: names,
+      }),
+      en,
+    );
+    const rows = out[0]!.pools[0]!.rounds[0]!.fixtures;
+    expect(rows.map((f) => f.id).sort()).toEqual(["m1", "wo"]);
+    expect(rows.every((f) => f.note === undefined)).toBe(true);
+    expect(rows.find((f) => f.id === "wo")!.home).toBe("Elm");
+  });
+
+  it("the knockout twin: the same row shape in a bracket stage has no note", () => {
+    const out = buildDrawModel(
+      baseInput({
+        stages: [{ id: "ko", seq: 1, name: "Cup", kind: "knockout" }],
+        fixtures: [rest("kb", "ko", 1, "e"), match("km", "ko", 1)],
+        entrantNames: names,
+      }),
+      en,
+    );
+    expect(out[0]!.pools[0]!.rounds[0]!.fixtures.every((f) => f.note === undefined)).toBe(true);
   });
 });

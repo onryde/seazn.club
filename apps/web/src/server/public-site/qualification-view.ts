@@ -30,7 +30,7 @@ import {
 } from "@seazn/engine/competition";
 import type { AnySportModule, MatchPointsBounds, TiebreakerKey } from "@seazn/engine/sport";
 import { inTheField } from "@/lib/entrant-field";
-import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { isOneSidedAwardBye, isScoringBye } from "@/lib/fixture-bye";
 import { engineFixtureStatus } from "@/lib/fixture-engine-status";
 import type { TKey } from "@/lib/i18n-runtime";
 import { tableWithdrawalInputs } from "@/lib/table-withdrawal";
@@ -80,6 +80,11 @@ export interface QualFixture {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;
+  /** #850 — the rest-bye MARKER (lib/fixture-bye.ts): without it a round-robin
+   *  rest bye reads as a fed league's walkover, which IS counted. Optional in
+   *  the type only because hand-built inputs predate it; `PublicFixture`
+   *  carries it. */
+  ext_key?: string | null;
 }
 
 /** The division's per-match bounds from its PINNED module and live cfg. Future
@@ -147,11 +152,13 @@ const outcomeKind = (f: QualFixture): string | undefined =>
   f.outcome && typeof f.outcome === "object" ? (f.outcome as { kind?: string }).kind : undefined;
 
 /** A fixture the standings fold counts as a match played by its entrants: a
- *  settled, non-void result between two seats, or a one-sided bye (the fold's
- *  `awardDelta` path). */
-function counted(f: QualFixture): boolean {
+ *  settled, non-void result between two seats, or a SCORING bye (the fold's
+ *  `awardDelta` path — Swiss/bracket). A round-robin rest bye (#850) is never
+ *  folded, so it is not counted: it falls through to the two-seat test and
+ *  fails it. */
+function counted(f: QualFixture, stageKind: string): boolean {
   if (!settled(f) || engineFixtureStatus(f.status) === "void") return false;
-  if (isOneSidedAwardBye(f)) return true;
+  if (isScoringBye(f, stageKind)) return true;
   return f.outcome !== null && f.outcome !== undefined && f.home_entrant_id !== null && f.away_entrant_id !== null;
 }
 
@@ -244,7 +251,7 @@ function boundsInForce(i: QualificationViewInput): MatchPointsBounds | null {
  *  void changes nothing. */
 function withdrawalVoidsResults(stageId: string, kind: string, entrantId: string, fixtures: readonly QualFixture[]): boolean {
   const mine = fixtures.filter((f) => f.stage_id === stageId && seats(f, entrantId));
-  const { played, pending } = tableWithdrawalInputs(entrantId, mine);
+  const { played, pending } = tableWithdrawalInputs(entrantId, kind, mine);
   const result = withdrawTableEntrant(
     { id: stageId, kind: kind as "league" | "group" | "swiss", entrants: [entrantId], cascade: [] },
     entrantId,
@@ -296,7 +303,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // the table's fixtures say reads stale points. (More is fine: a "full"
   // carry-over folds prior matches into `played`.)
   for (const r of i.rows) {
-    if (r.played < tableFx.filter((f) => seats(f, r.entrantId) && counted(f)).length) return null;
+    if (r.played < tableFx.filter((f) => seats(f, r.entrantId) && counted(f, i.stage.kind)).length) return null;
   }
 
   // F1 — departed entrants; an unreadable status fails closed.
@@ -398,7 +405,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     if (!rival) return null;
     // The average match counts only matches with a ledger (T3-⚠3).
     const ruleInAverage = ruleScored && ruleScoreInAverage(r, decidingKey);
-    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleInAverage)).length;
+    const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f, i.stage.kind) && ledgerless(f, i.awardAddsToLedger, ruleInAverage)).length;
     const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;

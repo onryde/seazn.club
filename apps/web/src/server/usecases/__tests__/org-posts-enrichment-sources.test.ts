@@ -32,6 +32,8 @@ import {
   type DivisionHeadline,
 } from "../org-posts";
 import { scoreEvent } from "../scoring";
+import { generateStageFixtures } from "../stages";
+import { isOneSidedAwardBye, isRestBye } from "@/lib/fixture-bye";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -370,5 +372,111 @@ describe.skipIf(!HAS_DB)("P3 review finding 3 — genuine-throw fail-open, per s
     expect(post.bodyMd).toContain("À déterminer");
     expect(post.bodyMd).not.toContain("Round of 4");
     expect(post.bodyMd).not.toMatch(/\bTBD\b/);
+  });
+});
+
+// #850 (owner ruling 2026-09-23): a league/group rest bye scores nothing — it
+// is not a win either, so the auto-post's win streak must not count it.
+//
+// Review 2026-09-23, finding 11: these used to HAND-BUILD the bye row. They now
+// read it off the REAL generator (`generateStageFixtures` over a three-entrant
+// stage), so a change to what the generator writes moves this suite with it.
+// The win after the bye goes through the real scoring door, which is what
+// drafts the post. The Swiss twin proves a real Swiss sit-out still counts
+// where a bye IS a win, so an absent streak line cannot pass for the wrong
+// reason.
+
+/** Seat a third entrant beside Alice and Bob and generate the stage for real.
+ *  Returns every row the generator wrote and a name for every entrant. */
+async function generateThree(ctx: Ctx, kind: "league" | "swiss") {
+  const div = await seedDivision(ctx);
+  if (kind === "swiss") {
+    await sql`update stages set kind = 'swiss', config = ${sql.json({ rounds: 2 })} where id = ${div.stageId}`;
+  }
+  const [{ id: cara }] = await sql<{ id: string }[]>`
+    insert into entrants (division_id, org_id, kind, display_name, seed)
+    values (${div.divisionId}, ${ctx.orgId}, 'individual', 'Cara', 3) returning id`;
+  const names: Record<string, string> = { [div.entrantA]: "Alice", [div.entrantB]: "Bob", [cara]: "Cara" };
+  let { fixtures } = await generateStageFixtures(ctx.auth, div.stageId);
+  // A Swiss stage's first press mints its empty shells; the second is Pair,
+  // which seats round 1 (and its sit-out).
+  if (kind === "swiss") ({ fixtures } = await generateStageFixtures(ctx.auth, div.stageId));
+  return { div, names, fixtures };
+}
+
+type GenRow = Awaited<ReturnType<typeof generateThree>>["fixtures"][number];
+const holderOf = (f: GenRow) => (f.home_entrant_id ?? f.away_entrant_id)!;
+
+/** Decide a fixture for `winner` by the loser's walkover, through scoring. */
+async function walkover(ctx: Ctx, f: GenRow, winner: string): Promise<void> {
+  const loser = f.home_entrant_id === winner ? f.away_entrant_id! : f.home_entrant_id!;
+  await scoreEvent(ctx.auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+  await scoreEvent(ctx.auth, f.id, { expected_seq: 1, type: "core.forfeit", payload: { by: loser, reason: "walkover" } });
+}
+
+async function resultBody(ctx: Ctx, fixtureId: string): Promise<string> {
+  const draft = (await listPosts(ctx.auth, ctx.orgId)).find(
+    (p) => p.kind === "result" && p.autoSource?.fixture_id === fixtureId,
+  );
+  expect(draft, "the result draft landed").toBeTruthy();
+  return draft!.bodyMd;
+}
+
+describe.skipIf(!HAS_DB)("#850 — a round-robin rest bye is not a win in the result post's streak", () => {
+  it("league: the generator's round-1 bye, then a win, is ONE win — no streak line", async () => {
+    const ctx = await seedOrg();
+    const { names, fixtures } = await generateThree(ctx, "league");
+    const bye = fixtures.find((f) => f.round_no === 1 && isRestBye(f, "league"));
+    expect(bye, "premise: the generator rests someone in round 1").toBeTruthy();
+    const rested = holderOf(bye!);
+    const next = fixtures.find(
+      (f) => f.round_no > 1 && !isRestBye(f, "league") && (f.home_entrant_id === rested || f.away_entrant_id === rested),
+    )!;
+    await walkover(ctx, next, rested);
+    const body = await resultBody(ctx, next.id);
+    expect(body).toContain(names[rested]!);
+    expect(body).not.toMatch(/won \d+ in a row/);
+  });
+
+  it("Swiss twin: the generator's Swiss sit-out IS a win there — 'won 2 in a row'", async () => {
+    const ctx = await seedOrg();
+    const { div, names, fixtures } = await generateThree(ctx, "swiss");
+    const bye = fixtures.find((f) => f.round_no === 1 && isOneSidedAwardBye(f));
+    expect(bye, "premise: Pair seats a round-1 sit-out").toBeTruthy();
+    const rested = holderOf(bye!);
+    // Round 1's one board is played, then Pair next seats round 2 for real.
+    const board = fixtures.find((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+    await walkover(ctx, board, board.home_entrant_id!);
+    const r2 = (await generateStageFixtures(ctx.auth, div.stageId)).fixtures.find(
+      (f) => f.round_no === 2 && f.home_entrant_id !== null && f.away_entrant_id !== null &&
+        (f.home_entrant_id === rested || f.away_entrant_id === rested),
+    );
+    expect(r2, "premise: the sit-out plays in round 2").toBeTruthy();
+    await walkover(ctx, r2!, rested);
+    expect(await resultBody(ctx, r2!.id)).toContain(`${names[rested]} have now won 2 in a row.`);
+  });
+});
+
+// #850 — the round recap lists the round's RESULTS. A league round with a rest
+// bye is complete when its matches are (the bye row is settled at generation),
+// and the bye is not a result: it must not print as "Cara vs TBD". Read off the
+// real generator's rows (finding 11), not a hand-built bye.
+describe.skipIf(!HAS_DB)("#850 — a round-robin rest bye is not a line in the round recap", () => {
+  it("the recap names the round's match and not the entrant who sat it out", async () => {
+    const ctx = await seedOrg();
+    const { names, fixtures } = await generateThree(ctx, "league");
+    const bye = fixtures.find((f) => f.round_no === 1 && isRestBye(f, "league"))!;
+    const rested = holderOf(bye);
+    const match = fixtures.find((f) => f.round_no === 1 && !isRestBye(f, "league"))!;
+    await walkover(ctx, match, match.home_entrant_id!);
+    const recap = (await listPosts(ctx.auth, ctx.orgId)).find((p) => p.kind === "round_recap");
+    expect(recap, "round 1 is complete once its one match is — the recap drafts").toBeTruthy();
+    const [results, standings] = recap!.bodyMd.split("**Standings**");
+    expect(results).toContain(names[match.home_entrant_id!]!);
+    expect(results).toContain(names[match.away_entrant_id!]!);
+    expect(results).not.toContain(names[rested]!);
+    expect(results).not.toContain("TBD");
+    // ...while the table beside it still carries them, on nothing: 0 pts, 0 played.
+    expect(standings).toMatch(new RegExp(`${names[rested]} — 0 pts \\(0\\)`));
   });
 });

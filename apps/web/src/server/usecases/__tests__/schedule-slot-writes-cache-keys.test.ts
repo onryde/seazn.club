@@ -153,6 +153,7 @@ import { appendEvent } from "@/server/engine-db";
 import { POST as completeStageRoute } from "@/app/api/v1/stages/[id]/complete/route";
 import { POST as confirmSeedProposalRoute } from "@/app/api/v1/stages/[id]/seed-proposal/confirm/route";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import { shiftDivisionSchedule } from "../schedule-plus";
 import {
   clearPoolEntrants,
@@ -236,6 +237,24 @@ async function board(divisionId: string): Promise<Board> {
   const rows = await sql<{ id: string; at: string | null; court_id: string | null }[]>`
     select id, scheduled_at::text as at, court_id from fixtures where division_id = ${divisionId}`;
   return new Map(rows.map((row) => [row.id, `${row.at ?? "-"}|${row.court_id ?? "-"}`]));
+}
+
+/** #850: the division's round-robin REST-bye rows — real rows a generate
+ *  creates and a rebuild deletes, but not fixtures anyone plays, so the
+ *  outcome's `created`/`removed` do not count them. */
+async function restByeIds(divisionId: string): Promise<Set<string>> {
+  const rows = await sql<
+    {
+      id: string;
+      kind: string;
+      outcome: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      ext_key: string | null;
+    }[]
+  >`select f.id, s.kind, f.outcome, f.home_entrant_id, f.away_entrant_id, f.ext_key
+    from fixtures f join stages s on s.id = f.stage_id where f.division_id = ${divisionId}`;
+  return new Set(rows.filter((r) => isRestBye(r, r.kind)).map((r) => r.id));
 }
 
 /** What a write did to the board: fixtures whose slot changed, fixtures it
@@ -565,7 +584,9 @@ describe.skipIf(!HAS_DB)("stage generate and rebuild drop what they replaced, th
     probe.hold = true;
     const out = await generateStageFixtures(auth, stageId);
     const { moved, deleted, created } = diff(before, await board(divisionId));
-    expect(out.created, "the generate landed").toBe(created.length);
+    const byes = await restByeIds(divisionId);
+    expect(byes.size, "three entrants rest one per round").toBe(3);
+    expect(out.created, "the generate landed").toBe(created.filter((id) => !byes.has(id)).length);
     expect(created.length).toBeGreaterThan(0);
     expect(moved).toEqual([]);
 
@@ -590,13 +611,17 @@ describe.skipIf(!HAS_DB)("stage generate and rebuild drop what they replaced, th
     const competitionId = await competitionOf(rig.divisionId);
     await quiesce();
     const before = await board(rig.divisionId);
+    const byesBefore = await restByeIds(rig.divisionId);
 
     probe.hold = true;
     const out = await rebuildStageFixtures(auth, rig.stages[0]!.stageId);
     const { moved, deleted, created } = diff(before, await board(rig.divisionId));
-    expect(out.removed, "the rebuild deleted the old board").toBe(deleted.length);
+    const byesAfter = await restByeIds(rig.divisionId);
+    // Every row goes and comes back (the DEL below names them all); the
+    // counts name the MATCHES among them (#850).
+    expect(out.removed, "the rebuild deleted the old board").toBe(deleted.filter((id) => !byesBefore.has(id)).length);
     expect(deleted.length).toBeGreaterThan(0);
-    expect(created.length, "and generated a new one").toBe(out.created);
+    expect(created.filter((id) => !byesAfter.has(id)).length, "and generated a new one").toBe(out.created);
     expect(moved).toEqual([]);
 
     await expectDelThenPushes(rig.divisionId, competitionId, deleted);
@@ -639,7 +664,12 @@ describe.skipIf(!HAS_DB)("an ad-hoc fixture, a ladder challenge and a stage dele
       scheduled_at: "2030-06-02T10:00:00.000Z",
     });
     const { moved, deleted, created } = diff(before, await board(rig.divisionId));
-    expect(created, "the ad-hoc fixture landed").toEqual([out.fixture_id]);
+    // #850, owner ruling (fifth round): only rounds the round-robin schedule
+    // GENERATED carry rest-bye rows. The ad-hoc match opens a new round of a
+    // 3-entrant league that exactly one entrant sits out — and the ONE row
+    // this write creates is still the match: no rest bye for a hand-added
+    // round, so no second id to publish.
+    expect(created, "the ad-hoc fixture landed, and nothing else").toEqual([out.fixture_id]);
     expect([moved, deleted]).toEqual([[], []]);
 
     await expectDelThenPushes(rig.divisionId, competitionId, deleted);
@@ -708,7 +738,10 @@ describe.skipIf(!HAS_DB)("an ad-hoc fixture, a ladder challenge and a stage dele
     await quiesce();
     const before = await board(rig.divisionId);
     expect(rig.fixtureIds.length, "the first stage has fixtures to keep").toBeGreaterThan(0);
-    expect(before.size, "and only the first stage has fixtures").toBe(rig.fixtureIds.length);
+    // #850: the board holds the first stage's matches AND its three settled
+    // rest-bye rows; the rig's `fixtureIds` are the matches.
+    const byes = await restByeIds(rig.divisionId);
+    expect(before.size, "and only the first stage has fixtures").toBe(rig.fixtureIds.length + byes.size);
 
     probe.hold = true;
     await deleteStage(auth, empty!.id);

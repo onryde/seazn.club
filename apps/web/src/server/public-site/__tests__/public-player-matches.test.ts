@@ -844,8 +844,18 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from fixtures f
       join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-      where em.person_id = ${scene.persons.xavier}`;
+      where em.person_id = ${scene.persons.xavier}
+        and f.home_entrant_id is not null and f.away_entrant_id is not null`;
     expect(n).toBe(2);
+    // #850: the three-player singles league also rests Xavier for one round on
+    // a persisted bye row — SETTLED (`forfeited`, one of the played statuses)
+    // from generation. It is not an appearance either, so it adds no line.
+    const [{ b }] = await sql<{ b: number }[]>`
+      select count(*)::int as b from fixtures f
+      join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+      where em.person_id = ${scene.persons.xavier}
+        and (f.home_entrant_id is null) <> (f.away_entrant_id is null) and f.status = 'forfeited'`;
+    expect(b).toBe(1);
     expect(await linesFor(scene.persons.xavier)).toEqual([]);
   });
 

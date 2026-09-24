@@ -29,6 +29,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { generateSingleElim } from "@seazn/engine/scheduling";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -291,7 +292,11 @@ describe.runIf(HAS_DB)("a qualifier who departs before Generate — walkover, no
     await generateStageFixtures(rig.auth, rig.stageId);
 
     const rows = await fixturesOf(rig.stageId);
-    expect(rows.length, "three survivors play a single round robin").toBe(3);
+    // #850: an odd field also rests one survivor per round on a persisted
+    // REST-bye row — three matches, three byes, none of them the departed.
+    const matches = rows.filter((r) => !isRestBye(r, "league"));
+    expect(matches.length, "three survivors play a single round robin").toBe(3);
+    expect(rows.length - matches.length, "and each of them rests once").toBe(3);
     for (const r of rows) {
       expect([r.home_entrant_id, r.away_entrant_id]).not.toContain(departed);
     }

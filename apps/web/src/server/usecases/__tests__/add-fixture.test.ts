@@ -11,6 +11,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { addFixture, createStages, generateStageFixtures } from "../stages";
+import { isRestBye } from "@/lib/fixture-bye";
 import { appendEvent, recomputeStandings } from "@/server/engine-db";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -90,8 +91,9 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
       progression: null,
     });
     await generateStageFixtures(auth, stage!.id);
-    const [{ count: before }] = await sql<{ count: number }[]>`
-      select count(*)::int as count from fixtures where stage_id = ${stage!.id}`;
+    const [{ count: before, maxGenerated }] = await sql<{ count: number; maxGenerated: number }[]>`
+      select count(*)::int as count, max(round_no)::int as "maxGenerated"
+      from fixtures where stage_id = ${stage!.id}`;
 
     // P9 pass 3c-2: a real venue/court by id — addFixture was the one writer
     // the cutover missed, still taking a free-text `venue` until now.
@@ -134,6 +136,22 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
     expect(fx.court_label).toBeNull();
     const [{ count: after }] = await sql<{ count: number }[]>`
       select count(*)::int as count from fixtures where stage_id = ${stage!.id}`;
+    // #850, owner ruling (fifth round): only rounds the round-robin schedule
+    // GENERATED carry rest-bye rows; a hand-added match never makes one. This
+    // match opens a NEW round of a 3-entrant league and seats two, so exactly
+    // one entrant sits it out — the case where "one sit-out ⇒ a bye" would
+    // write a row — and still the match is the only row the write adds.
+    expect(fx.round_no, "premise: the match opens a new round").toBe(maxGenerated + 1);
+    expect(entrants.filter((id) => id !== entrants[0] && id !== entrants[1]), "premise: one sits it out").toHaveLength(1);
+    const added = await sql<
+      { id: string; round_no: number; outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null; ext_key: string | null }[]
+    >`select id, round_no, outcome, home_entrant_id, away_entrant_id, ext_key from fixtures
+      where stage_id = ${stage!.id} and round_no = ${fx.round_no} and id <> ${fixture_id}`;
+    expect(added, "no rest-bye row in a hand-added round").toEqual([]);
+    const byes = await sql<
+      { outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null; ext_key: string | null }[]
+    >`select outcome, home_entrant_id, away_entrant_id, ext_key from fixtures where stage_id = ${stage!.id}`;
+    expect(byes.filter((r) => isRestBye(r, "league")), "the generated rounds keep theirs").toHaveLength(maxGenerated);
     expect(after).toBe(before + 1);
 
     // Score it — the standings fold every fixture, so the extra match counts.

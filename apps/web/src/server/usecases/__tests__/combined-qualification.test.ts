@@ -5,6 +5,7 @@
 import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
@@ -120,9 +121,13 @@ describe.skipIf(!HAS_DB)("combined qualification round-trip (PROMPT-59)", () => 
 
     // Decide every group fixture: higher entrant id string wins deterministically
     // by seed — home wins when home seed lower (E1 beats E2, etc.).
-    const fixtures = await sql<
-      { id: string; home_entrant_id: string; away_entrant_id: string }[]
-    >`select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${group.id}`;
+    // #850: an odd pool also holds one settled REST-bye row per round — not a
+    // match, nothing to decide — so only the matches are scored.
+    const fixtures = (
+      await sql<
+        { id: string; home_entrant_id: string; away_entrant_id: string; outcome: unknown; ext_key: string | null }[]
+      >`select id, home_entrant_id, away_entrant_id, outcome, ext_key from fixtures where stage_id = ${group.id}`
+    ).filter((f) => !isRestBye(f, "group"));
     const seedOf = new Map(entrants.map((e) => [e.id, e.seed ?? 99]));
     for (const f of fixtures) {
       const homeWins =

@@ -166,7 +166,7 @@ export async function withdrawEntrantCascade(
       if (TABLE_KINDS.has(stage.kind)) {
         // lib/table-withdrawal: the ONE reading of these rows into the policy's
         // input (the qualification builder reads the same verdict, ruling F1).
-        const { played, pending } = tableWithdrawalInputs(entrantId, mine);
+        const { played, pending } = tableWithdrawalInputs(entrantId, stage.kind, mine);
         const result = withdrawTableEntrant(
           {
             id: stage.id,

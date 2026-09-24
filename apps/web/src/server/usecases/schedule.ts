@@ -85,6 +85,7 @@ import {
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { generateStageFixturesUnpublished } from "./stages";
+import { restByeSql } from "@/server/fixture-bye-sql";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
 
 type Tx = postgres.TransactionSql;
@@ -3820,10 +3821,18 @@ export async function startDivision(
         ? ms(settings.config.startAt)
         : roundToMinute(Date.now());
       const step = settings.config.roundMinutes * MS_PER_MIN;
+      // #850 review, finding 6: a round-robin REST BYE is never timed — it is
+      // no match anyone plays, and a time would put it on the day spine and in
+      // the ICS feed as if it were one. Both queries skip it through the ONE
+      // SQL spelling of the predicate (`restByeSql`), so neither the sweep nor
+      // the round COUNT sees it: a round whose only untimed row is its bye is
+      // not a round still to time, and must not push every later round a slot
+      // later.
       const rounds = await tx<{ round_no: number }[]>`
-        select distinct round_no from fixtures
-        where stage_id = ${pre.firstStage.id} and scheduled_at is null
-        order by round_no`;
+        select distinct f.round_no from fixtures f
+        where f.stage_id = ${pre.firstStage.id} and f.scheduled_at is null
+          and not ${restByeSql(tx)}
+        order by f.round_no`;
       // The sweep below writes `scheduled_at` across the first stage, which is
       // a schedule edit whatever door it came through — so a frozen board
       // refuses it. Gated on `rounds.length`, not on reaching this branch: a
@@ -3836,9 +3845,10 @@ export async function startDivision(
       }
       for (const [i, r] of rounds.entries()) {
         await tx`
-          update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
-          where stage_id = ${pre.firstStage.id} and round_no = ${r.round_no}
-            and scheduled_at is null`;
+          update fixtures f set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
+          where f.stage_id = ${pre.firstStage.id} and f.round_no = ${r.round_no}
+            and f.scheduled_at is null
+            and not ${restByeSql(tx)}`;
       }
     }
 

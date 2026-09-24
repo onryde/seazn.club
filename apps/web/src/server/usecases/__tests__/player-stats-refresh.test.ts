@@ -210,6 +210,7 @@ vi.mock("../player-stats", async (importOriginal) => {
 });
 
 import { sql, withTenant } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resnapshotFixtureConfig } from "../admin-fixture-config";
@@ -383,7 +384,10 @@ async function scene(extraReds: string[] = []): Promise<Scene> {
   const nameOf = new Map(entrants.map((e) => [e.id, e.display_name]));
   const idOf = new Map(entrants.map((e) => [e.display_name, e.id]));
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {} });
-  const { fixtures } = await generateStageFixtures(auth, stage!.id);
+  // #850: three teams also rest one per round on a settled REST-bye row — no
+  // lineup can be declared on it (a forfeited fixture locks its sheet), and
+  // none is needed: the scene declares sheets for the MATCHES.
+  const fixtures = (await generateStageFixtures(auth, stage!.id)).fixtures.filter((f) => !isRestBye(f, "league"));
   await startDivision(auth, division.id);
   for (const f of fixtures) {
     for (const eid of [f.home_entrant_id, f.away_entrant_id]) {

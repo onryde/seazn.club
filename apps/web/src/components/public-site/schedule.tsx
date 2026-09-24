@@ -13,6 +13,7 @@ import { fmtPublicZoneAbbrev, fmtTime } from "@/lib/format";
 import { dayDateShort, dayLabelLong } from "@/lib/day-label";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
+import { isRestBye, placeRestByesInRounds } from "@/lib/fixture-bye";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
 // locale or <DictProvider> in its tree, and msgFor() carries `server-only`, so
@@ -69,6 +70,13 @@ interface Props {
   /** N1e e5 — the org's locale ("en", "es", …): the day headings and the
    *  round view's short rail date are written in it. */
   locale: string;
+  /** #850 (owner ruling 2026-09-24) — each stage's KIND, keyed by stage id, so
+   *  a round-robin rest bye (`isRestBye`) can be told from a match and drawn as
+   *  a NOTE in its round — "X has a bye", no time, no TBD, no "vs Bye", no
+   *  link — never as a result. A Swiss or bracket bye is not a rest bye and
+   *  renders exactly as before. Required, so a caller cannot forget it and
+   *  silently print the bye as a forfeit. */
+  stageKinds: Record<string, string>;
 }
 
 export interface ScheduleCopy {
@@ -96,6 +104,9 @@ export interface ScheduleCopy {
   timesIn: string;
   /** No fixtures at all. */
   empty: string;
+  /** #850 — a round-robin rest bye's note; `{name}` is the entrant sitting
+   *  the round out (the organiser run sheet's own `schedule.bye`). */
+  bye: string;
 }
 
 // Day bucket key as the venue-local calendar date (YYYY-MM-DD) so a 23:30 venue
@@ -286,6 +297,7 @@ export function Schedule({
   stageNames,
   copy,
   locale,
+  stageKinds,
 }: Props) {
   const [entrant, setEntrant] = useState<string>("");
   // Day view first (fixtures by date) — matches how a spectator reads a
@@ -294,6 +306,11 @@ export function Schedule({
   const shown = entrant
     ? fixtures.filter((f) => f.home_entrant_id === entrant || f.away_entrant_id === entrant)
     : fixtures;
+  // #850: a round-robin rest bye is held back from the grouping below — it has
+  // no time and is no match, so it would otherwise land in "Time TBD" as
+  // "X vs Bye". It is placed INSIDE ITS ROUND afterwards, as a note.
+  const isRest = (f: PublicFixture) => isRestBye(f, stageKinds[f.stage_id] ?? "");
+  const restByes = shown.filter(isRest);
   // The Intl tag dates are written in: the org's locale, "en" as en-GB
   // ("Friday 25 September"), as every public date was before N1e e5.
   const dateTag = intlLocaleFor(locale);
@@ -309,13 +326,13 @@ export function Schedule({
   // every stage: without the stage first, a league's rounds interleaved with
   // the knockout it feeds, and two stages' "Round 1" merged into one group.
   const stageRank = (f: PublicFixture) => stageOrder[f.stage_id] ?? Number.POSITIVE_INFINITY;
-  const inPlayOrder = [...shown].sort(
+  const inPlayOrder = shown.filter((f) => !isRest(f)).sort(
     (a, b) => stageRank(a) - stageRank(b) || a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
   );
   const groups = new Map<string, PublicFixture[]>();
   const roundNames = new Map<string, string>();
   const groupStage = new Map<string, string>();
-  for (const f of mode === "day" ? shown : inPlayOrder) {
+  for (const f of mode === "day" ? shown.filter((f) => !isRest(f)) : inPlayOrder) {
     let key: string;
     if (mode === "day") {
       key = f.scheduled_at ? dayKey(f.scheduled_at, tz) : UNSCHEDULED;
@@ -330,14 +347,37 @@ export function Schedule({
     groups.set(key, list);
   }
 
-  const orderedGroups =
+  const orderedGroups = (
     mode === "day"
       ? [...groups.entries()].sort(([a], [b]) => {
           if (a === UNSCHEDULED) return 1;
           if (b === UNSCHEDULED) return -1;
           return a.localeCompare(b);
         })
-      : [...groups.entries()];
+      : [...groups.entries()]
+  ).map(([key, list]) => [
+    key,
+    [...list].sort((a, b) =>
+      mode === "day"
+        ? (a.scheduled_at ?? "").localeCompare(b.scheduled_at ?? "") || a.round_no - b.round_no
+        : a.round_no - b.round_no,
+    ),
+  ] as [string, PublicFixture[]]);
+
+  // #850: each rest bye joins ITS ROUND — right after the last match of its
+  // round (same stage and pool) in the order rendered, so in the day view it
+  // sits on the day its round finishes and in the round view under its round's
+  // own heading. Filtered to one entrant (who plays nobody that round), it goes
+  // between their previous and next round instead. The ONE placement rule the
+  // organiser run sheet also uses (`placeRestByesInRounds`). A bye that fits
+  // nowhere — its round has no match left at all — is left out rather than
+  // given a "Time TBD" heading of its own: it is not a fixture.
+  placeRestByesInRounds(
+    orderedGroups.map(([, list]) => list),
+    restByes,
+    (f) => !isRest(f),
+    { nearest: entrant !== "" },
+  );
 
   // N1f f2, N1g g1: a round name two stages share ("Final" in a knockout and
   // in its plate) is headed with its stage. Decided over the division's WHOLE
@@ -433,14 +473,21 @@ export function Schedule({
             <span aria-hidden className="h-px flex-1 bg-zinc-200" />
           </h3>
           <ul className="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200/80 bg-surface shadow-sm">
-            {[...list]
-              .sort((a, b) =>
-                mode === "day"
-                  ? (a.scheduled_at ?? "").localeCompare(b.scheduled_at ?? "") ||
-                    a.round_no - b.round_no
-                  : a.round_no - b.round_no,
-              )
-              .map((f) => (
+            {list.map((f) =>
+              isRest(f) ? (
+                // #850 — a NOTE, not a result: no time rail, no "TBD", no
+                // "vs Bye", no link (there is no match centre to go to). The
+                // day view names the round, which its heading does not; the
+                // round view's heading already does.
+                <li
+                  key={f.id}
+                  data-testid="schedule-bye"
+                  className="min-w-0 break-words px-3.5 py-2.5 text-sm italic text-ink-muted"
+                >
+                  {mode === "day" ? `${roundNameOf(f, roundLabels)} · ` : ""}
+                  {copy.bye.replace("{name}", entrantNames[(f.home_entrant_id ?? f.away_entrant_id) as string] ?? "?")}
+                </li>
+              ) : (
                 <li key={f.id}>
                   <ScorebugRow
                     fixture={f}
@@ -453,7 +500,8 @@ export function Schedule({
                     dateTag={dateTag}
                   />
                 </li>
-              ))}
+              ),
+            )}
           </ul>
         </section>
       ))}

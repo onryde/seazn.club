@@ -65,6 +65,7 @@ vi.mock("../ai-runs-admin", async (importOriginal) => {
 });
 
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { AiCompetitionLastResult, AiCompetitionPlanResponse } from "@/server/api-v1/schemas";
@@ -156,7 +157,9 @@ async function seedDivision(
     config: {},
   });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
-  const fixtureIds = [...fixtures]
+  // #850: an odd league also persists settled REST-bye rows; this rig times MATCHES.
+  const fixtureIds = fixtures
+    .filter((f) => !isRestBye(f, "league"))
     .sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round)
     .map((f) => f.id);
   return { id: division.id, name, courts, fixtureIds };

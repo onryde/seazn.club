@@ -11,6 +11,7 @@ import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
+import { DRAW_BYE_SLOT_LABEL, restByeExtKey } from "@/lib/fixture-bye";
 import type {
   PublicFixture,
   PublicEntrant,
@@ -626,4 +627,140 @@ describe("GET .../calendar.ics — the SUMMARY's joining word is the org locale'
       }
     });
   }
+});
+
+// #850 (owner ruling 2026-09-23): a SIT-OUT is not an event anyone attends,
+// so the three kinds of sit-out are dropped from the feed — a Swiss sit-out, a
+// bracket's draw bye and a round-robin rest bye — each recognised by its OWN
+// explicit marker (the Swiss bye shell's `sw-r{n}-bye` key, the draw bye's
+// `DRAW_BYE_SLOT_LABEL`, the rest bye's `restByeExtKey`), never by row shape.
+// Orchestrator ruling (2026-09-24, from the owner's fourth round): a
+// departed-qualifier WALKOVER — the SAME one-sided award shape, stamped with
+// the plain `bracket.slot.bye` label when confirm vacates the seat — is not a
+// sit-out and keeps its pre-#850 display, so it IS emitted, in every kind.
+// Every "no event" assertion is paired with a real match in the SAME feed
+// that is emitted, so an empty or broken feed cannot pass.
+describe("GET .../calendar.ics — sit-outs are not events; a departed walkover is (#850)", () => {
+  const byeRow = (over: Partial<PublicFixture> = {}): PublicFixture =>
+    F({
+      id: "the-bye",
+      stage_id: "s1",
+      home_entrant_id: "e1",
+      away_entrant_id: null,
+      // The plain label: what confirm stamps on a VACATED seat.
+      away_slot_label: { key: "bracket.slot.bye", params: {} },
+      status: "forfeited",
+      outcome: { kind: "award", winner: "e1" },
+      scheduled_at: null,
+      ...over,
+    });
+  /** Each kind's OWN sit-out marker, as its writer stamps it. */
+  const SIT_OUT: Record<string, Partial<PublicFixture>> = {
+    league: { ext_key: restByeExtKey("", 1) },
+    group: { ext_key: restByeExtKey("pA-", 1) },
+    swiss: { ext_key: "sw-r1-bye" },
+    knockout: { ext_key: "se-r0-i0", away_slot_label: DRAW_BYE_SLOT_LABEL },
+    double_elim: { ext_key: "wb-r0-i0", away_slot_label: DRAW_BYE_SLOT_LABEL },
+    stepladder: { ext_key: "sl-g0", away_slot_label: DRAW_BYE_SLOT_LABEL },
+  };
+  /** The departed walkover in each kind: its line's MATCH key, the plain label. */
+  const WALKOVER: Record<string, Partial<PublicFixture>> = {
+    league: { ext_key: "rr-r1-c2" },
+    group: { ext_key: "pA-rr-r1-c1" },
+    swiss: { ext_key: "sw-r1-b2" },
+    knockout: { ext_key: "se-r0-i1" },
+    double_elim: { ext_key: "wb-r0-i1" },
+    stepladder: { ext_key: "sl-g1" },
+    page_playoff: { ext_key: "pp-q1" },
+  };
+  const realMatch = F({
+    id: "real-match",
+    home_entrant_id: "e1",
+    away_entrant_id: "e2",
+    scheduled_at: "2026-09-12T10:00:00.000Z",
+  });
+  const TWO = [E({ id: "e1", display_name: "Real Team" }), E({ id: "e2", display_name: "Other Team", seed: 2 })];
+  const DATES = { starts_on: "2026-09-01", ends_on: "2026-09-13" };
+  const withStage = (kind: string, fixtures: PublicFixture[]) => ({
+    ...baseData("en", fixtures, DATES, TWO),
+    stages: [{ id: "s1", kind, name: kind, seq: 1 }],
+  });
+  const events = (text: string) => text.split("BEGIN:VEVENT").length - 1;
+
+  it.each(Object.keys(SIT_OUT))("%s: its marked sit-out has no event; the real match beside it does", async (kind) => {
+    getPublicDivision.mockResolvedValue(withStage(kind, [byeRow(SIT_OUT[kind]), realMatch]));
+    const { status, text } = await get();
+    expect(status).toBe(200);
+    expect(text).toContain("UID:real-match");
+    expect(text).toContain("SUMMARY:Real Team vs Other Team");
+    expect(text).not.toContain("UID:the-bye");
+    expect(text).not.toMatch(/vs Bye/);
+    expect(events(text)).toBe(1);
+  });
+
+  it.each(Object.keys(WALKOVER))(
+    "%s: a departed-qualifier walkover (same shape, no sit-out marker) IS emitted, as before #850",
+    async (kind) => {
+      getPublicDivision.mockResolvedValue(withStage(kind, [byeRow({ id: "walkover", ...WALKOVER[kind] }), realMatch]));
+      const { text } = await get();
+      expect(text).toContain("UID:real-match");
+      expect(text).toContain("UID:walkover");
+      expect(events(text)).toBe(2);
+    },
+  );
+
+  // Each marker belongs to its OWN kind: a Swiss key in a league, a rest-bye
+  // key in a knockout, a draw label… each of those rows is still the walkover
+  // shape without its kind's marker where the marker is kind-bound.
+  it("the Swiss and rest-bye keys only mark their own kinds", async () => {
+    for (const [kind, over] of [
+      ["league", { ext_key: "sw-r1-bye" }],
+      ["knockout", { ext_key: restByeExtKey("", 1) }],
+      ["knockout", { ext_key: "sw-r1-bye" }],
+    ] as const) {
+      getPublicDivision.mockResolvedValue(withStage(kind, [byeRow({ id: "walkover", ...over }), realMatch]));
+      const { text } = await get();
+      expect(text, `${kind} / ${over.ext_key}`).toContain("UID:walkover");
+    }
+  });
+
+  it("an away-seated bye is dropped too", async () => {
+    getPublicDivision.mockResolvedValue(
+      withStage("knockout", [
+        byeRow({ home_entrant_id: null, away_entrant_id: "e1", home_slot_label: DRAW_BYE_SLOT_LABEL, away_slot_label: null }),
+        realMatch,
+      ]),
+    );
+    const { text } = await get();
+    expect(text).toContain("UID:real-match");
+    expect(text).not.toContain("UID:the-bye");
+  });
+
+  it("the bye holder's own ?entrant= feed has their match, not their bye", async () => {
+    getPublicDivision.mockResolvedValue(withStage("swiss", [byeRow(SIT_OUT.swiss), realMatch]));
+    const { GET } = await import("../route");
+    const res = await GET(new Request("http://t/shared/test-org/test-comp/open/calendar.ics?entrant=e1"), {
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+    });
+    const text = await res.text();
+    expect(text).toContain("UID:real-match");
+    expect(text).not.toContain("UID:the-bye");
+  });
+
+  it("a TWO-sided walkover is a match that was conceded, not a bye — it stays", async () => {
+    getPublicDivision.mockResolvedValue(
+      withStage("league", [
+        F({
+          id: "walkover",
+          home_entrant_id: "e1",
+          away_entrant_id: "e2",
+          status: "forfeited",
+          outcome: { kind: "award", winner: "e2" },
+          scheduled_at: "2026-09-10T10:00:00.000Z",
+        }),
+      ]),
+    );
+    const { text } = await get();
+    expect(text).toContain("UID:walkover");
+  });
 });

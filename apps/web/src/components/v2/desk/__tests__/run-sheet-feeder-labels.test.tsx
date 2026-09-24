@@ -127,6 +127,7 @@ function rowHtml(fixture: RunSheetFixture, feed?: ReturnType<typeof feedLabels>)
       canEdit
       entrantNames={ENTRANTS}
       feedLabels={feed}
+      stageKind="knockout"
     />,
   );
 }

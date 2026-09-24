@@ -78,6 +78,7 @@ import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
 import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
 import { describeFormat } from "./describe-format";
+import { isRestBye } from "@/lib/fixture-bye";
 import type {
   CompetitionHubDocT,
   HubDivisionT,
@@ -707,6 +708,14 @@ export async function loadCompetitionHub(
       stageKind: (stageId) => stageById.get(stageId)?.kind,
     });
     for (const f of fixtures) {
+      // #850 (owner ruling 2026-09-24): a round-robin REST bye is no match and
+      // never a result. It was filed `completed` off its `forfeited` status, so
+      // a freshly generated odd league read "Completed 5" before anything was
+      // played, and every card read "X vs Bye". The hub's lists are MATCHES
+      // (by bucket and day, not by round), so the bye is simply not one of
+      // them; the division page's schedule is where it is a note in its round.
+      // Swiss and bracket byes are unchanged.
+      if (isRestBye(f, stageById.get(f.stage_id)?.kind ?? "")) continue;
       // `seat`, not `slot`: a sibling-fed seat of a `timing: "setup"` bracket
       // has NO stored label, and reading the stored label alone is what put
       // "TBD" on a card the organiser saw named.

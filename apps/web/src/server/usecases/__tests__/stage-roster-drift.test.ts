@@ -11,6 +11,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
@@ -435,7 +436,11 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
     const { fixtures } = await generateStageFixtures(auth, stage!.id); // AB, AC, BC
     await startDivision(auth, divisionId);
     const aId = entrantByName.get("A")!;
-    const aFixtures = fixtures.filter((f) => f.home_entrant_id === aId || f.away_entrant_id === aId);
+    // #850: an odd field's entrant also holds a settled REST-bye row; these
+    // cases are about A's MATCHES.
+    const aFixtures = fixtures.filter(
+      (f) => !isRestBye(f, "league") && (f.home_entrant_id === aId || f.away_entrant_id === aId),
+    );
     expect(aFixtures).toHaveLength(2);
     await decideFixture(auth, aFixtures[0]!.id); // the other stays scheduled
     await patchEntrant(auth, aId, { status: "withdrawn" });
@@ -735,7 +740,11 @@ describe.skipIf(!HAS_DB)("getStageRosterDrift — a finished fixture is history,
     });
     const { fixtures } = await generateStageFixtures(auth, stage!.id); // AB, AC, BC
     const aId = entrantByName.get("A")!;
-    const aFixtures = fixtures.filter((f) => f.home_entrant_id === aId || f.away_entrant_id === aId);
+    // #850: an odd field's entrant also holds a settled REST-bye row; these
+    // cases are about A's MATCHES.
+    const aFixtures = fixtures.filter(
+      (f) => !isRestBye(f, "league") && (f.home_entrant_id === aId || f.away_entrant_id === aId),
+    );
     expect(aFixtures).toHaveLength(2); // one to bury, one left owed
     await sql`update fixtures set status = 'decided' where id = ${aFixtures[0]!.id}`;
 
@@ -771,7 +780,11 @@ describe.skipIf(!HAS_DB)("getStageRosterDrift — a finished fixture is history,
     const { fixtures } = await generateStageFixtures(auth, stage!.id); // 6 — a 4-way round robin
     await startDivision(auth, divisionId);
     const aId = entrantByName.get("A")!;
-    const aFixtures = fixtures.filter((f) => f.home_entrant_id === aId || f.away_entrant_id === aId);
+    // #850: an odd field's entrant also holds a settled REST-bye row; these
+    // cases are about A's MATCHES.
+    const aFixtures = fixtures.filter(
+      (f) => !isRestBye(f, "league") && (f.home_entrant_id === aId || f.away_entrant_id === aId),
+    );
     expect(aFixtures).toHaveLength(3);
     // TWO of A's three played before the withdrawal, so withdrawal.ts's 50%
     // rule picks `walkover` and leaves the played results standing. Under 50%

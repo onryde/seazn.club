@@ -74,7 +74,7 @@ import {
   SWISS_PAIRING_NOT_SWISS_CODE,
   SWISS_PAIRING_NOT_SWISS_MESSAGE,
 } from "@/lib/swiss-pairing";
-import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { DRAW_BYE_SLOT_LABEL, isDrawBye, isOneSidedAwardBye, isRestBye, REST_BYE_STAGE_KINDS, restByeExtKey } from "@/lib/fixture-bye";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -1584,11 +1584,12 @@ function roundRobinGen(
   legs: number,
   extPrefix = "",
   poolId?: string,
+  restByes = false,
 ): GenFixture[] {
   const ids = entrants.map((e) => e.id);
   const seeds = new Map(entrants.filter((e) => e.seed != null).map((e) => [e.id, e.seed as number]));
   const schedule = generateRoundRobin({ entrants: ids, seeds, config: { legs } });
-  return schedule.fixtures.map((f) => ({
+  const matches: GenFixture[] = schedule.fixtures.map((f) => ({
     extKey: extPrefix + f.id,
     roundNo: f.roundNo,
     seqInRound: f.court,
@@ -1596,6 +1597,57 @@ function roundRobinGen(
     away: f.away,
     ...(poolId ? { poolId } : {}),
   }));
+  if (!restByes) return matches;
+  // #850 (owner ruling): an odd field's per-round sit-out is persisted as a
+  // real bye row — the SAME shape swissGen writes (home seated, away null,
+  // `award` → `forfeited` + `{kind:"award", winner}` + the away side's
+  // `bracket.slot.bye` label at the shared insert), so the run sheet can say
+  // who sits out. It is a REST round, not a result: every scoring reader
+  // skips it through `isRestBye`/`isScoringBye` (lib/fixture-bye.ts). The
+  // holder is the engine's own `round.bye`, never re-derived here. Seated
+  // after the round's boards, like Swiss's bye shell (`boards + 1`).
+  const byes: GenFixture[] = schedule.rounds.flatMap((r) =>
+    r.bye === undefined
+      ? []
+      : [
+          {
+            extKey: restByeExtKey(extPrefix, r.roundNo),
+            roundNo: r.roundNo,
+            seqInRound: r.fixtures.length + 1,
+            home: r.bye,
+            away: null,
+            award: r.bye,
+            ...(poolId ? { poolId } : {}),
+          },
+        ],
+  );
+  return [...matches, ...byes];
+}
+
+/** A generator line that is a round-robin rest bye (#850) — asked of the ONE
+ *  predicate over the row the shared insert will write for it: its shape AND
+ *  its key (`restByeExtKey`, the rest-bye marker, lib/fixture-bye.ts). */
+function isRestByeGen(g: GenFixture, kind: string): boolean {
+  return (
+    g.award !== undefined &&
+    isRestBye(
+      { outcome: { kind: "award", winner: g.award }, home_entrant_id: g.home, away_entrant_id: g.away, ext_key: g.extKey },
+      kind,
+    )
+  );
+}
+
+interface GenerateOpts {
+  /** #850: emit a round-robin stage's per-round bye as a rest-bye line. Only
+   *  the plain generation path asks for it. The "Show example" preview lists
+   *  MATCHES (a bye is not one), and the `timing: "setup"` progression path
+   *  writes none at generation: its seats are synthetic seed refs, and a bye
+   *  line there would sit `scheduled` (outcome null) until confirm — offered
+   *  "Set time" on the run sheet and movable by the auto-scheduler — with no
+   *  settle path when its holder's seed departs. Its bye rows are written
+   *  when the draw places the entrants instead (owner ruling 2026-09-24):
+   *  `confirmSeedProposal` → `reconcileRestByes`. */
+  restByes?: boolean;
 }
 
 function generate(
@@ -1603,6 +1655,7 @@ function generate(
   cfg: Record<string, unknown>,
   entrants: ActiveEntrant[],
   poolIds: Map<string, string>, // pool key ('A'…) → pools.id
+  opts: GenerateOpts = {},
 ): GenFixture[] {
   const ids = entrants.map((e) => e.id);
   const seeds = new Map(entrants.filter((e) => e.seed != null).map((e) => [e.id, e.seed as number]));
@@ -1613,15 +1666,20 @@ function generate(
       const rawLegs = typeof cfg.legs === "number" ? Math.trunc(cfg.legs) : 1;
       const legs = Math.min(Math.max(rawLegs, 1), 8);
       const count = kind === "group" ? poolCount(cfg) : 1;
-      if (count === 1) return roundRobinGen(entrants, legs);
+      const restByes = opts.restByes === true;
+      if (count === 1) return roundRobinGen(entrants, legs, "", undefined, restByes);
       // Seeded-snake pools, each playing its own round robin (doc 05 §1).
       const ordered = [...entrants].sort(
         (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
       );
-      return snakeDistribute(ordered, count).flatMap((poolEntrants, i) => {
+      const lines = snakeDistribute(ordered, count).flatMap((poolEntrants, i) => {
         const key = POOL_KEYS[i];
-        return roundRobinGen(poolEntrants, legs, `p${key}-`, poolIds.get(key));
+        return roundRobinGen(poolEntrants, legs, `p${key}-`, poolIds.get(key), restByes);
       });
+      // Every pool's matches before any pool's bye: `fixture_no` is assigned
+      // per inserted row (V263's trigger), so this keeps the real matches
+      // numbered 1..M exactly as they were before bye rows existed.
+      return [...lines.filter((g) => g.award === undefined), ...lines.filter((g) => g.award !== undefined)];
     }
     case "knockout": {
       const bracket = generateSingleElim({
@@ -1894,6 +1952,9 @@ export function previewDivisionFixtures(
 }
 
 export interface GenerateOutcome {
+  /** Fixtures this pass created (Swiss: + shells seated). #850: a round-robin
+   *  rest-bye row is NOT counted here or in `existing` — it is in `fixtures`
+   *  (every row of the stage), but it is not a fixture anyone plays. */
   created: number;
   existing: number;
   fixtures: FixtureRow[];
@@ -1930,6 +1991,10 @@ interface GenerateWrite {
   competitionId: string;
   /** Swiss Pair next: how many shells were seated this pass (0 on mint). */
   swissSeatedCount?: number;
+  /** #850: rest-bye rows `reconcileRestByes` inserted or deleted this pass —
+   *  a change the public caches must hear about even when no MATCH was
+   *  created (`outcome.created` counts matches only). */
+  restByeIds?: string[];
 }
 
 /** What a Generate press may ask for beyond "generate". */
@@ -1961,8 +2026,8 @@ export async function generateStageFixtures(
   opts: GenerateOptions = {},
 ): Promise<GenerateOutcome> {
   const write = await generateStageFixturesWrite(auth, stageId, opts);
-  if (write.outcome.created > 0) {
-    afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  if (write.outcome.created > 0 || (write.restByeIds?.length ?? 0) > 0) {
+    afterScheduleWrite(write.divisionId, write.competitionId, "schedule", write.restByeIds ?? []);
   }
   return write.outcome;
 }
@@ -2104,6 +2169,266 @@ export async function unseatSwissRoundsSeatingEntrant(
     cleared += ids.length;
   }
   return cleared;
+}
+
+/**
+ * #850 — delete the round-robin rest-bye rows an entrant holds, ahead of the
+ * pre-Start entrant delete (`deleteEntrant`, entrants.ts).
+ *
+ * A rest bye is a statement about ONE entrant ("X sits out round N"). The FK
+ * is `on delete set null`, so without this the row outlives its holder as a
+ * forfeited award with NEITHER seat filled — no longer a bye by
+ * `isOneSidedAwardBye`, yet still carrying an award to an id that no longer
+ * exists. The victim's real matches are deliberately NOT touched here: their
+ * half-filled state is issue #837's, on its own path (pinned by
+ * `swiss-delete-entrant.test.ts`'s league case).
+ *
+ * Only rows `isRestBye` recognises are removed — the MARKED rest-bye rows
+ * (`restByeExtKey`) — never a Swiss or bracket bye (their own paths own them),
+ * never a two-sided result, and never a fed league's walkover
+ * (`awardSeededByes`): that row has the bye's shape but is a match the holder
+ * won (owner ruling 2026-09-24, fourth round), and it stays with its result.
+ */
+export async function deleteRestByesHeldBy(tx: Tx, entrantId: string): Promise<number> {
+  const held = await tx<
+    {
+      id: string;
+      kind: string;
+      outcome: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      ext_key: string | null;
+    }[]
+  >`
+    select f.id, s.kind, f.outcome, f.home_entrant_id, f.away_entrant_id, f.ext_key
+    from fixtures f
+    join stages s on s.id = f.stage_id
+    where f.home_entrant_id = ${entrantId} or f.away_entrant_id = ${entrantId}`;
+  const ids = held.filter((f) => isRestBye(f, f.kind)).map((f) => f.id);
+  if (ids.length === 0) return 0;
+  await tx`delete from fixtures where id in ${tx(ids)}`;
+  return ids.length;
+}
+
+/**
+ * #850 — keep a round-robin stage's REST-BYE rows equal to what its MATCHES
+ * say, round by round (review 2026-09-23, findings 7 and 8; owner ruling on
+ * progression-fed leagues, third round).
+ *
+ * THE INVARIANT: in every GENERATED round (of every pool) a rest-bye row names
+ * the entrant who sits it out, and only when exactly one does. "Sits out" is
+ * read off the rows themselves: the pool's FIELD is every active entrant
+ * (registered/confirmed) seated in any of the pool's other rows, and the
+ * round's sit-outs are the field minus everyone seated in that round. A fresh
+ * odd round robin has exactly one per round — the engine's own `round.bye`,
+ * which the generator has already written, so on a fresh Generate this is a
+ * verified no-op.
+ *
+ * GENERATED (owner ruling 2026-09-24, fifth round): only a round the
+ * round-robin schedule made rests anyone — one holding a match with the
+ * generator's key (`RR_MATCH_EXT_KEY`). A round of nothing but hand-added
+ * matches ("Add match", `addFixture`'s `adhoc-{n}`) never gets a bye, even a
+ * decider in a new round that exactly one entrant sits out; a hand-added match
+ * IN a generated round still counts as a seat there, so it still takes that
+ * round's bye away from a holder it seats. It exists for everything that
+ * happens AFTER that:
+ *
+ *  - Generate over an existing stage whose field changed (4→5, 5→6, …): the
+ *    engine's positional keys (`rr-r{n}-c{k}`) keep the rows already there, so
+ *    the stage is a mix of two schedules and the NEW schedule's `round.bye`
+ *    names entrants who still play that round (finding 7). The generator writes
+ *    no bye line over an existing stage; this decides them from the mix.
+ *  - A withdrawal (finding 8): the withdrawn entrant leaves the field, so their
+ *    bye in a round not yet under way is no longer anybody's sit-out and goes.
+ *  - A progression-fed league (`timing: "setup"`): its rows are drawn over
+ *    placeholder seats, so it has no bye rows until the draw places entrants
+ *    (`confirmSeedProposal`), and then gets exactly these.
+ *  - Undo/redo of any of those (history.ts): the bye rows follow the matches
+ *    back and forth instead of being stranded by a ledger that never listed
+ *    them.
+ *
+ * A ROUND ALREADY UNDER WAY is history: a match of it has been PLAYED —
+ * `in_play`/`decided`/`finalized`, or started (a `core.start` nobody voided,
+ * so a match played and then expunged still counts). Its bye rows are kept as
+ * they are — the sit-out happened — with ONE exception that holds
+ * everywhere: a bye whose holder is seated in another row of the same round
+ * is a contradiction and is deleted (finding 7: "no bye holder may also play
+ * in that round"). Scoring EVIDENCE alone is deliberately not "under way":
+ * a withdrawal cascade settles an unplayed match with `core.forfeit` or
+ * `core.abandon`, and that must not freeze a round nobody has played — it is
+ * exactly the round whose bye the withdrawal has to take away.
+ *
+ * Only rows this function OWNS are touched: a rest bye (`isRestBye`) carrying
+ * the generator's bye key (`restByeExtKey`). A one-seated award that is a
+ * MATCH line — a fed league's vacated seat settled by `awardSeededByes` — is
+ * not owned; it seats its entrant like any match. New rows are written in the
+ * generator's exact shape: untimed (a bye is never timed), `forfeited`,
+ * `{kind:"award", winner}`, the away side's bye label, seated after the
+ * round's boards. Returns the ids inserted and deleted.
+ */
+/** The round-robin GENERATOR's match key: the engine's `rr-r{round}-c{court}`
+ *  (`generateRoundRobin`, packages/engine/src/scheduling/roundrobin.ts), which
+ *  `roundRobinGen` prefixes with a group stage's pool (`pA-`). A round holding
+ *  one is a round the schedule made (`reconcileRestByes`). Not an ad-hoc match
+ *  (`adhoc-{n}`) and not a rest bye (`restByeExtKey`, `…-bye`). */
+const RR_MATCH_EXT_KEY = /(^|-)rr-r[0-9]+-c[0-9]+$/;
+
+export async function reconcileRestByes(
+  tx: Tx,
+  stageId: string,
+): Promise<{ inserted: string[]; deleted: string[] }> {
+  const none = { inserted: [], deleted: [] };
+  const [stage] = await tx<{ kind: string; division_id: string }[]>`
+    select kind, division_id from stages where id = ${stageId}`;
+  if (!stage || !REST_BYE_STAGE_KINDS.has(stage.kind)) return none;
+  const rows = await tx<
+    {
+      id: string;
+      pool_id: string | null;
+      round_no: number;
+      seq_in_round: number;
+      status: string;
+      outcome: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      ext_key: string | null;
+      under_way: boolean;
+    }[]
+  >`
+    select f.id, f.pool_id, f.round_no, f.seq_in_round, f.status, f.outcome,
+           f.home_entrant_id, f.away_entrant_id, f.ext_key,
+           (f.status in ('in_play', 'decided', 'finalized')
+            or exists (
+              select 1 from score_events st
+              where st.fixture_id = f.id and st.type = 'core.start'
+                and not exists (select 1 from score_events v where v.voids_event_id = st.id))
+           ) as under_way
+    from fixtures f where f.stage_id = ${stageId}`;
+  if (rows.length === 0) return none;
+  const active = new Set(
+    (
+      await tx<{ id: string }[]>`
+        select id from entrants
+        where division_id = ${stage.division_id} and status in ('registered', 'confirmed')`
+    ).map((e) => e.id),
+  );
+  const poolKey = new Map(
+    (await tx<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${stageId}`).map((p) => [
+      p.id,
+      p.key,
+    ]),
+  );
+
+  // `isRestBye` reads the marker (the generator's bye key) as well as the
+  // shape, so a fed league's walkover — same shape, match key — is not owned.
+  const owned = (r: (typeof rows)[number]) => isRestBye(r, stage.kind);
+  const seats = (r: (typeof rows)[number]) =>
+    [r.home_entrant_id, r.away_entrant_id].filter((id): id is string => id !== null);
+  const holder = (r: (typeof rows)[number]) => (r.home_entrant_id ?? r.away_entrant_id) as string;
+  const roundKey = (pool: string | null, round: number) => `${pool ?? ""}|${round}`;
+
+  const field = new Map<string, Set<string>>(); // pool → active entrants seated in its matches
+  const rounds = new Map<
+    string,
+    {
+      pool: string | null;
+      round: number;
+      seated: Set<string>;
+      underWay: boolean;
+      generated: boolean;
+      maxSeq: number;
+      byes: (typeof rows)[number][];
+    }
+  >();
+  const roundOf = (pool: string | null, round: number) => {
+    const key = roundKey(pool, round);
+    let r = rounds.get(key);
+    if (!r) {
+      r = { pool, round, seated: new Set(), underWay: false, generated: false, maxSeq: 0, byes: [] };
+      rounds.set(key, r);
+    }
+    return r;
+  };
+  const orphans: string[] = [];
+  for (const r of rows) {
+    if (owned(r)) continue;
+    const f = field.get(r.pool_id ?? "") ?? new Set<string>();
+    for (const id of seats(r)) if (active.has(id)) f.add(id);
+    field.set(r.pool_id ?? "", f);
+    const round = roundOf(r.pool_id, r.round_no);
+    for (const id of seats(r)) round.seated.add(id);
+    round.underWay ||= r.under_way;
+    round.generated ||= RR_MATCH_EXT_KEY.test(r.ext_key ?? "");
+    round.maxSeq = Math.max(round.maxSeq, r.seq_in_round);
+  }
+  for (const r of rows) {
+    if (!owned(r)) continue;
+    const round = rounds.get(roundKey(r.pool_id, r.round_no));
+    // A bye in a round with no match left in it sits out nothing.
+    if (!round) orphans.push(r.id);
+    else round.byes.push(r);
+  }
+
+  const toDelete: string[] = [...orphans];
+  const toInsert: Record<string, unknown>[] = [];
+  for (const round of rounds.values()) {
+    // Everywhere, under way or not: a holder who plays this round is no sit-out.
+    const standing = round.byes.filter((b) => !round.seated.has(holder(b)));
+    for (const b of round.byes) if (!standing.includes(b)) toDelete.push(b.id);
+    if (round.underWay) continue;
+    const sitOuts = [...(field.get(round.pool ?? "") ?? [])].filter((id) => !round.seated.has(id));
+    // Only a round the SCHEDULE made rests anyone (owner ruling, fifth round).
+    const want = round.generated && sitOuts.length === 1 ? sitOuts[0]! : null;
+    const keep = standing.find((b) => holder(b) === want);
+    for (const b of standing) if (b !== keep) toDelete.push(b.id);
+    if (want !== null && keep === undefined) {
+      const key = round.pool !== null ? poolKey.get(round.pool) : undefined;
+      toInsert.push({
+        id: randomUUID(),
+        stage_id: stageId,
+        division_id: stage.division_id,
+        pool_id: round.pool,
+        round_no: round.round,
+        seq_in_round: round.maxSeq + 1,
+        home_entrant_id: want,
+        away_entrant_id: null,
+        home_slot_label: null,
+        away_slot_label: tx.json(BYE_SLOT_LABEL as never),
+        ext_key: restByeExtKey(key !== undefined ? `p${key}-` : "", round.round),
+        status: "forfeited",
+        outcome: tx.json({ kind: "award", winner: want } as never),
+        lane: null,
+        is_final: false,
+        third_place: false,
+        conditional: false,
+      });
+    }
+  }
+  // Delete FIRST: a replacement reuses its round's key, and the
+  // `(stage_id, ext_key)` unique index would refuse it beside the old row.
+  if (toDelete.length > 0) await tx`delete from fixtures where id in ${tx(toDelete)}`;
+  if (toInsert.length > 0) await tx`insert into fixtures ${tx(toInsert as never)}`;
+  return { inserted: toInsert.map((r) => r.id as string), deleted: toDelete };
+}
+
+/** `reconcileRestByes` over every round-robin stage of a division — for the
+ *  writes that change the FIELD rather than one stage (an entrant's status
+ *  crossing in or out of it) and the history steps that can touch any stage. */
+export async function reconcileDivisionRestByes(
+  tx: Tx,
+  divisionId: string,
+): Promise<{ inserted: string[]; deleted: string[] }> {
+  const stages = await tx<{ id: string }[]>`
+    select id from stages
+    where division_id = ${divisionId} and kind = any(${[...REST_BYE_STAGE_KINDS]}::text[])
+    order by seq`;
+  const out = { inserted: [] as string[], deleted: [] as string[] };
+  for (const s of stages) {
+    const r = await reconcileRestByes(tx, s.id);
+    out.inserted.push(...r.inserted);
+    out.deleted.push(...r.deleted);
+  }
+  return out;
 }
 
 /** Clear the latest seated Swiss round back onto its shells (2026-09-18). */
@@ -2402,7 +2727,7 @@ async function generateStageFixturesWrite(
     } else if (stage.kind === "ladder") {
       gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
     } else {
-      gen = generate(stage.kind, stage.config, entrants, poolIds);
+      gen = generate(stage.kind, stage.config, entrants, poolIds, { restByes: true });
     }
 
     // F14: the draw above was built over the FULL qualification list, so every
@@ -2504,14 +2829,27 @@ async function generateStageFixturesWrite(
     // that already goes through resolveSlotLabel (public bracket, console
     // stages/bracket panels, …) picks it up for free, the same way every
     // other slot label on this row already does.
-    const byeSlotLabel = (isBye: boolean): { key: string; params: Record<string, never> } | null =>
-      isBye ? BYE_SLOT_LABEL : null;
+    //
+    // A bracket's bye is the DRAW's sit-out and says so (`DRAW_BYE_SLOT_LABEL`,
+    // lib/fixture-bye.ts): the explicit marker that tells it from a walkover
+    // stamped later on a vacated seat, which carries the plain label. A
+    // round-robin rest-bye line keeps the plain label its reconciler writes
+    // too — its own marker is its key (`restByeExtKey`).
+    const byeSlotLabel = (isBye: boolean): { key: string; params: Record<string, string> } | null =>
+      !isBye ? null : REST_BYE_STAGE_KINDS.has(stage.kind) ? BYE_SLOT_LABEL : DRAW_BYE_SLOT_LABEL;
 
     // First pass: all new fixtures in one multi-row insert. Ids are generated
     // client-side so the feed/bye passes can reference them without relying
     // on RETURNING order.
-    const newRows = gen
-      .filter((g) => !byKey.has(g.extKey))
+    // #850 review, finding 7: over a stage that already has rows, the engine's
+    // `round.bye` belongs to a schedule the stage does not have — its keys are
+    // positional (`rr-r{n}-c{k}`), so the rows already there keep their old
+    // pairings and a new field's bye can name an entrant who still plays that
+    // round. No bye line is written over existing rows; `reconcileRestByes`
+    // below decides them from the rows the stage actually ends up with.
+    const byeLinesOk = existing.length === 0;
+    const newGen = gen.filter((g) => !byKey.has(g.extKey) && (byeLinesOk || !isRestByeGen(g, stage.kind)));
+    const newRows = newGen
       .map((g) => {
         const home_entrant_id = bakeDirect(g) ? g.home : null;
         const away_entrant_id = bakeDirect(g) ? g.away : null;
@@ -2559,7 +2897,15 @@ async function generateStageFixturesWrite(
     for (const r of newRows) byKey.set(r.ext_key, r.id);
     // Pair next reports seated shell rows as `created` for UI notices.
     const created = newRows.length + swissSeatedCount;
-    const createdIds = newRows.map((r) => r.id);
+    const createdIds: string[] = newRows.map((r) => r.id);
+    // #850: the organiser-facing counts (`created`/`existing` on the outcome,
+    // "Generated N fixture(s)", `fixtures_created`) count MATCHES — a
+    // round-robin rest bye is a row, not a fixture anyone plays, and the owner
+    // ruled out inflating totals with it. The ledger below still records every
+    // inserted row (`createdIds`), so Undo removes the bye rows too.
+    const restByeLines = (lines: readonly GenFixture[]) => lines.filter((g) => isRestByeGen(g, stage.kind)).length;
+    const createdMatches = created - restByeLines(newGen);
+    const existingMatches = gen.length - restByeLines(gen) - (newRows.length - restByeLines(newGen));
 
     // 1b pass — cross-stage fill, through fillSlot (see viaFillSlot above).
     // Runs over the FULL `gen` (not just newRows): fillSlot's own
@@ -2575,6 +2921,17 @@ async function generateStageFixturesWrite(
         if (g.away) await fillSlot(tx, fixtureId, 2, g.away);
       }
     }
+
+    // #850 — the rest-bye rows agree with the matches this pass leaves behind
+    // (see `reconcileRestByes`). AFTER the fills above, so a qualified field's
+    // seats are real. A no-op on a fresh round robin (the generator's own bye
+    // lines are already exactly right); the rows it writes over an existing
+    // stage join the ledger's `fixture_ids`, so Undo removes them with the
+    // rest of this pass.
+    const byeSync = REST_BYE_STAGE_KINDS.has(stage.kind)
+      ? await reconcileRestByes(tx, stageId)
+      : { inserted: [], deleted: [] };
+    createdIds.push(...byeSync.inserted);
 
     // Second pass: feeds, batched per side. A target's homeFrom/awayFrom
     // becomes the SOURCE fixture's winner_to/loser_to (+slot 1=home, 2=away).
@@ -2729,7 +3086,7 @@ async function generateStageFixturesWrite(
     // `fixture_ids` IS that Undo contract — undo DELETEs every id in it — so a
     // Swiss seat's ids (UPDATEd shells that already existed) ride separately
     // in `seated_fixture_ids`, which no undo path reads.
-    if (created > 0) {
+    if (created > 0 || byeSync.inserted.length > 0) {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events
         where division_id = ${stage.division_id}`;
@@ -2744,14 +3101,15 @@ async function generateStageFixturesWrite(
       select competition_id from divisions where id = ${stage.division_id}`;
     return {
       outcome: {
-        created,
-        existing: gen.length - newRows.length,
+        created: createdMatches,
+        existing: existingMatches,
         fixtures,
         ...(swissReshaped ? { reshaped: swissReshaped } : {}),
       },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
       swissSeatedCount,
+      restByeIds: [...byeSync.inserted, ...byeSync.deleted],
     };
   });
   const outcome = write.outcome;
@@ -2944,7 +3302,9 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
 }
 
 export interface RebuildOutcome extends GenerateOutcome {
-  /** Fixtures deleted before regenerating (0 only when the stage had none). */
+  /** Fixtures deleted before regenerating (0 only when the stage had none).
+   *  Counts matches, like `created`: #850 rest-bye rows are deleted but not
+   *  counted. */
   removed: number;
 }
 
@@ -3102,10 +3462,22 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       );
     }
 
-    const deleted = await tx<{ id: string }[]>`
-      delete from fixtures where stage_id = ${stageId} returning id`;
+    const deleted = await tx<
+      {
+        id: string;
+        outcome: unknown;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        ext_key: string | null;
+      }[]
+    >`
+      delete from fixtures where stage_id = ${stageId}
+      returning id, outcome, home_entrant_id, away_entrant_id, ext_key`;
     return {
       fixtureIds: deleted.map((row) => row.id),
+      // #850: "Rebuilt — N fixture(s) replaced" counts MATCHES, the same
+      // count `created` reports; a round-robin rest bye row is not one.
+      removedMatches: deleted.filter((row) => !isRestBye(row, stage.kind)).length,
       divisionId: stage.division_id,
       competitionId: stage.competition_id,
     };
@@ -3124,7 +3496,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       { event: "stage_fixtures_rebuilt", stageId, removed: removed.fixtureIds.length, created: outcome.created },
       "stage_fixtures_rebuilt",
     );
-    return { ...outcome, removed: removed.fixtureIds.length };
+    return { ...outcome, removed: removed.removedMatches };
   } finally {
     if (removed.fixtureIds.length > 0 || created > 0) {
       afterScheduleWrite(removed.divisionId, removed.competitionId, "schedule", removed.fixtureIds);
@@ -3439,12 +3811,14 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       // destination. Both sides are guarded rather than assuming the engine
       // always lands the award on `home` (buildSingleElim does today), same
       // symmetry the plain path keeps.
+      // The DRAW's own bye, so the DRAW's marker (`DRAW_BYE_SLOT_LABEL`) — a
+      // seat confirm vacates later gets the plain label and is a walkover.
       if (g.award !== undefined) {
         if (g.home === null && !g.homeLabel) {
-          await tx`update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
+          await tx`update fixtures set home_slot_label = ${tx.json(DRAW_BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
         }
         if (g.away === null && !g.awayLabel) {
-          await tx`update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
+          await tx`update fixtures set away_slot_label = ${tx.json(DRAW_BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
         }
       }
     }
@@ -3711,6 +4085,38 @@ function seatFeederIsDead(e: FeederEdge | undefined): boolean {
   return e.via === "winner" ? feederIsDead(e.row) : loserFeederIsDead(e.row);
 }
 
+/** #850 review round 3 (orchestrator reading of the owner's ICS ruling) — is
+ *  this seat's feeder dead BECAUSE OF THE DRAW? Then the seat it empties is a
+ *  sit-out the draw made, stamped `DRAW_BYE_SLOT_LABEL` and dropped from the
+ *  ICS feed like a first-round draw bye; otherwise a PERSON emptied it (a
+ *  withdrawal's void or walkover) and it is a walkover under the plain label.
+ *
+ *  Draw-made is exactly: a dead feeder that is the draw's own bye (a bye drops
+ *  nobody through its LOSER edge — a double-elim losers'-bracket bye, the
+ *  third-place bye), or a dead feeder whose OWN two seats are both draw-made
+ *  (a void the cascade wrote because two draw byes met). Each clause is
+ *  load-bearing:
+ *   - the deadness is re-asked of EVERY edge on the way down, not only of the
+ *     seat's own: a walkover between two bye holders is fed by two draw byes
+ *     through their WINNER edge, which is alive — it seated both players — so
+ *     the void it leads to is the withdrawal's, not the draw's;
+ *   - BOTH seats, and a missing feeder answers no. A void with no feeder in
+ *     the stage is one the generator wrote because a pairing departed (F14,
+ *     `walkoverDepartedQualifiers`) — the empty case must not read as "all of
+ *     its feeders are draw-made";
+ *   - a walkover reached through its loser edge recurses and answers no: one
+ *     of its seats was filled, so that feeder is alive.
+ *  The feed graph runs strictly backwards through earlier rounds, so the
+ *  recursion ends. */
+function feederIsDrawMade(e: FeederEdge | undefined, feederOf: ReadonlyMap<string, FeederEdge>): boolean {
+  if (!e || !seatFeederIsDead(e)) return false;
+  if (isDrawBye(e.row)) return true;
+  return (
+    feederIsDrawMade(feederOf.get(`${e.row.id}:1`), feederOf) &&
+    feederIsDrawMade(feederOf.get(`${e.row.id}:2`), feederOf)
+  );
+}
+
 interface SeatRow {
   id: string;
   home_entrant_id: string | null;
@@ -3776,6 +4182,9 @@ const MAX_CASCADE_PASSES = 32;
  *
  * The fix stamps `bracket.slot.bye` on the dead feeder's target seat and lets
  * `awardSeededByes` + `advanceSettledByes` settle it — NO second settle path.
+ * Which bye label (#850 review round 3): the DRAW's marker when the draw made
+ * the feeder dead, so the seat is a sit-out; the plain one when a withdrawal
+ * did, so it is a walkover (`feederIsDrawMade`).
  * Voids compound into further voids only where BOTH feeders are dead, because
  * a walkover needs a live recipient (the same ruling C2 enforces one round
  * earlier).
@@ -3871,11 +4280,17 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
       // Exactly one seat is open and the other holds a live entrant (the
       // both-filled case returned above), so if that open seat's feeder is
       // dead there IS someone to award the walkover to. Stamp, and let
-      // awardSeededByes below settle it off the label like any other bye.
+      // awardSeededByes below settle it off the label like any other bye —
+      // the DRAW's marker when the draw emptied the seat (a sit-out, #850
+      // review round 3), the plain label when a person did (a walkover).
+      const label = (seat: 1 | 2) =>
+        tx.json(
+          (feederIsDrawMade(feederOf.get(`${f.id}:${seat}`), feederOf) ? DRAW_BYE_SLOT_LABEL : BYE_SLOT_LABEL) as never,
+        );
       const [stamped] = openHome
         ? deadHome
           ? await tx<{ id: string }[]>`
-              update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+              update fixtures set home_slot_label = ${label(1)}
               where id = ${f.id} and stage_id = ${stageId}
                 and home_entrant_id is null and status = 'scheduled' and outcome is null
                 and coalesce(home_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}
@@ -3883,7 +4298,7 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
           : []
         : deadAway
           ? await tx<{ id: string }[]>`
-              update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+              update fixtures set away_slot_label = ${label(2)}
               where id = ${f.id} and stage_id = ${stageId}
                 and away_entrant_id is null and status = 'scheduled' and outcome is null
                 and coalesce(away_slot_label->>'key', '') <> ${BYE_SLOT_LABEL.key}
@@ -5277,6 +5692,15 @@ export async function confirmSeedProposal(
     // centre now shows a settled walkover rather than a fixture waiting on a
     // draw.
     for (const id of await resolveBracketSeats(tx, stageId)) filledFixtureIds.add(id);
+    // #850 (owner ruling 2026-09-24, third round): a progression-fed league or
+    // group gets its rest-bye rows HERE, when the draw places the entrants —
+    // its rows were drawn over placeholder seats at setup, so until now nobody
+    // was known to sit anything out. The same reconciler every other writer
+    // uses (a no-op for a bracket), AFTER the vacated-seat settlement above so
+    // a line walked over to its remaining entrant seats them like a match.
+    // Never timed: the rows it writes carry no `scheduled_at`.
+    const byes = await reconcileRestByes(tx, stageId);
+    for (const id of [...byes.inserted, ...byes.deleted]) filledFixtureIds.add(id);
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
@@ -5761,8 +6185,17 @@ export async function addFixture(
     const [{ nextSeq }] = await tx<{ nextSeq: number }[]>`
       select coalesce(max(seq_in_round), 0)::int + 1 as "nextSeq"
       from fixtures where stage_id = ${stageId} and round_no = ${round}`;
+    // The ad-hoc key: one past the HIGHEST `adhoc-{n}` already in the stage
+    // (review round 2, R2-1). It used to be `count(*)+1`, which collides as
+    // soon as any row leaves the stage — and rows do leave: a withdrawal
+    // deletes the leaver's rest-bye rows (#850, `reconcileRestByes`), and the
+    // next Add match then reused a key the `(stage_id, ext_key)` unique index
+    // refuses, a 500 on every retry. Only keys of exactly this form are read,
+    // so no other generator's key can move the sequence, and the division
+    // lock above serialises two concurrent adds.
     const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+      select coalesce(max(substring(ext_key from '^adhoc-([0-9]+)$')::bigint), 0)::int as n
+      from fixtures where stage_id = ${stageId} and ext_key ~ '^adhoc-[0-9]+$'`;
     // Review wave 2: the venue is DERIVED from the court, exactly as
     // `applySchedule`/`moveFixture`/the joint apply now do. Accepting both
     // independently let a caller post Venue A's court with Venue B's
@@ -5783,11 +6216,25 @@ export async function addFixture(
               'scheduled', ${input.scheduled_at ?? null},
               ${adhocVenueId}, ${input.court_id ?? null})
       returning id`;
-    return { out: { fixture_id: fixture!.id }, divisionId: stage.division_id, competitionId: stage.competition_id };
+    // #850, review round 2 R2-3: the rest-bye rows agree with the matches this
+    // write leaves behind, in the same transaction under the same lock. A
+    // match added for an entrant in the round they were resting takes that
+    // bye away ("no bye holder may also play in that round"). It never WRITES
+    // one (owner ruling 2026-09-24, fifth round): only a round the schedule
+    // generated rests anyone, so a match in a new round — a decider that
+    // exactly one entrant sits out included — gets no bye row.
+    const byes = await reconcileRestByes(tx, stageId);
+    return {
+      out: { fixture_id: fixture!.id },
+      divisionId: stage.division_id,
+      competitionId: stage.competition_id,
+      removedByeIds: byes.deleted,
+    };
   });
   // R10e (found): an ad-hoc fixture lands on the hub with its kick-off and
   // court, so the hub drops in one DEL after the commit and the division push
-  // follows it. The fixture is new: no fixture key, no fixture push.
-  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  // follows it. The fixture is new: no fixture key, no fixture push — only a
+  // rest-bye row the write DELETED is named, like any other deleted fixture.
+  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", write.removedByeIds);
   return write.out;
 }

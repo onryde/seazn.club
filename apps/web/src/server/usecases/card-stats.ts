@@ -8,6 +8,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
 import { courtNamesById } from "./schedule";
+import { restByeSql } from "@/server/fixture-bye-sql";
 
 export interface NextFixture {
   home: string | null;
@@ -78,6 +79,12 @@ export interface DivisionCardStats {
 // PLAYED_STATUSES. Without the bye clause, a sit-out sits in `total`
 // forever and the ledger reads "N-1 of N" for a round that is done.
 // Denominator still excludes cancelled fixtures.
+//
+// #850: a round-robin REST bye (`restByeSql`, the SQL twin of `isRestBye`)
+// is out of BOTH counts — it is not a match, so it must neither inflate the
+// total ("5 of 15" for a five-team league at generation) nor sit in played.
+// Excluding it from both keeps played ≤ total and lands on "M of M" exactly
+// when the last real match is decided. Swiss and knockout byes are unchanged.
 const PLAYED = ["decided", "finalized"] as const;
 
 // RS004 W2b review finding 1 — declared locally, NOT imported from
@@ -119,11 +126,13 @@ export async function listCompetitionCardStats(
           where d.competition_id = c.id and d.archived_at is null
             and (f.status in ${tx([...PLAYED])}
               or (f.status = 'forfeited'
-                and (f.home_entrant_id is null or f.away_entrant_id is null)))) as played,
+                and (f.home_entrant_id is null or f.away_entrant_id is null)))
+            and not ${restByeSql(tx)}) as played,
         (select count(*)::int from fixtures f
           join divisions d on d.id = f.division_id
           where d.competition_id = c.id and d.archived_at is null
-            and f.status <> 'cancelled') as total,
+            and f.status <> 'cancelled'
+            and not ${restByeSql(tx)}) as total,
         (select d.sport_key from divisions d
           where d.competition_id = c.id and d.archived_at is null
           group by d.sport_key order by count(*) desc, d.sport_key limit 1) as top_sport,
@@ -187,9 +196,11 @@ export async function listDivisionCardStats(
           where f.division_id = d.id
             and (f.status in ${tx([...PLAYED])}
               or (f.status = 'forfeited'
-                and (f.home_entrant_id is null or f.away_entrant_id is null)))) as played,
+                and (f.home_entrant_id is null or f.away_entrant_id is null)))
+            and not ${restByeSql(tx)}) as played,
         (select count(*)::int from fixtures f
-          where f.division_id = d.id and f.status <> 'cancelled') as total,
+          where f.division_id = d.id and f.status <> 'cancelled'
+            and not ${restByeSql(tx)}) as total,
         nf.next
       from divisions d
       left join registration_settings rs on rs.division_id = d.id

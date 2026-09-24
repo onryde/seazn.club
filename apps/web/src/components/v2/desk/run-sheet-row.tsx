@@ -27,6 +27,7 @@ import { courtDisplayName } from "@/components/v2/board/types";
 import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { isScoringBye } from "@/lib/fixture-bye";
 // Stream Overlay W1 (task 6). ONE import; the row owns only the open state and
 // two mount points, because the toggle belongs beside the time cell and the
 // panel spans the row beneath it — one component cannot be in both places.
@@ -110,10 +111,17 @@ export function RunSheetRow({
   boardSlotOptions,
   onRescheduled,
   stageName,
+  stageKind,
   stream,
   feedLabels,
 }: {
   fixture: RunSheetFixture;
+  /** The kind of the stage this fixture belongs to (#850). Read ONLY by the
+   *  bye branch, which asks `isScoringBye` whether the ghost row may say the
+   *  holder won: a Swiss or bracket bye is a win, a round-robin rest bye
+   *  scores nothing. Required, so no call site can forget it and silently
+   *  print a false "won (w/o)". */
+  stageKind: string;
   href: string;
   /** The VENUE zone (`scheduleSettings.tz`) — the time cell's DISPLAY and
    *  `fixtureRowAction`'s "scheduled today" rule both key off it. */
@@ -223,12 +231,17 @@ export function RunSheetRow({
   // Swiss Pair sits the award on the bye shell (`forfeited` + outcome.award).
   // Showing only "{name} has a bye" hid that the sit-out was already decided
   // — Gus looked awarded after the points fix, then Finn's R2 bye looked like
-  // a bare sit-out again. `isBye` requires an award outcome, so always pair
-  // the bye label with the walkover result (`schedule.outcome.wonWo`).
+  // a bare sit-out again. So a SCORING bye pairs the bye label with the
+  // walkover result (`schedule.outcome.wonWo`).
+  //
+  // #850 (owner ruling 2026-09-23): a round-robin rest bye is the same ghost
+  // row with NO suffix — it scores nothing, so "won (w/o)" would be false.
+  // Asked of `isScoringBye`, the one "does this bye score" predicate every
+  // standings reader uses, never a kind check of its own.
   if (isBye(fixture)) {
     const who = fixture.home_entrant_id ?? fixture.away_entrant_id;
     const name = entrantNames[who ?? ""] ?? "?";
-    const awarded = outcomeText(msg, fixture.outcome, entrantNames);
+    const awarded = isScoringBye(fixture, stageKind) ? outcomeText(msg, fixture.outcome, entrantNames) : null;
     return (
       <li className="px-4 py-2 text-sm text-slate-500 italic" data-testid="run-sheet-bye">
         {msg("schedule.round", { n: fixture.round_no })} · {msg("schedule.bye", { name })}

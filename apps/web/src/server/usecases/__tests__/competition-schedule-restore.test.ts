@@ -21,6 +21,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   RestoreCompetitionScheduleRequest,
@@ -212,7 +213,8 @@ async function seedDivision(
     config: {},
   });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
-  const ordered = [...fixtures].sort(
+  // #850: an odd league also persists settled REST-bye rows; this rig times MATCHES.
+  const ordered = fixtures.filter((f) => !isRestBye(f, "league")).sort(
     (a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
   );
   return { id: division.id, name, court: courts[0]!, fixtureIds: ordered.map((f) => f.id) };

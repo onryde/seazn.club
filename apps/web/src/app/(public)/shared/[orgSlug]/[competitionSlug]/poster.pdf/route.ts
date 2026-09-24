@@ -327,7 +327,9 @@ function drawDrawPages(
             ensureSpace(18);
             doc
               .font("Helvetica").fontSize(11).fillColor(INK)
-              .text(`${fixture.home}   ${lookup("schedule.vs")}   ${fixture.away}`, MARGIN, doc.y, {
+              // #850: a round-robin rest bye is a note ("X has a bye"), never
+              // "X vs Bye".
+              .text(fixture.note ?? `${fixture.home}   ${lookup("schedule.vs")}   ${fixture.away}`, MARGIN, doc.y, {
                 width: contentW,
               });
             doc.moveDown(0.18);

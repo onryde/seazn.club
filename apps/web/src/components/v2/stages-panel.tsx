@@ -91,6 +91,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { isRestBye } from "@/lib/fixture-bye";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
@@ -481,9 +482,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   //
   // Built from the WHOLE division fixture list, here, because this is the one
   // place that holds it: `<RunSheet>` only ever sees `blocks`, which
-  // `buildRunSheet` has already grouped and filtered (R7(c) drops an untimed
-  // plain-league bye outright), so a seat's label would otherwise depend on
-  // whether its feeder happened to survive grouping.
+  // `buildRunSheet` has already grouped and filtered (until #850, R7(c) also
+  // dropped an untimed plain-league bye outright), so a seat's label would
+  // otherwise depend on whether its feeder happened to survive grouping.
   //
   // `feedLabels` is the schedule board's own builder, unchanged and
   // un-forked — the two organiser surfaces that render these same fixtures
@@ -880,6 +881,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           (f) => f.status === "in_play" && !isBye(toRunSheetFixture(f)),
         );
         const stageNonByeCount = stageFixtures.filter((f) => !isBye(toRunSheetFixture(f))).length;
+        // "View N fixtures" (#850): every row but a round-robin REST bye.
+        const stageViewCount = stageFixtures.filter((f) => !isRestBye(f, stage.kind)).length;
         // Fix round 2 (Ruling T4-B, CRITICAL finding): built ONCE per stage
         // — same rule the comment on `courtTagsEditor` below states for
         // itself — then placed in exactly one of two mutually exclusive
@@ -1253,12 +1256,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     reads as a destination ("View N fixtures"), never a bare
                     statistic — `plural()` (`msgPlural`) throughout, this
                     programme's own repeat offender ("1 fixtures", five
-                    times). `stageFixtures.length` — the count already in
-                    hand here, never re-derived. Gated on `> 0` alone (not
-                    `stageNonByeCount`, unlike the progress bar above): a
-                    bye is still a real row the run sheet renders, so a
-                    stage whose only fixture is a bye still has something to
-                    view.
+                    times). The COUNT is `stageFixtures.length` less the
+                    stage's round-robin REST-bye rows (`isRestBye`) and
+                    nothing else (#850, review O2 / finding 5: a 5-entrant
+                    league read "View 15 fixtures" over 10 matches, because
+                    its five rest-bye rows were counted). A Swiss or bracket
+                    bye and a fed league's walkover (owner ruling 2026-09-24,
+                    fourth round) count exactly as they did before #850.
+                    Gated on `stageFixtures.length > 0` (not
+                    `stageNonByeCount`, unlike the progress bar above): a bye
+                    is still a real row the run sheet renders, so a stage
+                    whose only fixture is a bye still has something to view.
 
                     Click sets `stageFilter` (this component's own state,
                     threaded to `<RunSheet>` as `stageId`) and scrolls the
@@ -1295,7 +1303,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     }}
                     className="flex min-h-11 w-full items-center gap-1 px-4 py-2 text-left text-xs font-semibold text-purple-700 hover:text-purple-800"
                   >
-                    {msgPlural("schedule.stage.viewFixtures", stageFixtures.length)}
+                    {msgPlural("schedule.stage.viewFixtures", stageViewCount)}
                     <span aria-hidden="true">→</span>
                   </button>
                 )}

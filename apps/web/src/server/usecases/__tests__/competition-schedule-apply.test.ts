@@ -17,6 +17,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import { HttpError } from "@/lib/errors";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { EngineError } from "@seazn/engine/core";
@@ -173,7 +174,8 @@ async function seedDivision(
     config: {},
   });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
-  const ordered = [...fixtures].sort(
+  // #850: an odd league also persists settled REST-bye rows; this rig times MATCHES.
+  const ordered = fixtures.filter((f) => !isRestBye(f, "league")).sort(
     (a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
   );
   return { id: division.id, name, fixtureIds: ordered.map((f) => f.id) };
@@ -250,12 +252,23 @@ async function slots(
   divisionId: string,
 ): Promise<{ id: string; at: string | null; court: string | null; source: string | null }[]> {
   const rows = await sql<
-    { id: string; scheduled_at: Date | null; court_id: string | null; schedule_source: string | null }[]
+    {
+      id: string;
+      scheduled_at: Date | null;
+      court_id: string | null;
+      schedule_source: string | null;
+      outcome: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      ext_key: string | null;
+    }[]
   >`
-    select id, scheduled_at, court_id, schedule_source from fixtures
+    select id, scheduled_at, court_id, schedule_source, outcome, home_entrant_id, away_entrant_id, ext_key from fixtures
     where division_id = ${divisionId}
     order by round_no, seq_in_round, id`;
-  return rows.map((r) => ({
+  // #850: the MATCHES' slots — an odd league's settled REST-bye rows are never
+  // placed (the apply refuses them as immutable), so they are no slot here.
+  return rows.filter((r) => !isRestBye(r, "league")).map((r) => ({
     id: r.id,
     at: r.scheduled_at === null ? null : new Date(r.scheduled_at).toISOString(),
     court: r.court_id,

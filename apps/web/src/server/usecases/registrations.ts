@@ -55,7 +55,9 @@ import { createSystemClaimInvite } from "./person-claims";
 // The entrant status flip inside `withdrawCore` is raw SQL, so `patchEntrant`'s
 // own hook cannot fire — this is what refreshes a seeding draft that still
 // names the registrant (review finding F3).
-import { markFieldChangeSeedProposalsStale } from "./stages";
+import { markFieldChangeSeedProposalsStale, reconcileDivisionRestByes } from "./stages";
+// The departed-status set `patchEntrant` decides a field change by — ONE copy.
+import { DEPARTED_STATUSES } from "./entrants";
 import {
   FIRST_PAID_EARN,
   recordEarnGrant,
@@ -4684,6 +4686,16 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
   const ctx = await divisionCtx(sql, reg.division_id);
 
   const outcome = (await sql.begin(async (tx) => {
+    // LOCK ORDER (#850 review round 3): the division lock FIRST — before this
+    // entry's row lock below and before the entrant row — the order
+    // `deleteEntrant` takes them in: the lock, then the entrant row, whose
+    // delete reaches THIS registration row through
+    // `registrations.entrant_id on delete set null`. Taken after either row
+    // (as it was), a withdrawal and a delete of the same entrant each held what
+    // the other waited for: a deadlock (40P01). The lock guards the rest-bye
+    // reconcile below; `reg.division_id` is the entry's own division, the one
+    // its entrant belongs to. `entrant-lock-order.test.ts`.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + reg.division_id}))`;
     // `for update` on the join locks both the entry AND its cart row — right
     // here, since the refund block below reads the cart's payment_intent_id.
     const [locked] = await tx<RegistrationWithGroupRow[]>`
@@ -4702,7 +4714,20 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
     // A withdrawn entrant that was already materialised marks withdrawn too —
     // fixtures/standings handle entrant withdrawal by the existing rules.
     if (locked.entrant_id) {
+      // Read BEFORE the flip, as `patchEntrant` does: only a crossing OUT of
+      // the field is a field change (re-withdrawing a departed entrant is not).
+      const [prior] = await tx<{ status: string; division_id: string }[]>`
+        select status, division_id from entrants where id = ${locked.entrant_id}`;
       await tx`update entrants set status = 'withdrawn' where id = ${locked.entrant_id}`;
+      // #850, review round 2 R2-2: this flip is raw SQL, so `patchEntrant`'s
+      // own reconcile never runs — and the leaver's rest-bye rows in rounds not
+      // yet under way stayed, naming someone who no longer sits anything out.
+      // Same policy as `patchEntrant`, same ONE reconciler, under the division
+      // lock every other fixture writer takes (taken at the top of this
+      // transaction, before any row lock — see there).
+      if (prior && !DEPARTED_STATUSES.has(prior.status)) {
+        await reconcileDivisionRestByes(tx, prior.division_id);
+      }
     }
     // RS009: if this entry is a solo sign-up placed on someone else's team,
     // withdrawing must take them OFF that roster. Marking their own entrant

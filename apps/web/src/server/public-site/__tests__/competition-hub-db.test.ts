@@ -38,6 +38,7 @@ import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
 import { getPublicDivision } from "../data";
 import { divisionChampion } from "../champion";
+import { isRestBye } from "@/lib/fixture-bye";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -55,7 +56,11 @@ interface Scene {
   privateSlug: string;
   divisionSlug: string;
   stageId: string;
+  /** The generated MATCHES. */
   fixtureIds: string[];
+  /** #850: the generated league of three also rests one team per round on a
+   *  settled REST-bye row — real rows, never hub matches. */
+  restByeIds: string[];
   /** The separate knockout competition (see `seed`). */
   koCompSlug: string;
   koStageId: string;
@@ -185,7 +190,8 @@ async function seed(): Promise<Scene> {
     privateSlug: hidden.slug,
     divisionSlug: division.slug,
     stageId: stage!.id,
-    fixtureIds: fixtures.map((f) => f.id),
+    fixtureIds: fixtures.filter((f) => !isRestBye(f, "league")).map((f) => f.id),
+    restByeIds: fixtures.filter((f) => isRestBye(f, "league")).map((f) => f.id),
     koCompSlug: cupCompetition.slug,
     koStageId: koStage!.id,
   };
@@ -234,9 +240,17 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
     expect(doc.orgSlug).toBe(scene.orgSlug);
   });
 
-  it("every generated fixture reaches the hub, each with a real division and href", async () => {
+  it("every generated MATCH reaches the hub, each with a real division and href — and no rest bye does (#850)", async () => {
     const doc = (await loadCompetitionHub(scene.orgSlug, scene.compSlug))!;
     expect(doc.matches.map((m) => m.fixtureId).sort()).toEqual([...scene.fixtureIds].sort());
+    // #850 (owner ruling 2026-09-24): the three rest-bye rows the generator
+    // wrote are settled (`forfeited`) — they used to be filed `completed`, so
+    // the hub read "Completed 3" before a ball was struck. Premise first, so
+    // the absence below is not vacuous.
+    expect(scene.restByeIds).toHaveLength(3);
+    for (const id of scene.restByeIds) expect(doc.matches.some((m) => m.fixtureId === id)).toBe(false);
+    expect(doc.matches.filter((m) => m.bucket === "completed")).toEqual([]);
+    expect(doc.matches.filter((m) => m.bucket === "upcoming")).toHaveLength(3);
     for (const match of doc.matches) {
       expect(match.divisionSlug).toBe(scene.divisionSlug);
       expect(match.href).toBe(

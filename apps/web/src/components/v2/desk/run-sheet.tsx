@@ -114,9 +114,10 @@ export function RunSheet({
    *
    *  Built by the PANEL, not here, and deliberately: the map must be derived
    *  from the division's WHOLE fixture list, and `blocks` is already a
-   *  filtered, grouped view of it (ruling R7(c) drops an untimed plain-league
-   *  bye from the sheet entirely). Deriving it from `blocks` would make a
-   *  seat's label depend on whether its feeder happened to survive grouping. */
+   *  filtered, grouped view of it (the filter chips drop rows; until #850,
+   *  ruling R7(c) also dropped an untimed plain-league bye outright). Deriving
+   *  it from `blocks` would make a seat's label depend on whether its feeder
+   *  happened to survive grouping. */
   feedLabels?: Record<string, FeedLabelPair>;
 }) {
   const msg = useMsg();
@@ -194,6 +195,9 @@ export function RunSheet({
   // stage... single-stage divisions gain no noise").
   const stageNameFor = (f: RunSheetFixture): string | null =>
     stages.length > 1 ? (stageById.get(f.stage_id)?.name ?? null) : null;
+  // #850: every row learns its stage's kind, so a bye's ghost row can ask
+  // `isScoringBye` whether it may print "won (w/o)" (a league rest bye may not).
+  const stageKindOf = (f: RunSheetFixture): string => stageById.get(f.stage_id)?.kind ?? "";
 
   // The two counted filters are FACTS about a fixture, asked of the one
   // module that owns them (`division-phase.ts`, W1's ledger) rather than
@@ -300,7 +304,10 @@ export function RunSheet({
             <DayHeading
               dayKey={block.dayKey}
               venueLabel={venueLabel}
-              count={rows.length}
+              // #850: a round-robin rest bye rides inside its round's day, but
+              // it is not a fixture anyone plays — "3 fixtures" over two
+              // matches and a bye would be false.
+              count={rows.filter((f) => !isBye(f)).length}
               locale={locale}
               msgPlural={msgPlural}
             />
@@ -324,6 +331,7 @@ export function RunSheet({
                 onRescheduled={onRescheduled}
                 stream={stream}
                 feedLabels={feedLabels}
+                stageKind={stageKindOf(f)}
               />
             ))}
             {nowIndex === rows.length && <NowRule msg={msg} />}
@@ -407,6 +415,7 @@ export function RunSheet({
                     onRescheduled={onRescheduled}
                     stream={stream}
                     feedLabels={feedLabels}
+                    stageKind={stageKindOf(f)}
                   />
                 ))}
               </ul>
@@ -445,6 +454,7 @@ export function RunSheet({
                 stream={stream}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
+                stageKind={stageKindOf(f)}
               />
             ))}
           </ul>
@@ -485,6 +495,7 @@ export function RunSheet({
                 stream={stream}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
+                stageKind={stageKindOf(f)}
               />
             ))}
           </ul>
@@ -718,6 +729,8 @@ function RowWithNow({
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
    *  wrapper reads nothing off it (same posture as `stream`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;
+  /** #850 — passed straight through, like `feedLabels`. */
+  stageKind: string;
 }) {
   return (
     <>

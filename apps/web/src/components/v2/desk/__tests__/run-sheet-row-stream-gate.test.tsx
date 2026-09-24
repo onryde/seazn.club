@@ -77,6 +77,7 @@ function row(options: { canEdit?: boolean; stream?: StreamPanelContext; fixture?
     canEdit: options.canEdit ?? true,
     entrantNames: ENTRANTS,
     stream: options.stream ?? ctx(),
+    stageKind: "league",
   });
 }
 
@@ -122,6 +123,7 @@ describe("the stream toggle's gate — each conjunct on its own", () => {
       nowMs: NOW_MS,
       canEdit: true,
       entrantNames: ENTRANTS,
+      stageKind: "league",
     });
     expectRowRendered(island.tree());
     expect(find(island.tree(), FixtureStreamToggle)).toBeUndefined();

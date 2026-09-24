@@ -23,6 +23,9 @@ import {
   type Page,
 } from "@playwright/test";
 import { apiJson, setEntitlementOverrideSql, setOrgLocaleSql, setOrgPlanBySql } from "./helpers";
+// THE rest-bye predicate (#850) — one type-only import behind it, so no app
+// runtime follows it in (the same terms as helpers.ts's import of it).
+import { isRestBye } from "../src/lib/fixture-bye";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { openContexts } from "./spectator-public-helpers";
 
@@ -260,10 +263,18 @@ export interface FixtureRow {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   status: string;
+  outcome?: unknown;
+  /** #850 — the rest-bye MARKER `isRestBye` reads (the v1 list carries it). */
+  ext_key?: string | null;
 }
 
 /** A league stage generated and the division started; the fixtures come back
- *  with their sides, so a caller never assumes which pairing is first. */
+ *  with their sides, so a caller never assumes which pairing is first.
+ *
+ *  #850: an odd field also persists one settled REST-bye row per round. Those
+ *  are not fixtures anyone plays, scores or withdraws from, so this returns the
+ *  MATCHES — asked of the product's own `isRestBye`, never a restated shape —
+ *  which is what every caller has always meant by "the fixtures". */
 export async function leagueFixtures(request: APIRequestContext, divisionId: string): Promise<FixtureRow[]> {
   const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
     seq: 1,
@@ -277,7 +288,13 @@ export async function leagueFixtures(request: APIRequestContext, divisionId: str
   if (started.status >= 300) throw new Error(`start ${divisionId} -> ${started.status} ${JSON.stringify(started.error)}`);
   const list = await apiJson<FixtureRow[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
   if (!list.data?.length) throw new Error(`fixtures for ${divisionId} -> ${list.status}`);
-  return list.data;
+  return list.data.filter(
+    (f) =>
+      !isRestBye(
+        { outcome: f.outcome ?? null, home_entrant_id: f.home_entrant_id, away_entrant_id: f.away_entrant_id, ext_key: f.ext_key ?? null },
+        "league",
+      ),
+  );
 }
 
 export async function scheduleFixture(request: APIRequestContext, fixtureId: string, iso: string): Promise<void> {

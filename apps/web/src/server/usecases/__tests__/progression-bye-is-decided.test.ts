@@ -22,9 +22,11 @@
 // not a hand-typed shape: `run-sheet-row.tsx` and `stages-panel.tsx` both gate
 // their bye branch on it, so pinning anything else would leave the two free to
 // disagree about what the fix produced.
+import { DRAW_BYE_SLOT_LABEL, isSitOutBye } from "@/lib/fixture-bye";
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
@@ -64,12 +66,13 @@ interface Row {
   away_slot_label: unknown;
   status: string;
   outcome: unknown;
+  ext_key: string | null;
 }
 
 async function fixturesOf(stageId: string): Promise<Row[]> {
   return sql<Row[]>`
     select id, round_no, seq_in_round, home_entrant_id, away_entrant_id,
-           home_slot_label, away_slot_label, status, outcome
+           home_slot_label, away_slot_label, status, outcome, ext_key
     from fixtures where stage_id = ${stageId}
     order by round_no, seq_in_round`;
 }
@@ -142,7 +145,8 @@ async function seedLeagueKo(auth: AuthCtx, field: number, topN: number): Promise
  *  final table is strict on points alone (En has n-1 losses) and the
  *  qualification order is E1 > E2 > … with no tiebreaker in play. */
 async function playLeagueOut(auth: AuthCtx, rig: Rig): Promise<void> {
-  for (const f of await fixturesOf(rig.leagueStageId)) {
+  // #850: an odd league's settled REST-bye rows are not matches to play.
+  for (const f of (await fixturesOf(rig.leagueStageId)).filter((x) => !isRestBye(x, "league"))) {
     const home = rig.nameOf.get(f.home_entrant_id!)!;
     const away = rig.nameOf.get(f.away_entrant_id!)!;
     const homeWins = Number(home.slice(1)) < Number(away.slice(1));
@@ -230,6 +234,9 @@ describe.runIf(HAS_DB)("a progression-seeded bracket's byes are decided, not lef
       expect(bye.status, `bye for ${rig.nameOf.get(bye.home_entrant_id!)}`).toBe("forfeited");
       expect(bye.outcome).toEqual({ kind: "award", winner: bye.home_entrant_id });
       expect(isBye(asRunSheetFixture(bye))).toBe(true);
+      // Settled at confirm, off the same key as a vacated seat's walkover —
+      // and still the DRAW's sit-out by its own marker, through the confirm.
+      expect(isSitOutBye({ ...bye, ext_key: null }, "knockout"), "the draw's bye is a sit-out").toBe(true);
     }
   });
 
@@ -254,7 +261,9 @@ describe.runIf(HAS_DB)("a progression-seeded bracket's byes are decided, not lef
       (f) => f.round_no === 1 && f.away_slot_label !== null,
     ).filter((f) => (f.away_slot_label as { key?: string }).key === "bracket.slot.bye");
     expect(byeLine, "exactly one day-one line is the bye").toHaveLength(1);
-    expect(byeLine[0]!.away_slot_label).toEqual({ key: "bracket.slot.bye", params: {} });
+    // The DRAW's bye carries the draw's explicit marker (the ICS feed drops
+    // it as a sit-out by that marker; a vacated seat's walkover lacks it).
+    expect(byeLine[0]!.away_slot_label).toEqual(DRAW_BYE_SLOT_LABEL);
     // Its own home side still names the seat that will fill it — the bye label
     // must not have overwritten the descriptor.
     expect((byeLine[0]!.home_slot_label as { seed?: number }).seed).toBe(1);

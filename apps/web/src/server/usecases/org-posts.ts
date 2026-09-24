@@ -28,6 +28,7 @@ import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
+import { restByeSql } from "@/server/fixture-bye-sql";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { playerStatsWithoutWaiting } from "./player-stats";
 import {
@@ -579,6 +580,9 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     left join entrants a on a.id = f.away_entrant_id
     left join match_states m on m.fixture_id = f.id
     where f.division_id = ${fx.division_id} and f.stage_id = ${fx.stage_id} and f.round_no = ${roundNo}
+      -- #850: a round-robin rest bye is settled (so the round above is
+      -- complete without it) but it is not a result to list.
+      and not ${restByeSql(tx)}
     order by f.fixture_no nulls last, f.id`;
   const results = resultRows.map((r) => ({
     // Unreachable: every row here is a DECIDED/FINALIZED/FORFEITED TABLE_KINDS (league/group/swiss) fixture, and those never get a null entrant — round-robin/swiss generation and addFixture always seat both sides, and appendEvent refuses to decide a fixture with one still null.
@@ -794,7 +798,12 @@ async function extractScorers(
  *  `computeStreak` (enrichment.ts) wants. Best-effort: an outcome shape this
  *  function does not recognise reads as a draw rather than throwing, since a
  *  wrong streak line is a worse failure mode than a missing one only when it
- *  silently corrupts data — here it can only under-report a streak. */
+ *  silently corrupts data — here it can only under-report a streak.
+ *
+ *  #850: a round-robin REST bye (`restByeSql`, the SQL twin of `isRestBye`)
+ *  is `forfeited` with an award to its holder but scores nothing, so it is no
+ *  result here — it neither extends a streak nor breaks one. A Swiss or
+ *  bracket bye still counts as the win it is. */
 async function entrantRecentOutcomes(
   tx: Tx,
   divisionId: string,
@@ -805,12 +814,13 @@ async function entrantRecentOutcomes(
   const rows = await tx<
     { outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null }[]
   >`
-    select outcome, home_entrant_id, away_entrant_id
-    from fixtures
-    where division_id = ${divisionId} and stage_id = ${stageId}
-      and status in ('decided','finalized','forfeited')
-      and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})
-    order by round_no desc, fixture_no desc nulls last, id desc
+    select f.outcome, f.home_entrant_id, f.away_entrant_id
+    from fixtures f
+    where f.division_id = ${divisionId} and f.stage_id = ${stageId}
+      and f.status in ('decided','finalized','forfeited')
+      and (f.home_entrant_id = ${entrantId} or f.away_entrant_id = ${entrantId})
+      and not ${restByeSql(tx)}
+    order by f.round_no desc, f.fixture_no desc nulls last, f.id desc
     limit ${limit}`;
   return rows.map((r): ResultOutcome => {
     const o = r.outcome as { kind?: string; winner?: string } | null;

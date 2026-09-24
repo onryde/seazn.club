@@ -69,6 +69,7 @@ const COPY: ScheduleCopy = {
   calendar: "(calendar)",
   timesIn: "(times in {zone})",
   empty: "(empty)",
+  bye: "(bye {name})",
 };
 
 // A main draw and its plate. Both end in a round the namer calls "(final)";
@@ -105,6 +106,7 @@ function render(entrant: string): string {
         roundLabels: ROUND_LABELS,
         stageOrder: STAGE_ORDER,
         stageNames: STAGE_NAMES,
+        stageKinds: {},
         copy: COPY,
         locale: "en",
       }),

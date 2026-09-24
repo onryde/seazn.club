@@ -9,6 +9,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -45,7 +46,9 @@ async function seedTwoFixtureDivision(auth: AuthCtx) {
     name: "League",
     config: {},
   });
-  const { fixtures } = await generateStageFixtures(auth, stage!.id);
+  // #850: three entrants also rest one per round on a settled REST-bye row,
+  // which can never take a time or a court — this rig moves MATCHES.
+  const fixtures = (await generateStageFixtures(auth, stage!.id)).fixtures.filter((f) => !isRestBye(f, "league"));
   expect(fixtures.length).toBeGreaterThanOrEqual(2);
   return { division, fixtures };
 }

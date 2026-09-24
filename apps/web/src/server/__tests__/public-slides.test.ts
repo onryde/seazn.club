@@ -1,4 +1,5 @@
 // buildPublicDivisionSlides (PROMPT-64 public /present) — pure, no DB.
+import { restByeExtKey } from "@/lib/fixture-bye";
 import { describe, expect, it } from "vitest";
 import { buildPublicDivisionSlides } from "../slideshow-data";
 import type { FixtureSlideItem } from "../slideshow-data";
@@ -301,5 +302,60 @@ describe("buildPublicDivisionSlides — waiting sides name their feeder's ROUND;
     const slides = await buildPublicDivisionSlides(knockout);
     const titles = slides.filter((s) => s.kind === "fixtures").map((s) => (s as { title: string }).title);
     expect(titles).toEqual(TITLE_KEYS.map((k) => msgFor("en", k)));
+  });
+});
+
+// #850 (owner ruling 2026-09-24): on Present a round-robin REST bye is never a
+// result. Settled `forfeited` at generation, it used to head "Latest results"
+// as "X vs Bye" before anything was played. The same row shape in a knockout
+// or a Swiss stage is still listed (its bye IS a result there): the twin that
+// keeps the exclusion from passing by dropping every bye.
+describe("buildPublicDivisionSlides — a round-robin rest bye is not a latest result (#850)", () => {
+  const restBye = (id: string, stage: string, holder: string) => ({
+    id, stage_id: stage, round_no: 1, seq_in_round: 3, home_entrant_id: holder, away_entrant_id: null,
+    away_slot_label: { key: "bracket.slot.bye", params: {} }, status: "forfeited", summary: null,
+    outcome: { kind: "award", winner: holder },
+    // The rest-bye MARKER, spelled by the generator's own function.
+    ext_key: restByeExtKey("", 1),
+  });
+  const played = { id: "g1", stage_id: "lg", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "decided", summary: { headline: "2–1" }, outcome: { kind: "win", winner: "e1" } };
+  const base = {
+    ...input,
+    stages: [
+      { id: "lg", kind: "league", name: "League" },
+      { id: "sw", kind: "swiss", name: "Swiss" },
+    ],
+    pools: [],
+    standings: [],
+  };
+  const resultsOf = async (fixtures: object[]) => {
+    const slides = await buildPublicDivisionSlides({ ...base, fixtures } as never);
+    const slide = slides.find((s) => s.kind === "fixtures" && s.title === "Latest results") as
+      | { items: FixtureSlideItem[] }
+      | undefined;
+    return slide?.items.map((i) => `${i.home} v ${i.away}`) ?? [];
+  };
+
+  it("a freshly generated odd league — only rest byes settled — has NO 'Latest results' slide at all", async () => {
+    expect(await resultsOf([restBye("b1", "lg", "e3"), { ...played, status: "scheduled", summary: null, outcome: null }])).toEqual([]);
+  });
+
+  it("once a match is played, it alone is listed — never the bye beside it", async () => {
+    expect(await resultsOf([played, restBye("b1", "lg", "e3")])).toEqual(["Mexico v Canada"]);
+  });
+
+  // Owner ruling 2026-09-24 (fourth round): a fed league's walkover has the
+  // rest bye's shape in the same league, but its MATCH key — it is a result,
+  // listed exactly as before #850.
+  it("the walkover twin: the same row shape in the same league, unmarked, IS listed", async () => {
+    const items = await resultsOf([{ ...restBye("wo", "lg", "e3"), ext_key: "rr-r1-c2" }]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatch(/^Japan v /);
+  });
+
+  it("the Swiss twin: the same row shape in a Swiss stage IS listed", async () => {
+    const items = await resultsOf([restBye("sb", "sw", "e3")]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatch(/^Japan v /);
   });
 });

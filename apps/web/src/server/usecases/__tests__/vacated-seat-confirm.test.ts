@@ -27,6 +27,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { isRestBye, isSitOutBye } from "@/lib/fixture-bye";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
@@ -118,7 +119,11 @@ async function setup() {
   const koStageId = stages.find((s) => s.kind === "knockout")!.id;
   await generateStageFixtures(auth, koStageId);
   await generateStageFixtures(auth, groupStageId);
-  for (const f of await sql<{ id: string }[]>`select id from fixtures where stage_id = ${groupStageId}`) {
+  // #850: an odd pool's settled REST-bye rows are not matches to play.
+  const groupRows = await sql<
+    { id: string; outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null; ext_key: string | null }[]
+  >`select id, outcome, home_entrant_id, away_entrant_id, ext_key from fixtures where stage_id = ${groupStageId}`;
+  for (const f of groupRows.filter((x) => !isRestBye(x, "group"))) {
     await appendEvent(auth.orgId, f.id, 0, { type: "core.start", payload: {} });
     await appendEvent(auth.orgId, f.id, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
   }
@@ -202,6 +207,11 @@ describe.skipIf(!HAS_DB)("confirming a draw with a seat nobody will take", () =>
     expect(isBye(final as unknown as RunSheetFixture), "the screen still reads this as an open match").toBe(
       true,
     );
+    // …but it is a WALKOVER, not the draw's sit-out: the vacated seat carries
+    // the PLAIN bye label, never the draw's marker, so the calendar feed keeps
+    // emitting it as it did before #850 (orchestrator ruling 2026-09-24).
+    expect(vacatedLabel, "a vacated seat is not dressed as the draw's bye").toEqual({ key: "bracket.slot.bye", params: {} });
+    expect(isSitOutBye({ ...final!, ext_key: null }, "knockout")).toBe(false);
 
     // Nobody was promoted: the departed qualifier is not in the fixture, and
     // no third party took her seat.
@@ -387,10 +397,14 @@ describe.skipIf(!HAS_DB)("a tie whose seat nobody is left to take", () => {
     await generateStageFixtures(auth, koStageId);
     await generateStageFixtures(auth, groupStageId);
 
-    const fixtures = await sql<
-      { id: string; pool: string | null; home_entrant_id: string; away_entrant_id: string }[]
-    >`select id, pool_id as pool, home_entrant_id, away_entrant_id
-      from fixtures where stage_id = ${groupStageId} order by pool_id, seq_in_round`;
+    // #850: pools of three rest one member per round on a settled REST-bye
+    // row; the cycle below is built from, and played over, the MATCHES.
+    const fixtures = (
+      await sql<
+        { id: string; pool: string | null; home_entrant_id: string; away_entrant_id: string; outcome: unknown; ext_key: string | null }[]
+      >`select id, pool_id as pool, home_entrant_id, away_entrant_id, outcome, ext_key
+        from fixtures where stage_id = ${groupStageId} order by pool_id, seq_in_round`
+    ).filter((f) => !isRestBye(f, "group"));
     const cycleIndex = new Map<string, number>();
     const seen = new Map<string, string[]>();
     for (const f of fixtures) {

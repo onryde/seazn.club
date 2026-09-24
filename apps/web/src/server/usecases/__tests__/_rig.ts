@@ -8,6 +8,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
+import { isRestBye } from "@/lib/fixture-bye";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -85,7 +86,10 @@ export async function divisionRig(
       seq, kind: "league", name: `L${seq}`, config: {},
     });
     const { fixtures } = await generateStageFixtures(auth, stage.id);
-    stages.push({ stageId: stage.id, fixtureIds: fixtures.map((f) => f.id) });
+    // #850: an odd field also rests one entrant per round on a persisted,
+    // settled REST-bye row. `fixtureIds` is what every caller scores, moves
+    // and imports into — the MATCHES — so a rest bye is never among them.
+    stages.push({ stageId: stage.id, fixtureIds: fixtures.filter((f) => !isRestBye(f, "league")).map((f) => f.id) });
   }
   if (opts.start !== false) await startDivision(auth, division.id);
   return { divisionId: division.id, fixtureIds: stages.flatMap((s) => s.fixtureIds), stages };

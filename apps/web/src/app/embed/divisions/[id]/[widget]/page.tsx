@@ -135,6 +135,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
   // N1f f2: two stages can name a round the same ("Final" in a knockout and in
   // its plate); the round view heads those groups with the stage as well.
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
+  // #850: the Schedule tells a round-robin rest bye from a match by its
+  // stage's kind (`isRestBye`) and draws it as a note in its round.
+  const stageKinds = Object.fromEntries(stages.map((s) => [s.id, s.kind]));
 
   let body: React.ReactNode;
   if (widget === "schedule") {
@@ -148,6 +151,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         roundLabels={roundLabels}
         stageOrder={stageOrder}
         stageNames={stageNames}
+        stageKinds={stageKinds}
         copy={scheduleCopy}
         locale={orgLocale}
       />

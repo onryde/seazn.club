@@ -42,6 +42,7 @@ import {
 // for their own `tags` — one copy, imported, not re-implemented (a court
 // tagged "clay" must match a division requiring "Clay").
 import { normalizeTags } from "./venues";
+import { restByeSql } from "@/server/fixture-bye-sql";
 
 export interface DivisionRow {
   id: string;
@@ -462,9 +463,12 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
     // Audit fidelity, not a guard: how MANY results died with the row. The
     // guard's question ("any at all?") is division_has_results above — this is
     // a different question, so it stays a count.
+    // #850: a round-robin rest bye is `forfeited` from generation but is no
+    // result — the same exemption V417 gives the guard above.
     const [{ decided }] = await tx<{ decided: number }[]>`
-      select count(*)::int as decided from fixtures
-      where division_id = ${id} and status in ('decided', 'finalized', 'forfeited')`;
+      select count(*)::int as decided from fixtures f
+      where f.division_id = ${id} and f.status in ('decided', 'finalized', 'forfeited')
+        and not ${restByeSql(tx)}`;
 
     // The division ledger dies with the row (ON DELETE CASCADE); the audit
     // fact lives on the competition ledger, which survives (v3/09 §4).

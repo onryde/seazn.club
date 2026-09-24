@@ -4,9 +4,11 @@ import {
   apiJson,
   addEntrantsViaApi,
   createStageAndGenerate,
+  scoreFixture,
   seedVenueWithCourts,
   type OrgInfo,
 } from "./helpers";
+import { DRAW_BYE_SLOT_LABEL, isSitOutBye } from "../src/lib/fixture-bye";
 
 // F4/P2 (wave B): a subscribed calendar is a surface an organiser hands out
 // to other people, so the day-one final has to be IN it, served as real
@@ -274,4 +276,74 @@ test("the public .ics carries the venue and court a fixture was scheduled onto",
   expect(body).toMatch(/LOCATION:.*Centre Court/);
   // Never the raw identity.
   expect(body).not.toMatch(/LOCATION:.*[0-9a-f]{8}-[0-9a-f]{4}-/i);
+});
+
+// #850 review round 3 (orchestrator reading of the owner's second-round ICS
+// ruling): a knockout sit-out the DRAW made is not an event, wherever the
+// bracket finds it — not only the first-round bye. A 3-entrant knockout with a
+// third-place match is the plainest case: the draw's bye drops nobody into the
+// third-place line, so once the real semi is played its loser is settled into
+// third place with nobody to play. Before the fix that line carried the PLAIN
+// bye label and went out as an all-day "X vs Bye" event. Over HTTP, against
+// the real route; the played semi and the final are the positive pair, so an
+// empty feed cannot pass.
+test("a 3-entrant knockout's third-place bye is the draw's sit-out: the feed drops it and keeps the played semi and the final", async ({
+  request,
+}) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Cal 3P ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "public",
+  });
+  expect(comp.status, "create competition").toBeLessThan(300);
+  const compId = comp.data!.id;
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    name: "Cup",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, "create division").toBeLessThan(300);
+  const divisionId = div.data!.id;
+  await addEntrantsViaApi(request, divisionId, ["Ash", "Beech", "Cherry"].map((n) => `${n} ${TAG}`));
+  await createStageAndGenerate(request, divisionId, { kind: "knockout", name: "Cup", config: { thirdPlace: true } });
+  expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST", {})).status).toBeLessThan(300);
+
+  type Row = {
+    id: string;
+    status: string;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+    home_slot_label: unknown;
+    away_slot_label: unknown;
+    outcome: unknown;
+    is_final?: boolean;
+    third_place?: boolean;
+  };
+  const list = async () => (await apiJson<Row[]>(request, `/api/v1/divisions/${divisionId}/fixtures`)).data!;
+  const semi = (await list()).find((f) => f.status === "scheduled" && f.home_entrant_id && f.away_entrant_id);
+  expect(semi, "the one real semi is playable").toBeTruthy();
+  await scoreFixture(request, semi!.id, 2, 1);
+
+  const rows = await list();
+  const third = rows.find((f) => f.third_place)!;
+  const final = rows.find((f) => f.is_final)!;
+  const drawBye = rows.find((f) => f.id !== third.id && isSitOutBye(f, "knockout"))!;
+  expect(drawBye, "premise: the first-round draw bye").toBeTruthy();
+  expect(third.status, "the third-place line is settled once the semi is played").toBe("forfeited");
+  expect(third.home_entrant_id === null ? third.home_slot_label : third.away_slot_label, "…as the draw's sit-out").toEqual(
+    DRAW_BYE_SLOT_LABEL,
+  );
+
+  const compData = await apiJson<{ org_id: string; slug: string }>(request, `/api/v1/competitions/${compId}`);
+  const divData = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${divisionId}`);
+  const orgs = await apiJson<OrgInfo[]>(request, "/api/orgs");
+  const orgSlug = orgs.data!.find((o) => o.id === compData.data!.org_id)?.slug;
+  const res = await request.get(`/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}/calendar.ics`);
+  expect(res.status()).toBe(200);
+  const body = await res.text();
+  expect(body, "the third-place sit-out is not an event").not.toContain(`UID:${third.id}@seazn.club`);
+  expect(body, "nor is the first-round draw bye").not.toContain(`UID:${drawBye.id}@seazn.club`);
+  expect(body, "the played semi is").toContain(`UID:${semi!.id}@seazn.club`);
+  expect(body, "and so is the final").toContain(`UID:${final.id}@seazn.club`);
 });

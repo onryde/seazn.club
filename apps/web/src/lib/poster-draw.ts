@@ -37,12 +37,17 @@
 // — the overwhelming majority, since a 3rd-place playoff is opt-in per
 // stage — is untouched.
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { isRestBye } from "@/lib/fixture-bye";
 import type { PublicFixture } from "@/server/public-site/data";
 
 export interface DrawFixtureRow {
   id: string;
   home: string;
   away: string;
+  /** #850 (owner ruling 2026-09-24): a round-robin REST bye prints as this
+   *  note — "X has a bye", in its round — instead of "X vs Bye". Absent on
+   *  every match, and on a Swiss or bracket bye (unchanged). */
+  note?: string;
 }
 
 export interface DrawRoundGroup {
@@ -64,7 +69,10 @@ export interface DrawStageGroup {
 }
 
 export interface BuildDrawModelInput {
-  stages: { id: string; seq: number; name: string }[];
+  /** `kind` tells a round-robin rest bye (`isRestBye`) from a match (#850).
+   *  Optional: hand-built inputs predate it, and a stage with no kind prints
+   *  every row as a match, as before. */
+  stages: { id: string; seq: number; name: string; kind?: string }[];
   pools: { id: string; stage_id: string; name: string }[];
   fixtures: PublicFixture[];
   /** entrant id -> display name. A fixture whose entrant id has no entry
@@ -131,7 +139,12 @@ function sideText(
  *  reaches a `DrawRoundGroup`. */
 type BucketRow = DrawFixtureRow & { isFinal: boolean; thirdPlace: boolean };
 
-const toRow = (r: BucketRow): DrawFixtureRow => ({ id: r.id, home: r.home, away: r.away });
+const toRow = (r: BucketRow): DrawFixtureRow => ({
+  id: r.id,
+  home: r.home,
+  away: r.away,
+  ...(r.note !== undefined ? { note: r.note } : {}),
+});
 
 interface RoundBucket {
   roundNo: number;
@@ -173,10 +186,18 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
       bucket = { roundNo: f.round_no, lane, rows: [] };
       buckets.push(bucket);
     }
+    const home = sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup, seatText, f.id, "home");
+    const away = sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup, seatText, f.id, "away");
     bucket.rows.push({
       id: f.id,
-      home: sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup, seatText, f.id, "home"),
-      away: sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup, seatText, f.id, "away"),
+      home,
+      away,
+      // #850: a rest bye is a NOTE in its round — its bucket is already its
+      // (stage, pool, round), and the generator seats it after the round's
+      // matches, so it prints last under its round's heading.
+      ...(isRestBye(f, stageById.get(f.stage_id)?.kind ?? "")
+        ? { note: lookup("schedule.bye", { name: f.home_entrant_id ? home : away }) }
+        : {}),
       isFinal: f.is_final === true,
       thirdPlace: f.third_place === true,
     });

@@ -186,7 +186,9 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
     const rig = await divisionRig(auth, { entrants: 3, start: false });
     const competitionId = await competitionOf(rig.divisionId);
     const all = await fixtureIdsOf(rig.divisionId);
-    expect(all.length, "the rig's division holds three fixtures").toBe(3);
+    // #850: three matches AND three settled rest-bye rows — every one of them
+    // has a public document, so the publish/start DEL below names all six.
+    expect(all.length, "the rig's division holds three matches and three bye rows").toBe(6);
     await quiesce();
 
     probe.hold = true;
@@ -210,7 +212,9 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
     const rig = await divisionRig(auth, { entrants: 3, start: false });
     const competitionId = await competitionOf(rig.divisionId);
     const all = await fixtureIdsOf(rig.divisionId);
-    expect(all.length, "the rig's division holds three fixtures").toBe(3);
+    // #850: three matches AND three settled rest-bye rows — every one of them
+    // has a public document, so the publish/start DEL below names all six.
+    expect(all.length, "the rig's division holds three matches and three bye rows").toBe(6);
     await quiesce();
 
     probe.hold = true;

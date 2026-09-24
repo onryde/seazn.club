@@ -30,7 +30,12 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // One-way edge (stages.ts does not import this module): a status flip has to
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
-import { markFieldChangeSeedProposalsStale, unseatSwissRoundsSeatingEntrant } from "./stages";
+import {
+  deleteRestByesHeldBy,
+  markFieldChangeSeedProposalsStale,
+  reconcileDivisionRestByes,
+  unseatSwissRoundsSeatingEntrant,
+} from "./stages";
 import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
@@ -506,6 +511,10 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
     // Read BEFORE the delete: `on delete set null` leaves nothing to find the
     // fixtures this entrant sat in by afterwards.
     const where = await entrantPublicScope(tx, row);
+    // #850: a round-robin rest bye names only this entrant, so it goes with
+    // them rather than surviving as a seatless award (see the helper). After
+    // the scope read, so the removed row's public page is refreshed too.
+    await deleteRestByesHeldBy(tx, id);
     await tx`delete from entrants where id = ${id}`;
     return where;
   });
@@ -715,7 +724,19 @@ export async function patchEntrant(
     // in or out of the field?" is answerable below. A patch that re-asserts
     // the status it already had must NOT count as a field change — it would
     // stale and recompute a seed proposal for nothing.
-    const [prior] = await tx<{ status: string }[]>`select status from entrants where id = ${id}`;
+    const [prior] = await tx<{ status: string; division_id: string }[]>`
+      select status, division_id from entrants where id = ${id}`;
+    // LOCK ORDER (#850 review round 3): a patch that writes `status` can move
+    // the entrant across the field boundary, and that crossing reconciles the
+    // division's rest byes under the division lock (below). Take the lock
+    // BEFORE this entrant row's update — the order `deleteEntrant` and
+    // `withdrawCore` (registrations.ts) take them in. Taken after it, a
+    // withdrawal and a delete of the same entrant each held what the other
+    // waited for: a deadlock (40P01). `entrant-lock-order.test.ts`.
+    const statusWrite = prior !== undefined && fields.status !== undefined;
+    if (statusWrite) {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior.division_id}))`;
+    }
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {
       const cols = Object.keys(fields);
@@ -729,9 +750,23 @@ export async function patchEntrant(
     // Crossing the field boundary in EITHER direction: a withdrawal removes a
     // qualifier a draft proposal may already name, and an un-withdrawal makes
     // one offerable again. Both are field changes; a move between two departed
-    // statuses, or between two active ones, is not.
+    // statuses, or between two active ones, is not. Only THIS patch's own
+    // status write counts — which is also what guarantees the division lock
+    // above is held whenever the reconcile below runs.
     const fieldChanged =
-      prior !== undefined && DEPARTED_STATUSES.has(prior.status) !== DEPARTED_STATUSES.has(row.status);
+      statusWrite && DEPARTED_STATUSES.has(prior.status) !== DEPARTED_STATUSES.has(row.status);
+    // #850 review, finding 8: an entrant leaving the field (a withdrawal — the
+    // cascade's last step lands here — or a disqualification) no longer sits
+    // out anything, so the rest-bye rows they hold in rounds not yet under way
+    // go; rows of a round already under way stay, the sit-out happened. And
+    // back into the field (an un-withdrawal) brings them back. The ONE
+    // reconciler decides both (`reconcileRestByes`, stages.ts), under the
+    // division lock every other fixture writer takes — taken above.
+    const byeRows: string[] = [];
+    if (fieldChanged) {
+      const byes = await reconcileDivisionRestByes(tx, row.division_id);
+      byeRows.push(...byes.inserted, ...byes.deleted);
+    }
     if (members) {
       // Full roster replacement — recheck the count against THIS entrant's kind
       // (kind itself isn't patchable, so only the roster is being written).
@@ -788,10 +823,13 @@ export async function patchEntrant(
         }
       }
     }
+    const scope = await entrantPublicScope(tx, row);
     return {
       out: await withMembers(tx, row),
       fieldChanged,
-      refresh: await entrantPublicScope(tx, row),
+      // A deleted bye row no longer seats this entrant, so the scope read
+      // cannot find it; its match-centre document goes all the same.
+      refresh: { ...scope, fixtureIds: [...new Set([...scope.fixtureIds, ...byeRows])] },
     };
   });
   // Before this, an entrant patch refreshed nothing, so a rename (or a roster,

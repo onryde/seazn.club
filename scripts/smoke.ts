@@ -40,6 +40,14 @@ import { rosterDerivedName } from "../apps/web/src/lib/entrant-roster-name.ts";
 // dependency-free `scheduling/swiss` leaf (the rest are `import type`), so it
 // loads under this runner's `--experimental-strip-types` like the line above.
 import { roundOnePairs } from "../apps/web/src/lib/swiss-pairing.ts";
+// #850: the engine's own round robin — the holder of each round's bye is ITS
+// answer, never a table typed here. A leaf with one `import type`, so it loads
+// under this runner like the imports above (proven before relying on it).
+import { generateRoundRobin } from "../packages/engine/src/scheduling/roundrobin.ts";
+// #850: THE "is this a round-robin rest bye" predicate — one `import type`, so
+// it loads under this runner too. Suites that time or apply a league's
+// MATCHES read the generate response through it, never a restated shape.
+import { isRestBye } from "../apps/web/src/lib/fixture-bye.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://localhost:3000";
 
@@ -972,6 +980,12 @@ async function main() {
   // proves the 409 refusal once a fixture already has a result (own fresh
   // free session — not an entitlement gate).
   await stageRosterDriftSuite();
+
+  // --- #850 (owner ruling 2026-09-23): a round-robin stage persists one REST
+  // bye row per round — a real row the run sheet can show — that scores
+  // NOTHING: generate counts, rebuild, the standings fold and the public .ics
+  // feed, over real HTTP (own fresh free session — not an entitlement gate).
+  await roundRobinByeSuite();
 
   // --- F10 (Swiss withdrawal walkthrough, 2026-09-21): the PUBLIC standings
   // table names a withdrawn entrant rather than printing her raw entrant id.
@@ -8674,6 +8688,224 @@ async function stageRosterDriftSuite(): Promise<void> {
 }
 
 /**
+ * #850 — league/group byes (owner ruling 2026-09-23, competition-desk
+ * _INDEX.md "Issue 850"). An odd round-robin field persists the engine's
+ * per-round sit-out as a REAL row (one seat, `forfeited`, `award`), the same
+ * shape as the Swiss bye, but it awards NO points: the standings, the
+ * organiser-facing counts and the public calendar all leave it out. Every
+ * expectation is derived — the bye holders from the engine's own
+ * `generateRoundRobin` over the seeded order, the points from the division's
+ * own config — never typed.
+ *
+ * Smoke rather than only e2e because smoke is the one gate a PR gets
+ * automatically, and this lives across a generator, a fold and a public route.
+ */
+async function roundRobinByeSuite(): Promise<void> {
+  const free = newSession();
+  const ver = await signIn(free, `delivered+rr_bye_${tag}@resend.dev`);
+  const orgs = (await call(free, "/api/orgs")) as { id: string; slug: string }[];
+  const org = orgs.find((o) => o.id === ver.org_id)!;
+  const WIN = 3;
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(free, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `RR Bye ${tag}`,
+      visibility: "public",
+    }),
+  );
+  const div = v1data<{ id: string; slug: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: WIN, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  const names = ["Alder", "Birch", "Cedar", "Damson", "Elm"].map((n) => `${n} ${tag}`);
+  await v1(
+    free,
+    `/api/v1/divisions/${div.id}/entrants`,
+    "POST",
+    names.map((display_name, i) => ({ kind: "individual", display_name, seed: i + 1 })),
+  );
+  const roster = v1data<{ id: string; display_name: string; seed: number }[]>(
+    await v1(free, `/api/v1/divisions/${div.id}/entrants`),
+  );
+  const seeded = [...roster].sort((a, b) => a.seed - b.seed);
+  const engine = generateRoundRobin({
+    entrants: seeded.map((e) => e.id),
+    seeds: new Map(seeded.map((e) => [e.id, e.seed])),
+  });
+  const expectedByes = engine.rounds.map((r) => [r.roundNo, r.bye] as const);
+
+  const stage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "L", config: {} }),
+  );
+  type Row = {
+    id: string;
+    round_no: number;
+    status: string;
+    scheduled_at: string | null;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+    outcome: { kind?: string; winner?: string } | null;
+    /** The rest-bye MARKER the predicate reads (the generator's bye key). */
+    ext_key: string | null;
+  };
+  // THE predicate (lib/fixture-bye.ts), imported — never restated here (review
+  // 2026-09-23, finding 11).
+  const isBye = (f: Row) => isRestBye(f, "league");
+  const gen = v1data<{ created: number; fixtures: Row[] }>(await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST"));
+  const byes = gen.fixtures.filter(isBye).sort((a, b) => a.round_no - b.round_no);
+  check("rr bye: a 5-entrant league counts its 10 matches as created, not 15 rows", gen.created === 10);
+  check("rr bye: the stage holds 10 matches + one bye row per round", gen.fixtures.length === 15 && byes.length === 5);
+  check(
+    "rr bye: each round's bye is held by the engine's own round.bye",
+    JSON.stringify(byes.map((b) => [b.round_no, b.home_entrant_id])) === JSON.stringify(expectedByes),
+  );
+  check(
+    "rr bye: every bye row is settled at generation and never timed",
+    byes.every((b) => b.status === "forfeited" && b.scheduled_at === null),
+  );
+
+  // Rebuild (pre-start) is not blocked by the bye rows and counts matches.
+  const rebuilt = v1data<{ removed: number; created: number; fixtures: Row[] }>(
+    await v1(free, `/api/v1/stages/${stage.id}/rebuild`, "POST"),
+  );
+  check(
+    "rr bye: rebuild replaces 10 matches and writes the 5 bye rows again",
+    rebuilt.removed === 10 && rebuilt.created === 10 && rebuilt.fixtures.filter(isBye).length === 5,
+  );
+
+  // Review finding 2 / V417: a freshly generated odd league has NO results —
+  // its settled bye rows are not results — so it deletes like an even one.
+  const spare = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Spare",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: WIN, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(
+    free,
+    `/api/v1/divisions/${spare.id}/entrants`,
+    "POST",
+    ["Fir", "Gum", "Hazel"].map((n, i) => ({ kind: "individual", display_name: `${n} ${tag}`, seed: i + 1 })),
+  );
+  const spareStage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${spare.id}/stages`, "POST", { seq: 1, kind: "league", name: "L", config: {} }),
+  );
+  const spareGen = v1data<{ fixtures: Row[] }>(await v1(free, `/api/v1/stages/${spareStage.id}/generate`, "POST"));
+  const spareDel = await v1(free, `/api/v1/divisions/${spare.id}`, "DELETE");
+  check(
+    `rr bye: a fresh odd league (${spareGen.fixtures.filter(isBye).length} bye rows) has no results and deletes (${spareDel.status})`,
+    spareGen.fixtures.filter(isBye).length === 3 && spareDel.status < 300,
+  );
+
+  // Review finding 7: Generate after the field grows (4 → 5 here, on its own
+  // division) writes only byes whose holder sits that round out.
+  const grow = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Grow",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: WIN, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  await v1(
+    free,
+    `/api/v1/divisions/${grow.id}/entrants`,
+    "POST",
+    ["Ash", "Box", "Elder", "Holly"].map((n, i) => ({ kind: "individual", display_name: `${n} ${tag}`, seed: i + 1 })),
+  );
+  const growStage = v1data<{ id: string }>(
+    await v1(free, `/api/v1/divisions/${grow.id}/stages`, "POST", { seq: 1, kind: "league", name: "L", config: {} }),
+  );
+  await v1(free, `/api/v1/stages/${growStage.id}/generate`, "POST");
+  await v1(free, `/api/v1/divisions/${grow.id}/entrants`, "POST", [
+    { kind: "individual", display_name: `Juniper ${tag}`, seed: 5 },
+  ]);
+  const grown = v1data<{ fixtures: Row[] }>(await v1(free, `/api/v1/stages/${growStage.id}/generate`, "POST"));
+  const clash = grown.fixtures
+    .filter(isBye)
+    .filter((b) =>
+      grown.fixtures.some(
+        (m) => !isBye(m) && m.round_no === b.round_no && [m.home_entrant_id, m.away_entrant_id].includes(b.home_entrant_id),
+      ),
+    );
+  check(
+    `rr bye: Generate after 4 → 5 writes no bye whose holder plays that round (${grown.fixtures.filter(isBye).length} byes, ${clash.length} clashing)`,
+    grown.fixtures.filter(isBye).length > 0 && clash.length === 0,
+  );
+
+  // Review finding 6: Start with rolling round times times every MATCH and
+  // never a bye.
+  await v1(free, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
+    tz: "UTC",
+    config: {
+      startAt: "2030-06-01T10:00:00.000Z",
+      matchMinutes: 25,
+      gapMinutes: 0,
+      courts: [],
+      perEntrantMinRest: 0,
+      blackouts: [],
+      sessionWindows: [],
+      roundMinutes: 30,
+    },
+  });
+  await v1(free, `/api/v1/divisions/${div.id}/start`, "POST", { acknowledge_warnings: true });
+  const afterStart = await Promise.all(
+    rebuilt.fixtures.map(async (f) => v1data<Row>(await v1(free, `/api/v1/fixtures/${f.id}`))),
+  );
+  check(
+    "rr bye: Start with rolling round times times all 10 matches and none of the 5 byes",
+    afterStart.filter((f) => !isBye(f) && f.scheduled_at !== null).length === 10 &&
+      afterStart.filter((f) => isBye(f) && f.scheduled_at === null).length === 5,
+  );
+
+  // Owner ruling 2026-09-24: a public feed never lists a bye as a result.
+  const pub = v1data<{ fixtures: Row[] }>(
+    await v1(free, `/api/v1/public/orgs/${org.slug}/competitions/${comp.slug}/divisions/${div.slug}/schedule`),
+  );
+  check(
+    `rr bye: the public schedule feed lists the 10 matches and no bye (saw ${pub.fixtures?.length})`,
+    pub.fixtures?.length === 10 && !pub.fixtures.some(isBye),
+  );
+
+  for (const f of rebuilt.fixtures.filter((x) => !isBye(x))) {
+    const st = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${f.id}/state`));
+    await v1(free, `/api/v1/fixtures/${f.id}/events`, "POST", {
+      expected_seq: st.last_seq,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 1 },
+    });
+  }
+  const table = v1data<{ rows: { entrantId: string; played: number; points: number }[] }>(
+    await v1(free, `/api/v1/stages/${stage.id}/standings`),
+  );
+  check(
+    "rr bye: every entrant played 4 (the bye is not a match), across all 5",
+    table.rows.length === 5 && table.rows.every((r) => r.played === 4),
+  );
+  check(
+    "rr bye: the table holds 10 matches' points and nothing for 5 byes",
+    table.rows.reduce((sum, r) => sum + r.points, 0) === 10 * WIN,
+  );
+
+  // A bye is not an event anyone attends: the public calendar carries the ten
+  // matches and no "X vs Bye".
+  const ics = await fetch(`${BASE}/shared/${org.slug}/${comp.slug}/${div.slug}/calendar.ics`);
+  const icsBody = await ics.text();
+  const events = icsBody.split("BEGIN:VEVENT").length - 1;
+  check(`rr bye: the public .ics carries the 10 matches and no bye (saw ${events})`, ics.status === 200 && events === 10);
+  check(
+    "rr bye: no bye row's UID is in the public .ics",
+    rebuilt.fixtures.filter(isBye).every((b) => !icsBody.includes(`UID:${b.id}@`)),
+  );
+}
+
+/**
  * F10 (2026-09-20 Swiss withdrawal walkthrough): the PUBLIC standings table
  * prints a withdrawn entrant's NAME, never her entrant id.
  *
@@ -9654,9 +9886,15 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
         config: {},
       }),
     );
-    const gen = v1data<{ fixtures: { id: string }[] }>(
-      await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
-    );
+    const gen = v1data<{
+      fixtures: {
+        id: string;
+        outcome: unknown;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        ext_key: string | null;
+      }[];
+    }>(await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"));
     await v1(s, `/api/v1/divisions/${div.id}/schedule-settings`, "PUT", {
       tz: "UTC",
       config: {
@@ -9669,7 +9907,9 @@ async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
         sessionWindows: [],
       },
     });
-    return { id: div.id, fixtureIds: gen.fixtures.map((f) => f.id) };
+    // #850: an odd field also persists settled REST-bye rows; the joint
+    // apply below places the MATCHES.
+    return { id: div.id, fixtureIds: gen.fixtures.filter((f) => !isRestBye(f, "league")).map((f) => f.id) };
   }
 
   const alpha = await seedRrDivision("Alpha", ["A", "B", "C", "D"], jointCourt1.id);
@@ -12015,9 +12255,16 @@ async function schedulingConstraintsSuite(): Promise<void> {
       config: { pools: { count: 2 } },
     }),
   );
-  const poolFixtures = v1data<{ fixtures: ConstraintFixtureLite[] }>(
-    await v1(s, `/api/v1/stages/${poolStage.id}/generate`, "POST"),
-  ).fixtures;
+  // #850: two pools of three also rest one member per round on a settled
+  // REST-bye row each; the rest rules below govern the MATCHES.
+  const poolFixtures = v1data<{
+    fixtures: (ConstraintFixtureLite & {
+      outcome: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      ext_key: string | null;
+    })[];
+  }>(await v1(s, `/api/v1/stages/${poolStage.id}/generate`, "POST")).fixtures.filter((f) => !isRestBye(f, "group"));
   const poolIds = [
     ...new Set(poolFixtures.map((f) => f.pool_id).filter((p): p is string => p !== null)),
   ].sort();
@@ -15134,10 +15381,18 @@ async function courtHoursSuite(): Promise<void> {
         name: "League",
       }),
     );
-    const generated = v1data<{ fixtures: { id: string }[] }>(
-      await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
-    ).fixtures;
-    return { stageId: stage.id, fixtureIds: generated.map((f) => f.id) };
+    const generated = v1data<{
+      fixtures: {
+        id: string;
+        outcome: unknown;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        ext_key: string | null;
+      }[];
+    }>(await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST")).fixtures;
+    // #850: an odd field also persists settled REST-bye rows; these checks
+    // schedule the MATCHES.
+    return { stageId: stage.id, fixtureIds: generated.filter((f) => !isRestBye(f, "league")).map((f) => f.id) };
   }
   async function makeLeagueStage(divisionId: string): Promise<{ stageId: string }> {
     const stage = v1data<{ id: string }>(

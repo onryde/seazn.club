@@ -10,6 +10,11 @@ import type { PassKey } from "../src/lib/currency";
 // fixture and production must agree on what a fee row says, or the restore
 // hook writes a value production would have refused.
 import { decodeFeePercent } from "../src/lib/platform-fee";
+// A second value import, on the same terms: lib/fixture-bye.ts imports one
+// TYPE and nothing else, so no app runtime follows it in. It is THE "is this a
+// round-robin rest bye" predicate (#850); the helper below asks it rather than
+// restating the rule.
+import { isRestBye } from "../src/lib/fixture-bye";
 
 /**
  * v3/02 §4 viewport gate: the page-level rule is "no horizontal scroll,
@@ -1792,7 +1797,14 @@ export async function addEntrantsViaApi(
   return { status: res.status, ids: (res.data ?? []).map((e) => e.id) };
 }
 
-/** Create a stage and generate its fixtures; returns stage + fixture ids. */
+/** Create a stage and generate its fixtures; returns stage + fixture ids.
+ *
+ *  #850: an odd round-robin field now persists one REST-BYE row per round
+ *  (settled at generation, never played). `fixtureIds` stays what every caller
+ *  has always used it for — the fixtures that are PLAYED (scored, timed,
+ *  counted) — so a rest bye is reported separately in `restByeIds`, asked of
+ *  the product's own `isRestBye`, never re-derived here. Knockout and Swiss
+ *  byes are unchanged: they were in `fixtureIds` before and still are. */
 export async function createStageAndGenerate(
   request: APIRequestContext,
   divisionId: string,
@@ -1800,19 +1812,29 @@ export async function createStageAndGenerate(
     kind: "league",
     name: "League",
   },
-): Promise<{ stageId: string; fixtureIds: string[] }> {
+): Promise<{ stageId: string; fixtureIds: string[]; restByeIds: string[] }> {
   const created = await apiJson<{ id: string }>(
     request,
     `/api/v1/divisions/${divisionId}/stages`,
     "POST",
     { seq: 1, ...stage },
   );
-  const gen = await apiJson<{ fixtures: { id: string }[] }>(
-    request,
-    `/api/v1/stages/${created.data!.id}/generate`,
-    "POST",
-  );
-  return { stageId: created.data!.id, fixtureIds: (gen.data?.fixtures ?? []).map((f) => f.id) };
+  const gen = await apiJson<{
+    fixtures: {
+      id: string;
+      outcome: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      ext_key?: string | null;
+    }[];
+  }>(request, `/api/v1/stages/${created.data!.id}/generate`, "POST");
+  const rows = gen.data?.fixtures ?? [];
+  const rest = (f: (typeof rows)[number]) => isRestBye(f, stage.kind);
+  return {
+    stageId: created.data!.id,
+    fixtureIds: rows.filter((f) => !rest(f)).map((f) => f.id),
+    restByeIds: rows.filter(rest).map((f) => f.id),
+  };
 }
 
 /** One entrant's real roster: the persons behind it and the lineup slot each

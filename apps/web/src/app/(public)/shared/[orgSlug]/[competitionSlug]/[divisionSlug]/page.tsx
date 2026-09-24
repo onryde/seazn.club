@@ -195,6 +195,9 @@ export default async function DivisionHomePage({ params }: Props) {
   // N1f f2: two stages can name a round the same ("Final" in a knockout and in
   // its plate); the round view heads those groups with the stage as well.
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
+  // #850: the Schedule tells a round-robin rest bye from a match by its
+  // stage's kind (`isRestBye`) and draws it as a note in its round.
+  const stageKinds = Object.fromEntries(stages.map((s) => [s.id, s.kind]));
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -520,6 +523,7 @@ export default async function DivisionHomePage({ params }: Props) {
               roundLabels={roundLabels}
               stageOrder={stageOrder}
               stageNames={stageNames}
+              stageKinds={stageKinds}
               copy={scheduleCopy}
               locale={orgLocale}
             />,

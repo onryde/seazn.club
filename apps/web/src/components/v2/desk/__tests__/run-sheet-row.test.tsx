@@ -5,6 +5,7 @@ import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/
 import { hasAssignedScorer } from "@/lib/fixture-row-action";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { RunSheetFixture } from "@/lib/run-sheet-groups";
+import { restByeExtKey } from "@/lib/fixture-bye";
 import { messages } from "@/lib/messages";
 
 // `RunSheetRow`'s inline Set-time editor refreshes on save. Nothing here clicks
@@ -60,7 +61,7 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
-function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null): string {
+function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null, stageKind = "knockout"): string {
   return renderToStaticMarkup(
     <RunSheetRow
       fixture={fixture}
@@ -71,6 +72,7 @@ function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | 
       canEdit={canEdit}
       entrantNames={ENTRANTS}
       stageName={stageName}
+      stageKind={stageKind}
     />,
   );
 }
@@ -206,12 +208,59 @@ describe("an awarded bye names the sit-out AND the walkover", () => {
         away_entrant_id: null,
         scheduled_at: null,
       }),
+      true,
+      null,
+      "swiss",
     );
     expect(html).toContain(msg("schedule.bye", { name: "Alpha" }));
     expect(html).toContain(outcomeText(msg, outcome, ENTRANTS)!);
     expect(html).toContain('data-testid="run-sheet-bye"');
     expect(rowAction(html)).toBeNull();
   });
+});
+
+// #850 (owner ruling 2026-09-23): a round-robin REST bye reuses the ghost row
+// but carries NO outcome suffix — it scores nothing, so "won (w/o)" would be a
+// false claim. The row asks `isScoringBye`, so the answer is the stage KIND's:
+// the SAME row prints the suffix under Swiss/knockout and not under league/
+// group. Every assertion is anchored on the ghost row existing first, so an
+// absent suffix can never be satisfied by an absent row.
+describe("#850: a round-robin bye's ghost row has no outcome suffix", () => {
+  const outcome = { kind: "award" as const, winner: "e1" };
+  const bye = fx({
+    status: "forfeited",
+    outcome,
+    home_entrant_id: "e1",
+    away_entrant_id: null,
+    round_no: 3,
+    scheduled_at: null,
+    // The rest-bye MARKER (owner ruling 2026-09-24, fourth round), spelled by
+    // the generator's own function.
+    ext_key: restByeExtKey("", 3),
+  });
+  const ghost = `${msg("schedule.round", { n: 3 })} · ${msg("schedule.bye", { name: "Alpha" })}`;
+  const suffix = outcomeText(msg, outcome, ENTRANTS)!;
+  /** The ghost row's visible text, or null when there is no ghost row. */
+  const ghostText = (html: string): string | null => {
+    const m = /<li[^>]*data-testid="run-sheet-bye"[^>]*>([\s\S]*?)<\/li>/.exec(html);
+    return m ? m[1]!.replace(/<!-- -->/g, "").replace(/<[^>]+>/g, "") : null;
+  };
+
+  it.each(["league", "group"])("%s: exactly 'Round N · X has a bye' — nothing after it", (kind) => {
+    const html = rowHtml(bye, true, null, kind);
+    expect(ghostText(html), "the ghost row itself").not.toBeNull();
+    expect(ghostText(html)).toBe(ghost);
+    expect(html).not.toContain(suffix);
+    expect(rowAction(html)).toBeNull();
+  });
+
+  it.each(["swiss", "knockout", "double_elim", "stepladder", "page_playoff"])(
+    "%s (a scoring bye): the same row keeps its '(w/o)' suffix",
+    (kind) => {
+      const html = rowHtml(bye, true, null, kind);
+      expect(ghostText(html)).toBe(`${ghost} · ${suffix}`);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

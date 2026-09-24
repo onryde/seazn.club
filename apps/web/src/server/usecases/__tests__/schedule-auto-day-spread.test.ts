@@ -16,6 +16,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const { sql } = await import("@/lib/db");
+const { isRestBye } = await import("@/lib/fixture-bye");
 const { createCompetition } = await import("../competitions");
 const { createDivision } = await import("../divisions");
 const { createEntrants } = await import("../entrants");
@@ -38,7 +39,7 @@ const DIVISION_CONFIG = {
 const DAYS = ["2026-09-01", "2026-09-02", "2026-09-03"];
 const SESSION_WINDOWS = DAYS.map((d) => ({ from: `${d}T10:00:00.000Z`, to: `${d}T19:00:00.000Z` }));
 
-async function seedStage(entrantCount: number): Promise<{ auth: AuthCtx; stageId: string; fixtureCount: number }> {
+async function seedStage(entrantCount: number): Promise<{ auth: AuthCtx; stageId: string; fixtureCount: number; restByeIds: string[] }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"Spread " + suffix}, ${"spread-" + suffix})
@@ -101,7 +102,16 @@ async function seedStage(entrantCount: number): Promise<{ auth: AuthCtx; stageId
     tz: "UTC",
   });
   const { fixtures } = await generateStageFixtures(auth, stage.id);
-  return { auth, stageId: stage.id, fixtureCount: fixtures.length };
+  // #850: an odd field also persists one settled REST-bye row per round. The
+  // board this test spreads is the MATCHES; the byes are returned so the test
+  // can prove the auto pass never places one.
+  const matches = fixtures.filter((f) => !isRestBye(f, "league"));
+  return {
+    auth,
+    stageId: stage.id,
+    fixtureCount: matches.length,
+    restByeIds: fixtures.filter((f) => isRestBye(f, "league")).map((f) => f.id),
+  };
 }
 
 afterAll(async () => {
@@ -132,10 +142,13 @@ describe.skipIf(!HAS_DB)("autoSchedule default day spread", () => {
       // 3/3/3 with one CAP-refused, which is why the assertions below tolerate
       // a day cap's own honest refusals rather than requiring every fixture
       // placed.
-      const { auth, stageId, fixtureCount } = await seedStage(5);
+      const { auth, stageId, fixtureCount, restByeIds } = await seedStage(5);
       expect(fixtureCount).toBe(10);
+      expect(restByeIds, "five entrants rest one per round").toHaveLength(5);
 
       const out = await autoSchedule(auth, stageId, { only_unlocked: false, mode: "build" });
+      // A bye is never a slot to fill: the auto pass proposes no time for one.
+      expect(out.assignments.filter((a) => restByeIds.includes(a.fixture_id))).toEqual([]);
 
       const perDay = new Map<string, number>();
       for (const a of out.assignments) {

@@ -13,6 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { Schedule, type ScheduleCopy } from "../schedule";
 import type { PublicFixture } from "@/server/public-site/data";
+import { restByeExtKey } from "@/lib/fixture-bye";
 
 const F = (over: Partial<PublicFixture>): PublicFixture => ({
   id: "f1",
@@ -56,6 +57,7 @@ const COPY: ScheduleCopy = {
   calendar: "(calendar)",
   timesIn: "(times in {zone})",
   empty: "(empty)",
+  bye: "(bye {name})",
 };
 const LOCALE = "en";
 // N1e e1 made stage order a prop, and N1f f2 the stage NAMES; these cases
@@ -77,6 +79,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
         stageNames: STAGE_NAMES,
+        stageKinds: {},
         slotLabels: { "final:home": "Ganador del Grupo A", "final:away": "Ganador del Grupo B" },
       }),
     );
@@ -100,6 +103,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
         stageNames: STAGE_NAMES,
+        stageKinds: {},
         slotLabels: { "semi:away": "Runner-up of Group C" },
       }),
     );
@@ -120,6 +124,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
         stageNames: STAGE_NAMES,
+        stageKinds: {},
         slotLabels: {},
       }),
     );
@@ -139,6 +144,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
         stageNames: STAGE_NAMES,
+        stageKinds: {},
         slotLabels: {
           "final:home": "Best 2 of the 3-place teams",
           "final:away": "Winner of Group B",
@@ -173,6 +179,7 @@ describe("public Schedule — court_name/venue_name, never the frozen court_labe
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
         stageNames: STAGE_NAMES,
+        stageKinds: {},
         slotLabels: {},
       }),
     );
@@ -225,6 +232,7 @@ describe("public Schedule — the round view reads stage by stage, then round (N
         locale: LOCALE,
         stageOrder,
         stageNames: namesOverride ?? stageNames,
+        stageKinds: {},
       }),
     );
   };
@@ -336,5 +344,121 @@ describe("public Schedule — the round view reads stage by stage, then round (N
     const bare = headings(render(stages, {}));
     expect(bare).toEqual(["(final)", "(final)"]);
     expect(bare.some((h) => h.includes("\u00b7"))).toBe(false);
+  });
+});
+
+// #850 (owner ruling 2026-09-24, third round) — on a public surface a
+// round-robin rest bye is a NOTE in its round, "X has a bye": no time, no TBD,
+// no "vs Bye", no link, never a result. A Swiss or bracket bye is unchanged.
+// Every case pins WHERE the note sits (the row right before it is a match of
+// its own round) and what it SAYS, and the Swiss twin proves the same row
+// shape still renders as a fixture where the bye scores.
+describe("public Schedule — a round-robin rest bye is a note in its round (#850)", () => {
+  const NAMES = { a: "Alder", b: "Birch", c: "Cedar", d: "Damson", e: "Elm" };
+  const match = (id: string, round: number, home: string, away: string, at: string | null, stage = "lg") =>
+    F({ id, stage_id: stage, round_no: round, seq_in_round: 1, home_entrant_id: home, away_entrant_id: away, scheduled_at: at });
+  const restBye = (id: string, round: number, holder: string, stage = "lg") =>
+    F({
+      id,
+      stage_id: stage,
+      round_no: round,
+      seq_in_round: 3,
+      home_entrant_id: holder,
+      away_entrant_id: null,
+      away_slot_label: { key: "bracket.slot.bye", params: {} },
+      scheduled_at: null,
+      status: "forfeited",
+      outcome: { kind: "award", winner: holder },
+      // The rest-bye MARKER, spelled by the generator's own function.
+      ext_key: restByeExtKey("", round),
+    });
+  const roundLabels = (ids: [string, number][]) => Object.fromEntries(ids.map(([id, n]) => [id, `(round ${n})`]));
+  const render = (fixtures: PublicFixture[], stageKinds: Record<string, string>) =>
+    renderToStaticMarkup(
+      createElement(Schedule, {
+        fixtures,
+        entrantNames: NAMES,
+        divisionPath: "/shared/org/comp/div",
+        tz: "UTC",
+        roundLabels: roundLabels(fixtures.map((f) => [f.id, f.round_no])),
+        copy: COPY,
+        locale: LOCALE,
+        stageOrder: { lg: 1, sw: 1 },
+        stageNames: {},
+        stageKinds,
+        slotLabels: Object.fromEntries(
+          fixtures.flatMap((f) => (f.away_entrant_id ? [] : [[`${f.id}:away`, "(bye slot)"]])),
+        ),
+      }),
+    );
+  /** Every `<li>` in render order: a match (by its fixture link) or a note. */
+  const items = (html: string) =>
+    [...html.matchAll(/<li([^>]*)>([\s\S]*?)<\/li>/g)].map((m) =>
+      m[1]!.includes('data-testid="schedule-bye"')
+        ? `note:${m[2]!.replace(/<!-- -->/g, "").replace(/<[^>]*>/g, "")}`
+        : `match:${/fixtures\/([\w-]+)"/.exec(m[2]!)?.[1]}`,
+    );
+
+  it("day view: the note sits after its round's LAST match on the day it finishes, names the round, and carries no time", () => {
+    const html = render(
+      [
+        match("r1a", 1, "a", "b", "2026-09-25T09:00:00.000Z"),
+        match("r2a", 2, "a", "c", "2026-09-25T10:00:00.000Z"),
+        match("r1b", 1, "c", "d", "2026-09-25T11:00:00.000Z"),
+        restBye("bye1", 1, "e"),
+      ],
+      { lg: "league" },
+    );
+    expect(items(html)).toEqual(["match:r1a", "match:r2a", "match:r1b", "note:(round 1) · (bye Elm)"]);
+    const note = /<li[^>]*data-testid="schedule-bye"[^>]*>[\s\S]*?<\/li>/.exec(html)![0];
+    expect(note).not.toContain("href");
+    expect(note).not.toContain("(tbd)");
+    expect(note).not.toContain("(ended)");
+    expect(note).not.toContain("(bye slot)");
+    // No "Time TBD" group was opened for the untimed bye.
+    expect(html).not.toContain("(time tbd)");
+  });
+
+  it("round view (nothing timed yet): the note closes its own round's group, without a round prefix", () => {
+    const html = render(
+      [
+        match("r1a", 1, "a", "b", null),
+        match("r1b", 1, "c", "d", null),
+        restBye("bye1", 1, "e"),
+        match("r2a", 2, "a", "e", null),
+        restBye("bye2", 2, "d"),
+      ],
+      { lg: "league" },
+    );
+    expect(items(html)).toEqual(["match:r1a", "match:r1b", "note:(bye Elm)", "match:r2a", "note:(bye Damson)"]);
+    // The round headings are the matches' own; the notes add no group.
+    expect([...html.matchAll(/<h3[^>]*>([\s\S]*?)<span/g)].map((m) => m[1]!.replace(/<[^>]*>/g, "").trim())).toEqual([
+      "(round 1)",
+      "(round 2)",
+    ]);
+  });
+
+  // Owner ruling 2026-09-24 (fourth round): a fed league's walkover has the
+  // rest bye's shape in the SAME league but its match key. It keeps its
+  // pre-#850 display — a linked fixture row, never the "has a bye" note.
+  it("the walkover twin: the SAME row shape in the SAME league, unmarked, is a fixture row, linked, not a note", () => {
+    const walkover = { ...restBye("wo", 1, "e"), ext_key: "rr-r1-c3" };
+    const html = render([match("r1a", 1, "a", "b", null), walkover], { lg: "league" });
+    expect(html).not.toContain('data-testid="schedule-bye"');
+    expect(html).toContain("fixtures/wo");
+    expect(html).toContain("(bye slot)");
+  });
+
+  it("the Swiss twin: the SAME row shape in a Swiss stage is still a fixture row, linked, not a note", () => {
+    const html = render([match("sw1", 1, "a", "b", null, "sw"), restBye("swbye", 1, "e", "sw")], { sw: "swiss" });
+    expect(html).not.toContain('data-testid="schedule-bye"');
+    expect(html).toContain("fixtures/swbye");
+    expect(html).toContain("(bye slot)");
+  });
+
+  it("without the stage's kind the row cannot be told apart — the prop is what makes it a note", () => {
+    const fixtures = [match("r1a", 1, "a", "b", null), restBye("bye1", 1, "e")];
+    expect(render(fixtures, { lg: "league" })).toContain('data-testid="schedule-bye"');
+    expect(render(fixtures, {})).not.toContain('data-testid="schedule-bye"');
   });
 });

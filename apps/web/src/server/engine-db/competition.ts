@@ -5,7 +5,7 @@ import { withTenant } from "@/lib/db";
 // used to be a private copy here; the 2026-09-20 review found the Swiss copy
 // had drifted into calling any award outcome a bye, which let Unpair destroy
 // real two-sided forfeits. See that module's header.
-import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { isScoringBye } from "@/lib/fixture-bye";
 // DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary). ONE
 // mapping, shared with the qualification builder and the bracket rebuild in
 // usecases/stages.ts; the local name is kept so the call sites read as before.
@@ -335,11 +335,20 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
       base.result = pointsRule
         ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule)
         : pair;
-    } else if (isOneSidedAwardBye(f)) {
+    } else if (isScoringBye(f, kind)) {
       // Swiss odd-field sit-out (and KO seeded bye): forfeited award with one
       // seat null and no match_state. The two-sided gate above never fires, so
       // without this branch the bye winner stayed P0/pts=0 on the table while
       // swissGen still counted +1 for pairing — Gus on the demo Swiss 7.
+      //
+      // #850 (owner ruling): a league/group REST bye is the same row shape but
+      // scores NOTHING — `isScoringBye` refuses it (its rest-bye marker, in a
+      // round-robin stage), so it gets no delta at all and the table is
+      // exactly what it was before bye rows were persisted (its `walkover`
+      // status still counts as settled for stage completion, which is right:
+      // the round is done). A fed league's WALKOVER (`awardSeededByes`) has
+      // the shape without the marker and scores here as the win it is (owner
+      // ruling 2026-09-24, fourth round).
       const ctx: StageCtx = { ...ctxBase, roundNo: f.round_no, ...(f.pool_id ? { poolId: f.pool_id } : {}) };
       base.awardDelta = awardByeDelta(
         sportModule,

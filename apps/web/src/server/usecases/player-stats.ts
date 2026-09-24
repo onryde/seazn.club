@@ -23,6 +23,7 @@ import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
 import { playerLinkId } from "@/lib/name-display";
+import { restByeSql } from "@/server/fixture-bye-sql";
 
 type Tx = postgres.TransactionSql;
 
@@ -916,7 +917,11 @@ export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPe
  *
  *  Guards the empty-array case itself (S8/#417 pattern, postgres.js's
  *  `sql([])` renders `(null)` and an empty `in ()` matches nothing, not
- *  everything) rather than trusting every caller to remember it. */
+ *  everything) rather than trusting every caller to remember it.
+ *
+ *  #850: a round-robin REST bye is `forfeited` like a walkover but is not a
+ *  match — `restByeSql` (the SQL twin of `isRestBye`) keeps it out. A Swiss or
+ *  bracket bye still counts, as it always has. */
 export async function countMatchesByDivision(
   db: Queryable,
   owner: MatchesOwner,
@@ -932,6 +937,7 @@ export async function countMatchesByDivision(
             and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
           where f.division_id in ${db(divisionIds as string[])}
             and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
+            and not ${restByeSql(db)}
           group by f.division_id`
       : await db<{ division_id: string; matches: number }[]>`
           select f.division_id, count(distinct f.id)::int as matches
@@ -940,6 +946,7 @@ export async function countMatchesByDivision(
           join persons p on p.id = em.person_id and p.user_id = ${owner.userId} and p.merged_into is null
           where f.division_id in ${db(divisionIds as string[])}
             and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
+            and not ${restByeSql(db)}
           group by f.division_id`;
   return new Map(rows.map((r) => [r.division_id, r.matches]));
 }

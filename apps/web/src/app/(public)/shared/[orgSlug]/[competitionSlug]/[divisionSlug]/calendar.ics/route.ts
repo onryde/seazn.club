@@ -7,6 +7,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
+import { isSitOutBye } from "@/lib/fixture-bye";
 
 export async function GET(
   req: Request,
@@ -74,6 +75,15 @@ export async function GET(
   const anchorDate = data.competition.ends_on ?? data.competition.starts_on;
 
   const events: IcsEvent[] = data.fixtures
+    // #850 (owner ruling 2026-09-23): a SIT-OUT is not an event anyone
+    // attends. A Swiss sit-out, a bracket's draw bye and a league/group rest
+    // bye used to go out as an all-day "X vs Bye" event (no time, so anchored
+    // to the competition's last day); they are dropped, before either feed's
+    // own filter — each by its own explicit marker (`isSitOutBye`). NOT a
+    // sit-out, and still emitted exactly as before #850: a departed
+    // qualifier's walkover (orchestrator ruling 2026-09-24, from the owner's
+    // fourth round) — the same one-sided award shape, on a vacated seat.
+    .filter((f) => !isSitOutBye(f, stageKind.get(f.stage_id) ?? ""))
     .filter(
       (f) =>
         !entrantId ||

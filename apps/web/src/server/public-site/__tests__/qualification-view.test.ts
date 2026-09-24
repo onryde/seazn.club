@@ -66,6 +66,7 @@ import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
+import { restByeExtKey } from "@/lib/fixture-bye";
 import {
   buildQualificationView,
   divisionAwardAddsToLedger,
@@ -147,6 +148,9 @@ const open = (round: number, home: string | null, away: string | null, over: Par
   fx(round, home, away, "scheduled", null, over);
 /** A Swiss sit-out as `seatSwissRound` writes it: settled at creation. */
 const bye = (round: number, id: string) => fx(round, id, null, "forfeited", { kind: "award", winner: id });
+/** A round-robin REST bye as the generator writes it (#850): a bye's shape
+ *  PLUS the generator's marker key (`restByeExtKey`). */
+const restBye = (round: number, id: string) => fx(round, id, null, "forfeited", { kind: "award", winner: id }, { ext_key: restByeExtKey("", round) });
 /** A real two-sided walkover (core.forfeit): an award with both seats. */
 const walkover = (round: number, winner: string, loser: string) =>
   fx(round, winner, loser, "forfeited", { kind: "award", winner });
@@ -565,6 +569,56 @@ describe("no status — stated first, each with its positive pair", () => {
     // the fold still skips it, so it is not a match the row owes.
     const kept = [...o.fixtures.filter((f) => f.round_no < 3), { ...won(3, "A", "B"), status: "abandoned" }, open(3, "C", "D")];
     expect(view({ ...o, fixtures: kept })).not.toBeNull();
+  });
+});
+
+// #850 (owner ruling 2026-09-23) — a league/group bye is a persisted REST row:
+// it awards nothing and is not a played match, so the snapshot's `played`
+// never counts it. Counting it here (as Swiss does) would read every odd
+// league as "snapshot lag" and fail closed for the whole season — a status
+// suppressed, not a status safe (failure class 6).
+describe("#850: a round-robin rest bye is not a match played", () => {
+  /** League of five after round 1: A>B, C>D, E rests. The table's rows are
+   *  what the fold writes for a rest bye — E has played nothing. */
+  function league5(kind: "league" | "group" = "league"): Scene {
+    const rest = ["A", "B", "C", "D", "E"].flatMap((h, i, all) =>
+      all.slice(i + 1).map((a) => [h, a] as [string, string]),
+    ).filter(([h, a]) => !((h === "A" && a === "B") || (h === "C" && a === "D")));
+    return {
+      kind,
+      rows: [row("A", 1, 1, 1, [2, 0]), row("C", 2, 1, 1, [1, 0]), row("B", 3, 0, 1, [0, 2]), row("D", 4, 0, 1, [0, 1]), row("E", 5, 0, 0)],
+      fixtures: [won(1, "A", "B"), won(1, "C", "D"), restBye(1, "E"), ...rest.map(([h, a], i) => open(2 + (i % 4), h, a))],
+    };
+  }
+
+  it("a league with a rest bye still shows statuses; E, who only rested, has one", () => {
+    const v = must(view(league5()));
+    expect(Object.keys(v.rows).sort()).toEqual(["A", "B", "C", "D", "E"]);
+  });
+
+  it("a group stage's rest bye is read the same way", () => {
+    expect(view({ ...league5("group") })).not.toBeNull();
+  });
+
+  // The differential: the SAME fixtures and the SAME rows under Swiss, where a
+  // bye IS a match played — E's played 0 is then genuine lag and fails closed.
+  // A gate that ignored the stage kind could not pass both halves.
+  // Owner ruling 2026-09-24 (fourth round): the SAME shape in the SAME league
+  // without the marker is a fed league's walkover — a win E played, so E's
+  // played 0 is genuine lag and the view fails closed, as before #850.
+  it("the walkover twin: E's row unmarked in the same league is a match played — played 0 is lag, so no status", () => {
+    const s = league5();
+    const walkover = s.fixtures.map((f) => (f.home_entrant_id === "E" && f.away_entrant_id === null ? { ...f, ext_key: "rr-r1-c3" } : f));
+    expect(view({ ...s, fixtures: walkover })).toBeNull();
+    const caughtUp = s.rows.map((r) => (r.entrantId === "E" ? row("E", 5, 1, 1, [0, 0], { points: W }) : r));
+    expect(view({ ...s, fixtures: walkover, rows: caughtUp })).not.toBeNull();
+  });
+
+  it("the same table under Swiss reads E's bye as played — played 0 is lag there, so no status", () => {
+    const s = league5();
+    expect(view({ ...s, kind: "swiss" })).toBeNull();
+    const caughtUp = s.rows.map((r) => (r.entrantId === "E" ? row("E", 5, 1, 1, [0, 0], { points: W }) : r));
+    expect(view({ ...s, kind: "swiss", rows: caughtUp })).not.toBeNull();
   });
 });
 

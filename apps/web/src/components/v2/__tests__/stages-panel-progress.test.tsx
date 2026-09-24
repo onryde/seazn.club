@@ -24,6 +24,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { restByeExtKey } from "@/lib/fixture-bye";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
@@ -58,7 +59,13 @@ const stage = (o: Partial<{ id: string; seq: number; kind: string; name: string;
 const fixture = (
   stageId: string,
   no: number,
-  o: Partial<{ status: string; scheduled_at: string | null; outcome: unknown; away_entrant_id: string | null }> = {},
+  o: Partial<{
+    status: string;
+    scheduled_at: string | null;
+    outcome: unknown;
+    away_entrant_id: string | null;
+    ext_key: string | null;
+  }> = {},
 ) => ({
   id: `f${no}`,
   stage_id: stageId,
@@ -206,9 +213,10 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
 // Owner-approved "Option 2" (on top of Option B) — "why are we not showing
 // the fixtures in each stage?" answered with a destination control, not a
 // second copy of the rows: `stage-view-fixtures`, reading as "View N
-// fixtures" (`plural()`, this programme's own repeat "1 fixtures" offender),
-// using `stageFixtures.length` — the count the brief names explicitly,
-// never re-derived from `stagePlayed`/`stageInPlay`/`unscheduled`.
+// fixtures" (`plural()`, this programme's own repeat "1 fixtures" offender).
+// Since #850 the count leaves out the stage's round-robin REST-bye rows
+// (`isRestBye`) and nothing else — every other row counts exactly as it did,
+// a Swiss or bracket bye and a fed league's walkover included.
 function viewFixturesTag(html: string): string | null {
   const m = /<button[^>]*data-testid="stage-view-fixtures"[^>]*>/.exec(html);
   return m ? m[0] : null;
@@ -222,7 +230,7 @@ function viewFixturesText(html: string): string | null {
 }
 
 describe("stage card — 'View N fixtures' destination control (owner-approved 'Option 2')", () => {
-  it.each(DICTS)("%s: reads 'View N fixtures' with stageFixtures.length (6), real translations", (locale, dict) => {
+  it.each(DICTS)("%s: reads 'View N fixtures' with the stage's match count (6), real translations", (locale, dict) => {
     const d = dict as unknown as Record<string, string>;
     const html = renderToStaticMarkup(
       <DictProvider dict={dict} locale={locale}>
@@ -253,6 +261,47 @@ describe("stage card — 'View N fixtures' destination control (owner-approved '
   it("uses the singular form for exactly one fixture — never 'View 1 fixtures'", () => {
     const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={[MIXED_FIXTURES[0]!]} />);
     expect(viewFixturesText(html)).toBe(en["schedule.stage.viewFixtures.one"]!);
+  });
+
+  // #850, review O2 / finding 5: a 5-entrant league persists a rest-bye row
+  // per round, and the control read "View 15 fixtures" over 10 matches. It
+  // counts what the counts line counts — the fixtures anyone PLAYS — so the
+  // number it promises is the number of match rows the sheet then shows.
+  it("#850: counts MATCHES — a league's rest-bye rows are not fixtures (6 matches + 2 byes reads 6)", () => {
+    const restBye = (no: number) =>
+      fixture("s1", no, {
+        status: "forfeited",
+        away_entrant_id: null,
+        outcome: { kind: "award", winner: "e1" },
+        ext_key: restByeExtKey("", no),
+      });
+    const html = renderToStaticMarkup(
+      <StagesPanel {...PROPS} fixtures={[...MIXED_FIXTURES, restBye(7), restBye(8)]} />,
+    );
+    expect(viewFixturesText(html)).toBe(en["schedule.stage.viewFixtures.other"]!.replace("{count}", "6"));
+    // ...and the counts line beside it agrees about what a fixture is.
+    expect(html).toContain('data-testid="stage-progress-counts"');
+  });
+
+  // Owner ruling 2026-09-24 (fourth round): a fed league's WALKOVER (the bye's
+  // shape, a match key) keeps its pre-#850 display — it is one of the stage's
+  // fixtures, and "View N fixtures" counted it before #850. Only the MARKED
+  // rest bye beside it drops out: 6 + 1 walkover + 1 rest bye reads 7.
+  it("#850: a fed league's walkover still counts; only the marked rest bye does not (reads 7, not 6 or 8)", () => {
+    const walkover = fixture("s1", 7, {
+      status: "forfeited",
+      away_entrant_id: null,
+      outcome: { kind: "award", winner: "e1" },
+      ext_key: "rr-r1-c3",
+    });
+    const rest = fixture("s1", 8, {
+      status: "forfeited",
+      away_entrant_id: null,
+      outcome: { kind: "award", winner: "e1" },
+      ext_key: restByeExtKey("", 1),
+    });
+    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={[...MIXED_FIXTURES, walkover, rest]} />);
+    expect(viewFixturesText(html)).toBe(en["schedule.stage.viewFixtures.other"]!.replace("{count}", "7"));
   });
 
   it("is absent for a stage with zero fixtures — nothing to view", () => {

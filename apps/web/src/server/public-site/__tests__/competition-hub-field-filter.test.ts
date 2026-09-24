@@ -31,6 +31,7 @@ vi.mock("next/cache", () => ({
 
 import { sql } from "@/lib/db";
 import { FIELD_ENTRANT_STATUSES } from "@/lib/entrant-field";
+import { isRestBye } from "@/lib/fixture-bye";
 import { EntrantStatus } from "@/server/api-v1/schemas";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
@@ -145,8 +146,12 @@ async function seed(): Promise<Scene> {
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
   const departed: Departure[] = leaving.map((d) => ({
     ...d,
+    // Her MATCHES. #850: a five-entrant league also rests her one round on a
+    // settled rest-bye row, and the hub lists matches, never a bye
+    // (owner ruling 2026-09-24) — so that row is not one the hub must name.
     fixtureIds: fixtures
       .filter((f) => f.home_entrant_id === d.entrantId || f.away_entrant_id === d.entrantId)
+      .filter((f) => !isRestBye(f, "league"))
       .map((f) => f.id),
   }));
 

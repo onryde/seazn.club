@@ -65,6 +65,7 @@ import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
 import { COMPLETED_FIXTURE_STATUSES } from "@/server/usecases/player-stats";
 import { maskPublicEntrantNames } from "./data";
+import { restByeSql } from "@/server/fixture-bye-sql";
 
 export type Sql = ReturnType<typeof postgres>;
 
@@ -389,6 +390,9 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
     ) mine on true
     where d.competition_id = ${competitionId}
       and f.status in ${sql(APPEARANCE_STATUSES as string[])}
+      -- #850: a round-robin rest bye is not an appearance (no opponent, no
+      -- result); read off the base row, which carries stage_id and outcome.
+      and not ${restByeSql(sql, "fx")}
     order by coalesce(f.scheduled_at, ms.updated_at) desc nulls last, f.id`;
   if (rows.length === 0) return [];
 

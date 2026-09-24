@@ -3,6 +3,7 @@
 // bracketToGen computed them (from BracketFixtureGen) and then dropped them
 // on the floor, so every consumer had to re-derive a round name from
 // round_no/match-count instead — and drifted (design 2026-08-17 §2.3).
+import { DRAW_BYE_SLOT_LABEL } from "@/lib/fixture-bye";
 import { describe, expect, it, afterAll } from "vitest";
 import { sql } from "@/lib/db";
 import { createCompetition } from "../competitions";
@@ -247,7 +248,8 @@ describe.skipIf(!HAS_DB)("generateStageFixtures — persists bracket round role 
     for (const row of byeRows) {
       expect(row.home_entrant_id).not.toBeNull(); // the awarded side is real
       expect(row.away_entrant_id).toBeNull(); // the phantom side is never filled
-      expect(row.away_slot_label).toEqual({ key: "bracket.slot.bye", params: {} });
+      // The DRAW's bye, marked as such (a vacated seat's walkover is not).
+      expect(row.away_slot_label).toEqual(DRAW_BYE_SLOT_LABEL);
     }
   });
 

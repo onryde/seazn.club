@@ -276,6 +276,28 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(view!.rows[r.id.Ann!]!.ifYouLose).toBe("If you lose your next match: Out.");
   });
 
+  it("#850 league of five: the real rest-bye row is no match played — the table and the statuses both leave it out", async () => {
+    const FIVE = [...FOUR, "Eve"];
+    const r = await rig("league", FIVE);
+    const fx = await fixturesOf(r);
+    // The premise, read from the real rows: every round rests one entrant on
+    // a settled, one-seated bye row.
+    const byes = fx.filter((f) => (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+    expect(byes).toHaveLength(5);
+    expect(byes.every((b) => b.status === "forfeited")).toBe(true);
+    const rested = byes.find((b) => b.round_no === 1)!;
+    const restedId = (rested.home_entrant_id ?? rested.away_entrant_id)!;
+    await playRound(r, 1, FIVE);
+    const { view, rows, statuses } = await load(r);
+    // The fold gives the bye nothing...
+    expect(rows.find((x) => x.entrantId === restedId)).toMatchObject({ played: 0, points: 0 });
+    // ...and the builder does not read that as snapshot lag (a Swiss-style
+    // count of the bye would fail the whole table closed here).
+    expect(view).not.toBeNull();
+    expect(Object.keys(view!.rows).sort()).toEqual(Object.values(r.id).sort());
+    expectSameStatuses(view!, await engineStatuses(r, rows, statuses, leagueLeft));
+  });
+
   it("Swiss of five: round 1's real bye counts as the bye entrant's round (two left for everyone)", async () => {
     const FIVE = [...FOUR, "Eve"];
     const r = await rig("swiss", FIVE, 3);

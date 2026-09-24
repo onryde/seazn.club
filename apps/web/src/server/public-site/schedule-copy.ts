@@ -17,7 +17,10 @@ import type { ScheduleCopy } from "@/components/public-site/schedule";
  * @param dict the PUBLIC dictionary, in the org's locale.
  * @param ui   the org-locale lookup the page already holds for `ui` keys.
  */
-export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => string): ScheduleCopy {
+export function publicScheduleCopy(
+  dict: Dict,
+  ui: (key: "schedule.tbd" | "schedule.bye", vars?: Record<string, string | number>) => string,
+): ScheduleCopy {
   return {
     timeTbd: t(dict, "matchCentre.status.timeTbd"),
     allEntrants: t(dict, "division.filter.allEntrants"),
@@ -33,5 +36,8 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     // group's first timed match (a DST boundary can change the abbreviation).
     timesIn: t(dict, "division.timesIn"),
     empty: t(dict, "division.scheduleEmpty"),
+    // #850 — the organiser run sheet's own "{name} has a bye", in the org's
+    // locale, left as a template: the Schedule fills `{name}` per note.
+    bye: ui("schedule.bye", { name: "{name}" }),
   };
 }
