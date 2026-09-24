@@ -707,3 +707,9 @@ edits fixtures.
 - Progression-fed ("setup" timing) league/group stages get bye rows when their
   draw places the entrants, the same way directly-entered leagues get them at
   generate.
+
+**Owner ruling (2026-09-24, fourth round):** a walkover awarded because a fed
+qualifier departed before the draw (`awardSeededByes`) is NOT a rest bye. It
+keeps scoring as a win and keeps its current display, as on main. Rest-bye rows
+are marked explicitly when they are created, so the predicate never infers
+"rest bye" from row shape (one seat plus award) alone.

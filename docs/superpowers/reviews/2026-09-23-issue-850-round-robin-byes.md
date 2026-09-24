@@ -52,3 +52,38 @@ Held: SQL and TS predicates agree (including NULL); regenerate doesn't
 duplicate; generation undo/redo works; double round-robin and odd/even pools
 work; auto-schedule, AI and conflicts never place a bye; the implementer's
 25/25 mutants were killed.
+
+## Round 2 — reviewer (verdict: NEEDS FIXES; 1 HIGH / 5 LOW)
+
+Round-1 findings: 10/11 fixed and probed through real paths; finding 8 is only
+half-fixed (see R2-2). Gate re-run: 754/754 across 39 files; 27/27 mutants
+killed; no assertions weakened.
+
+1. **HIGH — `stages.ts:6102,6119` addFixture keys `adhoc-${count(*)+1}`.**
+   Reconciling deletes bye rows on withdrawal, so the count drops and the next
+   key collides: duplicate key on `fixtures_stage_ext_key_idx`, then a 500 on
+   every retry. Reachable from the UI (`stages-panel.tsx:1955`). Fix: max(N)+1
+   or a uuid, with a test that fails today.
+2. LOW — `registrations.ts:4705` `withdrawCore` withdraws by raw SQL: no
+   reconcile, no division lock, so future byes stay.
+3. LOW — addFixture never reconciles. A match added for a bye holder in their
+   bye round leaves them both resting and playing. Test
+   `round-robin-bye-lifecycle.test.ts:315` locks this in.
+4. LOW, OWNER DECISION — in a progression-fed league, a qualifier who leaves
+   before the draw has their seat awarded to the opponent as a one-seated
+   walkover (`awardSeededByes`, `stages.ts:3934`). `isRestBye` classifies these
+   as rest byes, so they stop scoring (main scored them as a win).
+   `deleteRestByesHeldBy` (`stages.ts:2194`) deletes them while the reconciler
+   treats them as matches.
+5. LOW — `run-sheet-groups.ts:324`: in a partly played untimed round, the bye
+   sits under "Played, not scheduled" while one of its matches is still
+   unscheduled.
+6. LOW — bye rows take division-wide match numbers; cosmetic, as it already
+   happens with Swiss and knockout byes.
+
+Decisions: (a) hub omits rest byes: sound. (b) API feed drops them: sound.
+(c) withdrawal policy: sound, but wire it through withdrawCore. (d) reconciler:
+idempotent and inside the division lock at all 4 call sites; wire it into
+addFixture and withdrawCore. (e) V417: safe (no V415 on any ref; the gap is
+allowed; the predicate matches `restByeSql`). (f) acceptable apart from R2-5.
+(g) acceptable scope.
