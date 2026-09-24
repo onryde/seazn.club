@@ -206,6 +206,25 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
     expect(row!.home!.members.map((m) => m.full_name)).toEqual([`${row!.home!.name} One`, `${row!.home!.name} Two`]);
   });
 
+  it("a roster is ordered by squad number first, numberless players last, then by name", async () => {
+    const { auth } = await seedOrg("pro");
+    // Name order (Ann, Bob, Zed) contradicts squad order (Zed 2, Ann 9, Bob
+    // none), so the squad term is what decides.
+    const { competition, stage } = await seedStage(auth, "league", ["Hawks", "Owls"], {}, {
+      entrantKind: "team",
+      members: (n) => [
+        { full_name: `${n} Ann`, squad_number: 9 },
+        { full_name: `${n} Bob`, squad_number: null },
+        { full_name: `${n} Zed`, squad_number: 2 },
+      ],
+    });
+    const [f] = await fixturesOf(stage.id);
+    await at(f!.id, "2026-09-23T09:00:00Z");
+    const [row] = await loadSheetCandidates(auth, competition.id, en, "2026-09-23");
+    const team = row!.home!.name;
+    expect(row!.home!.members.map((m) => m.full_name)).toEqual([`${team} Zed`, `${team} Ann`, `${team} Bob`]);
+  });
+
   it("courts: the board's venue-qualified name, venue then court order, courtless rows last", async () => {
     const { auth } = await seedOrg("pro");
     const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D", "E", "F"]);

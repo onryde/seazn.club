@@ -44,8 +44,12 @@ export async function seedStage(
   kind: RigStageKind,
   names: string[],
   config: Record<string, unknown> = {},
-  /** T7/T8: real roster members (inline `new_person`), so name resolution is exercised. */
-  opts: { entrantKind?: "individual" | "team"; members?: (name: string) => string[] } = {},
+  /** T7/T8: real roster members (inline `new_person`), so name resolution is
+   *  exercised. A member may carry a squad number (the roster's first sort key). */
+  opts: {
+    entrantKind?: "individual" | "team";
+    members?: (name: string) => (string | { full_name: string; squad_number: number | null })[];
+  } = {},
 ) {
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -66,11 +70,10 @@ export async function seedStage(
       kind: opts.entrantKind ?? ("individual" as const),
       display_name: n,
       seed: i + 1,
-      members: (opts.members?.(n) ?? []).map((full_name) => ({
-        new_person: { full_name },
-        is_captain: false,
-        roles: [],
-      })),
+      members: (opts.members?.(n) ?? []).map((m) => {
+        const { full_name, squad_number } = typeof m === "string" ? { full_name: m, squad_number: null } : m;
+        return { new_person: { full_name }, squad_number, is_captain: false, roles: [] };
+      }),
     })),
   );
   const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: kind, config });
