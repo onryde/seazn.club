@@ -66,7 +66,24 @@ export async function readLeaderRows(
   // `playerLinkId`). It used to be "is in `public_players_v`", which is consent
   // only: on a plan with stats but without player pages, every consented
   // leader linked to a card that refuses them.
+  //
+  // It is asked of the one person, not read out of `members`: finding the id in
+  // that array meant the view rebuilt the whole roster — every member's name,
+  // photo gate and person_id gate — for EVERY leader row, to answer one
+  // question (hub query perf T1, 2026-09-24). The predicate is the view's own
+  // person_id arm (V418), verbatim, and only answers for a person the lateral
+  // actually found on a public entrant, exactly as the array lookup did. The
+  // entitlement depends only on the competition, so `profiles` asks it once per
+  // division (`materialized`, so it is never inlined back into each row).
+  // public-leaders.test.ts PARITY pins this to what the view publishes.
+  const divisionIds = divisions.map((d) => d.id);
   const rows = await sql<SnapshotQueryRow[]>`
+    with profiles as materialized (
+      select pd.id as division_id,
+             org_has_feature(c.org_id, 'dashboard.player_profiles', c.id) as profiles_on
+      from public_divisions_v pd
+      join competitions c on c.id = pd.competition_id
+      where pd.id in ${sql(divisionIds)})
     select ps.division_id, ps.person_id, ps.stats,
            p.full_name, p.consent,
            e.id            as entrant_id,
@@ -78,16 +95,17 @@ export async function readLeaderRows(
     from player_stat_snapshots ps
     join public_divisions_v d on d.id = ps.division_id
     join persons p on p.id = ps.person_id and p.merged_into is null
+    left join profiles pr on pr.division_id = ps.division_id
     left join lateral (
       select en.id, en.kind, en.display_name, en.badge_url, en.team_display,
-             exists (select 1 from jsonb_array_elements(en.members) m
-                      where m->>'person_id' = ps.person_id::text) as published
+             coalesce((p.consent->>'public_name')::boolean, false)
+               and coalesce(pr.profiles_on, false) as published
       from entrant_members em
       join public_entrants_v en on en.id = em.entrant_id
       where em.person_id = ps.person_id and en.division_id = ps.division_id
       order by en.id
       limit 1) e on true
-    where ps.division_id in ${sql(divisions.map((d) => d.id))}`;
+    where ps.division_id in ${sql(divisionIds)}`;
 
   // Entrant display names go through the SAME masking pass the division page
   // uses — never a second, parallel decision. It is per-division (it takes

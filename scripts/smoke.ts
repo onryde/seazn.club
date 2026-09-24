@@ -3026,7 +3026,7 @@ async function passGrantsSuite(): Promise<void> {
 
   // Per competition: a board division carrying real fixtures (realtime, the
   // branded export and the player card all read it) plus the ceiling probes.
-  const board: Record<"pass" | "plain", { divId: string; fixtureId: string; stageId: string }> =
+  const board: Record<"pass" | "plain", { divId: string; divSlug: string; fixtureId: string; stageId: string }> =
     {} as never;
   for (const [key, comp] of [["pass", passComp], ["plain", plainComp]] as const) {
     const div = await mkDiv(comp.id, "Board");
@@ -3041,7 +3041,7 @@ async function passGrantsSuite(): Promise<void> {
       await v1(s, `/api/v1/stages/${stage.id}/generate`, "POST"),
     ).fixtures;
     await v1(s, `/api/v1/divisions/${div.id}/start`, "POST");
-    board[key] = { divId: div.id, fixtureId: fixtures[0].id, stageId: stage.id };
+    board[key] = { divId: div.id, divSlug: div.slug, fixtureId: fixtures[0].id, stageId: stage.id };
   }
 
   // === entrants.per_division.max — community 64, pass 128 (V319) ==========
@@ -3187,6 +3187,26 @@ async function passGrantsSuite(): Promise<void> {
   check(
     "pass grants/profiles: the UNPASSED sibling stays dark (404) — V396 made profiles paid again",
     plainCard.status === 404,
+  );
+  // Hub query perf T1 (V418): `public_entrants_v` now asks this entitlement
+  // once per entrant row instead of twice per member. The pass is scoped to ONE
+  // competition, so the anonymous entrants document must still publish the
+  // consented member's id exactly where the card renders — and keep the member,
+  // id withheld, on the sibling. Both sides read the same person.
+  type BoardDoc = { entrants?: { display_name: string; members: { name: string; person_id: string | null }[] }[] };
+  const boardMember = async (key: "pass" | "plain", compSlug: string) =>
+    v1data<BoardDoc | undefined>(
+      await v1(newSession(), `/api/v1/public/orgs/${org.slug}/competitions/${compSlug}/divisions/${board[key].divSlug}/entrants`),
+    )?.entrants?.find((e) => e.display_name === `Board One ${key}`)?.members?.[0];
+  const passMember = await boardMember("pass", passComp.slug);
+  const plainMember = await boardMember("plain", plainComp.slug);
+  check(
+    "pass grants/profiles: the passed competition's public entrants document publishes the member's id",
+    passMember?.person_id === person.id,
+  );
+  check(
+    "pass grants/profiles: the unpassed sibling's document keeps the member but withholds the id",
+    !!plainMember && plainMember.name.length > 0 && plainMember.person_id === null,
   );
   // Player profile — upcoming across the org (spec 2026-09-23). The passed
   // card's board fixture was generated and never started, so it is SCHEDULED

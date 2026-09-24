@@ -509,6 +509,141 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
     expect(row!.publicProfile).toBe(false);
   });
 
+  // Public hub query perf, T1. `public_profile` used to be read out of the
+  // view's whole `members` array, rebuilt for EVERY leader row just to ask one
+  // question about one person. It is now the view's own person_id predicate,
+  // asked of the one person, with the entitlement read once per division. The
+  // view stays the authority: this pins the new column to what the view
+  // publishes, cell by cell, so the two cannot drift apart silently.
+  it("PARITY: publicProfile is exactly whether public_entrants_v publishes the person's id — every consent cell, both entitlement states, and a leader with no entrant", async () => {
+    const { auth, orgId } = await seedOrg();
+    const people = {
+      named: await seedPerson(orgId, "Nia Named", { public_name: true }),
+      refused: await seedPerson(orgId, "Omar Refused", { public_name: false }),
+      // `{}` never MASKS a name (the resolver's "absence never masks"), but it
+      // is not name consent either, so no id is published: the one cell where
+      // the name is shown in full and the profile is still withheld.
+      silent: await seedPerson(orgId, "Sol Silent", {}),
+      // Consenting, with stats, but on no entrant of the division.
+      nomad: await seedPerson(orgId, "Nell Nomad", { public_name: true }),
+    };
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Parity Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    await createEntrants(auth, division.id, [
+      {
+        kind: "team",
+        display_name: "Parity XI",
+        seed: 1,
+        members: [people.named, people.refused, people.silent].map((person_id, i) => ({
+          person_id,
+          squad_number: i + 1,
+          default_position_key: null,
+          is_captain: i === 0,
+          roles: [],
+        })),
+      },
+    ]);
+    for (const id of Object.values(people)) await seedSnapshot(division.id, id, { runs: 10 });
+    const policy = [{ id: division.id, youth: false, player_name_display: null }];
+
+    const expected: Record<string, Record<keyof typeof people, boolean>> = {
+      granted: { named: true, refused: false, silent: false, nomad: false },
+      denied: { named: false, refused: false, silent: false, nomad: false },
+    };
+    for (const state of ["granted", "denied"] as const) {
+      await setFeature(orgId, "dashboard.player_profiles", state === "granted");
+      const rows = await readLeaderRows(sql, policy);
+      const published = new Set(
+        (
+          await sql<{ person_id: string }[]>`
+            select m->>'person_id' as person_id
+            from public_entrants_v en, jsonb_array_elements(en.members) m
+            where en.division_id = ${division.id} and m->>'person_id' is not null`
+        ).map((r) => r.person_id),
+      );
+      for (const [key, personId] of Object.entries(people) as [keyof typeof people, string][]) {
+        const row = rows.find((r) => r.personId === personId);
+        expect(row, `${state}/${key} row`).toBeDefined();
+        // The view is the authority …
+        expect(row!.publicProfile, `${state}/${key} vs view`).toBe(published.has(personId));
+        // … and the cell's value is pinned, so a view and reader that drifted
+        // TOGETHER still fail here.
+        expect(row!.publicProfile, `${state}/${key}`).toBe(expected[state]![key]);
+      }
+      expect(rows.find((r) => r.personId === people.silent)!.masked).toBe(false);
+    }
+  });
+
+  it("CALLS: the leader read asks the player-profiles entitlement once per division, however many leaders and members", async () => {
+    const { auth, orgId } = await seedOrg();
+    await setFeature(orgId, "dashboard.player_profiles", true);
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Busy Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    const names = ["Ann One", "Ben Two", "Cat Three", "Dan Four"];
+    const ids: string[] = [];
+    for (const name of names) ids.push(await seedPerson(orgId, name, { public_name: true, public_photo: true }));
+    await createEntrants(auth, division.id, [
+      {
+        kind: "team",
+        display_name: "Crowd",
+        seed: 1,
+        members: ids.map((person_id, i) => ({
+          person_id,
+          squad_number: i + 1,
+          default_position_key: null,
+          is_captain: i === 0,
+          roles: [],
+        })),
+      },
+    ]);
+    for (const id of ids) await seedSnapshot(division.id, id, { runs: 3 });
+
+    // Counted as a delta inside one transaction: `pg_stat_xact_user_functions`
+    // carries a pooled connection's unflushed calls from earlier transactions.
+    const { rows, calls } = await sql.begin(async (tx) => {
+      await tx`set local track_functions = 'all'`;
+      const read = async (): Promise<number> => {
+        const [{ n }] = await tx<{ n: number }[]>`
+          select coalesce(sum(calls), 0)::int as n
+          from pg_stat_xact_user_functions where funcname = 'org_has_feature'`;
+        return n;
+      };
+      const start = await read();
+      const rows = await readLeaderRows(tx as unknown as Sql, [
+        { id: division.id, youth: false, player_name_display: null },
+      ]);
+      return { rows, calls: (await read()) - start };
+    });
+
+    // The read really consulted the entitlement (every leader is linked) …
+    expect(rows).toHaveLength(names.length);
+    expect(rows.every((r) => r.publicProfile)).toBe(true);
+    expect(calls).toBeGreaterThanOrEqual(1);
+    // … once for the division — not once per leader row, and not twice per
+    // member of each leader's entrant as rebuilding `members` did.
+    expect(calls).toBe(1);
+  });
+
   it("SAFEGUARDING: a single-token youth name is masked, so no player-page link is offered", async () => {
     // The one-token case against the REAL view and the REAL resolver: the
     // rendered name is identical either way (masking a single token returns
