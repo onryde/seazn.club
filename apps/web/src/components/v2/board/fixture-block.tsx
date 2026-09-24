@@ -6,7 +6,7 @@
 // touch and keyboard alike.
 import { divisionAccent, divisionHue, divisionShortCode, divisionTint } from "@/lib/division-hue";
 import type { FeedLabelPair } from "@/lib/schedule-board";
-import { CONFLICT_LABEL, cardTitle, type BoardConflict, type BoardFixture } from "./types";
+import { CONFLICT_LABEL, boardMovable, cardTitle, type BoardConflict, type BoardFixture } from "./types";
 import { formatBoardConflictDetail } from "./conflict-detail-format";
 import type { BoardRoundCode } from "./round-codes";
 import { RoundCodeChip } from "./round-code-chip";
@@ -55,7 +55,10 @@ export function FixtureBlock({
   roundCode: BoardRoundCode | undefined;
 }) {
   const msg = useMsg();
-  const movable = canEdit && fixture.status === "scheduled";
+  // `boardMovable`, not the status alone (review 4 of #857): a `held` card —
+  // a start taken back, a walkover recorded in play — is still `scheduled`,
+  // and the server refuses every drag and pin on it.
+  const movable = canEdit && boardMovable(fixture);
   // Fix round 3 (Important 3): `lookup` was left off, so an unfilled slot's
   // label fell through to cardTitle's own client-safe English default
   // (board/types.ts) regardless of this org's locale — even though `msg`
@@ -141,11 +144,14 @@ export function FixtureBlock({
             {title}
           </button>
         ) : (
-          <span className="min-w-0 flex-1 truncate text-left font-medium text-slate-600">
+          <span
+            title={fixture.held ? msg("schedule.error.played") : undefined}
+            className="min-w-0 flex-1 truncate text-left font-medium text-slate-600"
+          >
             {title}
           </span>
         )}
-        {canEdit && fixture.status === "scheduled" && (
+        {movable && (
           <button
             type="button"
             onClick={onTogglePin}

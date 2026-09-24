@@ -207,7 +207,12 @@ export const FIXTURE_COLS = [
 export type BoardFixtureRow = Omit<
   FixtureRow,
   "venue" | "court_label" | "court_name" | "venue_name" | "venue_id"
->;
+> & {
+  /** A `scheduled` row that holds a result or scoring (`fixtureHasResultSql`:
+   *  a start taken back, a walkover recorded in play), which every board
+   *  write refuses to move (review 4 of #857). Sent only when true. */
+  held?: true;
+};
 
 export const BOARD_FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",

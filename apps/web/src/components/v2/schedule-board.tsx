@@ -45,6 +45,7 @@ import { resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
 // court-multi-picker.tsx for why the board must not carry hours/exceptions.
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import {
+  boardMovable,
   cardTitle,
   courtDisplayName,
   DENSITY_STORAGE_KEY,
@@ -2101,7 +2102,8 @@ export function ScheduleBoard({
 }
 
 // Week view (cross-day drag) — behaviour unchanged from the pre-v3 board.
-function WeekView({
+// Exported for its test only (schedule-board-week-held.test.tsx).
+export function WeekView({
   weekDays,
   scheduled,
   cfgStartAt,
@@ -2135,7 +2137,7 @@ function WeekView({
 
   function moveToDay(fixtureId: string, targetDay: string) {
     const f = scheduled.find((x) => x.id === fixtureId);
-    if (!f || f.status !== "scheduled") return;
+    if (!f || !boardMovable(f)) return;
     if (f.scheduled_at && dayKey(f.scheduled_at as string) === targetDay) return;
     const src = f.scheduled_at ? new Date(f.scheduled_at) : cfgStartAt ? new Date(cfgStartAt) : null;
     const hh = src ? String(src.getHours()).padStart(2, "0") : "09";
@@ -2207,7 +2209,7 @@ function WeekView({
                   </li>
                 )}
                 {dayFx.map((f) => {
-                  const movable = canEdit && f.status === "scheduled";
+                  const movable = canEdit && boardMovable(f);
                   return (
                     <li
                       key={f.id}

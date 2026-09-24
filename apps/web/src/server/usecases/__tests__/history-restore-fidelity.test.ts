@@ -843,6 +843,27 @@ describe.skipIf(!HAS_DB)("a fixture in play or finalized is never taken away by 
     expect(await rowOf(voided)).toEqual(before);
   });
 
+  // Review 4 of #857. The board could not tell that card apart: it offered the
+  // drag and the pin the server refuses, and its bulk tools sent it. The board
+  // read now flags it — and only it: a walkover's own status already says so,
+  // and a flag on every row would be paid for on every board.
+  it("the board read flags a voided start as held, and no other row", async () => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const fixtures = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${mainId} order by fixture_no`;
+    for (let i = 0; i < fixtures.length; i++) {
+      await patchFixture(auth, fixtures[i]!.id, { scheduled_at: new Date(Date.UTC(2026, 6, 12, 9 + i)).toISOString() });
+    }
+    await startDivision(auth, divisionId);
+    const [voided, walkover] = [fixtures[0]!.id, fixtures[1]!.id];
+    await record(auth, voided, "voided start");
+    await record(auth, walkover, "forfeited");
+
+    const board = await listDivisionFixturesForBoard(auth, divisionId);
+    expect(board.filter((r) => "held" in r).map((r) => [r.id, r.held, r.status])).toEqual([[voided, true, "scheduled"]]);
+    expect(board.find((r) => r.id === walkover)?.status).toBe("forfeited");
+  });
+
   // The row filter behind the engine's refusal: a fixture that starts playing
   // AFTER the undo read the played set — the scorer's first tap racing the
   // organiser's Undo. Parked on the row's own lock, so the order is forced.

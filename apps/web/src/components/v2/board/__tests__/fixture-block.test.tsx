@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
 import es from "@/dictionaries/es/ui.json";
+import en from "@/dictionaries/en/ui.json";
 import { FixtureBlock } from "../fixture-block";
 import type { BoardConflict, BoardFixture } from "../types";
 
@@ -132,6 +133,24 @@ describe("FixtureBlock", () => {
     expect(locked).not.toContain("\u{1F512}"); // 🔒
     expect(unlocked).toContain("lucide-pin");
     expect(unlocked).not.toContain("\u{1F4CC}"); // 📌
+  });
+
+  // Review 4 of #857. A start taken back leaves the card `scheduled`, so it
+  // kept its pick handle, its drag and its pin — every one of which the server
+  // refuses. A `held` card offers none of them, and says why on hover.
+  it("a held card offers no drag, no pick and no pin, and says why; the same card unheld offers all three", () => {
+    const offers = (html: string) => ({
+      draggable: /draggable="(true|false)"/.exec(html)?.[1],
+      pick: html.includes("aria-pressed="),
+      pin: html.includes("lucide-pin"),
+    });
+    const why = `title="${(en as Record<string, string>)["schedule.error.played"]!.replace(/'/g, "&#x27;")}"`;
+    const unheld = renderToStaticMarkup(<FixtureBlock {...baseProps} />);
+    const held = renderToStaticMarkup(<FixtureBlock {...baseProps} fixture={{ ...fixture, held: true }} />);
+    expect(offers(unheld)).toEqual({ draggable: "true", pick: true, pin: true });
+    expect(offers(held)).toEqual({ draggable: "false", pick: false, pin: false });
+    expect(held).toContain(why);
+    expect(unheld).not.toContain(why);
   });
 
   it("fix round 3 (Important 3): an unfilled slot's title resolves through this org's REAL locale, not the client-safe English default", () => {
