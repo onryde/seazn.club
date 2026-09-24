@@ -1,6 +1,25 @@
-// When a fixture holds a RESULT, as SQL: the one predicate every destructive
-// or moving fixture path consults. Server-only (it is SQL); the client says
-// the refusal off `PLAYED_REFUSAL_CODE` (`@/lib/played-fixture-statuses`).
+// When a fixture holds a RESULT, as SQL. Server-only (it is SQL); the client
+// says the refusal off `PLAYED_REFUSAL_CODE` (`@/lib/played-fixture-statuses`).
+//
+// Who reads what. Not every destructive path does, so keep this list true when
+// a caller moves:
+//
+//   `fixtureHasResultSql` (status AND evidence: history's played set)
+//     - history.ts: the results-guard on every undo, redo and restore
+//       (`playedFixtureIds`), the row filter on its deletes, the schedule
+//       clear and the pool clear
+//     - schedule-plus.ts: the rain-delay shift
+//     - stages.ts: `rebuildStageFixtures`
+//     - the board writes: `autoSchedule`, `applySchedule` and `moveFixture`
+//       (schedule.ts, through `isMovable`), the joint apply
+//       (competition-schedule-apply.ts), the AI pack (schedule-ai.ts) and the
+//       joint builder's fixed occupancy (competition-schedule-ai.ts)
+//   `fixtureEvidenceSql` alone, beside the caller's own status clause
+//     - stages.ts: the Swiss shell reconcile, unseat and Unpair
+//   NEITHER, a status list only
+//     - stages.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
+//       deletes every other row with its evidence, an abandoned match or a
+//       start taken back included
 import type postgres from "postgres";
 
 type Tx = postgres.TransactionSql;
