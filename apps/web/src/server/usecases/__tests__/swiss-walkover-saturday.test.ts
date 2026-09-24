@@ -360,7 +360,7 @@ async function seedKnockout(rig: Rig) {
       .slice()
       .sort((a, b) => a.rank - b.rank)
       .map((q) => `${q.rank} ${rig.who(q.entrantId)}`),
-    ties: computed.ties.map((t) => ({ reason: t.reason, who: t.entrantIds.map((id) => rig.who(id)) })),
+    ties: computed.ties.map((t) => ({ reason: t.reason, who: t.entrantIds.map((id) => rig.who(id)).sort() })),
     bareConfirm: bare,
     filled: confirmed.filled,
     semis: inRound(bracket, firstRound).map((f) => pairOf(rig, f)),
@@ -445,7 +445,7 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     const ko = await seedKnockout(rig);
     o.knockout = ko;
     expect(ko.proposalRanks).toEqual(["1 S1", "2 A", "3 S2", "4 S5"]);
-    expect(ko.ties).toEqual([{ reason: "seed", who: ["S1", "A"] }]);
+    expect(ko.ties).toEqual([{ reason: "seed", who: ["A", "S1"] }]);
     // Confirm with no pick is refused: the organiser must resolve S1/A.
     expect(ko.bareConfirm).toMatchObject({ http: 422, code: "SEEDING_TIE_UNRESOLVED" });
     expect(ko.filled).toBe(4);
