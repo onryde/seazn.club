@@ -73,6 +73,16 @@ describe("selectSheetFixtures (scorer sheets §4.4)", () => {
     expect(ids(selectSheetFixtures([tbd, awayBye, homeBye], DAY))).toEqual([tbd.id]);
   });
 
+  it("an entrant is never a bye: a FILLED seat beside a stale bye label still prints, on either side", () => {
+    // The hub's rule (`hubByeSides`): a bye is an EMPTY seat AND the stored
+    // label — never the label alone.
+    const bye = { key: "bracket.slot.bye", params: {} };
+    const homeFilled = c({ home: side("A"), home_slot_label: bye });
+    const awayFilled = c({ away: side("B"), away_slot_label: bye });
+    expect(ids(selectSheetFixtures([homeFilled, awayFilled], DAY)).sort()).toEqual([homeFilled.id, awayFilled.id].sort());
+    expect(sheetDays([homeFilled])).toEqual([DAY]);
+  });
+
   it("the day is the fixture's LOCAL day in its own tz — Auckland vs UTC (Review Focus 3)", () => {
     const late = c({ scheduled_at: "2026-09-23T11:30:00Z", tz: "Pacific/Auckland" }); // 23:30 NZST, 23 Sep
     const early = c({ scheduled_at: "2026-09-22T12:30:00Z", tz: "Pacific/Auckland" }); // 00:30 NZST, 23 Sep

@@ -1,6 +1,6 @@
 // Scorer sheets §4.4 — the loader half: what each candidate row PRINTS, read
 // from a real schedule. Real use-cases end to end (the rig), so the names, the
-// board's round codes, the feed labels and the venue zone are what the product
+// board's round codes, the feed labels and the org clock are what the product
 // writes. Expected match refs and "Winner of …" labels are DERIVED from the
 // board's own `boardRoundCodes` over the stage's rows (owner ruling
 // 2026-09-24), never typed in, and read in French so an English default could
@@ -9,13 +9,14 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql, withTenant } from "@/lib/db";
 import { msgFor } from "@/lib/messages-i18n";
 import { matchRef, type SlotLabelLookup } from "@/lib/slot-label";
-import { paginateSheet } from "@/lib/scorer-sheets";
+import { paginateSheet, sheetDays } from "@/lib/scorer-sheets";
 import { boardRoundCodes } from "@/components/v2/board/round-codes";
 import { seedOrg } from "./_seed";
 import { decide, fixturesOf, seedStage, type RigFixture } from "./_sheets-rig";
 import { getScheduleSettings, putScheduleSettings, courtNamesById } from "../schedule";
 import { createCourt, createVenue } from "../venues";
 import { patchFixture } from "../fixtures";
+import { scoreEvent } from "../scoring";
 import { MATCH_NAME_COLS, type MatchNameRow } from "../scan-match-names";
 import { listSheetDays, loadSheetCandidates } from "../scorer-sheets";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -152,24 +153,30 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
     expect(all[0]!.status).toBe("scheduled");
   });
 
-  it("the day is the local day in the DIVISION's zone, which beats the org's", async () => {
+  it("the day is on the ORG clock — the board's — even when the division holds its own zone", async () => {
+    // Controller ruling 2026-09-24 (#397/#448): the competition board's day
+    // grid runs on the org clock, so the sheet does too. A differential: the
+    // division's Auckland override, the org's Los Angeles and UTC each put
+    // these three fixtures on a different set of days.
     const { auth } = await seedOrg("pro");
     await sql`update organizations set timezone = 'America/Los_Angeles' where id = ${auth.orgId}`;
     const { competition, division, stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
     await setDivisionTz(auth, division.id, "Pacific/Auckland");
+    expect((await getScheduleSettings(auth, division.id)).tz).toBe("Pacific/Auckland"); // premise: the override is live
     const fx = await fixturesOf(stage.id);
     const [sf1, sf2] = fx.filter((f) => f.round_no === 1);
     const final = fx.find((f) => f.round_no === 2)!;
-    await at(sf1!.id, "2026-09-22T12:30:00Z"); // 00:30 NZST, 23 Sep (UTC: the 22nd)
-    await at(sf2!.id, "2026-09-23T11:30:00Z"); // 23:30 NZST, 23 Sep
-    await at(final.id, "2026-09-23T20:00:00Z"); // 08:00 NZST, 24 Sep (UTC: the 23rd)
+    await at(sf1!.id, "2026-09-22T12:30:00Z"); // LA 22 Sep 05:30 · Auckland 23 Sep · UTC 22 Sep
+    await at(sf2!.id, "2026-09-23T11:30:00Z"); // LA 23 Sep 04:30 · Auckland 23 Sep · UTC 23 Sep
+    await at(final.id, "2026-09-24T05:00:00Z"); // LA 23 Sep 22:00 · Auckland 24 Sep · UTC 24 Sep
 
-    // UTC would say 22 + 23; Los Angeles would say 22 + 23 as well.
-    expect(await listSheetDays(auth, competition.id)).toEqual(["2026-09-23", "2026-09-24"]);
+    // Auckland would say 23 + 24; UTC 22 + 23 + 24.
+    expect(await listSheetDays(auth, competition.id)).toEqual(["2026-09-22", "2026-09-23"]);
     const day = await loadSheetCandidates(auth, competition.id, en, "2026-09-23");
-    expect(day.map((r) => r.id).sort()).toEqual([sf1!.id, sf2!.id].sort());
-    expect(day.every((r) => r.tz === "Pacific/Auckland")).toBe(true);
-    expect((await loadSheetCandidates(auth, competition.id, en, "2026-09-24")).map((r) => r.id)).toEqual([final.id]);
+    expect(day.map((r) => r.id).sort()).toEqual([sf2!.id, final.id].sort());
+    expect(day.every((r) => r.tz === "America/Los_Angeles")).toBe(true);
+    expect((await loadSheetCandidates(auth, competition.id, en, "2026-09-22")).map((r) => r.id)).toEqual([sf1!.id]);
+    expect(await loadSheetCandidates(auth, competition.id, en, "2026-09-24")).toEqual([]);
   });
 
   it("with no division override the org's zone decides the day", async () => {
@@ -247,24 +254,95 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
     ]);
   });
 
-  it("a bye line still waiting for its draw is never printed, and gives the day list nothing", async () => {
+  it("a bye line still waiting for its draw is never printed and gives the day list nothing — an EMPTY seat with the bye label, either side", async () => {
     const { auth } = await seedOrg("pro");
-    const { competition, stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
-    const [bye, real] = (await fixturesOf(stage.id)).filter((f) => f.round_no === 1);
+    const { competition, stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D", "E", "F", "G", "H"]);
+    const [awayBye, homeBye, stale, real] = (await fixturesOf(stage.id)).filter((f) => f.round_no === 1);
+    const BYE = sql.json({ key: "bracket.slot.bye", params: {} });
     // The state a seeded bye line holds until its draw lands: one side empty
     // and stamped `bracket.slot.bye`, status still `scheduled`, no outcome
     // (division-phase.ts `fixtureAwaitsSeedDraw`; stages.ts `awardSeededByes`
     // settles it). No rig path stops there, so the stamp is written by hand.
-    await sql`
-      update fixtures set away_entrant_id = null,
-             away_slot_label = ${sql.json({ key: "bracket.slot.bye", params: {} })}
-      where id = ${bye!.id}`;
-    await at(bye!.id, "2026-09-22T09:00:00Z");
-    await at(real!.id, "2026-09-23T09:00:00Z");
-    const [{ status }] = await sql<{ status: string }[]>`select status from fixtures where id = ${bye!.id}`;
-    expect(status).toBe("scheduled"); // premise: only the label excludes it
-    expect(await listSheetDays(auth, competition.id)).toEqual(["2026-09-23"]);
-    expect((await loadSheetCandidates(auth, competition.id, en)).map((r) => r.id)).toEqual([real!.id]);
+    await sql`update fixtures set away_entrant_id = null, away_slot_label = ${BYE} where id = ${awayBye!.id}`;
+    await sql`update fixtures set home_entrant_id = null, home_slot_label = ${BYE} where id = ${homeBye!.id}`;
+    // An entrant is never a bye, whatever label rides beside it (`hubByeSides`):
+    // both seats FILLED, both stamped.
+    await sql`update fixtures set home_slot_label = ${BYE}, away_slot_label = ${BYE} where id = ${stale!.id}`;
+    await at(awayBye!.id, "2026-09-21T09:00:00Z");
+    await at(homeBye!.id, "2026-09-22T09:00:00Z");
+    await at(stale!.id, "2026-09-23T09:00:00Z");
+    await at(real!.id, "2026-09-24T09:00:00Z");
+    const statuses = await sql<{ status: string }[]>`
+      select status from fixtures where id in ${sql([awayBye!.id, homeBye!.id, stale!.id])}`;
+    expect(statuses.map((s) => s.status)).toEqual(["scheduled", "scheduled", "scheduled"]); // premise: only the seat+label decide
+    expect([stale!.home_entrant_id, stale!.away_entrant_id]).not.toContain(null); // premise: both seats filled
+    expect(await listSheetDays(auth, competition.id)).toEqual(["2026-09-23", "2026-09-24"]);
+    expect((await loadSheetCandidates(auth, competition.id, en)).map((r) => r.id).sort()).toEqual(
+      [stale!.id, real!.id].sort(),
+    );
+  });
+
+  it("the day list is one query with the loader's exclusions: no excluded status, and no unscheduled row, ever gives a day", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D", "E", "F"]);
+    const fx = await fixturesOf(stage.id);
+    const [decidedF, finalizedF, forfeitedF, abandonedF, cancelledF, inPlayF, scheduledF] = fx;
+    for (const [i, f] of [decidedF, finalizedF, forfeitedF, abandonedF, cancelledF, inPlayF, scheduledF].entries()) {
+      await at(f!.id, `2026-09-${String(20 + i).padStart(2, "0")}T09:00:00Z`);
+    }
+    // Real transitions where the rig has one; the rest by hand (the day list
+    // reads the status column and nothing else about the result).
+    await decide(auth, decidedF!.id);
+    await scoreEvent(auth, inPlayF!.id, { expected_seq: 0, type: "core.start", payload: {} });
+    for (const [f, status] of [
+      [finalizedF, "finalized"],
+      [forfeitedF, "forfeited"],
+      [abandonedF, "abandoned"],
+      [cancelledF, "cancelled"],
+    ] as const) {
+      await sql`update fixtures set status = ${status} where id = ${f!.id}`;
+    }
+    const got = await sql<{ id: string; status: string; timed: boolean }[]>`
+      select id, status, scheduled_at is not null as timed from fixtures where stage_id = ${stage.id}`;
+    const statusOf = (id: string) => got.find((g) => g.id === id)!.status;
+    // premises: every one of the seven statuses is present, each on its own day…
+    expect([decidedF, finalizedF, forfeitedF, abandonedF, cancelledF, inPlayF, scheduledF].map((f) => statusOf(f!.id))).toEqual([
+      "decided",
+      "finalized",
+      "forfeited",
+      "abandoned",
+      "cancelled",
+      "in_play",
+      "scheduled",
+    ]);
+    // …and printable-status rows with no time remain.
+    expect(got.filter((g) => !g.timed && g.status === "scheduled").length).toBeGreaterThan(0);
+
+    // 20..24 are the five excluded statuses; 25 is in play, 26 scheduled.
+    expect(await listSheetDays(auth, competition.id)).toEqual(["2026-09-25", "2026-09-26"]);
+    // The SQL and `isPrintable` are two spellings of one rule: they agree.
+    expect(await listSheetDays(auth, competition.id)).toEqual(sheetDays(await loadSheetCandidates(auth, competition.id, en)));
+  });
+
+  it("an empty seat with NO label (a Swiss next-round shell) is not a bye: it prints and has a day", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D"], { rounds: 2 });
+    const shells = (await fixturesOf(stage.id)).filter((f) => f.round_no === 2);
+    expect(shells.length).toBeGreaterThan(0);
+    const shell = shells[0]!;
+    const [raw] = await sql<{ home_slot_label: unknown; away_slot_label: unknown; status: string }[]>`
+      select home_slot_label, away_slot_label, status from fixtures where id = ${shell.id}`;
+    // premise: both seats empty AND unlabelled, still scheduled
+    expect([shell.home_entrant_id, shell.away_entrant_id, raw!.home_slot_label, raw!.away_slot_label, raw!.status]).toEqual([
+      null,
+      null,
+      null,
+      null,
+      "scheduled",
+    ]);
+    await at(shell.id, "2026-09-25T09:00:00Z");
+    expect(await listSheetDays(auth, competition.id)).toEqual(["2026-09-25"]);
+    expect((await loadSheetCandidates(auth, competition.id, en, "2026-09-25")).map((r) => r.id)).toEqual([shell.id]);
   });
 
   it("is tenant-scoped: another org cannot load this competition", async () => {

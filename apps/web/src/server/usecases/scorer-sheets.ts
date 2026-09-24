@@ -8,8 +8,11 @@ import "server-only";
 //  - the court as the board names it (`courtDisplayName` over
 //    `courtNamesById`, venue-qualified where two venues share a name);
 //  - each side through `entrantDisplayName`, with its roster;
-//  - the venue zone through `venueTzForDivision`, the one authority for that
-//    join (division override → org → UTC).
+//  - the day and the times on the ORG clock (`resolveVenueTz(null, orgTz)`),
+//    the clock the competition board's day grid uses (#397/#448; controller
+//    ruling 2026-09-24) — never a division's own tz override, or a legacy
+//    division holding one would print a fixture on a different day than the
+//    board shows it.
 // Which rows print on a day, in what order and on which page is the pure
 // half's (lib/scorer-sheets.ts). Page auth (editor, same-origin) is the
 // ROUTE's job; this is RLS-bounded by withTenant.
@@ -18,22 +21,33 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import type { SlotLabel, SlotLabelLookup } from "@/lib/slot-label";
+import { resolveVenueTz } from "@/lib/tz";
 import { courtDisplayName } from "@/components/v2/board/types";
-import { venueTzForDivision } from "@/server/venue-tz";
 import {
+  BYE_SLOT_KEY,
+  PRINTABLE_STATUSES,
   isPrintable,
   selectSheetFixtures,
-  sheetDays,
   type SheetCandidate,
   type SheetSide,
 } from "@/lib/scorer-sheets";
 import { boardMatchNamer, MATCH_NAME_COLS, type MatchNameRow } from "./scan-match-names";
 import { courtNamesById } from "./schedule";
 
+/** The competition's clock: its organisation's zone, else UTC. 404 when the
+ *  competition is not this tenant's. */
+async function competitionClock(tx: Tx, competitionId: string): Promise<string> {
+  const [comp] = await tx<{ org_tz: string | null }[]>`
+    select o.timezone as org_tz
+    from competitions c left join organizations o on o.id = c.org_id
+    where c.id = ${competitionId}`;
+  if (!comp) throw new HttpError(404, "competition not found");
+  return resolveVenueTz(null, comp.org_tz);
+}
+
 /** One fixture of the competition: the board's naming columns plus what a
  *  sheet row prints. */
 type FixtureRow = MatchNameRow & {
-  division_id: string;
   division_name: string;
   status: string;
   /** postgres hands a timestamptz back as a Date. */
@@ -47,11 +61,9 @@ type FixtureRow = MatchNameRow & {
 };
 
 async function readFixtures(tx: Tx, competitionId: string): Promise<FixtureRow[]> {
-  const [comp] = await tx<{ id: string }[]>`select id from competitions where id = ${competitionId}`;
-  if (!comp) throw new HttpError(404, "competition not found");
   return tx<FixtureRow[]>`
     select ${tx(MATCH_NAME_COLS.map((c) => `f.${c}`))},
-           f.division_id, d.name as division_name, f.status, f.scheduled_at,
+           d.name as division_name, f.status, f.scheduled_at,
            f.court_id, f.court_label, c.name as court_entity_name, c.sort as court_sort,
            v.name as venue_name, v.sort as venue_sort
     from fixtures f
@@ -62,13 +74,6 @@ async function readFixtures(tx: Tx, competitionId: string): Promise<FixtureRow[]
 }
 
 const isoOf = (at: Date | string | null): string | null => (at === null ? null : new Date(at).toISOString());
-
-/** division id → its venue zone. Outside the tenant transaction: the venue
- *  lane reads the pooled `sql`, and `withTenant` holds a connection. */
-async function divisionZones(rows: readonly FixtureRow[]): Promise<Map<string, string>> {
-  const ids = [...new Set(rows.map((r) => r.division_id))];
-  return new Map(await Promise.all(ids.map(async (id) => [id, await venueTzForDivision(id)] as const)));
-}
 
 interface EntrantRow {
   id: string;
@@ -94,8 +99,8 @@ async function readSides(tx: Tx, competitionId: string): Promise<Map<string, She
 }
 
 /**
- * The competition's printable fixtures (`isPrintable`), every row named and
- * zoned. With `day`: exactly that day's sheet rows, in print order
+ * The competition's printable fixtures (`isPrintable`), every row named and on
+ * the org clock. With `day`: exactly that day's sheet rows, in print order
  * (`selectSheetFixtures`). `lookup` is the sheet's language — required, so no
  * caller prints English by default.
  */
@@ -106,24 +111,26 @@ export async function loadSheetCandidates(
   day?: string,
 ): Promise<SheetCandidate[]> {
   const read = await withTenant(auth.orgId, async (tx) => {
+    const tz = await competitionClock(tx, competitionId);
     const rows = await readFixtures(tx, competitionId);
     const stages = await tx<{ id: string; kind: string }[]>`
       select s.id, s.kind from stages s join divisions d on d.id = s.division_id
       where d.competition_id = ${competitionId}`;
     const sides = await readSides(tx, competitionId);
     const courtNames = Object.fromEntries(await courtNamesById(tx));
-    return { rows, stages, sides, courtNames };
+    return { tz, rows, stages, sides, courtNames };
   });
-  const zones = await divisionZones(read.rows);
+  const { tz } = read;
   const name = boardMatchNamer(read.rows, read.stages, lookup);
   const side = (id: string | null) => (id === null ? null : (read.sides.get(id) ?? null));
   const candidates: SheetCandidate[] = [];
   for (const r of read.rows) {
     const scheduled_at = isoOf(r.scheduled_at);
-    const tz = zones.get(r.division_id)!;
+    const home = side(r.home_entrant_id);
+    const away = side(r.away_entrant_id);
     const home_slot_label = r.home_slot_label as SlotLabel | null;
     const away_slot_label = r.away_slot_label as SlotLabel | null;
-    if (!isPrintable({ status: r.status, scheduled_at, tz, home_slot_label, away_slot_label })) continue;
+    if (!isPrintable({ status: r.status, scheduled_at, tz, home, away, home_slot_label, away_slot_label })) continue;
     // Every row is one the namer was built from.
     const names = name(r.id)!;
     candidates.push({
@@ -142,8 +149,8 @@ export async function loadSheetCandidates(
         read.courtNames,
       ),
       court_sort: r.court_sort,
-      home: side(r.home_entrant_id),
-      away: side(r.away_entrant_id),
+      home,
+      away,
       home_tbd: names.home,
       away_tbd: names.away,
       home_slot_label,
@@ -153,18 +160,27 @@ export async function loadSheetCandidates(
   return day === undefined ? candidates : selectSheetFixtures(candidates, day);
 }
 
-/** The local days that have something to print. Read on every schedule-page
- *  render, so it skips names, rosters and courts. */
+/**
+ * The org-clock days that have something to print, ascending. Read on every
+ * schedule-page render, so it is ONE query that returns only the days: the
+ * same exclusions as `isPrintable`, spelled in SQL — a printable status, a
+ * time, and no seat that is EMPTY and stamped a bye. `coalesce` keeps an
+ * unlabelled empty seat (a null key — a Swiss shell, say) from turning the
+ * whole `not (...)` null and dropping a row that prints.
+ */
 export async function listSheetDays(auth: AuthCtx, competitionId: string): Promise<string[]> {
-  const rows = await withTenant(auth.orgId, (tx) => readFixtures(tx, competitionId));
-  const zones = await divisionZones(rows);
-  return sheetDays(
-    rows.map((r) => ({
-      status: r.status,
-      scheduled_at: isoOf(r.scheduled_at),
-      tz: zones.get(r.division_id)!,
-      home_slot_label: r.home_slot_label as SlotLabel | null,
-      away_slot_label: r.away_slot_label as SlotLabel | null,
-    })),
-  );
+  return withTenant(auth.orgId, async (tx) => {
+    const tz = await competitionClock(tx, competitionId);
+    const rows = await tx<{ day: string }[]>`
+      select distinct to_char(f.scheduled_at at time zone ${tz}, 'YYYY-MM-DD') as day
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      where d.competition_id = ${competitionId}
+        and f.status in ${tx([...PRINTABLE_STATUSES])}
+        and f.scheduled_at is not null
+        and not (f.home_entrant_id is null and coalesce(f.home_slot_label->>'key', '') = ${BYE_SLOT_KEY})
+        and not (f.away_entrant_id is null and coalesce(f.away_slot_label->>'key', '') = ${BYE_SLOT_KEY})
+      order by day`;
+    return rows.map((r) => r.day);
+  });
 }

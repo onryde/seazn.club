@@ -1,7 +1,7 @@
 // Scorer sheets §4.4 — which fixtures print on a day, in what order, on which
 // page. Pure and client-safe: the print control (T9) and the PDF (T8) share it.
 // The loader (server/usecases/scorer-sheets.ts) resolves everything a row
-// PRINTS — names, the board's match ref, the venue zone — before it gets here;
+// PRINTS — names, the board's match ref, the org clock — before it gets here;
 // this module only decides membership, order and pages.
 import type { SlotLabel } from "@/lib/slot-label";
 
@@ -13,9 +13,12 @@ export const ROWS_PER_PAGE = 5;
 /** The label a bracket generator stamps on a bye's phantom side
  *  (stages.ts `BYE_SLOT_LABEL`). A bye can sit `scheduled` until its real
  *  seat fills and `awardSeededByes` settles it, so the status alone does not
- *  exclude it. Read off the STORED label: "one side is null" is also every
- *  later-round seat still waiting on its feeder, and those do print (D2). */
-const BYE_KEY = "bracket.slot.bye";
+ *  exclude it. A seat is a bye only when it is EMPTY and carries this STORED
+ *  label (the hub's `hubByeSides`, the player card's upcoming read): "one side
+ *  is null" is also every later-round seat still waiting on its feeder, and
+ *  those do print (D2); an entrant is never a bye, whatever label rides beside
+ *  it. `listSheetDays` repeats this test in SQL. */
+export const BYE_SLOT_KEY = "bracket.slot.bye";
 
 /** The member shape `entrantDisplayName` reads (`EntrantNameSource`). */
 export interface SheetSide {
@@ -32,7 +35,9 @@ export interface SheetCandidate {
   status: string;
   /** ISO 8601, UTC. */
   scheduled_at: string | null;
-  /** Venue lane (V305): division tz → org tz → UTC, resolved by the loader. */
+  /** The org clock (`resolveVenueTz(null, orgTz)`), resolved by the loader:
+   *  the clock the competition board's day grid uses (#397/#448), never a
+   *  division's own override, so a sheet's day is the board's day. */
   tz: string;
   division_name: string;
   round_no: number;
@@ -58,9 +63,11 @@ export interface SheetCandidate {
   away_slot_label: SlotLabel | null;
 }
 
-/** What `sheetDays` needs — the day list is read on every schedule-page
- *  render, so its loader skips names and entrants. */
-export type SheetDayRow = Pick<SheetCandidate, "status" | "scheduled_at" | "tz" | "home_slot_label" | "away_slot_label">;
+/** What `isPrintable` and `sheetDays` read. */
+export type SheetDayRow = Pick<
+  SheetCandidate,
+  "status" | "scheduled_at" | "tz" | "home" | "away" | "home_slot_label" | "away_slot_label"
+>;
 
 export interface SheetPage {
   courtHeading: string | null;
@@ -79,7 +86,10 @@ export function localDateOf(iso: string, tz: string): string {
 }
 
 function isBye(f: SheetDayRow): boolean {
-  return f.home_slot_label?.key === BYE_KEY || f.away_slot_label?.key === BYE_KEY;
+  return (
+    (f.home === null && f.home_slot_label?.key === BYE_SLOT_KEY) ||
+    (f.away === null && f.away_slot_label?.key === BYE_SLOT_KEY)
+  );
 }
 
 /** Could this fixture go on a sheet at all: a printable status, a time, and
