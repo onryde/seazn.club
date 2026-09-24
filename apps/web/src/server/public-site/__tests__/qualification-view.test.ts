@@ -77,6 +77,7 @@ import {
   type QualificationViewInput,
   type StageQualMeta,
 } from "../qualification-view";
+import { LEDGER_RULE_MSG_KEYS, tieBreakRule } from "../standings-view";
 
 const moduleOf = (key: string) => {
   const m = builtinModules.find((x) => x.key === key);
@@ -1192,8 +1193,10 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(scored.whatIf).toBe(target);
   });
   it("a cricket ledger names runs: `for` reads `runs_for`, and the what-if says \"runs scored\"", () => {
-    // open4's table with cricket's own ledger keys (no goals, no run
-    // difference — cricket folds none) and `for` deciding: D 3 runs for, Bo 5.
+    // open4's table with cricket's own ledger keys (no goals) and `for`
+    // deciding: D 3 runs for, Bo 5. The rows carry no `run_diff` (cricket's
+    // ledger folds one; `for` never reads it), so `runs_for` alone must name
+    // the family.
     const runs = (f: number, a: number): Metrics => ({ runs_for: f, runs_against: a, balls_faced_eff: 60, balls_bowled_eff: 60 });
     const rows = [
       ledgerRow("A", 1, 2, 2, 2 * W, runs(9, 2)),
@@ -1206,6 +1209,32 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     // …and the same table on the generic ledger says the plain phrase (pair).
     const g = must(view(open4({ D: [3, 9], B: [5, 5] }), { cascade: ["points", "for"] })).rows.D!;
     expect(g.whatIf).toMatch(/^If you finish level on points with Bo, total scored decides[.:]/);
+  });
+  it("a row with no ledger names the rule from its RIVAL's ledger, not the table's first one", () => {
+    // Review r1–r3 m4: the what-if passes the rival as the tie partner
+    // (`tieBreakRule(w.key, …, ordered, [rival.entrantId])`). A football league
+    // where Di has yet to play (three postponed matches: no ledger at all) and
+    // Ada, top, won both of hers by walkover under a scored stage rule, so her
+    // row records only the rule's generic `for`/`against`/`diff`. Di's rival
+    // Bo also played Cy for real: `gd` is on Bo's row. The word is Bo's, "goal
+    // difference"; read from the table instead it is Ada's plain "difference".
+    const FB = divisionPointsBounds(FOOTBALL, {})!;
+    expect(FB.winFloor).toBe(W);
+    const goals = (gf: number, ga: number): Metrics => ({ gf, ga, gd: gf - ga });
+    const rows = [
+      ledgerRow("A", 1, 2, 2, 2 * W, { for: 6, against: 0, diff: 6 }),
+      ledgerRow("B", 2, 1, 2, W, { ...ruleAward(0, 3), ...goals(2, 1) }),
+      ledgerRow("C", 3, 0, 2, 0, { ...ruleAward(0, 3), ...goals(1, 2) }),
+      ledgerRow("D", 4, 0, 0, 0, {}),
+    ];
+    const fixtures = [walkover(1, "A", "B"), open(1, "C", "D"), walkover(2, "A", "C"), open(2, "B", "D"), won(3, "B", "C"), open(3, "A", "D")];
+    const over = { cascade: ["points", "diff", "for"], bounds: FB, awardAddsToLedger: divisionAwardAddsToLedger(FOOTBALL, {}) };
+    const word = (family: "goals" | "plain") => t(en, LEDGER_RULE_MSG_KEYS.diff[family]);
+    expect(word("goals"), "premise: the two families word the rule differently").not.toBe(word("plain"));
+    // Premise: with no partner the table's first ledger (Ada's) names it plain.
+    expect(tieBreakRule("diff", (k: TKey) => t(en, k), rows[3]!, rows, [])).toBe(word("plain"));
+    const d = must(view({ kind: "league", rows, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
+    expect(d.whatIf).toMatch(new RegExp(`^If you finish level on points with Bo, ${word("goals")} decides[.:]`));
   });
   it("a badminton walkover under the rule: set ratio reads no goals, so the walkover stays out of the average", () => {
     // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Di's

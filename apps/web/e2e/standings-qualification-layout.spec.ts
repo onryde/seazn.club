@@ -166,8 +166,6 @@ test.afterAll(async () => {
   await seedContext?.close().catch(() => {});
 });
 
-/** Load `path` until its standings show the cut line (ISR can hand the first
- *  visitor a page rendered a moment before the last result folded). */
 /** The long entrant's name cell, as painted: how many lines it takes, whether
  *  the clamp cut it (content taller or wider than its box), and the title that
  *  carries the whole name. P4 option C (owner-approved 2026-09-24): below `md`
@@ -207,6 +205,8 @@ function expectLongNameClamped(m: Awaited<ReturnType<typeof longName>>, width: n
   }
 }
 
+/** Load `path` until its standings show the cut line (ISR can hand the first
+ *  visitor a page rendered a moment before the last result folded). */
 async function openWithCut(page: Page, path: string): Promise<void> {
   await expect
     .poll(

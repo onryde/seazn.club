@@ -252,8 +252,9 @@ export const LEDGER_RULE_MSG_KEYS: Readonly<Record<"diff" | "for", Readonly<Reco
 };
 
 /** The alias `rule` resolves to on one row: the one the engine compares for
- *  that rule, else the row's other ledger aliases (a cricket row records
- *  `runs_for` but no run difference); undefined when it records none. */
+ *  that rule, else the row's other ledger aliases (a cricket snapshot folded
+ *  before cricket's ledger recorded `run_diff` has `runs_for` but no run
+ *  difference); undefined when it records none. */
 function ledgerAlias(row: StandingsRow, rule: "diff" | "for"): string | undefined {
   const [own, other] = rule === "diff" ? [DIFF_KEYS, FOR_KEYS] : [FOR_KEYS, DIFF_KEYS];
   return metricKeyOf(row, own) ?? metricKeyOf(row, other) ?? metricKeyOf(row, AGAINST_KEYS);
@@ -282,8 +283,10 @@ function ledgerFamily(
 /** The family a SPORT's declared ledger speaks (`module.metrics`), for a
  *  surface with no row to read: the organiser console's cascade caption names
  *  the rules before any tie exists. The same alias order as `ledgerAlias` —
- *  the rule's own aliases, then the other ledger's, then against — so cricket,
- *  which declares `runs_for` but no run difference, still reads "runs". */
+ *  the rule's own aliases, then the other ledger's, then against — so a sport
+ *  that declares a `for` alias but no difference of its own still reads its
+ *  own family, never plain. (Cricket declares both `runs_for` and `run_diff`
+ *  today; old snapshots have no `run_diff`, which `ledgerAlias` covers.) */
 export function sportLedgerFamily(metrics: readonly { key: string }[], rule: "diff" | "for"): LedgerFamily {
   const declared = new Set(metrics.map((m) => m.key));
   const [own, other] = rule === "diff" ? [DIFF_KEYS, FOR_KEYS] : [FOR_KEYS, DIFF_KEYS];

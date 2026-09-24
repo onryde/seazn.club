@@ -291,7 +291,7 @@ describe("a tied row with no ledger reads its partners' word", () => {
 describe("the console caption's diff/for word (sportLedgerFamily)", () => {
   const RULES = ["diff", "for"] as const;
 
-  it("football, hockey, ice hockey: goals; cricket (runs_for, no run difference): runs; generic and the ratio sports: plain", () => {
+  it("football, hockey, ice hockey: goals; cricket (runs_for and run_diff): runs; generic and the ratio sports: plain", () => {
     const fam = (sport: string) => RULES.map((r) => sportLedgerFamily(moduleOf(sport).metrics, r));
     expect(fam("football")).toEqual(["goals", "goals"]);
     expect(fam("hockey")).toEqual(["goals", "goals"]);
