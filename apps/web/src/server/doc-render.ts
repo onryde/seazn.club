@@ -13,7 +13,10 @@ import {
   pagePlayoffPageGeometry,
 } from "./doc-bracket-geometry";
 
-const MARGIN = 40;
+// MARGIN, resolveLogo, drawMasthead and drawTitleBlock are also the scorer
+// sheet's chrome (scorer-sheet-pdf.ts), so every printed document shares one
+// masthead and one title block.
+export const MARGIN = 40;
 
 const MAST_H = 64; // masthead band height, page 1
 
@@ -23,7 +26,7 @@ import { publicStorageUrl } from "@/lib/supabase-storage";
  *  live in the PUBLIC Supabase bucket — there is no server-side byte reader,
  *  so fetch the public URL. Missing/broken → null, never throws (a broken
  *  export is worse than an unbranded one). */
-async function resolveLogo(logoPath: string | undefined): Promise<Buffer | null> {
+export async function resolveLogo(logoPath: string | undefined): Promise<Buffer | null> {
   if (!logoPath) return null;
   try {
     const url = /^https?:\/\//.test(logoPath) ? logoPath : publicStorageUrl(logoPath);
@@ -35,7 +38,7 @@ async function resolveLogo(logoPath: string | undefined): Promise<Buffer | null>
   }
 }
 
-function drawMasthead(
+export function drawMasthead(
   doc: PDFKit.PDFDocument,
   model: DocModel,
   logo: Buffer | null,
@@ -68,9 +71,15 @@ function drawMasthead(
   doc.y = MAST_H + 18;
 }
 
-function drawTitleBlock(doc: PDFKit.PDFDocument, model: DocModel): void {
+/** `eyebrow` defaults to the kind's hard-coded English label; the scorer sheet
+ *  passes its own, localised one. */
+export function drawTitleBlock(
+  doc: PDFKit.PDFDocument,
+  model: DocModel,
+  eyebrow: string = eyebrowFor(model.kind),
+): void {
   doc.font(FONT.bodyMed).fontSize(8).fillColor(PALETTE.mute)
-    .text(eyebrowFor(model.kind), MARGIN, doc.y, { characterSpacing: 2 });
+    .text(eyebrow, MARGIN, doc.y, { characterSpacing: 2 });
   doc.moveDown(0.1);
   doc.font(FONT.displayBold).fontSize(26).fillColor(PALETTE.night)
     .text(model.title.toUpperCase(), MARGIN, doc.y, { characterSpacing: 0.5 });
