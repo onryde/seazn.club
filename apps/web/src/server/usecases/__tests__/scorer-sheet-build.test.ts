@@ -184,6 +184,37 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(n).toBe(0);
   });
 
+  it("a server without DEVICE_LINK_KEK refuses the print — 503 DEVICE_LINK_KEK_MISSING, nothing minted, and a later reprint touches no live link", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const fx = await fixturesOf(stage.id);
+    const ids = fx.map((f) => f.id);
+    await schedule(ids);
+    const MISSING = { status: 503, code: "DEVICE_LINK_KEK_MISSING" };
+    const liveLinks = () =>
+      sql<{ fixture_id: string; token_hash: string }[]>`
+        select fixture_id, token_hash from device_links
+        where fixture_id = any(${ids}) and revoked_at is null order by fixture_id`;
+    const keep = process.env.DEVICE_LINK_KEK;
+    try {
+      // First print, no key: the mint path. Sealing comes before any write.
+      delete process.env.DEVICE_LINK_KEK;
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject(MISSING);
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from device_links where fixture_id = any(${ids})`;
+      expect(n).toBe(0);
+      // Printed once with the key; the key then goes missing: the re-show path.
+      process.env.DEVICE_LINK_KEK = keep;
+      await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
+      const printed = await liveLinks();
+      expect(printed).toHaveLength(ids.length); // premise: the sheet on court
+      delete process.env.DEVICE_LINK_KEK;
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject(MISSING);
+      expect(await liveLinks()).toEqual(printed); // the QR codes already on court still work
+    } finally {
+      process.env.DEVICE_LINK_KEK = keep;
+    }
+  });
+
   it("every chosen fixture finished before its link was ensured → 422 NO_FIXTURES_ON_DAY, never an empty sheet", async () => {
     const { auth } = await seedOrg("pro");
     const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
