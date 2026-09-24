@@ -26,6 +26,8 @@ import { buildScorerSheet, loadSheetCandidates } from "../scorer-sheets";
 const HAS_DB = !!process.env.DATABASE_URL;
 const ORIGIN = "http://localhost:3000";
 const DAY = "2026-09-23";
+/** The request's instant (the route's `new Date()`), as an ISO string. */
+const PRINTED = "2026-09-23T06:00:00.000Z";
 const fr: SlotLabelLookup = (k, v) => msgFor("fr", k, v);
 const en: SlotLabelLookup = (k, v) => msgFor("en", k, v);
 const realEnsure = (await vi.importActual<typeof import("../device-links")>("../device-links")).ensureDeviceLinks;
@@ -53,7 +55,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
     await schedule((await fixturesOf(stage.id)).map((f) => f.id)); // premise: another day HAS fixtures
     vi.mocked(ensureDeviceLinks).mockClear();
-    await expect(buildScorerSheet(auth, competition.id, "2026-10-01", ORIGIN, "en", { printedAt: "x" })).rejects.toMatchObject({
+    await expect(buildScorerSheet(auth, competition.id, "2026-10-01", ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject({
       status: 422,
       code: "NO_FIXTURES_ON_DAY",
     });
@@ -70,10 +72,12 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     await schedule(fx.map((f) => f.id));
     // 09:00Z is 11:00 in Paris on 23 September (CEST): the org clock, not UTC.
     await sql`update organizations set timezone = 'Europe/Paris' where id = ${auth.orgId}`;
-    const m = await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: "2026-09-23 08:00" });
+    const m = await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: PRINTED });
     const rows = cards(m);
     expect(rows.map((r) => r.fixtureId).sort()).toEqual(fx.map((f) => f.id).sort());
 
+    // The footer's stamp is the print instant on the SAME clock as the times on
+    // the cards: 06:00Z is 08:00 in Paris, never the server's UTC.
     expect(m.header).toMatchObject({ kind: "scoresheet", title: competition.name, meta: { printedAt: "2026-09-23 08:00" } });
     expect(m.header.description).toContain("23 septembre");
     expect(m.labels).toEqual({ eyebrow: msgFor("fr", "sheets.pdf.eyebrow"), checkNames: msgFor("fr", "sheets.pdf.checkNames") });
@@ -115,7 +119,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
     await schedule((await fixturesOf(stage.id)).map((f) => f.id));
     const urls = async () =>
-      cards(await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" }))
+      cards(await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED }))
         .map((r) => r.url)
         .sort();
     expect(await urls()).toEqual(await urls());
@@ -132,7 +136,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
       await patchFixture(auth, f.id, { court_id: court.id });
       await schedule([f.id], new Date(Date.UTC(2026, 8, 23, 8, i * 20)).toISOString());
     }
-    const m = await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" });
+    const m = await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
     const court1 = (await loadSheetCandidates(auth, competition.id, en, DAY))[0]!.court_name!;
     expect(m.pages.map((p) => [p.heading, p.rows.length])).toEqual([
       [msgFor("en", "sheets.pdf.courtPage", { court: court1, n: 1, of: 2 }), 9],
@@ -152,8 +156,8 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     });
     await schedule((await fixturesOf(pairs.stage.id)).map((f) => f.id));
     await schedule((await fixturesOf(teams.stage.id)).map((f) => f.id));
-    const [pair] = cards(await buildScorerSheet(auth, pairs.competition.id, DAY, ORIGIN, "en", { printedAt: "x" }));
-    const [team] = cards(await buildScorerSheet(auth, teams.competition.id, DAY, ORIGIN, "en", { printedAt: "x" }));
+    const [pair] = cards(await buildScorerSheet(auth, pairs.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED }));
+    const [team] = cards(await buildScorerSheet(auth, teams.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED }));
     const members = (side: string) => [`${side} Ana`, `${side} Ben`];
     expect([pair!.homePair, pair!.awayPair].map((p) => [...p].sort())).toEqual(
       [pair!.home.includes("P1") ? members("P1") : members("P2"), pair!.away.includes("P1") ? members("P1") : members("P2")].map((p) => [...p].sort()),
@@ -174,7 +178,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
       await sql`update fixtures set status = 'finalized' where id = ${gone}`;
       return realEnsure(a, c, ids);
     });
-    const rows = cards(await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" }));
+    const rows = cards(await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED }));
     expect(rows.map((r) => r.fixtureId).sort()).toEqual(fx.slice(1).map((f) => f.id).sort());
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from device_links where fixture_id = ${gone}`;
     expect(n).toBe(0);
@@ -190,7 +194,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
       await sql`update fixtures set status = 'finalized' where id = any(${[...ids]})`;
       return realEnsure(a, c, ids);
     });
-    await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" })).rejects.toMatchObject({
+    await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject({
       status: 422,
       code: "NO_FIXTURES_ON_DAY",
     });
@@ -213,7 +217,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
 
     it("control: the same rig, untouched, prints every card", async () => {
       const { auth, competition, fx } = await rig();
-      const rows = cards(await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: "x" }));
+      const rows = cards(await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: PRINTED }));
       expect(rows).toHaveLength(fx.length);
     });
 
@@ -224,7 +228,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
         await sql`update device_links set revoked_at = now() where fixture_id = ${fx[1]!.id} and revoked_at is null`;
         return links;
       });
-      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: "x" })).rejects.toMatchObject(refusal("fr"));
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: PRINTED })).rejects.toMatchObject(refusal("fr"));
     });
 
     it("a link that expired after it was ensured → 500 (the scoring door would refuse it)", async () => {
@@ -236,7 +240,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
           where fixture_id = ${fx[1]!.id} and revoked_at is null`;
         return links;
       });
-      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" })).rejects.toMatchObject(refusal("en"));
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject(refusal("en"));
     });
 
     it("a fixture deleted after its link was ensured → 500 (no card for a match that is gone)", async () => {
@@ -246,7 +250,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
         await sql`delete from fixtures where id = ${fx[1]!.id}`;
         return links;
       });
-      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" })).rejects.toMatchObject(refusal("en"));
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject(refusal("en"));
     });
 
     it("links ensured one short, for a fixture still in play → 500 (never a card without a code)", async () => {
@@ -256,7 +260,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
         links.delete(fx[2]!.id);
         return links;
       });
-      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" })).rejects.toMatchObject(refusal("en"));
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject(refusal("en"));
     });
 
     it("a secret that is not its own fixture's live link → 500 (a QR must open the match it is printed on)", async () => {
@@ -268,7 +272,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
         links.set(fx[1]!.id, { ...y, secret: x.secret });
         return links;
       });
-      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" })).rejects.toMatchObject(refusal("en"));
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject(refusal("en"));
     });
 
     it("two live links on one fixture → 500 (which one the QR opens would be a guess)", async () => {
@@ -280,7 +284,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
           values (${auth.orgId}, ${fx[3]!.id}, ${hashDeviceLinkToken(`dl_extra_${randomUUID()}`)}, null, ${auth.userId}, null)`;
         return links;
       });
-      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: "x" })).rejects.toMatchObject(refusal("en"));
+      await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED })).rejects.toMatchObject(refusal("en"));
     });
   });
 });

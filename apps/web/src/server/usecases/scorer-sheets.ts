@@ -243,7 +243,8 @@ async function unprovenLinks(
  * re-shown, never rotated (T2) — and then PROVEN (`unprovenLinks`): one card
  * without a working code refuses the whole sheet, never a partial one.
  * `loadSheetCandidates` runs first, so a foreign competition 404s before
- * anything is minted.
+ * anything is minted. `opts.printedAt` is the request's instant (ISO); the
+ * sheet prints it on the org clock.
  */
 export async function buildScorerSheet(
   auth: AuthCtx,
@@ -280,6 +281,22 @@ export async function buildScorerSheet(
   const intl = intlLocaleFor(locale);
   const time = (iso: string, tz: string) =>
     new Intl.DateTimeFormat(intl, { timeZone: tz, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+  // The footer's "YYYY-MM-DD HH:MM" stamp, on the same (org) clock as the
+  // cards' times — a Paris organiser must not read the server's UTC.
+  const part = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: chosen[0]!.tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date(opts.printedAt))
+      .map((p) => [p.type, p.value]),
+  );
+  const printedAt = `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}`;
   // A calendar day, formatted at UTC noon so no zone shifts it (poster.pdf's rule).
   const dayLabel = new Intl.DateTimeFormat(intl, {
     timeZone: "UTC",
@@ -296,7 +313,7 @@ export async function buildScorerSheet(
       kind: "scoresheet",
       title: comp.name,
       description: dayLabel,
-      meta: { printedAt: opts.printedAt },
+      meta: { printedAt },
       ...(branding !== undefined ? { branding } : {}),
       sections: [],
       pageBreaks: "auto",
