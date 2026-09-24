@@ -21,6 +21,8 @@ import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { composeMatchRef } from "@/lib/match-ref";
 
+export type { SlotLabel };
+
 export type SlotLabelLookup = (
   key: MessageKey,
   vars?: Record<string, string | number>,
