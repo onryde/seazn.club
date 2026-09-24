@@ -30,8 +30,12 @@
 //    match really ended elsewhere (a forfeit the organiser recorded) while the
 //    phone's stream was stalled. View-only keeps the header as the FINAL
 //    scoreboard (§4.5.3), so entering it re-reads the server; this proves that
-//    read is real — through the browser's HTTP cache and `/state`'s ETag,
-//    which no unit test with a mocked `apiV1` can see.
+//    read is real — a real `/state` GET answered by the real server, which no
+//    unit test with a mocked `apiV1` can see. NOT through the browser's HTTP
+//    cache: this phone's page carries routes (the stream stall below), and
+//    Playwright disables the HTTP cache on any routed page, so no `304` can
+//    reach it. `/state`'s revalidation has its own proof (the route's unit
+//    suite, and the scan walkthrough's unrouted page).
 //
 // HOW AN INNER-PAD TAP CAN MEET THE REFUSAL AT ALL (tests 1 and 2). Every tap
 // makes the chrome re-read before the tap is even sent: the tap's PENDING
@@ -48,17 +52,18 @@
 // panel) — or when that re-read FAILS: venue Wi-Fi that drops the GET and
 // lets the POST through. Tests 1 and 2 take the failed re-read on purpose:
 // `stallStateReads` aborts the phone's `GET …/state` from the moment the
-// match is flipped, and each test proves the tap's own re-read was TRIED (the
-// premise) before it waits on the refusal.
+// match is flipped, and each test proves the tap's own re-read was TRIED, and
+// tried before the tap's write went out (the premise), before it waits on the
+// refusal.
 //
-// Without the stall these tests would stand on two accidents instead.
-// `/state`'s ETag is the ledger seq alone (`fixtureStateEtag`), so after a
-// status-only change a successful re-read revalidates to `304` and keeps the
-// stale "in play" body — an earlier version of this file passed on exactly
-// that. Measured against a status-aware ETag (review fix round 1): the
-// negative pair's pad is then gone before its refusal arrives, so "View-only
-// never appears" would hold for a host that forwards EVERY refusal; and test
-// 1 survives only because of the accident below.
+// Without the stall these tests would stand on accidents instead. `/state`'s
+// ETag was once the ledger seq alone, so after a status-only change a
+// successful re-read revalidated to `304` and kept the stale "in play" body —
+// an earlier version of this file passed on exactly that. The ETag is now a
+// digest of the body (`fixtureStateEtag`, scorer sheets Task 6), so a working
+// re-read SEES the flip: the negative pair's pad is then gone before its
+// refusal arrives, and "View-only never appears" would hold for a host that
+// forwards EVERY refusal (measured in review fix round 1).
 //
 // THE SQL FLIPS ARE A SEAM PROOF, NOT A PRODUCT STATE. `decided` with the
 // stage `complete` meets `carried-forward.ts`'s `stageComplete` rule, and
@@ -70,7 +75,7 @@
 // forfeit is real (an event, an outcome, a seq that moves).
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { test, expect, type APIRequestContext, type Browser, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
 import {
   apiJson,
   expectNoHorizontalScroll,
@@ -256,36 +261,54 @@ async function openLinkedPhone(
     }
   };
 
-  return { fx, stageId: fixture.data!.stage_id, deviceCtx, device, refusedWith };
+  return { fx, stageId: fixture.data!.stage_id, deviceCtx, device, refusedWith, postsSent: () => postsSent };
+}
+
+/** One dropped `/state` read: when, and how many of this phone's writes had
+ *  gone out by then. */
+interface DroppedRead {
+  at: number;
+  postsSent: number;
 }
 
 /** The failed re-read (see the header): every `GET /api/v1/fixtures/{id}/state`
  *  this phone makes from now on is dropped on the wire — the chrome's
  *  `resync()` and the pad's own reconciliation both swallow that, as they must
- *  on venue Wi-Fi. Returns how many were dropped, so a test can prove the
- *  tap's re-read was really TRIED: if a future chrome stops re-reading on a
- *  pending tap, the premise of the refusal tests is gone and they must say so
- *  rather than pass on something else. */
-async function stallStateReads(device: Page): Promise<() => number> {
-  let dropped = 0;
+ *  on venue Wi-Fi. Records every drop with the phone's write count AT that
+ *  moment, so a test can prove the tap's re-read was really TRIED, and tried
+ *  BEFORE the tap's own write went out: if a future chrome stops re-reading
+ *  on a pending tap, or only re-reads after the send, the premise of the
+ *  refusal tests is gone and they must say so rather than pass on something
+ *  else. */
+async function stallStateReads(device: Page, postsSent: () => number): Promise<DroppedRead[]> {
+  const drops: DroppedRead[] = [];
   await device.route(
     (url) => url.pathname.startsWith("/api/v1/fixtures/") && url.pathname.endsWith("/state"),
     (route) => {
-      dropped += 1;
+      drops.push({ at: Date.now(), postsSent: postsSent() });
       return route.abort();
     },
   );
-  return () => dropped;
+  return drops;
 }
 
-/** A tap's own re-read was attempted, and failed. */
-async function expectReReadDropped(stateReadsDropped: () => number, before: number) {
+/** Taps `target` and proves the tap's own re-read was attempted, failed, and
+ *  PRECEDED the tap's write: a `/state` read dropped after the tap began while
+ *  the phone's write count still stood where it was before the tap. The write
+ *  waits out its soft-commit hold (`HOLD_MS`), the re-read does not — a read
+ *  that only follows the send carries the count one higher and fails this. */
+async function tapAndExpectReReadFirst(drops: readonly DroppedRead[], postsSent: () => number, target: Locator) {
+  const postsBefore = postsSent();
+  const tappedAt = Date.now();
+  await target.click();
   await expect
-    .poll(stateReadsDropped, {
+    .poll(() => drops.some((d) => d.at >= tappedAt && d.postsSent === postsBefore), {
       timeout: CONVERGE_MS,
-      message: "the tap must make the chrome re-read (onEvents → handlePadEvents → GET /state)",
+      message:
+        "the tap must make the chrome re-read (onEvents → handlePadEvents → GET /state) BEFORE its write is sent; " +
+        `writes before the tap: ${postsBefore}, drops since: ${JSON.stringify(drops.filter((d) => d.at >= tappedAt))}`,
     })
-    .toBeGreaterThan(before);
+    .toBe(true);
 }
 
 test("a real inner-pad tap refused RESULT_CARRIED_FORWARD moves the device to View-only", async ({
@@ -293,22 +316,20 @@ test("a real inner-pad tap refused RESULT_CARRIED_FORWARD moves the device to Vi
   browser,
 }) => {
   test.setTimeout(BUDGET_MS);
-  const { fx, stageId, deviceCtx, device, refusedWith } = await openLinkedPhone(page, browser, "Carried");
+  const { fx, stageId, deviceCtx, device, refusedWith, postsSent } = await openLinkedPhone(page, browser, "Carried");
   try {
     // ---- the competition moves on underneath the courtside pad ---------------
     // By SQL (a seam proof — see the header): no ledger event and no push, so
     // nothing tells the phone. The phone's re-reads fail from here on, so the
     // tap below re-reads nothing either — the stale courtside screen the
     // refusal exists for. This pad has never seen any other refusal.
-    const stateReadsDropped = await stallStateReads(device);
+    const drops = await stallStateReads(device, postsSent);
     await setFixtureStatusSql(fx.fixtureId, "decided");
     await setStageStatusSql(stageId, "complete");
     await expect(devicePad(device), "precondition: nothing told the phone — the pad is still up").toBeVisible();
 
     // ---- a REAL tap on the INNER pad ------------------------------------------
-    const droppedBefore = stateReadsDropped();
-    await half(device, "home").click();
-    await expectReReadDropped(stateReadsDropped, droppedBefore);
+    await tapAndExpectReReadFirst(drops, postsSent, half(device, "home"));
 
     // The server's answer first, so a broken hop reads as itself: "refused
     // RESULT_CARRIED_FORWARD, and the chrome never moved" is the inert-seam
@@ -336,7 +357,7 @@ test("an ordinary inner-pad refusal (422 ALREADY_DECIDED) never moves the device
   browser,
 }) => {
   test.setTimeout(BUDGET_MS);
-  const { fx, deviceCtx, device, refusedWith } = await openLinkedPhone(page, browser, "Ordinary");
+  const { fx, deviceCtx, device, refusedWith, postsSent } = await openLinkedPhone(page, browser, "Ordinary");
   try {
     // A finalized fixture is not "carried forward" (`SETTLED_OPEN_STATUSES`);
     // its writes are refused `ALREADY_DECIDED` (append-event.ts's LOCKED
@@ -345,11 +366,9 @@ test("an ordinary inner-pad refusal (422 ALREADY_DECIDED) never moves the device
     // away first (`scoring` is false once finalized), the refusal lands on no
     // host at all, and this test would pass for a host that forwards EVERY
     // refusal (measured — see the header).
-    const stateReadsDropped = await stallStateReads(device);
+    const drops = await stallStateReads(device, postsSent);
     await setFixtureStatusSql(fx.fixtureId, "finalized");
-    const droppedBefore = stateReadsDropped();
-    await half(device, "home").click();
-    await expectReReadDropped(stateReadsDropped, droppedBefore);
+    await tapAndExpectReReadFirst(drops, postsSent, half(device, "home"));
     await refusedWith(422, "ALREADY_DECIDED");
 
     // The sync point, neutral on purpose: the refusal has been TAKEN — shown
