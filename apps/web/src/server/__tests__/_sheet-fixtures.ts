@@ -1,4 +1,4 @@
-// Shared inputs for the scorer-sheet renderer's three test files. Their own
+// Shared inputs for the scorer-sheet renderer's test files. Their own
 // file, not exported from a test file: importing a test file collects its
 // describes a second time.
 import { resolve } from "node:path";
@@ -16,10 +16,6 @@ export const header: DocModel = {
 
 export const labels: SheetModel["labels"] = {
   eyebrow: "SCORER SHEETS",
-  scan: "Scan to score",
-  winner: "Winner",
-  score: "Score",
-  signature: "Umpire",
   checkNames: "Scan to score. Check names on screen before you start.",
 };
 
@@ -30,15 +26,19 @@ export const row = (i: number, over: Partial<SheetRow> = {}): SheetRow => ({
   fixtureId: `f${i}`,
   url: `https://example.test/score/${token(i)}`,
   time: "10:30",
-  matchLine: `Open · QF·${i}`,
+  matchRef: `QF·${i}`,
+  division: "Open Singles",
   home: `Home ${i}`,
   away: `Away ${i}`,
   homeTbd: false,
   awayTbd: false,
-  homeMembers: [],
-  awayMembers: [],
+  homePair: [],
+  awayPair: [],
   ...over,
 });
+
+/** A page's worth of rows: row(from) … row(from + n - 1). */
+export const rows = (n: number, from = 1): SheetRow[] => Array.from({ length: n }, (_, i) => row(from + i));
 
 export const model = (pages: SheetRow[][], over: Partial<SheetModel> = {}): SheetModel => ({
   header,

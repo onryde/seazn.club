@@ -1,40 +1,55 @@
 import "server-only";
 // Scorer sheets §4.4 — A4 portrait, on the shared document system:
-// doc-theme's fonts, palette and QR helper, and doc-render's masthead (Pro
-// `exports.branded` only) and title block. Its own body, because a match
-// block is not a DocModel section (the engine type is out of scope, and the
-// ticket section's QR has no link and its footer is English). Per page: the
-// court heading, the check-names line, then up to ROWS_PER_PAGE match blocks.
-// Each QR image is ALSO a link annotation, so a phone that opens the PDF can
-// tap it. The scan URL is never printed as text: its token is a bearer
-// secret, and a photo of a sheet must not leak it (controller ruling
-// 2026-09-24) — the QR is its only printed form. A TBD side prints its slot
-// label over a pen line.
+// doc-theme's fonts and palette, and doc-render's masthead (Pro
+// `exports.branded` only). Owner-approved layout (2026-09-24): full width,
+// 8 mm edges, a 3×3 grid of cut-out cards per page, in time order
+// left→right then top→bottom, one court per page run. Each page's header
+// carries the court heading ("COURT 2 · PAGE 1 OF 2") and the check-names line
+// BESIDE the title, so the cards get the height. A card: time, the board's
+// match code, the division, both sides, and a branded QR — no score, winner
+// or umpire lines (scoring happens on the phone the QR opens).
+//
+// The QR (owner pick "B2", decode evidence in the spec): error correction H,
+// square navy data modules, SOLID rounded navy finders (outer radius 2.0
+// modules — jsQR, the CI decoder, never finds dotted finders and misses
+// radius ≤ 1 at 90 dpi), and the Seazn app icon, 12 mm, over a knocked-out
+// centre with at least one module of white round it. Each symbol is ALSO a
+// link annotation, so a phone that opens the PDF can tap it. The scan URL is
+// never printed as text: its token is a bearer secret, and a photo of a
+// sheet must not leak it (controller ruling 2026-09-24).
 //
 // Glyphs, measured with fontkit against assets/fonts on 2026-09-23:
 // Inter (FONT.body/bodyMed) covers Latin-1, Latin Extended-A, Vietnamese,
 // Greek and Cyrillic. It has none of Tamil, Devanagari, Arabic, Hebrew, Thai
 // or CJK. Barlow Condensed (FONT.display*) covers Latin and Vietnamese only:
 // 4/57 Greek, 0/64 Cyrillic. So every PERSON name is set in Inter, never in
-// Barlow. Barlow is used only for our own chrome (court heading), where the
-// four UI locales are all Latin.
+// Barlow. Barlow is used only for our own chrome (title, court heading, match
+// code), where the four UI locales are all Latin.
+import fs from "node:fs";
+import path from "node:path";
 import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
 import type { DocModel } from "@seazn/engine/exports";
 import { ROWS_PER_PAGE } from "@/lib/scorer-sheets";
-import { FONT, PALETTE, qrBuffer, registerFonts } from "./doc-theme";
-import { MARGIN, drawMasthead, drawTitleBlock, resolveLogo } from "./doc-render";
+import { FONT, PALETTE, registerFonts } from "./doc-theme";
+import { MARGIN, drawMasthead, resolveLogo } from "./doc-render";
+import { log } from "./logger";
 
 export interface SheetRow {
   fixtureId: string;
   url: string;
   time: string;
-  matchLine: string;
+  /** The board's code for the match ("QF·2"), as the schedule shows it. */
+  matchRef: string;
+  division: string;
   home: string;
   away: string;
+  /** A side not yet known prints its slot label ("Winner of QF·2") over a pen line. */
   homeTbd: boolean;
   awayTbd: boolean;
-  homeMembers: string[];
-  awayMembers: string[];
+  /** A doubles pair's two members, one per line; empty for anyone else. */
+  homePair: string[];
+  awayPair: string[];
 }
 
 export interface SheetModel {
@@ -43,20 +58,29 @@ export interface SheetModel {
   pages: { heading: string; rows: SheetRow[] }[];
   /** No page counter here: numbering is per court and lives in each page's
    *  heading (owner ruling Q7). `checkNames` is the spec §4.4 page-header line. */
-  labels: { eyebrow: string; scan: string; winner: string; score: string; signature: string; checkNames: string };
+  labels: { eyebrow: string; checkNames: string };
 }
 
-// One match block at full size, in points. Every vertical offset below is on
-// this scale; a tall header (the Pro masthead plus a title that wraps) shrinks
-// the whole block, QR included, by one factor so ROWS_PER_PAGE blocks always
-// end above the footer. Overflowing is not an option: pdfkit silently moves a
-// line drawn past the bottom margin onto a new page of its own.
-const BLOCK = 120;
-const QR = 96;
-const GUTTER = 18;
-/** The footer's line (doc-render's position: text at or below
- *  page.height - MARGIN is suppressed by pdfkit). */
-const footerY = (doc: PDFKit.PDFDocument) => doc.page.height - MARGIN - 10;
+const MM = 72 / 25.4;
+/** Paper edge to cut line, all round. */
+const EDGE = 8 * MM;
+const COLS = 3;
+const ROWS = 3;
+/** Text inset from a card's side cut lines. */
+const PAD = 10;
+/** Person names, and the line box Inter gives them at that size. */
+const NAME = 9;
+const LH = NAME * 1.21;
+/** White, in modules, from the symbol to the text above and to the cut lines. */
+const QUIET = 4.1;
+/** Finder corner radii, in modules: the 7×7 ring, and the 3×3 centre. */
+const FINDER_R = 2;
+const FINDER_CENTRE_R = 0.6;
+/** The centre icon's side, and the white round it, in modules. */
+const ICON = 12 * MM;
+const ICON_PAD = 1;
+/** The gap between the title and the court heading beside it. */
+const GAP = 16;
 
 /** One line at `size`, cut with an ellipsis. `lineBreak: false` alone does
  *  not do it: pdfkit still WRAPS a string wider than `width` onto the lines
@@ -66,47 +90,81 @@ function oneLine(width: number, size: number): PDFKit.Mixins.TextOptions {
   return { width, height: size * 1.5, lineBreak: false, ellipsis: true };
 }
 
+/** The Seazn app icon (public/logo-square.png; no vector exists). The server
+ *  runs from the repo root in the image (WORKDIR /app, apps/web/public
+ *  copied) and from apps/web under next dev and vitest. Missing, the sheet
+ *  prints plain QR codes — they decode the same — rather than fail. */
+function brandIcon(): Buffer | null {
+  for (const dir of ["apps/web/public", "public"]) {
+    const file = path.join(process.cwd(), dir, "logo-square.png");
+    if (fs.existsSync(file)) return fs.readFileSync(file);
+  }
+  log.warn({ cwd: process.cwd() }, "scorer sheets: logo-square.png not found; printing QR codes without the centre icon");
+  return null;
+}
+
+type Image = { width: number; height: number };
+type Doc = PDFKit.PDFDocument & { openImage(src: Buffer): Image };
+/** pdfkit embeds an opened image once and reuses it on every draw; its types
+ *  only admit a Buffer, which would embed a copy per card. */
+const drawImage = (doc: PDFKit.PDFDocument, img: Image, x: number, y: number, side: number) =>
+  doc.image(img as unknown as Buffer, x, y, { width: side, height: side });
+
 export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
-  // QR pre-pass, as docModelToPdf does it: pdfkit draws synchronously. A null
-  // QR is a sheet nobody can scan, so fail the print rather than ship it.
-  const qrs = new Map<string, Buffer>();
+  // Encode every symbol first, as docModelToPdf pre-passes its QR codes: a
+  // card without a code is a card nobody can scan, so fail the whole print.
+  const qrs = new Map<string, QRCode.QRCode>();
   for (const page of model.pages) {
     if (page.rows.length > ROWS_PER_PAGE) {
       throw new Error(`A sheet page holds at most ${ROWS_PER_PAGE} rows; got ${page.rows.length}`);
     }
     for (const r of page.rows) {
-      const png = await qrBuffer(r.url);
-      if (!png) throw new Error(`QR generation failed for fixture ${r.fixtureId}`);
-      qrs.set(r.fixtureId, png);
+      try {
+        qrs.set(r.fixtureId, QRCode.create(r.url, { errorCorrectionLevel: "H" }));
+      } catch (cause) {
+        throw new Error(`QR generation failed for fixture ${r.fixtureId}`, { cause });
+      }
     }
   }
   const logo = model.header.branding ? await resolveLogo(model.header.branding.logos?.[0]) : null;
+  const iconBytes = brandIcon();
 
-  const doc = new PDFDocument({ size: "A4", layout: "portrait", margin: MARGIN, bufferPages: true, info: { Title: model.header.title } });
+  const doc = new PDFDocument({
+    size: "A4",
+    layout: "portrait",
+    margins: { top: EDGE, left: EDGE, right: EDGE, bottom: EDGE },
+    bufferPages: true,
+    info: { Title: model.header.title },
+  }) as Doc;
   const chunks: Buffer[] = [];
   doc.on("data", (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
   registerFonts(doc);
-  const width = doc.page.width - MARGIN * 2;
+  const icon = iconBytes ? doc.openImage(iconBytes) : null;
+
+  const pageW = doc.page.width;
+  // The 7pt footer sits inside the bottom edge band; the cards end above it.
+  const footerY = doc.page.height - EDGE - 9.5;
+  const cardsBottom = footerY - 3;
+  const cardW = (pageW - EDGE * 2) / COLS;
 
   for (const [p, page] of model.pages.entries()) {
     if (p > 0) doc.addPage();
-    if (model.header.branding) drawMasthead(doc, model.header, logo);
-    else doc.y = MARGIN;
-    drawTitleBlock(doc, model.header, model.labels.eyebrow);
-    doc.font(FONT.displayBold).fontSize(16).fillColor(PALETTE.night)
-      .text(page.heading.toUpperCase(), MARGIN, doc.y, oneLine(width, 16));
-    doc.font(FONT.bodyMed).fontSize(9).fillColor(PALETTE.slate)
-      .text(model.labels.checkNames, MARGIN, doc.y + 2, oneLine(width, 9));
-    const top = doc.y + 8;
-    const k = Math.min(1, (footerY(doc) - 6 - top) / (ROWS_PER_PAGE * BLOCK));
-    for (const [i, r] of page.rows.entries()) {
-      drawBlock(doc, model.labels, r, qrs.get(r.fixtureId)!, top + i * BLOCK * k, width, k);
-    }
-    if (page.rows.length > 0) {
-      const end = top + page.rows.length * BLOCK * k;
-      doc.moveTo(MARGIN, end).lineTo(MARGIN + width, end).strokeColor(PALETTE.hairline).lineWidth(0.75).stroke();
-    }
+    if (model.header.branding) {
+      drawMasthead(doc, model.header, logo);
+      doc.y -= 8; // the masthead leaves 18pt under its rule; 10 is enough on a cut sheet
+    } else doc.y = EDGE;
+    const top = drawHeader(doc, model, page.heading);
+    const cardH = (cardsBottom - top) / ROWS;
+    const cells = page.rows.map((r, i) => ({
+      r,
+      col: i % COLS,
+      row: Math.floor(i / COLS),
+      x: EDGE + (i % COLS) * cardW,
+      y: top + Math.floor(i / COLS) * cardH,
+    }));
+    drawCutLines(doc, cells, top, cardW, cardH, pageW);
+    for (const c of cells) drawCard(doc, c.r, qrs.get(c.r.fixtureId)!, icon, c.x, c.y, cardW, cardH);
   }
 
   // Own footer: doc-render's says "printed … page N of M" in English, and it
@@ -114,71 +172,172 @@ export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
   const range = doc.bufferedPageRange();
   for (let i = range.start; i < range.start + range.count; i++) {
     doc.switchToPage(i);
-    const fy = footerY(doc);
     doc.font(FONT.body).fontSize(7).fillColor(PALETTE.mute)
-      .text(model.header.meta.printedAt, MARGIN, fy, { width: width - 90, lineBreak: false });
+      .text(model.header.meta.printedAt, EDGE, footerY, { width: 200, lineBreak: false });
     doc.font(FONT.body).fontSize(7).fillColor(PALETTE.mute)
-      .text("seazn.club", MARGIN, fy, { width, align: "right", lineBreak: false });
+      .text("seazn.club", pageW - EDGE - 200, footerY, { width: 200, align: "right", lineBreak: false });
   }
   doc.end();
   return done;
 }
 
-function drawBlock(
+/** Eyebrow, title and description on the left — doc-render's title block,
+ *  held to two title lines and one description line so the header's height
+ *  (and so the QR size) is bounded — with the court heading on the title's
+ *  baseline and the check-names line on the description's, right-aligned to
+ *  the masthead's edge. Returns where the cards start. */
+function drawHeader(doc: PDFKit.PDFDocument, model: SheetModel, heading: string): number {
+  const left = MARGIN;
+  const right = doc.page.width - MARGIN;
+  const width = right - left;
+  const head = heading.toUpperCase();
+  doc.font(FONT.displayBold).fontSize(16);
+  const headW = Math.min(doc.widthOfString(head), width / 2);
+  const barlowAscent = (doc as unknown as { _font: { ascender: number } })._font.ascender / 1000;
+  doc.font(FONT.bodyMed).fontSize(9);
+  const checkW = Math.min(doc.widthOfString(model.labels.checkNames), width * 0.7);
+  const line9 = doc.currentLineHeight(true);
+
+  doc.font(FONT.bodyMed).fontSize(8).fillColor(PALETTE.mute)
+    .text(model.labels.eyebrow, left, doc.y, { ...oneLine(width, 8), characterSpacing: 2 });
+  doc.moveDown(0.1);
+  const titleTop = doc.y;
+  doc.font(FONT.displayBold).fontSize(26).fillColor(PALETTE.night);
+  doc.text(model.header.title.toUpperCase(), left, titleTop, {
+    width: width - headW - GAP,
+    height: doc.currentLineHeight(true) * 2.5,
+    ellipsis: true,
+    characterSpacing: 0.5,
+  });
+  doc.moveDown(0.15);
+  const descTop = doc.y;
+  if (model.header.description) {
+    doc.font(FONT.body).fontSize(9).fillColor(PALETTE.slate)
+      .text(model.header.description, left, descTop, oneLine(width - checkW - GAP, 9));
+  }
+  // Same baseline as the title's first line: the heading is smaller, so it
+  // starts lower by the difference in ascent.
+  doc.font(FONT.displayBold).fontSize(16).fillColor(PALETTE.night)
+    .text(head, right - headW - 1, titleTop + barlowAscent * (26 - 16), { ...oneLine(headW + 2, 16), align: "right" });
+  doc.font(FONT.bodyMed).fontSize(9).fillColor(PALETTE.slate)
+    .text(model.labels.checkNames, right - checkW - 1, descTop, { ...oneLine(checkW + 2, 9), align: "right" });
+  return descTop + line9 + 5;
+}
+
+/** Dashed cut lines, each drawn ONCE as one continuous run (a shared edge
+ *  drawn twice dashes out of phase): horizontals the full page width at every
+ *  occupied row's top and bottom; verticals down each column boundary for as
+ *  many rows as touch it. */
+function drawCutLines(
   doc: PDFKit.PDFDocument,
-  labels: SheetModel["labels"],
-  r: SheetRow,
-  qr: Buffer,
-  y: number,
-  width: number,
-  k: number,
+  cells: { col: number; row: number }[],
+  top: number,
+  cardW: number,
+  cardH: number,
+  pageW: number,
 ): void {
-  const at = (dy: number) => y + dy * k;
-  const q = QR * k;
-  doc.moveTo(MARGIN, y).lineTo(MARGIN + width, y).strokeColor(PALETTE.hairline).lineWidth(0.75).stroke();
-  doc.image(qr, MARGIN, at(10), { width: q, height: q, link: r.url });
-  doc.font(FONT.bodyMed).fontSize(7).fillColor(PALETTE.mute)
-    .text(labels.scan, MARGIN, at(10) + q + 2, { ...oneLine(q, 7), align: "center" });
+  const rowsUsed = Math.ceil(cells.length / COLS);
+  doc.save().dash(3, { space: 3 }).strokeColor("#9ca3af").lineWidth(0.5);
+  for (let r = 0; r <= rowsUsed; r++) doc.moveTo(0, top + r * cardH).lineTo(pageW, top + r * cardH).stroke();
+  for (let k = 0; k <= COLS; k++) {
+    const rowsTouching = new Set(cells.filter((c) => c.col === k || c.col === k - 1).map((c) => c.row)).size;
+    if (rowsTouching > 0) doc.moveTo(EDGE + k * cardW, top).lineTo(EDGE + k * cardW, top + rowsTouching * cardH).stroke();
+  }
+  doc.undash().restore();
+}
 
-  const x = MARGIN + q + GUTTER;
-  const w = width - q - GUTTER;
-  doc.font(FONT.bodyMed).fontSize(10).fillColor(PALETTE.slate)
-    .text(`${r.time}  ·  ${r.matchLine}`, x, at(10), oneLine(w, 10));
-  side(doc, r.home, r.homeTbd, r.homeMembers, x, at(27), w, k);
-  side(doc, r.away, r.awayTbd, r.awayMembers, x, at(60), w, k);
+function drawCard(
+  doc: PDFKit.PDFDocument,
+  r: SheetRow,
+  qr: QRCode.QRCode,
+  icon: Image | null,
+  x: number,
+  y: number,
+  cardW: number,
+  cardH: number,
+): void {
+  const iw = cardW - PAD * 2;
+  const ix = x + PAD;
+  // Time left, the board's match code right, the division under them.
+  doc.font(FONT.bodyMed).fontSize(11).fillColor(PALETTE.ink).text(r.time, ix, y + 8, oneLine(iw / 2, 11));
+  doc.font(FONT.displayBold).fontSize(13).fillColor(PALETTE.night)
+    .text(r.matchRef, ix + iw / 2, y + 7, { ...oneLine(iw / 2, 13), align: "right" });
+  doc.font(FONT.body).fontSize(8).fillColor(PALETTE.slate).text(r.division, ix, y + 23, oneLine(iw, 8));
+  // Two lines per side, a short hairline between the sides.
+  const ny = y + 36;
+  drawSide(doc, r.home, r.homeTbd, r.homePair, ix, ny, iw);
+  doc.moveTo(ix, ny + 2 * LH + 3).lineTo(ix + 24, ny + 2 * LH + 3).strokeColor(PALETTE.hairline).lineWidth(0.75).stroke();
+  drawSide(doc, r.away, r.awayTbd, r.awayPair, ix, ny + 2 * LH + 7, iw);
+  const namesBottom = ny + 4 * LH + 7;
+  // The QR: the largest symbol that keeps QUIET modules of white to the text
+  // above, to the cut line below and to both side cuts.
+  const n = qr.modules.size;
+  const size = Math.min(((y + cardH - namesBottom) * n) / (n + 2 * QUIET), (cardW * n) / (n + 2 * QUIET));
+  const mod = size / n;
+  const qx = x + (cardW - size) / 2;
+  const qy = y + cardH - QUIET * mod - size;
+  drawBrandQr(doc, qr, qx, qy, mod, icon);
+  doc.link(qx, qy, size, size, r.url);
+}
 
-  // The paper fallback: score, winner and the umpire's name, on pen lines
-  // sized for what gets written there (a three-game score is the longest).
-  let fx = x;
-  for (const [label, share] of [[labels.score, 0.45], [labels.winner, 0.3], [labels.signature, 0.25]] as const) {
-    const fw = w * share;
-    doc.font(FONT.body).fontSize(8).fillColor(PALETTE.slate).text(label, fx, at(97), { lineBreak: false });
-    const lx = fx + doc.widthOfString(label) + 4;
-    doc.moveTo(lx, at(106)).lineTo(fx + fw - 10, at(106)).strokeColor(PALETTE.slate).lineWidth(0.6).stroke();
-    fx += fw;
+/** Square navy data modules (one path, one fill — no seams between them),
+ *  solid rounded navy finders, and the icon over a knocked-out centre. */
+function drawBrandQr(doc: PDFKit.PDFDocument, qr: QRCode.QRCode, x: number, y: number, mod: number, icon: Image | null): void {
+  const n = qr.modules.size;
+  const dark = (r: number, c: number) => qr.modules.get(r, c) === 1;
+  const finders: [number, number][] = [[0, 0], [0, n - 7], [n - 7, 0]];
+  const inFinder = (r: number, c: number) => finders.some(([r0, c0]) => r >= r0 && r < r0 + 7 && c >= c0 && c < c0 + 7);
+  // The knock-out: the smallest ODD square of modules, centred on the grid
+  // (n is odd), that holds the icon and its white pad.
+  let k = 0;
+  if (icon) {
+    k = Math.ceil(ICON / mod + 2 * ICON_PAD);
+    if (k % 2 === 0) k += 1;
+  }
+  const k0 = (n - k) / 2;
+  const inKnockout = (r: number, c: number) => r >= k0 && r < k0 + k && c >= k0 && c < k0 + k;
+  const drawn = (r: number, c: number) => dark(r, c) && !inFinder(r, c) && !inKnockout(r, c);
+  doc.save();
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (!drawn(r, c)) continue;
+      const start = c;
+      while (c < n && drawn(r, c)) c++;
+      doc.rect(x + start * mod, y + r * mod, (c - start) * mod, mod);
+    }
+  }
+  doc.fill(PALETTE.night);
+  // Finders: the 7×7 ring is the outer rounded square minus the 5×5 inner one
+  // (even-odd), and the 3×3 centre sits in that hole, so even-odd fills it
+  // again. The straight edges are whole modules, so every centre line reads
+  // 1:1:3:1:1.
+  for (const [r0, c0] of finders) {
+    const fx = x + c0 * mod;
+    const fy = y + r0 * mod;
+    doc.roundedRect(fx, fy, 7 * mod, 7 * mod, FINDER_R * mod);
+    doc.roundedRect(fx + mod, fy + mod, 5 * mod, 5 * mod, (FINDER_R - 1) * mod);
+    doc.roundedRect(fx + 2 * mod, fy + 2 * mod, 3 * mod, 3 * mod, FINDER_CENTRE_R * mod);
+  }
+  doc.fill(PALETTE.night, "even-odd");
+  doc.restore();
+  if (icon) {
+    const centre = (n * mod) / 2;
+    drawImage(doc, icon, x + centre - ICON / 2, y + centre - ICON / 2, ICON);
   }
 }
 
-/** Largest size from `max` down to `min` at which `text` fits `width` in
- *  `font`; below `min` the caller's ellipsis takes over. */
-function fitSize(doc: PDFKit.PDFDocument, text: string, font: string, max: number, min: number, width: number): number {
-  const natural = doc.font(font).fontSize(max).widthOfString(text);
-  return natural <= width ? max : Math.max(min, Math.floor((max * width) / natural * 10) / 10);
-}
-
-function side(doc: PDFKit.PDFDocument, name: string, tbd: boolean, members: string[], x: number, y: number, w: number, k: number) {
-  // Person names in Inter (FONT.bodyMed) — Barlow has no Cyrillic/Greek.
+function drawSide(doc: PDFKit.PDFDocument, name: string, tbd: boolean, pair: string[], x: number, y: number, w: number): void {
   if (tbd) {
-    doc.font(FONT.bodyMed).fontSize(10).fillColor(PALETTE.slate)
-      .text(name, x, y, oneLine(w, 10));
-    doc.moveTo(x, y + 27 * k).lineTo(x + Math.min(w, 240), y + 27 * k).strokeColor(PALETTE.slate).lineWidth(0.6).stroke();
+    doc.font(FONT.bodyMed).fontSize(NAME).fillColor(PALETTE.slate).text(name, x, y, oneLine(w, NAME));
+    doc.moveTo(x, y + 2 * LH - 1).lineTo(x + w, y + 2 * LH - 1).strokeColor(PALETTE.slate).lineWidth(0.6).stroke();
     return;
   }
-  const size = fitSize(doc, name, FONT.bodyMed, 12, 9, w);
-  doc.font(FONT.bodyMed).fontSize(size).fillColor(PALETTE.ink)
-    .text(name, x, y + (12 - size) * 0.8, oneLine(w, size));
-  if (members.length > 0) {
-    doc.font(FONT.body).fontSize(8).fillColor(PALETTE.slate)
-      .text(members.join(", "), x, y + 16 * k, oneLine(w, 8));
+  doc.font(FONT.bodyMed).fontSize(NAME).fillColor(PALETTE.ink);
+  if (pair.length >= 2) {
+    pair.slice(0, 2).forEach((member, i) => doc.text(member, x, y + i * LH, oneLine(w, NAME)));
+  } else {
+    // One name wraps onto a second line, then takes an ellipsis: the height
+    // bound, in [2, 3) lines, is what stops a third.
+    doc.text(name, x, y, { width: w, height: LH * 2.5, ellipsis: true });
   }
 }

@@ -209,6 +209,18 @@ describe("paginateSheet", () => {
     ]);
   });
 
+  // The VALUE, not the symbol: the printed page is a 3×3 grid of cut-out cards
+  // (owner-approved 2026-09-24). Every other case here reads ROWS_PER_PAGE, so
+  // they follow any drift; this one reds on it.
+  it("a page is the printed 3×3 grid: 10 matches on one court are 9 + 1, not 5 + 5", () => {
+    expect(ROWS_PER_PAGE).toBe(9);
+    const rows = Array.from({ length: 10 }, () => c({ court_name: "Court 1" }));
+    expect(paginateSheet(rows, "No court").map((p) => [p.rows.length, p.pageInCourt, p.pagesInCourt])).toEqual([
+      [9, 1, 2],
+      [1, 2, 2],
+    ]);
+  });
+
   it(`exactly ${ROWS_PER_PAGE} rows fill ONE page — no empty continuation`, () => {
     const rows = Array.from({ length: ROWS_PER_PAGE }, () => c({ court_name: "Court 1" }));
     expect(paginateSheet(rows, "No court").map((p) => [p.rows.length, p.pageInCourt, p.pagesInCourt])).toEqual([

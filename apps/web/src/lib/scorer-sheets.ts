@@ -9,7 +9,9 @@ import type { SlotLabel } from "@/lib/slot-label";
  *  check permits (decided, finalized, forfeited — which is how a bye settles
  *  — abandoned, cancelled) is a match nobody will score from paper. */
 export const PRINTABLE_STATUSES: ReadonlySet<string> = new Set(["scheduled", "in_play"]);
-export const ROWS_PER_PAGE = 5;
+/** A printed page is a 3×3 grid of cut-out match cards (owner-approved
+ *  2026-09-24), so a page holds nine. */
+export const ROWS_PER_PAGE = 9;
 /** The label a bracket generator stamps on a bye's phantom side
  *  (stages.ts `BYE_SLOT_LABEL`). A bye can sit `scheduled` until its real
  *  seat fills and `awardSeededByes` settles it, so the status alone does not

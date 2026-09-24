@@ -16,13 +16,15 @@ it("is set in the brand fonts (doc-theme), not the Helvetica fallback", async ()
 
 it("sets every person name in Inter, never Barlow (Barlow has no Cyrillic or Greek)", async () => {
   const home = "Зоя Петрова";
-  const away = "Νίκος Παπαδόπουλος / Άννα Λάμπρου";
+  const pair = ["Νίκος Παπαδόπουλος", "Άννα Λάμπρου"];
   const tbd = "Winner of QF·2";
   const runs = pdfTextRuns(
-    await renderScorerSheetPdf(model([[row(1, { home, away }), row(2, { home: tbd, homeTbd: true })]])),
+    await renderScorerSheetPdf(
+      model([[row(1, { home, away: pair.join(" / "), awayPair: pair }), row(2, { home: tbd, homeTbd: true })]]),
+    ),
   );
   const fontOf = (text: string) => runs.filter((r) => r.text === text).map((r) => r.font);
-  for (const name of [home, away, tbd]) {
+  for (const name of [home, ...pair, tbd]) {
     expect(fontOf(name)).toHaveLength(1);
     expect(fontOf(name)[0]).toMatch(/^[A-Z]{6}\+Inter-/);
   }

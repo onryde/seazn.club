@@ -1,177 +1,372 @@
 // Scorer sheets §4.4 — the renderer, read back out of its own bytes with the
-// shared reader (e2e/pdf-uris.ts): pages, link annotations, the decoded text
-// of every line (the embedded fonts carry ToUnicode maps) and the QR images'
-// pixels, decoded with a real QR decoder.
-import { beforeAll, describe, expect, it } from "vitest";
-import jsQR from "jsqr";
-import sharp from "sharp";
+// shared reader (e2e/pdf-uris.ts): pages, link annotations and their areas,
+// the decoded text of every line (the embedded fonts carry ToUnicode maps),
+// every stroked line and image — and each card's QR, rasterised the way a
+// printer and a camera see it and read by a real decoder (_sheet-raster.ts).
+//
+// The page (owner-approved 2026-09-24): A4 portrait, 8 mm edges, a 3×3 grid
+// of cut-out cards in time order left→right then top→bottom; per card the
+// time, the board's match code, the division, both sides, and a branded QR
+// (ECL H, solid rounded navy finders, the Seazn icon 12 mm in the centre).
+import fs from "node:fs";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import QRCode from "qrcode";
 import { ROWS_PER_PAGE } from "@/lib/scorer-sheets";
-import { qrBuffer } from "../doc-theme";
 import { renderScorerSheetPdf } from "../scorer-sheet-pdf";
-import { pdfImages, pdfLines, pdfLinkUris, pdfPageCount, pdfTextRuns } from "../../../e2e/pdf-uris";
-import { header, labels, model, row, token, useBrandFonts } from "./_sheet-fixtures";
+import { pdfImages, pdfLines, pdfLinkUris, pdfLinks, pdfPageCount, pdfPageSvg, pdfTextRuns } from "../../../e2e/pdf-uris";
+import { CONDITIONS, decodeEveryCard, lumaAt, rasterPage, type Condition } from "./_sheet-raster";
+import { header, labels, model, row, rows, token, useBrandFonts } from "./_sheet-fixtures";
 
 beforeAll(useBrandFonts);
 
-const decode = (img: { rgba: Uint8ClampedArray; pxWidth: number; pxHeight: number }) =>
-  jsQR(img.rgba, img.pxWidth, img.pxHeight)?.data ?? null;
+const MM = 72 / 25.4;
+const PAGE_W = 595.28;
+const EDGE = 8 * MM;
+const CARD_W = (PAGE_W - 2 * EDGE) / 3;
+/** The tallest header the sheet can have: the Pro masthead and a title long
+ *  enough to wrap — so the smallest cards, and the smallest QR codes. */
+const LONG_TITLE = "Northern Counties Inter-Club Badminton Championships — Autumn Series Finals 2026";
+const tallHeader = { ...header, title: LONG_TITLE, branding: { orgName: "Riverside Shuttlers", logos: [] } };
 
-describe("renderScorerSheetPdf (scorer sheets §4.4)", () => {
+const round2 = (n: number) => Math.round(n * 100) / 100;
+/** 0, 1, 2 … by position among the distinct values, smallest first. */
+const ranks = (values: number[]) => {
+  const distinct = [...new Set(values.map(round2))].sort((a, b) => a - b);
+  return values.map((v) => distinct.indexOf(round2(v)));
+};
+
+describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", () => {
   it("is a PDF with one page per model page", async () => {
-    const pdf = await renderScorerSheetPdf(model([[row(1), row(2)], [row(3)]]));
+    const pdf = await renderScorerSheetPdf(model([rows(2), rows(1, 3)]));
     expect(pdf.subarray(0, 5).toString("latin1")).toBe("%PDF-");
     expect(pdfPageCount(pdf)).toBe(2);
   });
 
-  it("every row carries exactly one link to its own URL, in order — tappable when opened on a phone", async () => {
-    const rows = [row(1), row(2), row(3)];
-    expect(pdfLinkUris(await renderScorerSheetPdf(model([rows])))).toEqual(rows.map((r) => r.url));
+  it("every card carries exactly one link to its own URL, in order — tappable when opened on a phone", async () => {
+    const page = rows(9);
+    expect(pdfLinkUris(await renderScorerSheetPdf(model([page])))).toEqual(page.map((r) => r.url));
   });
 
-  it("the QR printed on each row decodes to that row's own URL, in order (real decoder)", async () => {
-    const pages = [[row(1), row(2)], [row(3)]];
-    const images = pdfImages(await renderScorerSheetPdf(model(pages)));
-    expect(images.map((i) => i.page)).toEqual([1, 1, 2]);
-    expect(images.map(decode)).toEqual(pages.flat().map((r) => r.url));
-  });
-
-  it("a TBD side keeps its row and its QR (D2), and prints its slot label over a pen line", async () => {
-    const pdf = await renderScorerSheetPdf(model([[row(1, { home: "Winner of QF·2", homeTbd: true })]]));
-    expect(pdfLinkUris(pdf)).toHaveLength(1);
-    expect(pdfImages(pdf).map(decode)).toEqual([row(1).url]);
+  it("lays the cards out left→right, then top→bottom, three by three — each card's text inside its own cell", async () => {
+    const page = rows(9);
+    const pdf = await renderScorerSheetPdf(model([page]));
+    const links = pdfLinks(pdf);
+    expect(links).toHaveLength(9);
+    const cols = ranks(links.map((l) => l.x));
+    const rowsOf = ranks(links.map((l) => l.top));
+    expect(links.map((_, i) => [cols[i], rowsOf[i]])).toEqual(page.map((_, i) => [i % 3, Math.floor(i / 3)]));
+    // The name printed on card i sits in card i's column, above card i's QR
+    // and below the QR of the row above it.
     const runs = pdfTextRuns(pdf);
-    const label = runs.find((r) => r.text === "Winner of QF·2")!;
-    const named = runs.find((r) => r.text === "Away 1")!;
-    // A line to write the name on, starting under the label and close below
-    // it — the named side opposite gets none.
-    const under = (run: { x: number; y: number }) =>
-      pdfLines(pdf).filter((l) => l.y1 === l.y2 && l.x1 === run.x && l.y1 - run.y > 8 && l.y1 - run.y < 30);
-    expect(under(label).map((l) => l.x2 - l.x1 >= 200)).toEqual([true]);
-    expect(under(named)).toEqual([]);
-  });
-
-  it("prints the QR only — never the scan URL or its token as text (the token is a bearer secret)", async () => {
-    const rows = [row(1), row(2), row(3)];
-    const pdf = await renderScorerSheetPdf(model([rows]));
-    const printed = pdfTextRuns(pdf).map((r) => r.text).join("\n");
-    // The reader sees the lines that ARE printed — so the absence below is not
-    // a reader that sees nothing.
-    for (const r of rows) expect(printed).toContain(r.home);
-    expect(printed).toContain(labels.checkNames);
-    for (const r of rows) {
-      expect(printed).not.toContain(token(Number(r.fixtureId.slice(1))));
-      expect(printed).not.toContain(r.url);
+    for (const [i, r] of page.entries()) {
+      const name = runs.find((t) => t.text === r.home)!;
+      const qr = links[i]!;
+      expect(Math.floor((name.x - EDGE) / CARD_W)).toBe(i % 3);
+      expect(name.y).toBeLessThan(qr.top);
+      if (i >= 3) expect(name.y).toBeGreaterThan(links[i - 3]!.top + links[i - 3]!.height);
     }
-    expect(printed).not.toContain("/score/");
-    // Nor anywhere in the uncompressed bytes (document info, annotations)
-    // other than each row's own link, which a printout does not show.
-    const outsideLinks = pdf.toString("latin1").replace(/\/URI\s*\((?:\\.|[^\\)])*\)/g, "");
-    for (const r of rows) expect(outsideLinks).not.toContain(token(Number(r.fixtureId.slice(1))));
   });
 
-  it("every page prints its own court heading and the check-names line", async () => {
+  it("a court's second page starts again at the top-left card, under its own heading", async () => {
     const pdf = await renderScorerSheetPdf({
       ...model([]),
       pages: [
-        { heading: "Court 1 · page 1 of 2", rows: [row(1)] },
-        { heading: "Court 1 · page 2 of 2", rows: [row(2)] },
-        { heading: "Unassigned · page 1 of 1", rows: [row(3)] },
+        { heading: "Court 1 · page 1 of 2", rows: rows(9) },
+        { heading: "Court 1 · page 2 of 2", rows: rows(1, 10) },
+      ],
+    });
+    const links = pdfLinks(pdf);
+    expect(links.map((l) => l.page)).toEqual([...Array(9).fill(1), 2]);
+    expect(round2(links[9]!.x)).toBe(round2(links[0]!.x));
+    expect(round2(links[9]!.top)).toBe(round2(links[0]!.top));
+    const onPage = (n: number) => pdfTextRuns(pdf).filter((r) => r.page === n).map((r) => r.text);
+    expect(onPage(1)).toContain("COURT 1 · PAGE 1 OF 2");
+    expect(onPage(2)).toContain("COURT 1 · PAGE 2 OF 2");
+  });
+
+  it("every page prints its own heading and the check-names line — the courtless section included", async () => {
+    const pdf = await renderScorerSheetPdf({
+      ...model([]),
+      pages: [
+        { heading: "Court 1 · page 1 of 1", rows: [row(1)] },
+        { heading: "No court assigned · page 1 of 1", rows: [row(2)] },
       ],
     });
     const onPage = (n: number) => pdfTextRuns(pdf).filter((r) => r.page === n).map((r) => r.text);
-    expect([1, 2, 3].map((n) => onPage(n).filter((t) => t === labels.checkNames).length)).toEqual([1, 1, 1]);
-    expect(onPage(1)).toContain("COURT 1 · PAGE 1 OF 2");
-    expect(onPage(2)).toContain("COURT 1 · PAGE 2 OF 2");
-    expect(onPage(3)).toContain("UNASSIGNED · PAGE 1 OF 1");
+    expect([1, 2].map((n) => onPage(n).filter((t) => t === labels.checkNames).length)).toEqual([1, 1]);
+    expect(onPage(1)).toContain("COURT 1 · PAGE 1 OF 1");
+    expect(onPage(2)).toContain("NO COURT ASSIGNED · PAGE 1 OF 1");
   });
 
-  it("five rows stay on one page and clear of the footer — under the masthead and a two-line title", async () => {
-    const title = "Northern Counties Inter-Club Badminton Championships — Autumn Series Finals 2026";
-    const rows = [1, 2, 3, 4, 5].map((i) => row(i));
-    const pdf = await renderScorerSheetPdf({
-      header: { ...header, title, branding: { orgName: "Riverside Shuttlers", logos: [] } },
-      labels,
-      pages: [{ heading: "Court 1 · page 1 of 1", rows }],
-    });
+  it.each(Object.keys(CONDITIONS) as Condition[])(
+    "every card's QR, cut from the page raster, decodes to ITS OWN row's URL — %s, tallest header, 9 + 1 cards, a TBD side",
+    async (condition) => {
+      const pages = [rows(8).concat(row(9, { home: "Winner of QF·2", homeTbd: true })), rows(1, 10)];
+      for (const h of [header, tallHeader]) {
+        const pdf = await renderScorerSheetPdf({ ...model(pages), header: h });
+        expect(await decodeEveryCard(pdf, condition)).toEqual(pages.flat().map((r) => r.url));
+      }
+    },
+  );
+
+  // The owner-approved finder SHAPE (B2), pinned as geometry: with the 12 mm
+  // icon, radius 1.0 decodes too (poppler and librsvg, every condition —
+  // measured 2026-09-24), so no decode test can hold the approved 2.0.
+  it("draws each finder as the approved rounded square: outer radius 2 modules, a 1-module ring, a 0.6-radius centre", async () => {
+    const pdf = await renderScorerSheetPdf(model([rows(3)]));
+    const moves = [...pdfPageSvg(pdf, 1, () => "").matchAll(/M([\d.-]+),([\d.-]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+    const drawnAt = (x: number, y: number) => moves.some(([mx, my]) => Math.abs(mx! - x) < 0.01 && Math.abs(my! - y) < 0.01);
+    const missing: string[] = [];
+    for (const [i, qr] of pdfLinks(pdf).entries()) {
+      const n = QRCode.create(qr.uri, { errorCorrectionLevel: "H" }).modules.size;
+      const mod = qr.width / n;
+      // pdfkit starts a rounded rectangle at (left + radius, top).
+      for (const [fx, fy] of [[qr.x, qr.top], [qr.x + (n - 7) * mod, qr.top], [qr.x, qr.top + (n - 7) * mod]] as const) {
+        if (!drawnAt(fx + 2 * mod, fy)) missing.push(`card ${i + 1} outer`);
+        if (!drawnAt(fx + mod + 1 * mod, fy + mod)) missing.push(`card ${i + 1} ring`);
+        if (!drawnAt(fx + 2 * mod + 0.6 * mod, fy + 2 * mod)) missing.push(`card ${i + 1} centre`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("centres the Seazn icon on every QR at 12 mm, embedded once for the whole sheet", async () => {
+    const pdf = await renderScorerSheetPdf(model([rows(9), rows(2, 10)]));
+    const icons = pdfImages(pdf);
+    const links = pdfLinks(pdf);
+    expect(icons).toHaveLength(11);
+    expect(new Set(icons.map((i) => i.xobject)).size).toBe(1);
+    for (const [i, icon] of icons.entries()) {
+      const qr = links[i]!;
+      expect(icon.width).toBeCloseTo(12 * MM, 2);
+      expect(icon.height).toBeCloseTo(12 * MM, 2);
+      expect(icon.x + icon.width / 2).toBeCloseTo(qr.x + qr.width / 2, 2);
+      expect(icon.top + icon.height / 2).toBeCloseTo(qr.top + qr.height / 2, 2);
+    }
+  });
+
+  it("without the icon file (a broken deploy) prints plain, full QR codes that still decode — never a failed print", async () => {
+    const real = fs.existsSync;
+    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => !String(p).endsWith("logo-square.png") && real(p));
+    try {
+      const page = rows(3);
+      const pdf = await renderScorerSheetPdf(model([page]));
+      expect(exists).toHaveBeenCalled();
+      expect(pdfImages(pdf)).toEqual([]);
+      expect(await decodeEveryCard(pdf, "dpi90")).toEqual(page.map((r) => r.url));
+      // No knock-out either: the centre of each symbol keeps its data modules.
+      const raster = await rasterPage(pdf, 1, "dpi90");
+      const centres = pdfLinks(pdf).map((l) => {
+        const [cx, cy, half] = [l.x + l.width / 2, l.top + l.height / 2, 4 * MM];
+        let dark = 0;
+        for (let dx = -half; dx <= half; dx += 0.5) for (let dy = -half; dy <= half; dy += 0.5) if (lumaAt(raster, cx + dx, cy + dy) < 100) dark++;
+        return dark > 0;
+      });
+      expect(centres).toEqual([true, true, true]);
+    } finally {
+      exists.mockRestore();
+    }
+  });
+
+  it("keeps at least one module of white round the icon — the data modules stop short of it", async () => {
+    const pdf = await renderScorerSheetPdf(model([rows(9)]));
+    const raster = await rasterPage(pdf, 1, "dpi90");
+    const links = pdfLinks(pdf);
+    /** Luma samples round the icon, `d` points outside its edge. */
+    const ring = (icon: { x: number; top: number; width: number; height: number }, d: number) => {
+      const [x0, y0, x1, y1] = [icon.x - d, icon.top - d, icon.x + icon.width + d, icon.top + icon.height + d];
+      const out: number[] = [];
+      for (let t = 0; t <= 1; t += 1 / 40) {
+        const x = x0 + t * (x1 - x0);
+        const y = y0 + t * (y1 - y0);
+        out.push(lumaAt(raster, x, y0), lumaAt(raster, x, y1), lumaAt(raster, x0, y), lumaAt(raster, x1, y));
+      }
+      return out;
+    };
+    const padDark: string[] = [];
+    let beyondDark = 0;
+    for (const [i, icon] of pdfImages(pdf).entries()) {
+      const mod = links[i]!.width / QRCode.create(links[i]!.uri, { errorCorrectionLevel: "H" }).modules.size;
+      // The middle of a one-module pad must be paper…
+      if (ring(icon, mod / 2).some((l) => l < 200)) padDark.push(`card ${i + 1}`);
+      // …while three modules out the data modules are there to be missed.
+      beyondDark += ring(icon, 3 * mod).filter((l) => l < 100).length;
+    }
+    expect(padDark).toEqual([]);
+    expect(beyondDark).toBeGreaterThan(9 * 20);
+  });
+
+  it("keeps four modules of white between each QR and the text above it, the cut line below and the side cuts", async () => {
+    const long = "Riverside Shuttlers Badminton Club Seniors";
+    const page = rows(9).map((r) => ({ ...r, away: long }));
+    const pdf = await renderScorerSheetPdf({ ...model([page]), header: tallHeader });
+    const links = pdfLinks(pdf);
     const runs = pdfTextRuns(pdf);
-    // Precondition: the masthead is drawn and the title really did wrap.
+    const lines = pdfLines(pdf);
+    const cutsY = lines.filter((l) => l.y1 === l.y2 && round2(l.x2 - l.x1) === round2(PAGE_W)).map((l) => l.y1);
+    const cutsX = lines.filter((l) => l.x1 === l.x2).map((l) => l.x1);
+    const short: string[] = [];
+    for (const [i, qr] of links.entries()) {
+      const mod = qr.width / QRCode.create(qr.uri, { errorCorrectionLevel: "H" }).modules.size;
+      const bottom = qr.top + qr.height;
+      const cutBelow = Math.min(...cutsY.filter((y) => y > bottom));
+      const cutAbove = Math.max(...cutsY.filter((y) => y < qr.top));
+      const cutLeft = Math.max(...cutsX.filter((x) => x < qr.x));
+      const cutRight = Math.min(...cutsX.filter((x) => x > qr.x + qr.width));
+      // Text in this card, above the symbol: its lowest descender (Inter's is 0.242 em).
+      const textBottom = Math.max(
+        ...runs.filter((r) => r.x > cutLeft && r.x < cutRight && r.y > cutAbove && r.y < qr.top).map((r) => r.y + 0.25 * r.size),
+      );
+      const gaps = {
+        text: qr.top - textBottom,
+        below: cutBelow - bottom,
+        left: qr.x - cutLeft,
+        right: cutRight - (qr.x + qr.width),
+      };
+      for (const [side, gap] of Object.entries(gaps)) {
+        if (!(gap >= 4 * mod)) short.push(`card ${i + 1} ${side}: ${(gap / mod).toFixed(2)} modules`);
+      }
+    }
+    expect(links).toHaveLength(9);
+    expect(short).toEqual([]);
+  });
+
+  it("prints only the card's own facts — no token or URL, and no score, winner or umpire lines", async () => {
+    const pdf = await renderScorerSheetPdf(model([[row(1)]]));
+    const texts = pdfTextRuns(pdf).map((r) => r.text);
+    expect([...texts].sort()).toEqual(
+      [
+        labels.eyebrow,
+        header.title.toUpperCase(),
+        header.description!,
+        "COURT 1 · PAGE 1 OF 1",
+        labels.checkNames,
+        "10:30",
+        "QF·1",
+        "Open Singles",
+        "Home 1",
+        "Away 1",
+        header.meta.printedAt,
+        "seazn.club",
+      ].sort(),
+    );
+    // Nor anywhere in the uncompressed bytes (document info, annotations)
+    // other than the card's own link, which a printout does not show.
+    const outsideLinks = pdf.toString("latin1").replace(/\/URI\s*\((?:\\.|[^\\)])*\)/g, "");
+    expect(outsideLinks).not.toContain(token(1));
+    expect(outsideLinks).not.toContain("/score/");
+  });
+
+  it("strokes only cut lines and one short divider per card — no pen lines on a named card", async () => {
+    const pdf = await renderScorerSheetPdf(model([rows(7)]));
+    const lines = pdfLines(pdf);
+    const isCut = (l: (typeof lines)[number]) =>
+      (l.y1 === l.y2 && round2(l.x1) === 0 && round2(l.x2) === round2(PAGE_W)) ||
+      (l.x1 === l.x2 && [0, 1, 2, 3].some((k) => round2(l.x1) === round2(EDGE + k * CARD_W)));
+    const dividers = lines.filter((l) => !isCut(l));
+    expect(lines.filter(isCut).length).toBeGreaterThan(0);
+    expect(dividers.map((l) => round2(l.x2 - l.x1))).toEqual(Array(7).fill(24));
+  });
+
+  it("a TBD side keeps its card and QR (D2), and prints its slot label over a pen line the card's width", async () => {
+    const pdf = await renderScorerSheetPdf(model([[row(1, { home: "Winner of QF·2", homeTbd: true })]]));
+    expect(pdfLinkUris(pdf)).toHaveLength(1);
+    const runs = pdfTextRuns(pdf);
+    const label = runs.find((r) => r.text === "Winner of QF·2")!;
+    const named = runs.find((r) => r.text === "Away 1")!;
+    // Longer than the 24pt divider between the sides, which every card has.
+    const under = (run: { x: number; y: number }) =>
+      pdfLines(pdf).filter(
+        (l) => l.y1 === l.y2 && round2(l.x1) === round2(run.x) && l.x2 - l.x1 > 24 && l.y1 > run.y && l.y1 - run.y < 20,
+      );
+    expect(under(label).map((l) => round2(l.x2 - l.x1))).toEqual([round2(CARD_W - 20)]);
+    expect(under(named)).toEqual([]);
+  });
+
+  it("a pair prints one member per line; a long member is cut on its own line", async () => {
+    const long = "Maximiliana Alejandra Fernández de Villanueva y Hartley-Okonkwo";
+    const pdf = await renderScorerSheetPdf(
+      model([
+        [
+          row(1, {
+            home: "Ana Silva / Ben Cole",
+            homePair: ["Ana Silva", "Ben Cole"],
+            away: `${long} / Zoë Li`,
+            awayPair: [long, "Zoë Li"],
+          }),
+        ],
+      ]),
+    );
+    const runs = pdfTextRuns(pdf);
+    const at = (text: string) => runs.filter((r) => r.text === text);
+    expect(at("Ana Silva / Ben Cole")).toEqual([]);
+    const [ana, ben] = [at("Ana Silva")[0]!, at("Ben Cole")[0]!];
+    expect(ben.x).toBe(ana.x);
+    expect(ben.y - ana.y).toBeCloseTo(9 * 1.21, 1);
+    const cut = runs.filter((r) => r.text.startsWith("Maximiliana"));
+    expect(cut).toHaveLength(1);
+    expect(cut[0]!.text.endsWith("…")).toBe(true);
+    expect(at("Zoë Li")).toHaveLength(1);
+  });
+
+  it("a long name wraps onto a second line, then is cut with an ellipsis — never a third line", async () => {
+    const fits = "Riverside Shuttlers Badminton Club Seniors";
+    const absurd = Array.from({ length: 4 }, () => "Maximiliana Fernández de Villanueva").join(" ");
+    const runs = pdfTextRuns(await renderScorerSheetPdf(model([[row(1, { home: fits }), row(2, { home: absurd })]])));
+    // Below the header (whose description is 9pt too), in the card's column.
+    const headerBottom = runs.find((r) => r.text === labels.checkNames)!.y;
+    const linesOf = (card: number) =>
+      runs.filter(
+        (r) => r.size === 9 && r.y > headerBottom && Math.floor((r.x - EDGE) / CARD_W) === card && !/^Away /.test(r.text),
+      );
+    const joined = (runs: { text: string }[]) => runs.map((r) => r.text.trim()).join(" ");
+    const whole = linesOf(0);
+    expect(whole).toHaveLength(2);
+    expect(joined(whole)).toBe(fits);
+    const cut = linesOf(1);
+    expect(cut).toHaveLength(2);
+    expect(cut[1]!.text.endsWith("…")).toBe(true);
+    expect(absurd.startsWith(joined(cut).slice(0, -1).trimEnd())).toBe(true);
+  });
+
+  it("nine cards stay on one page, clear of the footer, under the tallest header — the title held to two lines", async () => {
+    const pdf = await renderScorerSheetPdf({ ...model([rows(9)]), header: tallHeader });
+    const runs = pdfTextRuns(pdf);
     expect(runs.map((r) => r.text)).toContain("RIVERSIDE SHUTTLERS");
-    expect(runs.filter((r) => r.size === 26).length).toBeGreaterThanOrEqual(2);
+    const title = runs.filter((r) => r.size === 26);
+    expect(title).toHaveLength(2);
+    expect(title[1]!.text.endsWith("…")).toBe(true);
     expect(pdfPageCount(pdf)).toBe(1);
     const foot = runs.find((r) => r.text === header.meta.printedAt)!;
     const footTop = foot.y - foot.size;
-    const body = runs.filter((r) => r.y !== foot.y);
-    expect(body.length).toBeGreaterThan(0);
-    expect(Math.max(...body.map((r) => r.y))).toBeLessThan(footTop);
-    const qrs = pdfImages(pdf);
-    expect(qrs).toHaveLength(5);
-    expect(Math.max(...qrs.map((q) => q.top + q.height))).toBeLessThan(footTop);
+    expect(Math.max(...runs.filter((r) => r.y !== foot.y).map((r) => r.y))).toBeLessThan(footTop);
+    const links = pdfLinks(pdf);
+    expect(links).toHaveLength(9);
+    expect(Math.max(...links.map((l) => l.top + l.height))).toBeLessThan(footTop);
+    const check = runs.find((r) => r.text === labels.checkNames)!;
+    expect(Math.min(...links.map((l) => l.top))).toBeGreaterThan(check.y);
   });
 
-  it("a long name prints whole — the size gives way (12pt down to 9pt), the name does not", async () => {
-    const long = "Maximiliana Alejandra Fernández de Villanueva / Zoë Hartley-Okonkwo-Brightwater";
-    const runs = pdfTextRuns(await renderScorerSheetPdf(model([[row(1, { home: long })]])));
-    const home = runs.find((r) => r.text.startsWith("Maximiliana"))!;
-    expect(home.text).toBe(long);
-    expect(home.size).toBeLessThan(12);
-    expect(home.size).toBeGreaterThanOrEqual(9);
-    expect(runs.find((r) => r.text === "Away 1")!.size).toBe(12);
-  });
-
-  it("…but never below 9pt: a name too long even there is cut with an ellipsis", async () => {
-    const absurd = Array.from({ length: 6 }, () => "Maximiliana Fernández de Villanueva").join(" / ");
-    const runs = pdfTextRuns(await renderScorerSheetPdf(model([[row(1, { home: absurd })]])));
-    const home = runs.find((r) => r.text.startsWith("Maximiliana"))!;
-    expect(home.size).toBe(9);
-    expect(home.text.endsWith("…")).toBe(true);
-    expect(absurd.startsWith(home.text.slice(0, -1).trimEnd())).toBe(true);
-  });
-
-  it("every line stays ONE line — an overlong heading, match line or roster is cut, never wrapped into the row below", async () => {
-    const long = (s: string) => Array.from({ length: 12 }, () => s).join(" ");
-    const heading = long("Court Philippe-Chatrier");
-    const matchLine = long("Open Mixed Doubles");
-    const members = Array.from({ length: 14 }, (_, i) => `Player Number ${i + 1}`);
-    const pdf = await renderScorerSheetPdf({
-      ...model([]),
-      pages: [{ heading, rows: [row(1, { matchLine, homeMembers: members })] }],
-    });
-    const runs = pdfTextRuns(pdf);
-    const cut = (prefix: string) => runs.filter((r) => r.text.startsWith(prefix));
-    for (const prefix of ["COURT PHILIPPE", "10:30", "Player Number 1,"]) {
-      expect(cut(prefix)).toHaveLength(1);
-      expect(cut(prefix)[0]!.text.endsWith("…")).toBe(true);
-    }
-    // Nothing wrapped: no run starts mid-string.
-    expect(runs.filter((r) => /^(Philippe|Chatrier|Open Mixed|Doubles|Player Number \d+,? ?$)/.test(r.text))).toEqual([]);
-  });
-
-  it("a team side lists its players under its name; every block carries the paper fallback", async () => {
-    const rows = [row(1, { home: "Riverside A", homeMembers: ["Ana Silva", "Ben Cole"] }), row(2)];
-    const texts = pdfTextRuns(await renderScorerSheetPdf(model([rows]))).map((r) => r.text);
-    expect(texts).toContain("Ana Silva, Ben Cole");
-    expect(texts.filter((t) => t.includes(", "))).toHaveLength(1);
-    for (const label of [labels.score, labels.winner, labels.signature]) {
-      expect(texts.filter((t) => t === label)).toHaveLength(rows.length);
-    }
-    expect(texts.filter((t) => t === labels.scan)).toHaveLength(rows.length);
+  it("an overlong heading is cut on its one line, never wrapped", async () => {
+    const heading = Array.from({ length: 8 }, () => "Court Philippe-Chatrier").join(" ");
+    const runs = pdfTextRuns(await renderScorerSheetPdf({ ...model([]), pages: [{ heading, rows: [row(1)] }] }));
+    const cut = runs.filter((r) => r.text.startsWith("COURT PHILIPPE"));
+    expect(cut).toHaveLength(1);
+    expect(cut[0]!.text.endsWith("…")).toBe(true);
+    expect(runs.filter((r) => /^(PHILIPPE|CHATRIER)/.test(r.text))).toEqual([]);
   });
 
   it("refuses a page longer than ROWS_PER_PAGE rather than spill it onto a stray page", async () => {
-    const rows = (n: number) => Array.from({ length: n }, (_, i) => row(i + 1));
     expect(pdfPageCount(await renderScorerSheetPdf(model([rows(ROWS_PER_PAGE)])))).toBe(1);
     await expect(renderScorerSheetPdf(model([rows(ROWS_PER_PAGE + 1)]))).rejects.toThrow(
       `A sheet page holds at most ${ROWS_PER_PAGE} rows; got ${ROWS_PER_PAGE + 1}`,
     );
   });
-});
 
-describe("the shared qrBuffer, at the size the sheet prints it", () => {
-  it("decodes back to the exact URL (real encoder, real decoder)", async () => {
-    const url = `https://example.test/score/${token(7)}`;
-    const png = await qrBuffer(url);
-    expect(png).not.toBeNull();
-    const { data, info } = await sharp(png!).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    expect(jsQR(new Uint8ClampedArray(data), info.width, info.height)?.data).toBe(url);
+  it("a QR that cannot be encoded fails the whole print — never a card without a code", async () => {
+    const tooLong = `https://example.test/score/${"x".repeat(3000)}`;
+    await expect(renderScorerSheetPdf(model([[row(1), row(2, { url: tooLong })]]))).rejects.toThrow(
+      /QR generation failed for fixture f2/,
+    );
   });
 });
