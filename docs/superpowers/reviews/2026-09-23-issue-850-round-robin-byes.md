@@ -109,3 +109,24 @@ V355 plus the exemption.
    concurrent withdraw and delete of the same entrant can deadlock (40P01).
 3. LOW — addFixture in a new round writes a rest bye (3-entrant league;
    `add-fixture.test.ts:138-147`). Owner ruled: no bye for hand-added matches.
+
+## Round 4 — implementer report (awaiting round-4 review)
+
+- R3-1: draw-made dead feeders (double-elim losers'-bracket byes, the third-place
+  bye, voids whose two feeders are both draw-made) are now stamped
+  `DRAW_BYE_SLOT_LABEL`. Withdrawal voids keep the plain label.
+- R3-2: the division lock is taken before the entrant update in `patchEntrant`,
+  and at the top of `withdrawCore`, where it must also come before the
+  registration `FOR UPDATE`, because `deleteEntrant` reaches that row through
+  the FK's `on delete set null`.
+- R3-3: the reconciler only writes byes in rounds that contain a generator
+  match key (`rr-r{n}-c{m}`).
+- Orchestrator ruling on the implementer's open edge: a draw-bye line whose
+  holder left BEFORE the draw is a withdrawal void, so the seat it feeds keeps
+  the plain label and stays in ICS. That is consistent with the
+  departed-walkover rule.
+- Reported, not fixed: withdrawing after generate while the opponent is still
+  undecided throws `WRONG_PHASE` in `withdrawEntrantCascade`. The round-4
+  review must establish whether this is pre-existing on origin/main.
+- Merged origin/main (42 commits); one import conflict in
+  `public-player-matches.ts`, resolved as the union of both import lists.
