@@ -319,6 +319,40 @@ async function openTab(page: Page, id: string, extra = ""): Promise<void> {
   await expect(page.getByTestId(`mh-tab-panel-${id}`), `?tab=${id} opened a different tab`).toBeVisible();
 }
 
+/**
+ * Wait until no FINITE animation or CSS transition is running, so a colour
+ * check reads what a spectator rests on rather than one frame of an ease.
+ *
+ * A deep link to any tab but the first starts one on every hub load. The route
+ * is ISR, so `useTabParam` has no `?tab=` on the server and the SSR/hydration
+ * render paints the FIRST tab active; the client render then flips to the
+ * linked tab, and the pill that stops being active eases from `bg-accent` and
+ * white ink to its inactive colours over its `transition` (150ms). HB12's axe
+ * scan landing inside that window read the Overview pill as #736f80 on
+ * #f2f0f8, 4.3:1 (CI, PR 864's run). At rest it is #6f6a7c on #f6f5f8, 4.79:1,
+ * and hovered #6931c9 on #f5effe, 6.47:1 — neither end state fails, and the
+ * pointer is not involved. `openTab` returns the moment the linked panel is
+ * visible, which is the START of the ease.
+ *
+ * Infinite animations (a live pulse) never finish and are skipped. The loop
+ * re-reads because a finished ease can hand over to another one.
+ */
+async function settleMotion(page: Page): Promise<void> {
+  const left = await page.evaluate(async () => {
+    const running = () =>
+      document
+        .getAnimations()
+        .filter((a) => a.playState === "running" && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)));
+    for (let round = 0; round < 10; round++) {
+      const now = running();
+      if (now.length === 0) return 0;
+      await Promise.all(now.map((a) => a.finished.catch(() => undefined)));
+    }
+    return running().length;
+  });
+  expect(left, "finite animations still running after ten rounds").toBe(0);
+}
+
 /** A card's two score spans, whitespace dropped (score line + its sub line). */
 async function cardScores(card: Locator): Promise<string[]> {
   const out: string[] = [];
@@ -1091,6 +1125,7 @@ test("HB12: axe finds no serious or critical violation at 320 on Overview, Match
   const doc = await hubDoc();
   const view = doc.tables.find((t) => t.divisionSlug === cricketSlug)!;
   const scan = async (label: string) => {
+    await settleMotion(page);
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     const bad = results.violations
       .filter((v) => v.impact === "serious" || v.impact === "critical")
