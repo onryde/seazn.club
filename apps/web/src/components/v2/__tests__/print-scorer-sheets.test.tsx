@@ -202,6 +202,15 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     [400, "sheets.error.generic", { code: "VALIDATION", message: "date: Invalid" }],
     [422, "sheets.error.generic", { code: "SOMETHING_ELSE", message: "Unprocessable" }],
     [500, "sheets.error.generic", null],
+    // A card's link could not be proven (Task 8's builder): the whole sheet is
+    // refused. Its own line, not the generic one — the organiser's links are
+    // the thing to retry. The server's message is in the ORGANISER's language
+    // (here French) and must not leak onto an English screen.
+    [
+      500,
+      "sheets.error.linksIncomplete",
+      { code: "SHEET_LINKS_INCOMPLETE", message: "Certains liens de score n'ont pas pu être préparés. Réessayez." },
+    ],
   ] as const)("a %i refusal shows %s, never the server's message, and hands the button back", async (status, key, error) => {
     vi.stubGlobal(
       "fetch",

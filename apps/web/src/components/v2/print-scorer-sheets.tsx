@@ -26,6 +26,9 @@ const REFUSAL_BY_STATUS: Partial<Record<number, MessageKey>> = {
 
 function refusalKey(status: number, code: string | undefined): MessageKey {
   if (code === "NO_FIXTURES_ON_DAY") return "sheets.error.noFixtures";
+  // A card's link could not be proven, so the whole sheet was refused (the
+  // builder, usecases/scorer-sheets.ts). Keyed by code: its status is a 500.
+  if (code === "SHEET_LINKS_INCOMPLETE") return "sheets.error.linksIncomplete";
   return REFUSAL_BY_STATUS[status] ?? "sheets.error.generic";
 }
 
