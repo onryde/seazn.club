@@ -491,6 +491,87 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
       await flush();
       expect(server.posted, "exactly one core.start for two taps").toEqual(["core.start"]);
     });
+
+    // Task 6 review round 2 (item 4): `/state` and the ledger are two
+    // CONCURRENT reads, so the ledger's can be answered before a Start that
+    // `/state` then sees. `/state` says started, the ledger holds nothing, and
+    // the pad would mount on that empty ledger — the P8 hazard again, by a
+    // different door. The ledger is re-read until it reaches `/state`'s tip.
+    /** A server whose ledger reads answer from `ledgers` in turn (the last
+     *  one repeats) while `/state` already reports the match at `lastSeq`. */
+    async function serveLaggingLedger(ledgers: unknown[][], lastSeq = 1, status = "in_play") {
+      const { apiV1 } = await import("@/lib/client-v1");
+      const original = vi.mocked(apiV1).getMockImplementation()!;
+      onTestFinished(() => void vi.mocked(apiV1).mockImplementation(original));
+      const reads = { events: 0, state: 0 };
+      vi.mocked(apiV1).mockImplementation(((url: string, options?: { method?: string }) => {
+        if (options?.method === "POST") return Promise.resolve({});
+        if (url.includes("/events")) {
+          reads.events += 1;
+          return Promise.resolve(ledgers[Math.min(reads.events, ledgers.length) - 1]);
+        }
+        reads.state += 1;
+        return Promise.resolve({ status, last_seq: lastSeq, summary: null, state: {}, outcome: null });
+      }) as typeof apiV1);
+      return reads;
+    }
+    const OWN_START = { ...OTHER_START, id: "ev-start-own", device_link_id: DEVICE_LINK_ID, recorded_by: "u1" };
+
+    it("a ledger read answered BEFORE the Start /state saw is re-read: the pad never mounts without core.start", async () => {
+      const reads = await serveLaggingLedger([[], [OWN_START]]);
+      const island = renderIsland(DeviceScorePad, scheduled());
+      (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+      await flush();
+      expect(reads.events, "the lagging ledger was read again").toBe(2);
+      expect(reads.state, "…and /state only once: the ledger is what was behind").toBe(1);
+      expect(seedOf(island.tree())).toEqual([["core.start", 1, "u1"]]);
+    });
+
+    // The ledger's tip is its LAST row, not its first: a read that already
+    // holds the Start but not the point `/state` saw after it is still behind.
+    it("a ledger one event short of /state's tip is re-read too: the tip is the LAST row", async () => {
+      const POINT = { ...OWN_START, id: "ev-point", seq: 2, type: "generic.result", payload: { p1Score: 1, p2Score: 0 } };
+      const reads = await serveLaggingLedger([[OWN_START], [OWN_START, POINT]], 2);
+      const island = renderIsland(DeviceScorePad, scheduled());
+      (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+      await flush();
+      expect(reads.events).toBe(2);
+      expect(seedOf(island.tree())).toEqual([
+        ["core.start", 1, "u1"],
+        ["generic.result", 2, "u1"],
+      ]);
+    });
+
+    it("a ledger that never catches up is re-read a BOUNDED number of times and seeds nothing", async () => {
+      const reads = await serveLaggingLedger([[]]);
+      const island = renderIsland(DeviceScorePad, scheduled());
+      (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+      await flush();
+      expect(reads.events, "one read, then LEDGER_CATCHUP_READS re-reads, then it gives up").toBe(3);
+      expect(island.tree().find((e) => e.type === ScorePad), "no pad on a ledger behind /state").toBeUndefined();
+      expect(byTestId(island.tree(), "scan-confirm"), "the phone stays on Confirm").toBeDefined();
+      expect(textOfTree(island.tree()), "and says the refresh failed, in the dictionary's words").toContain(
+        dict["device.failed"],
+      );
+    });
+
+    // The empty case: a match with no events is at tip 0 on BOTH reads, so it
+    // is caught up — an organiser cancelling an unstarted match must still
+    // reach the Confirm phone on its next tab return, on one ledger read.
+    it("an empty ledger at /state's tip 0 is caught up: a match cancelled before Start reaches View-only", async () => {
+      const doc = { ...tabTarget(), visibilityState: "visible" as DocumentVisibilityState };
+      const win = tabTarget();
+      vi.stubGlobal("document", doc);
+      vi.stubGlobal("window", win);
+      onTestFinished(() => void vi.unstubAllGlobals());
+      const reads = await serveLaggingLedger([[]], 0, "cancelled");
+      const island = renderIsland(DeviceScorePad, scheduled());
+      expect(byTestId(island.tree(), "scan-confirm"), "precondition: Confirm").toBeDefined();
+      for (const fn of [...(win.listeners.focus ?? [])]) fn();
+      await flush();
+      expect(reads.events, "one ledger read: nothing to catch up").toBe(1);
+      expect(textOf(byTestId(island.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.cancelled"]);
+    });
   });
 });
 

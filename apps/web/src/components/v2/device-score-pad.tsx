@@ -101,6 +101,20 @@ interface Props {
 
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
 
+/** How many times `resync` re-reads a ledger that is behind the `/state` it
+ *  was read beside, before it gives up (see there). One sequential re-read is
+ *  enough in principle — it is issued after `/state` answered, so every event
+ *  up to that tip is committed — and events are append-only (no path deletes a
+ *  `score_events` row; every `match_states.last_seq` writer takes it from the
+ *  ledger), so a lag cannot be permanent. The second is slack, and the bound is
+ *  what stops a server that ever broke that invariant from spinning a phone. */
+const LEDGER_CATCHUP_READS = 2;
+
+/** The ledger's tip: the seq of its last row (`listEvents` orders by seq,
+ *  voids included), 0 for an empty ledger — the same 0 `/state` reports for a
+ *  match with no events. */
+const ledgerTip = (events: readonly PadEventIn[]) => events[events.length - 1]?.seq ?? 0;
+
 export function DeviceScorePad({
   token,
   deviceLinkId,
@@ -189,12 +203,29 @@ export function DeviceScorePad({
           ? null
           : setTimeout(() => controller.abort(new Error(`resync exceeded its ${budget}ms budget`)), budget);
       try {
-        const [state, all] = await Promise.all([
-          authed<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
+        const readLedger = () =>
           authed<PadEventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`, {
             signal: controller?.signal,
-          }),
+          });
+        const [state, first] = await Promise.all([
+          authed<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
+          readLedger(),
         ]);
+        let all = first;
+        // The two reads are CONCURRENT (review round 2), so the ledger's can be
+        // answered before an event `/state` then sees — a Start landing between
+        // them reads as "started" over a ledger without core.start, and the
+        // inner pad would mount on it (`seededStarted`). So the ledger must
+        // reach `/state`'s tip before either lands; a later re-read is issued
+        // after `/state` answered, so it sees what `/state` saw. Bounded by
+        // `LEDGER_CATCHUP_READS`; past it this refresh fails like any other (no
+        // message — see `ResyncShapeError` below) and lands nothing.
+        for (let reread = 0; Array.isArray(all) && state !== null && typeof state === "object"
+          && ledgerTip(all) < state.last_seq; reread++) {
+          if (reread === LEDGER_CATCHUP_READS) throw Object.assign(new Error(), { name: "ResyncLagError" });
+          controller?.signal.throwIfAborted();
+          all = await readLedger();
+        }
         // Never write an aborted refresh into state. `apiV1` now rejects on an
         // abort mid-body (review round 1), but before that it RESOLVED with
         // `undefined` there, and `setLive(undefined)` crashed the next render
