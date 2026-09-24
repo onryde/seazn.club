@@ -813,13 +813,19 @@ export async function applyCompetitionSchedule(
           where id = ${a.fixture_id}`;
         // `court` here is a courts.id, not a label — see `applySchedule`'s
         // identical note on its own `moves` ledger payload.
+        // `venue` rides along, as in `applySchedule` (review 3 of #857, m5).
         moves.push({
           fixture: a.fixture_id,
           from: {
             at: f.scheduled_at !== null ? iso(ms(f.scheduled_at)) : null,
             court: f.court_id,
+            venue: f.venue_id,
           },
-          to: { at: a.scheduled_at, court: a.court_id },
+          to: {
+            at: a.scheduled_at,
+            court: a.court_id,
+            venue: a.court_id !== null ? (courtVenues.get(a.court_id) ?? null) : null,
+          },
         });
       }
       // The same `schedule_applied` row the per-stage apply writes, so the

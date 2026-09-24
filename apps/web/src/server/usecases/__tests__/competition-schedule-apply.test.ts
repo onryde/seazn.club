@@ -502,6 +502,28 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     expect((await venueOf(board.alpha.id)).every((v) => v === venueB)).toBe(true);
   });
 
+  // Review 3 of #857, m5. A fixture can stand in a venue with no court; the
+  // joint step named courts only, so its Undo took the court off and left no
+  // venue behind. The step now carries the venue each side stood in.
+  it("undoing a joint apply gives venue-only fixtures their own venue back", async () => {
+    const [{ id: hall }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, 'Own Hall') returning id`;
+    await sql`update fixtures set venue_id = ${hall} where division_id = ${board.alpha.id}`;
+    const placed = async () =>
+      sql<{ court_id: string | null; venue_id: string | null }[]>`
+        select court_id, venue_id from fixtures where division_id = ${board.alpha.id} order by id`;
+    const before = await placed();
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.every((r) => r.court_id === null && r.venue_id === hall)).toBe(true);
+
+    const { alpha } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, { divisions: [alpha], source: "ai", ai: AI });
+    expect((await placed()).every((r) => r.court_id === board.courts.court1 && r.venue_id !== hall)).toBe(true);
+
+    expect((await undoDivision(auth, board.alpha.id)).applied.type).toBe("schedule_applied");
+    expect(await placed()).toEqual(before);
+  }, 60_000);
+
   it("writes every division's assignments in one go", async () => {
     const { alpha, bravo } = await clean();
     const out = await applyCompetitionSchedule(auth, board.competitionId, {

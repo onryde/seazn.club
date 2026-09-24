@@ -2845,13 +2845,17 @@ export async function applySchedule(
       // `court` here is a courts.id, not a label — see moveFixture's
       // identical note on `schedule_edited`'s ledger payload; history.ts's
       // `execute()` replays `schedule_applied`/`schedule_shifted` the same way.
+      // `venue` rides along (review 3 of #857, m5): a fixture can stand in a
+      // venue with NO court, and the Undo that takes it off the court has no
+      // court to derive that venue from.
       moves.push({
         fixture: a.fixture_id,
         from: {
           at: f.scheduled_at !== null ? iso(ms(f.scheduled_at)) : null,
           court: f.court_id,
+          venue: f.venue_id,
         },
-        to: { at: a.scheduled_at, court: a.court_id },
+        to: { at: a.scheduled_at, court: a.court_id, venue: courtVenues.get(a.court_id) ?? null },
       });
     }
     // One auditable ledger entry per apply (doc 12 §2 family: schedule_edited/…).
@@ -3245,14 +3249,19 @@ export async function moveFixture(
       // would write a label into an id column.
       const seq = await appendDivisionEvent(tx, fixture.division_id, "schedule_edited", {
         fixture: fixture.id,
+        // `venue` rides along (review 3 of #857, m5): see `applySchedule`'s
+        // identical note. Undo of a venue-only fixture dragged onto a court
+        // has no court left to derive the venue from.
         from: {
           at: fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null,
           court: fixture.court_id,
+          venue: fixture.venue_id,
           locked: fixture.schedule_locked,
         },
         to: {
           at: nextAt,
           court: nextCourtId,
+          venue: nextVenueId,
           locked: patch.schedule_locked ?? fixture.schedule_locked,
         },
       });

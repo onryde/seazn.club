@@ -992,6 +992,71 @@ describe.skipIf(!HAS_DB)("every history write keeps a fixture's venue its court'
     expect((await undoDivision(auth, divisionId)).applied.type).toBe(event);
     expect(await placement()).toEqual(inHall(9));
   });
+
+  // Review 3 of #857, m5. The move's ledger step named the courts only, so the
+  // Undo that takes a venue-only fixture back OFF a court had no court to read
+  // its venue from, and wrote none: the fixture came back with no venue at all.
+  // The step now carries the venue each side stood in.
+  async function venueOnlyFixture() {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const hall = await createVenue(auth, { name: "Hall", sort: 0 });
+    const arena = await createVenue(auth, { name: "Arena", sort: 1 });
+    const court = await createCourt(auth, arena.id, { name: "A1", sort: 0, tags: [] });
+    const [a, b] = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${divisionId} order by seed limit 2`;
+    const at = new Date(Date.UTC(2026, 6, 12, 9)).toISOString();
+    const { fixture_id: id } = await addFixture(auth, mainId, {
+      home_entrant_id: a!.id,
+      away_entrant_id: b!.id,
+      scheduled_at: at,
+      venue_id: hall.id,
+    });
+    const placement = async () => {
+      const [row] = await sql<{ court_id: string | null; venue_id: string | null }[]>`
+        select court_id, venue_id from fixtures where id = ${id}`;
+      return row;
+    };
+    const inHall = { court_id: null, venue_id: hall.id };
+    const onCourt = { court_id: court.id, venue_id: arena.id };
+    expect(await placement()).toEqual(inHall);
+    return { auth, divisionId, mainId, id, at, court: court.id, hall: hall.id, placement, inHall, onCourt };
+  }
+
+  it.each([
+    { how: "a drag (schedule_edited)", event: "schedule_edited" },
+    { how: "a board apply (schedule_applied)", event: "schedule_applied" },
+  ] as const)("a venue-only fixture moved ONTO a court gets its own venue back on Undo — $how; redo puts it on the court again", async ({ event }) => {
+    const { auth, divisionId, mainId, id, at, court, placement, inHall, onCourt } = await venueOnlyFixture();
+    if (event === "schedule_edited") {
+      await patchFixture(auth, id, { court_id: court });
+    } else {
+      await applySchedule(auth, mainId, { assignments: [{ fixture_id: id, scheduled_at: at, court_id: court }], source: "manual" });
+    }
+    expect(await placement()).toEqual(onCourt);
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe(event);
+    expect(await placement()).toEqual(inHall);
+
+    await redoDivision(auth, divisionId);
+    expect(await placement()).toEqual(onCourt);
+  });
+
+  it("a step written before the venue rode along still undoes, as it always did: court off, no venue to put back", async () => {
+    const { auth, divisionId, id, court, placement, onCourt } = await venueOnlyFixture();
+    await patchFixture(auth, id, { court_id: court });
+    expect(await placement()).toEqual(onCourt);
+    // Strip the step back to the shape it had before m5: courts only.
+    const stripped = await sql`
+      update division_events set payload = payload #- '{from,venue}' #- '{to,venue}'
+      where division_id = ${divisionId} and type = 'schedule_edited' and payload->>'fixture' = ${id}
+        and payload->'from' ? 'venue'`;
+    expect(stripped.count).toBe(1);
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("schedule_edited");
+    expect(await placement()).toEqual({ court_id: null, venue_id: null });
+    await redoDivision(auth, divisionId);
+    expect(await placement()).toEqual(onCourt);
+  });
 });
 
 // G3 (gap hunt, #857). A restore wrote the snapshot back as it was, whatever the

@@ -161,6 +161,18 @@ const liveCourt = (tx: Tx, courtId: string | null) =>
 const venueWith = (tx: Tx, courtId: string | null) =>
   tx`case when court_id is distinct from ${liveCourt(tx, courtId)} then ${venueOf(tx, courtId)} else venue_id end`;
 
+/** The `venue_id` a move replay writes. With NO court to put the fixture on, a
+ *  payload side that carries the venue it stood in (`venue`, review 3 of #857,
+ *  m5) puts that venue back: a venue-only fixture dragged onto a court and then
+ *  undone lost its venue, because an absent court names none. A payload written
+ *  before carries no `venue` key and replays exactly as before (`venueWith`).
+ *  A venue deleted since writes as no venue, never a dangling id. */
+const venueBack = (tx: Tx, courtId: string | null, side: { venue?: unknown }) => {
+  if (courtId !== null || side.venue === undefined) return venueWith(tx, courtId);
+  const venue = typeof side.venue === "string" && UUID_RE.test(side.venue) ? side.venue : null;
+  return tx`(select v.id from venues v where v.id = ${venue})`;
+};
+
 const DEPARTED: string[] = [...DEPARTED_STATUSES];
 
 /** The history events that delete fixture rows, each carrying them as they
@@ -476,12 +488,13 @@ async function execute(
     // after a restore), not merely a rename.
     case "schedule_applied":
     case "schedule_shifted": {
-      const moves = (p.moves as { fixture: string; to: { at: string | null; court: string | null } }[]) ?? [];
+      const moves =
+        (p.moves as { fixture: string; to: { at: string | null; court: string | null; venue?: unknown } }[]) ?? [];
       for (const m of moves) {
         const court = resolveCourtWrite(m.to.court, { divisionId, fixtureId: m.fixture, eventType: event.type });
         if (court.write) {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${liveCourt(tx, court.value)},
-                                                             venue_id = ${venueWith(tx, court.value)}
+                                                             venue_id = ${venueBack(tx, court.value, m.to)}
                    where id = ${m.fixture} and ${unplayed(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}
@@ -491,12 +504,12 @@ async function execute(
       break;
     }
     case "schedule_edited": {
-      const to = p.to as { at: string | null; court: string | null; locked?: boolean };
+      const to = p.to as { at: string | null; court: string | null; venue?: unknown; locked?: boolean };
       const court = resolveCourtWrite(to.court, { divisionId, fixtureId: p.fixture, eventType: event.type });
       if (court.write) {
         wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at}, court_id = ${liveCourt(tx, court.value)},
-                              venue_id = ${venueWith(tx, court.value)},
+                              venue_id = ${venueBack(tx, court.value, to)},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
           where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
       } else {
