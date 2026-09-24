@@ -1047,4 +1047,58 @@ describe.skipIf(!HAS_DB)("a change made outside the ledger after a restore survi
 
     expect(await wholeRows("pool_id", pool!.id)).toEqual(changed);
   });
+
+  // Review 2 of #857, M2. Walking back PAST a restore inverts an OLDER delete
+  // than the one that last took the rows: the clear the restore undid, while
+  // the newest delete is the Undo of that restore (an `__undo_of` inverse).
+  // The rows as they last stood are in the newest delete of the same rows,
+  // whatever kind of event it is.
+  it("a pool: clear, Undo, Redo, a fresh edit, then walked back past a change made while the rows were back — THAT change comes back", async () => {
+    const { auth, divisionId } = await seedDivision(8);
+    const created = await createStages(auth, divisionId, [
+      { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+      { seq: 2, kind: "league", name: "Later", config: {} },
+    ]);
+    const [stage, later] = [1, 2].map((seq) => created.find((st) => st.seq === seq)!);
+    await generateStageFixtures(auth, stage.id);
+    const [pool] = await sql<{ id: string }[]>`select id from pools where stage_id = ${stage.id} order by id limit 1`;
+    const undoes = async (...types: string[]) => {
+      for (const type of types) expect((await undoDivision(auth, divisionId)).applied.type).toBe(type);
+    };
+    await clearPoolEntrants(auth, pool!.id, true);
+    await undoes("pool_entrants_restored");
+    expect((await redoDivision(auth, divisionId)).applied.type).toBe("pool_entrants_cleared");
+    await generateStageFixtures(auth, later.id);
+
+    // Back past the fresh edit and the Redo: the pool's rows are back.
+    await undoes("fixtures_cleared", "pool_entrants_restored");
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where pool_id = ${pool!.id} order by fixture_no limit 1`;
+    await sql`update fixtures set home_entrant_id = away_entrant_id, away_entrant_id = home_entrant_id where id = ${f!.id}`;
+    const changed = await wholeRows("pool_id", pool!.id);
+
+    // Back past the first Undo (the rows go, read as they now stand) and the
+    // clear itself (the rows return — as they stood when they last went).
+    await undoes("pool_entrants_cleared", "pool_entrants_restored");
+    expect(await wholeRows("pool_id", pool!.id)).toEqual(changed);
+  });
+
+  it("a generation: undone, restored by walking back, changed, then walked back past that restore and further — THAT change comes back", async () => {
+    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(4, "league", {});
+    const undoes = async (...types: string[]) => {
+      for (const type of types) expect((await undoDivision(auth, divisionId)).applied.type).toBe(type);
+    };
+    await undoes("fixtures_cleared");
+    await generateStageFixtures(auth, laterId);
+    await undoes("fixtures_cleared", "fixtures_generated"); // the league restored raw
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${mainId} order by fixture_no limit 1`;
+    await sql`update fixtures set home_entrant_id = away_entrant_id, away_entrant_id = home_entrant_id where id = ${f!.id}`;
+    const changed = await wholeRows("stage_id", mainId);
+
+    await generateStageFixtures(auth, laterId);
+    // The fresh edit; the restore (the league goes, read as it now stands);
+    // the first Later generation, back and gone again; and the first Undo —
+    // the league returns as it stood when it last went.
+    await undoes("fixtures_cleared", "fixtures_cleared", "fixtures_generated", "fixtures_cleared", "fixtures_generated");
+    expect(await wholeRows("stage_id", mainId)).toEqual(changed);
+  });
 });

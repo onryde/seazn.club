@@ -167,6 +167,19 @@ const venueWith = (tx: Tx, courtId: string | null) =>
 
 const DEPARTED: string[] = [...DEPARTED_STATUSES];
 
+/** The history events that delete fixture rows, each carrying them as they
+ *  stood (`snapshotFixtures`) just before. */
+const DELETE_SIDE_EVENTS: ReadonlySet<string> = new Set(["fixtures_cleared", "pool_entrants_cleared"]);
+
+/** The set of rows a snapshot holds, as one comparable key. */
+function snapshotIdKey(snapshot: unknown): string | undefined {
+  if (!Array.isArray(snapshot)) return undefined;
+  return (snapshot as FixtureSnapshot[])
+    .map((f) => f.id)
+    .sort()
+    .join(",");
+}
+
 /** A restored seat: the entrant it held, unless that entrant is gone since.
  *  DELETED — the FK would refuse the insert (and a delete SET NULLs the seat
  *  of every live row, so an empty seat is what the row would hold had it
@@ -642,18 +655,24 @@ async function stepWrite(
       const ids = ((result.event.payload.fixtures as FixtureSnapshot[]) ?? []).map((f) => f.id);
       result.event.payload.fixtures = await snapshotFixtures(tx, { ids });
     }
-    // ...and the restore that follows a Redo restores THAT read. Undo after a
-    // Redo inverts the ORIGINAL clear, not the redo's copy — the engine's
-    // `redo` moves the watermark back onto the original — so its payload holds
-    // the snapshot from before the first Undo, and a change made while the
-    // rows were back would be reverted by the round trip. The rows as they
-    // were last deleted are in the newest redo copy of that clear (read fresh
-    // above when it was appended). Only a pool clear is ever redone: every
-    // `fixtures_cleared` is an undo's inverse, which Redo skips.
-    if (result.event.type === "pool_entrants_restored") {
-      const of = result.event.payload.__undo_of;
-      const copy = ledger.findLast((e) => e.payload.__redo_of === of);
-      if (copy?.payload.fixtures !== undefined) result.event.payload.fixtures = copy.payload.fixtures;
+    // ...and a restore restores the rows as they were LAST deleted: the
+    // snapshot of the newest delete-side event of the same rows, never merely
+    // the one it inverts. The two differ whenever the step inverts an older
+    // delete: Undo after a Redo inverts the ORIGINAL clear, not the redo's
+    // copy (the engine's `redo` moves the watermark back onto the original);
+    // walking back past a restore deletes the rows again (the Undo of that
+    // restore, an `__undo_of` inverse) and then inverts the delete the
+    // restore had undone. Either way the older snapshot predates a change
+    // made while the rows were back, and the round trip reverted it.
+    const restoring =
+      result.event.type === "pool_entrants_restored" ||
+      (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined);
+    if (restoring) {
+      const rows = snapshotIdKey(result.event.payload.fixtures);
+      const newest = ledger.findLast(
+        (e) => DELETE_SIDE_EVENTS.has(e.type) && snapshotIdKey(e.payload.fixtures) === rows,
+      );
+      if (newest !== undefined) result.event.payload.fixtures = newest.payload.fixtures;
     }
     const effects = { scoredFixtureRemoved: false };
     const fixtureIds = await execute(tx, divisionId, result.event, effects);
