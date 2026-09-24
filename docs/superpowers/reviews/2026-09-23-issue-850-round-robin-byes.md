@@ -130,3 +130,30 @@ V355 plus the exemption.
   review must establish whether this is pre-existing on origin/main.
 - Merged origin/main (42 commits); one import conflict in
   `public-player-matches.ts`, resolved as the union of both import lists.
+
+## Round 4 — reviewer (verdict: CLEAN; 1 LOW, fixed inline)
+
+All three round-3 fixes hold through real paths; the reviewer's 10/10 mutants
+were killed. There is no deadlock path: every registration path reaches the
+division lock only through `withdrawCore`, which takes it first. Merge sanity:
+none of the 42 merged main commits adds a fixture reader that needs the
+predicates; the new player "Upcoming" list reads status `scheduled` only.
+Gates on a fresh prod build of HEAD: `mobile.spec.ts` whole file at 320 and
+768, 96 passed / 2 skipped (LCP, skipped by design) / 0 failed; smoke 107/108
+(the one failure is the partial-run audit cleanup check); full apps/web vitest
+21206 passed / 5 failed (known environmental failures) of 21304.
+
+1. LOW — `entrants.ts` `patchEntrant` read `prior.status` before the division
+   lock, so a reinstate racing a withdrawal of the same entrant skipped the
+   reconcile and left them registered holding no rest bye. **Fixed inline by
+   the orchestrator:** the status is re-read under the lock. Regression test in
+   `entrant-lock-order.test.ts` ("#850 R4"), ordered by the lock, not by sleeps.
+   Mutant (re-read disabled) killed by that test alone: "expected +0 to be 1".
+   Gate after the fix: 826/826 across 43 files; typecheck and lint clean.
+
+`WRONG_PHASE` in `withdrawEntrantCascade`: **pre-existing on origin/main
+2e7487f23**, reproduced identically on main and on this branch, NOT introduced
+by #850. A knockout entrant whose opponent seat is still TBD cannot be
+withdrawn: `applyUpdate` voids the TBD match with `core.abandon`
+(`withdrawal.ts:120-125`), which trips the guard at `append-event.ts:184`.
+Surfaced to the owner; out of this change's scope.

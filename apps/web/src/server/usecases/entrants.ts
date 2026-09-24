@@ -736,6 +736,14 @@ export async function patchEntrant(
     const statusWrite = prior !== undefined && fields.status !== undefined;
     if (statusWrite) {
       await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior.division_id}))`;
+      // Re-read under the lock (#850 review round 4): a concurrent withdraw or
+      // reinstate of this entrant may have committed while we waited, and the
+      // crossing test below must judge against the status it left, or a
+      // reinstate racing a withdrawal sees "registered → registered" and never
+      // gives the rest bye back. `entrant-lock-order.test.ts`.
+      const [locked] = await tx<{ status: string }[]>`
+        select status from entrants where id = ${id}`;
+      if (locked) prior.status = locked.status;
     }
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {

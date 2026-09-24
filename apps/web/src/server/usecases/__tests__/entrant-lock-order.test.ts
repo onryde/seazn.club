@@ -89,12 +89,12 @@ async function holdDivisionLock(divisionId: string) {
 /** Until a backend is waiting on `holder` — the write under test, parked on
  *  the division lock. A condition, polled; the deadline only turns a hang into
  *  a readable failure. */
-async function parkedBehind(holder: number): Promise<void> {
+async function parkedBehind(holder: number, count = 1): Promise<void> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const waiting = await sql<{ pid: number }[]>`
       select pid from pg_stat_activity where ${holder} = any(pg_blocking_pids(pid))`;
-    if (waiting.length > 0) return;
+    if (waiting.length >= count) return;
     await new Promise((r) => setTimeout(r, 20));
   }
   throw new Error("the write never reached the division lock");
@@ -192,5 +192,47 @@ describe.skipIf(!HAS_DB)("#850 R3-2 — the division lock is taken BEFORE the en
     expect(held, "rows locked before the division lock").toEqual([]);
     const [e] = await sql<{ status: string }[]>`select status from entrants where id = ${id}`;
     expect(e!.status, "and then the withdrawal landed").toBe("withdrawn");
+  });
+});
+
+// #850 review round 4 — patchEntrant judges "did this patch cross the field
+// boundary?" against the status it re-reads UNDER the division lock. Read
+// before the lock, a reinstate queued behind a withdrawal of the same entrant
+// saw "registered → registered", skipped the reconcile, and left the entrant
+// back in the field holding no rest bye: one round with nobody sitting out.
+// Ordered by the lock, not by sleeps: both writes are parked on a held lock
+// (withdraw first) before it is released.
+describe.skipIf(!HAS_DB)("#850 R4 — a reinstate queued behind a withdrawal gets the rest bye back", () => {
+  const byesHeld = async (divisionId: string, entrantId: string) =>
+    (
+      await sql<{ n: number }[]>`
+        select count(*)::int as n from fixtures f join stages s on s.id = f.stage_id
+        where s.division_id = ${divisionId} and f.ext_key ~ '(^|-)rr-r[0-9]+-bye$'
+          and (f.home_entrant_id = ${entrantId} or f.away_entrant_id = ${entrantId})`
+    )[0]!.n;
+
+  it("withdraw then reinstate, both parked on the lock: registered, and holding their bye again", async () => {
+    const r = await rig();
+    const id = r.entrantIds[0]!;
+    const before = await byesHeld(r.divisionId, id);
+    expect(before, "a 5-entrant league gives every entrant a rest bye").toBeGreaterThan(0);
+
+    const lock = await holdDivisionLock(r.divisionId);
+    let withdraw: Promise<unknown> | undefined;
+    let reinstate: Promise<unknown> | undefined;
+    try {
+      withdraw = patchEntrant(r.auth, id, { status: "withdrawn" });
+      await parkedBehind(lock.pid, 1);
+      reinstate = patchEntrant(r.auth, id, { status: "registered" });
+      await parkedBehind(lock.pid, 2);
+    } finally {
+      await lock.release();
+    }
+    await withdraw;
+    await reinstate;
+
+    const [e] = await sql<{ status: string }[]>`select status from entrants where id = ${id}`;
+    expect(e!.status).toBe("registered");
+    expect(await byesHeld(r.divisionId, id), "the reinstate reconciled and gave the bye back").toBe(before);
   });
 });
