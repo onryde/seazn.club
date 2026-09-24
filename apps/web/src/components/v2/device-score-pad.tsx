@@ -460,9 +460,24 @@ export function DeviceScorePad({
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logo} alt="" className="h-5 w-5 shrink-0 rounded bg-white/10 object-cover" />
             )}
-            <span className="truncate">
-              {fixture.division_name} · {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
-              {fixture.court_label ? ` · ${fixture.court_label}` : ""}
+            {/* The round is the part a scorer checks against the sheet, so it
+                never shrinks or wraps; the division (and court) give way to
+                it. As one truncating span, the round was the first thing cut
+                at 320 ("SCAN CUP … · FI…"). */}
+            <span className="flex min-w-0 items-baseline">
+              <span data-testid="scan-scorebug-division" className="min-w-0 truncate">
+                {fixture.division_name}
+              </span>
+              <span data-testid="scan-scorebug-round" className="shrink-0 whitespace-pre">
+                {" · "}
+                {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
+              </span>
+              {fixture.court_label ? (
+                <span className="min-w-0 truncate">
+                  <span className="whitespace-pre">{" · "}</span>
+                  {fixture.court_label}
+                </span>
+              ) : null}
             </span>
           </p>
           {inPlay ? (

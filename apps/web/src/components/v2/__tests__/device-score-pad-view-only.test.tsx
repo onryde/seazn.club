@@ -253,6 +253,30 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     }
   });
 
+  // At 320 the scorebug's first line truncated as ONE span, so the round — the
+  // part the ruling is about — was the first thing cut ("SCAN CUP … · FI…").
+  // The round is its own element that never shrinks or wraps; the division
+  // beside it is what gives way.
+  it("the round label never gives way to the division: its own element, which does not shrink", () => {
+    const tree = renderIsland(DeviceScorePad, {
+      ...props("scheduled", null),
+      initialEvents: [],
+      fixture: { ...props("scheduled", null).fixture, division_name: "A very long division name indeed", round_label: "Final" },
+    }).tree();
+    const round = byTestId(tree, "scan-scorebug-round");
+    expect(round, "the round has its own element").toBeDefined();
+    expect(textOf(round!)).toMatch(/·\s*Final$/);
+    const cls = (round!.props as { className?: string }).className ?? "";
+    expect(cls, "it never shrinks").toMatch(/\bshrink-0\b/);
+    expect(cls, "it never truncates").not.toMatch(/\btruncate\b/);
+    const division = byTestId(tree, "scan-scorebug-division");
+    expect(division, "the division is its own element").toBeDefined();
+    expect(textOf(division!)).toBe("A very long division name indeed");
+    expect((division!.props as { className?: string }).className ?? "", "the division is what truncates").toMatch(
+      /\bmin-w-0\b.*\btruncate\b|\btruncate\b.*\bmin-w-0\b/,
+    );
+  });
+
   it("scheduled with both sides: the Confirm card with Start, and NO inner pad yet", () => {
     const island = renderIsland(DeviceScorePad, {
       ...props("scheduled", null),

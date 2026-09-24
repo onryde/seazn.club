@@ -337,12 +337,28 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     expect(label, "…by name, not by number").not.toBe(say(dict, "schedule.round", { n: f.round_no }));
     return label!;
   };
-  /** The scorebug's first line: the division, then the board's round. */
-  const scorebugRound = (page: Page, dict: Dict, f: Fx) =>
-    expect(
-      page.getByText(`Scan Cup ${TAG} · ${roundLabelOf(dict, f)}`),
+  /** The scorebug's first line: the division, then the board's round — and at
+   *  320 the round is whole (a clipped label is still "visible" to Playwright,
+   *  so this measures it against the line that clips it). */
+  const scorebugRound = async (page: Page, dict: Dict, f: Fx) => {
+    const label = roundLabelOf(dict, f);
+    await expect(
+      page.getByText(`Scan Cup ${TAG} · ${label}`),
       "the scorebug names the round as the board does",
     ).toBeVisible();
+    const round = page.getByTestId("scan-scorebug-round");
+    await expect(round).toContainText(label);
+    await page.setViewportSize({ width: 320, height: 900 });
+    const fit = await round.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const line = el.closest("p")!.getBoundingClientRect();
+      return { left: r.left, right: r.right, lineLeft: line.left, lineRight: line.right, overflow: el.scrollWidth > el.clientWidth + 1 };
+    });
+    expect(fit.right, "320: the round ends inside its line").toBeLessThanOrEqual(fit.lineRight + 0.5);
+    expect(fit.left, "320: the round starts inside its line").toBeGreaterThanOrEqual(fit.lineLeft - 0.5);
+    expect(fit.overflow, "320: the round is not clipped").toBe(false);
+    await page.setViewportSize({ width: 1280, height: 900 });
+  };
 
   const mint = async (fixtureId: string) => {
     const res = await apiJson<{ id: string; secret: string }>(
