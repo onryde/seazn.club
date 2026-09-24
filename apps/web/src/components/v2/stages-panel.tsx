@@ -1763,7 +1763,7 @@ export function classifyActError(
 }
 
 /** What "Undo" beside a notice says when the server refuses it. The played
- *  refusal (a match the change touches has started or finished) is said
+ *  refusal (a match the change touches has a result or scoring recorded) is said
  *  locally, off the CODE — the server's sentence is English, and
  *  history-panel.tsx gives the same refusal the same sentence. Anything else
  *  keeps its own message, which is the one an organiser can quote. */

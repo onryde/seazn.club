@@ -90,7 +90,7 @@ describe("clearing the schedule says what it left in place", () => {
 
     await clickClear(island);
 
-    expect(textOf(kept(island))).toBe("2 matches in play or finished were left in place.");
+    expect(textOf(kept(island))).toBe("2 matches with a result or scoring recorded were left in place.");
   });
 
   it("uses the singular for one", async () => {
@@ -100,7 +100,7 @@ describe("clearing the schedule says what it left in place", () => {
 
     await clickClear(island);
 
-    expect(textOf(kept(island))).toBe("1 match in play or finished was left in place.");
+    expect(textOf(kept(island))).toBe("1 match with a result or scoring recorded was left in place.");
   });
 
   it("says nothing when it kept none — and the clear still went through", async () => {

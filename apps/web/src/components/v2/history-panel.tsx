@@ -107,8 +107,8 @@ export function HistoryPanel({
    *  differently: "nothing to undo" answers a question, "undid 2 changes"
    *  confirms an action. */
   const [restored, setRestored] = useState<number | null>(null);
-  /** How many matches in play or finished the last schedule clear left in
-   *  place (`skipped.decided` — the server's played set). The clear never
+  /** How many matches with a result or scoring recorded the last schedule
+   *  clear left in place (`skipped.decided` — the server's played set). The clear never
    *  takes them, and a live match keeping its slot on a board just cleared,
    *  with nothing said, reads as a clear that did not work. */
   const [keptPlayed, setKeptPlayed] = useState<number | null>(null);
