@@ -110,10 +110,11 @@ const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNA
  *  what stops a server that ever broke that invariant from spinning a phone. */
 const LEDGER_CATCHUP_READS = 2;
 
-/** One scorebug-line separator: a fixed-width box (w-4) so the line can hang
- *  every item's separator in a clipped gutter of exactly that width (the row's
- *  `-ml-4`) — see the scorebug's comment. Change both together. */
-const SCOREBUG_SEP = "inline-block w-4 shrink-0 whitespace-pre text-center";
+/** One scorebug-line separator. Below md, a fixed-width box (w-4) so the
+ *  wrapping line can hang every item's separator in a clipped gutter of
+ *  exactly that width (the row's `max-md:-ml-4`) — see the scorebug's comment;
+ *  change both together. From md up, the natural " · " the line had before. */
+const SCOREBUG_SEP = "whitespace-pre max-md:inline-block max-md:w-4 max-md:shrink-0 max-md:text-center";
 
 /** The ledger's tip: the seq of its last row (`listEvents` orders by seq,
  *  voids included), 0 for an empty ledger — the same 0 `/state` reports for a
@@ -508,16 +509,20 @@ export function DeviceScorePad({
                 line).
 
                 SEPARATORS never lead a line. CSS cannot tell which item a wrap
-                put first, so EVERY item — the division included — carries its
-                separator in front, `SCOREBUG_SEP`'s fixed w-4; the row hangs
-                exactly that far left of the clipping box (`-ml-4`), so the
-                first item on EVERY line has its separator in the clipped
-                gutter while an item mid-line shows its own. The two widths
-                must match (a unit test pins it). ≥md the row never wraps, so
-                the division is always first and the line reads as before.
+                put first, so below md EVERY item — the division included —
+                carries its separator in front, `SCOREBUG_SEP`'s fixed w-4; the
+                row hangs exactly that far left of the clipping box (`-ml-4`),
+                so the first item on EVERY line has its separator in the
+                clipped gutter while an item mid-line shows its own. The two
+                widths must match (a unit test pins it). The whole trick is
+                `max-md:` (review round 3): ≥md the row never wraps, the
+                division shows no separator (`md:hidden`) and every other one
+                is its natural " · " — a fixed box at every width made each
+                one wider — so from 768 up the line is exactly the one before
+                the wrap work (AGENTS.md: at 768 and above nothing changes).
 
-                The round is a FLEX item — its separator, then the label as
-                its own box. As plain inline text, a label that wraps inside
+                Below md the round is a FLEX item — its separator, then the
+                label as its own box. As plain inline text, a label that wraps inside
                 itself started its second line at the item's left edge, which
                 is in the clipped gutter: fr "Grande finale (revanche)" lost
                 the "(r" of its second line. In its own box the label's every
@@ -530,17 +535,20 @@ export function DeviceScorePad({
                 3). So below md the label may shrink below that word and
                 break inside it (`min-w-0`, `wrap-anywhere`) rather than
                 clip. */}
-            <span data-testid="scan-scorebug-clip" className="min-w-0 overflow-hidden">
-              <span data-testid="scan-scorebug-line" className="-ml-4 flex items-baseline max-md:flex-wrap">
+            <span data-testid="scan-scorebug-clip" className="min-w-0 max-md:overflow-hidden">
+              <span data-testid="scan-scorebug-line" className="flex items-baseline max-md:-ml-4 max-md:flex-wrap">
                 <span className="flex min-w-0">
-                  <span aria-hidden data-scorebug-sep="" className={SCOREBUG_SEP}>
+                  <span aria-hidden data-scorebug-sep="" className={`md:hidden ${SCOREBUG_SEP}`}>
                     {" · "}
                   </span>
                   <span data-testid="scan-scorebug-division" className="min-w-0 truncate">
                     {fixture.division_name}
                   </span>
                 </span>
-                <span data-testid="scan-scorebug-round" className="flex shrink-0 items-baseline max-md:max-w-full">
+                <span
+                  data-testid="scan-scorebug-round"
+                  className="shrink-0 max-md:flex max-md:max-w-full max-md:items-baseline"
+                >
                   <span data-scorebug-sep="" className={SCOREBUG_SEP}>
                     {" · "}
                   </span>

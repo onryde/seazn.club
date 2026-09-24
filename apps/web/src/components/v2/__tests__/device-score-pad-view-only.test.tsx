@@ -305,8 +305,10 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
   // on each separator), and the line's own box clips that gutter. Whatever
   // item starts a line, its separator sits in the clipped gutter; an item
   // mid-line shows its separator. The widths must MATCH, or a line's first
-  // item is either partly clipped or keeps a sliver of its dot. Class tokens
-  // only; the scan-screens walkthrough reads the painted text at 320.
+  // item is either partly clipped or keeps a sliver of its dot. Only the phone
+  // line wraps, so the whole trick is `max-md:` (review round 3; the next test
+  // pins ≥md). Class tokens only; the scan-screens walkthrough reads the
+  // painted text at 320.
   it("a separator never leads a line: every item hangs a same-width separator in a clipped gutter", () => {
     const tree = renderIsland(DeviceScorePad, {
       ...props("scheduled", null),
@@ -317,17 +319,17 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
       new Set(((e?.props as { className?: string } | undefined)?.className ?? "").split(/\s+/));
     const clip = byTestId(tree, "scan-scorebug-clip");
     expect(clip, "the line has a clipping box").toBeDefined();
-    expect(tokens(clip).has("overflow-hidden"), "…which clips").toBe(true);
+    expect(tokens(clip).has("max-md:overflow-hidden"), "…which clips below md").toBe(true);
     const row = byTestId(tree, "scan-scorebug-line");
-    const gutter = [...tokens(row)].find((t) => /^-ml-\d+$/.test(t));
-    expect(gutter, "the row hangs left of the clipping box").toBeDefined();
-    const width = `w-${gutter!.slice("-ml-".length)}`;
+    const gutter = [...tokens(row)].find((t) => /^max-md:-ml-\d+$/.test(t));
+    expect(gutter, "below md the row hangs left of the clipping box").toBeDefined();
+    const width = `max-md:w-${gutter!.slice("max-md:-ml-".length)}`;
     const seps = tree.filter((e) => propsOf(e)["data-scorebug-sep"] !== undefined);
     // Division, round and court (the fixture has "Court 2"): one each.
     expect(seps, "every item carries its own separator").toHaveLength(3);
     for (const sep of seps) {
       expect(textOf(sep).trim()).toBe("·");
-      expect(tokens(sep).has("inline-block"), "a separator has a box").toBe(true);
+      expect(tokens(sep).has("max-md:inline-block"), "below md a separator has a box").toBe(true);
       expect(tokens(sep).has(width), `…exactly the gutter's width (${width})`).toBe(true);
     }
     const round = byTestId(tree, "scan-scorebug-round")!;
@@ -339,9 +341,54 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     // left edge — that edge is in the clipped gutter, and as plain inline text
     // the continuation lost its first glyphs ("(r"). The round is a flex box,
     // separator then label, so the label is a box of its own right of the dot.
-    expect(tokens(round).has("flex"), "the round is a flex box: its label wraps inside its own box").toBe(true);
+    expect(tokens(round).has("max-md:flex"), "below md the round is a flex box: its label wraps inside its own box").toBe(true);
     expect(tokens(byTestId(tree, "scan-scorebug-round-label")).has("max-md:whitespace-normal"), "…and it is the LABEL that wraps").toBe(true);
     expect(tokens(round).has("max-md:whitespace-normal"), "the round itself never wraps text beside its separator").toBe(false);
+  });
+
+  // Review round 3 (AGENTS.md, the phone composition: at 768 and above nothing
+  // changes). The trick above hung a fixed-width box at EVERY width, so on a
+  // tablet or desktop each separator was wider than its natural " · " (the
+  // line measured 4.98px wider at 768 in the scan-screens walkthrough).
+  // ≥md every scorebug element must carry exactly the classes of the line
+  // before the wrap work (729b80360): the division `min-w-0 truncate`, the
+  // round `shrink-0` over `whitespace-pre` text, the court `min-w-0 truncate`
+  // behind a `whitespace-pre` " · " — and the division has no separator.
+  // Compared as exact token SETS of every class that is not `max-md:`, never
+  // as `\b` regexes: `/\bw-4\b/` also matches inside `max-md:w-4`, and
+  // `/\bmd:hidden\b/` inside `max-md:hidden`.
+  it("≥md the scorebug line is the one before the wrap work: every separator trick is max-md: only", () => {
+    const tree = renderIsland(DeviceScorePad, {
+      ...props("scheduled", null),
+      initialEvents: [],
+      fixture: { ...props("scheduled", null).fixture, division_name: "Open", round_label: "Final" },
+    }).tree();
+    const classes = (e: ReactElement | undefined) =>
+      ((e?.props as { className?: string } | undefined)?.className ?? "").split(/\s+/).filter((t) => t !== "");
+    /** The classes that apply at 768 and above. */
+    const atMd = (e: ReactElement | undefined) => classes(e).filter((t) => !t.startsWith("max-md:")).sort();
+    const parentOf = (child: ReactElement) =>
+      tree.find((e) => {
+        const kids = (propsOf(e) as { children?: unknown }).children;
+        return Array.isArray(kids) ? kids.includes(child) : kids === child;
+      });
+    const seps = tree.filter((e) => propsOf(e)["data-scorebug-sep"] !== undefined);
+    expect(seps, "division, round and court separators").toHaveLength(3);
+    const [divisionSep, roundSep, courtSep] = seps as [ReactElement, ReactElement, ReactElement];
+    const round = byTestId(tree, "scan-scorebug-round")!;
+    expect((propsOf(round).children as unknown[])[0], "the second separator is the round's").toBe(roundSep);
+    expect(textOf(parentOf(courtSep)), "the third is the court's").toContain("Court 2");
+
+    expect(atMd(byTestId(tree, "scan-scorebug-clip")), "clip").toEqual(["min-w-0"]);
+    expect(atMd(byTestId(tree, "scan-scorebug-line")), "line").toEqual(["flex", "items-baseline"]);
+    expect(atMd(parentOf(divisionSep)), "division's box").toEqual(["flex", "min-w-0"]);
+    expect(atMd(divisionSep), "the division has no separator ≥md").toEqual(["md:hidden", "whitespace-pre"]);
+    expect(atMd(byTestId(tree, "scan-scorebug-division")), "division").toEqual(["min-w-0", "truncate"]);
+    expect(atMd(round), "round").toEqual(["shrink-0"]);
+    expect(atMd(roundSep), "the round's natural ' · '").toEqual(["whitespace-pre"]);
+    expect(atMd(byTestId(tree, "scan-scorebug-round-label")), "the round's label").toEqual(["whitespace-pre"]);
+    expect(atMd(parentOf(courtSep)), "court").toEqual(["min-w-0", "truncate"]);
+    expect(atMd(courtSep), "the court's natural ' · '").toEqual(["whitespace-pre"]);
   });
 
   it("scheduled with both sides: the Confirm card with Start, and NO inner pad yet", () => {
