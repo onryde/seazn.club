@@ -38,14 +38,29 @@ const FILES: Record<string, string> = {
   BodyMed: "Inter-Medium.otf",
 };
 
-function fontDir(): string {
-  return process.env.DOC_FONT_DIR ?? path.join(process.cwd(), "apps/web/assets/fonts");
+/** The brand font directory (apps/web/assets/fonts), for every reader of it:
+ *  these PDFs and the match poster's satori fonts (og/match-poster.tsx).
+ *  DOC_FONT_DIR wins. Otherwise the first that exists of
+ *  - `<cwd>/assets/fonts`: production — the standalone server.js does
+ *    `process.chdir(__dirname)`, so the image runs from /app/apps/web — and
+ *    vitest / `next dev`, which run from apps/web;
+ *  - `<cwd>/apps/web/assets/fonts`: scripts run from the repo root.
+ *  A miss is SILENT downstream (Helvetica, WinAnsi: "Ł" and Cyrillic garble),
+ *  so doc-theme-font-dir.test.ts pins both with DOC_FONT_DIR unset. */
+export function brandFontDir(): string {
+  const override = process.env.DOC_FONT_DIR;
+  if (override) return override;
+  const candidates = [
+    path.join(process.cwd(), "assets/fonts"),
+    path.join(process.cwd(), "apps/web/assets/fonts"),
+  ];
+  return candidates.find((dir) => fs.existsSync(dir)) ?? candidates[0]!;
 }
 
 /** Register brand fonts on a pdfkit doc. Any file that fails to load aliases
  *  its slot to a built-in Helvetica so the render still succeeds. */
 export function registerFonts(doc: PDFKit.PDFDocument): void {
-  const dir = fontDir();
+  const dir = brandFontDir();
   for (const [name, file] of Object.entries(FILES)) {
     try {
       const p = path.join(dir, file);

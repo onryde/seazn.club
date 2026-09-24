@@ -459,12 +459,10 @@ describe("matchPosterModel — which side is DOING something", () => {
 });
 
 describe("posterFonts — the real static TTFs, wired into satori's `fonts:` option", () => {
-  // `fontDir()` shares `doc-theme.ts`'s `DOC_FONT_DIR` knob, resolved by
-  // default against `process.cwd()` — correct when Next runs from the repo
-  // root (how `poster.pdf` reaches the same files today) but NOT when this
-  // suite itself runs with `apps/web` as cwd. Pointed at the real directory
-  // explicitly rather than asserting against whatever the runner's cwd
-  // happens to be.
+  // `fontDir()` IS `doc-theme.ts`'s `brandFontDir` (DOC_FONT_DIR, else
+  // `<cwd>/assets/fonts`, else `<cwd>/apps/web/assets/fonts`). Pointed at the
+  // real directory explicitly here; the unset default is pinned in
+  // server/__tests__/doc-theme-font-dir.test.ts.
   beforeAll(() => {
     process.env.DOC_FONT_DIR = path.join(process.cwd(), "assets/fonts");
   });

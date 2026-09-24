@@ -90,10 +90,13 @@ function oneLine(width: number, size: number): PDFKit.Mixins.TextOptions {
   return { width, height: size * 1.5, lineBreak: false, ellipsis: true };
 }
 
-/** The Seazn app icon (public/logo-square.png; no vector exists). The server
- *  runs from the repo root in the image (WORKDIR /app, apps/web/public
- *  copied) and from apps/web under next dev and vitest. Missing, the sheet
- *  prints plain QR codes — they decode the same — rather than fail. */
+/** The Seazn app icon (public/logo-square.png; no vector exists). Everything
+ *  that serves a request runs from apps/web: the image's standalone server.js
+ *  chdirs to its own directory (/app/apps/web, where the Dockerfile copies
+ *  public/), and next dev and vitest start there — so production is found by
+ *  the SECOND candidate, `public`. The first serves a script run from the repo
+ *  root. Missing, the sheet prints plain QR codes — they decode the same —
+ *  rather than fail. */
 function brandIcon(): Buffer | null {
   for (const dir of ["apps/web/public", "public"]) {
     const file = path.join(process.cwd(), dir, "logo-square.png");

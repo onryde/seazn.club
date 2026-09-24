@@ -47,9 +47,10 @@ export const model = (pages: SheetRow[][], over: Partial<SheetModel> = {}): Shee
   ...over,
 });
 
-/** fontDir() defaults to <cwd>/apps/web/assets/fonts, which does not exist
- *  when vitest runs from apps/web. Unset, registerFonts SILENTLY falls back to
- *  Helvetica and a test would prove the wrong fonts. */
+/** Pin the fonts to the real directory whatever the runner's cwd: a miss makes
+ *  registerFonts SILENTLY fall back to Helvetica, and a font test would then
+ *  prove the wrong fonts. The UNSET default (`brandFontDir`, what production
+ *  uses) is pinned on its own in doc-theme-font-dir.test.ts. */
 export function useBrandFonts(): void {
   process.env.DOC_FONT_DIR = resolve(import.meta.dirname, "../../../assets/fonts");
 }
