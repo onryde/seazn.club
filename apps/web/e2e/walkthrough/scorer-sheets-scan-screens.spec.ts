@@ -30,7 +30,17 @@
 // ── WHERE THE NUMBERS COME FROM ─────────────────────────────────────────────
 // Every sentence is read from the dictionary the page renders (en + fr). The
 // Waiting screen refreshes every `POLL_MS`, read from its source
-// (`padPollMs()`), so each wait for it is derived from that constant.
+// (`padPollMs()`), so each wait for it is derived from that constant. Every
+// match name is the schedule board's (owner ruling 2026-09-24): derived here
+// by the board's own `boardRoundCodes` + `composeMatchRef` over the draw read
+// back from the API — never a typed "SF·1".
+//
+// ── WHAT ONE WAITING REFRESH WEIGHS (Task 6 review I2) ─────────────────────
+// Waiting re-renders its server page every POLL_MS. For a French phone it used
+// to sit inside a DictProvider carrying the whole merged `ui` dictionary, which
+// every one of those refreshes re-sent. Step 1b measures one refresh's RSC
+// response on an unrouted French phone and prints its transfer and decoded
+// sizes; the bound is derived from the dictionary file itself.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page, type TestInfo } from "@playwright/test";
@@ -45,6 +55,8 @@ import {
 } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { padPollMs } from "../realtime-propagation-kit";
+import { composeMatchRef } from "../../src/lib/match-ref";
+import { boardRoundCodes } from "../../src/components/v2/board/round-codes";
 
 const dictionary = (locale: "en" | "fr") =>
   JSON.parse(
@@ -60,9 +72,7 @@ const say = (dict: Dict, key: string, vars: Record<string, string | number> = {}
   expect(template, `dictionary has no "${key}"`).toBeDefined();
   return template!.replace(/\{(\w+)\}/g, (whole, k: string) => (k in vars ? String(vars[k]) : whole));
 };
-/** "Winner of R1·2", the way `resolveSlotLabel` names an unfilled seat. */
-const winnerOf = (dict: Dict, round: number, seq: number) =>
-  say(dict, "slot.winner_match", { ext: say(dict, "slot.match_ref", { round, seq }) });
+const lookup = (dict: Dict) => (key: string, vars?: Record<string, string | number>) => say(dict, key, vars);
 
 /** A realistic long entrant name (43 characters): the truncate / min-w-0
  *  chain on Confirm and Waiting is only exercised by a name this long. */
@@ -79,8 +89,9 @@ const REACH_MS = 5_000;
 const WIDTHS = [320, 768, 1280] as const;
 /** Screens captured, each at every width: six screens, en + fr. */
 const CAPTURES = 12;
-/** Page loads: the final (en, once), and every other screen per locale. */
-const NAVIGATIONS = 12;
+/** Page loads: the final (en, once), the French Waiting whose refresh is
+ *  weighed, and every other screen per locale. */
+const NAVIGATIONS = 13;
 /** API reaches: competition, division, entrants, stage, generate, start, the
  *  draw, three mints, two results, a finalize, a revoke, the ledger reads. */
 const REACHES = 18;
@@ -97,6 +108,36 @@ interface Fx {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   status: string;
+  /** The board's role columns, which `boardRoundCodes` reads. */
+  ext_key?: string | null;
+  lane?: "WB" | "LB" | "GF" | null;
+  is_final?: boolean;
+  third_place?: boolean;
+  conditional?: boolean;
+}
+
+/** The match as the schedule board's card names it ("SF·1"), in `dict`. */
+function boardRef(dict: Dict, drawn: Fx[], stage: { id: string; kind: string }, id: string): string {
+  const rc = boardRoundCodes(drawn, [stage], lookup(dict)).get(id);
+  expect(rc, "the board codes every knockout round").toBeDefined();
+  const f = drawn.find((d) => d.id === id)!;
+  return composeMatchRef(f.round_no, rc!.refSeq, lookup(dict), rc!.code);
+}
+
+/** The ref must be whole on screen at 320: visible, inside the viewport, and
+ *  not clipped by its own box (review minor c — it used to be truncated away). */
+async function expectRefWhole(page: Page, ref: Locator, text: string, label: string) {
+  await page.setViewportSize({ width: 320, height: 900 });
+  await expect(ref, `${label}: the match ref is on screen at 320`).toBeVisible();
+  await expect(ref).toHaveText(text);
+  const fit = await ref.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { right: r.right, left: r.left, clipped: el.scrollWidth > el.clientWidth + 1, vw: window.innerWidth };
+  });
+  expect(fit.left, `${label}: the ref starts inside the viewport`).toBeGreaterThanOrEqual(0);
+  expect(fit.right, `${label}: the ref ends inside the viewport`).toBeLessThanOrEqual(fit.vw);
+  expect(fit.clipped, `${label}: the ref is not clipped`).toBe(false);
+  await page.setViewportSize({ width: 1280, height: 900 });
 }
 
 async function ledger(request: APIRequestContext, id: string): Promise<{ type: string }[]> {
@@ -160,6 +201,74 @@ async function phoneIn(browser: Browser, locale: "en" | "fr"): Promise<Page> {
   return ctx.newPage();
 }
 
+/** A phone that has never been to the site: no locale cookie, only its
+ *  browser's language (Accept-Language), the way a volunteer scans a sheet.
+ *  The root layout's `<html lang>` fallback reads the cookie, so on this phone
+ *  only the page itself can say the page is French. */
+async function freshPhoneIn(browser: Browser, acceptLanguage: string): Promise<Page> {
+  const ctx = await browser.newContext({ storageState: await consentedAnonymousState(), locale: acceptLanguage });
+  expect(
+    (await ctx.cookies()).some((c) => c.name === "seazn_locale"),
+    "precondition: no locale cookie on a fresh phone",
+  ).toBe(false);
+  return ctx.newPage();
+}
+
+/** Step 1b: one Waiting refresh on a fresh French phone, weighed and printed.
+ *  The bound is derived from the dictionary file: a refresh that carried it
+ *  would decode to at least that much (the build that still wrapped Waiting in
+ *  the provider decoded to 390,387 B against a 363,631 B dictionary). */
+async function weighFrenchWaitingRefresh(browser: Browser, secret: string, testInfo: TestInfo) {
+  const scanPhone = await freshPhoneIn(browser, "fr-FR");
+  try {
+    await scanPhone.goto(`/score/${secret}`);
+    const waiting = scanPhone.getByTestId("scan-waiting");
+    await expect(waiting).toContainText(say(FR, "device.scan.waitingFor"), { timeout: STEP_MS });
+    await expect(scanPhone.locator("html"), "the page itself tells a screen reader it is French").toHaveAttribute(
+      "lang",
+      "fr",
+    );
+    const refreshed = scanPhone.waitForResponse(
+      (r) => r.request().headers()["rsc"] === "1" && new URL(r.url()).pathname === `/score/${secret}`,
+      { timeout: STEP_MS },
+    );
+    await scanPhone.evaluate(() => window.dispatchEvent(new Event("focus")));
+    const rscUrl = (await refreshed).url();
+    // Weighed by the browser's own account of that request (Resource Timing),
+    // not by reading the body back over CDP: the router aborts its fetch once
+    // it has consumed the stream (net::ERR_ABORTED right after the response),
+    // so CDP keeps no body to read — while Resource Timing records the
+    // completed transfer.
+    let weight: { transferBytes: number; encodedBytes: number; decodedBytes: number } | null = null;
+    await expect
+      .poll(
+        async () => {
+          weight = await scanPhone.evaluate((url) => {
+            const e = performance.getEntriesByType("resource").filter((r) => r.name === url).at(-1) as
+              | PerformanceResourceTiming
+              | undefined;
+            return e && e.responseEnd > 0
+              ? { transferBytes: e.transferSize, encodedBytes: e.encodedBodySize, decodedBytes: e.decodedBodySize }
+              : null;
+          }, rscUrl);
+          return weight !== null;
+        },
+        { timeout: STEP_MS, message: "the browser timed the refresh" },
+      )
+      .toBe(true);
+    const dictBytes = Buffer.byteLength(JSON.stringify(FR));
+    const measured = { ...weight!, frDictionaryBytes: dictBytes };
+    console.log(`[scan-screens] one French Waiting refresh: ${JSON.stringify(measured)}`);
+    await testInfo.attach("fr-waiting-refresh-weight", { body: JSON.stringify(measured), contentType: "application/json" });
+    expect(measured.decodedBytes, "the refresh carried a body").toBeGreaterThan(0);
+    expect(measured.decodedBytes, "one refresh weighs less than the dictionary it used to carry").toBeLessThan(dictBytes);
+    await expect(waiting, "still French after the refresh").toContainText(say(FR, "device.scan.waitingFor"));
+    await expect(scanPhone.locator("html")).toHaveAttribute("lang", "fr");
+  } finally {
+    await scanPhone.context().close();
+  }
+}
+
 test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, Start opens the pad, a live cancel lands on View-only — and every scan screen, en + fr", async ({
   browser,
   request,
@@ -213,6 +322,14 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
   expect(longSemi, "the long-named entrant is drawn into a semi").toBeDefined();
   // A time on the final, so Confirm shows its time row.
   await setFixtureScheduledAtSql(final.id, "2030-06-14T18:30:00.000Z");
+  // Every match name below is the board's (owner ruling 2026-09-24).
+  const cup = { id: stage.data!.id, kind: "knockout" };
+  const refOf = (dict: Dict, id: string) => boardRef(dict, drawn, cup, id);
+  /** "Winner of SF·2", the way the board names a seat its feeder fills. */
+  const winnerOf = (dict: Dict, feeder: Fx) => say(dict, "slot.winner_match", { ext: refOf(dict, feeder.id) });
+  /** The round-number form the board does NOT print for a knockout. */
+  const roundForm = (dict: Dict, f: Fx) => say(dict, "slot.match_ref", { round: f.round_no, seq: f.seq_in_round });
+  expect(refOf(EN, final.id), "the differential: the board codes the final").not.toBe(roundForm(EN, final));
 
   const mint = async (fixtureId: string) => {
     const res = await apiJson<{ id: string; secret: string }>(
@@ -253,10 +370,20 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     await phone.evaluate(() => {
       (window as unknown as { __scanFirstLoad?: true }).__scanFirstLoad = true;
     });
+
+    // ---- 1b. What one French Waiting refresh weighs (review I2) --------------
+    // A fresh, unrouted French phone on the same Waiting; a tab return fires
+    // the same `router.refresh()` the POLL_MS interval does. Weighed before
+    // any label is asserted, so a build that still wraps Waiting in the
+    // dictionary reports its size here rather than failing first on a name.
+    await weighFrenchWaitingRefresh(browser, finalLink.secret, testInfo);
+
     await expect(waiting).toContainText(say(EN, "device.scan.waitingFor"));
-    await expect(waiting).toContainText(winnerOf(EN, longSemi.round_no, longSemi.seq_in_round));
-    await expect(waiting).toContainText(winnerOf(EN, otherSemi.round_no, otherSemi.seq_in_round));
+    await expect(waiting).toContainText(winnerOf(EN, longSemi));
+    await expect(waiting).toContainText(winnerOf(EN, otherSemi));
+    await expect(waiting, "never the round number the board does not print").not.toContainText(roundForm(EN, otherSemi));
     await expect(waiting).toContainText(say(EN, "device.scan.waitingHint"));
+    await expectRefWhole(phone, waiting.getByTestId("scan-waiting-ref"), refOf(EN, final.id), "en Waiting");
     await expect(phone.getByTestId("scan-confirm"), "no Confirm while a side is unknown").toHaveCount(0);
     await expect(phone.getByTestId("score-start-match"), "…and nothing to start").toHaveCount(0);
 
@@ -272,15 +399,14 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     await expect(waiting, "Waiting refreshes itself to the seated name").toContainText(LONG_NAME, {
       timeout: WAITING_BUDGET_MS,
     });
-    await expect(waiting, "one side is still unknown, so still Waiting").toContainText(
-      winnerOf(EN, otherSemi.round_no, otherSemi.seq_in_round),
-    );
+    await expect(waiting, "one side is still unknown, so still Waiting").toContainText(winnerOf(EN, otherSemi));
     shots.push(...(await capture(phone, waiting, testInfo, "en-waiting")));
     await frPhone.goto(`/score/${finalLink.secret}`);
     const frWaiting = frPhone.getByTestId("scan-waiting");
     await expect(frWaiting).toContainText(say(FR, "device.scan.waitingFor"), { timeout: STEP_MS });
     await expect(frWaiting).toContainText(LONG_NAME);
-    await expect(frWaiting).toContainText(winnerOf(FR, otherSemi.round_no, otherSemi.seq_in_round));
+    await expect(frWaiting).toContainText(winnerOf(FR, otherSemi));
+    await expectRefWhole(frPhone, frWaiting.getByTestId("scan-waiting-ref"), refOf(FR, final.id), "fr Waiting");
     shots.push(...(await capture(frPhone, frWaiting, testInfo, "fr-waiting")));
 
     // ---- 3. The decided semi's own sheet: View-only, carried forward ---------
@@ -310,7 +436,8 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     await expect(confirm).toContainText(LONG_NAME);
     await expect(confirm).toContainText(otherWinner);
     await expect(confirm).toContainText(say(EN, "device.scan.time"));
-    await expect(confirm).toContainText(say(EN, "slot.match_ref", { round: final.round_no, seq: final.seq_in_round }));
+    await expect(confirm, "the Match line is the board's name for it").toContainText(refOf(EN, final.id));
+    await expect(confirm).not.toContainText(roundForm(EN, final));
     await expect(confirm.getByTestId("score-start-match")).toHaveText(say(EN, "score.startMatch"));
     await expect(phone.locator('[data-role="pad-v3"]'), "no pad before Start").toHaveCount(0);
     shots.push(...(await capture(phone, confirm, testInfo, "en-confirm")));
@@ -318,6 +445,7 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     const frConfirm = frPhone.getByTestId("scan-confirm");
     await expect(frConfirm).toContainText(say(FR, "device.scan.confirmTitle"), { timeout: STEP_MS });
     await expect(frConfirm.getByTestId("score-start-match")).toHaveText(say(FR, "score.startMatch"));
+    await expect(frConfirm, "the Match line, in French board codes").toContainText(refOf(FR, final.id));
     shots.push(...(await capture(frPhone, frConfirm, testInfo, "fr-confirm")));
 
     // ---- 5. The other semi is finalised: its sheet says so -------------------
