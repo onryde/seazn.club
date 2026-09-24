@@ -42,6 +42,14 @@ async function masthead(orgName: string, logo: Buffer | null) {
   doc.on("data", (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
   registerFonts(doc);
+  // pdf-uris reads no curves, so the brand ball (the masthead's only circle)
+  // is recorded on its way into the REAL doc.
+  const circles: { x: number; y: number; r: number }[] = [];
+  const circle = doc.circle.bind(doc);
+  doc.circle = (x: number, y: number, r: number) => {
+    circles.push({ x, y, r });
+    return circle(x, y, r);
+  };
   const model: DocModel = {
     kind: "timetable",
     title: "Autumn Open",
@@ -62,8 +70,17 @@ async function masthead(orgName: string, logo: Buffer | null) {
   const wordmark = runs.filter((r) => r.size === 18);
   const wordmarkRight = Math.max(...wordmark.map((r: PdfTextRun) => r.x + measure(FONT.displayBold, 18, r.text)));
   const images = pdfImages(pdf);
-  return { name, nameRight, wordmarkRight, logo: images[0] ?? null, imageCount: images.length };
+  expect(circles).toHaveLength(1);
+  const c = circles[0]!;
+  const ball: Box = { left: c.x - c.r, right: c.x + c.r, top: c.y - c.r, bottom: c.y + c.r };
+  return { name, nameRight, wordmarkRight, logo: images[0] ?? null, imageCount: images.length, ball };
 }
+
+interface Box { left: number; right: number; top: number; bottom: number }
+const clear = (a: Box, b: Box) => a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom;
+const boxOf = (i: { x: number; top: number; width: number; height: number }): Box =>
+  ({ left: i.x, right: i.x + i.width, top: i.top, bottom: i.top + i.height });
+const MAST_H = 64; // doc-render's masthead band; the lime rule starts here
 
 describe("PDF masthead: the org name and the org logo are one right-aligned unit", () => {
   it("a short name ends 3mm left of a square logo, and the logo sits on the right margin", async () => {
@@ -109,5 +126,31 @@ describe("PDF masthead: the org name and the org logo are one right-aligned unit
     expect(m.logo!.height).toBeLessThanOrEqual(40.01);
     expect(m.logo!.x).toBeGreaterThan(m.wordmarkRight + GAP);
     expect(m.nameRight).toBeLessThanOrEqual(m.logo!.x - GAP + 0.01);
+  });
+});
+
+// The red ball (the SEAZN mark: wordmark + lime pitch line + ball) used to
+// float 6pt above the lime rule on the right margin — inside the logo's box,
+// so it sat on every org logo's bottom-right corner.
+describe("PDF masthead: the red ball never sits on the org logo", () => {
+  it.each([
+    ["square", 240, 240],
+    ["tall 1:2", 120, 240],
+    ["wide 10:1", 1000, 100],
+  ])("its box clears a %s logo's box", async (_shape, w, h) => {
+    const m = await masthead(SHORT, await png(w, h));
+    expect(clear(m.ball, boxOf(m.logo!))).toBe(true);
+  });
+
+  it("with no logo, its box clears the org name", async () => {
+    const m = await masthead(SHORT, null);
+    const name: Box = { left: m.name.x, right: m.nameRight, top: m.name.y - 10, bottom: m.name.y + 3 };
+    expect(clear(m.ball, name)).toBe(true);
+  });
+
+  it.each([["a logo", true], ["no logo", false]])("with %s, it rests on the lime rule at the right margin", async (_c, withLogo) => {
+    const m = await masthead(SHORT, withLogo ? await png(240, 240) : null);
+    expect(m.ball.bottom).toBeCloseTo(MAST_H, 2);
+    expect(m.ball.right).toBeCloseTo(A4_W - MARGIN, 2);
   });
 });

@@ -22,6 +22,7 @@ const MAST_H = 64; // masthead band height, page 1
 const LOGO_H = 40; // org logo box height in the masthead
 const LOGO_MAX_W = 120; // a wide logo is capped at 3:1 so the org name keeps room
 const MAST_GAP = 3 * (72 / 25.4); // 3mm: org name ↔ logo, and org name ↔ wordmark
+const BALL_R = 4; // the brand's red ball, resting on the lime rule at the right margin
 
 import { publicStorageUrl } from "@/lib/supabase-storage";
 
@@ -77,8 +78,10 @@ export function drawMasthead(
     }
   }
   // red ball riding the lime line, right-aligned — mirrors ticket.png's mark
-  // (wordmark + ball + pitch line is the full SEAZN brand, not just the line)
-  doc.circle(w - MARGIN - 4, MAST_H - 10, 4).fill(PALETTE.ball);
+  // (wordmark + ball + pitch line is the full SEAZN brand, not just the line).
+  // It RESTS on the rule (bottom = MAST_H): floating higher put it inside the
+  // org logo's box (y 12–52), on the logo's bottom-right corner.
+  doc.circle(w - MARGIN - BALL_R, MAST_H - BALL_R, BALL_R).fill(PALETTE.ball);
   // lime pitch-line rule — the signature
   doc.rect(0, MAST_H, w, 4).fill(PALETTE.lime);
   doc.fillColor(PALETTE.ink);
