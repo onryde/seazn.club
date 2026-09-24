@@ -291,10 +291,11 @@ test("a device-link pad whose stream is dead still refreshes when the scorer ret
 
     // ---- let the pad settle, and prove its pipeline really is stalled -----
     //
-    // Before the foreign rally, deliberately. The pad fires `onEvents` once at
-    // mount as it adopts its bootstrap, and `handlePadEvents` answers with a
-    // PRE-rally resync. Waiting for the pad's first blocked poll puts a whole
-    // poll cycle between that churn and the window measured below. It also
+    // Before the foreign rally, deliberately. The pad used to fire `onEvents`
+    // once at mount with its bootstrap, and `handlePadEvents` answered with a
+    // PRE-rally resync; it no longer does (`useReportLedgerChanges`,
+    // v3/pad-host.tsx). Waiting for the pad's first blocked poll still puts a
+    // whole poll cycle between any mount churn and the window measured below. It also
     // pins that the pad TRIED to poll and was refused — without it, "the pad
     // never delivered" could equally mean it was never polling.
     await expect

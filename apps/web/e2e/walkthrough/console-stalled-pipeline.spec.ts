@@ -182,13 +182,14 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   );
   // ---- let the pad settle, and prove its pipeline really is stalled -------
   //
-  // Done BEFORE the rally is posted, deliberately. The pad fires `onEvents`
-  // once at mount as it adopts its server bootstrap, and the console's
-  // `handlePadEvents` answers that with a `resync()` — a real, expected refresh
-  // that carries the PRE-rally ledger. Waiting for the pad's first (blocked)
-  // poll puts a full 15s `POLL_MS` cycle between that mount churn and the
-  // window this test measures, so a late bootstrap resync cannot drift into it
-  // and be mistaken for the seam under test.
+  // Done BEFORE the rally is posted, deliberately. The pad used to fire
+  // `onEvents` once at mount with its server bootstrap, and the console's
+  // `handlePadEvents` answered that with a PRE-rally `resync()`. It no longer
+  // does (`useReportLedgerChanges`, v3/pad-host.tsx — the mount report greyed
+  // Start match under a click), but the guard costs nothing to keep: waiting
+  // for the pad's first (blocked) poll puts a full 15s `POLL_MS` cycle between
+  // any mount-time churn and the window this test measures, so none can drift
+  // into it and be mistaken for the seam under test.
   //
   // The wait is not decoration either: it pins that the pad TRIED to poll and
   // was refused, which is the production shape. Without it, "the pad never
