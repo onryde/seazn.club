@@ -698,3 +698,12 @@ edits fixtures.
 - ICS drops one-sided bye rows for ALL stage kinds, including Swiss, which
   previously emitted all-day "X vs Bye" events. A bye is not an event anyone
   attends.
+
+**Owner rulings (2026-09-24, third round):**
+- Public surfaces: a league/group bye is a NOTE in its round ("X has a bye",
+  no time, no TBD), never a result. Present / "Latest results", hub counts and
+  every other result feed exclude round-robin byes. Swiss and knockout
+  public display is unchanged.
+- Progression-fed ("setup" timing) league/group stages get bye rows when their
+  draw places the entrants, the same way directly-entered leagues get them at
+  generate.
