@@ -3241,7 +3241,7 @@
   "div.detail.tiebreak.rule.nrr": "run rate net",
   "div.detail.tiebreak.rule.set_ratio": "ratio de sets",
   "div.detail.tiebreak.rule.game_ratio": "ratio de jeux",
-  "div.detail.tiebreak.rule.board_ratio": "ratio d'échiquiers",
+  "div.detail.tiebreak.rule.board_ratio": "ratio de plateau",
   "div.detail.tiebreak.rule.point_ratio": "ratio de points",
   "div.detail.tiebreak.rule.h2h_points": "confrontation directe",
   "div.detail.tiebreak.rule.h2h_diff": "différence en confrontation directe",

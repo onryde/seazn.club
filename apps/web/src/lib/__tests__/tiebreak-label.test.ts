@@ -11,6 +11,13 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
+import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
+import { RATIO_LEDGERS } from "@seazn/engine/competition";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 
 describe("localizedTieBreakLabel", () => {
   it("translates known engine rule keys via the ui catalog", () => {
@@ -65,5 +72,30 @@ describe("localizedTieBreakLabel", () => {
       }
     }
     expect(bad).toEqual([]);
+  });
+
+  // Fix round 2: Dutch said "setratio" on the public table and "setverhouding"
+  // in the organiser console (and "bordverhouding"/"puntenverhouding" beside
+  // them), so one carrom cascade read two ways. The public word is the one
+  // players read, so the console takes it — for every ratio rule the engine
+  // knows (`RATIO_LEDGERS`), in every locale.
+  it("each ratio rule reads exactly as the public tables name it, in every locale", () => {
+    const pairs = [
+      ["en", en, enPublic],
+      ["es", es, esPublic],
+      ["fr", fr, frPublic],
+      ["nl", nl, nlPublic],
+    ] as const;
+    const rules = Object.keys(RATIO_LEDGERS);
+    expect(rules, "premise: the sweep reaches set ratio").toContain("set_ratio");
+    const apart: string[] = [];
+    for (const [locale, ui, pub] of pairs) {
+      for (const rule of rules) {
+        const console_ = localizedTieBreakLabel(ui, rule);
+        const publicWord = t(pub as unknown as Dict, TIE_BREAK_MSG_KEYS[rule]!);
+        if (console_ !== publicWord) apart.push(`${locale} ${rule}: console "${console_}" vs public "${publicWord}"`);
+      }
+    }
+    expect(apart).toEqual([]);
   });
 });
