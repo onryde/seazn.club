@@ -9,10 +9,12 @@ import "server-only";
 //    `courtNamesById`, venue-qualified where two venues share a name);
 //  - each side through `entrantDisplayName`, with its roster;
 //  - the day and the times on the ORG clock (`resolveVenueTz(null, orgTz)`),
-//    the clock the competition board's day grid uses (#397/#448; controller
-//    ruling 2026-09-24) — never a division's own tz override, or a legacy
-//    division holding one would print a fixture on a different day than the
-//    board shows it.
+//    never a division's own tz override: the repo rule is that calendar-day
+//    math wants `orgTz` (schedule.ts `ScheduleSettingsOut`), and a printed
+//    sheet must not depend on the device that prints it (controller ruling
+//    2026-09-24). The board's day tabs bucket on the VIEWER's device clock
+//    (`dayKey`, ruling R8), so they can differ from the sheet's day when the
+//    printing device is outside the org's zone.
 // Which rows print on a day, in what order and on which page is the pure
 // half's (lib/scorer-sheets.ts). Page auth (editor, same-origin) is the
 // ROUTE's job; this is RLS-bounded by withTenant.

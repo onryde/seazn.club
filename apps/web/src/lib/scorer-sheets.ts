@@ -35,9 +35,11 @@ export interface SheetCandidate {
   status: string;
   /** ISO 8601, UTC. */
   scheduled_at: string | null;
-  /** The org clock (`resolveVenueTz(null, orgTz)`), resolved by the loader:
-   *  the clock the competition board's day grid uses (#397/#448), never a
-   *  division's own override, so a sheet's day is the board's day. */
+  /** The org clock (`resolveVenueTz(null, orgTz)`), resolved by the loader,
+   *  never a division's own override: calendar-day math wants `orgTz` (repo
+   *  rule), so a printed sheet does not depend on the device that prints it.
+   *  The board's day tabs use the VIEWER's clock (`dayKey`, ruling R8) and can
+   *  differ from this day when that device is outside the org's zone. */
   tz: string;
   division_name: string;
   round_no: number;
@@ -124,7 +126,8 @@ export function selectSheetFixtures(candidates: readonly SheetCandidate[], day: 
   return candidates.filter((f) => printable(f) && localDateOf(f.scheduled_at, f.tz) === day).sort(compare);
 }
 
-/** The local days that have something to print, ascending. */
+/** The local days that have something to print, ascending. The pure oracle
+ *  the `listSheetDays` SQL parity test checks against. */
 export function sheetDays(candidates: readonly SheetDayRow[]): string[] {
   const days = new Set<string>();
   for (const f of candidates) if (printable(f)) days.add(localDateOf(f.scheduled_at, f.tz));

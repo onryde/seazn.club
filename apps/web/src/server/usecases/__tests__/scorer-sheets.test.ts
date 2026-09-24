@@ -153,10 +153,12 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
     expect(all[0]!.status).toBe("scheduled");
   });
 
-  it("the day is on the ORG clock — the board's — even when the division holds its own zone", async () => {
-    // Controller ruling 2026-09-24 (#397/#448): the competition board's day
-    // grid runs on the org clock, so the sheet does too. A differential: the
-    // division's Auckland override, the org's Los Angeles and UTC each put
+  it("the day is on the ORG clock, never the division's own zone", async () => {
+    // Controller ruling 2026-09-24: calendar-day math wants `orgTz` (repo rule,
+    // schedule.ts `ScheduleSettingsOut`), so a printed sheet does not depend on
+    // the device that prints it. The board's day tabs are the VIEWER's clock
+    // (ruling R8), a different clock this test does not assert. A differential:
+    // the division's Auckland override, the org's Los Angeles and UTC each put
     // these three fixtures on a different set of days.
     const { auth } = await seedOrg("pro");
     await sql`update organizations set timezone = 'America/Los_Angeles' where id = ${auth.orgId}`;
