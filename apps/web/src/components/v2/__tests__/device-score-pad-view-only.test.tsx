@@ -5,6 +5,11 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ReactElement } from "react";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import { officialLabelKey } from "@/lib/official-label";
+import type { ViewOnlyReason } from "@/lib/scan-screen";
 import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
 import { ScorePad } from "@/components/v2/scorepad/registry";
 import type { SideInfo, SportInfo } from "@/components/v2/fixture-console";
@@ -31,6 +36,9 @@ const api = vi.hoisted(() => ({
    *  with the mock: a module-scope const is not yet initialised when the
    *  factory runs. */
   serverFinal: "2 — 1",
+  /** The status `/state` answers with — `decided` unless a test finalises or
+   *  cancels the match behind the screen. */
+  serverStatus: "decided",
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -46,7 +54,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
       if (url.includes("/events")) return Promise.resolve([OWN]);
       api.stateReads += 1;
       return Promise.resolve({
-        status: "decided",
+        status: api.serverStatus,
         last_seq: 2,
         summary: { headline: api.serverFinal },
         state: {},
@@ -100,6 +108,7 @@ beforeEach(() => {
   api.postRefusal = null;
   api.posts = 0;
   api.stateReads = 0;
+  api.serverStatus = "decided";
 });
 
 describe("DeviceScorePad — View-only (scorer sheets §4.5)", () => {
@@ -294,5 +303,85 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     // here): the pad's stream does not read on mount, so a pad opened on the
     // bootstrap would send its first tap at a stale seq (P8).
     expect(seeded.map((e) => [e.type, e.seq, e.recordedBy])).toEqual([["core.start", 1, "u1"]]);
+  });
+});
+
+// Task 5 review carries: the chrome's own words for the screen it is on.
+describe("DeviceScorePad — View-only chrome (scorer sheets §4.5.3)", () => {
+  it("the footer names the sport's official from the dictionary, never the engine's English label", () => {
+    // A sentinel engine label: if it reaches the screen, the footer is still
+    // reading `sport.scorerLabel` (English in every locale).
+    const island = renderIsland(DeviceScorePad, {
+      ...props("in_play", null),
+      sport: { ...sport, key: "badminton", scorerLabel: "Enginelabel" },
+    });
+    const official = dict[officialLabelKey("badminton")]!;
+    expect(official, "precondition: the dictionary's official differs from the generic one").not.toBe(
+      dict[officialLabelKey("generic")],
+    );
+    const header = headerText(island.tree());
+    expect(header).toContain(dict["device.courtsideFooter"]!.replace("{scorer}", official.toLowerCase()));
+    expect(header.toLowerCase()).not.toContain("enginelabel");
+  });
+
+  // Links live until the match is finalised or cancelled since Task 2; the
+  // footer used to promise "link active today only" in every locale.
+  it.each(Object.entries({ en, es, fr, nl }))("%s: the footer never promises 'today only'", (_locale, d) => {
+    const footer = (d as Record<string, string>)["device.courtsideFooter"]!;
+    expect(footer).not.toMatch(/\btoday\b|aujourd|\bhoy\b|vandaag/i);
+    expect(footer, "the official placeholder is still there").toContain("{scorer}");
+  });
+
+  it.each([
+    ["finalized", "device.scan.viewOnly.finalized"],
+    ["cancelled", "device.scan.viewOnly.cancelled"],
+  ] as const)("a match %s behind a live screen lands on View-only with that wording", async (status, key) => {
+    const island = renderIsland(DeviceScorePad, props("in_play", null));
+    const pad = island.tree().find((e) => e.type === ScorePad);
+    // Empty case first: live and in play, no View-only.
+    expect(pad, "precondition: the pad is up").toBeDefined();
+    expect(byTestId(island.tree(), "scan-view-only")).toBeUndefined();
+
+    // The organiser finalises / cancels elsewhere; the chrome's next re-read
+    // (a pad event here — the same path a tab return takes) sees it.
+    api.serverStatus = status;
+    (propsOf(pad!).onEvents as () => void)();
+    await flush();
+
+    const screen = byTestId(island.tree(), "scan-view-only");
+    expect(screen, `a ${status} match must explain itself, not just lose its controls`).toBeDefined();
+    expect(textOf(screen)).toBe(dict[key]);
+    expect(island.tree().find((e) => e.type === ScorePad), "no pad").toBeUndefined();
+    expect(byTestId(island.tree(), "device-void-mine"), "no undo").toBeUndefined();
+  });
+
+  it("a terminal status outranks a carried-forward refusal's wording (same order as the scan page)", async () => {
+    const island = renderIsland(DeviceScorePad, props("in_play", null));
+    const pad = island.tree().find((e) => e.type === ScorePad)!;
+    api.serverStatus = "finalized";
+    (propsOf(pad).onTerminalRefusal as (r: { code: string; message: string }) => void)({
+      code: "RESULT_CARRIED_FORWARD",
+      message: "",
+    });
+    await flush();
+    expect(textOf(byTestId(island.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.finalized"]);
+  });
+
+  it("a later initialViewOnly from the server is honoured, both ways", () => {
+    const live = { ...props("in_play", null), initialViewOnly: null as ViewOnlyReason | null };
+    const island = renderIsland(DeviceScorePad, live);
+    expect(byTestId(island.tree(), "scan-view-only"), "precondition: live").toBeUndefined();
+
+    island.rerender({ ...live, initialViewOnly: "carried_forward" });
+    const screen = byTestId(island.tree(), "scan-view-only");
+    expect(screen, "the server's newer verdict moves the screen to View-only").toBeDefined();
+    expect(textOf(screen)).toBe(dict["device.scan.viewOnly.carried"]);
+    expect(island.tree().find((e) => e.type === ScorePad)).toBeUndefined();
+
+    // …and back: an organiser void can lift the carry (#856), and the server
+    // then renders the page with no reason at all.
+    island.rerender({ ...live, initialViewOnly: null });
+    expect(byTestId(island.tree(), "scan-view-only"), "a lifted verdict leaves View-only").toBeUndefined();
+    expect(island.tree().find((e) => e.type === ScorePad)).toBeDefined();
   });
 });

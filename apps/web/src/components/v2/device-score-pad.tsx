@@ -36,6 +36,7 @@ import type { MessageKey } from "@/lib/messages";
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { deadLinkKey, VIEW_ONLY_COPY, type ViewOnlyReason } from "@/lib/scan-screen";
+import { officialLabelKey } from "@/lib/official-label";
 import { useTabReturn } from "@/components/v2/use-tab-return";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 import type { EventEnvelope } from "@seazn/engine/core";
@@ -126,6 +127,17 @@ export function DeviceScorePad({
    *  ways in once mounted: this chrome's own `send()` refused, or the inner
    *  pad's pipeline refused (`onTerminalRefusal`, via the registry). */
   const [viewOnly, setViewOnly] = useState<ViewOnlyReason | null>(initialViewOnly);
+  // The server's verdict can change under a mounted screen (a re-render of the
+  // scan page after an organiser void lifts a carry, #856, or after one lands):
+  // a NEWER `initialViewOnly` replaces whatever this screen last knew, both
+  // ways. Adjusted during render (React's "adjusting state when a prop
+  // changes"), not in an effect, so no frame paints the stale screen. An
+  // unchanged prop leaves a live refusal's View-only alone.
+  const [seenInitialViewOnly, setSeenInitialViewOnly] = useState(initialViewOnly);
+  if (initialViewOnly !== seenInitialViewOnly) {
+    setSeenInitialViewOnly(initialViewOnly);
+    setViewOnly(initialViewOnly);
+  }
   const [busy, setBusy] = useState(false);
   /** True while an opportunistic post-pad-event `resync()` is in flight.
    *  Separate from `busy` on purpose: `busy` means "a send of MINE is
@@ -359,9 +371,11 @@ export function DeviceScorePad({
   // constantly while someone is scoring.
   //
   // Measured both ways against a real prod build and a real Supabase project
-  // (`device-links.spec.ts`, "reaches its own inner pad faster than the poll",
-  // E2E_REQUIRE_REALTIME=1). With the memo: the socket joins and the chrome's
-  // `core.start` paints on the inner pad well inside POLL_MS. Revert this one
+  // (`device-links.spec.ts`, then titled "reaches its own inner pad faster
+  // than the poll" — now "a second writer's event reaches a device link's
+  // inner pad, mounted after Start, faster than the poll" since the pad mounts
+  // only after Start; E2E_REQUIRE_REALTIME=1). With the memo: the socket joins
+  // and the event paints on the inner pad well inside POLL_MS. Revert this one
   // line to a fresh literal and the same test reds with "never moved off
   // \"0\" at all" — the teardown/re-handshake also restarts the polling
   // interval on every render, so while the component is re-rendering NEITHER
@@ -390,8 +404,14 @@ export function DeviceScorePad({
   const scoring = live.status !== "finalized" && live.status !== "cancelled";
   const inPlay = live.status === "in_play";
   // Scorer sheets §4.5.3 — View-only is "final scoreboard, no controls": the
-  // header stays, every control and the inner pad go.
-  const canAct = viewOnly === null;
+  // header stays, every control and the inner pad go. A match finalised or
+  // cancelled while this screen is up (seen by any re-read) lands here too,
+  // with its own words — not a screen that silently lost its controls. A
+  // terminal status outranks a carried-forward refusal, the same order as the
+  // scan page's `scanScreen`.
+  const shownViewOnly: ViewOnlyReason | null =
+    live.status === "finalized" ? "finalized" : live.status === "cancelled" ? "cancelled" : viewOnly;
+  const canAct = shownViewOnly === null;
   const confirming = canAct && live.status === "scheduled" && !!home && !!away;
 
   // Undo-own (doc 13 §7): only un-voided events THIS link recorded.
@@ -458,17 +478,19 @@ export function DeviceScorePad({
           </p>
         </div>
         <p className="border-t border-slate-800 px-4 py-2 text-center text-[10px] uppercase tracking-widest text-slate-400">
-          {msg("device.courtsideFooter", { scorer: sport.scorerLabel.toLowerCase() })}
+          {/* The sport's official in the viewer's language (Task 3's
+              `officialLabelKey`), never the engine's English `scorerLabel`. */}
+          {msg("device.courtsideFooter", { scorer: msg(officialLabelKey(sport.key)).toLowerCase() })}
         </p>
       </header>
 
-      {viewOnly !== null && (
+      {shownViewOnly !== null && (
         <p
           data-testid="scan-view-only"
           role="status"
           className="rounded-md border border-slate-700 bg-slate-900 px-3 py-3 text-center text-sm text-slate-200"
         >
-          {msg(VIEW_ONLY_COPY[viewOnly])}
+          {msg(VIEW_ONLY_COPY[shownViewOnly])}
         </p>
       )}
 

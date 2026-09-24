@@ -2496,7 +2496,7 @@
   "device.failed": "Error — inténtalo de nuevo",
   "device.askFreshLink": "Pide al organizador un enlace nuevo.",
   "device.live": "En directo",
-  "device.courtsideFooter": "Panel {scorer} junto a la cancha · enlace activo solo hoy",
+  "device.courtsideFooter": "Panel {scorer} junto a la cancha",
   "device.undoMine": "Anular mi última entrada",
   "device.resultRecorded": "Resultado registrado — el organizador lo finaliza. ¿Detectas un error en tus propias entradas? Usa «Anular mi última».",
   "device.scan.viewOnly.carried": "Partido terminado — el resultado ya ha hecho avanzar la competición. Pide al organizador que lo corrija.",

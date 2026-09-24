@@ -2541,7 +2541,7 @@
   "device.failed": "Failed — try again",
   "device.askFreshLink": "Ask the organiser for a fresh link.",
   "device.live": "Live",
-  "device.courtsideFooter": "Courtside {scorer} pad · link active today only",
+  "device.courtsideFooter": "Courtside {scorer} pad",
   "device.undoMine": "Void my last entry",
   "device.resultRecorded": "Result recorded — the organiser finalizes it. Spot a mistake in your own entries? Use “Void my last”.",
   "device.scan.viewOnly.carried": "Match over — result carried forward. Ask the organiser to correct it.",

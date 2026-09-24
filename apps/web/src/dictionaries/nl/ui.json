@@ -2496,7 +2496,7 @@
   "device.failed": "Mislukt — probeer opnieuw",
   "device.askFreshLink": "Vraag de organisator om een nieuwe link.",
   "device.live": "Live",
-  "device.courtsideFooter": "Courtside {scorer} pad · link vandaag alleen actief",
+  "device.courtsideFooter": "Courtside {scorer} pad",
   "device.undoMine": "Mijn laatste invoer vernietigen",
   "device.resultRecorded": "Resultaat vastgelegd — de organisator maakt het definitief. Fout in je eigen invoer opgemerkt? Gebruik “Mijn laatste vernietigen”.",
   "device.scan.viewOnly.carried": "Wedstrijd voorbij — uitslag doorgezet. Vraag de organisator om het te corrigeren.",

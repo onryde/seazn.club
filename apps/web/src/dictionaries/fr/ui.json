@@ -2541,7 +2541,7 @@
   "device.failed": "Échec — réessayez",
   "device.askFreshLink": "Demandez un nouveau lien à l'organisateur.",
   "device.live": "En direct",
-  "device.courtsideFooter": "Tablette {scorer} bord de terrain · lien actif aujourd'hui seulement",
+  "device.courtsideFooter": "Tablette {scorer} bord de terrain",
   "device.undoMine": "Annuler ma dernière entrée",
   "device.resultRecorded": "Résultat enregistré — l'organisateur le finalise. Vous repérez une erreur dans vos propres saisies ? Utilisez « Annuler ma dernière ».",
   "device.scan.viewOnly.carried": "Match terminé — résultat déjà pris en compte pour la suite. Demandez à l'organisateur de le corriger.",
