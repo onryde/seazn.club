@@ -56,6 +56,9 @@ vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),
   orgPlanKey: vi.fn(async () => "community"),
 }));
+// The scorer-sheets print control (§4.4) reads its day list on this page for
+// an editor; its own wiring is pinned in print-control.test.tsx.
+vi.mock("@/server/usecases/scorer-sheets", () => ({ listSheetDays: vi.fn(async () => []) }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: vi.fn(async () => "usd") }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") }));
 
