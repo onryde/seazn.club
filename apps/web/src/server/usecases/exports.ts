@@ -162,8 +162,9 @@ export function liveUrlFor(meta: Pick<DivisionMeta, "visibility" | "org_slug" | 
 // otherwise. Shared by every caller so `resolveSponsors` is only ever
 // called once per export: `brandingFor` layers division-level colour/logo
 // overrides on top for the per-division exports; `buildCompetitionTimetable`
-// (no DivisionMeta in hand) calls this directly.
-async function orgBranding(
+// (no DivisionMeta in hand) calls this directly, and so does the scorer
+// sheet (usecases/scorer-sheets.ts `buildScorerSheet`).
+export async function orgBranding(
   orgId: string,
   orgName: string,
   competitionId: string,

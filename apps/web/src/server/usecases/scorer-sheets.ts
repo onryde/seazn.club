@@ -25,16 +25,29 @@ import { entrantDisplayName } from "@/lib/entrant-name";
 import type { SlotLabel, SlotLabelLookup } from "@/lib/slot-label";
 import { resolveVenueTz } from "@/lib/tz";
 import { courtDisplayName } from "@/components/v2/board/types";
+import type { Locale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import {
   BYE_SLOT_KEY,
   PRINTABLE_STATUSES,
   isPrintable,
+  paginateSheet,
   selectSheetFixtures,
   type SheetCandidate,
   type SheetSide,
 } from "@/lib/scorer-sheets";
+import type { SheetModel } from "@/server/scorer-sheet-pdf";
+import { log } from "@/server/logger";
 import { boardMatchNamer, MATCH_NAME_COLS, type MatchNameRow } from "./scan-match-names";
 import { courtNamesById } from "./schedule";
+import {
+  ensureDeviceLinks,
+  hashDeviceLinkToken,
+  isFinishedFixtureStatus,
+  type EnsuredDeviceLink,
+} from "./device-links";
+import { orgBranding } from "./exports";
 
 /** The competition's clock: its organisation's zone, else UTC. 404 when the
  *  competition is not this tenant's. */
@@ -185,4 +198,125 @@ export async function listSheetDays(auth: AuthCtx, competitionId: string): Promi
       order by day`;
     return rows.map((r) => r.day);
   });
+}
+
+/**
+ * Every card's link, proven in ONE read before anything is printed (owner
+ * ruling 2026-09-24): a fixture in the map must hold exactly one live link —
+ * not revoked, not expired, the predicate `ensureDeviceLinks` re-opens by —
+ * and that link's hash must be the secret the card will print. A fixture the
+ * map left out must be one that finished since the sheet chose it (the only
+ * reason `ensureDeviceLinks` skips one). Returns the ids that fail.
+ */
+async function unprovenLinks(
+  auth: AuthCtx,
+  ids: readonly string[],
+  links: ReadonlyMap<string, EnsuredDeviceLink>,
+): Promise<string[]> {
+  const rows = await withTenant(auth.orgId, (tx) =>
+    tx<{ id: string; status: string; token_hash: string | null }[]>`
+      select f.id, f.status, dl.token_hash
+      from fixtures f
+      left join device_links dl on dl.fixture_id = f.id and dl.revoked_at is null
+        and (dl.expires_at is null or dl.expires_at > now())
+      where f.id in ${tx([...ids])}`,
+  );
+  const live = new Map<string, { status: string; hashes: string[] }>();
+  for (const r of rows) {
+    const f = live.get(r.id) ?? { status: r.status, hashes: [] };
+    if (r.token_hash !== null) f.hashes.push(r.token_hash);
+    live.set(r.id, f);
+  }
+  return ids.filter((id) => {
+    const f = live.get(id);
+    if (f === undefined) return true;
+    const link = links.get(id);
+    if (link === undefined) return !isFinishedFixtureStatus(f.status);
+    return f.hashes.length !== 1 || f.hashes[0] !== hashDeviceLinkToken(link.secret);
+  });
+}
+
+/**
+ * The printable model for one day (§4.4). Shaped like exports.ts's
+ * `buildAdmitTicketsDoc`: branding resolved OUTSIDE any tenant transaction,
+ * 422 on nothing to print rather than an empty 200. Links are ENSURED —
+ * re-shown, never rotated (T2) — and then PROVEN (`unprovenLinks`): one card
+ * without a working code refuses the whole sheet, never a partial one.
+ * `loadSheetCandidates` runs first, so a foreign competition 404s before
+ * anything is minted.
+ */
+export async function buildScorerSheet(
+  auth: AuthCtx,
+  competitionId: string,
+  day: string,
+  origin: string,
+  locale: Locale,
+  opts: { printedAt: string },
+): Promise<SheetModel> {
+  const t: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
+  const chosen = await loadSheetCandidates(auth, competitionId, t, day);
+  const nothing = () => new HttpError(422, "No fixtures to print on that day", "NO_FIXTURES_ON_DAY");
+  if (chosen.length === 0) throw nothing();
+  const [comp] = await withTenant(auth.orgId, (tx) =>
+    tx<{ name: string; org_name: string }[]>`
+      select c.name, o.name as org_name
+      from competitions c join organizations o on o.id = c.org_id
+      where c.id = ${competitionId}`,
+  );
+  if (!comp) throw new HttpError(404, "competition not found");
+  const branding = await orgBranding(auth.orgId, comp.org_name, competitionId);
+
+  const ids = chosen.map((c) => c.id);
+  const links = await ensureDeviceLinks(auth, competitionId, ids);
+  const unproven = await unprovenLinks(auth, ids, links);
+  if (unproven.length > 0) {
+    log.error({ competitionId, day, fixtureIds: unproven }, "scorer sheet: links not proven, sheet refused");
+    throw new HttpError(500, t("sheets.error.linksIncomplete"), "SHEET_LINKS_INCOMPLETE");
+  }
+  // Finished since the rows were chosen: left off, the rest still print.
+  const printed = chosen.filter((c) => links.has(c.id));
+  if (printed.length === 0) throw nothing();
+
+  const intl = intlLocaleFor(locale);
+  const time = (iso: string, tz: string) =>
+    new Intl.DateTimeFormat(intl, { timeZone: tz, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+  // A calendar day, formatted at UTC noon so no zone shifts it (poster.pdf's rule).
+  const dayLabel = new Intl.DateTimeFormat(intl, {
+    timeZone: "UTC",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(`${day}T12:00:00Z`));
+  // A pair prints one member per line; its name is already their " / " join.
+  const pairOf = (s: SheetSide | null) =>
+    s !== null && s.kind === "pair" && s.members.length >= 2 ? s.members.map((m) => m.full_name) : [];
+  return {
+    header: {
+      kind: "scoresheet",
+      title: comp.name,
+      description: dayLabel,
+      meta: { printedAt: opts.printedAt },
+      ...(branding !== undefined ? { branding } : {}),
+      sections: [],
+      pageBreaks: "auto",
+    },
+    labels: { eyebrow: t("sheets.pdf.eyebrow"), checkNames: t("sheets.pdf.checkNames") },
+    pages: paginateSheet(printed, t("sheets.pdf.noCourt")).map((p) => ({
+      heading: t("sheets.pdf.courtPage", { court: p.courtHeading ?? "", n: p.pageInCourt, of: p.pagesInCourt }),
+      rows: p.rows.map((r) => ({
+        fixtureId: r.id,
+        url: `${origin}/score/${links.get(r.id)!.secret}`,
+        time: time(r.scheduled_at!, r.tz),
+        matchRef: r.match_ref,
+        division: r.division_name,
+        home: r.home?.name ?? r.home_tbd,
+        away: r.away?.name ?? r.away_tbd,
+        homeTbd: r.home === null,
+        awayTbd: r.away === null,
+        homePair: pairOf(r.home),
+        awayPair: pairOf(r.away),
+      })),
+    })),
+  };
 }

@@ -47,7 +47,7 @@ export async function seedStage(
   /** T7/T8: real roster members (inline `new_person`), so name resolution is
    *  exercised. A member may carry a squad number (the roster's first sort key). */
   opts: {
-    entrantKind?: "individual" | "team";
+    entrantKind?: "individual" | "team" | "pair";
     members?: (name: string) => (string | { full_name: string; squad_number: number | null })[];
   } = {},
 ) {
