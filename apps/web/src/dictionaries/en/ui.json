@@ -4089,6 +4089,8 @@
   "constraints.bulkShift.unit": "minutes",
   "constraints.bulkShift.button": "Shift everything",
   "constraints.bulkShift.hint": "Locked and decided fixtures stay put. Undoable from the history panel.",
+  "constraints.bulkShift.done.one": "Moved 1 match.",
+  "constraints.bulkShift.done.other": "Moved {count} matches.",
   "constraints.waitReport.heading": "Wait-time report",
   "constraints.waitReport.intro": "Who sits around the longest between their matches — worth a look before you publish.",
   "constraints.waitReport.checking": "Checking…",

@@ -4089,6 +4089,8 @@
   "constraints.bulkShift.unit": "minuten",
   "constraints.bulkShift.button": "Alles verschuiven",
   "constraints.bulkShift.hint": "Vergrendelde en besliste wedstrijden blijven staan. Ongedaan te maken vanuit het geschiedenispaneel.",
+  "constraints.bulkShift.done.one": "1 wedstrijd verplaatst.",
+  "constraints.bulkShift.done.other": "{count} wedstrijden verplaatst.",
   "constraints.waitReport.heading": "Wachttijdrapport",
   "constraints.waitReport.intro": "Wie het langst wacht tussen wedstrijden door — de moeite waard om te bekijken voor je publiceert.",
   "constraints.waitReport.checking": "Controleren…",

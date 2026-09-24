@@ -1396,6 +1396,8 @@ export type DictionaryKey =
   | "constraints.blackout.title"
   | "constraints.blackout.to"
   | "constraints.bulkShift.button"
+  | "constraints.bulkShift.done.one"
+  | "constraints.bulkShift.done.other"
   | "constraints.bulkShift.heading"
   | "constraints.bulkShift.hint"
   | "constraints.bulkShift.minutesAriaLabel"

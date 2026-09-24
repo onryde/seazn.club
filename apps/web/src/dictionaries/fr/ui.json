@@ -4089,6 +4089,8 @@
   "constraints.bulkShift.unit": "minutes",
   "constraints.bulkShift.button": "Tout décaler",
   "constraints.bulkShift.hint": "Les rencontres verrouillées et décidées restent en place. Annulable depuis le panneau d'historique.",
+  "constraints.bulkShift.done.one": "1 rencontre déplacée.",
+  "constraints.bulkShift.done.other": "{count} rencontres déplacées.",
   "constraints.waitReport.heading": "Rapport des temps d'attente",
   "constraints.waitReport.intro": "Qui attend le plus longtemps entre ses matchs — à vérifier avant de publier.",
   "constraints.waitReport.checking": "Vérification…",

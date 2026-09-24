@@ -394,6 +394,10 @@ export function ConstraintsPanel({
     constraints,
   };
   const [shiftMinutes, setShiftMinutes] = useState(15);
+  // What the last shift did (review 3 of #857, m2): how many it moved, and how
+  // many it left in place because they hold a result. The locked ones are the
+  // hint's own sentence below.
+  const [shiftOutcome, setShiftOutcome] = useState<{ shifted: number; kept: number } | null>(null);
   const [report, setReport] = useState<{ worst: WaitRow[] } | null>(null);
   // Blackouts are edited as a DRAFT and committed with one button, unlike the
   // instant-save rows above. A datetime pair cannot be saved per keystroke, and
@@ -993,18 +997,22 @@ export function ConstraintsPanel({
                     confirmLabel: msg("confirm.shiftAll.label"),
                   });
                   if (!ok) return;
-                  void run(
-                    () =>
-                      apiV1("/api/v1/schedule/shift", {
+                  setShiftOutcome(null);
+                  void run(async () => {
+                    const out = await apiV1<{ shifted: number; skipped: { decided: number } }>(
+                      "/api/v1/schedule/shift",
+                      {
                         method: "POST",
                         json: {
                           division_id: divisionId,
                           scope: { excludeLocked: true },
                           delta_minutes: shiftMinutes,
                         },
-                      }),
-                    true,
-                  );
+                      },
+                    );
+                    // `apiV1` can resolve undefined on a dropped connection.
+                    setShiftOutcome({ shifted: out?.shifted ?? 0, kept: out?.skipped?.decided ?? 0 });
+                  }, true);
                 }}
               >
                 {msg("constraints.bulkShift.button")}
@@ -1013,6 +1021,23 @@ export function ConstraintsPanel({
             <p className="text-xs text-slate-500">
               {msg("constraints.bulkShift.hint")}
             </p>
+            {shiftOutcome !== null && (
+              <p data-testid="bulk-shift-outcome" className="text-xs text-slate-600">
+                {shiftOutcome.shifted === 1
+                  ? msg("constraints.bulkShift.done.one")
+                  : msg("constraints.bulkShift.done.other", { count: String(shiftOutcome.shifted) })}
+              </p>
+            )}
+            {shiftOutcome !== null && shiftOutcome.kept > 0 && (
+              <p
+                data-testid="bulk-shift-kept"
+                className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800"
+              >
+                {shiftOutcome.kept === 1
+                  ? msg("history.danger.keptPlayed.one")
+                  : msg("history.danger.keptPlayed.other", { count: String(shiftOutcome.kept) })}
+              </p>
+            )}
           </div>
         )}
 

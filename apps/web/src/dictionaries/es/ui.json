@@ -4089,6 +4089,8 @@
   "constraints.bulkShift.unit": "minutos",
   "constraints.bulkShift.button": "Desplazar todo",
   "constraints.bulkShift.hint": "Los encuentros bloqueados y decididos permanecen en su sitio. Se puede deshacer desde el panel de historial.",
+  "constraints.bulkShift.done.one": "Se ha movido 1 partido.",
+  "constraints.bulkShift.done.other": "Se han movido {count} partidos.",
   "constraints.waitReport.heading": "Informe de tiempos de espera",
   "constraints.waitReport.intro": "Quién espera más tiempo entre sus partidos — vale la pena revisarlo antes de publicar.",
   "constraints.waitReport.checking": "Comprobando…",
