@@ -218,6 +218,9 @@ test("staff can look a fixture up by pasting the organiser's match URL (#858)", 
     await expect(panel).toBeVisible({ timeout: 20_000 });
     await expect(panel).toHaveAttribute("data-fixture-id", fixtureId);
     await expect(page.getByTestId("fixture-not-found")).toHaveCount(0);
+    // The narrowest supported width, with the new "Fixture id" row showing.
+    await page.setViewportSize({ width: 320, height: 640 });
+    await expectNoHorizontalScroll(page);
 
     // A well-formed link to a match that does not exist: a plain message, no 500.
     const missing = path.replace(/\/f\/\d+$/, "/f/9999");

@@ -10,7 +10,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900 px-6 py-3 flex items-center gap-6">
+      {/* Wraps on phones: at 320 the name/role/App cluster alone pushed the page
+          35px wide on every /admin page (#858 review). Desktop is unchanged. */}
+      <header className="border-b border-slate-800 bg-slate-900 px-6 py-3 flex items-center gap-6 max-sm:flex-wrap max-sm:gap-y-2">
         <span className="text-xs font-bold uppercase tracking-widest text-purple-400">
           Staff Console
         </span>

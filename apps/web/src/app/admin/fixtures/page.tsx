@@ -1,6 +1,7 @@
 import Link from "@/components/ui/console-link";
 import { fixtureConfigPanel, fixtureIdFromLink } from "@/server/usecases/admin-fixture-config";
 import { parseFixtureLink } from "@/lib/fixture-link";
+import { requireStaff } from "@/lib/admin";
 import { ResnapshotForm } from "./resnapshot-form";
 
 export const dynamic = "force-dynamic";
@@ -18,10 +19,15 @@ export const dynamic = "force-dynamic";
 export default async function AdminFixtureConfigPage({
   searchParams,
 }: {
-  searchParams: Promise<{ id?: string }>;
+  searchParams: Promise<{ id?: string | string[] }>;
 }) {
+  // Check THEN fetch, like every sibling admin page, not only via the layout:
+  // since #858 a guessable match link (public slugs + a sequential number)
+  // reaches the panel, where it used to take an unguessable uuid.
+  await requireStaff();
   const { id } = await searchParams;
-  const trimmed = (id ?? "").trim();
+  // `?id=a&id=b` arrives as an array; only a single string is a lookup.
+  const trimmed = (typeof id === "string" ? id : "").trim();
   // Look up only when it PARSES as a uuid: `fixtureConfigPanel` would otherwise
   // hand Postgres a malformed uuid and 500 the page on a typo.
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);

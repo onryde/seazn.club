@@ -504,4 +504,21 @@ describe.skipIf(!HAS_DB)("fixtureIdFromLink (#858)", () => {
       }),
     ).toBe(s.fixtureId);
   });
+
+  it("follows a renamed org slug too", async () => {
+    const s = await seedWithNo();
+    const renamed = `${s.slugs.org}-renamed`;
+    await sql`update organizations set slug = ${renamed} where id = ${s.orgId}`;
+    await sql`
+      insert into slug_history (entity_type, entity_id, parent_id, old_slug)
+      values ('org', ${s.orgId}, null, ${s.slugs.org})`;
+    expect(
+      await fixtureIdFromLink({
+        orgSlug: s.slugs.org,
+        compSlug: s.slugs.comp,
+        divSlug: s.slugs.div,
+        fixtureNo: 7,
+      }),
+    ).toBe(s.fixtureId);
+  });
 });

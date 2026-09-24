@@ -17,6 +17,7 @@ import { invalidatePublicCache } from "./scoring";
 import {
   compBySlugUncached,
   divBySlugUncached,
+  fixtureByNo,
   orgBySlugUncached,
   type Resolution,
 } from "@/server/slug-resolve";
@@ -140,9 +141,7 @@ export async function fixtureIdFromLink(link: FixtureLink): Promise<string | nul
   if (!compId) return null;
   const divId = await follow((s) => divBySlugUncached(compId, s), link.divSlug);
   if (!divId) return null;
-  const [row] = await sql<{ id: string }[]>`
-    select id from fixtures where division_id = ${divId} and fixture_no = ${link.fixtureNo}`;
-  return row?.id ?? null;
+  return (await fixtureByNo(divId, link.fixtureNo))?.id ?? null;
 }
 
 /** Everything `/admin/fixtures` renders. Null when the id matches nothing —

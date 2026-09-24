@@ -38,6 +38,13 @@ describe("parseFixtureLink (#858)", () => {
     }
   });
 
+  it("stops at the int4 ceiling of fixtures.fixture_no, so Postgres never sees an out-of-range number", () => {
+    expect(parseFixtureLink("/o/acme/c/summer-cup/d/open-1/f/2147483647")?.fixtureNo).toBe(
+      2147483647,
+    );
+    expect(parseFixtureLink("/o/acme/c/summer-cup/d/open-1/f/2147483648")).toBeNull();
+  });
+
   it("refuses anything that is not the match address", () => {
     expect(parseFixtureLink("")).toBeNull();
     expect(parseFixtureLink("acme/summer-cup")).toBeNull();
