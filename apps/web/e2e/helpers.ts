@@ -286,7 +286,17 @@ export async function apiJson<T = unknown>(
 ): Promise<{ status: number; data?: T; error?: { code?: string; message?: string } }> {
   const res = await request.fetch(path, {
     method,
-    headers: { "Content-Type": "application/json" },
+    // Never on a pooled keep-alive socket (CI run 35966856075: `read
+    // ECONNRESET` on a test's first call). Every APIRequestContext in a worker
+    // shares one process-global keep-alive agent with no idle limit, while the
+    // server reaps an idle socket at 6s and, when busy across that deadline,
+    // resets a request already on it unread. `Connection: close` means this
+    // helper never parks a socket; `maxRetries` covers the socket a bare
+    // `request.get`/`post` parked, which a close request still takes. A reaped
+    // request is reset unread, so its one retry cannot apply it twice.
+    // Witnessed by api-json-keep-alive.spec.ts.
+    headers: { "Content-Type": "application/json", Connection: "close" },
+    maxRetries: 1,
     ...(body !== undefined ? { data: body } : {}),
   });
   const json = (await res.json().catch(() => ({ ok: false }))) as {
