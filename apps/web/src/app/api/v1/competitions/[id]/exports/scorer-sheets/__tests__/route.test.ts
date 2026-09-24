@@ -9,6 +9,7 @@ import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { baseUrl } from "@/lib/oauth";
 import type { Locale } from "@/lib/i18n-constants";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import type { SheetModel } from "@/server/scorer-sheet-pdf";
 
 const PDF = Buffer.from("%PDF-1.3 scorer sheets");
@@ -112,6 +113,9 @@ describe("POST /competitions/{id}/exports/scorer-sheets", () => {
     expect(r422.status).toBe(422);
     expect(await r422.json()).toMatchObject({ ok: false, error: { code: "NO_FIXTURES_ON_DAY" } });
 
+    // A 500 is v1's to log (api-v1/http.ts); captured here so the expected
+    // refusal does not print a level-50 line into the run.
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
     const incomplete = "Certains liens de score n'ont pas pu être préparés. Réessayez.";
     h.build.mockRejectedValueOnce(new HttpError(500, incomplete, "SHEET_LINKS_INCOMPLETE"));
     const r500 = await POST(req({ date: "2026-09-23" }), ctx);
@@ -119,14 +123,17 @@ describe("POST /competitions/{id}/exports/scorer-sheets", () => {
     expect(r500.headers.get("content-disposition")).toBeNull();
     expect(await r500.json()).toMatchObject({ ok: false, error: { code: "SHEET_LINKS_INCOMPLETE", message: incomplete } });
     expect(h.render).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(expect.objectContaining({ code: "SHEET_LINKS_INCOMPLETE" }), "v1: HttpError reached 500");
   });
 
   it("a card whose QR cannot be encoded refuses the whole sheet: 500, no PDF", async () => {
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
     h.render.mockRejectedValueOnce(new Error("QR generation failed for fixture f1"));
     const res = await POST(req({ date: "2026-09-23" }), ctx);
     expect(res.status).toBe(500);
     expect(res.headers.get("content-type")).not.toBe("application/pdf");
     expect(res.headers.get("content-disposition")).toBeNull();
+    expect(logged).toHaveBeenCalledWith({ err: expect.objectContaining({ message: "QR generation failed for fixture f1" }) }, "v1: unhandled error");
   });
 
   it("one bucket per user, `sheets:<userId>`, six prints a minute: the sixth prints, the seventh is 429 and builds nothing", async () => {

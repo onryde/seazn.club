@@ -6,10 +6,11 @@
 // sheet being built — the revoke, the short answer — that no real request can
 // time on purpose.
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { sql } from "@/lib/db";
 import { msgFor } from "@/lib/messages-i18n";
 import type { SlotLabelLookup } from "@/lib/slot-label";
+import { log } from "@/server/logger";
 import { seedOrg } from "./_seed";
 import { fixturesOf, seedStage } from "./_sheets-rig";
 import { createCourt, createVenue } from "../venues";
@@ -237,6 +238,13 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
       code: "SHEET_LINKS_INCOMPLETE",
       message: msgFor(locale, "sheets.error.linksIncomplete"),
     });
+    // Every refusal here logs at error level (the operator's trail); captured
+    // so the expected refusals do not print level-50 lines into the run.
+    let logged: MockInstance<typeof log.error>;
+    beforeEach(() => {
+      logged = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    });
+    afterEach(() => logged.mockRestore());
 
     async function rig() {
       const { auth } = await seedOrg("pro");
@@ -250,6 +258,7 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
       const { auth, competition, fx } = await rig();
       const rows = cards(await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: PRINTED }));
       expect(rows).toHaveLength(fx.length);
+      expect(logged).not.toHaveBeenCalled();
     });
 
     it("a link revoked after it was ensured → 500 SHEET_LINKS_INCOMPLETE, in the organiser's language", async () => {
@@ -260,6 +269,11 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
         return links;
       });
       await expect(buildScorerSheet(auth, competition.id, DAY, ORIGIN, "fr", { printedAt: PRINTED })).rejects.toMatchObject(refusal("fr"));
+      // The trail names the one fixture that failed, not the whole day.
+      expect(logged).toHaveBeenCalledWith(
+        expect.objectContaining({ competitionId: competition.id, fixtureIds: [fx[1]!.id] }),
+        "scorer sheet: links not proven, sheet refused",
+      );
     });
 
     it("a link that expired after it was ensured → 500 (the scoring door would refuse it)", async () => {
