@@ -110,6 +110,11 @@ const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNA
  *  what stops a server that ever broke that invariant from spinning a phone. */
 const LEDGER_CATCHUP_READS = 2;
 
+/** One scorebug-line separator: a fixed-width box (w-4) so the line can hang
+ *  every item's separator in a clipped gutter of exactly that width (the row's
+ *  `-ml-4`) — see the scorebug's comment. Change both together. */
+const SCOREBUG_SEP = "inline-block w-4 shrink-0 whitespace-pre text-center";
+
 /** The ledger's tip: the seq of its last row (`listEvents` orders by seq,
  *  voids included), 0 for an empty ledger — the same 0 `/state` reports for a
  *  match with no events. */
@@ -500,25 +505,46 @@ export function DeviceScorePad({
                 md the line wraps: the round moves down as one unit when it
                 does not fit beside the division, and a label longer than a
                 whole line wraps inside itself (`max-w-full` caps it at the
-                line). The separator keeps its spaces in its own `pre` span,
-                which a wrapping round would otherwise trim. ≥md: unchanged. */}
-            <span data-testid="scan-scorebug-line" className="flex min-w-0 items-baseline max-md:flex-wrap">
-              <span data-testid="scan-scorebug-division" className="min-w-0 truncate">
-                {fixture.division_name}
-              </span>
-              <span
-                data-testid="scan-scorebug-round"
-                className="shrink-0 whitespace-pre max-md:max-w-full max-md:whitespace-normal"
-              >
-                <span className="whitespace-pre">{" · "}</span>
-                {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
-              </span>
-              {fixture.court_label ? (
-                <span className="min-w-0 truncate">
-                  <span className="whitespace-pre">{" · "}</span>
-                  {fixture.court_label}
+                line).
+
+                SEPARATORS never lead a line. CSS cannot tell which item a wrap
+                put first, so EVERY item — the division included — carries its
+                separator in front, `SCOREBUG_SEP`'s fixed w-4; the row hangs
+                exactly that far left of the clipping box (`-ml-4`), so the
+                first item on EVERY line has its separator in the clipped
+                gutter while an item mid-line shows its own. The two widths
+                must match (a unit test pins it). ≥md the row never wraps, so
+                the division is always first and the line reads as before. */}
+            <span data-testid="scan-scorebug-clip" className="min-w-0 overflow-hidden">
+              <span data-testid="scan-scorebug-line" className="-ml-4 flex items-baseline max-md:flex-wrap">
+                <span className="flex min-w-0">
+                  <span aria-hidden data-scorebug-sep="" className={SCOREBUG_SEP}>
+                    {" · "}
+                  </span>
+                  <span data-testid="scan-scorebug-division" className="min-w-0 truncate">
+                    {fixture.division_name}
+                  </span>
                 </span>
-              ) : null}
+                <span
+                  data-testid="scan-scorebug-round"
+                  className="shrink-0 whitespace-pre max-md:max-w-full max-md:whitespace-normal"
+                >
+                  <span data-scorebug-sep="" className={SCOREBUG_SEP}>
+                    {" · "}
+                  </span>
+                  <span data-testid="scan-scorebug-round-label">
+                    {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
+                  </span>
+                </span>
+                {fixture.court_label ? (
+                  <span className="min-w-0 truncate">
+                    <span data-scorebug-sep="" className={SCOREBUG_SEP}>
+                      {" · "}
+                    </span>
+                    {fixture.court_label}
+                  </span>
+                ) : null}
+              </span>
             </span>
           </p>
           {inPlay ? (

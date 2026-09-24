@@ -290,6 +290,44 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     expect(div.has("min-w-0") && div.has("truncate"), "the division is what truncates").toBe(true);
   });
 
+  // Review round 2 follow-up: a round that wraps to its own line used to START
+  // with its "·". A separator must never lead a line, and CSS cannot tell which
+  // item a wrap put first — so EVERY item hangs its separator in a gutter of
+  // exactly the separator's width left of the line (`-ml-N` on the row, `w-N`
+  // on each separator), and the line's own box clips that gutter. Whatever
+  // item starts a line, its separator sits in the clipped gutter; an item
+  // mid-line shows its separator. The widths must MATCH, or a line's first
+  // item is either partly clipped or keeps a sliver of its dot. Class tokens
+  // only; the scan-screens walkthrough reads the painted text at 320.
+  it("a separator never leads a line: every item hangs a same-width separator in a clipped gutter", () => {
+    const tree = renderIsland(DeviceScorePad, {
+      ...props("scheduled", null),
+      initialEvents: [],
+      fixture: { ...props("scheduled", null).fixture, division_name: "Open", round_label: "Final" },
+    }).tree();
+    const tokens = (e: ReactElement | undefined) =>
+      new Set(((e?.props as { className?: string } | undefined)?.className ?? "").split(/\s+/));
+    const clip = byTestId(tree, "scan-scorebug-clip");
+    expect(clip, "the line has a clipping box").toBeDefined();
+    expect(tokens(clip).has("overflow-hidden"), "…which clips").toBe(true);
+    const row = byTestId(tree, "scan-scorebug-line");
+    const gutter = [...tokens(row)].find((t) => /^-ml-\d+$/.test(t));
+    expect(gutter, "the row hangs left of the clipping box").toBeDefined();
+    const width = `w-${gutter!.slice("-ml-".length)}`;
+    const seps = tree.filter((e) => propsOf(e)["data-scorebug-sep"] !== undefined);
+    // Division, round and court (the fixture has "Court 2"): one each.
+    expect(seps, "every item carries its own separator").toHaveLength(3);
+    for (const sep of seps) {
+      expect(textOf(sep).trim()).toBe("·");
+      expect(tokens(sep).has("inline-block"), "a separator has a box").toBe(true);
+      expect(tokens(sep).has(width), `…exactly the gutter's width (${width})`).toBe(true);
+    }
+    const round = byTestId(tree, "scan-scorebug-round")!;
+    const first = (propsOf(round).children as unknown[])[0] as ReactElement;
+    expect(propsOf(first)["data-scorebug-sep"], "the round's separator comes first, into the gutter").toBeDefined();
+    expect(textOf(byTestId(tree, "scan-scorebug-round-label")!), "the label is its own element").toBe("Final");
+  });
+
   it("scheduled with both sides: the Confirm card with Start, and NO inner pad yet", () => {
     const island = renderIsland(DeviceScorePad, {
       ...props("scheduled", null),
