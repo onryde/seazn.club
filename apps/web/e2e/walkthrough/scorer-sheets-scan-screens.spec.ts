@@ -888,7 +888,10 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     const de = { id: stage.data!.id, kind: "double_elim" };
 
     // The label under test is the LONGEST the board prints for this bracket,
-    // in French — found by the board's own function, not typed here.
+    // in French, by CHARACTER count — found by the board's own function, not
+    // typed here. It is the reset, the one match whose Confirm this bracket
+    // can show last. What paints WIDEST is measured, not counted: see the
+    // forfeited case below (in es the widest word is not the reset's).
     const drawn = await draw();
     const frLabels = boardRoundCodes(drawn, [de], lookup(FR));
     const longest = [...frLabels.entries()].sort(([, a], [, b]) => b.label.length - a.label.length)[0]!;
