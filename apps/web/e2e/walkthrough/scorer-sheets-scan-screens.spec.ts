@@ -41,7 +41,7 @@
 // every one of those refreshes re-sent. Step 1b measures one refresh's RSC
 // response on an unrouted French phone and prints its transfer and decoded
 // sizes; the bound is derived from the dictionary file itself.
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Browser, type Locator, type Page, type TestInfo } from "@playwright/test";
@@ -106,9 +106,17 @@ const NAVIGATIONS = 13;
 /** API reaches: competition, division, entrants, stage, generate, start, the
  *  draw, three mints, two results, a finalize, a revoke, the ledger reads. */
 const REACHES = 18;
+/** Measured checks, one width each (review round 3): the Match line's code at
+ *  320 on both Confirms, and the scorebug line at 768 and 1280 on the four
+ *  screens that read its round. */
+const MEASURES = 2 + 4 * 2;
 const BUDGET_MS = Math.max(
   180_000,
-  2 * WAITING_BUDGET_MS + NAVIGATIONS * STEP_MS + REACHES * REACH_MS + CAPTURES * WIDTHS.length * REACH_MS,
+  2 * WAITING_BUDGET_MS +
+    NAVIGATIONS * STEP_MS +
+    REACHES * REACH_MS +
+    CAPTURES * WIDTHS.length * REACH_MS +
+    MEASURES * REACH_MS,
 );
 
 interface Fx {
@@ -229,6 +237,101 @@ async function expectRoundWhole(page: Page, label: string, what: string) {
   await page.setViewportSize({ width: 1280, height: 900 });
 }
 
+/** At 768 and 1280 the scorebug line reads exactly as it did before the phone
+ *  wrap work (review round 3; AGENTS.md: at 768 and above nothing changes):
+ *  one natural run, "division · round". Every separator trick is below md
+ *  only, so the line's painted width — the division's first character to the
+ *  label's last — equals the same text painted as ONE run in the line's own
+ *  typography, and the line paints exactly that text (no division separator).
+ *  A fixed-width separator box (w-4, ~3.5px wider than its " · ") fails it. */
+async function expectScorebugNaturalAtMd(page: Page, label: string, what: string) {
+  const line = page.getByTestId("scan-scorebug-line");
+  for (const w of [768, 1280] as const) {
+    await page.setViewportSize({ width: w, height: 900 });
+    const got = await line.evaluate(async (row, text) => {
+      await document.fonts.ready;
+      const first = row.querySelector('[data-testid="scan-scorebug-division"]')!.firstChild as Text;
+      const last = row.querySelector('[data-testid="scan-scorebug-round-label"]')!.lastChild as Text;
+      const live = document.createRange();
+      live.setStart(first, 0);
+      live.setEnd(last, last.data.length);
+      const probe = document.createElement("span");
+      probe.style.cssText = "position:absolute;left:0;top:0;visibility:hidden;white-space:pre";
+      probe.textContent = text;
+      row.appendChild(probe);
+      const natural = probe.getBoundingClientRect().width;
+      probe.remove();
+      return { live: live.getBoundingClientRect().width, natural };
+    }, `${DIVISION} · ${label}`);
+    expect(
+      Math.abs(got.live - got.natural),
+      `${what} ${w}: the line paints as one natural run (live ${got.live}px, natural ${got.natural}px)`,
+    ).toBeLessThanOrEqual(0.5);
+    expect((await paintedText(line)).replace(/\s+/g, ""), `${what} ${w}: the line paints exactly its text`).toBe(
+      `${DIVISION}·${label}`.replace(/\s+/g, ""),
+    );
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+}
+
+/** Confirm's "Match" line at 320 (review round 3): the board's code ("GF·1")
+ *  is what the umpire checks against the printed sheet, so it paints whole and
+ *  the division before it is what truncates — it read "Scan Cup … Open Ch…",
+ *  code gone. Measured on the code's own characters: each one's range must lie
+ *  inside every box that clips it, starting with the element that holds it,
+ *  and no ellipsis may cut that element. PRECONDITION: the division truncates,
+ *  so the line is under pressure — a short name would prove nothing. */
+async function expectMatchCodeWhole(page: Page, card: Locator, ref: string, what: string) {
+  await page.setViewportSize({ width: 320, height: 900 });
+  const line = card.locator("dl > dd").last();
+  await expect(line, `${what}: the Match line is the division, then the board's code`).toContainText(`${DIVISION} · ${ref}`);
+  const got = await line.evaluate(
+    (dd, { ref, division }) => {
+      const nodes: Text[] = [];
+      const walker = document.createTreeWalker(dd, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode(); t; t = walker.nextNode()) nodes.push(t as Text);
+      const codeNode = [...nodes].reverse().find((t) => t.data.includes(ref))!;
+      const at = codeNode.data.lastIndexOf(ref);
+      const divisionNode = nodes.find((t) => t.data.includes(division))!;
+      const truncates = (el: HTMLElement) => el.scrollWidth > el.clientWidth + 1;
+      const owner = codeNode.parentElement!;
+      const clips: DOMRect[] = [];
+      for (let a: HTMLElement | null = owner; a && a !== document.body; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        if (cs.overflowX !== "visible" || cs.overflowY !== "visible") clips.push(a.getBoundingClientRect());
+      }
+      let painted = "";
+      for (let k = 0; k < ref.length; k++) {
+        const r = document.createRange();
+        r.setStart(codeNode, at + k);
+        r.setEnd(codeNode, at + k + 1);
+        const b = r.getBoundingClientRect();
+        if (b.width > 0 && clips.every((c) => b.left >= c.left - 0.5 && b.right <= c.right + 0.5)) painted += ref[k];
+      }
+      const whole = document.createRange();
+      whole.setStart(codeNode, at);
+      whole.setEnd(codeNode, at + ref.length);
+      const box = whole.getBoundingClientRect();
+      return {
+        painted,
+        ownerCut: truncates(owner),
+        divisionTruncates: truncates(divisionNode.parentElement!),
+        left: box.left,
+        right: box.right,
+        vw: document.documentElement.clientWidth,
+      };
+    },
+    { ref, division: DIVISION },
+  );
+  expect(got.divisionTruncates, `${what} 320: precondition — the division truncates, so the line is under pressure`).toBe(true);
+  expect(got.painted, `${what} 320: the board's code "${ref}" paints whole`).toBe(ref);
+  expect(got.ownerCut, `${what} 320: no ellipsis cuts the element holding the code`).toBe(false);
+  expect(got.left, `${what} 320: the code starts inside the viewport`).toBeGreaterThanOrEqual(0);
+  expect(got.right, `${what} 320: the code ends inside the viewport`).toBeLessThanOrEqual(got.vw);
+  await expectNoHorizontalScroll(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+}
+
 /** The characters of `el` that actually paint: each one's own range must have
  *  a box and overlap every ancestor that clips (overflow not `visible`). A
  *  character hung in a clipped gutter is not painted, whatever the DOM says —
@@ -255,6 +358,31 @@ async function paintedText(el: Locator): Promise<string> {
     }
     return out;
   });
+}
+
+/** How wide each text paints in the scorebug line's typography, measured on a
+ *  live scan page with its fonts loaded — never guessed from a character count
+ *  (review round 3: "(DESEMPATE)" and "PERDEDORES" differ by one character and
+ *  a few pixels, the other way round). The probe sits inside the round, so it
+ *  inherits the line's size, case and tracking; the status beside the line
+ *  carries the same three classes. `width` is the text on one line; `widestWord`
+ *  is its widest word — once a label wraps, the least room it can take without
+ *  breaking a word (its min-content width). */
+async function paintWidths(page: Page, texts: readonly string[]) {
+  const rows = await page.getByTestId("scan-scorebug-round-label").evaluate(async (label, all) => {
+    await document.fonts.ready;
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;left:0;top:0;visibility:hidden;white-space:pre";
+    label.parentElement!.appendChild(probe);
+    const paint = (t: string) => {
+      probe.textContent = t;
+      return probe.getBoundingClientRect().width;
+    };
+    const out = all.map((t) => ({ text: t, width: paint(t), widestWord: Math.max(...t.split(/\s+/).filter(Boolean).map(paint)) }));
+    probe.remove();
+    return out;
+  }, [...texts]);
+  return new Map(rows.map((r) => [r.text, r]));
 }
 
 async function ledger(request: APIRequestContext, id: string): Promise<{ type: string }[]> {
@@ -464,6 +592,7 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
       "the scorebug names the round as the board does",
     ).toBeVisible();
     await expectRoundWhole(page, label, `scorebug ${f.id}`);
+    await expectScorebugNaturalAtMd(page, label, `scorebug ${f.id}`);
   };
 
   const mint = async (fixtureId: string) => {
@@ -575,6 +704,7 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     await expect(confirm).toContainText(say(EN, "device.scan.time"));
     await expect(confirm, "the Match line is the board's name for it").toContainText(refOf(EN, final.id));
     await expect(confirm).not.toContainText(roundForm(EN, final));
+    await expectMatchCodeWhole(phone, confirm, refOf(EN, final.id), "en Confirm");
     await scorebugRound(phone, EN, final);
     await expect(confirm.getByTestId("score-start-match")).toHaveText(say(EN, "score.startMatch"));
     await expect(phone.locator('[data-role="pad-v3"]'), "no pad before Start").toHaveCount(0);
@@ -584,6 +714,7 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
     await expect(frConfirm).toContainText(say(FR, "device.scan.confirmTitle"), { timeout: STEP_MS });
     await expect(frConfirm.getByTestId("score-start-match")).toHaveText(say(FR, "score.startMatch"));
     await expect(frConfirm, "the Match line, in French board codes").toContainText(refOf(FR, final.id));
+    await expectMatchCodeWhole(frPhone, frConfirm, refOf(FR, final.id), "fr Confirm");
     await scorebugRound(frPhone, FR, final);
     shots.push(...(await capture(frPhone, frConfirm, testInfo, "fr-confirm")));
 
@@ -676,13 +807,26 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
 // SQL as overlay-kit.ts seeds its org; then the organiser's API plays the
 // bracket until the Lower-bracket champion wins the grand final, which is what
 // seats the reset. THE TEST, in the browser: the reset's Confirm scorebug.
+//
+// ── THE WIDEST COMBINATION (review round 3) ─────────────────────────────────
+// Once the round wraps inside itself, its WIDEST WORD sets its min-content
+// width, and beside a wide status that can still be wider than the room the
+// line has — es "POR INCOMPARECENCIA" beside a logo at 320. So the same bracket
+// also forfeits the match whose es label paints the widest word, picked by
+// MEASURED width on a live Spanish scan page (never by character count), and
+// reads it at 320 beside that status and the logo — measured, the label is
+// wider than its room, and it must still paint whole.
 /** Org seed + sign-in, then competition, division, entrants, stage, generate,
- *  start, the draw, five results and their reads, the reset's poll, a mint. */
-const DE_REACHES = 24;
+ *  start, the draw, two mints for the measuring and forfeited pages, five
+ *  results and their reads, a forfeit (state + event), the reset's poll, a
+ *  mint, and the forfeit's read back. */
+const DE_REACHES = 29;
 const DE_LOCALES: readonly Locale[] = ["en", "fr", "es", "nl"];
-const DE_BUDGET_MS = Math.max(120_000, STEP_MS + DE_REACHES * REACH_MS + DE_LOCALES.length * (STEP_MS + 3 * REACH_MS));
+/** The measuring page, then per locale the reset's Confirm and the forfeit. */
+const DE_PAGES = 1 + 2 * DE_LOCALES.length;
+const DE_BUDGET_MS = Math.max(120_000, STEP_MS + DE_REACHES * REACH_MS + DE_PAGES * (STEP_MS + 3 * REACH_MS));
 
-test("the scorebug's LONGEST round label — a double-elimination reset — is whole at 320 beside the org logo, in en, fr, es and nl", async ({
+test("the scorebug's LONGEST round label — a double-elimination reset — is whole at 320 beside the org logo, in en, fr, es and nl; so is the WIDEST es label beside the widest status, forfeited", async ({
   browser,
 }, testInfo) => {
   test.setTimeout(DE_BUDGET_MS);
@@ -755,6 +899,68 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     ).toBe(true);
     const grandFinal = drawn.find((f) => f.lane === "GF" && f.conditional !== true)!;
     expect(grandFinal, "the bracket has a grand final before its reset").toBeDefined();
+    const mintFor = async (fixtureId: string) => {
+      const res = await apiJson<{ secret: string }>(api, `/api/v1/fixtures/${fixtureId}/device-links`, "POST", {});
+      expect([200, 201], `mint for ${fixtureId} → ${JSON.stringify(res.error)}`).toContain(res.status);
+      return res.data!;
+    };
+    const one = async (id: string) => (await draw()).find((f) => f.id === id)!;
+
+    // ---- The widest combination, measured (review round 3) --------------------
+    // Every es label this bracket prints and every status the scorebug can
+    // show, painted in the scorebug's own typography on a live Spanish scan
+    // page at 320 (the first match's Confirm, the one page open before play).
+    const ES = DICTS.es;
+    const esLabels = boardRoundCodes(drawn, [de], lookup(ES));
+    const statusKeys = Object.keys(ES).filter((k) => k.startsWith("score.status."));
+    const opener = drawn.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+    const openerLink = await mintFor(opener.id);
+    const measured = await (async () => {
+      const probe = await phoneIn(browser, "es");
+      try {
+        await probe.setViewportSize({ width: 320, height: 900 });
+        await probe.goto(`/score/${openerLink.secret}`);
+        await expect(probe.getByTestId("scan-confirm"), "es: the first match opens on Confirm").toBeVisible({
+          timeout: STEP_MS,
+        });
+        return await paintWidths(probe, [...[...esLabels.values()].map((c) => c.label), ...statusKeys.map((k) => ES[k]!)]);
+      } finally {
+        await probe.context().close();
+      }
+    })();
+    const byWidth = (a: { width: number }, b: { width: number }) => b.width - a.width;
+    const statusesByWidth = statusKeys.map((key) => ({ key, ...measured.get(ES[key]!)! })).sort(byWidth);
+    const widestStatus = statusesByWidth[0]!;
+    // The reach below forfeits (a no-show, the organiser's own event), so the
+    // widest status must be the forfeit's; a copy change that makes another
+    // status wider moves this case to that status, not past it.
+    expect(widestStatus.key, `the widest es status: ${JSON.stringify(statusesByWidth)}`).toBe("score.status.forfeited");
+    const labelsByWidth = drawn
+      .map((f) => ({ f, ...measured.get(esLabels.get(f.id)!.label)! }))
+      .sort((a, b) => b.widestWord - a.widestWord || b.width - a.width);
+    const widest = labelsByWidth[0]!;
+    const widestTable = labelsByWidth.map((l) => ({ label: l.text, width: l.width, widestWord: l.widestWord }));
+    console.log(`[scan-screens] es widths at 320: ${JSON.stringify({ widestStatus, labels: widestTable })}`);
+    await testInfo.attach("es-scorebug-widths", {
+      body: JSON.stringify({ statuses: statusesByWidth, labels: widestTable }),
+      contentType: "application/json",
+    });
+
+    /** One match decided, the home side winning: by the away side's no-show
+     *  forfeit when it is the widest-label match (its scorebug must then read
+     *  "forfeited"), by a result otherwise. `f` is read fresh (its seats). */
+    const settle = async (f: Fx, homeWins: boolean) => {
+      if (f.id !== widest.f.id) return scoreFixture(api, f.id, homeWins ? 2 : 1, homeWins ? 1 : 2);
+      const state = await apiJson<{ last_seq: number }>(api, `/api/v1/fixtures/${f.id}/state`);
+      expect(state.status, `state read: ${JSON.stringify(state.error)}`).toBe(200);
+      const forfeit = await apiJson(api, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: state.data!.last_seq,
+        type: "core.forfeit",
+        payload: { by: homeWins ? f.away_entrant_id : f.home_entrant_id, reason: "no-show" },
+        idempotency_key: randomUUID(),
+      });
+      expect(forfeit.status, `the organiser's forfeit: ${JSON.stringify(forfeit.error)}`).toBe(201);
+    };
 
     // ---- Reach: play every match before the grand final (home wins) ----------
     for (let guard = 0; guard < drawn.length; guard++) {
@@ -767,7 +973,7 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
           f.away_entrant_id !== null,
       );
       if (ready === undefined) break;
-      await scoreFixture(api, ready.id, 2, 1);
+      await settle(ready, true);
     }
     // The Lower-bracket champion wins the grand final: that is what seats the
     // reset. The Winners-bracket champion is its final's home side (home won).
@@ -778,7 +984,7 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     const gf = settled.find((f) => f.id === grandFinal.id)!;
     expect([gf.home_entrant_id, gf.away_entrant_id], "both champions reach the grand final").not.toContain(null);
     const lbIsHome = gf.home_entrant_id !== wbFinal.home_entrant_id;
-    await scoreFixture(api, gf.id, lbIsHome ? 2 : 1, lbIsHome ? 1 : 2);
+    await settle(gf, lbIsHome);
     await expect
       .poll(
         async () => {
@@ -788,8 +994,7 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
         { timeout: STEP_MS, message: "the record: the grand final's result seats the reset" },
       )
       .toBe(true);
-    const link = await apiJson<{ secret: string }>(api, `/api/v1/fixtures/${reset.id}/device-links`, "POST", {});
-    expect([200, 201], `mint → ${JSON.stringify(link.error)}`).toContain(link.status);
+    const link = await mintFor(reset.id);
 
     // ---- The test: the reset's Confirm scorebug, at 320, in four languages ---
     const shots: string[] = [];
@@ -797,14 +1002,16 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
       const label = boardRoundCodes(drawn, [de], lookup(DICTS[loc])).get(reset.id)!.label;
       const phone = await phoneIn(browser, loc);
       try {
-        await phone.goto(`/score/${link.data!.secret}`);
-        await expect(phone.getByTestId("scan-confirm"), `${loc}: the seated reset opens on Confirm`).toBeVisible({
+        await phone.goto(`/score/${link.secret}`);
+        const confirm = phone.getByTestId("scan-confirm");
+        await expect(confirm, `${loc}: the seated reset opens on Confirm`).toBeVisible({
           timeout: STEP_MS,
         });
         const logo = phone.locator("header p img");
         await expect(logo, `${loc}: the org logo is on the scorebug's line`).toBeVisible();
         await expect(phone.getByTestId("scan-scorebug-round")).toContainText(label);
         await expectRoundWhole(phone, label, `${loc} reset "${label}"`);
+        await expectMatchCodeWhole(phone, confirm, boardRef(DICTS[loc], drawn, de, reset.id), `${loc} reset Confirm`);
         await phone.setViewportSize({ width: 320, height: 900 });
         const path = testInfo.outputPath(`${loc}-de-reset-confirm-320.png`);
         await phone.screenshot({ path, fullPage: true, animations: "disabled" });
@@ -814,10 +1021,53 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
         await phone.context().close();
       }
     }
-    // Four pictures, and four DIFFERENT ones (AGENTS.md 10).
-    expect(shots).toHaveLength(DE_LOCALES.length);
+
+    // ---- The test: the widest combination, forfeited, at 320 (review round 3)
+    // A reset that is itself the widest is forfeited only now, after its
+    // Confirm was read above; any other was forfeited where it was played.
+    if (widest.f.id === reset.id) await settle(await one(reset.id), true);
+    expect((await one(widest.f.id)).status, "the record: the widest-label match was forfeited").toBe("forfeited");
+    const forfeitLink = widest.f.id === reset.id ? link : await mintFor(widest.f.id);
+    for (const loc of DE_LOCALES) {
+      const dict = DICTS[loc];
+      const label = boardRoundCodes(drawn, [de], lookup(dict)).get(widest.f.id)!.label;
+      const phone = await phoneIn(browser, loc);
+      try {
+        await phone.setViewportSize({ width: 320, height: 900 });
+        await phone.goto(`/score/${forfeitLink.secret}`);
+        const status = phone.locator("header").getByText(say(dict, "score.status.forfeited"), { exact: true });
+        await expect(status, `${loc}: the scorebug says the match was forfeited`).toBeVisible({ timeout: STEP_MS });
+        await expect(phone.locator("header p img"), `${loc}: the org logo is on the scorebug's line`).toBeVisible();
+        await expect(phone.getByTestId("scan-scorebug-round")).toContainText(label);
+        if (loc === "es") {
+          // The measurement is the status's own width, not a stand-in for it…
+          const shown = await status.evaluate((el) => el.getBoundingClientRect().width);
+          expect(Math.abs(shown - widestStatus.width), `es: the status paints ${shown}px, measured ${widestStatus.width}px`).toBeLessThanOrEqual(1);
+          // …and the case is the one that clipped: the widest word is wider
+          // than all the room the label has on its line.
+          const room = await phone.getByTestId("scan-scorebug-round-label").evaluate((el) => {
+            const clip = el.closest('[data-testid="scan-scorebug-clip"]')!;
+            return clip.getBoundingClientRect().right - el.getBoundingClientRect().left;
+          });
+          expect(
+            widest.widestWord,
+            `es 320: precondition — the widest word of "${label}" (${widest.widestWord}px) is wider than its room (${room}px)`,
+          ).toBeGreaterThan(room);
+        }
+        await expectRoundWhole(phone, label, `${loc} forfeited "${label}"`);
+        await phone.setViewportSize({ width: 320, height: 900 });
+        const path = testInfo.outputPath(`${loc}-forfeited-widest-320.png`);
+        await phone.screenshot({ path, fullPage: true, animations: "disabled" });
+        await testInfo.attach(`${loc}-forfeited-widest-320`, { path, contentType: "image/png" });
+        shots.push(path);
+      } finally {
+        await phone.context().close();
+      }
+    }
+    // Eight pictures, and eight DIFFERENT ones (AGENTS.md 10).
+    expect(shots).toHaveLength(2 * DE_LOCALES.length);
     expect(new Set(shots.map((p) => readFileSync(p).toString("base64"))).size, "no two captures are identical").toBe(
-      DE_LOCALES.length,
+      2 * DE_LOCALES.length,
     );
   } finally {
     await owner.context().close();
