@@ -136,8 +136,25 @@ resolver.
 - Button **Print scorer sheets** on `app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx` with a
   day picker (default: today if it has fixtures, else the next day that does). Community
   without an Event Pass sees `UpgradeGate feature="scoring.device_links"`. Works at 320.
-- `POST /o/[orgSlug]/c/[compSlug]/schedule/scorer-sheets.pdf` (POST: it may mint), body
-  `{ date: "YYYY-MM-DD" }`. Session editor only; rate limited per user.
+- `POST /api/v1/competitions/{id}/exports/scorer-sheets` (amended 2026-09-24, Task 8: beside
+  its timetable/tickets siblings, and under `/api` so `proxy.ts`'s CSRF Origin check covers
+  it). POST because printing may mint. Body `{ date: "YYYY-MM-DD" }`. Session editor only
+  (write scope; session-only in `key-scopes.ts`); rate limited per user (6 a minute). 200
+  `application/pdf`, `attachment; filename="scorer-sheets-<date>.pdf"`, `private, no-store`
+  (the bytes are live credentials). Refusals use the v1 envelope: 400, 402, 403, 429,
+  422 `NO_FIXTURES_ON_DAY` when nothing prints, and 500 as below.
+- Links (amended 2026-09-24, owner ruling): every printed fixture's link is ENSURED —
+  re-shown, never rotated (§4.2), in one transaction with ids locked in sorted order. A
+  fixture that finished (`finalized`/`cancelled`) between choosing the day's rows and
+  ensuring its link is left OFF the sheet, not a refusal: one result entered mid-print must
+  not cost the organiser every other sheet. If that leaves nothing, 422.
+- **Every card's link is proven before anything is printed** (owner ruling 2026-09-24), in
+  ONE query: each printed fixture holds exactly one live link (not revoked, not expired)
+  whose hash is the secret the card will print, and each fixture left off must be one that
+  finished. Any miss refuses the WHOLE request — 500 `SHEET_LINKS_INCOMPLETE` with the
+  localised "Some scoring links could not be prepared. Try again." — never a partial sheet
+  and never a card without a working code. A QR that cannot be encoded refuses the same
+  way (500, no PDF).
 - Fixtures: `scheduled_at` inside that day on the **org clock** (`organizations.timezone`
   → UTC, `resolveVenueTz(null, orgTz)`), never a division's own tz override. This follows
   the repo rule in `usecases/schedule.ts` (`ScheduleSettingsOut`: "anything doing
@@ -159,8 +176,9 @@ resolver.
 - Page header: the masthead (Pro `exports.branded` only), competition name (held to two
   lines), the date, and — beside the title, right-aligned — the court heading with its own
   page count (`COURT 2 · PAGE 1 OF 2`) and "Scan to score. Check names on screen before
-  you start." Footer: printed-at and `seazn.club`; page numbering is per court, in the
-  heading.
+  you start." The masthead heads every page, not just the first. Footer: printed-at (the
+  request's instant, `YYYY-MM-DD HH:MM` on the org clock, like the card times) and
+  `seazn.club`; page numbering is per court, in the heading.
 - Card: time · the board's match code (`QF·2`, `R1·3`) · division · both sides (entrant
   display name via `entrantDisplayName`, else `resolveSlotLabel`, else `TBD`). A name wraps
   to two lines, then takes an ellipsis; a doubles pair prints one member per line; a TBD
@@ -168,8 +186,9 @@ resolver.
   scoring happens on the phone the QR opens. Then the QR of `<origin>/score/<token>` (§4.4.1),
   which is also a link annotation. The URL and token are never printed as text: the token
   is a bearer secret.
-- Rendering: pdfkit + qrcode on the shared document theme. Strings in the organiser's
-  locale, keys added to all 4 dictionaries (+ `gen-keys`).
+- Rendering: pdfkit + qrcode on the shared document theme, set in the embedded brand fonts
+  (Barlow Condensed for chrome, Inter for every name). Strings in the organiser's locale,
+  keys added to all 4 dictionaries (+ `gen-keys`).
 
 #### 4.4.1 The printed QR — "B2" (owner-approved 2026-09-24)
 
@@ -242,7 +261,11 @@ Each change ships a test that fails without it; each guard is mutated (predicate
   day selection (tz midnight edge, terminal-status exclusion, Unassigned, ordering).
 - **Integration (real DB):** PDF route mints then re-returns the same tokens; a
   device-link void after carry-forward → 403 `RESULT_CARRIED_FORWARD` while a session
-  editor's void on the same fixture passes; Community → 402, Event Pass lifts.
+  editor's void on the same fixture passes; Community → 402, Event Pass lifts. The link
+  proof (§4.4): a link revoked, expired or deleted between ensure and render, one short, a
+  swapped secret, or two live links → 500 `SHEET_LINKS_INCOMPLETE`; no `DEVICE_LINK_KEK`
+  → 503 and nothing minted. With `DOC_FONT_DIR` unset the PDF embeds Inter and Barlow from
+  both the production cwd (apps/web) and the repo root.
 - **E2E (real producer → real consumer):** print → extract a token from the PDF →
   `/score/<token>` → Start match → score to decided; pair the next round → rescan → View
   only. TBD: open a semi-final link → decide its feeder → Waiting flips to Confirm without
