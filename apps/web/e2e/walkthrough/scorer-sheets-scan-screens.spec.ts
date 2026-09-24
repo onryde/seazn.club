@@ -203,13 +203,58 @@ async function expectRoundWhole(page: Page, label: string, what: string) {
     await division.evaluate((el) => el.scrollWidth > el.clientWidth + 1),
     `${what} 320: precondition — the division truncates, so the line is under pressure`,
   ).toBe(true);
-  const fit = await textFit(round);
+  // …and so the round starts a line of its own there — the case in which its
+  // separator must not show.
+  const [roundTop, divisionBottom] = await Promise.all([
+    round.evaluate((el) => el.getBoundingClientRect().top),
+    division.evaluate((el) => el.getBoundingClientRect().bottom),
+  ]);
+  expect(roundTop, `${what} 320: precondition — the round wrapped below the division`).toBeGreaterThanOrEqual(
+    divisionBottom - 1,
+  );
+  // What the round actually PAINTS, character by character (review round 2
+  // follow-up: a wrapped round read "· GRANDE FINALE"). A separator must never
+  // lead a line, and the painted text is the label, nothing more.
+  const painted = await paintedText(round);
+  expect(painted.trimStart().startsWith("·"), `${what} 320: the wrapped round does not start with "·" ("${painted}")`).toBe(
+    false,
+  );
+  expect(painted.replace(/\s+/g, ""), `${what} 320: the round paints exactly its label`).toBe(label.replace(/\s+/g, ""));
+  const fit = await textFit(page.getByTestId("scan-scorebug-round-label"));
   expect(fit.width, `${what} 320: the round paints some text`).toBeGreaterThan(0);
   expect(fit.cut, `${what} 320: nothing clips the round "${label}"`).toEqual([]);
   expect(fit.left, `${what} 320: the round starts inside the viewport`).toBeGreaterThanOrEqual(0);
   expect(fit.right, `${what} 320: the round ends inside the viewport`).toBeLessThanOrEqual(fit.vw);
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 1280, height: 900 });
+}
+
+/** The characters of `el` that actually paint: each one's own range must have
+ *  a box and overlap every ancestor that clips (overflow not `visible`). A
+ *  character hung in a clipped gutter is not painted, whatever the DOM says —
+ *  which is exactly how the scorebug hides a separator that would lead a line. */
+async function paintedText(el: Locator): Promise<string> {
+  return el.evaluate((node) => {
+    const clips: DOMRect[] = [];
+    for (let a = node.parentElement; a && a !== document.body; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      if (cs.overflowX !== "visible" || cs.overflowY !== "visible") clips.push(a.getBoundingClientRect());
+    }
+    let out = "";
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+      const text = t.textContent ?? "";
+      for (let i = 0; i < text.length; i++) {
+        const range = document.createRange();
+        range.setStart(t, i);
+        range.setEnd(t, i + 1);
+        const b = range.getBoundingClientRect();
+        const shown = b.width > 0 && clips.every((c) => b.right > c.left + 0.5 && b.left < c.right - 0.5);
+        if (shown) out += text[i];
+      }
+    }
+    return out;
+  });
 }
 
 async function ledger(request: APIRequestContext, id: string): Promise<{ type: string }[]> {
