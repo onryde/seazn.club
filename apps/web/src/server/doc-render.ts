@@ -13,9 +13,9 @@ import {
   pagePlayoffPageGeometry,
 } from "./doc-bracket-geometry";
 
-// MARGIN, resolveLogo, drawMasthead and drawTitleBlock are also the scorer
-// sheet's chrome (scorer-sheet-pdf.ts), so every printed document shares one
-// masthead and one title block.
+// MARGIN, resolveLogo and drawMasthead are also the scorer sheet's chrome
+// (scorer-sheet-pdf.ts), so every printed document shares one masthead. The
+// sheet draws its own title block: two-line title bound, per-court heading.
 export const MARGIN = 40;
 
 const MAST_H = 64; // masthead band height, page 1
@@ -99,15 +99,9 @@ function ellipsize(text: string, maxW: number, width: (s: string) => number): st
   return "";
 }
 
-/** `eyebrow` defaults to the kind's hard-coded English label; the scorer sheet
- *  passes its own, localised one. */
-export function drawTitleBlock(
-  doc: PDFKit.PDFDocument,
-  model: DocModel,
-  eyebrow: string = eyebrowFor(model.kind),
-): void {
+function drawTitleBlock(doc: PDFKit.PDFDocument, model: DocModel): void {
   doc.font(FONT.bodyMed).fontSize(8).fillColor(PALETTE.mute)
-    .text(eyebrow, MARGIN, doc.y, { characterSpacing: 2 });
+    .text(eyebrowFor(model.kind), MARGIN, doc.y, { characterSpacing: 2 });
   doc.moveDown(0.1);
   doc.font(FONT.displayBold).fontSize(26).fillColor(PALETTE.night)
     .text(model.title.toUpperCase(), MARGIN, doc.y, { characterSpacing: 0.5 });
