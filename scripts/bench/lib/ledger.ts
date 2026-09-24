@@ -12,8 +12,9 @@
 //     already seen, not the next one wanted.
 //   GET /api/v1/fixtures/{id}/state
 //     `reply(200, state)` over `FixtureStateOut`, whose fields here are
-//     `status` and `last_seq` (the same `last_seq` the route's ETag is built
-//     from).
+//     `status` and `last_seq`. The route's ETag is a digest of that whole
+//     body (`fixtureStateEtag`), not of `last_seq`: a status change with no
+//     new event is a new ETag.
 // Both arrive inside the v1 envelope (`{ ok, data, requestId }`).
 import { raw, type RawResult, type Session } from "./http.ts";
 
