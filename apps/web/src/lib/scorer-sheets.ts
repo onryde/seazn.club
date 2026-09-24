@@ -82,9 +82,12 @@ function isBye(f: SheetDayRow): boolean {
   return f.home_slot_label?.key === BYE_KEY || f.away_slot_label?.key === BYE_KEY;
 }
 
-function printable(f: SheetDayRow): f is SheetDayRow & { scheduled_at: string } {
+/** Could this fixture go on a sheet at all: a printable status, a time, and
+ *  not a bye. The loader and every function below share this one test. */
+export function isPrintable(f: SheetDayRow): f is SheetDayRow & { scheduled_at: string } {
   return PRINTABLE_STATUSES.has(f.status) && f.scheduled_at !== null && !isBye(f);
 }
+const printable = isPrintable;
 
 const LAST = Number.MAX_SAFE_INTEGER;
 

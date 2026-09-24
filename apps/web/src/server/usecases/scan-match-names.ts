@@ -42,32 +42,75 @@ export interface ScanMatchNames {
   roundLabel: string;
 }
 
-type Row = RoundCodeFixture & SeatLabelFixture & FeedRow & { stage_id: string };
+/** The `fixtures` columns the board's naming reads: its round codes, its feed
+ *  map and each seat's stored label. Select exactly these (`tx(MATCH_NAME_COLS)`)
+ *  so every reader that names a match reads the same row. */
+export const MATCH_NAME_COLS = [
+  "id",
+  "stage_id",
+  "round_no",
+  "seq_in_round",
+  "ext_key",
+  "lane",
+  "is_final",
+  "third_place",
+  "conditional",
+  "home_entrant_id",
+  "away_entrant_id",
+  "home_slot_label",
+  "away_slot_label",
+  "winner_to_fixture",
+  "winner_to_slot",
+  "loser_to_fixture",
+  "loser_to_slot",
+] as const;
+
+export type MatchNameRow = RoundCodeFixture & SeatLabelFixture & FeedRow & { stage_id: string };
+
+/**
+ * Names fixtures the way the board does, computing the round codes and the
+ * seat map ONCE over `rows` — the scan page names one fixture, a printed
+ * scorer sheet (usecases/scorer-sheets.ts) names a whole day's. `rows` must
+ * hold every fixture a seat's feeder can be: a whole division at least (cross
+ * feeds never leave one), and `stages` their stages. Returns undefined for an
+ * id `rows` does not hold.
+ */
+export function boardMatchNamer(
+  rows: readonly MatchNameRow[],
+  stages: readonly { id: string; kind: string }[],
+  lookup: SlotLabelLookup,
+): (fixtureId: string) => ScanMatchNames | undefined {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const codes = boardRoundCodes(rows, stages, lookup);
+  const seatMap = withRoundCodeRefs(rows, feedLabels(rows), codes);
+  return (fixtureId) => {
+    const self = byId.get(fixtureId);
+    if (self === undefined) return undefined;
+    const rc = codes.get(fixtureId);
+    const seats = seatMap[fixtureId];
+    const seat = (side: "home" | "away") =>
+      resolveSlotLabel(
+        seats?.[side] ?? (side === "home" ? self.home_slot_label : self.away_slot_label) ?? null,
+        lookup,
+        "schedule.tbd",
+      );
+    return {
+      ref: matchRef(self.round_no, rc?.refSeq ?? self.seq_in_round, lookup, rc?.code),
+      home: seat("home"),
+      away: seat("away"),
+      roundLabel: rc?.label ?? lookup("schedule.round", { n: self.round_no }),
+    };
+  };
+}
 
 export async function scanMatchNames(tx: Tx, fixtureId: string, lookup: SlotLabelLookup): Promise<ScanMatchNames> {
-  const rows = await tx<Row[]>`
-    select id, stage_id, round_no, seq_in_round, ext_key, lane, is_final, third_place, conditional,
-           home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-           winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot
+  const rows = await tx<MatchNameRow[]>`
+    select ${tx(MATCH_NAME_COLS)}
     from fixtures
     where division_id = (select division_id from fixtures where id = ${fixtureId})`;
-  const self = rows.find((r) => r.id === fixtureId);
-  if (self === undefined) throw new Error(`scanMatchNames: fixture ${fixtureId} not found`);
   const stages = await tx<{ id: string; kind: string }[]>`
     select id, kind from stages where division_id = (select division_id from fixtures where id = ${fixtureId})`;
-  const codes = boardRoundCodes(rows, stages, lookup);
-  const rc = codes.get(fixtureId);
-  const seats = withRoundCodeRefs(rows, feedLabels(rows), codes)[fixtureId];
-  const seat = (side: "home" | "away") =>
-    resolveSlotLabel(
-      seats?.[side] ?? (side === "home" ? self.home_slot_label : self.away_slot_label) ?? null,
-      lookup,
-      "schedule.tbd",
-    );
-  return {
-    ref: matchRef(self.round_no, rc?.refSeq ?? self.seq_in_round, lookup, rc?.code),
-    home: seat("home"),
-    away: seat("away"),
-    roundLabel: rc?.label ?? lookup("schedule.round", { n: self.round_no }),
-  };
+  const names = boardMatchNamer(rows, stages, lookup)(fixtureId);
+  if (names === undefined) throw new Error(`scanMatchNames: fixture ${fixtureId} not found`);
+  return names;
 }
