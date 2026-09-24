@@ -118,6 +118,34 @@ describe("renderScorerSheetPdf (scorer sheets §4.4)", () => {
     expect(runs.find((r) => r.text === "Away 1")!.size).toBe(12);
   });
 
+  it("…but never below 9pt: a name too long even there is cut with an ellipsis", async () => {
+    const absurd = Array.from({ length: 6 }, () => "Maximiliana Fernández de Villanueva").join(" / ");
+    const runs = pdfTextRuns(await renderScorerSheetPdf(model([[row(1, { home: absurd })]])));
+    const home = runs.find((r) => r.text.startsWith("Maximiliana"))!;
+    expect(home.size).toBe(9);
+    expect(home.text.endsWith("…")).toBe(true);
+    expect(absurd.startsWith(home.text.slice(0, -1).trimEnd())).toBe(true);
+  });
+
+  it("every line stays ONE line — an overlong heading, match line or roster is cut, never wrapped into the row below", async () => {
+    const long = (s: string) => Array.from({ length: 12 }, () => s).join(" ");
+    const heading = long("Court Philippe-Chatrier");
+    const matchLine = long("Open Mixed Doubles");
+    const members = Array.from({ length: 14 }, (_, i) => `Player Number ${i + 1}`);
+    const pdf = await renderScorerSheetPdf({
+      ...model([]),
+      pages: [{ heading, rows: [row(1, { matchLine, homeMembers: members })] }],
+    });
+    const runs = pdfTextRuns(pdf);
+    const cut = (prefix: string) => runs.filter((r) => r.text.startsWith(prefix));
+    for (const prefix of ["COURT PHILIPPE", "10:30", "Player Number 1,"]) {
+      expect(cut(prefix)).toHaveLength(1);
+      expect(cut(prefix)[0]!.text.endsWith("…")).toBe(true);
+    }
+    // Nothing wrapped: no run starts mid-string.
+    expect(runs.filter((r) => /^(Philippe|Chatrier|Open Mixed|Doubles|Player Number \d+,? ?$)/.test(r.text))).toEqual([]);
+  });
+
   it("a team side lists its players under its name; every block carries the paper fallback", async () => {
     const rows = [row(1, { home: "Riverside A", homeMembers: ["Ana Silva", "Ben Cole"] }), row(2)];
     const texts = pdfTextRuns(await renderScorerSheetPdf(model([rows]))).map((r) => r.text);

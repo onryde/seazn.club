@@ -58,6 +58,14 @@ const GUTTER = 18;
  *  page.height - MARGIN is suppressed by pdfkit). */
 const footerY = (doc: PDFKit.PDFDocument) => doc.page.height - MARGIN - 10;
 
+/** One line at `size`, cut with an ellipsis. `lineBreak: false` alone does
+ *  not do it: pdfkit still WRAPS a string wider than `width` onto the lines
+ *  below (the bracket poster's F6 note in doc-render.ts), and it only applies
+ *  the ellipsis when a `height` bound leaves no room for a second line. */
+function oneLine(width: number, size: number): PDFKit.Mixins.TextOptions {
+  return { width, height: size * 1.5, lineBreak: false, ellipsis: true };
+}
+
 export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
   // QR pre-pass, as docModelToPdf does it: pdfkit draws synchronously. A null
   // QR is a sheet nobody can scan, so fail the print rather than ship it.
@@ -87,9 +95,9 @@ export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
     else doc.y = MARGIN;
     drawTitleBlock(doc, model.header, model.labels.eyebrow);
     doc.font(FONT.displayBold).fontSize(16).fillColor(PALETTE.night)
-      .text(page.heading.toUpperCase(), MARGIN, doc.y, { width, lineBreak: false, ellipsis: true });
+      .text(page.heading.toUpperCase(), MARGIN, doc.y, oneLine(width, 16));
     doc.font(FONT.bodyMed).fontSize(9).fillColor(PALETTE.slate)
-      .text(model.labels.checkNames, MARGIN, doc.y + 2, { width, lineBreak: false, ellipsis: true });
+      .text(model.labels.checkNames, MARGIN, doc.y + 2, oneLine(width, 9));
     const top = doc.y + 8;
     const k = Math.min(1, (footerY(doc) - 6 - top) / (ROWS_PER_PAGE * BLOCK));
     for (const [i, r] of page.rows.entries()) {
@@ -130,12 +138,12 @@ function drawBlock(
   doc.moveTo(MARGIN, y).lineTo(MARGIN + width, y).strokeColor(PALETTE.hairline).lineWidth(0.75).stroke();
   doc.image(qr, MARGIN, at(10), { width: q, height: q, link: r.url });
   doc.font(FONT.bodyMed).fontSize(7).fillColor(PALETTE.mute)
-    .text(labels.scan, MARGIN, at(10) + q + 2, { width: q, align: "center", lineBreak: false, ellipsis: true });
+    .text(labels.scan, MARGIN, at(10) + q + 2, { ...oneLine(q, 7), align: "center" });
 
   const x = MARGIN + q + GUTTER;
   const w = width - q - GUTTER;
   doc.font(FONT.bodyMed).fontSize(10).fillColor(PALETTE.slate)
-    .text(`${r.time}  ·  ${r.matchLine}`, x, at(10), { width: w, lineBreak: false, ellipsis: true });
+    .text(`${r.time}  ·  ${r.matchLine}`, x, at(10), oneLine(w, 10));
   side(doc, r.home, r.homeTbd, r.homeMembers, x, at(27), w, k);
   side(doc, r.away, r.awayTbd, r.awayMembers, x, at(60), w, k);
 
@@ -162,15 +170,15 @@ function side(doc: PDFKit.PDFDocument, name: string, tbd: boolean, members: stri
   // Person names in Inter (FONT.bodyMed) — Barlow has no Cyrillic/Greek.
   if (tbd) {
     doc.font(FONT.bodyMed).fontSize(10).fillColor(PALETTE.slate)
-      .text(name, x, y, { width: w, lineBreak: false, ellipsis: true });
+      .text(name, x, y, oneLine(w, 10));
     doc.moveTo(x, y + 27 * k).lineTo(x + Math.min(w, 240), y + 27 * k).strokeColor(PALETTE.slate).lineWidth(0.6).stroke();
     return;
   }
   const size = fitSize(doc, name, FONT.bodyMed, 12, 9, w);
   doc.font(FONT.bodyMed).fontSize(size).fillColor(PALETTE.ink)
-    .text(name, x, y + (12 - size) * 0.8, { width: w, lineBreak: false, ellipsis: true });
+    .text(name, x, y + (12 - size) * 0.8, oneLine(w, size));
   if (members.length > 0) {
     doc.font(FONT.body).fontSize(8).fillColor(PALETTE.slate)
-      .text(members.join(", "), x, y + 16 * k, { width: w, lineBreak: false, ellipsis: true });
+      .text(members.join(", "), x, y + 16 * k, oneLine(w, 8));
   }
 }
