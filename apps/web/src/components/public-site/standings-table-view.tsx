@@ -553,9 +553,17 @@ export function StandingsTableView({
                             TWO lines before its ellipsis instead of one — the
                             98px phone column showed "Riversid…" of a club
                             name; from `md` up it truncates to one line, as
-                            before. The full name stays in `title`. */}
+                            before. The full name stays in `title`. The name
+                            opts into browser hyphenation (owner ruling (a),
+                            2026-09-24: "Northgat / e BC" broke mid-letter at
+                            62px), by the rules of `<html lang>` — the org's
+                            locale, set by the /shared org layout. Safari
+                            (WebKit) draws "North- / gate"; Chromium never
+                            hyphenates a word that starts with a capital, so
+                            there `break-words` stays the fallback and a long
+                            name still breaks at a letter. */}
                         <span
-                          className={`block min-w-0 truncate max-md:line-clamp-2 max-md:whitespace-normal max-md:break-words${r.qual?.status === "out" ? " text-ink-muted" : ""}`}
+                          className={`block min-w-0 truncate max-md:line-clamp-2 max-md:whitespace-normal max-md:break-words max-md:hyphens-auto${r.qual?.status === "out" ? " text-ink-muted" : ""}`}
                           title={r.name}
                         >
                           {r.name}

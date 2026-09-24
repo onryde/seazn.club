@@ -24,7 +24,9 @@
 // that moved are the row header's `max-md:` two-line clamp (a wrapper span,
 // the clamped name with its `title`, a 7.5rem phone floor on the division
 // table). Stripping those back out of the new golden gives the old one
-// byte for byte, so nothing else in the no-cut path changed.
+// byte for byte, so nothing else in the no-cut path changed. Ruling (a) the
+// same day re-captured it again for one class on the name,
+// `max-md:hyphens-auto`; stripping that gives the P4 golden byte for byte.
 //
 // ---------------------------------------------------------------------------
 // Mutants killed (task-7 report has the run log)

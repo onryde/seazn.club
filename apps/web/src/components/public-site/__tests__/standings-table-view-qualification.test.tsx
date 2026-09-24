@@ -19,7 +19,9 @@
 // P4 (option C, 2026-09-24) re-captured both deliberately: the only bytes
 // that moved are the name span's three `max-md:` two-line clamp classes.
 // Stripping those back out of the new goldens gives the old ones byte for
-// byte, so nothing else in the no-cut path changed.
+// byte, so nothing else in the no-cut path changed. Ruling (a) the same day
+// re-captured both again for a fourth, `max-md:hyphens-auto`; stripping that
+// gives the P4 goldens byte for byte.
 //
 // ---------------------------------------------------------------------------
 // Mutants killed (task-8 report has the run log)

@@ -315,7 +315,13 @@ export function StandingsTable({
                     one word a line (a 43-character club took five). Every
                     class here is `max-md:`, so from `md` up the cell draws
                     exactly as before. `min-w-0` down the chain lets the
-                    clamped span shrink inside the flex row. */}
+                    clamped span shrink inside the flex row. The name opts
+                    into browser hyphenation (ruling (a), 2026-09-24, as the
+                    hub's name does), by the rules of `<html lang>` — the
+                    org's locale, set by the org layout. Safari (WebKit)
+                    breaks "North- / gate"; Chromium never hyphenates a word
+                    that starts with a capital, so there `break-words` stays
+                    the fallback and a long word still breaks at a letter. */}
                 <th
                   scope="row"
                   className={`py-2.5 pr-3 text-left font-medium max-md:min-w-[7.5rem] ${qual?.status === "out" ? "text-ink-muted" : "text-ink"}`}
@@ -330,7 +336,7 @@ export function StandingsTable({
                       />
                     )}
                     <span
-                      className="max-md:line-clamp-2 max-md:min-w-0 max-md:break-words"
+                      className="max-md:line-clamp-2 max-md:min-w-0 max-md:break-words max-md:hyphens-auto"
                       title={entrantNames[row.entrantId] ?? row.entrantId}
                     >
                       {entrantNames[row.entrantId] ?? row.entrantId}

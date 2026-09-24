@@ -167,10 +167,17 @@ test.afterAll(async () => {
 });
 
 /** The long entrant's name cell, as painted: how many lines it takes, whether
- *  the clamp cut it (content taller or wider than its box), and the title that
- *  carries the whole name. P4 option C (owner-approved 2026-09-24): below `md`
- *  a name wraps to at most TWO lines and ends in an ellipsis, the full name in
- *  `title`; from `md` up it is drawn exactly as before. */
+ *  the clamp cut it (content taller or wider than its box), how it may break a
+ *  word, and the title that carries the whole name. P4 option C
+ *  (owner-approved 2026-09-24): below `md` a name wraps to at most TWO lines
+ *  and ends in an ellipsis, the full name in `title`; from `md` up it is drawn
+ *  exactly as before. Ruling (a), same day: below `md` the name opts into
+ *  browser hyphenation (`hyphens: auto`), so a word too long for the column
+ *  can break at a hyphenation point rather than at an arbitrary letter
+ *  ("Northgat / e BC" in the hub's 62px column). What this pins is the
+ *  OPT-IN, not a hyphen on screen: Chromium never hyphenates a word that
+ *  starts with a capital (measured, Chromium 149), so in this runner the
+ *  name still breaks at a letter; WebKit (Safari) draws "North- / gate". */
 const LONG_NAME = NAMES.find((n) => n.startsWith("Riverside"))!;
 
 async function longName(scope: Locator) {
@@ -184,6 +191,7 @@ async function longName(scope: Locator) {
       lines: Math.round(box.height / lineHeight),
       clipped: e.scrollHeight > e.clientHeight + 1 || e.scrollWidth > e.clientWidth + 1,
       clamp: cs.getPropertyValue("-webkit-line-clamp"),
+      hyphens: cs.hyphens,
       width: Math.round(box.width),
       height: Math.round(box.height),
       lineHeight,
@@ -202,7 +210,20 @@ function expectLongNameClamped(m: Awaited<ReturnType<typeof longName>>, width: n
     expect(m.lines, `${where}: the long name uses its two lines`).toBe(2);
     expect(m.clamp, `${where}: the name is clamped to two lines`).toBe("2");
     expect(m.clipped, `${where}: the name is cut short (ellipsis), not merely short`).toBe(true);
+    expect(m.hyphens, `${where}: the name opts into browser hyphenation`).toBe("auto");
+  } else {
+    // Pair: from `md` up the name is drawn as before P4 — no hyphenation.
+    expect(m.hyphens, `${where}: no hyphenation from md up`).toBe("manual");
   }
+}
+
+/** `hyphens: auto` breaks words by the rules of the element's LANGUAGE, and
+ *  with no `lang` in scope the browser does not hyphenate at all. The /shared
+ *  org layout sets `<html lang>` to the ORG's locale (`HtmlLang`), and the
+ *  legend check beside each call reads this org's copy from the English
+ *  dictionary — so the page must say "en". */
+async function expectOrgLang(page: Page, where: string): Promise<void> {
+  await expect(page.locator("html"), `${where}: <html lang> is the org's locale, which hyphenation reads`).toHaveAttribute("lang", "en");
 }
 
 /** Load `path` until its standings show the cut line (ISR can hand the first
@@ -381,6 +402,7 @@ for (const width of [1280, 768, 320] as const) {
     );
     expect(kinds).toEqual(["needs_help", "out", "through", "win_k"]);
     await expect(panel.getByTestId("qual-legend")).toContainText(dictString("en", "table.qual.legend.open"));
+    await expectOrgLang(page, `division ${width}`);
 
     // 1. No sideways page scroll.
     const widths = await pageWidths(page);
@@ -514,6 +536,7 @@ for (const width of [1280, 768, 320] as const) {
     const table = hubTable(page, "mh-table-");
     await expect(table).toHaveCount(1);
     await expect(table.getByTestId("qual-legend")).toContainText(dictString("en", "table.qual.legend.open"));
+    await expectOrgLang(page, `hub ${width}`);
 
     // Premise: every marker kind, as on the division page.
     const kinds = await table.locator("tbody [data-qual-marker]").evaluateAll((els) =>
