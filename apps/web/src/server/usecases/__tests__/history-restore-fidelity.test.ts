@@ -40,6 +40,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
 import {
+  addFixture,
   completeStage,
   computeSeedProposal,
   confirmSeedProposal,
@@ -51,6 +52,7 @@ import {
 import { listDivisionFixturesForBoard, patchFixture } from "../fixtures";
 import { applySchedule, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
+import { shiftDivisionSchedule } from "../schedule-plus";
 import { createCourt, createVenue, deleteCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import {
@@ -778,6 +780,50 @@ describe.skipIf(!HAS_DB)("every history write keeps a fixture's venue its court'
 
     expect((await undoDivision(auth, divisionId)).applied.type).toBe("schedule_restored");
     expect(await placement()).toEqual(onNorth);
+  });
+
+  // Review 2 of #857, M1. A fixture can hold a venue with NO court: `addFixture`
+  // takes a venue alone, and `moveFixture` leaves the venue as it is whenever
+  // the court is. The replays derived the venue from the payload's court every
+  // time, so undoing a time-only move, a pin or a rain-delay shift wiped such a
+  // fixture's venue, and a clear dropped it with nothing to bring it back.
+  // One fresh division per edit: each is the head edit its Undo inverts.
+  it.each([
+    { how: "a time-only move", edit: "move", event: "schedule_edited", after: 10 },
+    { how: "a pin", edit: "pin", event: "schedule_edited", after: 9 },
+    { how: "a rain-delay shift", edit: "shift", event: "schedule_shifted", after: 10 },
+    { how: "a schedule clear", edit: "clear", event: "schedule_restored", after: null },
+  ] as const)("a fixture with a venue and no court keeps its venue through $how, and through its Undo", async ({ edit, event, after }) => {
+    const { auth, divisionId, mainId } = await seedGeneratedStage(4, "league", {});
+    const hall = await createVenue(auth, { name: "Hall", sort: 0 });
+    const [a, b] = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${divisionId} order by seed limit 2`;
+    const t = (h: number) => new Date(Date.UTC(2026, 6, 12, h)).toISOString();
+    const { fixture_id: id } = await addFixture(auth, mainId, {
+      home_entrant_id: a!.id,
+      away_entrant_id: b!.id,
+      scheduled_at: t(9),
+      venue_id: hall.id,
+    });
+    const placement = async () => {
+      const [row] = await sql<Row[]>`select scheduled_at, court_id, venue_id from fixtures where id = ${id}`;
+      return row;
+    };
+    const inHall = (h: number | null) => ({ scheduled_at: h === null ? null : new Date(t(h)), court_id: null, venue_id: hall.id });
+    expect(await placement()).toEqual(inHall(9));
+
+    if (edit === "move") await patchFixture(auth, id, { scheduled_at: t(10) });
+    if (edit === "pin") await patchFixture(auth, id, { schedule_locked: true });
+    if (edit === "shift") {
+      await shiftDivisionSchedule(auth, { division_id: divisionId, scope: { excludeLocked: true }, delta_minutes: 60 });
+    }
+    if (edit === "clear") {
+      await clearScheduleScoped(auth, { division_id: divisionId, scope: { excludeLocked: true }, confirm: true });
+    }
+    expect(await placement()).toEqual(inHall(after));
+
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe(event);
+    expect(await placement()).toEqual(inHall(9));
   });
 });
 
