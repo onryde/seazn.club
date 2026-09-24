@@ -546,6 +546,24 @@ describe.skipIf(!HAS_DB)("ensureDeviceLink (scorer sheets §4.2)", () => {
     await expect(ensureDeviceLinks(owner, competition.id, [other.fixtures[0].id])).rejects.toMatchObject({ status: 404 });
   });
 
+  it("ensureDeviceLinks: a fixture finished since the sheet chose it is left out — no link, and no 422 for the batch", async () => {
+    // Controller ruling (T8): a single mid-print finalize must not refuse
+    // the whole print. The one-fixture paths still refuse a finished match.
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, fixtures } = await rig(owner);
+    const [finalized, cancelled, live] = [fixtures[0].id, fixtures[1].id, fixtures[2].id];
+    await sql`update fixtures set status = 'finalized' where id = ${finalized}`;
+    await sql`update fixtures set status = 'cancelled' where id = ${cancelled}`;
+    const links = await ensureDeviceLinks(owner, competition.id, [finalized, cancelled, live]);
+    expect([...links.keys()]).toEqual([live]);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from device_links where fixture_id in ${sql([finalized, cancelled])}`;
+    expect(n).toBe(0);
+    await expect(ensureDeviceLink(owner, finalized)).rejects.toMatchObject({ status: 422 });
+    await expect(ensureDeviceLinks(owner, competition.id, [finalized])).resolves.toEqual(new Map());
+  });
+
   it("fails CLOSED without a valid DEVICE_LINK_KEK: 503 DEVICE_LINK_KEK_MISSING, nothing revoked; resolving by hash still works (Q1)", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);

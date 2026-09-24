@@ -135,7 +135,12 @@ async function lockFixtureLinks(tx: Tx, fixtureId: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext(${"device_link:" + fixtureId}))`;
 }
 
-async function loadLinkableFixture(tx: Tx, fixtureId: string, competitionId?: string): Promise<void> {
+/** A finalized or cancelled match has nothing left to score, so no link. */
+export const isFinishedFixtureStatus = (status: string): boolean => status === "finalized" || status === "cancelled";
+
+/** The fixture's status; 404 when it is not in `competitionId` (or anywhere
+ *  this tenant can see). */
+async function linkableStatus(tx: Tx, fixtureId: string, competitionId?: string): Promise<string> {
   const [fixture] = await tx<{ status: string; competition_id: string }[]>`
     select f.status, d.competition_id from fixtures f
     join divisions d on d.id = f.division_id
@@ -143,8 +148,13 @@ async function loadLinkableFixture(tx: Tx, fixtureId: string, competitionId?: st
   if (!fixture || (competitionId !== undefined && fixture.competition_id !== competitionId)) {
     throw new HttpError(404, "fixture not found");
   }
-  if (fixture.status === "finalized" || fixture.status === "cancelled") {
-    throw new HttpError(422, `fixture is ${fixture.status} — nothing left to score`);
+  return fixture.status;
+}
+
+async function loadLinkableFixture(tx: Tx, fixtureId: string, competitionId?: string): Promise<void> {
+  const status = await linkableStatus(tx, fixtureId, competitionId);
+  if (isFinishedFixtureStatus(status)) {
+    throw new HttpError(422, `fixture is ${status} — nothing left to score`);
   }
 }
 
@@ -227,6 +237,12 @@ async function ensureInTx(
 ): Promise<EnsuredDeviceLink> {
   await lockFixtureLinks(tx, fixtureId);
   await loadLinkableFixture(tx, fixtureId, competitionId);
+  return ensureLocked(tx, auth, fixtureId, label);
+}
+
+/** Re-open the fixture's live sealed link, or mint one. The caller holds the
+ *  fixture's link lock and has checked the fixture is linkable. */
+async function ensureLocked(tx: Tx, auth: AuthCtx, fixtureId: string, label: string | null): Promise<EnsuredDeviceLink> {
   const [live] = await tx<(DeviceLinkRow & { secret_enc: Uint8Array | null })[]>`
     select ${tx(COLS)}, secret_enc from device_links
     where fixture_id = ${fixtureId} and revoked_at is null
@@ -260,7 +276,10 @@ export async function ensureDeviceLink(
  * The print path: one gate for the competition, one transaction, every
  * fixture's link. Ids are locked in SORTED order so two overlapping prints
  * cannot deadlock on each other's advisory locks. A fixture outside
- * `competitionId` is a 404, never a silent mint.
+ * `competitionId` is a 404, never a silent mint. A fixture finished (or
+ * cancelled) since the sheet chose it is LEFT OUT of the map rather than
+ * refusing the batch — one match finalized mid-print must not cost the
+ * organiser every other sheet (controller ruling, scorer sheets T8).
  */
 export async function ensureDeviceLinks(
   auth: AuthCtx,
@@ -272,7 +291,9 @@ export async function ensureDeviceLinks(
   const out = new Map<string, EnsuredDeviceLink>();
   await withTenant(auth.orgId, async (tx) => {
     for (const id of [...new Set(fixtureIds)].sort()) {
-      out.set(id, await ensureInTx(tx, auth, id, null, competitionId));
+      await lockFixtureLinks(tx, id);
+      if (isFinishedFixtureStatus(await linkableStatus(tx, id, competitionId))) continue;
+      out.set(id, await ensureLocked(tx, auth, id, null));
     }
   });
   return out;
