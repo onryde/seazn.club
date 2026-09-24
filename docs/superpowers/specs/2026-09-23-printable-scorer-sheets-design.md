@@ -18,8 +18,8 @@ it. No organiser action is needed per match.
 | D1 | What does the umpire scan? | **One link per fixture.** No per-court link. |
 | D2 | TBD sides | Link is bound to the fixture, not the entrants — print the slot label (`Winner of QF1`), score once filled. |
 | D3 | Link lifetime | **Until the fixture is over** (see §4.3). No end-of-day expiry. Reprint shows the **same** QR. |
-| D4 | Where / what one print covers | **Competition schedule page, one day**, one section per court, all divisions, `Unassigned` last. |
-| D5 | Page layout | **List sheet**, 5 rows per page, not cut-out cards. |
+| D4 | Where / what one print covers | **Competition schedule page, one day**, one section per court, all divisions, `Unassigned` last (printed "No court assigned"). |
+| D5 | Page layout | ~~List sheet, 5 rows per page, not cut-out cards.~~ **Amended 2026-09-24 (owner-approved after seeing both rendered): full-width 3×3 grid of cut-out cards, 9 per page**, branded QR "B2", no result pen lines — §4.4 and §4.4.1. |
 | D6 | What an old sheet can do after the round moves on | Rule table §4.3 — view-only once the result is carried forward. |
 | D7 | Who starts the match | **The umpire, from the device pad.** The confirm screen's button is `Start match` (`core.start`). |
 | D8 | Frozen-competition gap (UI-only guard) | Leave as is. |
@@ -150,17 +150,53 @@ resolver.
   fixture can sit under one day tab on the board and on a different day's sheet. Exclude `finalized`, `cancelled`, `decided`, `forfeited`
   (byes), `abandoned`, and a bye line still waiting for its draw (an EMPTY seat stamped
   `bracket.slot.bye`).
-- Grouping: court order, then time, then match reference. No court → `Unassigned`
-  section last.
-- Page header: competition name, date, court, and "Scan to score. Check names on screen
-  before you start."
-- Row: time · division · match ref (`R1 M3`, `SF1`, `Round 3 · Board 2`) · sides (entrant
-  display name via `entrantDisplayName`, else `resolveSlotLabel`, else `TBD`) · a pen line
-  when a side is TBD · QR of `<origin>/score/<token>`.
-- 5 rows per page; a court continues onto the next page with its header repeated. Footer:
-  printed-at and page n / m.
-- Rendering: pdfkit + qrcode following `poster.pdf`. Strings in the organiser's locale,
-  keys added to all 4 dictionaries (+ `gen-keys`).
+- Grouping: court order, then time, then match reference. No court → a "No court
+  assigned" section last.
+- **Layout (amended 2026-09-24, owner-approved):** A4 portrait, full width — 8 mm edges
+  all round, a 3×3 grid of cut-out cards (≈64.7 × 78.8 mm each) divided by dashed cut
+  lines, cards in time order left→right, then top→bottom. 9 cards per page
+  (`ROWS_PER_PAGE`); a court continues onto the next page with its header repeated.
+- Page header: the masthead (Pro `exports.branded` only), competition name (held to two
+  lines), the date, and — beside the title, right-aligned — the court heading with its own
+  page count (`COURT 2 · PAGE 1 OF 2`) and "Scan to score. Check names on screen before
+  you start." Footer: printed-at and `seazn.club`; page numbering is per court, in the
+  heading.
+- Card: time · the board's match code (`QF·2`, `R1·3`) · division · both sides (entrant
+  display name via `entrantDisplayName`, else `resolveSlotLabel`, else `TBD`). A name wraps
+  to two lines, then takes an ellipsis; a doubles pair prints one member per line; a TBD
+  side prints its slot label over a pen line. **No score, winner or umpire lines** —
+  scoring happens on the phone the QR opens. Then the QR of `<origin>/score/<token>` (§4.4.1),
+  which is also a link annotation. The URL and token are never printed as text: the token
+  is a bearer secret.
+- Rendering: pdfkit + qrcode on the shared document theme. Strings in the organiser's
+  locale, keys added to all 4 dictionaries (+ `gen-keys`).
+
+#### 4.4.1 The printed QR — "B2" (owner-approved 2026-09-24)
+
+Error correction **H**; square navy data modules; **solid rounded navy finders** (7×7 ring
+with outer corner radius **2.0 modules** and a solid one-module band, 3×3 centre rounded at
+0.6 module — the 1:1:3:1:1 ratio holds on every centre line); the Seazn app icon
+(`public/logo-square.png`), **12 mm** square (≈8.4% of the symbol), centred over a
+knocked-out odd square of modules that leaves at least **one module of white** round it.
+At least 4 modules of white separate the symbol from the text above and from the cut lines.
+
+Decode evidence (jsQR, one crop per card):
+- Variant B (dotted finders) decoded 0/9 in every condition — jsQR never finds dotted
+  finders — hence solid rounded finders. Radius sweep on the 41.4 mm prototype symbol
+  (`pdftoppm`, 90 dpi / 72 dpi / B&W): outer radius 1.5, 2.0 and 2.5 decoded 9/9
+  everywhere; 0.5 and 1.0 (a rounded centre in a square hole) missed 2/9 at 90 dpi, with or
+  without the icon; 3.0 and 3.5 missed 1–2/9. 2.0 is the centre of the passing band.
+- Shipped renderer, 12 mm icon, radius 2.0, 10 cards (one TBD), under both a plain header
+  and the tallest one (Pro masthead + two-line title): `pdftoppm` raster **10/10** at 72,
+  80, 90, 100, 150 and 300 dpi and on a simulated black-and-white laser copy at 90 dpi;
+  the only miss is 60 dpi under the tallest header (1/10, ≈1.8 px per module).
+- CI gate: the page's vector drawing rasterised by librsvg (sharp; CI has no poppler) at
+  90 dpi, 72 dpi and the B&W copy — every card decodes to its own row's URL.
+- The low-radius misses depend on where the module edges fall on the pixel grid: at the
+  shipped renderer's symbol sizes, radius 1.0 decodes 10/10 in every condition above. So
+  no decode test can hold the line at 1.0, and the approved 2.0 is pinned by a geometry
+  test instead. The icon size is load-bearing: a 16 mm icon under the tallest header
+  decodes 0/10 at every radius.
 
 ### 4.5 Scan screens (`app/score/[token]/page.tsx` + `device-score-pad.tsx`)
 
