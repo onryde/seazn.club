@@ -669,9 +669,13 @@ async function stepWrite(
       (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined);
     if (restoring) {
       const rows = snapshotIdKey(result.event.payload.fixtures);
-      const newest = ledger.findLast(
-        (e) => DELETE_SIDE_EVENTS.has(e.type) && snapshotIdKey(e.payload.fixtures) === rows,
-      );
+      // Only a restore that names its rows, and only a DELETE of them: a
+      // payload with no snapshot keys as `undefined`, and would otherwise
+      // match any event that carries none.
+      const newest =
+        rows === undefined
+          ? undefined
+          : ledger.findLast((e) => DELETE_SIDE_EVENTS.has(e.type) && snapshotIdKey(e.payload.fixtures) === rows);
       if (newest !== undefined) result.event.payload.fixtures = newest.payload.fixtures;
     }
     const effects = { scoredFixtureRemoved: false };
