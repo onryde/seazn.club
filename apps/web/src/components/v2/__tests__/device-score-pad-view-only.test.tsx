@@ -277,7 +277,8 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     const cls = tokens(round);
     expect(cls.has("shrink-0"), "it never shrinks").toBe(true);
     expect(cls.has("truncate"), "it never truncates").toBe(false);
-    expect(cls.has("max-md:whitespace-normal"), "below md, a label longer than a line wraps inside itself").toBe(true);
+    const label = tokens(byTestId(tree, "scan-scorebug-round-label"));
+    expect(label.has("max-md:whitespace-normal"), "below md, a label longer than a line wraps inside itself").toBe(true);
     expect(cls.has("max-md:max-w-full"), "…capped at the line, so it wraps rather than overflows").toBe(true);
     const line = byTestId(tree, "scan-scorebug-line");
     expect(line, "the division and the round share one line element").toBeDefined();
@@ -326,6 +327,14 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     const first = (propsOf(round).children as unknown[])[0] as ReactElement;
     expect(propsOf(first)["data-scorebug-sep"], "the round's separator comes first, into the gutter").toBeDefined();
     expect(textOf(byTestId(tree, "scan-scorebug-round-label")!), "the label is its own element").toBe("Final");
+    // A label that wraps INSIDE the round (fr "Grande finale (revanche)" at
+    // 320) must start its second line after the separator, not at the round's
+    // left edge — that edge is in the clipped gutter, and as plain inline text
+    // the continuation lost its first glyphs ("(r"). The round is a flex box,
+    // separator then label, so the label is a box of its own right of the dot.
+    expect(tokens(round).has("flex"), "the round is a flex box: its label wraps inside its own box").toBe(true);
+    expect(tokens(byTestId(tree, "scan-scorebug-round-label")).has("max-md:whitespace-normal"), "…and it is the LABEL that wraps").toBe(true);
+    expect(tokens(round).has("max-md:whitespace-normal"), "the round itself never wraps text beside its separator").toBe(false);
   });
 
   it("scheduled with both sides: the Confirm card with Start, and NO inner pad yet", () => {

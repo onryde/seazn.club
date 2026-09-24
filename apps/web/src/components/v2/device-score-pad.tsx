@@ -514,7 +514,14 @@ export function DeviceScorePad({
                 first item on EVERY line has its separator in the clipped
                 gutter while an item mid-line shows its own. The two widths
                 must match (a unit test pins it). ≥md the row never wraps, so
-                the division is always first and the line reads as before. */}
+                the division is always first and the line reads as before.
+
+                The round is a FLEX item — its separator, then the label as
+                its own box. As plain inline text, a label that wraps inside
+                itself started its second line at the item's left edge, which
+                is in the clipped gutter: fr "Grande finale (revanche)" lost
+                the "(r" of its second line. In its own box the label's every
+                line starts after the separator. */}
             <span data-testid="scan-scorebug-clip" className="min-w-0 overflow-hidden">
               <span data-testid="scan-scorebug-line" className="-ml-4 flex items-baseline max-md:flex-wrap">
                 <span className="flex min-w-0">
@@ -525,14 +532,11 @@ export function DeviceScorePad({
                     {fixture.division_name}
                   </span>
                 </span>
-                <span
-                  data-testid="scan-scorebug-round"
-                  className="shrink-0 whitespace-pre max-md:max-w-full max-md:whitespace-normal"
-                >
+                <span data-testid="scan-scorebug-round" className="flex shrink-0 items-baseline max-md:max-w-full">
                   <span data-scorebug-sep="" className={SCOREBUG_SEP}>
                     {" · "}
                   </span>
-                  <span data-testid="scan-scorebug-round-label">
+                  <span data-testid="scan-scorebug-round-label" className="whitespace-pre max-md:whitespace-normal">
                     {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
                   </span>
                 </span>
