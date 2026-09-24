@@ -492,15 +492,25 @@ export function DeviceScorePad({
               <img src={logo} alt="" className="h-5 w-5 shrink-0 rounded bg-white/10 object-cover" />
             )}
             {/* The round is the part a scorer checks against the sheet, so it
-                never shrinks or wraps; the division (and court) give way to
-                it. As one truncating span, the round was the first thing cut
-                at 320 ("SCAN CUP … · FI…"). */}
-            <span className="flex min-w-0 items-baseline">
+                never shrinks; the division (and court) give way to it. As one
+                truncating span, the round was the first thing cut at 320
+                ("SCAN CUP … · FI…"). Never shrinking alone then CLIPPED the
+                longest board labels at 320 with no ellipsis (fr "Grande
+                finale (revanche)" beside a logo, review round 2), so below
+                md the line wraps: the round moves down as one unit when it
+                does not fit beside the division, and a label longer than a
+                whole line wraps inside itself (`max-w-full` caps it at the
+                line). The separator keeps its spaces in its own `pre` span,
+                which a wrapping round would otherwise trim. ≥md: unchanged. */}
+            <span data-testid="scan-scorebug-line" className="flex min-w-0 items-baseline max-md:flex-wrap">
               <span data-testid="scan-scorebug-division" className="min-w-0 truncate">
                 {fixture.division_name}
               </span>
-              <span data-testid="scan-scorebug-round" className="shrink-0 whitespace-pre">
-                {" · "}
+              <span
+                data-testid="scan-scorebug-round"
+                className="shrink-0 whitespace-pre max-md:max-w-full max-md:whitespace-normal"
+              >
+                <span className="whitespace-pre">{" · "}</span>
                 {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
               </span>
               {fixture.court_label ? (

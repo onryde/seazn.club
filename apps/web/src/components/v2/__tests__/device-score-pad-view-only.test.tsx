@@ -255,26 +255,39 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
 
   // At 320 the scorebug's first line truncated as ONE span, so the round — the
   // part the ruling is about — was the first thing cut ("SCAN CUP … · FI…").
-  // The round is its own element that never shrinks or wraps; the division
-  // beside it is what gives way.
-  it("the round label never gives way to the division: its own element, which does not shrink", () => {
+  // The round is its own element that never shrinks; the division beside it is
+  // what gives way. Review round 2: never shrinking is not enough — a label
+  // longer than the whole line ("Grande finale (revanche)" beside a logo) was
+  // then clipped with no ellipsis at all. Below md the line WRAPS, the round
+  // moving down as one unit, and a label longer than a line wraps inside
+  // itself. Class tokens only (node, no DOM): the scan-screens walkthrough
+  // measures it at 320. Tokens, not `\b` regexes — `\bshrink-0\b` also
+  // matches inside `max-md:shrink-0`.
+  it("the round label never gives way to the division, and below md wraps as a unit instead of clipping", () => {
     const tree = renderIsland(DeviceScorePad, {
       ...props("scheduled", null),
       initialEvents: [],
       fixture: { ...props("scheduled", null).fixture, division_name: "A very long division name indeed", round_label: "Final" },
     }).tree();
+    const tokens = (e: ReactElement | undefined) =>
+      new Set(((e?.props as { className?: string } | undefined)?.className ?? "").split(/\s+/));
     const round = byTestId(tree, "scan-scorebug-round");
     expect(round, "the round has its own element").toBeDefined();
     expect(textOf(round!)).toMatch(/·\s*Final$/);
-    const cls = (round!.props as { className?: string }).className ?? "";
-    expect(cls, "it never shrinks").toMatch(/\bshrink-0\b/);
-    expect(cls, "it never truncates").not.toMatch(/\btruncate\b/);
+    const cls = tokens(round);
+    expect(cls.has("shrink-0"), "it never shrinks").toBe(true);
+    expect(cls.has("truncate"), "it never truncates").toBe(false);
+    expect(cls.has("max-md:whitespace-normal"), "below md, a label longer than a line wraps inside itself").toBe(true);
+    expect(cls.has("max-md:max-w-full"), "…capped at the line, so it wraps rather than overflows").toBe(true);
+    const line = byTestId(tree, "scan-scorebug-line");
+    expect(line, "the division and the round share one line element").toBeDefined();
+    expect(tokens(line).has("max-md:flex-wrap"), "below md the line wraps, moving the round down whole").toBe(true);
+    expect(tokens(line).has("flex-wrap"), "≥md keeps one line, unchanged").toBe(false);
     const division = byTestId(tree, "scan-scorebug-division");
     expect(division, "the division is its own element").toBeDefined();
     expect(textOf(division!)).toBe("A very long division name indeed");
-    expect((division!.props as { className?: string }).className ?? "", "the division is what truncates").toMatch(
-      /\bmin-w-0\b.*\btruncate\b|\btruncate\b.*\bmin-w-0\b/,
-    );
+    const div = tokens(division);
+    expect(div.has("min-w-0") && div.has("truncate"), "the division is what truncates").toBe(true);
   });
 
   it("scheduled with both sides: the Confirm card with Start, and NO inner pad yet", () => {
