@@ -6,7 +6,12 @@
 //   2. the Start-tournament confirmation and the four consequences it states
 //      (design 2026-09-20);
 //   3. `startDivision`'s promotion of the parent competition published → live
-//      (`server/usecases/schedule.ts`, inside the status transaction).
+//      (`server/usecases/schedule.ts`, inside the status transaction);
+//   4. what a SPECTATOR then reads of those rules (brief 2026-09-24): the
+//      public match page labels a league fixture with the league stage's own
+//      format, not the division's preset name, and the hub and division page
+//      name the league stage's format — while the Finals, back on the
+//      division's format, stay as they were.
 //
 // They are one file because they are one journey: the confirmation's own
 // fourth line PROMISES the lock behaviour this file then drives ("Match rules
@@ -61,6 +66,21 @@ const L = JSON.parse(
     "utf8",
   ),
 ) as Record<string, string>;
+/** The PUBLIC dictionary — the spectator pages' copy (the format lines and
+ *  the headings around them live there, not in `ui.json`). */
+const P = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL("../../src/dictionaries/en/public.json", import.meta.url)),
+    "utf8",
+  ),
+) as Record<string, string>;
+
+/** `{name}` placeholders filled — the dictionary's own template, so the words
+ *  are never retyped here. */
+function fill(template: string | undefined, params: Record<string, number>): string {
+  expect(template, "the dictionary must carry the template").toBeDefined();
+  return template!.replace(/\{(\w+)\}/g, (_, k: string) => String(params[k]));
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -103,6 +123,9 @@ let divId = "";
 let leagueStageId = "";
 let finalsStageId = "";
 let leagueFixtureId = "";
+/** A Finals placeholder — the public page's control: its stage ends this file
+ *  back on the division's own format. */
+let finalsFixtureId = "";
 /** The division's own `bestOf`, READ from the created division rather than
  *  typed here — the inherited summary line is derived from it. */
 let divisionBestOf = 0;
@@ -260,6 +283,7 @@ test("an organiser gives the league stage its own match format, and the Finals b
     genFinals.data!.fixtures.length,
     "the Finals must carry real fixture rows, or the unlocked half of this file is the empty case",
   ).toBeGreaterThan(0);
+  finalsFixtureId = genFinals.data!.fixtures[0]!.id;
 
   const division = await apiJson<{ config: Record<string, unknown> }>(
     request,
@@ -505,4 +529,78 @@ test("the format lock is per stage: the played stage refuses, the stage that has
     "a refused write must not half-land",
   ).toEqual({ bestOf: LEAGUE_BEST_OF });
   expect(stageById(after, finalsStageId).config.rules).toEqual({ bestOf: FINALS_BEST_OF_VIA_API });
+});
+
+test("a spectator reads the league stage's own format: on its match page, on the hub and on the division page — and the Finals keep the division's", async ({
+  page,
+  request,
+}) => {
+  // Five page loads plus the Info-tab hydration wait, each at STEP_MS.
+  test.setTimeout(Math.max(120_000, 7 * STEP_MS));
+
+  // Where this file left the two stages: the league at its own Best of 5
+  // (locked, scored), the Finals written back by the API to a value that is
+  // the division's own — so the Finals play the division's format again.
+  const division = await apiJson<{ config: Record<string, unknown>; variant_key: string }>(
+    request,
+    `/api/v1/divisions/${divId}`,
+  );
+  expect(division.status, `GET /divisions/${divId}`).toBe(200);
+  const cfg = division.data!.config;
+  const setTo = Number(cfg.setTo);
+  const cap = Number(cfg.cap);
+  expect(Number.isInteger(setTo) && Number.isInteger(cap), "the preset must carry setTo and cap").toBe(true);
+  expect(cap, "the cap clause is only said when the cap exceeds the target").toBeGreaterThan(setTo);
+  expect(
+    FINALS_BEST_OF_VIA_API,
+    "the Finals must end this file back on the division's own format, or they are no control",
+  ).toBe(divisionBestOf);
+  // The league stage's EFFECTIVE rules, described the way the product does:
+  // its own bestOf over the division's points and cap.
+  const leagueLine = fill(P["format.rules.bestOfPointsCap"], { n: LEAGUE_BEST_OF, points: setTo, cap });
+  // The division's own label — what every page said before, and what the
+  // Finals must still say.
+  const preset = L[`variant.badminton.${division.data!.variant_key}`];
+  expect(preset, `a dictionary label for variant ${division.data!.variant_key}`).toBeDefined();
+
+  const [, orgSlug, compSlug] = (await competitionPath(request, compId)).match(/^\/o\/([^/]+)\/c\/([^/]+)$/)!;
+  const divSlug = (await divisionPath(request, divId)).split("/d/")[1]!;
+  const shared = `/shared/${orgSlug}/${compSlug}`;
+
+  // 1. The public match page of a league fixture — the one scored above, so
+  // it is labelled from its frozen snapshot, which carries the stage's rules.
+  // The header meta line (which the poster falls back to) and the Info tab.
+  await page.goto(`${shared}/${divSlug}/fixtures/${leagueFixtureId}?tab=info`);
+  await expect(page.getByTestId("mc-meta-line")).toContainText(leagueLine, { timeout: STEP_MS });
+  await expect(page.getByTestId("mc-meta-line")).not.toContainText(preset!);
+  const formatRow = page.getByTestId(/^mc-info-\d+$/).filter({ hasText: P["matchCentre.info.format"]! });
+  await expect(formatRow.locator("dd")).toHaveText(leagueLine, { timeout: STEP_MS });
+
+  // The control: a Finals fixture keeps the division's label, and says no
+  // rules line at all.
+  await page.goto(`${shared}/${divSlug}/fixtures/${finalsFixtureId}`);
+  await expect(page.getByTestId("mc-meta-line")).toContainText(preset!, { timeout: STEP_MS });
+  await expect(page.getByTestId("mc-meta-line")).not.toContainText(leagueLine);
+
+  // 2. The hub's Info tab: the division's box names the League stage's format,
+  // and ONLY it — the Finals' line would be noise, identical to the division.
+  await page.goto(`${shared}?tab=info`);
+  const formats = page.getByTestId(`mh-info-formats-${divSlug}`);
+  await expect(formats).toBeVisible({ timeout: STEP_MS });
+  await expect(formats.getByRole("heading", { name: P["info.stageFormats"]! })).toBeVisible();
+  const rows = formats.getByTestId(new RegExp(`^mh-info-format-${divSlug}-\\d+$`));
+  await expect(rows).toHaveCount(1);
+  await expect(rows.locator("dt")).toHaveText("League");
+  await expect(rows.locator("dd")).toHaveText(leagueLine);
+
+  // 3. The division page, where a spectator reads the format under the title:
+  // the League chip carries its line, the Finals chip is its bare name, and
+  // the preset chip is the division's, unchanged.
+  await page.goto(`${shared}/${divSlug}`);
+  const leagueChip = page.locator(`[data-stage-id="${leagueStageId}"]`);
+  await expect(leagueChip).toContainText(`League · ${leagueLine}`, { timeout: STEP_MS });
+  const finalsChip = page.locator(`[data-stage-id="${finalsStageId}"]`);
+  await expect(finalsChip).toContainText("Finals");
+  await expect(finalsChip.getByTestId("division-stage-format")).toHaveCount(0);
+  await expect(page.getByText(preset!, { exact: true })).toBeVisible();
 });
