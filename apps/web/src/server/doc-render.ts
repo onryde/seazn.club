@@ -19,6 +19,9 @@ import {
 export const MARGIN = 40;
 
 const MAST_H = 64; // masthead band height, page 1
+const LOGO_H = 40; // org logo box height in the masthead
+const LOGO_MAX_W = 120; // a wide logo is capped at 3:1 so the org name keeps room
+const MAST_GAP = 3 * (72 / 25.4); // 3mm: org name ↔ logo, and org name ↔ wordmark
 
 import { publicStorageUrl } from "@/lib/supabase-storage";
 
@@ -51,16 +54,27 @@ export function drawMasthead(
   doc.font(FONT.displayBold).fontSize(18).fillColor(PALETTE.cream)
     .text("SEAZN", MARGIN, 16, { continued: true })
     .fillColor(PALETTE.lime).text(" CLUB", { continued: false });
-  // org name, right
-  if (b.orgName) {
-    doc.font(FONT.bodyMed).fontSize(10);
-    doc.fillColor(PALETTE.cream).text(b.orgName.toUpperCase(), MARGIN, 22, {
-      width: w - MARGIN * 2, align: "right", characterSpacing: 2,
-    });
-  }
-  // logo, aspect-locked, right of wordmark
+  const wordmarkRight = MARGIN + doc.widthOfString("SEAZN") + doc.widthOfString(" CLUB");
+  // Org logo and org name are ONE right-aligned unit: the logo against the
+  // right margin (by its own aspect, capped), the name ending MAST_GAP to its
+  // left — never under the logo, never into the wordmark.
+  let nameRight = w - MARGIN;
   if (logo) {
-    try { doc.image(logo, w - MARGIN - 40, 12, { height: 40 }); } catch { /* skip */ }
+    try {
+      const img = (doc as unknown as { openImage(src: Buffer): { width: number; height: number } }).openImage(logo);
+      const lw = Math.min((LOGO_H * img.width) / img.height, LOGO_MAX_W);
+      doc.image(logo, w - MARGIN - lw, 12, { fit: [lw, LOGO_H], valign: "center" });
+      nameRight = w - MARGIN - lw - MAST_GAP;
+    } catch { /* unreadable logo: skip it, the name takes the margin */ }
+  }
+  if (b.orgName) {
+    const spacing = { characterSpacing: 2 };
+    doc.font(FONT.bodyMed).fontSize(10);
+    const name = ellipsize(b.orgName.toUpperCase(), nameRight - (wordmarkRight + MAST_GAP), (s) => doc.widthOfString(s, spacing));
+    if (name) {
+      doc.fillColor(PALETTE.cream)
+        .text(name, nameRight - doc.widthOfString(name, spacing), 22, { ...spacing, lineBreak: false });
+    }
   }
   // red ball riding the lime line, right-aligned — mirrors ticket.png's mark
   // (wordmark + ball + pitch line is the full SEAZN brand, not just the line)
@@ -69,6 +83,17 @@ export function drawMasthead(
   doc.rect(0, MAST_H, w, 4).fill(PALETTE.lime);
   doc.fillColor(PALETTE.ink);
   doc.y = MAST_H + 18;
+}
+
+/** `text` whole if it fits `maxW`, else its longest prefix + "…" that does;
+ *  "" when not even the ellipsis fits. */
+function ellipsize(text: string, maxW: number, width: (s: string) => number): string {
+  if (width(text) <= maxW) return text;
+  for (let n = text.length - 1; n > 0; n--) {
+    const cut = `${text.slice(0, n).trimEnd()}…`;
+    if (width(cut) <= maxW) return cut;
+  }
+  return "";
 }
 
 /** `eyebrow` defaults to the kind's hard-coded English label; the scorer sheet
