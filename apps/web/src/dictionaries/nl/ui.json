@@ -2693,6 +2693,7 @@
   "dlink.error.rateLimited": "Te veel aanvragen voor scorelinks. Wacht een minuut en probeer het opnieuw.",
   "dlink.error.notFound": "Deze wedstrijd of de scorelink bestaat niet meer. Laad de pagina opnieuw.",
   "dlink.error.forbidden": "Je hebt geen toestemming om scorelinks voor deze wedstrijd te beheren.",
+  "dlink.error.signedOut": "Je sessie is verlopen. Log opnieuw in om scorelinks te beheren.",
   "dlink.title": "Geef dit apparaat door",
   "dlink.desc": "Wie de telefoon vasthoudt, houdt de score bij van deze wedstrijd als de {scorer} — geen account nodig. De link werkt alleen voor deze wedstrijd, tot die is afgerond of geannuleerd; ze kunnen niet afronden.",
   "dlink.alt": "QR van scorelink",

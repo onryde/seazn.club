@@ -28,6 +28,8 @@ export function liveCopy(expiresAt: string | null, format: (iso: string) => stri
  * thing that tells them apart.
  */
 const FAILURE_BY_STATUS: Partial<Record<number, MessageKey>> = {
+  // An expired session: "try again" cannot work until they sign in again.
+  401: "dlink.error.signedOut",
   403: "dlink.error.forbidden",
   404: "dlink.error.notFound",
   422: "dlink.error.matchOver",

@@ -387,6 +387,31 @@ describe("device-link panel — every refusal is localised, never the server's E
     expect(island.text()).not.toContain("device link not found");
   });
 
+  // Task 3 review carry: a failed revoke used to leave the question open,
+  // still offering "Yes, revoke" for a link that (on a 404) is already gone.
+  it("a failed revoke closes the question and re-reads the live line", async () => {
+    const { apiV1 } = await import("@/lib/client-v1");
+    const reads = () => vi.mocked(apiV1).mock.calls.filter(([, o]) => o?.method === undefined).length;
+    api.refuseDelete = { status: 404, code: "NOT_FOUND", message: "device link not found" };
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-revoke"));
+    expect(byTestId(island.tree(), "device-link-revoke-confirm"), "precondition: the question is open").toBeDefined();
+    // Revoked from another session meanwhile: the server has no live link.
+    api.active = null;
+    const readsBefore = reads();
+    click(byTestId(island.tree(), "device-link-revoke-confirm"));
+    await flush();
+
+    expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
+    expect(byTestId(island.tree(), "device-link-revoke-confirm"), "no 'Yes, revoke' for a dead link").toBeUndefined();
+    expect(island.text()).not.toContain(t("dlink.revokeWarn"));
+    expect(reads(), "the panel re-reads the live line").toBeGreaterThan(readsBefore);
+    expect(byTestId(island.tree(), "device-link-show"), "the gone link's live line is gone").toBeUndefined();
+    expect(byTestId(island.tree(), "device-link-mint"), "…and Create is back").toBeDefined();
+    expect(island.text(), "the refusal is still said").toContain(t("dlink.error.notFound"));
+  });
+
   it("a dropped connection (fetch TypeError) gets the generic line, not the browser's English", async () => {
     const { apiV1 } = await import("@/lib/client-v1");
     const island = renderIsland(DeviceLinkPanel, PROPS);

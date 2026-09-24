@@ -2738,6 +2738,7 @@
   "dlink.error.rateLimited": "Trop de demandes de liens de score. Patientez une minute puis réessayez.",
   "dlink.error.notFound": "Ce match ou son lien de score n'existe plus. Rechargez la page.",
   "dlink.error.forbidden": "Vous n'avez pas l'autorisation de gérer les liens de score de ce match.",
+  "dlink.error.signedOut": "Votre session a expiré. Reconnectez-vous pour gérer les liens de score.",
   "dlink.title": "Passez cet appareil",
   "dlink.desc": "La personne qui tient le téléphone marque cette rencontre (rôle : {scorer}) — aucun compte requis. Le lien fonctionne pour cette rencontre uniquement, jusqu'à ce qu'elle soit finalisée ou annulée ; elle ne peut pas finaliser.",
   "dlink.alt": "QR du lien de score",

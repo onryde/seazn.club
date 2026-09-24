@@ -46,6 +46,12 @@ const EN = dict("en");
 const FR = dict("fr");
 /** The football official in English — what French must never show. */
 const ENGLISH_OFFICIAL = EN["sport.official.football"]!;
+/** The panel's whole description in one locale, interpolated the way the
+ *  panel does it (`dlink.desc` with that locale's football official,
+ *  lower-cased) — so the lifetime AND the official are pinned by the
+ *  dictionary, not by phrases typed here. */
+const panelDesc = (d: Record<string, string>): string =>
+  d["dlink.desc"]!.replace("{scorer}", d["sport.official.football"]!.toLowerCase());
 
 const WIDTHS = [320, 768, 1280] as const;
 /** A page load, a seed, or a poll of the server's own record. */
@@ -150,8 +156,7 @@ test("the hand-over panel in every state, en + fr: Show QR re-shows, Revoke and 
   // 1. No link yet: Create, under the durable-lifetime description.
   let panel = await openPanel(page, path);
   await expect(panel.getByTestId("device-link-mint")).toHaveText(EN["dlink.create"]!);
-  await expect(panel).toContainText("until it's finalized or cancelled");
-  await expect(panel).toContainText(`as the ${EN["sport.official.football"]!.toLowerCase()}`);
+  await expect(panel).toContainText(panelDesc(EN));
   await expect(panel).not.toContainText(/\btoday\b/i);
   await capture(page, panel, testInfo, "en-1-create");
 
@@ -228,8 +233,7 @@ test("the hand-over panel in every state, en + fr: Show QR re-shows, Revoke and 
   panel = await openPanel(page, path);
   await expect(panel.getByTestId("device-link-show")).toHaveText(FR["dlink.showQr"]!, { timeout: STEP_MS });
   await expect(panel).toContainText(FR["dlink.liveUntilOver"]!);
-  await expect(panel).toContainText("jusqu'à ce qu'elle soit finalisée ou annulée");
-  await expect(panel).toContainText(`(rôle : ${FR["sport.official.football"]!.toLowerCase()})`);
+  await expect(panel).toContainText(panelDesc(FR));
   await expect(panel).not.toContainText(new RegExp(`\\b${ENGLISH_OFFICIAL}\\b`, "i"));
   await expect(panel).not.toContainText(/aujourd/i);
   await capture(page, panel, testInfo, "fr-3-live");

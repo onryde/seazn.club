@@ -93,6 +93,9 @@ describe("failureKey — a device-link refusal as the organiser reads it", () =>
     ["the per-IP mint budget is spent (429)", refusal(429, "RATE_LIMITED", "Too many requests — slow down and try again."), "dlink.error.rateLimited"],
     ["the fixture or link is gone (404)", refusal(404, "NOT_FOUND", "fixture not found"), "dlink.error.notFound"],
     ["the caller may not manage links (403)", refusal(403, "FORBIDDEN", "Device links can only be managed with a session login"), "dlink.error.forbidden"],
+    // Task 3 review carry: an expired organiser session is not "try again" —
+    // retrying cannot work until they sign in again.
+    ["the organiser's session has expired (401)", refusal(401, "UNAUTHENTICATED", "Not signed in"), "dlink.error.signedOut"],
     ["the server has no key (503 DEVICE_LINK_KEK_MISSING)", refusal(503, "DEVICE_LINK_KEK_MISSING"), "dlink.kekMissing"],
   ])("%s", (_label, err, key) => {
     expect(failureKey(err)).toBe(key);
@@ -109,7 +112,7 @@ describe("failureKey — a device-link refusal as the organiser reads it", () =>
   });
 
   it("every key it can return exists, in all four locales, as a full sentence", () => {
-    const keys = ["dlink.failed", "dlink.kekMissing", "dlink.error.matchOver", "dlink.error.rateLimited", "dlink.error.notFound", "dlink.error.forbidden"];
+    const keys = ["dlink.failed", "dlink.kekMissing", "dlink.error.matchOver", "dlink.error.rateLimited", "dlink.error.notFound", "dlink.error.forbidden", "dlink.error.signedOut"];
     for (const [locale, dict] of Object.entries({ en, es, fr, nl }) as [string, Record<string, string>][]) {
       for (const key of keys) {
         expect(dict[key], `${locale} ${key}`).toMatch(/\S.*[.!]$/);

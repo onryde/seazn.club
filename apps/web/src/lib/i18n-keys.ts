@@ -1854,6 +1854,7 @@ export type DictionaryKey =
   | "dlink.error.matchOver"
   | "dlink.error.notFound"
   | "dlink.error.rateLimited"
+  | "dlink.error.signedOut"
   | "dlink.failed"
   | "dlink.keep"
   | "dlink.kekMissing"

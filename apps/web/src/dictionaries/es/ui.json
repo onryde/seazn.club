@@ -2693,6 +2693,7 @@
   "dlink.error.rateLimited": "Demasiadas solicitudes de enlaces de anotación. Espera un minuto e inténtalo de nuevo.",
   "dlink.error.notFound": "Este partido o su enlace de anotación ya no existe. Recarga la página.",
   "dlink.error.forbidden": "No tienes permiso para gestionar los enlaces de anotación de este partido.",
+  "dlink.error.signedOut": "Tu sesión ha caducado. Vuelve a iniciar sesión para gestionar los enlaces de anotación.",
   "dlink.title": "Entrega este dispositivo",
   "dlink.desc": "Quien tenga el teléfono anota este partido como {scorer}, sin necesidad de cuenta. El enlace funciona solo para este partido, hasta que se finalice o se cancele; no puede finalizarlo.",
   "dlink.alt": "QR del enlace de anotación",

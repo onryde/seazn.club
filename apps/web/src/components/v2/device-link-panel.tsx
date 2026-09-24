@@ -150,7 +150,11 @@ export function DeviceLinkPanel({
       setConfirm(null);
       await refresh();
     } catch (err) {
+      // A refused revoke must not leave "Yes, revoke" on screen — on a 404 the
+      // link is already gone. Close the question and re-read what is live.
+      setConfirm(null);
       refused(err);
+      await refresh();
     } finally {
       setBusy(false);
     }
