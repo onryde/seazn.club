@@ -44,9 +44,10 @@ export interface MatchCentreLoadDivision {
    *
    *  2026-09-24: this is the PRESET name, and `loadMatchCentre` uses it only
    *  when the fixture plays the division's own rules. A fixture whose stage
-   *  overrides them (or whose frozen snapshot differs) is labelled with its
-   *  effective rules instead (`describe-rules.ts`), decided in the loader so
-   *  the page and the poll cannot disagree.
+   *  overrides them (or whose frozen snapshot differs) in a way the describer
+   *  can SAY is labelled with its effective rules instead
+   *  (`describe-rules.ts`), decided in the loader so the page and the poll
+   *  cannot disagree.
    *
    *  The division's own variant/format key, printed verbatim as the Info
    *  tab's "format" row (fix round 1 ruling — `match-centre.ts`'s own doc

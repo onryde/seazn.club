@@ -19,7 +19,7 @@ import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
-import { describeMatchRules, effectiveRulesLine, rulesDifferFromDivision } from "../describe-rules";
+import { describeMatchRules, effectiveRulesLine } from "../describe-rules";
 
 const mod = (sportKey: string) => resolveLatestModule(sportKey);
 
@@ -51,7 +51,7 @@ describe("describeMatchRules — option A wording, from the parsed config", () =
     });
   });
 
-  it("the short preset itself describes as Best of N · points (cap) — every number read off the variant", () => {
+  it("the short preset itself describes as Best of N, points (cap) — every number read off the variant", () => {
     const badminton = mod("badminton");
     const cfg = variantCfg("badminton", "short") as { bestOf: number; setTo: number; cap: number };
     // The load-bearing property: the preset HAS a cap above its target, or the
@@ -74,11 +74,57 @@ describe("describeMatchRules — option A wording, from the parsed config", () =
 
   it("an uncapped sport (cap null) says points only", () => {
     const volleyball = mod("volleyball");
-    const cfg = volleyball.configSchema.parse({ bestOf: 1 }) as { setTo: number; cap: unknown };
+    const cfg = volleyball.configSchema.parse({ bestOf: 1 }) as { finalSetTo: number; cap: unknown };
     expect(cfg.cap, "volleyball ships uncapped — the case this test is about").toBeNull();
     expect(describeMatchRules("volleyball", volleyball, cfg)).toEqual({
       key: "format.rules.oneSetPoints",
-      params: { points: cfg.setTo },
+      params: { points: cfg.finalSetTo },
+    });
+  });
+
+  it("a ONE-unit match is its own decider, so it plays to `finalSetTo` — never `setTo` (kernel `setTarget`)", () => {
+    // The set kernel plays set index bestOf−1 to `finalSetTo`; with bestOf 1
+    // that is the only set. Volleyball's defaults are the sharp case: 25 per
+    // set, 15 in the decider — a Bo1 volleyball match is to 15, not 25.
+    const volleyball = mod("volleyball");
+    const v = volleyball.configSchema.parse({ bestOf: 1 }) as { setTo: number; finalSetTo: number };
+    expect(v.finalSetTo, "the witness needs the two targets apart").not.toBe(v.setTo);
+    expect(describeMatchRules("volleyball", volleyball, v)?.params?.points).toBe(v.finalSetTo);
+    // Badminton with the two apart, capped above both: the cap reads against
+    // the target the game is actually played to.
+    const badminton = mod("badminton");
+    const b = badminton.configSchema.parse({ bestOf: 1, setTo: 21, finalSetTo: 11, cap: 30 });
+    expect(describeMatchRules("badminton", badminton, b)).toEqual({
+      key: "format.rules.oneGamePointsCap",
+      params: { points: 11, cap: 30 },
+    });
+  });
+
+  it("a decider played to a DIFFERENT target is said: volleyball indoor reads '…, decider 15' — every number off the variant", () => {
+    const volleyball = mod("volleyball");
+    const cfg = variantCfg("volleyball", "indoor") as { bestOf: number; setTo: number; finalSetTo: number };
+    expect(cfg.finalSetTo, "indoor's decider must differ from its sets").not.toBe(cfg.setTo);
+    expect(describeMatchRules("volleyball", volleyball, cfg)).toEqual({
+      key: "format.rules.bestOfPointsDecider",
+      params: { n: cfg.bestOf, points: cfg.setTo, decider: cfg.finalSetTo },
+    });
+  });
+
+  it("the decider clause rides after the cap clause, and is omitted when the decider plays to the same target", () => {
+    const badminton = mod("badminton");
+    const decider = badminton.configSchema.parse({ bestOf: 3, setTo: 21, finalSetTo: 15, cap: 30 });
+    expect(describeMatchRules("badminton", badminton, decider)).toEqual({
+      key: "format.rules.bestOfPointsCapDecider",
+      params: { n: 3, points: 21, cap: 30, decider: 15 },
+    });
+    // bwf: the third game is to 21 like the first two — no clause.
+    const bwf = variantCfg("badminton", "bwf") as { setTo: number; finalSetTo: number };
+    expect(bwf.finalSetTo).toBe(bwf.setTo);
+    expect(describeMatchRules("badminton", badminton, bwf)?.key).toBe("format.rules.bestOfPointsCap");
+    // A missing or zero decider says nothing about itself.
+    expect(describeMatchRules("badminton", permissive({ bestOf: 3, setTo: 21, finalSetTo: 0 }), {})).toEqual({
+      key: "format.rules.bestOfPoints",
+      params: { n: 3, points: 21 },
     });
   });
 
@@ -147,77 +193,97 @@ describe("describeMatchRules — option A wording, from the parsed config", () =
   });
 });
 
-describe("rulesDifferFromDivision — WHEN the described line replaces the preset name", () => {
+describe("effectiveRulesLine — WHEN the described line replaces the preset name: only when its WORDS differ", () => {
+  // The line replaces the division's preset name only when it would SAY
+  // something different from what the same describer says of the division.
+  // A difference it cannot express (tennis `finalSet`/`set`, badminton
+  // `winBy`) keeps the preset — otherwise the page swaps the preset for words
+  // identical to the division's own (review round 1, finding 1).
   const badminton = mod("badminton");
   const division = variantCfg("badminton", "short");
+  const line = (sportKey: string, effective: unknown, div: unknown) =>
+    effectiveRulesLine(sportKey, mod(sportKey), effective, div);
 
-  it("the prod case: a Swiss stage at Bo1/15/21 over a short division differs", () => {
-    expect(rulesDifferFromDivision("badminton", badminton, { ...division, ...SWISS_RULES }, division)).toBe(true);
+  it("the prod case: a Swiss stage at Bo1/15/21 over a short division names ITS rules — 15, not the preset's 11", () => {
+    expect(line("badminton", { ...division, ...SWISS_RULES }, division)).toEqual({
+      key: "format.rules.oneGamePointsCap",
+      params: { points: 15, cap: 21 },
+    });
+    expect((division as { setTo: number }).setTo).not.toBe(15);
   });
 
-  it("no override: identical configs do not differ", () => {
-    expect(rulesDifferFromDivision("badminton", badminton, division, division)).toBe(false);
+  it("EMPTY FIRST: identical rules → null, so the caller keeps its preset name", () => {
+    expect(line("badminton", division, division)).toBeNull();
   });
 
-  it("an override that restates the division's own values is NOT a difference (a stage `rules: {bestOf: 3}` over bestOf 3)", () => {
+  it("an override that restates the division's own values → null (a stage `rules: {bestOf: 3}` over bestOf 3)", () => {
     const division3 = badminton.configSchema.parse({ bestOf: 3 }) as Record<string, unknown>;
-    expect(rulesDifferFromDivision("badminton", badminton, { ...division3, bestOf: 3 }, division3)).toBe(false);
+    expect(line("badminton", { ...division3, bestOf: 3 }, division3)).toBeNull();
   });
 
-  it("compares PARSED configs: a raw `{}` division and its own defaults filled in are the same rules", () => {
+  it("both sides are PARSED: a raw `{}` division and its own defaults filled in are the same rules", () => {
     // A frozen snapshot is the RAW resolved cfg; a division row may omit keys
-    // its schema defaults. Comparing raw would call a defaulted `cap` a change.
-    const filled = badminton.configSchema.parse({});
-    expect(rulesDifferFromDivision("badminton", badminton, filled, {})).toBe(false);
+    // its schema defaults. Unparsed, a defaulted `cap` would read as a change.
+    expect(line("badminton", badminton.configSchema.parse({}), {})).toBeNull();
   });
 
-  it("ONLY the sport's rule keys count — points or a decider key moving is not a format change", () => {
-    const keys = configKeysFor("badminton");
-    expect(keys.has("pointsMap")).toBe(false);
-    expect(
-      rulesDifferFromDivision("badminton", badminton, { ...division, pointsMap: { "2-0": [3, 0] } }, division),
-    ).toBe(false);
-    expect(
-      rulesDifferFromDivision("badminton", badminton, { ...division, shootout: { attempts: 5 } }, division),
-    ).toBe(false);
+  it("standings points or a decider KEY (shootout) moving is not a format change → null", () => {
+    expect(line("badminton", { ...division, pointsMap: { "2-0": [3, 0] } }, division)).toBeNull();
+    expect(line("badminton", { ...division, shootout: { attempts: 5 } }, division)).toBeNull();
   });
 
-  it("each rule key, on its own, is a difference", () => {
-    // Per KEY, not per test: a predicate reading only `bestOf` would pass the
-    // prod case above and miss a cap-only override.
-    const parsed = division as Record<string, number>;
-    for (const key of configKeysFor("badminton")) {
-      const moved = { ...division, [key]: key === "bestOf" ? parsed.bestOf! + 2 : parsed[key]! + 1 };
-      expect(rulesDifferFromDivision("badminton", badminton, moved, division), key).toBe(true);
-    }
+  it("each rule the line can SAY, moved on its own, is named: bestOf, setTo, cap, finalSetTo", () => {
+    const d = division as { bestOf: number; setTo: number; finalSetTo: number; cap: number };
+    expect(line("badminton", { ...d, bestOf: 5 }, d)).toEqual({
+      key: "format.rules.bestOfPointsCap",
+      params: { n: 5, points: d.setTo, cap: d.cap },
+    });
+    // setTo and finalSetTo move TOGETHER for a best-of-3 (the decider keeps
+    // up), inside the division's cap — only the points number changes.
+    expect(line("badminton", { ...d, setTo: 13, finalSetTo: 13 }, d)).toEqual({
+      key: "format.rules.bestOfPointsCap",
+      params: { n: d.bestOf, points: 13, cap: d.cap },
+    });
+    expect(line("badminton", { ...d, cap: 17 }, d)).toEqual({
+      key: "format.rules.bestOfPointsCap",
+      params: { n: d.bestOf, points: d.setTo, cap: 17 },
+    });
+    // finalSetTo ALONE: the decider clause is what makes it sayable.
+    expect(line("badminton", { ...d, finalSetTo: d.cap }, d)).toEqual({
+      key: "format.rules.bestOfPointsCapDecider",
+      params: { n: d.bestOf, points: d.setTo, cap: d.cap, decider: d.cap },
+    });
   });
 
-  it("tennis's NESTED rule keys compare by value, not by reference or key order", () => {
-    const tennis = mod("tennis");
-    const base = tennis.configSchema.parse({}) as Record<string, unknown>;
-    const set = base.set as Record<string, unknown>;
-    // Same value, keys in a different order — not a difference.
-    const reordered = Object.fromEntries(Object.entries(set).reverse());
-    expect(rulesDifferFromDivision("tennis", tennis, { ...base, set: reordered }, base)).toBe(false);
-    // Fast4's set shape — a difference.
-    const fast4 = { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5 };
-    expect(rulesDifferFromDivision("tennis", tennis, { ...base, set: fast4 }, base)).toBe(true);
+  it("volleyball: a stage that plays its decider to 25 like every other set names that — the division's line has a decider clause, the stage's has none", () => {
+    const indoor = variantCfg("volleyball", "indoor") as { bestOf: number; setTo: number };
+    expect(line("volleyball", { ...indoor, finalSetTo: indoor.setTo }, indoor)).toEqual({
+      key: "format.rules.bestOfPoints",
+      params: { n: indoor.bestOf, points: indoor.setTo },
+    });
   });
 
-  it("with no module (or a refused parse) the raw configs are compared", () => {
-    expect(rulesDifferFromDivision("badminton", null, { bestOf: 1 }, { bestOf: 3 })).toBe(true);
-    expect(rulesDifferFromDivision("badminton", null, { bestOf: 3 }, { bestOf: 3 })).toBe(false);
-    // `bestOf: 2` is refused by the schema — raw comparison still sees it.
-    expect(rulesDifferFromDivision("badminton", badminton, { ...division, bestOf: 2 }, division)).toBe(true);
+  it("a difference the describer CANNOT say → null: badminton `winBy` alone", () => {
+    const d = division as { winBy: number };
+    expect(configKeysFor("badminton").has("winBy"), "winBy is a rule key — the case this is about").toBe(true);
+    expect(line("badminton", { ...division, winBy: d.winBy - 1 }, division)).toBeNull();
   });
 
-  it("a RAW comparison is blind to nested key order (jsonb and a spread can order one object differently)", () => {
-    // Only the raw path can see this — two parsed configs come out of one
-    // schema in one key order — so it is pinned with no module.
-    const a = { bestOf: 3, set: { gamesTo: 6, winBy: 2, tiebreakAt: 6, tiebreakTo: 7 } };
-    const b = { bestOf: 3, set: { tiebreakTo: 7, tiebreakAt: 6, winBy: 2, gamesTo: 6 } };
-    expect(rulesDifferFromDivision("tennis", null, a, b)).toBe(false);
-    expect(rulesDifferFromDivision("tennis", null, a, { ...b, set: { ...b.set, gamesTo: 4 } })).toBe(true);
+  it("a difference the describer CANNOT say → null: tennis `finalSet` alone (grand-slam's) and `set` alone (fast4's)", () => {
+    const tour = variantCfg("tennis", "tour");
+    const grandSlam = variantCfg("tennis", "grand-slam") as Record<string, unknown>;
+    const fast4 = variantCfg("tennis", "fast4") as Record<string, unknown>;
+    expect(grandSlam.finalSet, "the premise: grand-slam's final set differs").not.toEqual(tour.finalSet);
+    expect(line("tennis", { ...tour, finalSet: grandSlam.finalSet }, tour)).toBeNull();
+    expect(line("tennis", { ...tour, set: fast4.set }, tour)).toBeNull();
+    // The positive pair: a best-of it CAN say is named.
+    expect(line("tennis", { ...tour, bestOf: 5 }, tour)).toEqual({ key: "format.sets.bestOf", params: { n: 5 } });
+  });
+
+  it("no module, a refused config, or a sport with no per-stage rules → null (the preset stays; nothing invented)", () => {
+    expect(effectiveRulesLine("badminton", null, { ...division, ...SWISS_RULES }, division)).toBeNull();
+    expect(line("badminton", { ...division, bestOf: 2 }, division), "bestOf must be odd").toBeNull();
+    expect(line("carrom", { bestOf: 1 }, { bestOf: 3 })).toBeNull();
   });
 });
 
@@ -229,7 +295,13 @@ describe("every line the describer can PRODUCE is in all four public dictionarie
   const emitted = new Map<string, string[]>();
   for (const sportKey of STAGE_RULES_SPORTS) {
     for (const bestOf of [1, 3]) {
-      for (const extra of [{}, { setTo: 11 }, { setTo: 11, cap: 15 }]) {
+      for (const extra of [
+        {},
+        { setTo: 11 },
+        { setTo: 11, cap: 15 },
+        { setTo: 11, finalSetTo: 15 },
+        { setTo: 11, cap: 21, finalSetTo: 15 },
+      ]) {
         const line = describeMatchRules(sportKey, permissive({ bestOf, ...extra }), {});
         if (line) emitted.set(line.key, Object.keys(line.params ?? {}).sort());
       }
@@ -238,8 +310,8 @@ describe("every line the describer can PRODUCE is in all four public dictionarie
   const dicts = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic } as Record<string, Record<string, string>>;
   const placeholders = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!))].sort();
 
-  it("the drive reaches all nine shapes (so the loop below is not vacuous)", () => {
-    expect(emitted.size).toBe(9);
+  it("the drive reaches all eleven shapes (so the loop below is not vacuous)", () => {
+    expect(emitted.size).toBe(11);
   });
 
   for (const [locale, dict] of Object.entries(dicts)) {
@@ -247,27 +319,11 @@ describe("every line the describer can PRODUCE is in all four public dictionarie
       for (const [key, params] of emitted) {
         expect(Object.hasOwn(dict, key), `${locale} ${key}`).toBe(true);
         expect(placeholders(dict[key]!), `${locale} ${key}`).toEqual(params);
+        // The match header joins its facts with " · " (`match-centre.ts`), so
+        // a line that used it too would read as several separate facts
+        // ("1 game · 15 points · Court 2"). Its clauses join with commas.
+        expect(dict[key], `${locale} ${key} must not use the header's joiner`).not.toContain("·");
       }
     });
   }
-});
-
-describe("effectiveRulesLine — the two together", () => {
-  const badminton = mod("badminton");
-  const division = variantCfg("badminton", "short");
-
-  it("differs → the described EFFECTIVE rules, whose number is NOT the preset's", () => {
-    const line = effectiveRulesLine("badminton", badminton, { ...division, ...SWISS_RULES }, division);
-    expect(line).toEqual({ key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } });
-    // The regression's own witness: the wrong answer's number is 11.
-    expect((division as { setTo: number }).setTo).not.toBe(15);
-  });
-
-  it("same rules → null, so the caller keeps its preset name", () => {
-    expect(effectiveRulesLine("badminton", badminton, division, division)).toBeNull();
-  });
-
-  it("differs but cannot be described → null (the preset name stays; nothing is invented)", () => {
-    expect(effectiveRulesLine("carrom", mod("carrom"), { bestOf: 1 }, { bestOf: 3 })).toBeNull();
-  });
 });

@@ -111,11 +111,19 @@ async function chips(locale: string, stages: unknown[]) {
         renderToStaticMarkup(el).replace(/<[^>]+>/g, ""),
       ]),
   );
-  return { stageChips, html: all.map((el) => renderToStaticMarkup(el)).join("") };
+  const chipClasses = new Map(
+    all
+      .filter((el) => typeof (el.props as { "data-stage-id"?: unknown })["data-stage-id"] === "string")
+      .map((el) => [
+        (el.props as { "data-stage-id": string })["data-stage-id"],
+        String((el.props as { className?: unknown }).className ?? "").split(/\s+/),
+      ]),
+  );
+  return { stageChips, chipClasses, html: all.map((el) => renderToStaticMarkup(el)).join("") };
 }
 
 describe("public division page — a stage chip names the rules its stage plays when they differ (T7)", () => {
-  it("the Swiss chip says 1 game · 15 points (cap 21); the League chip beside it is the bare name", async () => {
+  it("the Swiss chip says 1 game, 15 points (cap 21); the League chip beside it is the bare name", async () => {
     const en = await getDictionary("en", "public");
     // The load-bearing difference: the division's own number is not 15.
     expect(SHORT.setTo).not.toBe(SWISS_RULES.setTo);
@@ -129,6 +137,16 @@ describe("public division page — a stage chip names the rules its stage plays 
     // The preset chip is the division's, untouched (brief: no copy change for
     // a division without overrides — and none for the division line here).
     expect(html).toContain(`>${msgFor("en", "variant.badminton.short")}<`);
+  });
+
+  it("a chip holding a long line or an unbroken stage name wraps inside the row at 320 instead of widening the page", async () => {
+    // The chip is a flex item of a `flex-wrap` row: without `min-w-0` its
+    // floor is its longest word, and without a break opportunity an unbroken
+    // name is one word (review round 1, finding 4).
+    const { chipClasses } = await chips("en", [stage("s-swiss", 1, "Qualifiers-Pool-A-Round-Robin-Swiss", SWISS_RULES)]);
+    expect(chipClasses.get("s-swiss")).toEqual(
+      expect.arrayContaining(["min-w-0", "max-w-full", "[overflow-wrap:anywhere]"]),
+    );
   });
 
   it("EMPTY: stored rules that restate the division's own values are no different format — bare name", async () => {

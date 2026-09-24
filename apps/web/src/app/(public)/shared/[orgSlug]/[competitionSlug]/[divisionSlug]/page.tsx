@@ -491,7 +491,10 @@ export default async function DivisionHomePage({ params }: Props) {
             <span
               key={s.id}
               data-stage-id={s.id}
-              className={`rounded-full px-2 py-0.5 ${
+              // `min-w-0 max-w-full` + `[overflow-wrap:anywhere]`: a flex
+              // item's floor is its longest word, so an unbroken stage name
+              // (or name + rules line) would otherwise widen the page at 320.
+              className={`min-w-0 max-w-full rounded-full px-2 py-0.5 [overflow-wrap:anywhere] ${
                 s.status === "complete"
                   ? "bg-emerald-50 text-emerald-700"
                   : "bg-zinc-100 text-zinc-600"

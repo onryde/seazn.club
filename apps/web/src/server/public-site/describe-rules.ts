@@ -18,7 +18,7 @@
 // THE MODULE IS PASSED IN, for `describe-format.ts`'s reason: a division pins
 // its module version, and every read path honours that pin.
 import type { AnySportModule } from "@seazn/engine/sport";
-import { configKeysFor, STAGE_RULES_SPORTS } from "@/lib/match-rules";
+import { STAGE_RULES_SPORTS } from "@/lib/match-rules";
 import { GAME_UNIT_SPORTS } from "@/lib/public-site";
 import type { MsgT } from "./match-centre-schema";
 
@@ -50,12 +50,23 @@ const ONE_UNIT = {
 
 /**
  * The EFFECTIVE match rules as one line (option A, brief 2026-09-24):
- * `1 game · 15 points (cap 21)`, `Best of 3 · 11 points (cap 15)`.
+ * `1 game, 15 points (cap 21)`, `Best of 3, 11 points (cap 15)`,
+ * `Best of 5, 25 points, decider 15`.
+ *
+ * Its clauses join with COMMAS, never " · ": the match header joins its own
+ * facts with " · " (`match-centre.ts`'s metaLine), and a line using the same
+ * joiner read as several separate facts ("1 game · 15 points · Court 2").
  *
  * Says only what the parsed config declares:
  *  - no positive `bestOf` → null (nothing honest to say);
- *  - `setTo` is stated only when present and positive — tennis counts GAMES in
- *    `set.gamesTo` and has no `setTo`, so it gets the best-of alone;
+ *  - the points target only when present and positive — tennis counts GAMES in
+ *    `set.gamesTo` and has neither `setTo` nor `finalSetTo`, so it gets the
+ *    best-of alone;
+ *  - a ONE-unit match is its own decider: the set kernel plays set index
+ *    bestOf−1 to `finalSetTo` (`setTarget`, engine `setbased/kernel.ts`), so a
+ *    best-of-1 states `finalSetTo`, falling back to `setTo`;
+ *  - a best-of-N states `setTo`, plus a decider clause when `finalSetTo` is
+ *    present and plays to a DIFFERENT target (volleyball's 25 / 15);
  *  - the cap clause only when the cap is ABOVE the target — a null cap is
  *    uncapped, and a cap equal to the target extends nothing.
  *
@@ -76,75 +87,51 @@ export function describeMatchRules(
 
   const bestOf = positive(c.bestOf);
   if (bestOf === undefined) return null;
-  const points = positive(c.setTo);
+  const setTo = positive(c.setTo);
+  const finalSetTo = positive(c.finalSetTo);
   const capRaw = positive(c.cap);
-  const cap = points !== undefined && capRaw !== undefined && capRaw > points ? capRaw : undefined;
+  const capAbove = (target: number) => (capRaw !== undefined && capRaw > target ? capRaw : undefined);
 
   if (bestOf === 1) {
     const keys = ONE_UNIT[GAME_UNIT_SPORTS.has(sportKey) ? "game" : "set"];
+    const points = finalSetTo ?? setTo;
     if (points === undefined) return { key: keys.bare };
+    const cap = capAbove(points);
     if (cap === undefined) return { key: keys.points, params: { points } };
     return { key: keys.pointsCap, params: { points, cap } };
   }
-  if (points === undefined) return { key: "format.sets.bestOf", params: { n: bestOf } };
-  if (cap === undefined) return { key: "format.rules.bestOfPoints", params: { n: bestOf, points } };
-  return { key: "format.rules.bestOfPointsCap", params: { n: bestOf, points, cap } };
-}
-
-/** Structural equality for jsonb-shaped values, blind to object key ORDER
- *  (a frozen snapshot and a division row can serialise one nested object with
- *  its keys in different orders). */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+  if (setTo === undefined) return { key: "format.sets.bestOf", params: { n: bestOf } };
+  const points = setTo;
+  const cap = capAbove(points);
+  const decider = finalSetTo !== undefined && finalSetTo !== points ? finalSetTo : undefined;
+  if (decider === undefined) {
+    if (cap === undefined) return { key: "format.rules.bestOfPoints", params: { n: bestOf, points } };
+    return { key: "format.rules.bestOfPointsCap", params: { n: bestOf, points, cap } };
   }
-  return JSON.stringify(value) ?? "undefined";
-}
-
-/**
- * Does this effective config play a different FORMAT from the division's?
- *
- * Compared on the sport's rule keys only (`configKeysFor` — the CONFIG keys its
- * rule fields write, the same set the per-stage endpoint allows), so standings
- * points or a decider key moving is not a format change.
- *
- * Both sides are compared AFTER the module's schema fills its defaults: a
- * fixture's frozen snapshot is the raw resolved cfg, and a division row may
- * omit a key its schema defaults, so a raw comparison would call a defaulted
- * `cap` an override. When either side is refused (or there is no module) the
- * RAW values are compared instead — a difference is still a difference.
- */
-export function rulesDifferFromDivision(
-  sportKey: string,
-  module_: AnySportModule | null | undefined,
-  effectiveCfg: unknown,
-  divisionCfg: unknown,
-): boolean {
-  const parse = (cfg: unknown): unknown => {
-    if (!module_) return undefined;
-    const r = module_.configSchema.safeParse(cfg);
-    return r.success ? r.data : undefined;
-  };
-  let a = parse(effectiveCfg);
-  let b = parse(divisionCfg);
-  if (a === undefined || b === undefined) {
-    a = effectiveCfg;
-    b = divisionCfg;
-  }
-  const ra = (a ?? {}) as Record<string, unknown>;
-  const rb = (b ?? {}) as Record<string, unknown>;
-  for (const key of configKeysFor(sportKey)) {
-    if (canonical(ra[key]) !== canonical(rb[key])) return true;
-  }
-  return false;
+  if (cap === undefined) return { key: "format.rules.bestOfPointsDecider", params: { n: bestOf, points, decider } };
+  return { key: "format.rules.bestOfPointsCapDecider", params: { n: bestOf, points, cap, decider } };
 }
 
 /**
  * The line a fixture or stage shows INSTEAD of its division's preset name, or
- * null when it should keep that name: the rules are the division's own, or
- * they differ in a way this file cannot describe honestly.
+ * null when it should keep that name.
+ *
+ * Decided on the WORDS, not on the config: the line replaces the preset only
+ * when the effective rules describe differently from the division's own rules
+ * through this same describer. So null when
+ *  - the rules are the division's own (or merely restate them);
+ *  - they differ only in a way this file cannot say — tennis's `finalSet` or
+ *    `set` shape, badminton's `winBy` — because swapping the preset name for
+ *    words identical to the division's would tell a spectator less, not more;
+ *  - the effective rules cannot be described at all (no module, a refused
+ *    config, a sport without per-stage rules).
+ *
+ * Both sides go through the module's schema inside `describeMatchRules`, so a
+ * frozen snapshot (the RAW resolved cfg) and a division row that omits a key
+ * its schema defaults read the same; and only rule fields reach the words, so
+ * standings points or a decider key (`shootout`) moving is no format change.
+ * Both lines come from one builder, so their key and param order agree and a
+ * serialised comparison is exact.
  */
 export function effectiveRulesLine(
   sportKey: string,
@@ -152,6 +139,8 @@ export function effectiveRulesLine(
   effectiveCfg: unknown,
   divisionCfg: unknown,
 ): MsgT | null {
-  if (!rulesDifferFromDivision(sportKey, module_, effectiveCfg, divisionCfg)) return null;
-  return describeMatchRules(sportKey, module_, effectiveCfg);
+  const line = describeMatchRules(sportKey, module_, effectiveCfg);
+  if (line === null) return null;
+  const divisionLine = describeMatchRules(sportKey, module_, divisionCfg);
+  return JSON.stringify(line) === JSON.stringify(divisionLine) ? null : line;
 }

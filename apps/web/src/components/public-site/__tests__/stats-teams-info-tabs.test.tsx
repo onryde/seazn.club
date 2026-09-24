@@ -2186,6 +2186,14 @@ describe("InfoTab — a stage that plays different rules names them (per-stage r
       expect(tagOf(h, id).match(/class="([^"]*)"/)?.[1]?.split(" ")).toEqual(
         expect.arrayContaining(["min-w-0", "flex-wrap"]),
       );
+      // And an UNBROKEN name ("Qualifiers-Pool-A-Round-Robin…") breaks inside
+      // its own cell: `min-w-0` alone lets the cell shrink, it does not let
+      // the word wrap (review round 1, finding 4).
+      const row = formatRow(id);
+      for (const cell of ["dt", "dd"]) {
+        const cls = row.match(new RegExp(`<${cell} class="([^"]*)"`))?.[1]?.split(" ");
+        expect(cls, `${id} ${cell}`).toEqual(expect.arrayContaining(["min-w-0", "[overflow-wrap:anywhere]"]));
+      }
     }
   });
 

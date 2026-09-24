@@ -318,8 +318,13 @@ export function InfoTab({
                             data-testid={`mh-info-format-${d.slug}-${i}`}
                             className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-2"
                           >
-                            <dt className="min-w-0 text-sm font-medium text-ink">{s.stageName}</dt>
-                            <dd className="min-w-0 text-sm tabular-nums text-ink">
+                            {/* `[overflow-wrap:anywhere]`: `min-w-0` lets a cell
+                                shrink, but an unbroken stage name is one word
+                                and would still overflow the box at 320. */}
+                            <dt className="min-w-0 text-sm font-medium text-ink [overflow-wrap:anywhere]">
+                              {s.stageName}
+                            </dt>
+                            <dd className="min-w-0 text-sm tabular-nums text-ink [overflow-wrap:anywhere]">
                               {t(dict, s.line.key, s.line.params)}
                             </dd>
                           </div>

@@ -2241,6 +2241,8 @@ export type DictionaryKey =
   | "format.page_playoff.tradeoff"
   | "format.rules.bestOfPoints"
   | "format.rules.bestOfPointsCap"
+  | "format.rules.bestOfPointsCapDecider"
+  | "format.rules.bestOfPointsDecider"
   | "format.rules.oneGame"
   | "format.rules.oneGamePoints"
   | "format.rules.oneGamePointsCap"

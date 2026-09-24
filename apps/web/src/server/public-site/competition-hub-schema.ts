@@ -118,8 +118,8 @@ export const HubDivision = z.object({
    *  `variantKey`. */
   formatLine: Msg.nullable(),
   /** Per-stage match rules (design 2026-09-17 §D3/T7): one line per stage
-   *  whose EFFECTIVE rules differ from the division's — "Swiss" · "1 game ·
-   *  15 points (cap 21)" — in stage order, from the same describer that labels
+   *  whose EFFECTIVE rules describe differently from the division's — "Swiss" /
+   *  "1 game, 15 points (cap 21)" — in stage order, from the same describer that labels
    *  the stage's fixtures in the match centre. `formatLine` above stays the
    *  division's default. ABSENT when no stage differs (never an empty list),
    *  and OPTIONAL for the reason `description` below is: the hub API is cached

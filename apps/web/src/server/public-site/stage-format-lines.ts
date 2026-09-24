@@ -22,14 +22,16 @@ export interface StageFormatLine {
 }
 
 /**
- * A line for each stage, in STAGE order (`seq`), whose rules make it play a
- * different format from the division — and nothing for the rest: an identical
- * line per stage is noise (brief decision), and a stage whose stored rules
- * merely restate the division's own values plays the division's format.
+ * A line for each stage, in STAGE order (`seq`), whose rules DESCRIBE
+ * differently from the division's — and nothing for the rest: an identical
+ * line per stage is noise (brief decision). A stage whose stored rules merely
+ * restate the division's own values, or differ only where the describer has no
+ * words (tennis `finalSet`, badminton `winBy`), gets no line
+ * (`effectiveRulesLine`).
  *
  * `stages[].rules` is the stored FRAGMENT (`PublicStage.rules`); only it is
  * overlaid, so the decider keys (`shootout`/`extraTime`) that also live on a
- * stage's config play no part — they are not format rules (`configKeysFor`).
+ * stage's config play no part — they are not format rules.
  */
 export function stageFormatLines(
   sportKey: string,
