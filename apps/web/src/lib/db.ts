@@ -28,7 +28,25 @@ export interface DbConnectionOptions {
   prepare: boolean;
   max: number;
   schema: string;
+  /** Seconds a pooled connection may sit idle before postgres.js closes it. */
+  idleTimeout: number;
 }
+
+/**
+ * Idle seconds before a pooled connection is closed. Was 20; raised to 60 on
+ * 2026-09-24. Prod pg_stat_statements showed ~24.7k reconnects in 6 days at
+ * 20 s, and every reconnect pays a TLS handshake, postgres.js's array-type
+ * fetch (the `select b.oid, b.typarray from pg_catalog.pg_type …` query) and
+ * the loss of that connection's prepared statements (re-plan). fly.toml's
+ * `min_machines_running = 1` keeps one machine up permanently, so a short
+ * timeout only churned it; Fly autostop idles a machine for minutes before
+ * suspending, so 60 s still drains the pool well before a suspend.
+ *
+ * fetch_types must stay on — postgres.js 3.4.9 registers ALL array parsers
+ * (text[]/uuid[] included) via it; off ⇒ arrays come back as '{a,b}' strings
+ * and any(${ids}) throws. See __tests__/db-array-types.test.ts.
+ */
+const IDLE_TIMEOUT_S = 60;
 
 /**
  * Pure derivation of postgres.js options from the URL + env. Session pooler
@@ -48,7 +66,7 @@ export function connectionOptions(
   const rawMax = Number(env.DB_POOL_MAX);
   const max = Number.isInteger(rawMax) && rawMax >= 1 && rawMax <= 50 ? rawMax : 5;
   const schema = env.DB_SCHEMA ?? "seazn_club";
-  return { ssl, prepare, max, schema };
+  return { ssl, prepare, max, schema, idleTimeout: IDLE_TIMEOUT_S };
 }
 
 function getClient(): Sql {
@@ -59,13 +77,14 @@ function getClient(): Sql {
       "DATABASE_URL is not set. Copy .env.example to .env.local and add your Supabase connection string.",
     );
   }
-  const { ssl, prepare, max, schema } = connectionOptions(url);
+  const { ssl, prepare, max, schema, idleTimeout } = connectionOptions(url);
 
+  // fetch_types is deliberately left at its default (on) — see IDLE_TIMEOUT_S.
   const client = postgres(url, {
     ssl,
     prepare,
     max,
-    idle_timeout: 20,
+    idle_timeout: idleTimeout,
     connect_timeout: 15,
     connection: { search_path: schema },
     debug: () => {

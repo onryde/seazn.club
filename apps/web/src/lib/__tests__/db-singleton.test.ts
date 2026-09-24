@@ -37,4 +37,17 @@ describe("db client singleton", () => {
     void sql.options;
     expect(postgresMock).toHaveBeenCalledTimes(1);
   });
+
+  // The pure connectionOptions() seam is only worth testing if getClient()
+  // actually hands its value to postgres(). Pin the pass-through, and pin that
+  // fetch_types is left at its default: postgres.js 3.4.9 registers EVERY array
+  // parser (text[]/uuid[] included) through it — see lib/db.ts.
+  it("hands connectionOptions' idle timeout to postgres() and leaves fetch_types on", async () => {
+    const { sql } = await import("@/lib/db");
+    void sql.options;
+    expect(postgresMock).toHaveBeenCalledTimes(1);
+    const opts = (postgresMock.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    expect(opts.idle_timeout).toBe(60);
+    expect(opts.fetch_types).not.toBe(false);
+  });
 });

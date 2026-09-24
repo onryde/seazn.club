@@ -34,4 +34,17 @@ describe("connectionOptions", () => {
     expect(connectionOptions(`${remote}:5432/postgres`, {}).schema).toBe("seazn_club");
     expect(connectionOptions(`${remote}:5432/postgres`, { DB_SCHEMA: "public" }).schema).toBe("public");
   });
+
+  // 2026-09-24: prod pg_stat_statements showed ~24.7k reconnects in 6 days at
+  // idle_timeout 20 s. 60 s keeps the warm pool across ordinary request gaps
+  // while still draining it long before a Fly autostop — see lib/db.ts.
+  it("idles a pooled connection out after 60 s, on every URL shape", () => {
+    for (const url of [
+      `${remote}:5432/postgres`,
+      `${remote}:6543/postgres`,
+      "postgresql://u:p@localhost:5432/seazn",
+    ]) {
+      expect(connectionOptions(url, {}).idleTimeout).toBe(60);
+    }
+  });
 });
