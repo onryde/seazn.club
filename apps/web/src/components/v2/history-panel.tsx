@@ -11,7 +11,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { Tip } from "@/components/ui/tip";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 // Zero imports of its own, so a client component may hold it. The CODE is the
 // contract between a schedule-lock refusal and this panel; the SENTENCE is not.
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
@@ -83,6 +83,7 @@ export function HistoryPanel({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  const plural = useMsgPlural();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [history, setHistory] = useState<HistoryOut | null>(null);
@@ -392,19 +393,14 @@ export function HistoryPanel({
               data-testid="history-restore-notice"
               className="rounded-md bg-purple-50 px-2.5 py-1.5 text-[11px] leading-snug text-purple-800"
             >
-              {/* `msg` over the two plural forms, not `usePlural`: that hook
-                  THROWS outside a DictProvider, and this panel is mounted in
-                  node-environment tests that have no provider tree (`useMsg`
-                  falls back to the English catalog there, which is the
-                  production copy). All four shipped locales use one/other, so
-                  picking the form here loses nothing a plural runtime would
-                  give — and a fifth locale with more categories would need a
-                  provider-safe plural hook anyway. */}
+              {/* `useMsgPlural`, not `usePlural`: that hook THROWS outside a
+                  DictProvider, and this panel is mounted in node-environment
+                  tests that have no provider tree; this one falls back to the
+                  English catalog there, which is the production copy. And the
+                  locale's own plural rule, not `=== 1` (review 4 of #857). */}
               {restored === 0
                 ? msg("history.restore.noop")
-                : restored === 1
-                  ? msg("history.restore.done.one")
-                  : msg("history.restore.done.other", { count: String(restored) })}
+                : plural("history.restore.done", restored)}
             </p>
           )}
           {evicted && (
@@ -667,17 +663,14 @@ export function HistoryPanel({
             {msg("history.danger.clear")}
           </button>
           {/* The locked ones are the danger zone's own sentence above; this
-              says the played ones, which no control on this page pins. `msg`
-              over the two plural forms for the reason given at the restore
-              notice. */}
+              says the played ones, which no control on this page pins.
+              `useMsgPlural` for the reason given at the restore notice. */}
           {keptPlayed !== null && keptPlayed > 0 && (
             <p
               data-testid="schedule-clear-kept"
               className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800"
             >
-              {keptPlayed === 1
-                ? msg("history.danger.keptPlayed.one")
-                : msg("history.danger.keptPlayed.other", { count: String(keptPlayed) })}
+              {plural("history.danger.keptPlayed", keptPlayed)}
             </p>
           )}
         </div>

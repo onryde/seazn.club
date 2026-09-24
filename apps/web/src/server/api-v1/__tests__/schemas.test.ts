@@ -3,7 +3,9 @@
 import { describe, expect, it } from "vitest";
 import {
   AppendEventRequest,
+  ApplyCompetitionScheduleResult,
   ApplyScheduleRequest,
+  ApplyScheduleResult,
   CapacityPrecheck,
   CreateClubContact,
   CreateCompetition,
@@ -900,5 +902,18 @@ describe("RestoreCompetitionScheduleResult — the per-division refusal code", (
     });
     expect(r.success).toBe(true);
     if (r.success) expect(r.data.failed[0]!.code).toBeUndefined();
+  });
+});
+
+// Review 4 of #857, nit: an apply's counts are counts. The published shape
+// says so, so a client can rely on it.
+describe("the apply results' counts are never negative", () => {
+  it.each(["applied", "skipped"] as const)("%s", (field) => {
+    const single = { applied: 1, skipped: 0, conflicts: [], seq: 3 };
+    const joint = { applied: 1, skipped: 0, divisions: [], conflicts: [] };
+    expect(ApplyScheduleResult.safeParse(single).success).toBe(true);
+    expect(ApplyCompetitionScheduleResult.safeParse(joint).success).toBe(true);
+    expect(ApplyScheduleResult.safeParse({ ...single, [field]: -1 }).success).toBe(false);
+    expect(ApplyCompetitionScheduleResult.safeParse({ ...joint, [field]: -1 }).success).toBe(false);
   });
 });

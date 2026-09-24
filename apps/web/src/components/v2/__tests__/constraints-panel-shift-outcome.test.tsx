@@ -62,9 +62,16 @@ describe("ConstraintsPanel — a rain-delay shift says what it moved and what it
     ]);
   });
 
+  it("one kept match reads the singular line", async () => {
+    const island = await shiftWith({ shifted: 2, skipped: { decided: 1, locked: 0 }, seq: 9 });
+    expect(byTestid(island.tree(), "bulk-shift-kept").map(textOf)).toEqual([
+      "1 match with a result or scoring recorded was left in place.",
+    ]);
+  });
+
   it("says nothing about kept matches when the shift left none", async () => {
     const island = await shiftWith({ shifted: 1, skipped: { decided: 0, locked: 0 }, seq: 9 });
-    expect(byTestid(island.tree(), "bulk-shift-outcome").map(textOf)).toEqual([EN["constraints.bulkShift.done.one"]]);
+    expect(byTestid(island.tree(), "bulk-shift-outcome").map(textOf)).toEqual([EN["constraints.bulkShift.done.one"]!.replace("{count}", "1")]);
     expect(byTestid(island.tree(), "bulk-shift-kept")).toEqual([]);
   });
 });

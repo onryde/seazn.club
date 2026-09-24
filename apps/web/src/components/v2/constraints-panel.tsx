@@ -8,7 +8,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { Tip } from "@/components/ui/tip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-note";
@@ -371,6 +371,8 @@ export function ConstraintsPanel({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  // The locale's own plural rule, not `=== 1`: French says 0 in the singular.
+  const plural = useMsgPlural();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [error, setError] = useState<string | null>(null);
@@ -1023,9 +1025,7 @@ export function ConstraintsPanel({
             </p>
             {shiftOutcome !== null && (
               <p data-testid="bulk-shift-outcome" className="text-xs text-slate-600">
-                {shiftOutcome.shifted === 1
-                  ? msg("constraints.bulkShift.done.one")
-                  : msg("constraints.bulkShift.done.other", { count: String(shiftOutcome.shifted) })}
+                {plural("constraints.bulkShift.done", shiftOutcome.shifted)}
               </p>
             )}
             {shiftOutcome !== null && shiftOutcome.kept > 0 && (
@@ -1033,9 +1033,7 @@ export function ConstraintsPanel({
                 data-testid="bulk-shift-kept"
                 className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800"
               >
-                {shiftOutcome.kept === 1
-                  ? msg("history.danger.keptPlayed.one")
-                  : msg("history.danger.keptPlayed.other", { count: String(shiftOutcome.kept) })}
+                {plural("history.danger.keptPlayed", shiftOutcome.kept)}
               </p>
             )}
           </div>

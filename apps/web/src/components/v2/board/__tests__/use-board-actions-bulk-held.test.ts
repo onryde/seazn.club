@@ -46,6 +46,7 @@ import { useBoardActions, type BoardActions } from "../use-board-actions";
 import type { BoardDivision, BoardFixture } from "../types";
 
 const EN = en as unknown as Record<string, string>;
+const KEPT_ONE = EN["history.danger.keptPlayed.one"]!.replace("{count}", "1");
 const DIVISIONS = [{ id: "d1", name: "Open", seq: 3 } as unknown as BoardDivision];
 const AT = (h: number) => `2026-08-05T${String(h).padStart(2, "0")}:00:00.000Z`;
 const DAY = dayKey(AT(10));
@@ -105,7 +106,7 @@ describe("useBoardActions — a bulk tool passes over a match that holds a resul
     // The refused move wrote no ledger step, so the token does not advance.
     expect(net.calls.map((c) => c.json.expected_seq)).toEqual([3, 4, 4]);
     expect(actions().error).toBeNull();
-    expect(actions().notice).toBe(EN["history.danger.keptPlayed.one"]);
+    expect(actions().notice).toBe(KEPT_ONE);
     expect(net.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -115,7 +116,7 @@ describe("useBoardActions — a bulk tool passes over a match that holds a resul
     await actions().shiftDay(DAY, 15);
 
     expect(patched()).toEqual(["f1", "f3"]);
-    expect(actions().notice).toBe(EN["history.danger.keptPlayed.one"]);
+    expect(actions().notice).toBe(KEPT_ONE);
   });
 
   it("+15m with nothing held says nothing about kept matches", async () => {
@@ -133,13 +134,13 @@ describe("useBoardActions — a bulk tool passes over a match that holds a resul
     await refused().swapCourts(DAY, "crt-a", "crt-b");
     expect(patched()).toEqual(["f1", "f2", "f3"]);
     expect(net.calls.map((c) => c.json.court_id)).toEqual(["crt-b", "crt-a", "crt-b"]);
-    expect(refused().notice).toBe(EN["history.danger.keptPlayed.one"]);
+    expect(refused().notice).toBe(KEPT_ONE);
 
     reset();
     const held = driveHook(SWAP_HELD_MIDDLE);
     await held().swapCourts(DAY, "crt-a", "crt-b");
     expect(patched()).toEqual(["f1", "f3"]);
-    expect(held().notice).toBe(EN["history.danger.keptPlayed.one"]);
+    expect(held().notice).toBe(KEPT_ONE);
   });
 
   it("two kept matches read the plural line", async () => {

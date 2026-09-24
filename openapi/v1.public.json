@@ -25484,12 +25484,12 @@
                       "properties": {
                         "applied": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "maximum": 9007199254740991
                         },
                         "skipped": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "maximum": 9007199254740991
                         },
                         "conflicts": {
@@ -25696,8 +25696,8 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "applied": -9007199254740991,
-                    "skipped": -9007199254740991,
+                    "applied": 0,
+                    "skipped": 0,
                     "conflicts": [
                       {
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -75657,12 +75657,12 @@
                       "properties": {
                         "applied": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "maximum": 9007199254740991
                         },
                         "skipped": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "maximum": 9007199254740991
                         },
                         "divisions": {
@@ -75865,8 +75865,8 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "applied": -9007199254740991,
-                    "skipped": -9007199254740991,
+                    "applied": 0,
+                    "skipped": 0,
                     "divisions": [
                       {
                         "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
