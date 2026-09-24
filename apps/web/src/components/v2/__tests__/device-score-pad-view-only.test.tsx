@@ -280,6 +280,13 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     const label = tokens(byTestId(tree, "scan-scorebug-round-label"));
     expect(label.has("max-md:whitespace-normal"), "below md, a label longer than a line wraps inside itself").toBe(true);
     expect(cls.has("max-md:max-w-full"), "…capped at the line, so it wraps rather than overflows").toBe(true);
+    // Review round 3: once the label wraps, its WIDEST WORD is its min-content
+    // width, and beside a wide status at 320 with a logo (es "POR
+    // INCOMPARECENCIA") that word is wider than all the room the line has —
+    // "PERDEDORES" painted "PERDEDOR". Below md the label may shrink below its
+    // widest word, and breaks inside it rather than clip.
+    expect(label.has("max-md:min-w-0"), "below md the label can shrink below its widest word").toBe(true);
+    expect(label.has("max-md:wrap-anywhere"), "…and breaks inside a word instead of clipping it").toBe(true);
     const line = byTestId(tree, "scan-scorebug-line");
     expect(line, "the division and the round share one line element").toBeDefined();
     expect(tokens(line).has("max-md:flex-wrap"), "below md the line wraps, moving the round down whole").toBe(true);

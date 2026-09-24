@@ -521,7 +521,15 @@ export function DeviceScorePad({
                 itself started its second line at the item's left edge, which
                 is in the clipped gutter: fr "Grande finale (revanche)" lost
                 the "(r" of its second line. In its own box the label's every
-                line starts after the separator. */}
+                line starts after the separator.
+
+                Once the label wraps, its WIDEST WORD is its min-content
+                width — and beside a wide status at 320 with a logo (es "POR
+                INCOMPARECENCIA") that word can be wider than all the room
+                the line has: "PERDEDORES" painted "PERDEDOR" (review round
+                3). So below md the label may shrink below that word and
+                break inside it (`min-w-0`, `wrap-anywhere`) rather than
+                clip. */}
             <span data-testid="scan-scorebug-clip" className="min-w-0 overflow-hidden">
               <span data-testid="scan-scorebug-line" className="-ml-4 flex items-baseline max-md:flex-wrap">
                 <span className="flex min-w-0">
@@ -536,7 +544,10 @@ export function DeviceScorePad({
                   <span data-scorebug-sep="" className={SCOREBUG_SEP}>
                     {" · "}
                   </span>
-                  <span data-testid="scan-scorebug-round-label" className="whitespace-pre max-md:whitespace-normal">
+                  <span
+                    data-testid="scan-scorebug-round-label"
+                    className="whitespace-pre max-md:min-w-0 max-md:whitespace-normal max-md:wrap-anywhere"
+                  >
                     {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
                   </span>
                 </span>
