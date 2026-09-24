@@ -650,9 +650,19 @@ export function DeviceScorePad({
               </>
             )}
             <dt className="text-slate-400">{msg("device.scan.match")}</dt>
-            <dd className="min-w-0 truncate text-slate-100">
-              {fixture.division_name}
-              {fixture.match_ref ? ` · ${fixture.match_ref}` : ""}
+            {/* The board's code ("GF·1") is what the umpire checks against
+                the printed sheet, so it never shrinks and the division before
+                it truncates. As one truncating line the code was the first
+                thing cut at 320 ("Scan Cup … Open Ch…", review round 3).
+                `whitespace-pre` keeps the code's leading space, which a flex
+                item would otherwise drop. */}
+            <dd className="flex min-w-0 text-slate-100">
+              <span className="min-w-0 truncate">{fixture.division_name}</span>
+              {fixture.match_ref ? (
+                <span data-testid="scan-confirm-match-code" className="shrink-0 whitespace-pre">
+                  {` · ${fixture.match_ref}`}
+                </span>
+              ) : null}
             </dd>
           </dl>
           <p className="mt-3 break-words text-base font-semibold text-slate-100">

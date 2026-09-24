@@ -411,6 +411,42 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     expect(island.tree().find((e) => e.type === ScorePad)).toBeUndefined();
   });
 
+  // Review round 3: the Match line truncated as ONE element, so at 320 the
+  // board's code — the thing the umpire checks against the printed sheet —
+  // was the first thing cut ("Scan Cup … Open Ch…"). The code is its own
+  // element that never shrinks (its " · " kept by `whitespace-pre`, or a flex
+  // item would drop the leading space); the division before it truncates.
+  // Class tokens only; the scan-screens walkthrough measures it at 320.
+  it("Confirm's Match line: the board's code is its own element that never shrinks, and the division truncates", () => {
+    const tree = renderIsland(DeviceScorePad, {
+      ...props("scheduled", null),
+      initialEvents: [],
+      fixture: {
+        ...props("scheduled", null).fixture,
+        division_name: "A very long division name indeed",
+        match_ref: "GF·1",
+      },
+    }).tree();
+    const tokens = (e: ReactElement | undefined) =>
+      new Set(((e?.props as { className?: string } | undefined)?.className ?? "").split(/\s+/));
+    const code = byTestId(tree, "scan-confirm-match-code");
+    expect(code, "the code has its own element").toBeDefined();
+    expect(textOf(code!)).toBe(" · GF·1");
+    expect(tokens(code).has("shrink-0"), "it never shrinks").toBe(true);
+    expect(tokens(code).has("whitespace-pre"), "…and keeps its leading space").toBe(true);
+    expect(tokens(code).has("truncate"), "…and never truncates").toBe(false);
+    const line = tree.find((e) => {
+      const kids = (propsOf(e) as { children?: unknown }).children;
+      return e.type === "dd" && Array.isArray(kids) && kids.includes(code);
+    });
+    expect(line, "the code sits in the Match line").toBeDefined();
+    expect(tokens(line).has("flex") && tokens(line).has("min-w-0"), "the line lays its parts side by side").toBe(true);
+    expect(tokens(line).has("truncate"), "the line no longer truncates as one").toBe(false);
+    const division = ((propsOf(line!) as { children: unknown[] }).children)[0] as ReactElement;
+    expect(textOf(division)).toBe("A very long division name indeed");
+    expect(tokens(division).has("min-w-0") && tokens(division).has("truncate"), "the division is what truncates").toBe(true);
+  });
+
   it("in play: no Confirm card — the pad", () => {
     const island = renderIsland(DeviceScorePad, props("in_play", null));
     expect(byTestId(island.tree(), "scan-confirm")).toBeUndefined();
