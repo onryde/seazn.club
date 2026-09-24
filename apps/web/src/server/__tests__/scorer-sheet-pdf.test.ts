@@ -84,6 +84,22 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
     expect(onPage(2)).toContain("COURT 1 · PAGE 2 OF 2");
   });
 
+  it("a Pro org's masthead heads EVERY page — page 2 of a court, cut and handed out, still says whose event it is — and the cards start at the same place", async () => {
+    const branded = { ...header, branding: { orgName: "Riverside Shuttlers", logos: [] } };
+    const pdf = await renderScorerSheetPdf({
+      ...model([], { header: branded }),
+      pages: [
+        { heading: "Court 1 · page 1 of 2", rows: rows(9) },
+        { heading: "Court 1 · page 2 of 2", rows: rows(1, 10) },
+      ],
+    });
+    const org = pdfTextRuns(pdf).filter((r) => r.text === "RIVERSIDE SHUTTLERS");
+    expect(org.map((r) => r.page)).toEqual([1, 2]);
+    expect(round2(org[1]!.y)).toBe(round2(org[0]!.y));
+    const links = pdfLinks(pdf);
+    expect(round2(links[9]!.top)).toBe(round2(links[0]!.top));
+  });
+
   it("every page prints its own heading and the check-names line — the courtless section included", async () => {
     const pdf = await renderScorerSheetPdf({
       ...model([]),
