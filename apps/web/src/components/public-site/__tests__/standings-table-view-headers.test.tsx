@@ -210,8 +210,9 @@ describe("hub table: every header word fits its own column", () => {
         ["3", "+5", "6"],
       ),
     );
-    // 48 rank + 96 name + P 32 + Pts 44 below md (Difference folds); + 96 from md.
-    expect(markup).toContain('style="--sv-min:220px;--sv-min-md:316px"');
+    // Below md: 48 rank + 120 name (the 7.5rem phone floor, ruling (d)) + P 32
+    // + Pts 44 = 244 (Difference folds). From md: 48 + 96 + 32 + 96 + 44 = 316.
+    expect(markup).toContain('style="--sv-min:244px;--sv-min-md:316px"');
   });
 });
 

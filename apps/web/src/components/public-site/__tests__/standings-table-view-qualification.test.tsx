@@ -21,7 +21,10 @@
 // Stripping those back out of the new goldens gives the old ones byte for
 // byte, so nothing else in the no-cut path changed. Ruling (a) the same day
 // re-captured both again for a fourth, `max-md:hyphens-auto`; stripping that
-// gives the P4 goldens byte for byte.
+// gives the P4 goldens byte for byte. Ruling (d) re-captured both once more:
+// the phone floor `--sv-min` grew by the name's 7.5rem floor (120 − 96 = 24px:
+// 284 → 308 full, 220 → 244 preview); writing the old value back gives the
+// ruling-(a) goldens byte for byte, and `--sv-min-md` did not move.
 //
 // ---------------------------------------------------------------------------
 // Mutants killed (task-8 report has the run log)

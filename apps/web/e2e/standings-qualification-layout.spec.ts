@@ -551,6 +551,15 @@ for (const width of [1280, 768, 320] as const) {
     expectCutSpansTable(geometry[0]!);
     const name = await longName(table);
     expectLongNameClamped(name, width, `hub ${width}`);
+    // 1c. Ruling (d): the 7.5rem team-column floor is phone-only. At 320 the
+    //     table scrolls inside its own box (the swipe test below); from `md`
+    //     up nothing changed, so the table still fits its card.
+    if (width >= 768) {
+      const box = await table
+        .locator('[role="region"]')
+        .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(box.scroll, `hub ${width}: the table fits its card, as before the phone floor`).toBeLessThanOrEqual(box.client);
+    }
 
     // 2. Every rank trigger is a 40px target (±19.5 at a phone width).
     const triggers = table.getByRole("button", { name: /^Rank \d+,/ });
@@ -627,6 +636,89 @@ test("the hub's phone shows the same controls as its desktop: markers, cut line,
   expect(hubShots[1280], "the 1280 leg did not run").toBeDefined();
   expect(hubShots[320]).toEqual(hubShots[1280]);
   expect(hubShots[768]).toEqual(hubShots[1280]);
+});
+
+/** "Northgate BC": its first word is the one the hub's phone column broke
+ *  mid-letter before the floor ("Northgat / e"). */
+const NORTHGATE = NAMES.find((n) => n.startsWith("Northgate"))!;
+
+/** The text an element paints on its FIRST line, read per character from the
+ *  layout (a line ends where a character's box drops below the first one). A
+ *  word the column broke — at a letter or at a hyphen — ends the line early. */
+async function firstLine(el: Locator): Promise<string> {
+  return el.evaluate((node) => {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    let text = "";
+    let top: number | null = null;
+    for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+      for (let i = 0; i < n.data.length; i++) {
+        const range = document.createRange();
+        range.setStart(n, i);
+        range.setEnd(n, i + 1);
+        const rect = range.getClientRects()[0];
+        if (!rect) continue; // collapsed whitespace
+        top ??= rect.top;
+        if (Math.abs(rect.top - top) > 2) return text.trim();
+        text += n.data[i];
+      }
+    }
+    return text.trim();
+  });
+}
+
+test("hub Table tab at 320: the team column keeps the division page's 7.5rem floor — a long first word stays whole, the table swipes inside its own box to PTS, the page never scrolls", async ({ browser }, testInfo) => {
+  // Owner ruling (d), 2026-09-24. Hyphenation (ruling (a)) cannot mend the
+  // mid-letter break in Chromium, which never hyphenates a word that starts
+  // with a capital; a floor can. Below `md` the name column gets the division
+  // page's 7.5rem, and at 320 the table becomes wider than its card, so it
+  // scrolls inside its own box (AGENTS.md #23: reachable, never clipped).
+  const page = await spectator(browser, { width: 320, height: 900 });
+  await openWithCut(page, `${seed.hubPath}?tab=table`);
+  const table = hubTable(page, "mh-table-");
+  await expect(table).toHaveCount(1);
+  const region = table.locator('[role="region"]');
+  await expect(region).toHaveCount(1);
+
+  // 1. The floor, and the word it keeps whole.
+  const nameTh = table.locator(`th[scope="row"]:has([title="${NORTHGATE}"])`);
+  await expect(nameTh).toHaveCount(1);
+  const thWidth = await nameTh.evaluate((el) => el.getBoundingClientRect().width);
+  expect(thWidth, "the team column is at least 7.5rem (120px) wide at 320").toBeGreaterThanOrEqual(119.5);
+  const word = NORTHGATE.split(" ")[0]!;
+  const line = await firstLine(nameTh.locator(`[title="${NORTHGATE}"]`));
+  expect(line.split(/\s+/)[0], `"${word}" is whole on the first line (first line: "${line}")`).toBe(word);
+
+  // 2. The box is reachable: it scrolls, it is an auto/scroll box, and a
+  //    keyboard can reach it (tabindex, role, name — the division table's
+  //    wrapper carries the same three).
+  const box = await region.evaluate((el) => ({
+    overflowX: getComputedStyle(el).overflowX,
+    scroll: el.scrollWidth,
+    client: el.clientWidth,
+    tabindex: el.getAttribute("tabindex"),
+    label: el.getAttribute("aria-label"),
+  }));
+  expect(box.scroll, `premise: the floor puts the table wider than its box (${JSON.stringify(box)})`).toBeGreaterThan(box.client);
+  expect(["auto", "scroll"], "the box that overflows is reachable, not clipped").toContain(box.overflowX);
+  expect(box.tabindex, "a keyboard can reach the box").toBe("0");
+  expect(box.label ?? "", "the box has an accessible name").not.toBe("");
+  await expectNoHorizontalScroll(page);
+
+  // 3. A swipe brings PTS into the box, and the page still does not move.
+  const pts = table.locator('thead th[data-col="points"]');
+  const ptsRight = () =>
+    Promise.all([pts.boundingBox(), region.boundingBox()]).then(([p, r]) => p!.x + p!.width - (r!.x + r!.width));
+  expect(await ptsRight(), "premise: PTS starts past the box's right edge").toBeGreaterThan(0.5);
+  // The region is taller than the viewport's lower half: the element
+  // screenshot scrolls the PAGE to it, which is what a reader does too.
+  await region.screenshot({ path: testInfo.outputPath("hub-320-floor.png") });
+  const rb = (await region.boundingBox())!;
+  await page.mouse.move(rb.x + rb.width / 2, rb.y + 12);
+  await page.mouse.wheel(rb.width, 0);
+  await expect.poll(ptsRight, { message: "after the swipe PTS is inside the box" }).toBeLessThanOrEqual(0.5);
+  await region.screenshot({ path: testInfo.outputPath("hub-320-floor-pts.png") });
+  await expectNoHorizontalScroll(page);
+  console.log(`MEASURED ${JSON.stringify({ floor: 320, thWidth, line, box })}`);
 });
 
 test("the hub Overview's preview at 320: markers and the cut line, NO legend, no sideways scroll", async ({ browser }, testInfo) => {

@@ -47,7 +47,10 @@
 //    the region scrolls instead of crushing. TWO values, because below `md`
 //    the folded columns are `display:none` and claim nothing while from `md`
 //    up nothing folds at all: a single value would either force a rail under
-//    a collapsed phone or leave the wide state unprotected. They travel as
+//    a collapsed phone or leave the wide state unprotected. (Ruling (d),
+//    2026-09-24, then raised the PHONE name floor to 7.5rem, which does put
+//    a short, deliberate rail under the collapsed table at 320 — see
+//    `NAME_MIN_PHONE_PX`.) They travel as
 //    inline CUSTOM PROPERTIES read by the two utilities on the table below,
 //    which is how a computed length gets to vary by media query — a plain
 //    inline `min-width` cannot, and round 1 wrongly
@@ -200,13 +203,22 @@ function columnSize(chars: number, header: number): ColumnSize {
  *  the column nothing, and `NAME_MIN_PX` and both floors are unchanged. */
 const RANK_PX = 48;
 
-/** The narrowest the name column may ever be. 96px holds the 20px crest, its
- *  gap and ~7 characters before the ellipsis — enough for `truncate` to do its
- *  job at 320 rather than clipping to nothing. Anything wider pushes the
- *  COLLAPSED phone table (48 + 96 + 32 + 32 + 32 + 44 = 284px) past a ~286px
- *  card and puts a rail under the compact set, which is the one thing the fold
- *  exists to prevent. */
+/** The narrowest the name column may be from `md` up. 96px holds the 20px
+ *  crest, its gap and ~7 characters before the ellipsis — enough for
+ *  `truncate` to do its job rather than clipping to nothing. */
 const NAME_MIN_PX = 96;
+
+/** The narrowest the name column may be BELOW `md`: 7.5rem, the division
+ *  table's own phone floor (`standings-table.tsx`, `max-md:min-w-[7.5rem]` on
+ *  its name cell). Owner ruling (d), 2026-09-24. At 96px the collapsed phone
+ *  table (48 + 96 + 32 + 32 + 32 + 44 = 284px) just fitted a ~286px card, but
+ *  it left the name ~62px of text, and Chromium — which never hyphenates a
+ *  word that starts with a capital — broke a club's first word mid-letter
+ *  ("Northgat / e BC"). At 120 the same table is 308px: at 320 it scrolls
+ *  inside its own `overflow-x-auto` region (AGENTS.md #23: reachable, never
+ *  clipped), and from ~360 up it fits again. The price was ruled acceptable:
+ *  a small swipe to PTS on the narrowest phones, never a mangled name. */
+const NAME_MIN_PHONE_PX = 120;
 
 /**
  * The columns a PREVIEW shows. Narrower than the compact set, and deliberately.
@@ -317,22 +329,21 @@ export function StandingsTableView({
   };
 
   // The floor described at the top of the file (it sums `sizes`, so it follows
-  // them), in two flavours because the column set differs by viewport. BELOW
-  // `md` a folded column is
-  // `display:none` and claims nothing, so only the shown set counts — which is
-  // what keeps the collapsed phone off a rail while still guaranteeing the
-  // name column its 96px once the disclosure is open. From `md` UP nothing
-  // folds, so every column counts.
-  const floor = (px: (c: TableColumnT, i: number) => number) =>
-    RANK_PX + NAME_MIN_PX + view.columns.reduce((total, c, i) => total + px(c, i), 0);
-  const minPhone = floor((c, i) => (shown(c) ? sizes[i]!.px : 0));
+  // them), in two flavours because the column set and the name floor differ
+  // by viewport. BELOW `md` a folded column is `display:none` and claims
+  // nothing, so only the shown set counts, and the name gets its phone floor
+  // (`NAME_MIN_PHONE_PX`, 7.5rem) folded or open. From `md` UP nothing folds,
+  // so every column counts, over the 96px name floor.
+  const floor = (name: number, px: (c: TableColumnT, i: number) => number) =>
+    RANK_PX + name + view.columns.reduce((total, c, i) => total + px(c, i), 0);
+  const minPhone = floor(NAME_MIN_PHONE_PX, (c, i) => (shown(c) ? sizes[i]!.px : 0));
   // The wide floor counts every column because above `md` a full table folds
   // nothing — but a PREVIEW folds at every width (see `foldCls`), so counting
   // its hidden columns reserves width for cells that are not rendered. That is
   // what kept **Points** behind a scroll after the fold fix: the columns were
   // gone and the floor still demanded 380px in a 318px rail, so the table
   // overflowed by exactly the space its invisible columns had booked.
-  const minWide = floor((c, i) => (preview === undefined || shown(c) ? sizes[i]!.px : 0));
+  const minWide = floor(NAME_MIN_PX, (c, i) => (preview === undefined || shown(c) ? sizes[i]!.px : 0));
 
   // ── THE CUT LINE ──────────────────────────────────────────────────────────
   // Its first cell spans rank, name and the columns shown at the narrowest
@@ -560,8 +571,10 @@ export function StandingsTableView({
                             locale, set by the /shared org layout. Safari
                             (WebKit) draws "North- / gate"; Chromium never
                             hyphenates a word that starts with a capital, so
-                            there `break-words` stays the fallback and a long
-                            name still breaks at a letter. */}
+                            there `break-words` stays the fallback — which is
+                            why ruling (d) also gives the column a 7.5rem
+                            phone floor (`NAME_MIN_PHONE_PX`): wide enough that
+                            a club's first word stays whole. */}
                         <span
                           className={`block min-w-0 truncate max-md:line-clamp-2 max-md:whitespace-normal max-md:break-words max-md:hyphens-auto${r.qual?.status === "out" ? " text-ink-muted" : ""}`}
                           title={r.name}
