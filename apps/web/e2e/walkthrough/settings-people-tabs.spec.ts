@@ -6,7 +6,7 @@ import {
   type SeededOrg,
 } from "../settings-support";
 import { apiJson, TAG } from "../helpers";
-import { dismissConsent, freshOrg } from "../directory-kit";
+import { ownTest, signInOwnAccount } from "../own-account";
 
 /**
  * W2 Task 3 — the four PEOPLE-facing panels of `/o/{org}/settings`:
@@ -606,56 +606,22 @@ test("preferences tab: the org's timezone, public language and entry-fee currenc
 // ---------------------------------------------------------------------------
 
 /**
- * `ownPage`: a page in a context of its own with EMPTY storage — explicitly
- * empty, because a bare `browser.newContext()` inherits the project's
- * storageState and would be the shared Pro user again. A fixture rather than
- * `test.use({ storageState })` on the describe: that option also reaches the
- * file's root `beforeAll`/`afterAll` whenever the first or last test a worker
- * runs sits in the describe (a `-g`, or the fresh worker after a red), and
- * their bare `newContext()` then asks `/api/users/me` as nobody.
- *
- * Playwright's `use` callback is named `provide` here: react-hooks lints any
- * call named `use` as React's hook.
- */
-const ownTest = test.extend<{ ownPage: Page }>({
-  ownPage: async ({ browser }, provide) => {
-    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
-    try {
-      await provide(await ctx.newPage());
-    } finally {
-      await ctx.close();
-    }
-  },
-});
-
-/**
  * Sign `page` in as a brand-new account (with the org the settings page needs)
  * and return its id and its profile as it starts out.
  */
 async function ownAccount(page: Page, label: string): Promise<{ id: string; start: Profile }> {
-  await freshOrg(page, `people-${label}`);
-  // freshOrg leaves the page on the app origin, where the consent keys are
-  // writable — and an empty storageState carries neither (directory-kit.ts).
-  await dismissConsent(page);
-  const me = await apiJson<{ id: string }>(page.request, "/api/users/me");
-  const id = me.data?.id;
-  expect(id, "GET /api/users/me carried no id for the fresh account").toBeTruthy();
-  expect(id, "the fresh account must not be the shared Pro user").not.toBe(sharedUserId);
-  return { id: id!, start: await readProfile(id!) };
+  const { userId } = await signInOwnAccount(page, `people-${label}`, sharedUserId);
+  return { id: userId, start: await readProfile(userId) };
 }
 
 ownTest.describe("a user's own profile, on an account of its own", () => {
   /**
-   * Every test here signs in a fresh account — NOT the shared Pro user with a
-   * restore afterwards, which is what this block used to do. A restore protects the NEXT spec, never a CONCURRENT one: the leg runs
-   * `fullyParallel` at `--workers=3`, every other worker is signed in as that
-   * same account, and `resolveLocale` (src/lib/resolve-locale.ts) reads
-   * `users.locale` on every server render. For the seconds between the
-   * language save below and its restore, pages other workers rendered came
-   * back in French. CI run 35975872571: settings-schedule-drive.spec.ts saved
-   * its start time, reloaded into `<html lang="fr">` and could not find
-   * `getByLabel("Time")` beside the "Heure" select that held its 09:00. The
-   * display-name and timezone writes leaked the same way, less visibly.
+   * Every test here signs in a fresh account (e2e/own-account.ts says why) —
+   * NOT the shared Pro user with a restore afterwards, which is what this
+   * block used to do. For the seconds between its language save and that
+   * restore, pages other workers rendered came back in French: CI run
+   * 35975872571's settings-schedule-drive reloaded into a "Heure" select
+   * holding its saved 09:00 and could not find `getByLabel("Time")`.
    *
    * Each test ends by reading the SHARED row back, so a regression to driving
    * the shared account fails here, deterministically, instead of as a

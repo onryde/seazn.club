@@ -1,16 +1,32 @@
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
 import { TAG } from "./helpers";
+import { ownTest, signInOwnAccount, signedInUserId, userColumns } from "./own-account";
 
 // Account tab basics that don't consume the email rate budget: display-name
-// edit (restored afterwards) and the data export. Change-email and account
-// deletion are deliberately NOT covered end-to-end: the confirmation token is
-// only delivered by email (no dev fallback), and each attempt spends the
-// fail-closed 5/5min email budget CI needs for logins.
-test("display name edits persist and the data export downloads", async ({ page }) => {
+// edit and the data export. Change-email and account deletion are deliberately
+// NOT covered end-to-end: the confirmation token is only delivered by email (no
+// dev fallback), and each attempt spends the fail-closed 5/5min email budget CI
+// needs for logins.
+//
+// Both tests save a user row, so both run on an account of their own
+// (own-account.ts explains). They used to save the shared AUTH_STATE user and
+// restore it afterwards, while every other worker in the project was signed in
+// as that user. Each reads the shared row back once its own save has landed.
+
+/** The columns these tests save. */
+const PROFILE = ["display_name", "timezone", "locale"] as const;
+
+ownTest("display name edits persist and the data export downloads", async ({
+  ownPage: page,
+  request,
+}) => {
+  const sharedUserId = await signedInUserId(request);
+  const sharedBefore = await userColumns(sharedUserId, PROFILE);
+  await signInOwnAccount(page, "account", sharedUserId);
+
   await page.goto("/settings?tab=account");
   // The profile form: input placeholder "Your name" + Save.
   const input = page.getByPlaceholder("Your name");
-  const originalName = await input.inputValue();
 
   await input.fill(`Renamed User ${TAG}`);
   // Scope to the profile form (the tab has other Save buttons) and wait for
@@ -24,12 +40,10 @@ test("display name edits persist and the data export downloads", async ({ page }
   await expect(page.getByPlaceholder("Your name")).toHaveValue(`Renamed User ${TAG}`, {
     timeout: 20_000,
   });
-
-  // Restore so later runs/spec reruns see a stable profile.
-  await page.request.patch("/api/users/me", {
-    headers: { "Content-Type": "application/json" },
-    data: { display_name: originalName || "E2e Pro" },
-  });
+  // The rename landed on this account; the shared user's row is as found.
+  expect(await userColumns(sharedUserId, PROFILE), "the shared Pro user's row moved").toEqual(
+    sharedBefore,
+  );
 
   // Data export responds with the user's JSON bundle.
   const exported = await page.request.get("/api/users/me/export");
@@ -41,7 +55,14 @@ test("display name edits persist and the data export downloads", async ({ page }
 // Timezone preference: pick a zone, it persists; a bogus zone is rejected by
 // the API. No email budget touched. It lives on the Preferences tab, not
 // Account — Account keeps identity and the irreversible actions.
-test("timezone preference persists and the API rejects a bogus zone", async ({ page }) => {
+ownTest("timezone preference persists and the API rejects a bogus zone", async ({
+  ownPage: page,
+  request,
+}) => {
+  const sharedUserId = await signedInUserId(request);
+  const sharedBefore = await userColumns(sharedUserId, PROFILE);
+  await signInOwnAccount(page, "tz", sharedUserId);
+
   await page.goto("/settings?tab=preferences");
 
   // The picker is a search combobox, not a <select> — 418 zones cannot be
@@ -77,6 +98,10 @@ test("timezone preference persists and the API rejects a bogus zone", async ({ p
   await expect(page.getByRole("combobox", { name: "Your timezone" })).toContainText("Kolkata", {
     timeout: 20_000,
   });
+  // The zone landed on this account; the shared user's row is as found.
+  expect(await userColumns(sharedUserId, PROFILE), "the shared Pro user's row moved").toEqual(
+    sharedBefore,
+  );
 
   // The venue-vs-your-time helper copy is present.
   await expect(page.getByText(/venue/i).first()).toBeVisible();
@@ -88,10 +113,4 @@ test("timezone preference persists and the API rejects a bogus zone", async ({ p
   });
   expect(bad.status()).toBeGreaterThanOrEqual(400);
   expect(bad.status()).toBeLessThan(500);
-
-  // Restore to "follow my browser" so reruns start clean.
-  await page.request.patch("/api/users/me", {
-    headers: { "Content-Type": "application/json" },
-    data: { timezone: null },
-  });
 });

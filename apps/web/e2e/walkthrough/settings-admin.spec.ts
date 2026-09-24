@@ -1,5 +1,12 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
-import { activeOrg, apiJson, platformFeePercentSql, setOwnerStaffRoleSql } from "../helpers";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  activeOrg,
+  apiJson,
+  platformFeePercentSql,
+  setOwnerStaffRoleSql,
+  type UserRowSnapshot,
+} from "../helpers";
+import { ownTest, signInOwnAccount, signedInUserId, userColumns } from "../own-account";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -13,7 +20,7 @@ const UI_EN: Record<string, string> = JSON.parse(
 
 /**
  * One-shot SQL client against the app's schema, for the ONE fixture this file
- * seeds (a pending `email_change_requests` row) and its restore.
+ * seeds (a pending `email_change_requests` row) and its read-back.
  *
  * A local copy of `helpers.ts`'s `withDb` (helpers.ts:295) rather than an
  * import, because that one is module-private and helpers.ts is owned by
@@ -64,14 +71,51 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
  * second failure behind the first.
  *
  * WHAT THAT LINE DOES NOT BUY: it orders tests WITHIN THIS FILE ONLY. At
- * `--workers=3` two OTHER walkthrough specs run alongside this one, and both
- * the fee row and the shared Pro user are global to the leg — so a spec here
- * that leaves a borrowed `staff_role` behind breaks a stranger's spec, not its
- * own. That is why every grant below lives inside a `try` whose `finally`
- * clears it unconditionally, and why nothing that can throw sits between a
- * grant and that `try`.
+ * `--workers=3` two OTHER walkthrough specs run alongside this one, and the
+ * fee row is global to the leg. So is every `users` row those specs are signed
+ * in as, which is why every test here that grants a `staff_role` or changes an
+ * address does it on an account of its own (own-account.ts), and asserts the
+ * shared Pro user's row did not move. Every grant still lives inside a `try`
+ * whose `finally` clears it unconditionally, and nothing that can throw sits
+ * between a grant and that `try`.
  */
 test.describe.configure({ mode: "default" });
+
+/** The staff columns a grant writes. */
+const STAFF = ["is_staff", "staff_role"] as const;
+
+interface OwnAdminRig {
+  /** The org `signInOwnAccount` minted. Its owner is the page's own account. */
+  orgId: string;
+  sharedUserId: string;
+  sharedStaff: Pick<UserRowSnapshot, (typeof STAFF)[number]>;
+}
+
+/**
+ * Sign `page` in as an account of its own. `setOwnerStaffRoleSql(orgId, …)`
+ * writes the org OWNER's row, so on the shared Pro org it granted the shared
+ * user, the one every other worker in the leg is signed in as. `request` is
+ * the AUTH_STATE-carrying fixture, used only to name that user.
+ */
+async function ownAdminRig(
+  page: Page,
+  request: APIRequestContext,
+  label: string,
+): Promise<OwnAdminRig> {
+  const sharedUserId = await signedInUserId(request);
+  const sharedStaff = await userColumns(sharedUserId, STAFF);
+  const { orgId } = await signInOwnAccount(page, `admin-${label}`, sharedUserId);
+  return { orgId, sharedUserId, sharedStaff };
+}
+
+/** Called while a grant is HELD. A restore in `finally` would make any later
+ *  check pass on a grant that reached the shared user and was then cleared. */
+async function expectSharedStaffUntouched(rig: OwnAdminRig): Promise<void> {
+  expect(
+    await userColumns(rig.sharedUserId, STAFF),
+    "a staff grant reached the shared Pro user",
+  ).toEqual(rig.sharedStaff);
+}
 
 interface FeeBody {
   platform_fee_percent: number;
@@ -115,7 +159,7 @@ test.describe("admin platform settings", () => {
    *
    * VERIFIED on Playwright 1.61.1: when a test TIMES OUT, Playwright does not
    * unwind the test function, so NEITHER `finally` below runs — a probe that
-   * timed out while the grant was held left the shared Pro user
+   * timed out while the grant was held left the org's owner
    * `is_staff=t, staff_role=superadmin` in the database. `afterEach` DOES run,
    * and its awaits complete. So the try/finally is the ordinary-failure path
    * (it also has to restore superadmin mid-test to re-read the fee), and this
@@ -145,7 +189,9 @@ test.describe("admin platform settings", () => {
     originalFeePercent = await platformFeePercentSql();
   });
 
-  test.afterEach(async ({ page }) => {
+  // `ownTest`, so this hook gets the test's own page: the PUT below needs the
+  // account that holds the borrowed role, and the shared user's page holds none.
+  ownTest.afterEach(async ({ ownPage: page }) => {
     const orgId = borrowedOrgId;
     const fee = originalFeePercent;
     borrowedOrgId = null;
@@ -187,25 +233,26 @@ test.describe("admin platform settings", () => {
     }
   });
 
-  test("a support-role staff member gets no live Save, and the route refuses the write", async ({
-    page,
+  ownTest("a support-role staff member gets no live Save, and the route refuses the write", async ({
+    ownPage: page,
+    request,
   }) => {
-    const org = await activeOrg(page);
+    const rig = await ownAdminRig(page, request, "support");
 
     let original: number | undefined;
     let after: { status: number; value?: number } | undefined;
 
     // The FIRST grant is already inside this try. Nothing that can throw may
-    // sit between a grant and the `finally` that clears it: the org owner is
-    // the SHARED Pro user, and a leaked `superadmin` does not fail here — it
-    // fails in some other spec in the leg, whose diff explains nothing.
+    // sit between a grant and the `finally` that clears it: a leaked role
+    // outlives the test on a row nothing else will ever clear.
     try {
       // Arm the afterEach backstop BEFORE the grant exists to leak.
-      borrowedOrgId = org.id;
-      await setOwnerStaffRoleSql(org.id, "superadmin");
+      borrowedOrgId = rig.orgId;
+      await setOwnerStaffRoleSql(rig.orgId, "superadmin");
+      await expectSharedStaffUntouched(rig);
       original = await readFee(page.request);
 
-      await setOwnerStaffRoleSql(org.id, "support");
+      await setOwnerStaffRoleSql(rig.orgId, "support");
       await page.goto("/admin/settings");
 
       // LOAD-BEARING, and not decoration for the 401 below. `setOwnerStaffRoleSql`
@@ -243,10 +290,10 @@ test.describe("admin platform settings", () => {
       // privilege NO MATTER WHAT. The inner finally holds only the restore, so
       // a failing read can never skip it.
       try {
-        await setOwnerStaffRoleSql(org.id, "superadmin");
+        await setOwnerStaffRoleSql(rig.orgId, "superadmin");
         after = await peekFee(page.request);
       } finally {
-        await setOwnerStaffRoleSql(org.id, null);
+        await setOwnerStaffRoleSql(rig.orgId, null);
       }
     }
 
@@ -267,15 +314,19 @@ test.describe("admin platform settings", () => {
    * table pins that 200), so the server cannot tell "the admin meant zero" from
    * "the admin cleared the box". Only the form knows the field was EMPTY.
    */
-  test("clearing the fee field cannot silently save 0%", async ({ page }) => {
-    const org = await activeOrg(page);
+  ownTest("clearing the fee field cannot silently save 0%", async ({
+    ownPage: page,
+    request,
+  }) => {
+    const rig = await ownAdminRig(page, request, "clear");
 
     // The grant lives INSIDE the try (nothing that can throw may sit between a
     // grant and the finally that clears it), and `borrowedOrgId` is armed
     // BEFORE the grant exists to leak, or the afterEach backstop is a no-op.
     try {
-      borrowedOrgId = org.id;
-      await setOwnerStaffRoleSql(org.id, "superadmin");
+      borrowedOrgId = rig.orgId;
+      await setOwnerStaffRoleSql(rig.orgId, "superadmin");
+      await expectSharedStaffUntouched(rig);
       const original = await readFee(page.request);
 
       await page.goto("/admin/settings");
@@ -320,7 +371,7 @@ test.describe("admin platform settings", () => {
         "clearing the field must not have written anything",
       ).toBe(original);
     } finally {
-      await setOwnerStaffRoleSql(org.id, null);
+      await setOwnerStaffRoleSql(rig.orgId, null);
     }
   });
 
@@ -342,8 +393,11 @@ test.describe("admin platform settings", () => {
    * `handler()` maps a ZodError to 400 (`lib/http.ts`), so 422 is unreachable
    * through this route and asserting it would be asserting a dead branch.
    */
-  test("a superadmin can change the fee, and the bounds hold on both sides", async ({ page }) => {
-    const org = await activeOrg(page);
+  ownTest("a superadmin can change the fee, and the bounds hold on both sides", async ({
+    ownPage: page,
+    request,
+  }) => {
+    const rig = await ownAdminRig(page, request, "fee");
 
     // Hoisted so the closing assertions can live OUTSIDE every `finally`.
     let original: number | undefined;
@@ -355,8 +409,9 @@ test.describe("admin platform settings", () => {
       // WRITES the global fee row, and on a TIMEOUT the `finally` below never
       // starts, so without this line the platform's default cut would stay
       // wherever this test left it for every run that follows.
-      borrowedOrgId = org.id;
-      await setOwnerStaffRoleSql(org.id, "superadmin");
+      borrowedOrgId = rig.orgId;
+      await setOwnerStaffRoleSql(rig.orgId, "superadmin");
+      await expectSharedStaffUntouched(rig);
       original = await readFee(page.request);
       // A target that differs from every wrong answer's constant: not the
       // current value, not 0 (F2's failure mode), not 5 (the env fallback).
@@ -486,8 +541,8 @@ test.describe("admin platform settings", () => {
     } finally {
       // Cleanup UNCONDITIONAL, and ordered so the fee restore can never skip
       // the role clear: the inner `finally` holds only the clear, so a restore
-      // that throws still drops the borrowed `superadmin` off the shared Pro
-      // user. Nothing here asserts, for the same reason `peekFee` exists — an
+      // that throws still drops the borrowed `superadmin` off the org's owner.
+      // Nothing here asserts, for the same reason `peekFee` exists — an
       // expect() in this block would replace the test's real failure with its
       // own.
       //
@@ -508,7 +563,7 @@ test.describe("admin platform settings", () => {
         }
         restored = await peekFee(page.request);
       } finally {
-        await setOwnerStaffRoleSql(org.id, null);
+        await setOwnerStaffRoleSql(rig.orgId, null);
       }
     }
 
@@ -734,8 +789,7 @@ test.describe("legacy settings redirects", () => {
     const anon = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     // Closes a context this test alone owns — no shared row is being restored
     // here, so Global Constraint 6 (nothing that outlives the test may be
-    // restored in a `finally`) does not bite. The email restore, which IS
-    // shared, lives in the `afterAll` below.
+    // restored in a `finally`) does not bite.
     try {
       const page = await anon.newPage();
       const landing = await page.goto(
@@ -762,55 +816,6 @@ test.describe("legacy settings redirects", () => {
   });
 
   /**
-   * Timeout-independent restore for the ONE test below that writes a row the
-   * whole leg shares.
-   *
-   * `users.email` for the shared Pro account is global state in exactly the way
-   * `platform_settings` is: every project in this run signs in as that account
-   * (`AUTH_STATE = e2e/.auth/pro.json`), and two other walkthrough specs are in
-   * flight beside this file at `--workers=3`. A `finally` inside the test
-   * cannot be the protection — VERIFIED on Playwright 1.61.1 and recorded at
-   * the top of this file: when a test TIMES OUT Playwright does not unwind the
-   * test function, so no `finally` in it runs. `afterAll` does run, and its
-   * awaits complete (Global Constraint 6).
-   *
-   * `afterAll` rather than `afterEach` because this describe's other tests
-   * borrow nothing, and the arming assignment happens inside the one test that
-   * does; a per-test hook would add a DB round trip to all three for no gain.
-   * The seeding test is declared LAST on purpose, so the window in which the
-   * shared account carries a synthetic address is one hook wide.
-   *
-   * Both writes are unconditional on the flags being set, never on what the
-   * test thinks it managed to do — a test killed between the insert and the
-   * redirect has still armed them.
-   *
-   * SQL alone is a COMPLETE restore here, which is worth stating because
-   * `getCurrentUser` memoises the row (`user:<uid>`, 300s TTL, auth.ts:100-108)
-   * and this hook cannot reach that cache. It does not have to: `cacheGet`
-   * fails open to `null` whenever `REDIS_URL` is unset (cache.ts:13-19), and
-   * the e2e leg runs without Redis deliberately (`e2e.yml`:222, "No Redis on
-   * purpose"), so every read of this account goes to the row below. If a Redis
-   * is ever wired into the leg, this hook owes a cache bust too.
-   */
-  let borrowedUserId: string | null = null;
-  let originalEmail: string | null = null;
-  let seededToken: string | null = null;
-
-  test.afterAll(async () => {
-    const userId = borrowedUserId;
-    const email = originalEmail;
-    const token = seededToken;
-    borrowedUserId = null;
-    originalEmail = null;
-    seededToken = null;
-    if (!userId) return;
-    await withDb(async (sql) => {
-      if (email) await sql`update users set email = ${email} where id = ${userId}`;
-      if (token) await sql`delete from email_change_requests where token = ${token}`;
-    });
-  });
-
-  /**
    * THE OUTCOME THAT MATTERS MOST, and the only one with a side effect.
    *
    * `success`, `taken` and `expired` were indistinguishable to the user for as
@@ -830,10 +835,18 @@ test.describe("legacy settings redirects", () => {
    * The new address is a value neither the route nor the fixture could produce
    * by accident, so `toBe(newEmail)` cannot be satisfied by the row simply
    * being left alone.
+   *
+   * ON AN ACCOUNT OF ITS OWN (own-account.ts). It used to confirm a change of
+   * the shared Pro user's address and put it back in an `afterAll`, while the
+   * rest of the leg was signed in as that user.
    */
-  test("a confirmed link commits the new address and shows the success banner", async ({
-    page,
+  ownTest("a confirmed link commits the new address and shows the success banner", async ({
+    ownPage: page,
+    request,
   }) => {
+    const sharedUserId = await signedInUserId(request);
+    const sharedBefore = await userColumns(sharedUserId, ["email"]);
+    const { userId } = await signInOwnAccount(page, "admin-email", sharedUserId);
     const org = await activeOrg(page);
     const mine = UI_EN["settings.emailChange.success"];
     const other = UI_EN["settings.emailChange.invalid"];
@@ -841,40 +854,23 @@ test.describe("legacy settings redirects", () => {
     expect(other, "settings.emailChange.invalid missing from en/ui.json").toBeTruthy();
     expect(mine).not.toBe(other);
 
-    // Ask the app who is signed in rather than rebuilding the address from
-    // TAG: TAG is evaluated per PROCESS, so this worker's `proEmail()` names an
-    // account `auth.setup.ts` never created — a `where email = …` seed would
-    // then insert against nobody, or restore nobody.
-    const whoami = await apiJson<{ id: string }>(page.request, "/api/users/me");
-    expect(whoami.status, "whoami failed — is the storageState session live?").toBe(200);
-    const userId = whoami.data?.id;
-    expect(userId, "GET /api/users/me carried no id").toBeTruthy();
-
     const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const token = `e2e-emailchange-${stamp}`;
     const newEmail = `delivered+e2e-emailchange-${stamp}@resend.dev`;
 
     const currentEmail = await withDb(async (sql) => {
       const [row] = await sql<{ email: string }[]>`
-        select email from users where id = ${userId!}`;
+        select email from users where id = ${userId}`;
       return row?.email ?? null;
     });
     expect(currentEmail, `no users row for the signed-in account ${userId}`).toBeTruthy();
-
-    // ARM THE RESTORE BEFORE THE WRITE. Nothing that can throw sits between
-    // these three assignments and the insert below, so the `afterAll` can
-    // always put the shared account back — including when this test times out
-    // mid-navigation.
-    borrowedUserId = userId!;
-    originalEmail = currentEmail!;
-    seededToken = token;
 
     // Mirrors POST /api/auth/change-email (route.ts:31-33) column for column —
     // the row production writes, not an invented shape.
     await withDb(
       (sql) => sql`
         insert into email_change_requests (user_id, old_email, new_email, token, expires_at)
-        values (${userId!}, ${currentEmail!}, ${newEmail}, ${token},
+        values (${userId}, ${currentEmail!}, ${newEmail}, ${token},
                 ${new Date(Date.now() + 60 * 60 * 1000).toISOString()})`,
     );
 
@@ -902,7 +898,7 @@ test.describe("legacy settings redirects", () => {
       const [row] = await sql<{ email: string; confirmed: boolean }[]>`
         select u.email, r.confirmed
         from users u join email_change_requests r on r.user_id = u.id
-        where u.id = ${userId!} and r.token = ${token}`;
+        where u.id = ${userId} and r.token = ${token}`;
       return row ?? null;
     });
     expect(
@@ -913,6 +909,10 @@ test.describe("legacy settings redirects", () => {
       committed?.confirmed,
       "the address changed but the request was left unconfirmed — the same link would work twice",
     ).toBe(true);
+    expect(
+      await userColumns(sharedUserId, ["email"]),
+      "the confirmation moved the shared Pro user's address",
+    ).toEqual(sharedBefore);
   });
 
   /**
