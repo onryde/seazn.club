@@ -412,6 +412,26 @@ describe("device-link panel — every refusal is localised, never the server's E
     expect(island.text(), "the refusal is still said").toContain(t("dlink.error.notFound"));
   });
 
+  // The case above cannot see the close on its own: with no live link left the
+  // question has nothing to render against. Here the link SURVIVES the refusal
+  // (a transient 500), so only closing the question takes "Yes, revoke" away.
+  it("a refused revoke on a link that is still live closes the question too, and keeps the live line", async () => {
+    api.refuseDelete = { status: 500, code: "INTERNAL", message: "connection reset" };
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    click(byTestId(island.tree(), "device-link-revoke"));
+    expect(byTestId(island.tree(), "device-link-revoke-confirm"), "precondition: the question is open").toBeDefined();
+    click(byTestId(island.tree(), "device-link-revoke-confirm"));
+    await flush();
+
+    expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
+    expect(byTestId(island.tree(), "device-link-show"), "precondition: the link is still live").toBeDefined();
+    expect(byTestId(island.tree(), "device-link-revoke-confirm"), "the question closes on any refusal").toBeUndefined();
+    expect(island.text()).not.toContain(t("dlink.revokeWarn"));
+    expect(island.text(), "the refusal is said").toContain(t("dlink.failed"));
+    expect(island.text()).not.toContain("connection reset");
+  });
+
   it("a dropped connection (fetch TypeError) gets the generic line, not the browser's English", async () => {
     const { apiV1 } = await import("@/lib/client-v1");
     const island = renderIsland(DeviceLinkPanel, PROPS);
