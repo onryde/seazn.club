@@ -28,6 +28,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import en from "@/dictionaries/en/ui.json";
+import { PASS_FEATURES } from "@/lib/pass-features";
 
 const ARTICLE = readFileSync(join(process.cwd(), "content/help/scoring/device-links.md"), "utf8");
 
@@ -143,6 +144,54 @@ describe("the device's undo window ends when the result moves the competition on
     // actors; a finalization bound may now only speak for a signed-in scorer.
     const offending = sentences.filter(
       (s) => UNDO_UNTIL_FINAL(s) && (/device link/i.test(s) || !/signed-in scorer/i.test(s)),
+    );
+    expect(offending).toEqual([]);
+  });
+});
+
+// Scorer sheets, help pass (2026-09-24). Three more places the device-link
+// pages said something the product no longer does:
+//  - device-links.md listed the ways a link ends and left out the one an
+//    organiser is most likely to press: Rebuild fixtures deletes every match
+//    in the stage (usecases/stages.ts rebuildStageFixtures), `device_links`
+//    cascades off `fixtures` (V222), so every QR on that stage stops working —
+//    the rebuild dialog itself says so (progression.rosterDrift.sheetsStop).
+//  - scorer-role.md said device links are for mass scoring "on any plan".
+//    The Event Pass lifts `scoring.device_links` (PASS_FEATURES), which is by
+//    that set's own definition a key the Community row does NOT grant.
+//  - conflicts.md told a reader to "give each court its own device link". A
+//    link belongs to one MATCH (scorer sheets D1: no per-court link), and
+//    since Task 2 asking again re-shows the same one — there is no second
+//    link to hand a second court.
+const SCORER_ROLE = readFileSync(join(process.cwd(), "content/help/scoring/scorer-role.md"), "utf8");
+const CONFLICTS = readFileSync(join(process.cwd(), "content/help/scoring/conflicts.md"), "utf8");
+const REBUILD = en["progression.rosterDrift.rebuildCta"];
+/** "stops working" / "stop working" / "no longer works" — how these pages say a link is dead. */
+const DIES = /\bstops? working\b|\bno longer works?\b/i;
+
+describe("every way a device link ends is on the page, and no plan it lacks is claimed", () => {
+  it("reads the Rebuild label, and the pass still lifts device links (the premises below)", () => {
+    expect(REBUILD).toMatch(/\w/);
+    expect(PASS_FEATURES.has("scoring.device_links")).toBe(true);
+  });
+
+  it("device-links.md: Rebuild fixtures is named as a way the link stops working", () => {
+    const hits = SENTENCES.filter((s) => s.includes(REBUILD));
+    expect(hits, `device-links.md never names ${REBUILD}`).not.toHaveLength(0);
+    expect(hits.some((s) => DIES.test(s)), hits.join(" | ")).toBe(true);
+  });
+
+  it("scorer-role.md: the device-link sentence names Pro and the Event Pass, and claims no plan-free reach", () => {
+    const device = sentencesOf(SCORER_ROLE).filter((s) => /device links?\b/i.test(s));
+    expect(device, "scorer-role.md no longer mentions device links").not.toHaveLength(0);
+    const everyPlan = /\b(?:on|for|with)\s+(?:any|every|all)\s+plans?\b|\bwhatever (?:your|the) plan\b|\bno matter (?:your|which) plan\b/i;
+    expect(device.filter((s) => everyPlan.test(s))).toEqual([]);
+    expect(device.some((s) => /\bPro\b/.test(s) && /\bEvent Pass\b/i.test(s)), device.join(" | ")).toBe(true);
+  });
+
+  it("conflicts.md: no sentence gives a court its own device link", () => {
+    const offending = sentencesOf(CONFLICTS).filter(
+      (s) => /device link/i.test(s) && /\bcourts?\b[^.]*\bown\b|\bown\b[^.]*\bcourts?\b|\bper court\b/i.test(s),
     );
     expect(offending).toEqual([]);
   });

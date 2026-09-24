@@ -18,4 +18,4 @@ Look at the refreshed score. If your point is already there, you're done — the
 
 Every match's results are a numbered ledger; each entry states which number it expects to follow. Two entries claiming the same number can't both land, so the ledger can never fork — that guarantee is what lets phones, tablets and integrations all score the same event safely.
 
-**Seeing it constantly?** Two devices are probably assigned to the same court. Give each court its own [device link](/help/scoring/device-links).
+**Seeing it constantly?** Two devices are probably scoring the same match — for example two phones that scanned the same [device link](/help/scoring/device-links) QR, or a phone and the desk. Keep to one device per match.

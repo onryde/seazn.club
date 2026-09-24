@@ -27,7 +27,7 @@ Scorer invites are **additive — they never change anyone's existing role**:
 
 ## Common questions
 
-**Community plan limits?** Community orgs get 3 members in total across all roles; Pro gets 10 members — mass day-of scoring is what [device links](/help/scoring/device-links) are for on any plan, and a device link is not a seat.
+**Community plan limits?** Community orgs get 3 members in total across all roles; Pro gets 10 members. For mass scoring on match day, use [device links](/help/scoring/device-links): they come with Pro, or with an Event Pass for the competition, and a device link is not a seat.
 
 **Can a scorer fix a wrong score?** They can correct a match they're assigned to until it's finalized; after that an admin steps in.
 
