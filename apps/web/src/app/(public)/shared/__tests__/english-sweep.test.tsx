@@ -51,6 +51,7 @@ const stub = vi.hoisted(() => ({
   getPublicDivision: vi.fn(),
   getPublicFixture: vi.fn(),
   getPublicPlayer: vi.fn(),
+  getPublicPlayerUpcoming: vi.fn<typeof getPublicPlayerUpcoming>(),
   readEntrantMemberRefs: vi.fn(),
   readLeaderRows: vi.fn(),
   publicRegistrationInfo: vi.fn(),
@@ -99,6 +100,7 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicDivision: stub.getPublicDivision,
   getPublicFixture: stub.getPublicFixture,
   getPublicPlayer: stub.getPublicPlayer,
+  getPublicPlayerUpcoming: stub.getPublicPlayerUpcoming,
   readEntrantMemberRefs: stub.readEntrantMemberRefs,
 }));
 vi.mock("@/server/public-site/public-leaders", async (importOriginal) => ({
@@ -197,7 +199,10 @@ import { Slideshow } from "@/components/v2/slideshow";
 import { buildMatchCentre } from "@/server/public-site/match-centre";
 import type { MatchCentreDocT, SideT } from "@/server/public-site/match-centre-schema";
 import type { PublicPerson } from "@/server/public-site/public-lineups";
-import { composePlayerMatchLines, type PlayerMatchSeed } from "@/server/public-site/public-player-matches";
+import { composePlayerMatchLines, type PlayerMatchSeed, type PlayerUpcomingRow } from "@/server/public-site/public-player-matches";
+import type { getPublicPlayerUpcoming } from "@/server/public-site/data";
+import { PlayerUpcoming } from "@/components/public-site/player-upcoming";
+import { UpcomingReveal } from "@/components/public-site/player-upcoming-reveal";
 import { groupCareerStatsBySport, labelPlayerStats } from "@/server/player-stats";
 import { scriptLedger, HOME, AWAY, type Script } from "@/server/public-site/__tests__/cricket-ledger";
 import { makeEnvelope } from "@seazn/engine/testkit";
@@ -878,14 +883,80 @@ async function playerData() {
   };
 }
 
+/** The player's Upcoming rows (spec 2026-09-23), as `getPublicPlayerUpcoming`
+ *  returns them: SEVEN, so "Show {count} more" is drawn, and inside the first
+ *  five (the ones a static render shows) one with a court and a venue, one
+ *  from another competition, and one undated (Time TBD). Every name is data. */
+const upcomingRows = (): PlayerUpcomingRow[] => {
+  const row = (n: number, over: Partial<PlayerUpcomingRow> = {}): PlayerUpcomingRow => ({
+    fixtureId: `00000000-0000-4000-8000-0000000001${String(n).padStart(2, "0")}`,
+    href: `/shared/${ORG_SLUG}/${COMP_SLUG}/${DIV_A.slug}/fixtures/u${n}`,
+    scheduledAt: `2030-07-0${n}T10:00:00.000Z`,
+    tz: "Europe/London",
+    venue: null,
+    courtLabel: null,
+    opponentLabel: `${n}zqrival 9zqside`,
+    competitionName: hubCompetition().name,
+    competitionSlug: COMP_SLUG,
+    divisionName: DIV_A.name,
+    divisionSlug: DIV_A.slug,
+    isOtherCompetition: false,
+    ...over,
+  });
+  return [
+    row(1, { courtLabel: "3zqcourt 9zqthree", venue: "5zqriverside 9zqhall" }),
+    row(2, { isOtherCompetition: true, competitionName: "7zqspring 9zqopen", competitionSlug: "7zqspring", divisionName: "7zqopen 9zqdiv", divisionSlug: "7zqopen" }),
+    row(3, { scheduledAt: null }),
+    row(4),
+    row(5),
+    row(6),
+    row(7),
+  ];
+};
+
+/** The first element of `type` anywhere in a server tree (host children only). */
+function findElement(node: unknown, type: unknown): ReactElement | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findElement(child, type);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  if (!node || typeof node !== "object" || !("props" in node)) return undefined;
+  const el = node as ReactElement<{ children?: unknown }>;
+  return el.type === type ? el : findElement(el.props.children, type);
+}
+
 async function renderPlayer(): Promise<Segment[]> {
   const data = await playerData();
   expect(data.stats.every((s) => s.metrics.length > 0), "the stat labeller labelled every division").toBe(true);
   expect(data.career.length, "the career rollup aggregated").toBe(1);
   expect(data.matches.length, "every seeded match became a line").toBe(5);
   stub.getPublicPlayer.mockResolvedValue(data);
+  stub.getPublicPlayerUpcoming.mockResolvedValue(upcomingRows());
   const p = params({ orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, personId: PERSON_ID });
-  return [...(await html(await Player.default(p))), ...(await served(Player, p))];
+  const tree = (await Player.default(p)) as ReactElement;
+  const markup = renderToStaticMarkup(tree);
+  // Premise: the Upcoming section drew every conditional piece of copy it has
+  // in THIS render (the served, collapsed state: the first five and the toggle).
+  const up = markup.slice(markup.indexOf('data-testid="mh-player-upcoming"'));
+  expect(markup, "the Upcoming section rendered").toContain('data-testid="mh-player-upcoming"');
+  for (const id of ["mh-player-upcoming-tbc", "mh-player-upcoming-court", "mh-player-upcoming-venue", "mh-player-upcoming-more"]) {
+    expect(up, `Upcoming drew ${id}`).toContain(`data-testid="${id}"`);
+  }
+  expect(up, "the other competition's row is accented").toMatch(/data-testid="mh-player-upcoming-where" class="[^"]*\btext-accent-strong\b/);
+  // What the toggle shows once OPENED — its "Show less" label and rows six and
+  // seven — is state a static render never reaches. It is read off the island's
+  // own props, as the page built them, and swept as markup.
+  const upcoming = findElement(tree, PlayerUpcoming);
+  expect(upcoming, "the page mounts PlayerUpcoming").toBeDefined();
+  const island = findElement((PlayerUpcoming as (p: unknown) => unknown)(upcoming!.props), UpcomingReveal);
+  expect(island, "PlayerUpcoming mounts its reveal").toBeDefined();
+  const { rest, lessLabel } = island!.props as { rest: unknown[]; lessLabel: string };
+  expect(rest.length, "premise: two rows wait behind the toggle").toBe(2);
+  const opened = renderToStaticMarkup(createElement("div", null, createElement("ul", null, ...(rest as ReactElement[])), createElement("button", null, lessLabel)));
+  return [...extractSegments(markup), ...extractSegments(opened), ...(await served(Player, p))];
 }
 
 // ------------------------------------------ the division page, every panel

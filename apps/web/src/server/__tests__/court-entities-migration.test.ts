@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
@@ -117,6 +117,24 @@ function migrationBlock(marker: string): string {
   return m[1]!;
 }
 
+// Replay V374 blocks over THESE orgs' rows only. The blocks are DB-wide by
+// design (V374 ran once, at deploy); replayed through `sql` they ran as the
+// test connection's role (a superuser with BYPASSRLS) and rewrote EVERY org's
+// rows, including other suites' live scenes: public-player-upcoming's
+// text-only `ned` fixture came back carrying a court and a venue whenever the
+// two files shared a database. `withTenant` runs as app_user (no BYPASSRLS,
+// and every table these blocks touch FORCEs RLS), so each pass sees and
+// writes that one org alone. One transaction per org, all markers inside it:
+// the later blocks read the earlier ones' session temp tables
+// (court_mapping, venue_mapping) by name.
+async function replay(orgs: string | readonly string[], ...markers: string[]): Promise<void> {
+  for (const orgId of typeof orgs === "string" ? [orgs] : orgs) {
+    await withTenant(orgId, async (tx) => {
+      for (const marker of markers) await tx.unsafe(migrationBlock(marker));
+    });
+  }
+}
+
 async function seedOrgWithDivision(): Promise<{ auth: AuthCtx; orgId: string; divisionId: string }> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
@@ -177,18 +195,12 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
   it("real stored config shapes all re-read through ScheduleConfig.parse with zero throws", async () => {
     const { orgId, divisionId: d1 } = await seedOrgWithDivision();
     orgIds.push(orgId);
-    const { divisionId: d2 } = await seedOrgWithDivision().then((r) => {
-      orgIds.push(r.orgId);
-      return r;
-    });
-    const { divisionId: d3 } = await seedOrgWithDivision().then((r) => {
-      orgIds.push(r.orgId);
-      return r;
-    });
-    const { divisionId: d4 } = await seedOrgWithDivision().then((r) => {
-      orgIds.push(r.orgId);
-      return r;
-    });
+    const { orgId: o2, divisionId: d2 } = await seedOrgWithDivision();
+    orgIds.push(o2);
+    const { orgId: o3, divisionId: d3 } = await seedOrgWithDivision();
+    orgIds.push(o3);
+    const { orgId: o4, divisionId: d4 } = await seedOrgWithDivision();
+    orgIds.push(o4);
 
     // d1: string courts, WITH a duplicate.
     await sql`insert into schedule_settings (division_id, org_id, config)
@@ -203,7 +215,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
     await sql`insert into schedule_settings (division_id, org_id, config)
       values (${d4}, ${orgId}, ${sql.json({ courts: ["  Café Court  "] })})`;
 
-    await sql.unsafe(migrationBlock("courts-migration"));
+    await replay([orgId, o2, o3, o4], "courts-migration");
 
     const rows = await sql<{ division_id: string; config: Record<string, unknown> }[]>`
       select division_id, config from schedule_settings
@@ -243,14 +255,10 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
   it("a present-but-non-array `courts` value (null, string, object) normalizes to [] instead of 500ing at read", async () => {
     const { orgId, divisionId: d1 } = await seedOrgWithDivision();
     orgIds.push(orgId);
-    const { divisionId: d2 } = await seedOrgWithDivision().then((r) => {
-      orgIds.push(r.orgId);
-      return r;
-    });
-    const { divisionId: d3 } = await seedOrgWithDivision().then((r) => {
-      orgIds.push(r.orgId);
-      return r;
-    });
+    const { orgId: o2, divisionId: d2 } = await seedOrgWithDivision();
+    orgIds.push(o2);
+    const { orgId: o3, divisionId: d3 } = await seedOrgWithDivision();
+    orgIds.push(o3);
 
     // d1: courts is JSON null (key present, wrong shape).
     await sql`insert into schedule_settings (division_id, org_id, config)
@@ -262,7 +270,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
     await sql`insert into schedule_settings (division_id, org_id, config)
       values (${d3}, ${orgId}, ${sql.json({ courts: {} })})`;
 
-    await sql.unsafe(migrationBlock("courts-migration"));
+    await replay([orgId, o2, o3], "courts-migration");
 
     const rows = await sql<{ division_id: string; config: Record<string, unknown> }[]>`
       select division_id, config from schedule_settings
@@ -292,7 +300,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       values (${stageId}, ${divisionId}, ${orgId}, 1, 2, 'Court 5')
       returning id`;
 
-    await sql.unsafe(migrationBlock("courts-migration"));
+    await replay(orgId, "courts-migration");
 
     const rows = await sql<{ id: string; court_label: string | null; court_id: string | null }[]>`
       select id, court_label, court_id from fixtures where id in (${f1}, ${f2}) order by seq_in_round`;
@@ -302,6 +310,57 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
     expect(rows[0]!.court_id).toMatch(UUID_RE);
     expect(rows[1]!.court_id).toMatch(UUID_RE);
     expect(rows[0]!.court_id).not.toBe(rows[1]!.court_id);
+  });
+
+  // The replay's own blast radius (see `replay`). Unscoped, every block here
+  // rewrote whatever else the database held, and a sibling suite's text-only
+  // fixture came back with a court_id and a venue_id. A bystander org seeded
+  // with the SAME text-only shape must leave a full four-block replay exactly
+  // as it entered it, while the replayed org is still backfilled (the
+  // positive half: proof the replay ran at all).
+  it("replays only the test's own org: a bystander org's text-only fixture and string courts are left untouched", async () => {
+    const mine = await seedOrgWithDivision();
+    orgIds.push(mine.orgId);
+    const bystander = await seedOrgWithDivision();
+    orgIds.push(bystander.orgId);
+
+    const seedTextOnly = async (s: { orgId: string; divisionId: string }): Promise<string> => {
+      const stageId = await seedStage(s.orgId, s.divisionId);
+      await sql`insert into schedule_settings (division_id, org_id, config)
+        values (${s.divisionId}, ${s.orgId}, ${sql.json({ courts: ["Court 1"] })})`;
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, court_label, venue)
+        values (${stageId}, ${s.divisionId}, ${s.orgId}, 1, 1, 'Court 1', 'Old Pavilion')
+        returning id`;
+      return id;
+    };
+    const ownFixture = await seedTextOnly(mine);
+    const bystanderFixture = await seedTextOnly(bystander);
+
+    await replay(
+      mine.orgId,
+      "courts-migration",
+      "fixture-venue-migration",
+      "division-locked-scopes-migration",
+      "blackouts-court-migration",
+    );
+
+    type Row = { court_label: string | null; venue: string | null; court_id: string | null; venue_id: string | null };
+    const [own] = await sql<Row[]>`
+      select court_label, venue, court_id, venue_id from fixtures where id = ${ownFixture}`;
+    expect(own!.court_id).toMatch(UUID_RE);
+    expect(own!.venue_id).toMatch(UUID_RE);
+
+    const [other] = await sql<Row[]>`
+      select court_label, venue, court_id, venue_id from fixtures where id = ${bystanderFixture}`;
+    expect(other).toEqual({ court_label: "Court 1", venue: "Old Pavilion", court_id: null, venue_id: null });
+    const [otherSettings] = await sql<{ config: { courts: unknown } }[]>`
+      select config from schedule_settings where division_id = ${bystander.divisionId}`;
+    expect(otherSettings!.config.courts).toEqual(["Court 1"]);
+    const [{ courts, venues }] = await sql<{ courts: string; venues: string }[]>`
+      select (select count(*) from courts where org_id = ${bystander.orgId})::text as courts,
+             (select count(*) from venues where org_id = ${bystander.orgId})::text as venues`;
+    expect({ courts, venues }).toEqual({ courts: "0", venues: "0" });
   });
 
   // P9 dispatch #6: court names are unique only PER VENUE
@@ -338,7 +397,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       values (${stageId}, ${divisionId}, ${orgId}, 1, 2, 'Court 1', 'Hall B')
       returning id`;
 
-    await sql.unsafe(migrationBlock("courts-migration"));
+    await replay(orgId, "courts-migration");
 
     const rows = await sql<{ id: string; court_id: string | null }[]>`
       select id, court_id from fixtures where id in (${f1}, ${f2}) order by seq_in_round`;
@@ -380,7 +439,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       returning id`;
 
     // Would throw 23505 on courts_venue_name_active_idx before the fix.
-    await sql.unsafe(migrationBlock("courts-migration"));
+    await replay(orgId, "courts-migration");
 
     const rows = await sql<{ id: string; court_id: string | null }[]>`
       select id, court_id from fixtures where id in (${f1}, ${f2}) order by seq_in_round`;
@@ -418,7 +477,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
 
     // Step 5 (the config.courts string[] -> uuid[] rewrite) lives inside this
     // same block, so one call covers both halves.
-    await sql.unsafe(migrationBlock("courts-migration"));
+    await replay(orgId, "courts-migration");
 
     const [fixture] = await sql<{ court_id: string | null }[]>`
       select court_id from fixtures where id = ${f1}`;
@@ -450,7 +509,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       values (${stageId}, ${divisionId}, ${orgId}, 1, 3)
       returning id`;
 
-    await sql.unsafe(migrationBlock("fixture-venue-migration"));
+    await replay(orgId, "fixture-venue-migration");
 
     const rows = await sql<{ id: string; venue: string | null; venue_id: string | null }[]>`
       select id, venue, venue_id from fixtures where id in (${f1}, ${f2}, ${f3}) order by seq_in_round`;
@@ -471,15 +530,14 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
     await sql`insert into schedule_settings (division_id, org_id, config)
       values (${divisionId}, ${orgId}, ${sql.json({ courts: ["Court 1", "Court 2"] })})`;
 
-    const block = migrationBlock("courts-migration");
-    await sql.unsafe(block);
+    await replay(orgId, "courts-migration");
 
     const [after1] = await sql<{ config: { courts: string[] } }[]>`
       select config from schedule_settings where division_id = ${divisionId}`;
     const [{ n: courtsAfter1 }] = await sql<{ n: string }[]>`
       select count(*)::text as n from courts where org_id = ${orgId}`;
 
-    await sql.unsafe(block); // second apply — must change nothing
+    await replay(orgId, "courts-migration"); // second apply — must change nothing
 
     const [after2] = await sql<{ config: { courts: string[] } }[]>`
       select config from schedule_settings where division_id = ${divisionId}`;
@@ -516,8 +574,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       values (${stageId}, ${divisionId}, ${orgId}, 1, 1, 'Community Center')
       returning id`;
 
-    const block = migrationBlock("fixture-venue-migration");
-    await sql.unsafe(block);
+    await replay(orgId, "fixture-venue-migration");
 
     const [after1] = await sql<{ venue: string | null; venue_id: string | null }[]>`
       select venue, venue_id from fixtures where id = ${fixtureId}`;
@@ -533,7 +590,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       values (${stageId}, ${divisionId}, ${orgId}, 1, 2, 'Community Center')
       returning id`;
 
-    await sql.unsafe(block); // second apply — f1 untouched; f2 resolved fresh
+    await replay(orgId, "fixture-venue-migration"); // second apply — f1 untouched; f2 resolved fresh
 
     const [after2] = await sql<{ venue: string | null; venue_id: string | null }[]>`
       select venue, venue_id from fixtures where id = ${fixtureId}`;
@@ -566,8 +623,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
           blackouts: [{ court: "Court 1", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
         })})`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+      await replay(orgId, "courts-migration", "blackouts-court-migration");
 
       const [row] = await sql<{ config: Record<string, unknown> }[]>`
         select config from schedule_settings where division_id = ${divisionId}`;
@@ -593,8 +649,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
           blackouts: [{ court: "Court 5", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
         })})`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+      await replay(orgId, "courts-migration", "blackouts-court-migration");
 
       const [fixtureRow] = await sql<{ court_id: string | null }[]>`
         select court_id from fixtures where id = ${fixtureId}`;
@@ -629,8 +684,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
           blackouts: [{ court: "Ghost Court", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
         })})`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+      await replay(orgId, "courts-migration", "blackouts-court-migration");
 
       const [row] = await sql<{ config: { blackouts: { court?: string; from: string; to: string }[] } }[]>`
         select config from schedule_settings where division_id = ${divisionId}`;
@@ -680,8 +734,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
           ],
         })})`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+      await replay(orgId, "courts-migration", "blackouts-court-migration");
 
       const [row] = await sql<{ config: { blackouts: { court?: string }[] } }[]>`
         select config from schedule_settings where division_id = ${divisionId}`;
@@ -705,8 +758,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       await sql`insert into schedule_settings (division_id, org_id, config)
         values (${divisionId}, ${orgId}, ${sql.json(original)})`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+      await replay(orgId, "courts-migration", "blackouts-court-migration");
 
       const [row] = await sql<{ config: { blackouts: unknown[] } }[]>`
         select config from schedule_settings where division_id = ${divisionId}`;
@@ -726,17 +778,22 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
           blackouts: [{ court: "Court 1", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
         })})`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
+      // One tenant session for the whole sequence: the second blackouts apply
+      // reads the first pass's court_mapping temp table by name (see replay).
       const block = migrationBlock("blackouts-court-migration");
-      await sql.unsafe(block);
+      const { after1, after2 } = await withTenant(orgId, async (tx) => {
+        await tx.unsafe(migrationBlock("courts-migration"));
+        await tx.unsafe(block);
 
-      const [after1] = await sql<{ config: Record<string, unknown> }[]>`
-        select config from schedule_settings where division_id = ${divisionId}`;
+        const [after1] = await tx<{ config: Record<string, unknown> }[]>`
+          select config from schedule_settings where division_id = ${divisionId}`;
 
-      await sql.unsafe(block); // second apply — must change nothing
+        await tx.unsafe(block); // second apply — must change nothing
 
-      const [after2] = await sql<{ config: Record<string, unknown> }[]>`
-        select config from schedule_settings where division_id = ${divisionId}`;
+        const [after2] = await tx<{ config: Record<string, unknown> }[]>`
+          select config from schedule_settings where division_id = ${divisionId}`;
+        return { after1, after2 };
+      });
 
       expect(after2!.config).toEqual(after1!.config);
       const parsed = ScheduleConfig.parse(after1!.config);
@@ -761,9 +818,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       await sql`update divisions set locked_scopes = ${sql.json([{ courts: ["Court 1"], pool_ids: [] }])}
         where id = ${divisionId}`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("fixture-venue-migration"));
-      await sql.unsafe(migrationBlock("division-locked-scopes-migration"));
+      await replay(orgId, "courts-migration", "fixture-venue-migration", "division-locked-scopes-migration");
 
       const [row] = await sql<{ locked_scopes: { courts?: string[]; pool_ids?: string[] }[] }[]>`
         select locked_scopes from divisions where id = ${divisionId}`;
@@ -794,9 +849,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       await sql`update divisions set locked_scopes = ${sql.json([{ courts: ["Ghost Court"], pool_ids: [] }])}
         where id = ${divisionId}`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("fixture-venue-migration"));
-      await sql.unsafe(migrationBlock("division-locked-scopes-migration"));
+      await replay(orgId, "courts-migration", "fixture-venue-migration", "division-locked-scopes-migration");
 
       const [row] = await sql<{ locked_scopes: { courts?: string[]; pool_ids?: string[] }[] }[]>`
         select locked_scopes from divisions where id = ${divisionId}`;
@@ -824,9 +877,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       await sql`update divisions set locked_scopes = ${sql.json([{ courts: [null], pool_ids: [] }])}
         where id = ${divisionId}`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("fixture-venue-migration"));
-      await sql.unsafe(migrationBlock("division-locked-scopes-migration"));
+      await replay(orgId, "courts-migration", "fixture-venue-migration", "division-locked-scopes-migration");
 
       const [row] = await sql<{ locked_scopes: { courts?: (string | null)[] }[] }[]>`
         select locked_scopes from divisions where id = ${divisionId}`;
@@ -845,9 +896,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
       await sql`update divisions set locked_scopes = ${sql.json([{ venues: ["Ghost Venue"], pool_ids: [] }])}
         where id = ${divisionId}`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("fixture-venue-migration"));
-      await sql.unsafe(migrationBlock("division-locked-scopes-migration"));
+      await replay(orgId, "courts-migration", "fixture-venue-migration", "division-locked-scopes-migration");
 
       const [row] = await sql<{ locked_scopes: { venues?: string[]; pool_ids?: string[] }[] }[]>`
         select locked_scopes from divisions where id = ${divisionId}`;
@@ -875,10 +924,7 @@ describe.skipIf(!HAS_DB)("V374 court entities cutover", () => {
           blackouts: [{ court: "Ghost C", from: "2026-08-01T09:00:00.000Z", to: "2026-08-01T10:00:00.000Z" }],
         })})`;
 
-      await sql.unsafe(migrationBlock("courts-migration"));
-      await sql.unsafe(migrationBlock("fixture-venue-migration"));
-      await sql.unsafe(migrationBlock("division-locked-scopes-migration"));
-      await sql.unsafe(migrationBlock("blackouts-court-migration"));
+      await replay(orgId, "courts-migration", "fixture-venue-migration", "division-locked-scopes-migration", "blackouts-court-migration");
 
       const [{ n: placeholderCourts }] = await sql<{ n: string }[]>`
         select count(*)::text as n from courts where org_id = ${orgId} and name = 'Unresolved legacy reference'`;

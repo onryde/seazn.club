@@ -280,22 +280,19 @@ describe("StandingsTableView — phone composition", () => {
     // picks one. Same shape as `settings-nav.tsx`'s `top-[var(--app-header-h)]`.
     expect(h).toMatch(/<table class="[^"]*\bmin-w-\[var\(--sv-min\)\]/);
     expect(h).toMatch(/<table class="[^"]*\bmd:min-w-\[var\(--sv-min-md\)\]/);
-    // 48 (rank) + 96 (name floor) + played 32 + won 32 + lost 32 + points 44.
-    // `gd` is long-tail: below `md` it is display:none and claims nothing, so
-    // counting it in the PHONE floor would put a rail under the collapsed
-    // phone, which is the one thing the fold exists to prevent.
-    // From `md` up nothing folds, so `gd` adds its 32px there — the two
-    // numbers differ by exactly the folded column, which is the differential
-    // that round 1 was missing and that leaves the name column 16px short at
-    // 768 without it.
-    expect(h).toContain('style="--sv-min:284px;--sv-min-md:316px"');
+    // Phone: 48 (rank) + 120 (the 7.5rem phone name floor, ruling (d)) +
+    // played 32 + won 32 + lost 32 + points 44 = 308. `gd` is long-tail: below
+    // `md` it is display:none and claims nothing, so it is not counted there.
+    // From `md` up: 48 + 96 (name floor) + every column, `gd`'s 32 included =
+    // 316 — the value it has always had, so nothing from `md` up moves.
+    expect(h).toContain('style="--sv-min:308px;--sv-min-md:316px"');
     // Differential — with `gd` made compact nothing folds at any width, so the
-    // two floors converge. That is what proves the gap above comes from the
-    // FOLD and not from a constant offset between the two properties.
+    // two floors differ ONLY by the name floors (120 − 96 = 24). That is what
+    // proves the fold's share of the gap above is exactly the folded column.
     const allCompact = html({
       view: { ...view, columns: view.columns.map((c) => ({ ...c, compact: true })) },
     });
-    expect(allCompact).toContain('style="--sv-min:316px;--sv-min-md:316px"');
+    expect(allCompact).toContain('style="--sv-min:340px;--sv-min-md:316px"');
     // …and a wide derived column contributes its own wider size, so both
     // floors track `columnSize` rather than a per-column constant.
     const wide = html({
@@ -307,7 +304,7 @@ describe("StandingsTableView — phone composition", () => {
         rows: view.rows.map((r) => ({ ...r, cells: [...r.cells.slice(0, 3), "+1.000", r.cells[4]!] })),
       },
     });
-    expect(wide).toContain('style="--sv-min:340px;--sv-min-md:340px"');
+    expect(wide).toContain('style="--sv-min:364px;--sv-min-md:340px"');
   });
 
   it("preview={0} states the empty case rather than painting a header over nothing", () => {
@@ -365,10 +362,13 @@ describe("StandingsTableView — phone composition", () => {
       expect(m, "both floors ride as custom properties").not.toBeNull();
       return { phone: Number(m![1]), wide: Number(m![2]) };
     };
+    // Below `md` the name floor is 7.5rem (ruling (d)), from `md` up 96px, so
+    // the two floors of a preview differ by exactly that (120 − 96) and by
+    // nothing a folded column booked.
     const p = floors(previewed);
-    expect(p.wide, "a preview books no width for a column it folded").toBe(p.phone);
+    expect(p.phone - p.wide, "a preview books no width for a column it folded").toBe(120 - 96);
     const f = floors(full);
-    expect(f.wide, "a full table still widens from `md`").toBeGreaterThan(f.phone);
+    expect(f.wide - f.phone, "a full table still widens from `md` by its folded column").toBe(32 - (120 - 96));
   });
 
   it("a preview keeps played and points and drops the rest, so the NAME gets the width", () => {

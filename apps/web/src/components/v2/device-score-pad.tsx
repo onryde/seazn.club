@@ -246,6 +246,7 @@ export function DeviceScorePad({
             err instanceof Error ? err.message : null,
             msg,
             "device.failed",
+            err instanceof ApiV1Error ? err.extra : null,
           ));
         }
         return false;

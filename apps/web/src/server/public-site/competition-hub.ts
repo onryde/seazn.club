@@ -71,6 +71,7 @@ import {
   type PublicStage,
 } from "./data";
 import { statusOf } from "./match-centre";
+import { byPoolOrder } from "@/lib/pool-order";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { divisionQualification } from "./division-qualification";
@@ -801,7 +802,8 @@ export async function loadCompetitionHub(
       if (BRACKET_KINDS.has(stage.kind)) continue;
       const snapshots = standings
         .filter((s) => s.stage_id === stage.id)
-        .sort((a, b) => (a.pool_id ?? "").localeCompare(b.pool_id ?? ""));
+        // Pool A above Pool B — the pool's own order, never its random id.
+        .sort(byPoolOrder(pools));
       for (const snap of snapshots) {
         tables.push(
           buildTableView({

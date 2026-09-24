@@ -65,6 +65,14 @@ export interface BoardRoundCode {
   order: readonly [number, number, number, number];
 }
 
+/** The columns `boardRoundCodes` reads — a board row carries them, and so
+ *  does a plain `fixtures` row, which is how the next-match refusal
+ *  (server/engine-db/fed-seats.ts) names a match exactly as the board does. */
+export type RoundCodeFixture = Pick<
+  BoardFixture,
+  "id" | "stage_id" | "round_no" | "seq_in_round" | "ext_key" | "lane" | "is_final" | "third_place" | "conditional"
+>;
+
 /** The stage kinds whose rounds get a code: every bracket kind. */
 const CODED_STAGE_KINDS: ReadonlySet<string> = new Set(["knockout", "double_elim", "page_playoff", "stepladder"]);
 
@@ -103,7 +111,7 @@ const PAGE_PLAYOFF_KEYS: ReadonlySet<string> = new Set(["pp-q1", "pp-elim", "pp-
  * no `is_final` row is legacy or history-restored. For a stepladder that flag
  * is the only evidence on its rows that its final is among them at all.
  */
-function hasRoleMetadata(kind: string, rows: readonly BoardFixture[]): boolean {
+function hasRoleMetadata(kind: string, rows: readonly RoundCodeFixture[]): boolean {
   if (kind === "page_playoff") {
     return rows.every((f) => typeof f.ext_key === "string" && PAGE_PLAYOFF_KEYS.has(f.ext_key));
   }
@@ -123,12 +131,12 @@ function hasRoleMetadata(kind: string, rows: readonly BoardFixture[]): boolean {
  * `hasRoleMetadata`.
  */
 export function boardRoundCodes(
-  fixtures: readonly BoardFixture[],
+  fixtures: readonly RoundCodeFixture[],
   stages: readonly Pick<BoardStage, "id" | "kind">[],
   msg: Msg,
 ): ReadonlyMap<string, BoardRoundCode> {
   const kindOf = new Map(stages.map((s) => [s.id, s.kind]));
-  const byStage = new Map<string, BoardFixture[]>();
+  const byStage = new Map<string, RoundCodeFixture[]>();
   for (const f of fixtures) {
     const kind = kindOf.get(f.stage_id);
     if (kind === undefined || !CODED_STAGE_KINDS.has(kind)) continue;

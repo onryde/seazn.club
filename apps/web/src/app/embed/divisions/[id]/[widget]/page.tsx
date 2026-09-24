@@ -22,6 +22,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { divisionQualification } from "@/server/public-site/division-qualification";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
+import { byPoolOrder } from "@/lib/pool-order";
 
 export const revalidate = 30;
 
@@ -202,7 +203,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
     body = (
       <div className="space-y-5">
         {stages.map((stage) => {
-          const snaps = standings.filter((s) => s.stage_id === stage.id);
+          // Pool A above Pool B (the same order the division page draws);
+          // the query hands them over in no particular order.
+          const snaps = standings.filter((s) => s.stage_id === stage.id).sort(byPoolOrder(pools));
           if (snaps.length === 0) return null;
           return snaps.map((snap) => (
             <StandingsTable

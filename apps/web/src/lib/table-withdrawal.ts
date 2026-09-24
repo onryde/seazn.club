@@ -1,7 +1,8 @@
 // spec 05 §5 — a table stage (league/group/swiss) decides what a withdrawal
-// does from the entrant's PLAYED and PENDING fixtures: under 50% played its
-// games are expunged (standings read as if it never entered), otherwise its
-// remaining games walk over to the opponents. The rule itself is the engine's
+// does from the entrant's PLAYED and PENDING fixtures: in a league or group,
+// under 50% played its games are expunged (standings read as if it never
+// entered), otherwise its remaining games walk over to the opponents; a Swiss
+// withdrawal always walks over (owner ruling 2026-09-24). The rule itself is the engine's
 // `withdrawTableEntrant`; this is the ONE reading of DB fixture rows into that
 // rule's input, shared by the cascade that APPLIES it
 // (server/usecases/withdrawal.ts) and the qualification builder that must know

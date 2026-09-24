@@ -2128,6 +2128,46 @@ async function hubKnockoutSuite(): Promise<void> {
     done?.knockouts?.[0]?.championFixtureId === finalId &&
       done?.knockouts?.[0]?.rounds?.[1]?.fixtureIds?.[0] === finalId,
   );
+
+  // V416 — `show_seeds`. This division was seeded 1..4 in the order the names
+  // were posted, and the name order is a different one, so the two reads below
+  // can tell a hidden seed from a merely re-sorted list. Both are anonymous
+  // and come straight after the organiser's PATCH: a hub or entrants document
+  // the PATCH failed to retire would still print the numbers.
+  const koNames = ["KO One", "KO Two", "KO Three", "KO Four"];
+  const byName = [...koNames].sort();
+  const divSlug = v1data<{ slug: string }>(div).slug;
+  const entrantsPath = `/api/v1/public/orgs/${orgSlug}/competitions/${compRow.slug}/divisions/${divSlug}/entrants`;
+  type SeedCard = { divisionId: string; name: string; seed: number | null };
+  const hubCards = async () =>
+    (v1data<{ teams?: SeedCard[] } | undefined>(await v1(newSession(), hubPath))?.teams ?? []).filter(
+      (t) => t.divisionId === divId,
+    );
+  const publicRows = async () =>
+    v1data<{ entrants?: { display_name: string; seed: number | null }[] } | undefined>(
+      await v1(newSession(), entrantsPath),
+    )?.entrants ?? [];
+  const shownCards = await hubCards();
+  check(
+    "show seeds: while ON, the hub's Teams cards carry every seed, in seed order",
+    JSON.stringify(shownCards.map((t) => [t.name, t.seed])) ===
+      JSON.stringify(koNames.map((n, i) => [n, i + 1])),
+  );
+  const off = await v1(owner, `/api/v1/divisions/${divId}`, "PATCH", { show_seeds: false });
+  check(
+    "show seeds: PATCH { show_seeds: false } is accepted and echoed",
+    off.status === 200 && v1data<{ show_seeds?: boolean }>(off)?.show_seeds === false,
+  );
+  const hiddenCards = await hubCards();
+  check(
+    "show seeds: after OFF, the next anonymous hub read carries NO seed, cards in name order",
+    JSON.stringify(hiddenCards.map((t) => [t.name, t.seed])) === JSON.stringify(byName.map((n) => [n, null])),
+  );
+  const hiddenRows = await publicRows();
+  check(
+    "show seeds: after OFF, the anonymous entrants document carries NO seed, in name order",
+    JSON.stringify(hiddenRows.map((e) => [e.display_name, e.seed])) === JSON.stringify(byName.map((n) => [n, null])),
+  );
 }
 
 /**
@@ -3152,6 +3192,21 @@ async function passGrantsSuite(): Promise<void> {
   check(
     "pass grants/profiles: the UNPASSED sibling stays dark (404) — V396 made profiles paid again",
     plainCard.status === 404,
+  );
+  // Player profile — upcoming across the org (spec 2026-09-23). The passed
+  // card's board fixture was generated and never started, so it is SCHEDULED
+  // and upcoming. The plain competition is UNLISTED and is not this card's,
+  // so its board fixture must never reach this card (R2). Positive and
+  // negative read the same page body; both anchor on `="`.
+  const passCardHtml = await passCard.text();
+  check(
+    "player upcoming: the passed card lists its own scheduled board fixture under Upcoming",
+    passCardHtml.includes('data-testid="mh-player-upcoming"') &&
+      passCardHtml.includes(`data-testid="mh-player-upcoming-row-${board.pass.fixtureId}"`),
+  );
+  check(
+    "player upcoming: the sibling UNLISTED competition's fixture never reaches this card (R2)",
+    !passCardHtml.includes(board.plain.fixtureId),
   );
   // Spectator W2 (Task 17, SM2) — the card's open page polls its match lines
   // from a public API. That API must refuse exactly where the card does, or a

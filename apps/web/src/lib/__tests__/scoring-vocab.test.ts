@@ -8,6 +8,7 @@ import {
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
 } from "@/lib/scoring-vocab";
 import { interpolate } from "@/lib/i18n-runtime";
+import { matchRef } from "@/lib/slot-label";
 import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
 import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
@@ -1006,6 +1007,55 @@ describe("scoringErrorText keeps engine English off the scorer's screen", () => 
     ).toBe(uiFr["engineError.GAME_AWARD_DURING_TIEBREAK"]);
     expect(scoringErrorText("NON_MONOTONIC_TIME", "at precedes high-water mark", fr, "device.failed"))
       .not.toContain("high-water");
+  });
+
+  // Owner ruling 2026-09-23: the refusal to void a result whose next match has
+  // started NAMES that match. The server's sentence is English; the console and
+  // the device chrome rebuild it from the code and `next_match`.
+  it.each(Object.keys(LOCALES) as (keyof typeof LOCALES)[])(
+    "%s: NEXT_MATCH_STARTED names the next match in the reader's language, never the server's English",
+    (locale) => {
+      const dict = LOCALES[locale];
+      const say: MsgFn = (k, vars) => interpolate(dict[k] ?? k, vars);
+      const english = "The next match (R2·1) has already started. Void that one first.";
+      const extra = { next_match: { fixture_id: "fx-final", round: 2, seq: 1 } };
+      const text = scoringErrorText("NEXT_MATCH_STARTED", english, say, "score.failed", extra);
+      const ref = interpolate(dict["slot.match_ref"]!, { round: 2, seq: 1 });
+      expect(text).toBe(interpolate(dict["score.nextMatchStarted"]!, { ref }));
+      expect(text).toContain(ref);
+      if (locale !== "en") expect(text).not.toBe(english);
+    },
+  );
+
+  // Fix round 2 ruling: the refusal names the next match with the SAME label
+  // the schedule board shows. The board names a knockout match by its round's
+  // code — "QF·3", not "R1·3" (`matchRef` with the code `boardRoundCodes`
+  // gives it, schedule-board.tsx). The server sends that code as the
+  // dictionary key the board chose, so each reader renders it in their own
+  // language: QF, CF and KF are the same match.
+  it.each(Object.keys(LOCALES) as (keyof typeof LOCALES)[])(
+    "%s: a knockout match the board names by its round code is named by that code here too",
+    (locale) => {
+      const dict = LOCALES[locale];
+      const say: MsgFn = (k, vars) => interpolate(dict[k] ?? k, vars);
+      const english = "The next match (QF·3) has already started. Void that one first.";
+      const extra = {
+        next_match: { fixture_id: "fx-qf", round: 1, seq: 3, code: { key: "bracket.roundShort.quarter", params: {}, ref_seq: 3 } },
+      };
+      const text = scoringErrorText("NEXT_MATCH_STARTED", english, say, "score.failed", extra);
+      const board = matchRef(1, 3, say, say("bracket.roundShort.quarter"));
+      expect(text).toBe(interpolate(dict["score.nextMatchStarted"]!, { ref: board }));
+      expect(text, "never the plain round number the board does not print").not.toContain(
+        interpolate(dict["slot.match_ref"]!, { round: 1, seq: 3 }),
+      );
+    },
+  );
+
+  it("NEXT_MATCH_STARTED with no ref falls back to localized copy, not the server's English", () => {
+    const say: MsgFn = (k, vars) => interpolate(LOCALES.fr[k] ?? k, vars);
+    const english = "The next match (R2·1) has already started. Void that one first.";
+    const text = scoringErrorText("NEXT_MATCH_STARTED", english, say, "score.failed", {});
+    expect(text).toBe(LOCALES.fr["scorepad.refusal.nextMatchStarted"]);
   });
 
   it("keeps the raw message for a non-engine failure, and the fallback for none", () => {

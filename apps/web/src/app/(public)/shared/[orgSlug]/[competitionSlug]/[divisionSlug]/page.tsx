@@ -27,6 +27,7 @@ import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
 import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { playerLinkId } from "@/lib/name-display";
+import { byPoolOrder } from "@/lib/pool-order";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -281,7 +282,8 @@ export default async function DivisionHomePage({ params }: Props) {
         }
         const snapshots = standings
           .filter((s) => s.stage_id === stage.id)
-          .sort((a, b) => (a.pool_id ?? "").localeCompare(b.pool_id ?? ""));
+          // Pool A above Pool B — the pool's own order, never its random id.
+          .sort(byPoolOrder(pools));
         if (snapshots.length === 0) return null;
         return (
           <section key={stage.id}>
@@ -367,7 +369,9 @@ export default async function DivisionHomePage({ params }: Props) {
         >
           <p className="flex min-w-0 items-baseline justify-between gap-2 font-display text-lg font-semibold text-ink">
             <span className="min-w-0 truncate">{e.display_name}</span>
-            {e.seed ? (
+            {/* `!= null`, never truthiness: seed 0 is a seed. A division that
+                hides its seeds (V416) is served `seed: null`, so no chip. */}
+            {e.seed != null ? (
               <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 font-sans text-[11px] font-medium text-accent-strong">
                 {t(dict, "division.seed", { seed: e.seed })}
               </span>

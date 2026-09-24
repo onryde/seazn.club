@@ -125,6 +125,16 @@ const REST = [
   "src/server/public-site/__tests__/qualification-view-db.test.ts",
   "src/server/public-site/__tests__/qualification-view.test.ts",
   "src/server/public-site/__tests__/standings-ratio-note.test.ts",
+  // show_seeds (V416 — `public_entrants_v` publishes `seed` only while the
+  // division shows it, and every public reader then sorts by name). Begins
+  // with "p", so it belongs here rather than in C_GLOBBED; ninth wave running,
+  // and again it reddened only this repo-root suite, in CI.
+  "src/server/public-site/__tests__/public-entrants-show-seeds.test.ts",
+  // Player profile Upcoming (a player's same-org scheduled fixtures): begins with "p", so it belongs here.
+  "src/server/public-site/__tests__/public-player-upcoming.test.ts",
+  // Standings follow-ups (#862): the tie-break note's ledger-derived diff/for
+  // word. Begins with "t", so it belongs here.
+  "src/server/public-site/__tests__/tie-break-ledger-words.test.tsx",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

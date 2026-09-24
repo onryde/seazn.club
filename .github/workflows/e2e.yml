@@ -97,6 +97,11 @@ concurrency:
   group: e2e-${{ inputs.pr || github.ref }}
   cancel-in-progress: true
 
+# Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
+# Every job only reads the repo; a job needing more declares its own block.
+permissions:
+  contents: read
+
 jobs:
   # `runs-on` for every job reads the E2E_RUNNER repo variable (Settings ->
   # Secrets and variables -> Actions -> Variables), so the runner can change

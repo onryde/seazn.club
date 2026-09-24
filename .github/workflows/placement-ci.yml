@@ -41,6 +41,11 @@ concurrency:
   group: placement-ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
+# Every job only reads the repo; a job needing more declares its own block.
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------
   # Python 3.14, NOT the design doc's original 3.11. The service is built

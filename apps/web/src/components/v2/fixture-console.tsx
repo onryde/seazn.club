@@ -553,6 +553,7 @@ export function FixtureConsole({
             err instanceof Error ? err.message : null,
             msg,
             "score.failed",
+            err instanceof ApiV1Error ? err.extra : null,
           ));
         }
         return false;

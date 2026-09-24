@@ -267,6 +267,27 @@ function statusText(s: QualStatus): string {
   }
 }
 
+/** What losing the next match leaves, as the public dictionary words it (en):
+ *  one sentence per post-loss status, never a status chip glued into one; a
+ *  win_k counted over the matches left AFTER that loss (the engine's r − 1). */
+function ifYouLoseText(s: QualStatus, left: number): string {
+  switch (s.kind) {
+    case "through":
+      return dictString("en", "table.qual.ifYouLose.through");
+    case "win_k":
+      return s.k >= left
+        ? dictString("en", left === 1 ? "table.qual.ifYouLose.winAll.one" : "table.qual.ifYouLose.winAll.other", { count: left })
+        : dictString("en", s.k === 1 ? "table.qual.ifYouLose.winKOf.one" : "table.qual.ifYouLose.winKOf.other", {
+            count: s.k,
+            r: left,
+          });
+    case "needs_help":
+      return dictString("en", "table.qual.ifYouLose.needsHelp");
+    case "out":
+      return dictString("en", "table.qual.ifYouLose.out");
+  }
+}
+
 /** The cut line's words for a table the engine has read: the cut sentence
  *  agrees with N, the rounds left with the rounds (final review COPY — one
  *  key pluralised on the rounds printed "Top 1 go through"). */
@@ -449,7 +470,7 @@ test("division page: the leader's popover reads Win and in with the loss case, a
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
   await expect(panel.getByTestId("qual-headline")).toHaveText(dictString("en", "table.qual.headline.winK.one", { next: NEXT }));
   await expect(panel.getByTestId("qual-if-lose")).toHaveText(
-    dictString("en", "table.qual.ifYouLose", { status: statusText(leader.ifYouLose!) }),
+    ifYouLoseText(leader.ifYouLose!, e.input.remaining.get(e.order[0]!)! - 1),
   );
 
   // An outside tap: the legend, a plain paragraph under the box (a corner of
@@ -504,6 +525,44 @@ test("pools: each pool draws its own line after place 1 and its own legend, with
   expect(seen.size, "each pool drawn once").toBe(POOLS);
 });
 
+// ── Pool order ───────────────────────────────────────────────────────────
+//
+// Pools read in the organiser's order — Pool A above Pool B — on every surface
+// that draws one table per pool. They used to be sorted by pool UUID on the
+// public division page and the hub (and left in query order on the embed), so
+// "Pool B" came first whenever B's random id sorted lower. The ids are random
+// here, so this run witnesses the old defect only when they happen to sort
+// opposite to the names; it logs which. The deterministic kill is in vitest
+// (`lib/__tests__/pool-order.test.ts` and the surface tests beside it).
+
+/** Which pool each caption names, in DOM order. */
+const poolLetters = (texts: string[]) => texts.map((t) => /Pool ([A-Z])\b/.exec(t)?.[1] ?? `? ${t}`);
+
+test("pools: Pool A reads above Pool B on the division page, the hub Table tab and the console", async ({ page, browser }) => {
+  const letters = ["A", "B"].slice(0, POOLS);
+
+  const pub = await spectator(browser, { width: 1280, height: 900 });
+  await openUntil(pub, paths.division(scene.pools.slug), (p) => withCut(p).count(), POOLS);
+  expect(poolLetters(await pub.locator("#panel-standings table > caption").allTextContents()), "division page").toEqual(letters);
+
+  const hub = await spectator(browser, { width: 1280, height: 900 });
+  const hubPools = (p: Page) => p.locator(`section[data-testid^="mh-table-${scene.pools.slug}-"]`);
+  await openUntil(hub, paths.hub(), (p) => hubPools(p).count(), POOLS);
+  expect(poolLetters(await hubPools(hub).locator("h3").allTextContents()), "hub Table tab").toEqual(letters);
+  // The witness: each hub section's test id ends with its pool id, in drawn order.
+  const ids = (await hubPools(hub).evaluateAll((els) => els.map((el) => el.getAttribute("data-testid") ?? ""))).map(
+    (tid) => UUID.exec(tid)?.[0] ?? tid,
+  );
+  console.log(
+    `POOL-ORDER witness: pool ids in drawn (A, B) order ${JSON.stringify(ids)}; a sort by id would ${
+      [...ids].sort().join() === ids.join() ? "ALSO pass" : "FAIL"
+    } this run`,
+  );
+
+  await openUntil(page, paths.console(scene.pools.slug), (p) => consoleWithCut(p).count(), POOLS);
+  expect(poolLetters(await page.locator("table > caption").allTextContents()), "console").toEqual(letters);
+});
+
 // ── No cut ───────────────────────────────────────────────────────────────
 
 test("regression: a league with no next stage draws no marker, line, legend or status trigger", async ({ browser }) => {
@@ -552,6 +611,111 @@ for (const width of WIDTHS) {
     expect(hit.inside, `a tap misses the trigger (${hit.width}×${hit.height})`).toEqual([true, true, true, true, true]);
     await open(page, trigger);
     await expectNoHorizontalScroll(page); // an open popover must not widen the page
+  });
+}
+
+// ── Hub Table tab: column headers stand apart ────────────────────────────
+//
+// A generic division's long-tail headers are whole words ("Against",
+// "Difference"), 11px uppercase with tracking — wider than the fixed column
+// they sat in, so a right-aligned word spilled LEFT into its neighbour and the
+// row read "AGAINST DIFFERENCE PTS" as one run. No unit test can see it
+// (`apps/web` vitest has no layout); only the browser measures a painted word.
+
+/** Every DISPLAYED header of a hub table, left to right: its column key, the
+ *  painted box of the words a sighted reader sees (the `aria-hidden` notation
+ *  where the cell has one, else its own text), and the cell's content box. */
+async function headerGeometry(section: Locator) {
+  return section.locator("thead th").evaluateAll((ths) =>
+    ths
+      .filter((th) => getComputedStyle(th).display !== "none")
+      .map((th) => {
+        const shown = th.querySelector("[aria-hidden]") ?? th;
+        const range = document.createRange();
+        range.selectNodeContents(shown);
+        const text = range.getBoundingClientRect();
+        const cell = th.getBoundingClientRect();
+        const cs = getComputedStyle(th);
+        return {
+          key: th.getAttribute("data-col") ?? "team",
+          text: (shown.textContent ?? "").trim(),
+          left: text.left,
+          right: text.right,
+          cellLeft: cell.left + parseFloat(cs.paddingLeft),
+          cellRight: cell.right - parseFloat(cs.paddingRight),
+        };
+      }),
+  );
+}
+
+/** At least this much clear space between two neighbouring header words —
+ *  the two cells' facing paddings (`pl-0.5` + `pr-0.5`), i.e. each word inside
+ *  its own content box. */
+const HEADER_GAP_PX = 4;
+
+function expectHeadersApart(g: Awaited<ReturnType<typeof headerGeometry>>, where: string) {
+  for (const h of g) {
+    expect(h.left, `${where}: "${h.text}" spills out of its own cell on the left`).toBeGreaterThanOrEqual(h.cellLeft - 0.5);
+    expect(h.right, `${where}: "${h.text}" spills out of its own cell on the right`).toBeLessThanOrEqual(h.cellRight + 0.5);
+  }
+  for (let i = 1; i < g.length; i++) {
+    const gap = g[i]!.left - g[i - 1]!.right;
+    expect(gap, `${where}: "${g[i - 1]!.text}" and "${g[i]!.text}" run together (${gap.toFixed(1)}px apart)`).toBeGreaterThanOrEqual(
+      HEADER_GAP_PX,
+    );
+  }
+}
+
+/** The columns each width shows, pinned so the header fix cannot move the
+ *  fold: every column from `md` up, the compact set on a closed phone table,
+ *  every column again once "More" opens it. */
+const EVERY_COLUMN = ["rank", "team", "played", "won", "lost", "for", "against", "diff", "points"];
+const COMPACT = ["rank", "team", "played", "won", "lost", "points"];
+
+for (const width of [1280, 768, 320] as const) {
+  test(`hub Table tab at ${width}: every column header stands clear of its neighbours, and the fold is unchanged`, async ({ browser }) => {
+    const page = await spectator(browser, { width, height: 900 });
+    await openUntil(page, paths.hub(), (p) => hubSwiss(p).getByTestId("qual-cut").count(), 1);
+    const section = hubSwiss(page);
+    const head = section.locator("thead");
+    await frame(section);
+    const shoot = async (name: string) =>
+      page.screenshot({ path: test.info().outputPath(`${name}.png`), clip: await clipAround(page, [head]) });
+
+    const closed = await headerGeometry(section);
+    await shoot(`hub-header-${width}`);
+    expect(
+      closed.map((h) => h.key),
+      "the columns shown",
+    ).toEqual(width < 768 ? COMPACT : EVERY_COLUMN);
+    expectHeadersApart(closed, `${width}`);
+    await expectNoHorizontalScroll(page);
+    if (width >= 768) {
+      // From md up the table folds nothing, so it must fit its card: a region
+      // that scrolls sideways here is a floor past the card (the unit budget in
+      // `standings-table-view-headers.test.tsx` sums every sport × locale).
+      const region = await section
+        .locator('[role="region"]')
+        .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(region.scroll, `${width}: the table scrolls sideways inside its card`).toBeLessThanOrEqual(region.client);
+    }
+
+    if (width < 768) {
+      const more = section.getByTestId(`mh-table-${scene.swiss.slug}-${scene.swiss.table.stageId}-overall-more`);
+      await expect(async () => {
+        if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+        await expect(more).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
+      }).toPass({ timeout: 15_000 });
+      const opened = await headerGeometry(section);
+      // The opened long tail lives past the region's right edge: scroll it
+      // into view so the picture shows the headers the check just measured.
+      await section.locator('[role="region"]').evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
+      await shoot(`hub-header-${width}-more`);
+      expect(opened.map((h) => h.key), "the columns shown once opened").toEqual(EVERY_COLUMN);
+      expectHeadersApart(opened, `${width}, opened`);
+      await expectNoHorizontalScroll(page);
+    }
+    console.log(`MEASURED hub headers ${width}: ${JSON.stringify(closed.map((h) => [h.text, Math.round(h.left), Math.round(h.right)]))}`);
   });
 }
 

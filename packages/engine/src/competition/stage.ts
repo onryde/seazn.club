@@ -385,12 +385,30 @@ function involvesEntrant(fixture: TableFixture, entrantId: EntrantId): boolean {
   );
 }
 
+// Which table kinds may EXPUNGE an early withdrawal. One row per kind, so a
+// new table kind has to declare its rule rather than inherit one.
+//
+// Swiss never does (owner ruling 2026-09-24, "case 2", option A). Expunging a
+// Swiss board abandons it with no outcome, and the round can then neither be
+// paired past (an abandoned board is not decided), unpaired (it has a played
+// result) nor forfeited (the match is over) — the division is stranded. A
+// Swiss withdrawal keeps every played result, earlier walkovers included, and
+// walks each paired board over to the opponent; unseated later rounds simply
+// pair without them. The same verdict feeds the qualification builder
+// (apps/web lib/table-withdrawal + qualification-view), so it lives here once.
+const EXPUNGES_EARLY_WITHDRAWAL: Readonly<Record<TableStage["kind"], boolean>> = {
+  league: true,
+  group: true,
+  swiss: false,
+};
+
 // spec 05 §5 — league/group `void_remaining`: if the withdrawing entrant has
 // played < 50% of its fixtures, EXPUNGE (void all its games so the standings
 // read as if it never entered); otherwise AWARD its remaining fixtures to the
 // opponents as forfeits and keep the games already played. `played`/`total`
 // are the entrant's decided vs scheduled fixture counts (the caller knows the
-// full schedule, including result-less pending fixtures).
+// full schedule, including result-less pending fixtures). Swiss always
+// AWARDS — see EXPUNGES_EARLY_WITHDRAWAL.
 export function withdrawTableEntrant(
   stage: TableStage,
   entrantId: EntrantId,
@@ -402,7 +420,7 @@ export function withdrawTableEntrant(
   const playedCount = fixtures.played.filter((fixture) => involvesEntrant(fixture, entrantId)).length;
   const total = playedCount + fixtures.pending.length;
   const fraction = total === 0 ? 0 : playedCount / total;
-  const expunge = fraction < 0.5;
+  const expunge = EXPUNGES_EARLY_WITHDRAWAL[stage.kind] && fraction < 0.5;
 
   const updates: FixtureUpdate[] = [];
   if (expunge) {

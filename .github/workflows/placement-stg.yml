@@ -46,6 +46,11 @@ on:
       - "packages/engine/scripts/gen-proto.ts"
       - ".github/workflows/placement-stg.yml"
 
+# Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
+# Every job only reads the repo; a job needing more declares its own block.
+permissions:
+  contents: read
+
 jobs:
   deploy-stg:
     name: Deploy to placement-stg

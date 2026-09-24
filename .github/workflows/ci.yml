@@ -26,6 +26,11 @@ env:
   TURBO_TEAMID: team_YHIpnOtgzPbKRRZIePMhWVtG
   TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
 
+# Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
+# Every job only reads the repo; a job needing more declares its own block.
+permissions:
+  contents: read
+
 jobs:
   # -------------------------------------------------------------------------
   # The DB-free gate used to be ONE job named "Unit + typecheck" that ran
@@ -412,6 +417,10 @@ jobs:
   security:
     name: Security scan
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # gitleaks-action lists the PR's commits through the API.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v5
         with:

@@ -218,6 +218,38 @@ function statusLabel(s: QualStatus, i: QualificationViewInput): string {
   }
 }
 
+/** What losing the next match leaves — one sentence per post-loss status
+ *  (owner copy fix, 2026-09-23), never a status chip's words glued into a
+ *  sentence ("If you lose your next match: Win and in."). `left` is the
+ *  matches left AFTER that loss — the engine's own `r - 1` — so win_k reads as
+ *  the engine means it: win `k` of those. Where `k` is all of them the
+ *  sentence says so ("your last one", "all of your last 2"); otherwise it
+ *  names both numbers, because "your last one" would claim a particular match.
+ *
+ *  `through` is unreachable from `buildQualificationView`: a loss moves the
+ *  floor by the per-match min and takes one match away, so the worst case the
+ *  through test reads is unchanged, and it was already not through (only the
+ *  two open statuses get a loss case). It has a sentence all the same, so an
+ *  engine change could never print a key. */
+export function ifYouLoseSentence(
+  s: QualStatus,
+  left: number,
+  i: Pick<QualificationViewInput, "msg" | "plural">,
+): string {
+  switch (s.kind) {
+    case "through":
+      return i.msg("table.qual.ifYouLose.through");
+    case "win_k":
+      return s.k >= left
+        ? i.plural("table.qual.ifYouLose.winAll", left)
+        : i.plural("table.qual.ifYouLose.winKOf", s.k, { r: left });
+    case "needs_help":
+      return i.msg("table.qual.ifYouLose.needsHelp");
+    case "out":
+      return i.msg("table.qual.ifYouLose.out");
+  }
+}
+
 function headline(s: QualStatus, i: QualificationViewInput, next: string, n: number): string {
   switch (s.kind) {
     case "through":
@@ -242,8 +274,10 @@ function boundsInForce(i: QualificationViewInput): MatchPointsBounds | null {
 }
 
 /** F1 — would this departed entrant's table withdrawal VOID results the table
- *  counts? The policy (usecases/withdrawal.ts) expunges an entrant under 50%
- *  played; applied now or later it rewrites every rival's points, so no status
+ *  counts? The policy (usecases/withdrawal.ts) expunges a league/group entrant
+ *  under 50% played, never a Swiss one (owner ruling 2026-09-24, decided in the
+ *  engine so this reads it rather than restating it); applied now or later an
+ *  expunge rewrites every rival's points, so no status
  *  can be trusted. Award mode only walks pending matches over: each is one of
  *  the departed row's unplayed fixtures, which its `remaining` already bounds
  *  with the per-match [min, max] (and each rival's likewise), so the walkover
@@ -409,7 +443,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;
-    const vars = { rival: name, rule: tieBreakRule(w.key, i.msg) };
+    const vars = { rival: name, rule: tieBreakRule(w.key, i.msg, r, ordered, [rival.entrantId]) };
     const assumption = i.msg("table.qual.whatIf.assumption", { rival: name });
     const rule = (): { text: string; assumption: null } => {
       const mine = tieKeyValue(r, w.key);
@@ -467,7 +501,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
       headline: headline(res.status, i, next, cut),
       ifYouLose:
         res.ifYouLose && !nextIsBye(r.entrantId)
-          ? i.msg("table.qual.ifYouLose", { status: statusLabel(res.ifYouLose, i) })
+          ? ifYouLoseSentence(res.ifYouLose, (engine.remaining.get(r.entrantId) ?? 0) - 1, i)
           : null,
       whatIf: w?.text ?? null,
       whatIfAssumption: w?.assumption ?? null,

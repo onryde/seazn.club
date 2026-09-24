@@ -43,6 +43,8 @@ import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import { TableView } from "../competition-hub-schema";
 import {
   buildTableView,
@@ -53,6 +55,7 @@ import {
   STRUCTURAL_ABBR_KEYS,
   STRUCTURAL_KEYS,
   TIE_BREAK_MSG_KEYS,
+  tieBreakRule,
   type TableViewInput,
 } from "../standings-view";
 
@@ -219,9 +222,10 @@ describe("buildTableView", () => {
     // `entrantLogos.b` is an explicit null — the initials fallback, not a badge.
     expect(v.rows[1]).toMatchObject({ rank: 2, name: "Beta", badgeUrl: null, champion: false });
     // The rule name is LOCALISED too — a whole English clause inside a
-    // translated sentence is a leak, unlike a bare notation (GD, NRR).
+    // translated sentence is a leak, unlike a bare notation (GD, NRR). And it
+    // is the ledger's word: these rows fold gf/ga/gd, so "goal difference".
     expect(v.rows[1]!.tieBreakText).toBe(
-      'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diff"}',
+      'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diffGoals"}',
     );
     expect(TableView.parse(v)).toEqual(v);
   });
@@ -298,6 +302,7 @@ describe("buildTableView", () => {
   const HEADER_IDENTICAL_BY_DESIGN: Readonly<Record<string, readonly string[]>> = {
     "table.abbr.gf": ["es"], // goles a favor — GF
     "table.col.ratio": ["es", "fr"],
+    "table.abbr.ratio": ["es", "fr"],
   };
 
   it("every header key is authored in all four locales, the English value IS the engine's label, and every locale translates every word", () => {
@@ -329,7 +334,7 @@ describe("buildTableView", () => {
     // One key, two words: tennis's sets and badminton's games.
     expect(columnHeader({ key: "sets_won", label: "Sets won" }, msg)).toEqual({ abbr: "table.col.setsWon", title: "table.col.setsWon" });
     expect(columnHeader({ key: "sets_won", label: "Games won" }, msg)).toEqual({ abbr: "table.col.gamesWon", title: "table.col.gamesWon" });
-    expect(columnHeader({ key: "set_ratio", label: "Ratio" }, msg)).toEqual({ abbr: "table.col.ratio", title: "table.col.ratio" });
+    expect(columnHeader({ key: "set_ratio", label: "Ratio" }, msg)).toEqual({ abbr: "table.abbr.ratio", title: "table.col.ratio" });
     expect(columnHeader({ key: "nrr", label: "NRR" }, msg)).toEqual({ abbr: "NRR", title: "NRR" });
     // A label no module declares for that key is not guessed at.
     expect(columnHeader({ key: "sets_won", label: "Frames won" }, msg)).toEqual({ abbr: "Frames won", title: "Frames won" });
@@ -434,6 +439,10 @@ describe("qualification (spec 2026-09-22)", () => {
   });
 
   it("carries the table line and each row's status through unchanged, on the row of the entrant it names", () => {
+    // The sentences are today's English copy, read from the dictionary (and
+    // the what-if's rule from the builder's own `tieBreakRule` over these
+    // rows), so a copy change moves them instead of leaving a retired line.
+    const english = (key: Parameters<typeof t>[1], vars?: Record<string, string | number>) => t(en as Dict, key, vars);
     const qualification = {
       table: {
         cutIndex: 1,
@@ -446,7 +455,7 @@ describe("qualification (spec 2026-09-22)", () => {
           label: "Win and in",
           ariaLabel: "Rank 1, Win and in, show details",
           headline: "Win your next match and you're through to KO.",
-          ifYouLose: "If you lose your next match: Needs help.",
+          ifYouLose: english("table.qual.ifYouLose.needsHelp"),
           whatIf: null,
           whatIfAssumption: null,
         },
@@ -455,8 +464,13 @@ describe("qualification (spec 2026-09-22)", () => {
           label: "Needs help",
           ariaLabel: "Rank 2, Needs help, show details",
           headline: "Still open: you need other results to go your way.",
-          ifYouLose: "If you lose your next match: Out.",
-          whatIf: "If you finish level on points with Alpha, goal/run difference decides. Now: you +1, Alpha +2.",
+          ifYouLose: english("table.qual.ifYouLose.out"),
+          whatIf: english("table.qual.whatIf.ruleValues", {
+            rival: "Alpha",
+            rule: tieBreakRule("diff", (k) => english(k), rows[0]!, rows),
+            mine: "+1",
+            theirs: "+2",
+          }),
           whatIfAssumption: null,
         },
       },
@@ -515,7 +529,9 @@ describe("qualification (spec 2026-09-22)", () => {
           colour: null,
           cells: ["1", "0", "0", "1", "0", "1", "3"],
           cellNotes: [null, null, null, null, null, null, null],
-          tieBreakText: 'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diff"}',
+          // The one field the owner's copy fix moved (2026-09-23): a gd row
+          // names goal difference, not the old catch-all.
+          tieBreakText: 'table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.diffGoals"}',
           qual: null,
           champion: false,
         },

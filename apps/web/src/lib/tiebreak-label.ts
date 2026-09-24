@@ -11,8 +11,16 @@ import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 
-export function localizedTieBreakLabel(dict: Dict, key: string): string {
-  const messageKey = `div.detail.tiebreak.rule.${key}` as MessageKey;
+/** The `diff`/`for` rules in the sport's word, as the public tables print
+ *  them: "goal difference" / "run difference" / plain "difference" (never the
+ *  old catch-all "goal/run difference"). The server page resolves the family
+ *  from the division's module (`sportLedgerFamily` in
+ *  `server/public-site/standings-view.ts`); without one the plain word. */
+const LEDGER_SUFFIX = { goals: "Goals", runs: "Runs", plain: "" } as const;
+
+export function localizedTieBreakLabel(dict: Dict, key: string, family?: keyof typeof LEDGER_SUFFIX): string {
+  const suffix = (key === "diff" || key === "for") && family !== undefined ? LEDGER_SUFFIX[family] : "";
+  const messageKey = `div.detail.tiebreak.rule.${key}${suffix}` as MessageKey;
   const label = t(dict, messageKey);
   return label === messageKey ? key : label;
 }

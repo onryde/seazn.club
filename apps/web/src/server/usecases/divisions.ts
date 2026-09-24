@@ -80,6 +80,9 @@ export interface DivisionRow {
   auto_progress: boolean;
   /** SPEC-2: draft a news post when results land in this division. */
   auto_posts: boolean;
+  /** V416: publish seed numbers on the public site (`public_entrants_v`
+   *  redacts `seed` when false). Admin reads are unaffected. */
+  show_seeds: boolean;
   schedule_locked: boolean;
   archived_at: string | null;
   created_at: string;
@@ -104,7 +107,7 @@ const COLS = [
   "id", "competition_id", "name", "slug", "description", "sport_key", "variant_key", "config",
   "module_version", "tiebreakers", "category", "age_min", "age_max", "age_cutoff_month",
   "age_cutoff_day", "eligibility_note", "status",
-  "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "schedule_locked",
+  "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "show_seeds", "schedule_locked",
   "archived_at", "created_at", "seq", "youth", "player_name_display", "logo_url",
   "logo_storage_path", "required_court_tags",
 ] as const;
@@ -680,11 +683,20 @@ export async function patchDivision(
   // The same stored-before read also decides the privacy hotfix's public-page
   // expiry below: one read, one lock, one comparison for both.
   let maskingBefore: { youth: boolean; player_name_display: string | null } | undefined;
+  // V416: the stored `show_seeds` this write replaces, read under the same
+  // `for no key update` for the same reason — the public expiry below fires
+  // only when the STORED value actually flips, never on a re-send.
+  let seedsBefore: boolean | undefined;
   const row = await withTenant(auth.orgId, async (tx) => {
     const effective: Record<string, unknown> = { ...patch };
     if (patch.youth !== undefined || patch.player_name_display !== undefined || patch.age_max !== undefined) {
       [maskingBefore] = await tx<{ youth: boolean; player_name_display: string | null }[]>`
         select youth, player_name_display from divisions where id = ${id} for no key update`;
+    }
+    if (patch.show_seeds !== undefined) {
+      const [stored] = await tx<{ show_seeds: boolean }[]>`
+        select show_seeds from divisions where id = ${id} for no key update`;
+      seedsBefore = stored?.show_seeds;
     }
     // RS004 review finding 1: checkAgeBand (schemas.ts) only compares
     // age_min/age_max when BOTH are present in the SAME patch body — a
@@ -987,6 +999,23 @@ export async function patchDivision(
     // peers (review r2-m1).
     dropNamedPublicDocuments(
       { competitionIds: [row.competition_id], divisionIds: [row.id], fixtureIds: fixtures.map((f) => f.id) },
+      { divisionId: row.id },
+      peersExpired,
+    );
+  }
+  // V416: seeds on or off must reach the public site now, not after a TTL —
+  // turning them OFF is the organiser saying "take these numbers down". The
+  // seed reaches spectators only through this division's own documents (the
+  // hub's Teams cards, the division page, its entrants document; no player
+  // card, org page or match centre prints one), so the division tag EXPIRES
+  // with the competition tag revalidated — `fireScoreRevalidate`'s pair, for
+  // the reason the name-policy block above gives — and the org tag is left
+  // alone. The hub and this division's Redis documents are dropped by name.
+  // Synchronous, never behind a `void`, for the same flush reason.
+  if (seedsBefore !== undefined && seedsBefore !== row.show_seeds) {
+    const peersExpired = fireScoreRevalidate(row.id, row.competition_id);
+    dropNamedPublicDocuments(
+      { competitionIds: [row.competition_id], divisionIds: [row.id], fixtureIds: [] },
       { divisionId: row.id },
       peersExpired,
     );

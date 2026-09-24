@@ -28,6 +28,14 @@
 // rather than a silent pass — the shape that lets a rule certify `en` and wave
 // es/fr/nl through untouched.
 //
+// ── SWISS (owner ruling 2026-09-24, "case 2") ────────────────────────────────
+// The copy that replaced it still told organisers a Swiss withdrawal COULD be
+// voided, only rarely ("Swiss pairs a round at a time, so that's rare"). It
+// never is now: `withdrawTableEntrant` exempts swiss from the expunge, because
+// an expunged Swiss board stranded the division. Each locale must drop the
+// "rare" sentence and say Swiss never voids. The pre-ruling body is kept per
+// locale as `swissWas`, the positive proof the retired pattern bites.
+//
 // LOCATION IS LOAD-BEARING: `src/lib/__tests__/`, beside
 // `dictionary-copy-truth.test.ts`. CI's unit job selects `src/server src/lib`
 // and `src/app`; a file outside those runs in no job at all.
@@ -60,6 +68,12 @@ type Claim = {
   qualifier: RegExp;
   /** The open formats (ladder / americano), absent from the retired copy. */
   openFormats: RegExp;
+  /** The body as shipped before the Swiss ruling — proof `swissRare` bites. */
+  swissWas: string;
+  /** "Swiss voids rarely" — false since the ruling; must not survive. */
+  swissRare: RegExp;
+  /** Swiss never voids their results. */
+  swissNever: RegExp;
 };
 
 const CLAIMS: Record<string, Claim> = {
@@ -69,6 +83,10 @@ const CLAIMS: Record<string, Claim> = {
     retired: [/less than half their games/i, /as if they never entered/i],
     qualifier: /scheduled so far/i,
     openFormats: /americano/i,
+    swissWas:
+      "In a running table stage their results stand and remaining games walk over to opponents — unless more of their games are still to play than they've played, counting only what's scheduled so far; then those results are voided too. Swiss pairs a round at a time, so that's rare. In a bracket, opponents advance; in a ladder or americano, remaining games are voided and earned standings stand. All of it rides the normal scoring ledger, so each can be undone.",
+    swissRare: /so that's rare/i,
+    swissNever: /in Swiss they never are/i,
   },
   es: {
     retiredBody:
@@ -76,6 +94,10 @@ const CLAIMS: Record<string, Claim> = {
     retired: [/menos de la mitad de sus partidos/i, /como si nunca hubiera participado/i],
     qualifier: /hasta ahora/i,
     openFormats: /americano/i,
+    swissWas:
+      "En una fase de liga en curso sus resultados se mantienen y los partidos restantes se otorgan a los oponentes — salvo que le queden más partidos por jugar de los que ya ha jugado, contando solo lo programado hasta ahora; entonces esos resultados también se anulan. El suizo empareja una ronda cada vez, así que ahí es raro. En un cuadro, los oponentes avanzan; en una escalera o un americano, los partidos restantes se anulan y la clasificación lograda se mantiene. Todo pasa por el registro de puntuación normal, así que cada uno se puede deshacer.",
+    swissRare: /ahí es raro/i,
+    swissNever: /en el suizo, nunca/i,
   },
   fr: {
     retiredBody:
@@ -83,6 +105,10 @@ const CLAIMS: Record<string, Claim> = {
     retired: [/moins de la moiti[ée] de leurs matchs/i, /jamais particip[ée]/i],
     qualifier: /jusqu['’]ici/i,
     openFormats: /americano/i,
+    swissWas:
+      "Dans une phase de poule en cours, leurs résultats sont conservés et les matchs restants sont attribués par forfait aux adversaires — sauf s'il leur reste plus de matchs à jouer qu'ils n'en ont joué, en ne comptant que ce qui est programmé jusqu'ici ; ces résultats sont alors invalidés eux aussi. Le suisse apparie une ronde à la fois, c'est donc rare. Dans un tableau, les adversaires progressent ; dans une échelle ou un americano, les matchs restants sont invalidés et le classement acquis est conservé. Tout passe par le registre de scores habituel, chacun peut donc être annulé.",
+    swissRare: /c'est donc rare/i,
+    swissNever: /en système suisse, jamais/i,
   },
   nl: {
     retiredBody:
@@ -90,6 +116,10 @@ const CLAIMS: Record<string, Claim> = {
     retired: [/minder dan de helft van hun wedstrijden/i, /nooit hebben deelgenomen/i],
     qualifier: /tot nu toe/i,
     openFormats: /americano/i,
+    swissWas:
+      "In een lopende tabelfase blijven hun resultaten staan en gaan de resterende wedstrijden als walk-over naar de tegenstanders — tenzij ze nog meer wedstrijden te spelen hebben dan ze al gespeeld hebben, geteld over alleen wat tot nu toe is ingepland; dan worden die resultaten ook ongeldig verklaard. Het Zwitserse systeem paart één ronde per keer, dus daar is dat zeldzaam. In een schema gaan de tegenstanders door; in een ladder of americano worden resterende wedstrijden ongeldig verklaard en blijft de behaalde stand staan. Alles verloopt via het normale scoreregister, dus elk kan ongedaan worden gemaakt.",
+    swissRare: /dus daar is dat zeldzaam/i,
+    swissNever: /in het Zwitserse systeem nooit/i,
   },
 };
 
@@ -142,6 +172,17 @@ describe(`${KEY} tells the truth in every locale`, () => {
         `${locale} ${KEY} is missing the scheduled-so-far qualifier ${String(claim.qualifier)} — ` +
           `without it an organiser reads the threshold as half a season, which the engine never measures.\n  on disk: ${text}`,
       ).toBe(true);
+    });
+
+    it(`${locale}: the Swiss patterns bite the pre-ruling copy — "rare" is there, "never" is not`, () => {
+      expect(claim.swissRare.test(claim.swissWas), `${locale} swissRare matches nothing it retired`).toBe(true);
+      expect(claim.swissNever.test(claim.swissWas), `${locale} swissNever already matched the old copy`).toBe(false);
+    });
+
+    it(`${locale}: says a Swiss withdrawal never voids results, not that it rarely does`, () => {
+      const text = body(locale);
+      expect(claim.swissRare.test(text), `${locale} ${KEY} still says Swiss voiding is rare.\n  on disk: ${text}`).toBe(false);
+      expect(claim.swissNever.test(text), `${locale} ${KEY} does not say Swiss never voids.\n  on disk: ${text}`).toBe(true);
     });
 
     it(`${locale}: covers the open formats the retired copy left out`, () => {

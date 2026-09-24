@@ -45,6 +45,11 @@ concurrency:
   group: build-guard-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
+# Every job only reads the repo; a job needing more declares its own block.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Production build

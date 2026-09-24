@@ -35,6 +35,7 @@
 import type { MessageKey } from "@/lib/messages";
 import { engineErrorLabel, type MsgFn } from "@/lib/scoring-vocab";
 import type { RejectionInfo } from "./use-pad-pipeline";
+import { NEXT_MATCH_STARTED_CODE, nextMatchLabel } from "@/lib/next-match-started";
 
 /**
  * Wire code -> the pad's words. Every entry is a PERMANENT refusal the pad can
@@ -62,6 +63,9 @@ export const REFUSAL_KEY: Readonly<Record<string, MessageKey>> = {
   UNDO_TARGET_MISSING: "scorepad.refusal.undoMissing",
   UNDO_ALREADY_VOIDED: "scorepad.refusal.undoAlready",
   UNDO_NOT_UNDOABLE: "scorepad.refusal.undoNotUndoable",
+  // The plain sentence, for a refusal that arrived without its ref;
+  // `refusalText` names the match whenever the ref is there.
+  NEXT_MATCH_STARTED: "scorepad.refusal.nextMatchStarted",
   QUEUE_STALLED: "scorepad.refusal.queueStalled",
 };
 
@@ -77,6 +81,13 @@ export function refusalText(rejection: RejectionInfo | null, m: MsgFn): string |
   if (!rejection) return null;
   const engine = engineErrorLabel(rejection.code, m);
   if (engine !== null) return engine;
+  // Owner ruling 2026-09-23: the refusal NAMES the match to void first — by
+  // the label the schedule board shows it by (fix round 2 ruling): "F·1" for a
+  // knockout final, "R2·1" where the board prints no code
+  // (`lib/next-match-started.ts`'s `nextMatchLabel`).
+  if (rejection.code === NEXT_MATCH_STARTED_CODE && rejection.nextMatch) {
+    return m("scorepad.refusal.nextMatchStartedRef", { ref: nextMatchLabel(rejection.nextMatch, m) });
+  }
   const own = REFUSAL_KEY[rejection.code];
   return m(own ?? REFUSAL_FALLBACK);
 }

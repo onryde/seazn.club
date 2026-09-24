@@ -179,7 +179,10 @@ async function inRequestWithAfter<T>(
         return fsCache.revalidateTag(list, durations);
       },
       // `unstable_cache` always misses here: every read runs its callback.
+      // Next 16.3 keys it through `generateSimpleCacheKey`; older releases
+      // called `generateCacheKey`. Stub both so the harness tracks either.
       generateCacheKey: async (key: string) => key,
+      generateSimpleCacheKey: async (key: string) => key,
       get: async () => null,
       set: async () => {},
     },
