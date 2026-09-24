@@ -304,7 +304,166 @@ describe("DeviceScorePad — Confirm (scorer sheets §4.5.1)", () => {
     // bootstrap would send its first tap at a stale seq (P8).
     expect(seeded.map((e) => [e.type, e.seq, e.recordedBy])).toEqual([["core.start", 1, "u1"]]);
   });
+
+  // Task 6 review I1: the test above is only ONE way into "started". Every
+  // other way — another device's Start seen on a tab return, this phone's Start
+  // refused SEQ_CONFLICT because another device got there first, a second tap
+  // after a Start whose re-read failed — used to mount the pad on the page's
+  // PRE-start bootstrap (empty here), the P8 hazard: its stream does not read on
+  // mount, so its first tap goes out at a stale seq for up to POLL_MS.
+  describe("every way into 'started' seeds the pad from the read that saw it (review I1)", () => {
+    /** Another device's Start: a different link and a different human, so a
+     *  seed from it cannot be confused with a local fabrication. */
+    const OTHER_START = {
+      id: "ev-start-other",
+      seq: 1,
+      type: "core.start",
+      payload: {},
+      recorded_at: "2026-09-23T10:31:00.000Z",
+      voids_event_id: null,
+      device_link_id: "dl-other",
+      recorded_by: "u-other",
+    };
+    type Server = {
+      status: string;
+      ledger: unknown[];
+      /** What each POST does, in order; past the end, resolve. */
+      posts: (() => Promise<unknown>)[];
+      /** Fail the next N reads with a dropped connection. */
+      failReads: number;
+      posted: string[];
+    };
+    /** A fake server behind `apiV1`, restored after the test. */
+    async function serve(server: Server) {
+      const { apiV1, ApiV1Error } = await import("@/lib/client-v1");
+      const original = vi.mocked(apiV1).getMockImplementation()!;
+      onTestFinished(() => void vi.mocked(apiV1).mockImplementation(original));
+      vi.mocked(apiV1).mockImplementation(((url: string, options?: { method?: string; json?: { type: string } }) => {
+        if (options?.method === "POST") {
+          server.posted.push(options.json!.type);
+          const next = server.posts.shift();
+          return next ? next() : Promise.resolve({});
+        }
+        if (server.failReads > 0) {
+          server.failReads -= 1;
+          return Promise.reject(new TypeError("Failed to fetch"));
+        }
+        if (url.includes("/events")) return Promise.resolve(server.ledger);
+        return Promise.resolve({ status: server.status, last_seq: server.ledger.length, summary: null, state: {}, outcome: null });
+      }) as typeof apiV1);
+      return ApiV1Error;
+    }
+    const seedOf = (tree: ReactElement[]) => {
+      const pad = tree.find((e) => e.type === ScorePad);
+      expect(pad, "the pad mounts once the match reads as started").toBeDefined();
+      return (propsOf(pad!).initialEvents as { type: string; seq: number; recordedBy: string | null }[]).map(
+        (e) => [e.type, e.seq, e.recordedBy],
+      );
+    };
+    const scheduled = () => ({ ...props("scheduled", null), initialState: { status: "scheduled", last_seq: 0, summary: null, state: {}, outcome: null }, initialEvents: [] });
+
+    it("a tab return that first sees ANOTHER device's Start mounts the pad on that read's ledger", async () => {
+      const doc = { ...tabTarget(), visibilityState: "visible" as DocumentVisibilityState };
+      const win = tabTarget();
+      vi.stubGlobal("document", doc);
+      vi.stubGlobal("window", win);
+      onTestFinished(() => void vi.unstubAllGlobals());
+      const server: Server = { status: "scheduled", ledger: [], posts: [], failReads: 0, posted: [] };
+      await serve(server);
+      const island = renderIsland(DeviceScorePad, scheduled());
+      await flush();
+      expect(byTestId(island.tree(), "scan-confirm"), "precondition: Confirm, no pad").toBeDefined();
+      // The other device starts the match; this phone taps nothing.
+      server.status = "in_play";
+      server.ledger = [OTHER_START];
+      for (const fn of [...(win.listeners.focus ?? [])]) fn();
+      await flush();
+      expect(server.posted, "this phone sent nothing").toEqual([]);
+      expect(seedOf(island.tree())).toEqual([["core.start", 1, "u-other"]]);
+    });
+
+    it("Start refused SEQ_CONFLICT (another device started first): the conflict's re-read seeds the pad", async () => {
+      const server: Server = { status: "scheduled", ledger: [], posts: [], failReads: 0, posted: [] };
+      const ApiV1Error = await serve(server);
+      server.posts = [
+        () => {
+          // The other device's Start landed first; this one's expected_seq is stale.
+          server.status = "in_play";
+          server.ledger = [OTHER_START];
+          return Promise.reject(new ApiV1Error("stale", 409, "SEQ_CONFLICT"));
+        },
+      ];
+      const island = renderIsland(DeviceScorePad, scheduled());
+      (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+      await flush();
+      expect(server.posted).toEqual(["core.start"]);
+      expect(seedOf(island.tree())).toEqual([["core.start", 1, "u-other"]]);
+    });
+
+    it("a Start that landed but whose re-read failed: the second tap's re-read seeds the pad", async () => {
+      const server: Server = { status: "scheduled", ledger: [], posts: [], failReads: 0, posted: [] };
+      const ApiV1Error = await serve(server);
+      const OWN_START = { ...OTHER_START, id: "ev-start-own", device_link_id: DEVICE_LINK_ID, recorded_by: "u1" };
+      server.posts = [
+        () => {
+          server.status = "in_play";
+          server.ledger = [OWN_START];
+          server.failReads = 2; // the re-read's /state and /events both drop
+          return Promise.resolve({});
+        },
+        // The second tap still carries expected_seq 0: the server's tip is 1.
+        () => Promise.reject(new ApiV1Error("stale", 409, "SEQ_CONFLICT")),
+      ];
+      const island = renderIsland(DeviceScorePad, scheduled());
+      (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+      await flush();
+      expect(byTestId(island.tree(), "scan-confirm"), "the failed re-read left the phone on Confirm").toBeDefined();
+      (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+      await flush();
+      expect(server.posted).toEqual(["core.start", "core.start"]);
+      expect(seedOf(island.tree())).toEqual([["core.start", 1, "u1"]]);
+    });
+
+    it("a double tap on Start sends core.start exactly once (the busy guard)", async () => {
+      const server: Server = { status: "scheduled", ledger: [], posts: [], failReads: 0, posted: [] };
+      await serve(server);
+      let land: () => void = () => {};
+      server.posts = [
+        () =>
+          new Promise((resolve) => {
+            land = () => {
+              server.status = "in_play";
+              server.ledger = [{ ...OTHER_START, device_link_id: DEVICE_LINK_ID, recorded_by: "u1" }];
+              resolve({});
+            };
+          }),
+      ];
+      const island = renderIsland(DeviceScorePad, scheduled());
+      /** A tap as the browser delivers it: a disabled button fires nothing. */
+      const tap = () => {
+        const start = propsOf(byTestId(island.tree(), "score-start-match")!);
+        if (!start.disabled) (start.onClick as () => void)();
+      };
+      tap();
+      tap(); // the second tap lands while the first POST is still in flight
+      land();
+      await flush();
+      expect(server.posted, "exactly one core.start for two taps").toEqual(["core.start"]);
+    });
+  });
 });
+
+/** A recording `EventTarget` stand-in for the tab-return listeners (the same
+ *  double the freshness-floor suite uses). */
+function tabTarget() {
+  const listeners: Record<string, (() => void)[]> = {};
+  return {
+    listeners,
+    addEventListener: (type: string, fn: () => void) => void (listeners[type] ??= []).push(fn),
+    removeEventListener: (type: string, fn: () => void) =>
+      void (listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn)),
+  };
+}
 
 // Task 5 review carries: the chrome's own words for the screen it is on.
 describe("DeviceScorePad — View-only chrome (scorer sheets §4.5.3)", () => {

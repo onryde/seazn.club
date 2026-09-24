@@ -149,10 +149,13 @@ export function DeviceScorePad({
    *  bounded (it never voids the wrong event) but an unearned error where a
    *  clean undo was expected. Found in review (S13 follow-ups). */
   const [padSyncing, setPadSyncing] = useState(false);
-  /** What the inner pad mounts on. The page's bootstrap, unless this screen
-   *  started the match itself: the pad mounts only after Start (Confirm,
-   *  §4.5.1), so it is re-seeded from the post-start ledger (see `send`). */
+  /** What the inner pad mounts on. The page's bootstrap when the page itself
+   *  rendered the match started; otherwise the ledger of whichever read first
+   *  saw it started (`seededStarted`, below the dead-link return). */
   const [padSeed, setPadSeed] = useState<readonly EventEnvelope[]>(scorePadV2?.initialEvents ?? []);
+  /** The `started` that `padSeed` was taken for. Starts as the page's own
+   *  status, whose ledger IS the bootstrap. */
+  const [seededStarted, setSeededStarted] = useState(initialState.status !== "scheduled");
 
   const authed = useCallback(
     <T,>(url: string, options?: Parameters<typeof apiV1>[1]) =>
@@ -206,8 +209,13 @@ export function DeviceScorePad({
         if (state === null || typeof state !== "object" || !Array.isArray(all)) {
           throw Object.assign(new Error(), { name: "ResyncShapeError" });
         }
-        setLive(state);
+        // The ledger lands BEFORE the status: the render in which the match
+        // first reads as started seeds the inner pad from `events` (see
+        // `seededStarted`), so that render must already hold this read's
+        // ledger. React batches the pair anyway; this order keeps it true
+        // where nothing batches.
         setEvents(all);
+        setLive(state);
         return all;
       } finally {
         if (timer !== null) clearTimeout(timer);
@@ -289,13 +297,8 @@ export function DeviceScorePad({
             throw err;
           }
         }
-        const all = await resync();
-        // The inner pad mounts only after Start (Confirm, §4.5.1) and its stream
-        // does not read on mount, so it is SEEDED from this post-start ledger —
-        // otherwise it opens on the pre-start bootstrap and sends a stale seq (P8).
-        if (type === "core.start") {
-          setPadSeed(all.map((e) => eventOutToEnvelope(fixture.id, { ...e, recorded_by: e.recorded_by ?? null })));
-        }
+        // A Start's re-read is what seeds the inner pad (`seededStarted`).
+        await resync();
         return true;
       } catch (err) {
         if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) {
@@ -401,6 +404,22 @@ export function DeviceScorePad({
   const summary = live.summary as { headline?: string } | null;
   const decided = live.outcome !== null;
   const started = live.status !== "scheduled";
+  // P8, for EVERY way into "started" (Task 6 review I1). The inner pad mounts
+  // only once the match is started (Confirm, §4.5.1), and its stream does not
+  // read on mount, so it must mount on the ledger of the read that FIRST saw
+  // the match started — never the page's pre-start bootstrap, or its first tap
+  // goes out at a stale seq for up to POLL_MS. That read may be this phone's
+  // own Start, a Start refused SEQ_CONFLICT because another device got there
+  // first, a tab return after another device started, or a second tap after a
+  // Start whose re-read failed: all of them go through `resync`, which lands
+  // `events` with `live`. Adjusted during render ("adjusting state when a prop
+  // changes"), so no frame mounts the pad on the old seed.
+  if (started !== seededStarted) {
+    setSeededStarted(started);
+    if (started) {
+      setPadSeed(events.map((e) => eventOutToEnvelope(fixture.id, { ...e, recorded_by: e.recorded_by ?? null })));
+    }
+  }
   const scoring = live.status !== "finalized" && live.status !== "cancelled";
   const inPlay = live.status === "in_play";
   // Scorer sheets §4.5.3 — View-only is "final scoreboard, no controls": the
