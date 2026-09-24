@@ -1,0 +1,55 @@
+// Shared inputs for the scorer-sheet renderer's three test files. Their own
+// file, not exported from a test file: importing a test file collects its
+// describes a second time.
+import { resolve } from "node:path";
+import type { DocModel } from "@seazn/engine/exports";
+import type { SheetModel, SheetRow } from "../scorer-sheet-pdf";
+
+export const header: DocModel = {
+  kind: "scoresheet",
+  title: "Cup",
+  description: "Wednesday 23 September",
+  meta: { printedAt: "2026-09-23 08:00" },
+  sections: [],
+  pageBreaks: "auto",
+};
+
+export const labels: SheetModel["labels"] = {
+  eyebrow: "SCORER SHEETS",
+  scan: "Scan to score",
+  winner: "Winner",
+  score: "Score",
+  signature: "Umpire",
+  checkNames: "Scan to score. Check names on screen before you start.",
+};
+
+/** A realistic token: `dl_` + 32 random bytes as base64url (device-links.ts). */
+export const token = (i: number) => `dl_${String(i).padStart(3, "0")}Qx7vN2mK8pL4rT6wY9zB1cD3fG5hJ0kS-_aEuIoP`;
+
+export const row = (i: number, over: Partial<SheetRow> = {}): SheetRow => ({
+  fixtureId: `f${i}`,
+  url: `https://example.test/score/${token(i)}`,
+  time: "10:30",
+  matchLine: `Open · QF·${i}`,
+  home: `Home ${i}`,
+  away: `Away ${i}`,
+  homeTbd: false,
+  awayTbd: false,
+  homeMembers: [],
+  awayMembers: [],
+  ...over,
+});
+
+export const model = (pages: SheetRow[][], over: Partial<SheetModel> = {}): SheetModel => ({
+  header,
+  labels,
+  pages: pages.map((rows, i) => ({ heading: `Court ${i + 1} · page 1 of 1`, rows })),
+  ...over,
+});
+
+/** fontDir() defaults to <cwd>/apps/web/assets/fonts, which does not exist
+ *  when vitest runs from apps/web. Unset, registerFonts SILENTLY falls back to
+ *  Helvetica and a test would prove the wrong fonts. */
+export function useBrandFonts(): void {
+  process.env.DOC_FONT_DIR = resolve(import.meta.dirname, "../../../assets/fonts");
+}
