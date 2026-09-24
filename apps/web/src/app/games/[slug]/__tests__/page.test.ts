@@ -48,6 +48,18 @@ describe("games/[slug] page metadata — Open Graph", () => {
     expect(metadata.openGraph?.url).toBe("https://seazn.club/games/chess-quest");
   });
 
+  // Next applies [slug]/opengraph-image.tsx only when this level's openGraph
+  // does not OWN an `images` key (resolve-metadata.js, mergeStaticMetadata:
+  // `!source.openGraph.hasOwnProperty('images')`). Even `images: []` would
+  // silently drop the game's share picture from the <head>.
+  it("leaves openGraph.images unset, so [slug]/opengraph-image.tsx supplies og:image", async () => {
+    const metadata = await generateMetadata({
+      params: Promise.resolve({ slug: "2048" }),
+    });
+    expect(metadata.openGraph).toBeDefined();
+    expect(Object.hasOwn(metadata.openGraph!, "images")).toBe(false);
+  });
+
   it("returns empty metadata for an unknown slug (no crash, matches the existing notFound() path)", async () => {
     const metadata = await generateMetadata({
       params: Promise.resolve({ slug: "not-a-real-game" }),
