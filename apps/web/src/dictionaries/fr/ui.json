@@ -806,6 +806,8 @@
   "sheets.preparing": "Préparation…",
   "sheets.error.noFixtures": "Aucun match à imprimer ce jour-là.",
   "sheets.error.generic": "Impossible de préparer les feuilles. Réessayez.",
+  "sheets.error.notAllowed": "Vous ne pouvez pas imprimer les feuilles de score de cette compétition.",
+  "sheets.gate.reason": "Les feuilles de score imprimables sont incluses dans Pro et l’Event Pass.",
   "payments.title": "Connect",
   "payments.desc": "Comment vos frais d'inscription sont collectés — paiements par carte via Stripe, ou vos propres instructions de paiement en espèces / par virement bancaire. Chaque division choisit sa méthode dans ses paramètres d'inscription.",
   "payments.planNote": "Le forfait et l'abonnement se trouvent sous",

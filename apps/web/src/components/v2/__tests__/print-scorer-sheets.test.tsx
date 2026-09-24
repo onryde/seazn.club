@@ -6,11 +6,18 @@
 // the v1 envelope `{ ok:false, error:{ code, message } }`).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import en from "@/dictionaries/en/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
 
 vi.mock("@/components/upgrade-gate", () => ({ UpgradeGate: vi.fn(() => null) }));
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { PrintScorerSheets } from "@/components/v2/print-scorer-sheets";
+
+const EN = en as Record<string, string>;
+const FR = fr as Record<string, string>;
 
 const byTestId = (tree: ReactElement[], id: string) => tree.find((e) => propsOf(e)["data-testid"] === id);
 const base: Parameters<typeof PrintScorerSheets>[0] = {
@@ -37,6 +44,13 @@ const pdf = () =>
   });
 const sentBody = (fetchFn: ReturnType<typeof vi.fn>) =>
   JSON.parse((fetchFn.mock.calls[0]![1] as RequestInit).body as string) as { date: string };
+/** A refusal must hand the button BACK: enabled, and saying "Print" again —
+ *  not stuck on "Preparing…" with nothing in flight. */
+const expectIdle = (island: { tree: () => ReactElement[]; text: () => string }) => {
+  expect(propsOf(byTestId(island.tree(), "print-sheets-submit")!).disabled).toBe(false);
+  expect(propsOf(byTestId(island.tree(), "print-sheets-submit")!).children).toBe(EN["sheets.print"]);
+  expect(island.text()).not.toContain(EN["sheets.preparing"]);
+};
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -45,6 +59,12 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     const island = renderIsland(PrintScorerSheets, { ...base, days: [], defaultDay: null });
     expect(island.tree()).toEqual([]);
     expect(byTestId(island.tree(), "print-sheets")).toBeUndefined();
+  });
+
+  it("the empty case outranks the paywall: no days on a plan without the feature renders nothing, not the gate", () => {
+    const island = renderIsland(PrintScorerSheets, { ...base, days: [], defaultDay: null, allowed: false });
+    expect(island.tree()).toEqual([]);
+    expect(island.tree().find((e) => e.type === UpgradeGate)).toBeUndefined();
   });
 
   it("each half of the empty case stands alone: no days, or no default day, renders nothing", () => {
@@ -133,6 +153,13 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     const submit = propsOf(byTestId(island.tree(), "print-sheets-submit")!);
     expect(submit.disabled).toBe(true);
     expect(island.text()).toContain("Preparing…");
+    // The harness calls onClick directly and so walks straight past
+    // `disabled` — which is what makes this second tap a test of the
+    // handler's own in-flight guard. In a browser `disabled` stops it first;
+    // the assertion above pins that half.
+    click(island.tree());
+    await flush();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
     release(pdf());
     await flush();
     expect(propsOf(byTestId(island.tree(), "print-sheets-submit")!).disabled).toBe(false);
@@ -153,26 +180,45 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     const island = renderIsland(PrintScorerSheets, { ...base, download });
     click(island.tree());
     await flush();
-    expect(byTestId(island.tree(), "print-sheets-error")).toBeDefined();
+    const error = byTestId(island.tree(), "print-sheets-error");
+    expect(error).toBeDefined();
+    // Announced, not just painted: the refusal lands after the click, away
+    // from the focus, so a screen reader only hears it as an alert.
+    expect(propsOf(error!).role).toBe("alert");
     expect(island.text()).toContain("No matches to print on that day.");
     expect(island.text()).not.toContain("No fixtures to print on that day");
     expect(download).not.toHaveBeenCalled();
+    expectIdle(island);
   });
 
-  it("any other refusal (429, 500, a non-JSON body) shows the localised generic line, never the server's message", async () => {
-    for (const res of [
-      Response.json({ ok: false, error: { code: "RATE_LIMITED", message: "Too many requests" } }, { status: 429 }),
-      new Response("upstream exploded", { status: 500 }),
-    ]) {
-      vi.stubGlobal("fetch", vi.fn(async () => res));
-      const island = renderIsland(PrintScorerSheets, { ...base, download: vi.fn() });
-      click(island.tree());
-      await flush();
-      expect(propsOf(byTestId(island.tree(), "print-sheets-error")!).children).toBe(
-        "The sheets could not be prepared. Try again.",
-      );
-      expect(island.text()).not.toContain("Too many requests");
-    }
+  // Each refusal the route can give, named for what the organiser can DO about
+  // it. The two scoring-link lines are reused verbatim — a signed-out or
+  // throttled organiser is in the same position whichever button they pressed.
+  it.each([
+    [401, "dlink.error.signedOut", { code: "UNAUTHENTICATED", message: "Authentication required" }],
+    [402, "sheets.error.notAllowed", { code: "FEATURE_NOT_IN_PLAN", message: "Feature not in plan" }],
+    [403, "sheets.error.notAllowed", { code: "FORBIDDEN", message: "Forbidden" }],
+    [429, "dlink.error.rateLimited", { code: "RATE_LIMITED", message: "Too many requests" }],
+    [400, "sheets.error.generic", { code: "VALIDATION", message: "date: Invalid" }],
+    [422, "sheets.error.generic", { code: "SOMETHING_ELSE", message: "Unprocessable" }],
+    [500, "sheets.error.generic", null],
+  ] as const)("a %i refusal shows %s, never the server's message, and hands the button back", async (status, key, error) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        error ? Response.json({ ok: false, error }, { status }) : new Response("upstream exploded", { status }),
+      ),
+    );
+    const download = vi.fn();
+    const island = renderIsland(PrintScorerSheets, { ...base, download });
+    click(island.tree());
+    await flush();
+    expect(EN[key]).toBeTruthy();
+    expect(propsOf(byTestId(island.tree(), "print-sheets-error")!).children).toBe(EN[key]);
+    if (error) expect(island.text()).not.toContain(error.message);
+    expect(island.text()).not.toContain("upstream exploded");
+    expect(download).not.toHaveBeenCalled();
+    expectIdle(island);
   });
 
   it("a dropped connection shows the generic line, and a successful retry clears it", async () => {
@@ -183,7 +229,8 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     const island = renderIsland(PrintScorerSheets, { ...base, download });
     click(island.tree());
     await flush();
-    expect(byTestId(island.tree(), "print-sheets-error")).toBeDefined();
+    expect(propsOf(byTestId(island.tree(), "print-sheets-error")!).children).toBe(EN["sheets.error.generic"]);
+    expectIdle(island);
     click(island.tree());
     await flush();
     expect(byTestId(island.tree(), "print-sheets-error")).toBeUndefined();
@@ -194,8 +241,27 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     const island = renderIsland(PrintScorerSheets, { ...base, allowed: false, viewerPlan: "community" });
     const gate = island.tree().find((e) => e.type === UpgradeGate);
     expect(gate).toBeDefined();
-    expect(propsOf(gate!)).toMatchObject({ feature: "scoring.device_links", viewerPlan: "community" });
+    expect(propsOf(gate!)).toMatchObject({
+      feature: "scoring.device_links",
+      viewerPlan: "community",
+      // The feature's own sentence is about hand-over scoring links; this gate
+      // sells PRINTING, so it says so.
+      reason: EN["sheets.gate.reason"],
+    });
+    expect(EN["sheets.gate.reason"]).toBeTruthy();
     expect(byTestId(island.tree(), "print-sheets-submit")).toBeUndefined();
     expect(byTestId(island.tree(), "print-sheets-day")).toBeUndefined();
+  });
+
+  it("the gate's reason is in the organiser's language", () => {
+    vi.mocked(UpgradeGate).mockImplementationOnce(({ reason }) => <span data-reason="">{reason}</span>);
+    const html = renderToStaticMarkup(
+      <DictProvider dict={fr} locale="fr">
+        <PrintScorerSheets {...base} allowed={false} viewerPlan="community" />
+      </DictProvider>,
+    );
+    expect(FR["sheets.gate.reason"]).toBeTruthy();
+    expect(FR["sheets.gate.reason"]).not.toBe(EN["sheets.gate.reason"]);
+    expect(html).toBe(`<span data-reason="">${FR["sheets.gate.reason"]!.replaceAll("'", "&#x27;")}</span>`);
   });
 });

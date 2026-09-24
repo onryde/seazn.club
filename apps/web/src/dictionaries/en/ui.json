@@ -806,6 +806,8 @@
   "sheets.preparing": "Preparing…",
   "sheets.error.noFixtures": "No matches to print on that day.",
   "sheets.error.generic": "The sheets could not be prepared. Try again.",
+  "sheets.error.notAllowed": "You can't print scorer sheets for this competition.",
+  "sheets.gate.reason": "Printable scorer sheets are on Pro and the Event Pass.",
   "payments.title": "Connect",
   "payments.desc": "How your entry fees are collected — card payments via Stripe, or your own cash / bank-transfer instructions. Each division picks its method in its registration settings.",
   "payments.planNote": "Plan and subscription live under",

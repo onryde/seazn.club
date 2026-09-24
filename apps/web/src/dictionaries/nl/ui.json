@@ -806,6 +806,8 @@
   "sheets.preparing": "Bezig…",
   "sheets.error.noFixtures": "Geen wedstrijden om af te drukken op die dag.",
   "sheets.error.generic": "De formulieren konden niet worden gemaakt. Probeer het opnieuw.",
+  "sheets.error.notAllowed": "Je kunt voor deze competitie geen scoreformulieren afdrukken.",
+  "sheets.gate.reason": "Afdrukbare scoreformulieren zitten in Pro en de Event Pass.",
   "payments.title": "Connect",
   "payments.desc": "Hoe je inschrijfgelden worden geïnd — kaartbetalingen via Stripe, of je eigen instructies voor contant geld / bankoverschrijving. Elke divisie kiest haar methode in haar registratie-instellingen.",
   "payments.planNote": "Abonnement en plan vind je onder",

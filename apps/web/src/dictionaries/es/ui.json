@@ -806,6 +806,8 @@
   "sheets.preparing": "Preparando…",
   "sheets.error.noFixtures": "No hay partidos que imprimir ese día.",
   "sheets.error.generic": "No se han podido preparar las hojas. Inténtalo de nuevo.",
+  "sheets.error.notAllowed": "No puedes imprimir hojas de puntuación para esta competición.",
+  "sheets.gate.reason": "Las hojas de puntuación imprimibles están incluidas en Pro y en el Event Pass.",
   "payments.title": "Connect",
   "payments.desc": "Cómo se cobran tus cuotas de inscripción: pagos con tarjeta a través de Stripe, o tus propias instrucciones de pago en efectivo / transferencia bancaria. Cada división elige su método en sus ajustes de inscripción.",
   "payments.planNote": "El plan y la suscripción se encuentran en",

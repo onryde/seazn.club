@@ -11,6 +11,23 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { dayLabel } from "@/lib/day-label";
 import { downloadBlob } from "@/lib/download-blob";
+import type { MessageKey } from "@/lib/messages";
+
+/** A refusal's line, by what the organiser can do about it. Signed out and
+ *  throttled reuse the scoring-link lines (device-link-copy.ts) — the
+ *  organiser is in the same position whichever button they pressed. Anything
+ *  unlisted is worth another try. */
+const REFUSAL_BY_STATUS: Partial<Record<number, MessageKey>> = {
+  401: "dlink.error.signedOut",
+  402: "sheets.error.notAllowed",
+  403: "sheets.error.notAllowed",
+  429: "dlink.error.rateLimited",
+};
+
+function refusalKey(status: number, code: string | undefined): MessageKey {
+  if (code === "NO_FIXTURES_ON_DAY") return "sheets.error.noFixtures";
+  return REFUSAL_BY_STATUS[status] ?? "sheets.error.generic";
+}
 
 export function PrintScorerSheets({
   action,
@@ -38,7 +55,19 @@ export function PrintScorerSheets({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (days.length === 0 || defaultDay === null) return null;
-  if (!allowed) return <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} compact />;
+  // The empty case first: with nothing to print there is nothing to sell.
+  if (!allowed) {
+    return (
+      <UpgradeGate
+        feature="scoring.device_links"
+        // The feature's own sentence is about hand-over scoring links; this
+        // gate is selling printing.
+        reason={msg("sheets.gate.reason")}
+        viewerPlan={viewerPlan}
+        compact
+      />
+    );
+  }
 
   // The page re-renders the list when the board changes. A picked day that is
   // no longer on it would leave the select SHOWING one day (the browser falls
@@ -47,6 +76,8 @@ export function PrintScorerSheets({
   const day = days.includes(picked) ? picked : defaultDay;
 
   async function submit() {
+    // `disabled` stops a second tap in the browser; this stops a second call.
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -57,9 +88,9 @@ export function PrintScorerSheets({
       });
       if (!res.ok) {
         // The server's message is English prose; the organiser reads a
-        // localised line chosen by the wire code.
+        // localised line chosen by the status and wire code.
         const code = ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code;
-        setError(code === "NO_FIXTURES_ON_DAY" ? msg("sheets.error.noFixtures") : msg("sheets.error.generic"));
+        setError(msg(refusalKey(res.status, code)));
         return;
       }
       const name =
