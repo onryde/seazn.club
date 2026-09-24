@@ -165,6 +165,27 @@ describe.skipIf(!HAS_DB)("withdrawal cascade (spec 05 §5)", () => {
     }
   });
 
+  // The Swiss exception (owner ruling 2026-09-24, swiss-withdrawal-walkover
+  // .test.ts) is Swiss ONLY: a league under 50% still expunges, PLAYED result
+  // included — the exact input a Swiss withdrawal now walks over instead.
+  it("league, 1 played of 3 → still expunges: the played win is voided too, not only the pending games", async () => {
+    const auth = await seedOrg();
+    const { division, byName } = await rig(auth, ["A", "B", "C", "D"]);
+    const mine = (await fixturesOf(division.id)).filter(
+      (f) => f.home_entrant_id === byName.A || f.away_entrant_id === byName.A,
+    );
+    await decide(auth, mine[0]!.id, mine[0]!.home_entrant_id === byName.A); // A wins 1 of 3
+
+    const out = await withdrawEntrantCascade(auth, byName.A!);
+    expect(out).toMatchObject({ policy: "expunge", voided: 3, walkovers: 0, skipped_finalized: 0 });
+    const after = await fixturesOf(division.id);
+    for (const f of mine) {
+      const now = after.find((x) => x.id === f.id)!;
+      expect(now.status, "every A fixture, the played one included, is abandoned").toBe("abandoned");
+      expect(now.outcome?.kind ?? null).not.toBe("award");
+    }
+  });
+
   it("before the start there is no surgery — plain status flip", async () => {
     const auth = await seedOrg();
     const comp = await createCompetition(auth, {

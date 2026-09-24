@@ -489,6 +489,17 @@ describe("no status — stated first, each with its positive pair", () => {
     // After round 2, A has 2 of 3: award mode keeps the results.
     expect(view({ ...rr4(2), statuses: { A: "withdrawn" } })).not.toBeNull();
   });
+  it("F1: a departed SWISS entrant never expunges (owner ruling 2026-09-24), so the fixtures that hide a league table show", () => {
+    // rr4(1) as a Swiss: A has 1 played of 3, which expunges in a league (the
+    // test above). The cascade never expunges a Swiss withdrawal — played
+    // results stand, pending boards walk over — so the builder must agree
+    // and keep the table, or it hides statuses the cascade would never void.
+    const swiss = { ...rr4(1), kind: "swiss", meta: { qualifyCount: 2 } };
+    expect(view({ ...swiss, statuses: { A: "withdrawn" } })).not.toBeNull();
+    expect(view({ ...swiss, statuses: { A: "disqualified" } })).not.toBeNull();
+    // The same fixtures as a league still hide: the exception is Swiss only.
+    expect(view({ ...swiss, kind: "league", statuses: { A: "withdrawn" } })).toBeNull();
+  });
   it("F1: the policy reads THIS stage's fixtures — results A banked in an earlier stage do not make it award", () => {
     // withdrawal.ts groups by stage; three earlier-stage wins would lift A to
     // 4 of 6 played if they were counted here.

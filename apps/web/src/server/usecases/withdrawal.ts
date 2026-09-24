@@ -4,6 +4,9 @@ import "server-only";
 //   - table stages (league/group/swiss): played < 50% of their fixtures →
 //     EXPUNGE (every game they touched voids; standings read as if they never
 //     entered); otherwise their remaining games walk over to the opponents.
+//     Swiss NEVER expunges (owner ruling 2026-09-24): played results stand and
+//     every paired board walks over — an expunged Swiss board stranded the
+//     division. The per-kind rule is the engine's `withdrawTableEntrant`.
 //   - brackets (knockout/double_elim/stepladder): opponents advance by
 //     walkover.
 //   - open formats (ladder/americano): remaining games void; the standings

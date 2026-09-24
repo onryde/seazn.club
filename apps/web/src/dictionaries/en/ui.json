@@ -349,7 +349,7 @@
   "visibility.youth.body": "Making it visible publishes players' names on the public page. Confirm you hold guardian consent for every under-age player before continuing.",
   "visibility.youth.confirm": "I hold guardian consent — continue",
   "confirm.withdrawEntrant.title": "Withdraw {name}?",
-  "confirm.withdrawEntrant.body": "In a running table stage their results stand and remaining games walk over to opponents — unless more of their games are still to play than they've played, counting only what's scheduled so far; then those results are voided too. Swiss pairs a round at a time, so that's rare. In a bracket, opponents advance; in a ladder or americano, remaining games are voided and earned standings stand. All of it rides the normal scoring ledger, so each can be undone.",
+  "confirm.withdrawEntrant.body": "In a running table stage their results stand and remaining games walk over to opponents. In a league or group, if more of their games are still to play than they've played, counting only what's scheduled so far, those results are voided too; in Swiss they never are. In a bracket, opponents advance; in a ladder or americano, remaining games are voided and earned standings stand. All of it rides the normal scoring ledger, so each can be undone.",
   "confirm.withdrawEntrant.label": "Withdraw entrant",
   "confirm.deleteEntrant.title": "Delete {name}?",
   "confirm.deleteEntrant.body": "This removes the entrant and its roster entirely — unlike Withdraw, there is no reinstating it. Only offered before the division has started.",

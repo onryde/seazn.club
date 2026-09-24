@@ -267,8 +267,10 @@ function boundsInForce(i: QualificationViewInput): MatchPointsBounds | null {
 }
 
 /** F1 — would this departed entrant's table withdrawal VOID results the table
- *  counts? The policy (usecases/withdrawal.ts) expunges an entrant under 50%
- *  played; applied now or later it rewrites every rival's points, so no status
+ *  counts? The policy (usecases/withdrawal.ts) expunges a league/group entrant
+ *  under 50% played, never a Swiss one (owner ruling 2026-09-24, decided in the
+ *  engine so this reads it rather than restating it); applied now or later an
+ *  expunge rewrites every rival's points, so no status
  *  can be trusted. Award mode only walks pending matches over: each is one of
  *  the departed row's unplayed fixtures, which its `remaining` already bounds
  *  with the per-match [min, max] (and each rival's likewise), so the walkover

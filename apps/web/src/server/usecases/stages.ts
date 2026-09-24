@@ -1106,7 +1106,13 @@ async function swissGen(
   const inRound = new Map<number, Set<string>>();
   for (const f of existing) {
     const o = f.outcome as { kind?: string; winner?: string } | null;
-    if (o?.kind === "award" && o.winner) {
+    // Only a system bye — one seat, won by the seated side — is a bye. Every
+    // sport kernel ALSO emits `{kind: "award"}` for a real two-sided walkover
+    // or retirement, and that is a played match: it falls through, so the pair
+    // is `played` (no rematch), both sides sat the round (no implicit bye for
+    // the absent loser) and the winner scores below. Case 3 of the 2026-09-24
+    // Saturday probe: reading every award as a bye re-paired A v H in round 2.
+    if (isOneSidedAwardBye(f) && o?.winner) {
       const forRound = inRound.get(f.round_no) ?? new Set<string>();
       forRound.add(o.winner);
       inRound.set(f.round_no, forRound);
@@ -1119,9 +1125,19 @@ async function swissGen(
     const forRound = inRound.get(f.round_no) ?? new Set<string>();
     forRound.add(f.home_entrant_id).add(f.away_entrant_id);
     inRound.set(f.round_no, forRound);
-    (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
-    (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
-    if (o?.kind === "win" && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+    // A forfeited game takes no colour — the engine's colour history skips
+    // byes and forfeits (`competition/tiebreakers.ts`, boardgame DOMAIN.md).
+    if (o?.kind !== "award") {
+      (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
+      (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
+    }
+    // FIDE C.04.1(d) (owner-approved 2026-09-24): a player who has scored a
+    // walkover win may not later receive the pairing-allocated bye. `byes`
+    // feeds ONLY `pairRound`'s bye pick, so this is eligibility and nothing
+    // else — no bye score (the +1 below is the win's), and `played`/`inRound`
+    // above treat it as any played match.
+    if (o?.kind === "award" && o.winner) byes.add(o.winner);
+    if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
     else if (o?.kind === "draw" || o?.kind === "tie") {
       score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
       score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
