@@ -11,8 +11,8 @@ import "server-only";
 //
 // The QR (owner pick "B2", decode evidence in the spec): error correction H,
 // square navy data modules, SOLID rounded navy finders (outer radius 2.0
-// modules — jsQR, the CI decoder, never finds dotted finders and misses
-// radius ≤ 1 at 90 dpi), and the Seazn app icon, 12 mm, over a knocked-out
+// modules, the centre of the band that decoded everywhere — jsQR, the CI
+// decoder, never finds dotted finders), and the Seazn app icon, 12 mm, over a knocked-out
 // centre with at least one module of white round it. Each symbol is ALSO a
 // link annotation, so a phone that opens the PDF can tap it. The scan URL is
 // never printed as text: its token is a bearer secret, and a photo of a

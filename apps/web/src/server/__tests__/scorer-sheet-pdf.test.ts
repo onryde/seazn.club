@@ -109,9 +109,11 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
     },
   );
 
-  // The owner-approved finder SHAPE (B2), pinned as geometry: with the 12 mm
-  // icon, radius 1.0 decodes too (poppler and librsvg, every condition —
-  // measured 2026-09-24), so no decode test can hold the approved 2.0.
+  // The owner-approved finder SHAPE (B2), pinned as geometry. Radius 1.0 missed
+  // 2/9 at 90 dpi on the prototype's symbol size but decodes 10/10 at these
+  // (poppler and librsvg, every condition — measured 2026-09-24): the miss
+  // depends on where module edges fall on the pixel grid, so no decode test
+  // can hold the approved 2.0.
   it("draws each finder as the approved rounded square: outer radius 2 modules, a 1-module ring, a 0.6-radius centre", async () => {
     const pdf = await renderScorerSheetPdf(model([rows(3)]));
     const moves = [...pdfPageSvg(pdf, 1, () => "").matchAll(/M([\d.-]+),([\d.-]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
