@@ -26,7 +26,7 @@ import { GENERIC_CONFIG } from "./_seed";
 // 503 DEVICE_LINK_KEK_MISSING (or seals with an ambient key CI never has).
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 
-export type RigStageKind = "league" | "knockout" | "swiss";
+export type RigStageKind = "league" | "knockout" | "swiss" | "page_playoff";
 
 export interface RigFixture {
   id: string;

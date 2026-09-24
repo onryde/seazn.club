@@ -73,6 +73,14 @@ export type RoundCodeFixture = Pick<
   "id" | "stage_id" | "round_no" | "seq_in_round" | "ext_key" | "lane" | "is_final" | "third_place" | "conditional"
 >;
 
+/** The columns `withRoundCodeRefs` reads — likewise a board row or a plain
+ *  `fixtures` row, so the scan page names a waiting seat "Winner of QF·2"
+ *  exactly as the board does (scorer sheets §4.5, owner ruling 2026-09-24). */
+export type SeatLabelFixture = Pick<
+  BoardFixture,
+  "id" | "stage_id" | "round_no" | "seq_in_round" | "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
+>;
+
 /** The stage kinds whose rounds get a code: every bracket kind. */
 const CODED_STAGE_KINDS: ReadonlySet<string> = new Set(["knockout", "double_elim", "page_playoff", "stepladder"]);
 
@@ -234,7 +242,7 @@ const MATCH_REF_KEYS: ReadonlySet<string> = new Set(["slot.winner_match", "slot.
  * carries a `code` is skipped, so a second pass returns its input unchanged.
  */
 export function withRoundCodeRefs(
-  fixtures: readonly BoardFixture[],
+  fixtures: readonly SeatLabelFixture[],
   feeds: Record<string, FeedLabelPair>,
   codes: ReadonlyMap<string, BoardRoundCode>,
 ): Record<string, FeedLabelPair> {

@@ -7,8 +7,39 @@ import { renderIsland } from "@/components/__tests__/_hook-harness";
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
+import { isValidElement, type ReactNode } from "react";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
 import { POLL_MS } from "@/components/v2/scorepad/use-fixture-stream";
+import en from "@/dictionaries/en/ui.json";
+
+/** Sentinels, so a string the screen looked up itself cannot pass for one it
+ *  was handed. */
+const COPY = { waitingFor: "«waiting-for»", vs: "«vs»", hint: "«hint»" };
+const props = (over: Partial<Parameters<typeof ScanWaiting>[0]> = {}) => ({
+  home: "A",
+  away: "B",
+  matchRef: "SF·1",
+  meta: [] as string[],
+  copy: COPY,
+  ...over,
+});
+
+type El = { type: unknown; props: { className?: string; children?: ReactNode; "data-testid"?: string } };
+/** Every host element from the root down to the first one carrying `testid`. */
+function pathTo(node: ReactNode, testid: string, trail: El[] = []): El[] | null {
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const hit = pathTo(n as ReactNode, testid, trail);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (!isValidElement(node)) return null;
+  const el = node as unknown as El;
+  const here = [...trail, el];
+  if (el.props["data-testid"] === testid) return here;
+  return pathTo(el.props.children, testid, here);
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -35,7 +66,7 @@ const fire = (t: { listeners: Record<string, Listener[]> }, type: string) => {
 
 describe("ScanWaiting (scorer sheets §4.5.2)", () => {
   it("re-renders the page every POLL_MS — and not before", () => {
-    renderIsland(ScanWaiting, { home: "Winner of R1·1", away: "Ben Lim", meta: "Court 3" });
+    renderIsland(ScanWaiting, props({ meta: ["Court 3"] }));
     vi.advanceTimersByTime(POLL_MS - 1);
     expect(router.refresh).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
@@ -45,7 +76,7 @@ describe("ScanWaiting (scorer sheets §4.5.2)", () => {
   });
 
   it("stops the moment Waiting unmounts (only while waiting)", () => {
-    const island = renderIsland(ScanWaiting, { home: "A", away: "B", meta: "" });
+    const island = renderIsland(ScanWaiting, props());
     island.unmount();
     vi.advanceTimersByTime(POLL_MS * 3);
     expect(router.refresh).not.toHaveBeenCalled();
@@ -56,7 +87,7 @@ describe("ScanWaiting (scorer sheets §4.5.2)", () => {
     const win = recordingTarget();
     vi.stubGlobal("document", doc);
     vi.stubGlobal("window", win);
-    renderIsland(ScanWaiting, { home: "A", away: "B", meta: "" });
+    renderIsland(ScanWaiting, props());
     fire(doc, "visibilitychange");
     expect(router.refresh, "a hide re-renders nothing").not.toHaveBeenCalled();
     doc.visibilityState = "visible";
@@ -67,8 +98,39 @@ describe("ScanWaiting (scorer sheets §4.5.2)", () => {
   });
 
   it("names both sides, the TBD one by its slot label", () => {
-    const island = renderIsland(ScanWaiting, { home: "Winner of R1·1", away: "Ben Lim", meta: "" });
-    expect(island.text()).toContain("Winner of R1·1");
+    const island = renderIsland(ScanWaiting, props({ home: "Winner of SF·1", away: "Ben Lim" }));
+    expect(island.text()).toContain("Winner of SF·1");
     expect(island.text()).toContain("Ben Lim");
+  });
+
+  // Task 6 review I2: this screen polls the server page every POLL_MS, and a
+  // dictionary provider around it re-sent the whole `ui` dictionary on every
+  // poll. So it looks nothing up: the page hands it its three sentences.
+  it("says exactly the words it was handed, and looks none up (review I2)", () => {
+    const text = renderIsland(ScanWaiting, props()).text();
+    for (const s of Object.values(COPY)) expect(text).toContain(s);
+    for (const key of ["device.scan.waitingFor", "device.scan.waitingHint"] as const) {
+      expect(text, `no ${key} from the English catalog`).not.toContain(en[key]);
+    }
+  });
+
+  // Task 6 review minor (c): at 320 the one-line meta truncated the match ref
+  // away — the one part a scorer checks against the sheet. The meta wraps now,
+  // and the ref is its own element that never truncates and never splits.
+  it("keeps the match ref whole: its own element, and nothing on its path truncates (review minor c)", () => {
+    const tree = renderIsland(
+      ScanWaiting,
+      props({ matchRef: "QF·3", meta: ["Court 12 — the long one by the car park", "Sat 10:30", "Open Singles"] }),
+    ).tree();
+    const path = pathTo(tree as ReactNode, "scan-waiting-ref");
+    expect(path, "the ref has its own element").not.toBeNull();
+    const ref = path!.at(-1)!;
+    expect(ref.props.children).toBe("QF·3");
+    expect(ref.props.className ?? "", "the ref never breaks across lines").toMatch(/\bwhitespace-nowrap\b/);
+    for (const el of path!) {
+      expect(el.props.className ?? "", "nothing between the screen and the ref clips it").not.toMatch(
+        /\b(truncate|overflow-hidden|text-ellipsis)\b/,
+      );
+    }
   });
 });

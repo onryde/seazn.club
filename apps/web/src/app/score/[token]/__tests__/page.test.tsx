@@ -22,8 +22,48 @@ import { decide, deviceFor, fixturesOf, seedStage } from "@/server/usecases/__te
 import { DeviceScorePad } from "@/components/v2/device-score-pad";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
 import { DictProvider } from "@/components/i18n/dict-provider";
+import { HtmlLang } from "@/components/i18n/html-lang";
+import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
+import { composeMatchRef } from "@/lib/match-ref";
+import { t as tRuntime } from "@/lib/i18n-runtime";
+import en from "@/dictionaries/en/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import ScorePadPage from "../page";
+
+/** The viewer's dictionary as a lookup, the way the page renders with it. */
+const lookupFor = (dict: Record<string, string>) => (key: string, vars?: Record<string, string | number>) =>
+  tRuntime(dict, key as Parameters<typeof tRuntime>[1], vars);
+
+/** OWNER RULING 2026-09-24: the scan screens name a match the way the schedule
+ *  board does. The expected names come from the BOARD's own function over the
+ *  stage's rows (never a typed "SF·1"), so a change to the board's codes moves
+ *  these tests with it. */
+async function boardNames(stageId: string, dict: Record<string, string>) {
+  const lookup = lookupFor(dict);
+  const rows = await sql<RoundCodeFixture[]>`
+    select id, stage_id, round_no, seq_in_round, ext_key, lane, is_final, third_place, conditional
+    from fixtures where stage_id = ${stageId}`;
+  const stages = await sql<{ id: string; kind: string }[]>`select id, kind from stages where id = ${stageId}`;
+  const codes = boardRoundCodes(rows, stages, lookup);
+  const ref = (id: string) => {
+    const row = rows.find((r) => r.id === id)!;
+    const rc = codes.get(id);
+    return composeMatchRef(row.round_no, rc?.refSeq ?? row.seq_in_round, lookup, rc?.code);
+  };
+  return {
+    ref,
+    code: (id: string) => codes.get(id)?.code,
+    winnerOf: (id: string) => lookup("slot.winner_match", { ext: ref(id) }),
+  };
+}
+
+type WaitingProps = {
+  home: string;
+  away: string;
+  matchRef: string;
+  meta: string[];
+  copy: { waitingFor: string; vs: string; hint: string };
+};
 
 // The page resolves the viewer's locale from the request (cookie, user,
 // header); there is no request here. Hoisted so one test can switch it.
@@ -141,20 +181,70 @@ describe.skipIf(!HAS_DB)("ScorePadPage (P9 cutover)", () => {
 });
 
 describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
-  it("TBD side → Waiting, naming the slot label ('Winner of …'), no pad", async () => {
+  it("TBD side → Waiting, naming each feeder and the match the way the board does, no pad", async () => {
     const { auth } = await seedOrg("pro");
     const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
-    const final = (await fixturesOf(stage.id)).find((f) => f.round_no === 2)!;
+    const fixtures = await fixturesOf(stage.id);
+    const final = fixtures.find((f) => f.round_no === 2)!;
+    const semis = fixtures.filter((f) => f.round_no === 1);
+    const board = await boardNames(stage.id, en);
     const { secret } = await ensureDeviceLink(auth, final.id);
     const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
     const waiting = find(tree, ScanWaiting);
     expect(waiting).not.toBeNull();
     expect(find(tree, DeviceScorePad)).toBeNull();
-    const { home, away, meta } = waiting!.props as { home: string; away: string; meta: string };
-    expect(home).toMatch(/^Winner of R1/);
-    expect(away).toMatch(/^Winner of R1/);
-    expect(home, "each side names its own feeder").not.toBe(away);
-    expect(meta, "the meta line names the match").toContain("R2·1");
+    const { home, away, matchRef, copy } = waiting!.props as WaitingProps;
+    expect([home, away].sort(), "each seat names its own feeder, by the board's code").toEqual(
+      semis.map((s) => board.winnerOf(s.id)).sort(),
+    );
+    expect(matchRef, "the match itself, by the board's code").toBe(board.ref(final.id));
+    // The differential: the board codes a knockout, so the old "R2·1" is wrong.
+    expect(matchRef).not.toMatch(/^R\d/);
+    expect(home).not.toMatch(/R\d·/);
+    expect(copy, "Waiting's own words, in the viewer's language").toEqual({
+      waitingFor: en["device.scan.waitingFor"],
+      vs: en["schedule.vs"],
+      hint: en["device.scan.waitingHint"],
+    });
+  });
+
+  // Task 6 review I2: Waiting re-renders this page every POLL_MS. Inside a
+  // DictProvider, every one of those refreshes re-sent the whole merged `ui`
+  // dictionary (~385 KB raw) to say three sentences. The server hands Waiting
+  // its few strings instead, and mounts no provider around it.
+  it("a French viewer's Waiting carries its own French strings, with NO dictionary provider (review I2)", async () => {
+    locale.value = "fr";
+    try {
+      const { auth } = await seedOrg("pro");
+      const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+      const fixtures = await fixturesOf(stage.id);
+      const final = fixtures.find((f) => f.round_no === 2)!;
+      const board = await boardNames(stage.id, fr);
+      const { secret } = await ensureDeviceLink(auth, final.id);
+      const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+      const waiting = find(tree, ScanWaiting);
+      expect(waiting, "precondition: Waiting").not.toBeNull();
+      expect(find(tree, DictProvider), "no dictionary rides on every Waiting refresh").toBeNull();
+      // The provider was also what told a screen reader the page is French. A
+      // phone that scans a sheet rarely has the locale cookie the root
+      // layout's fallback reads, so the page says it, authoritatively.
+      const lang = find(tree, HtmlLang);
+      expect(lang, "the page still names its language").not.toBeNull();
+      expect((lang!.props as { lang?: string }).lang).toBe("fr");
+      const { home, away, matchRef, copy } = waiting!.props as WaitingProps;
+      expect(copy).toEqual({
+        waitingFor: fr["device.scan.waitingFor"],
+        vs: fr["schedule.vs"],
+        hint: fr["device.scan.waitingHint"],
+      });
+      expect(copy.waitingFor, "French, not the English fallback").not.toBe(en["device.scan.waitingFor"]);
+      expect([home, away].sort()).toEqual(
+        fixtures.filter((f) => f.round_no === 1).map((s) => board.winnerOf(s.id)).sort(),
+      );
+      expect(matchRef).toBe(board.ref(final.id));
+    } finally {
+      locale.value = "en";
+    }
   });
 
   it("one side filled, the other still TBD → still Waiting, the known side by name", async () => {
@@ -199,6 +289,7 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
 
   it("scheduled, both sides → the pad with no View-only, a match ref and a venue-tz time", async () => {
     const { auth, fixtureId } = await seedScorableFixture();
+    const [{ stage_id: leagueStage }] = await sql<{ stage_id: string }[]>`select stage_id from fixtures where id = ${fixtureId}`;
     await sql`update fixtures set scheduled_at = '2026-09-23T10:30:00Z' where id = ${fixtureId}`;
     // The venue's zone, not UTC: a division override to Auckland moves 10:30Z
     // to 22:30 on the card.
@@ -214,8 +305,55 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
       fixture: { match_ref: string | null; scheduled_label: string | null };
     };
     expect(p.initialViewOnly).toBeNull();
+    // A league: the board codes no round, so it prints "R1·n" — and so does this.
+    expect(p.fixture.match_ref).toBe((await boardNames(leagueStage!, en)).ref(fixtureId));
     expect(p.fixture.match_ref).toMatch(/^R1·\d+$/);
     expect(p.fixture.scheduled_label).toContain("22:30");
+  });
+
+  it("Confirm names a knockout match by the board's round code, never 'R1·1' (owner ruling 2026-09-24)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf1 = (await fixturesOf(stage.id)).find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const { secret } = await ensureDeviceLink(auth, sf1.id);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    const ref = (find(tree, DeviceScorePad)!.props as { fixture: { match_ref: string } }).fixture.match_ref;
+    expect(ref).toBe((await boardNames(stage.id, en)).ref(sf1.id));
+    expect(ref, "the differential: a semi is coded").not.toMatch(/^R\d/);
+  });
+
+  // The page playoff is where the board's number is not the row's: the
+  // Eliminator is the SECOND match of round 1 but the only Eliminator — "E·1"
+  // on the board, where its seq_in_round would print "E·2". And Qualifier 2
+  // waits on two different feeders by two different codes.
+  it("a page playoff: Confirm prints the board's number, and Q2 waits on its feeders by their codes (owner ruling 2026-09-24)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "page_playoff", ["A", "B", "C", "D"]);
+    const fixtures = await fixturesOf(stage.id);
+    const lookup = lookupFor(en);
+    const board = await boardNames(stage.id, en);
+    const elim = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 2)!;
+    const q1 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    expect(elim.home_entrant_id, "precondition: the Eliminator is seated").not.toBeNull();
+
+    const elimTree = await ScorePadPage({ params: Promise.resolve({ token: (await ensureDeviceLink(auth, elim.id)).secret }) });
+    const elimRef = (find(elimTree, DeviceScorePad)!.props as { fixture: { match_ref: string } }).fixture.match_ref;
+    expect(elimRef).toBe(board.ref(elim.id));
+    expect(elimRef, "the differential: the board's number, not the row's").not.toBe(
+      composeMatchRef(elim.round_no, elim.seq_in_round, lookup, board.code(elim.id)),
+    );
+
+    const q2 = fixtures.find((f) => f.round_no === 2)!;
+    const waiting = find(
+      await ScorePadPage({ params: Promise.resolve({ token: (await ensureDeviceLink(auth, q2.id)).secret }) }),
+      ScanWaiting,
+    );
+    expect(waiting, "precondition: Q2 waits").not.toBeNull();
+    const { home, away, matchRef } = waiting!.props as WaitingProps;
+    expect(matchRef).toBe(board.ref(q2.id));
+    const seats = [home, away];
+    expect(seats, "Qualifier 2 waits on the Eliminator's winner, by the board's code").toContain(board.winnerOf(elim.id));
+    expect(seats, "and on Qualifier 1's loser").toContain(lookup("slot.loser_match", { ext: board.ref(q1.id) }));
   });
 
   it("a SCHEDULED semi whose final was hand-seated → Confirm, not View-only (the page's own status gate, A15)", async () => {
@@ -264,7 +402,7 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
   // `useMsg`, which outside a <DictProvider> falls back to English. The page
   // mounted none, so a French phone got French server lines around English
   // screens. The viewer's dictionary must reach both client islands.
-  it("a French viewer's client screens get the French dictionary — the pad and Waiting", async () => {
+  it("a French viewer's pad gets the French dictionary (Waiting gets its strings instead — see review I2)", async () => {
     locale.value = "fr";
     try {
       const { auth, fixtureId } = await seedScorableFixture();
@@ -281,18 +419,6 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
       expect(dict["device.scan.confirmTitle"]).toBe(fr["device.scan.confirmTitle"]);
       expect(dict["device.scan.viewOnly.cancelled"]).toBe(fr["device.scan.viewOnly.cancelled"]);
       expect(find(children, DeviceScorePad), "the pad renders INSIDE the provider").not.toBeNull();
-
-      const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
-      const final = (await fixturesOf(stage.id)).find((f) => f.round_no === 2)!;
-      const waitingLink = await ensureDeviceLink(auth, final.id);
-      const waitingTree = await ScorePadPage({ params: Promise.resolve({ token: waitingLink.secret }) });
-      const waitingProvider = find(waitingTree, DictProvider);
-      expect(waitingProvider).not.toBeNull();
-      expect((waitingProvider!.props as { locale: string }).locale).toBe("fr");
-      expect(
-        find((waitingProvider!.props as { children: ReactNode }).children, ScanWaiting),
-        "Waiting renders inside it too",
-      ).not.toBeNull();
     } finally {
       locale.value = "en";
     }

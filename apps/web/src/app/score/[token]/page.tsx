@@ -33,8 +33,7 @@ import { ScanWaiting } from "@/components/v2/scan-waiting";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
 import { resultCarriedForward } from "@/server/usecases/carried-forward";
-import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { matchRef, resolveSlotLabel } from "@/lib/slot-label";
+import { scanMatchNames } from "@/server/usecases/scan-match-names";
 import { venueTzForDivision } from "@/server/venue-tz";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -42,6 +41,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import type { MessageKey } from "@/lib/messages";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
+import { HtmlLang } from "@/components/i18n/html-lang";
 import type { ReactNode } from "react";
 
 export default async function ScorePadPage({
@@ -90,11 +90,6 @@ export default async function ScorePadPage({
         scheduled_at: string | null;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
-        /** Scorer sheets §4.5 — what a TBD side is called while it waits
-         *  ("Winner of R1·1"), and the match's own ref ("R1·3"). */
-        seq_in_round: number;
-        home_slot_label: SlotLabel | null;
-        away_slot_label: SlotLabel | null;
         division_id: string;
         sport_key: string;
         module_version: string;
@@ -106,8 +101,7 @@ export default async function ScorePadPage({
       }[]
     >`
       select f.id, f.round_no, ven.name as venue_name, crt.name as court_name,
-             f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
-             f.seq_in_round, f.home_slot_label, f.away_slot_label, d.id as division_id,
+             f.scheduled_at, f.home_entrant_id, f.away_entrant_id, d.id as division_id,
              d.sport_key, d.module_version, d.config,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding
@@ -184,13 +178,45 @@ export default async function ScorePadPage({
   // never a fourth copy of it.
   const tz = await venueTzForDivision(fixture.division_id);
   const scheduledLabel = fixtureTimeLabel(fixture.scheduled_at, tz, intlLocaleFor(locale));
-  const ref = matchRef(fixture.round_no, fixture.seq_in_round, t);
-  // Both screens below are CLIENT islands, and their copy (Confirm, Waiting,
-  // View-only, the pad) reads through `useMsg`, which outside a provider falls
-  // back to English — so a French phone got French server lines around English
-  // screens. English needs no provider: that fallback IS the English catalog
-  // the bundle already carries, and wrapping it would ship ui.json again in
-  // every scan's payload.
+  // The match and each still-empty seat, named the way the schedule board
+  // names them (owner ruling 2026-09-24: "QF·1", "Winner of QF·2"), in the
+  // viewer's language.
+  const names = await withTenant(link.org_id, (tx) => scanMatchNames(tx, fixture.id, t));
+  const ref = names.ref;
+  if (screen.screen === "waiting") {
+    // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
+    // until both sides exist, when it renders the pad fresh — the Waiting →
+    // Confirm hop needs no client state. Its words go down as props, already
+    // in the viewer's language, and NO dictionary provider wraps it: that
+    // provider would re-send the whole merged `ui` dictionary on every
+    // POLL_MS refresh, to say three sentences (Task 6 review I2). The provider
+    // was also what set `<html lang>`; a scanning phone rarely carries the
+    // locale cookie the root layout's fallback reads, so the page says it.
+    return (
+      <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
+        <HtmlLang lang={locale} />
+        <div className="mx-auto max-w-2xl">
+          <ScanWaiting
+            home={home ? entrantDisplayName(home) : names.home}
+            away={away ? entrantDisplayName(away) : names.away}
+            matchRef={ref}
+            meta={[fixture.court_name, scheduledLabel, fixture.division_name].filter((m): m is string => !!m)}
+            copy={{
+              waitingFor: t("device.scan.waitingFor"),
+              vs: t("schedule.vs"),
+              hint: t("device.scan.waitingHint"),
+            }}
+          />
+        </div>
+      </main>
+    );
+  }
+
+  // The pad's copy (Confirm, View-only, the pad itself) reads through
+  // `useMsg`, which outside a provider falls back to English — so a French
+  // phone got French server lines around an English pad. It renders once, not
+  // on a poll, so it carries the dictionary. English needs no provider: that
+  // fallback IS the English catalog the bundle already carries.
   const ui = locale === DEFAULT_LOCALE ? null : await getDictionary(locale, "ui");
   const inLocale = (node: ReactNode) =>
     ui ? (
@@ -200,27 +226,6 @@ export default async function ScorePadPage({
     ) : (
       node
     );
-  if (screen.screen === "waiting") {
-    // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
-    // until both sides exist, when it renders the pad fresh — the Waiting →
-    // Confirm hop needs no client state.
-    const meta = [fixture.court_name, scheduledLabel, `${fixture.division_name} · ${ref}`]
-      .filter(Boolean)
-      .join(" · ");
-    return (
-      <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
-        <div className="mx-auto max-w-2xl">
-          {inLocale(
-            <ScanWaiting
-              home={home ? entrantDisplayName(home) : resolveSlotLabel(fixture.home_slot_label, t, "schedule.tbd")}
-              away={away ? entrantDisplayName(away) : resolveSlotLabel(fixture.away_slot_label, t, "schedule.tbd")}
-              meta={meta}
-            />,
-          )}
-        </div>
-      </main>
-    );
-  }
 
   // S13/#422 — the v2 pad's bootstrap, resolved unconditionally now that the
   // feature flag that used to gate it is gone. `recordedBy` is the ISSUING human
