@@ -75,9 +75,9 @@ export async function shiftDivisionSchedule(
              schedule_locked
       from fixtures where division_id = ${divisionId}`;
     // History's played set (`fixtureHasResultSql`), not `decided` alone: a
-    // shift that moved an in-play kick-off, or a walkover's, could then be
-    // neither undone nor redone — the results-guard refuses any history step
-    // that touches a played row.
+    // shift that moved an in-play kick-off, a walkover recorded in play or a
+    // start taken back could then be neither undone nor redone — the
+    // results-guard refuses any history step that touches a played row.
     const played = await playedFixtureIds(tx, divisionId);
     const { moves, skipped } = shiftSchedule(
       rows.map((f) => ({

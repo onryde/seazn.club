@@ -10,10 +10,18 @@
 //       clear and the pool clear
 //     - schedule-plus.ts: the rain-delay shift
 //     - stages.ts: `rebuildStageFixtures`
-//     - the board writes: `autoSchedule`, `applySchedule` and `moveFixture`
-//       (schedule.ts, through `isMovable`), the joint apply
-//       (competition-schedule-apply.ts), the AI pack (schedule-ai.ts) and the
-//       joint builder's fixed occupancy (competition-schedule-ai.ts)
+//     - the board writes, through `isMovable`/`heldInPlace` over
+//       `playedFixtureIds`: `autoSchedule` and `applySchedule` (schedule.ts),
+//       the joint apply (competition-schedule-apply.ts) and the AI pack
+//       (schedule-ai.ts)
+//     - `moveFixture` (schedule.ts) reads it directly, on its one row, to
+//       refuse a drag or a pin
+//     - `movableFixtureSql` (schedule.ts, the SQL twin of `isMovable`): the
+//       counts that price, drop and size an AI run (competition-schedule-ai.ts,
+//       schedule-ai-preview.ts)
+//     - the joint builder's fixed occupancy (competition-schedule-ai.ts)
+//     - the board read's `held` flag (`listDivisionFixturesForBoard`,
+//       fixtures.ts)
 //   `fixtureEvidenceSql` alone, beside the caller's own status clause
 //     - stages.ts: the Swiss shell reconcile, unseat and Unpair
 //   NEITHER, a status list only

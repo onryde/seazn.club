@@ -3004,14 +3004,15 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     }
 
     // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
-    // guard above (same three statuses), with one refinement: 'forfeited'
-    // alone doesn't distinguish a generation-time BYE (structural — one side
-    // never had an opponent, isBye in stages-panel.tsx) from a mid-tournament
-    // WITHDRAWAL WALKOVER (withdrawal.ts's core.forfeit — append-event.ts:116
-    // maps it to this SAME 'forfeited' status). A walkover has two real
-    // entrants and a real winner; destroying it would erase the reason the
-    // opponent advanced. Only a two-sided 'forfeited' fixture blocks — a bye
-    // (one side null by construction) does not.
+    // guard above (same three statuses), with one refinement for 'forfeited'.
+    // The status alone covers three different rows: a generation-time BYE
+    // (one side null by construction), the generator's own F14 walkover for a
+    // qualifier who departed before the draw (both seats filled, nothing
+    // played), and a WALKOVER RECORDED IN PLAY (withdrawal.ts's core.forfeit
+    // — append-event.ts maps it to this same status). Only the last holds a
+    // result, and it is the only one with evidence: its core.forfeit is a
+    // score event. So a 'forfeited' fixture blocks through its evidence
+    // alone (review 3 of #857, N2, owner ruling), never through its status.
     // Status alone is NOT a sufficient test, because `delete from fixtures`
     // CASCADEs into score_events, match_states, match_reports, lineups,
     // official_marks, fixture_officials and device_links, and SET NULLs
