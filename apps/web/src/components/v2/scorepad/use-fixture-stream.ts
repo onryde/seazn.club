@@ -201,7 +201,25 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
       startPolling();
     }
 
-    void attemptRealtime();
+    // Catch-up on subscribe: ONE read, once a transport is chosen (the channel
+    // requested, or polling armed), for whatever was written before it was.
+    // Neither transport covers that window by itself — a realtime channel only
+    // signals FUTURE writes, and the first poll tick is `pollMs` away. And the
+    // seed can be older than the page: browser Back/Forward re-uses the
+    // router's cached RSC payload, so a console remounts on the ledger it held
+    // when the scorer navigated away. The pad used to be rescued from that by
+    // its own mount-time report to the chrome, which forced a full re-read;
+    // that report greyed Start match under a scorer's tap (v3/pad-host.tsx,
+    // `useReportLedgerChanges`), and this read replaces it.
+    //
+    // On a fresh page it returns nothing new — the cursor is the seed's own
+    // count, and a server bootstrap is gapless — and the pad's pipeline treats
+    // an empty batch as a no-op, so nothing on screen moves or greys. It is
+    // the SAME `fetchOnce` a tick runs, under the same rules: no overlap with
+    // a read in flight, and skipped while `skipPollWhile` holds.
+    void attemptRealtime().then(() => {
+      if (!cancelled) void fetchOnce();
+    });
 
     return () => {
       cancelled = true;

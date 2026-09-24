@@ -37,7 +37,9 @@
 //   the pad's stream poll     -> GET /events?since_seq=N   (N = `ledgerTipSeq`
 //                                of what it already holds — use-pad-pipeline
 //                                .ts's `sinceSeq`; 1 here, because the fixture
-//                                is seeded with `core.start`)
+//                                is seeded with `core.start`). The stream's
+//                                catch-up on subscribe, at mount, asks from
+//                                the same N and is refused the same way.
 //
 // So `since_seq=0` is let through for the entire test and every other value is
 // aborted forever. The pad's pipeline can therefore NEVER deliver, at any
@@ -187,9 +189,13 @@ test("a console whose pad stream is dead still refreshes when the operator retur
   // `handlePadEvents` answered that with a PRE-rally `resync()`. It no longer
   // does (`useReportLedgerChanges`, v3/pad-host.tsx — the mount report greyed
   // Start match under a click), but the guard costs nothing to keep: waiting
-  // for the pad's first (blocked) poll puts a full 15s `POLL_MS` cycle between
-  // any mount-time churn and the window this test measures, so none can drift
-  // into it and be mistaken for the seam under test.
+  // for the pad's first (blocked) poll TICK puts a full 15s `POLL_MS` cycle
+  // between any mount-time churn and the window this test measures, so none
+  // can drift into it and be mistaken for the seam under test.
+  //
+  // The first refused read is NOT that tick: it is the stream's catch-up on
+  // subscribe (`use-fixture-stream.ts`), made at mount from the same cursor.
+  // So the wait is for the SECOND refused read — the tick.
   //
   // The wait is not decoration either: it pins that the pad TRIED to poll and
   // was refused, which is the production shape. Without it, "the pad never
@@ -201,7 +207,7 @@ test("a console whose pad stream is dead still refreshes when the operator retur
       timeout: POLL_MS * 2 + 15_000,
       message: "the pad's stream poll never fired, so this test never simulated a stalled pipeline",
     })
-    .toBeGreaterThan(0);
+    .toBeGreaterThan(1);
 
   // The console is now at rest: whatever it did at mount, it is finished.
   // Everything counted from here is attributable to this test's own actions.

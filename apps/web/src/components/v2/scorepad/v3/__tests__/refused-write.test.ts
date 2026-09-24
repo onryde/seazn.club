@@ -367,6 +367,11 @@ describe("a transient failure still keeps the action queued and the optimistic f
 describe("409 still renegotiates rather than being refused outright", () => {
   it("a conflict is not turned into a permanent rejection", async () => {
     let firstPost = true;
+    // The other official scores AFTER this pad has mounted and caught up —
+    // "while this pad was typing". Present from the start, the stream's
+    // catch-up on subscribe would have read it and the write would never
+    // have conflicted at all.
+    let foreignLanded = false;
     const posts: string[] = [];
     const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -385,6 +390,7 @@ describe("409 still renegotiates rather than being refused outright", () => {
         return fakeResponse(200, { ok: true, data: { status: "in_play", last_seq: 4, state: null, summary: null, outcome: null } });
       }
       if (url.includes("/events")) {
+        if (!foreignLanded) return fakeResponse(200, { ok: true, data: [] });
         // A FOREIGN row already sitting in the slot this write aimed at
         // (`targetSeqFor(expected_seq)` = expected_seq + 1 = 2) — which is
         // what makes `resolveConflict` return `renegotiate` rather than
@@ -410,6 +416,7 @@ describe("409 still renegotiates rather than being refused outright", () => {
 
     const pad = mountPad(fn);
     await settle();
+    foreignLanded = true;
     await pad.current.submit(TYPES.suspStart, { by: "H", class: "minor" });
     await settle();
 

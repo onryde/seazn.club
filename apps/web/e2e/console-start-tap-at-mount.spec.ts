@@ -26,8 +26,9 @@ import { apiJson, fixturePath, seedRosteredFixture, TAG } from "./helpers";
 // actionability check; Playwright's does, and that wait is exactly what hid
 // this from every other spec that clicks Start match. The tap is made only
 // once the pad's own mount effects have run (its realtime-token request is on
-// the wire — see `openAndStart` in the soft-commit walkthrough), so a tap on
-// the still-inert server markup is not what is being measured.
+// the wire — see `openAndStart` in the soft-commit walkthrough) AND its
+// stream's catch-up read has come back, so neither a tap on the still-inert
+// server markup nor a tap that beats the catch-up is what is being measured.
 test("console: a tap on Start match the moment the pad is live starts the match", async ({ page }) => {
   test.setTimeout(90_000);
   const fx = await seedRosteredFixture(page.request, {
@@ -59,8 +60,23 @@ test("console: a tap on Start match the moment the pad is live starts the match"
     (req) => req.url().includes(`/api/v1/public/fixtures/${fx.fixtureId}/realtime-token`),
     { timeout: 20_000 },
   );
+  // The stream's catch-up on subscribe (`use-fixture-stream.ts`): one ledger
+  // read once the token door has answered. On a fresh page it finds nothing
+  // new, and must leave Start match alone — so the tap waits for it to have
+  // landed and been handled, rather than beating it to the button.
+  const catchUpRead = page.waitForResponse(
+    (res) => {
+      const url = new URL(res.url());
+      return url.pathname === `/api/v1/fixtures/${fx.fixtureId}/events` && url.searchParams.get("since_seq") === "0";
+    },
+    { timeout: 20_000 },
+  );
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   await padMounted;
+  await catchUpRead;
+  // One frame and a task: React has committed whatever that read changed and
+  // run its effects, so a report it triggered has already greyed the button.
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
 
   await page.getByRole("button", { name: "Start match", exact: true }).click({ force: true });
   tapped = true;
