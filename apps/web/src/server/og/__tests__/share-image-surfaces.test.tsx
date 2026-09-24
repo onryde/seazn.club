@@ -46,7 +46,7 @@ const WALK_FIXTURE = path.resolve(import.meta.dirname, "fixtures/satori-walk");
  * `src/server/og` — the natural tidy-up, since `match-poster-data.ts` already
  * centralises the loader — left its route file with neither, and went
  * uncovered with this suite green. Now the helper itself is derived and has to
- * be driven. Over today's tree both rules give the same nine modules.
+ * be driven. Over today's tree both rules give the same eleven modules.
  */
 function satoriModules(root: string): string[] {
   const found: string[] = [];
@@ -196,6 +196,8 @@ const PosterPng = (
 ).GET;
 const NewsOg = (await import("@/app/(public)/shared/[orgSlug]/news/[postSlug]/opengraph-image")).default;
 const StoryPng = (await import("@/app/(public)/shared/[orgSlug]/news/[postSlug]/story.png/route")).GET;
+const GamesOg = (await import("@/app/games/opengraph-image")).default;
+const GameOg = (await import("@/app/games/[slug]/opengraph-image")).default;
 
 const slugs = {
   orgSlug: "scc",
@@ -225,6 +227,9 @@ interface Surface {
  *    a literal (`:30`).
  *  - `app/(public)/r/[ref]/ticket.png/route.tsx` — its only `<img>` (`:167`) is a
  *    QR code built locally by `QRCode.toDataURL` (`:50`), i.e. a `data:` URI.
+ *  - `app/games/opengraph-image.tsx` and `app/games/[slug]/opengraph-image.tsx`
+ *    — Seazn Games: no org, no logo, no `<img>` at all. Static registry data
+ *    drawn as divs plus GameArt's inline `<svg>` (games/_shared/game-art.tsx).
  *
  * Every OTHER derived surface gets the logo cases by default: a new share image
  * is driven through the fetcher unless someone edits this set, whose members
@@ -237,6 +242,8 @@ const NO_LOGO_SURFACES: ReadonlySet<string> = new Set([
   "app/opengraph-image.tsx",
   "app/join/[token]/opengraph-image.tsx",
   "app/(public)/r/[ref]/ticket.png/route.tsx",
+  "app/games/opengraph-image.tsx",
+  "app/games/[slug]/opengraph-image.tsx",
 ]);
 
 /**
@@ -272,6 +279,14 @@ const DRIVERS: Record<string, Surface> = {
   },
   "app/(public)/shared/[orgSlug]/news/[postSlug]/story.png/route.tsx": {
     render: () => StoryPng(req("/story.png"), { params }),
+  },
+  "app/games/opengraph-image.tsx": {
+    render: async () => GamesOg() as Response,
+  },
+  // chess-quest: its card draws the svg board and an em dash in the tagline —
+  // the two things most likely to make satori reach for a network asset.
+  "app/games/[slug]/opengraph-image.tsx": {
+    render: async () => (await GameOg({ params: Promise.resolve({ slug: "chess-quest" }) })) as Response,
   },
 };
 
@@ -383,7 +398,7 @@ describe("every public share image draws its logo through the guarded fetcher", 
     ]);
   });
 
-  it("exempts exactly these three surfaces, by name, and each is really driven", () => {
+  it("exempts exactly these five surfaces, by name, and each is really driven", () => {
     // Pinned by NAME, not by size. A size pin stays green when one exempt file
     // is swapped for a logo surface: the swapped-in surface quietly loses its
     // three cases, and the only red is the swapped-out one's, downstream, and
@@ -391,6 +406,8 @@ describe("every public share image draws its logo through the guarded fetcher", 
     // is an edit to this list AND the set above.
     expect([...NO_LOGO_SURFACES].sort()).toEqual([
       "app/(public)/r/[ref]/ticket.png/route.tsx",
+      "app/games/[slug]/opengraph-image.tsx",
+      "app/games/opengraph-image.tsx",
       "app/join/[token]/opengraph-image.tsx",
       "app/opengraph-image.tsx",
     ]);

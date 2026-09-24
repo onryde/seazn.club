@@ -1,6 +1,11 @@
 // /games — Seazn Games listing. Cards come straight from the registry;
 // coming-soon games render as non-clickable cards with a badge.
 //
+// Layout: owner-approved "Option A — game-box cards" (games-canvas gen.py,
+// a_card / option_a_desktop / option_a_phone). Each live game is ONE link:
+// its GameArt miniature full-bleed on top, then title, tagline and a pill
+// "Play →" CTA. 1 column on phones, 2 at sm, 3 at lg.
+//
 // W3 (chrome tokens, Amendment 2): this page's purple-* classes now read
 // from chess-quest's --cq-* custom properties (chess-quest.css), each with
 // an inline var(--cq-x, <same oklch>) fallback. The fallback is load-bearing
@@ -11,12 +16,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
+import { GameArt } from "@/games/_shared/game-art";
 import { GAMES } from "@/games/registry";
 import { siteOrigin } from "@/lib/site-origin";
 
 const TITLE = "Games — free browser games | Seazn Club";
 const DESCRIPTION =
-  "Play free browser games by Seazn Club. Learn-to-play quests and quick challenges — no install, no sign-up.";
+  "Play free browser games by Seazn Club. Learn-to-play quests and quick challenges — no install, no sign-up, no ads.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -31,6 +37,11 @@ export const metadata: Metadata = {
   // 2026-08-27, confirmed against node_modules/next/dist/docs's own
   // metadata-merging rules — "duplicate keys are replaced", "the absence of
   // openGraph.description" is their own example of exactly this gap).
+  //
+  // No `images` key, deliberately — not even an empty one. The share picture
+  // is games/opengraph-image.tsx, and Next applies a segment's file-based
+  // image only when that level's openGraph does not own `images`
+  // (resolve-metadata.js, mergeStaticMetadata). page.test.tsx pins this.
   openGraph: {
     title: TITLE,
     description: DESCRIPTION,
@@ -38,15 +49,39 @@ export const metadata: Metadata = {
   },
 };
 
+/**
+ * The card's art panel: 150px tall on phones, 188px from `sm` (the mockups'
+ * two heights). GameArt is satori-safe — inline styles only, sized in px off
+ * its height — so a media query cannot resize it; each height is its own
+ * instance and exactly one is displayed at any width. Both are decorative
+ * (aria-hidden), so neither reaches the link's accessible name.
+ */
+function CardArt({ slug, className = "" }: { slug: string; className?: string }) {
+  return (
+    <>
+      <div className={`sm:hidden ${className}`}>
+        <GameArt slug={slug} width="100%" height={150} />
+      </div>
+      <div className={`max-sm:hidden ${className}`}>
+        <GameArt slug={slug} width="100%" height={188} />
+      </div>
+    </>
+  );
+}
+
 export default function GamesPage() {
   return (
     <MarketingShell hideBackButton>
-      <main className="mx-auto max-w-5xl px-4 py-12">
-        <h1 className="mk-display text-4xl font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))]">
+      <main className="mx-auto max-w-5xl px-4 pt-10 pb-12 sm:pt-14 sm:pb-[72px]">
+        <h1 className="mk-display text-5xl leading-[0.95] font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))] sm:text-[4rem]">
           Games
         </h1>
-        <p className="mt-3 max-w-2xl text-lg text-slate-600">
-          Free games in your browser — pick one and play. No install, no sign-up.
+        <p className="mt-2.5 max-w-[620px] text-[17px] leading-[1.4] text-slate-600 sm:text-xl">
+          {/* "sign-up" is held on one line: a hyphen is a line-break
+              opportunity, and at 768 and 1280 the subline wrapped as
+              "no sign-" / "up, no ads." */}
+          Free games in your browser — pick one and play. No install,{" "}
+          <span className="whitespace-nowrap">no sign-up,</span> no ads.
         </p>
         {/* Absolute, not "/" — on the games.* subdomain the proxy rewrites "/"
             straight back to "/games" (see gamesHostRewrite in proxy.ts), so a
@@ -54,39 +89,45 @@ export default function GamesPage() {
             instead of reaching the marketing home (found in review 2026-08-27). */}
         <Link
           href={`${siteOrigin()}/`}
-          className="mt-1 inline-block text-xs text-slate-400 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
+          className="mt-2.5 inline-block text-[13px] text-slate-500 hover:text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]"
         >
           Powered by <span className="font-semibold">Seazn Club</span>
         </Link>
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-6 grid gap-4 sm:mt-8 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
           {GAMES.map((g) =>
             g.status === "live" ? (
               <Link
                 key={g.slug}
                 href={`/games/${g.slug}`}
-                className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-[color:var(--cq-accent-line,oklch(82.7%_0.119_306.383))] hover:shadow-md"
+                className="group flex flex-col overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-[0_1px_0_rgba(59,7,100,0.04)] transition hover:border-[color:var(--cq-accent-line,oklch(82.7%_0.119_306.383))] hover:shadow-md"
               >
-                <div className="text-5xl">{g.thumbnail}</div>
-                <h2 className="mk-display mt-3 text-xl font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))] group-hover:text-[color:var(--cq-label,oklch(49.6%_0.265_301.924))]">
-                  {g.title}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">{g.tagline}</p>
-                <span className="mt-3 inline-block text-sm font-medium text-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))]">
-                  Play →
-                </span>
+                <CardArt slug={g.slug} />
+                <div className="flex flex-1 flex-col gap-2 px-5 pt-[18px] pb-5">
+                  <h2 className="mk-display text-[26px] leading-none font-bold text-[color:var(--cq-ink,oklch(29.1%_0.149_302.717))] group-hover:text-[color:var(--cq-label,oklch(49.6%_0.265_301.924))] sm:text-[28px]">
+                    {g.title}
+                  </h2>
+                  <p className="mb-2 flex-1 text-[15px] leading-[1.45] text-slate-600">{g.tagline}</p>
+                  <span className="inline-flex h-11 items-center self-start rounded-full bg-[color:var(--cq-accent,oklch(55.8%_0.288_302.321))] px-[18px] text-[15px] font-semibold text-white transition group-hover:bg-[color:var(--cq-accent-strong,oklch(43.8%_0.218_303.724))]">
+                    Play →
+                  </span>
+                </div>
               </Link>
             ) : (
               <div
                 key={g.slug}
-                className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5"
+                className="flex flex-col overflow-hidden rounded-[20px] border border-dashed border-slate-300 bg-slate-50"
               >
-                <div className="text-5xl opacity-60">{g.thumbnail}</div>
-                <h2 className="mk-display mt-3 text-xl font-bold text-slate-500">{g.title}</h2>
-                <p className="mt-1 text-sm text-slate-400">{g.tagline}</p>
-                <span className="mt-3 inline-block rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-medium text-slate-600">
-                  Coming soon
-                </span>
+                <CardArt slug={g.slug} className="opacity-60" />
+                <div className="flex flex-1 flex-col gap-2 px-5 pt-[18px] pb-5">
+                  <h2 className="mk-display text-[26px] leading-none font-bold text-slate-500 sm:text-[28px]">
+                    {g.title}
+                  </h2>
+                  <p className="mb-2 flex-1 text-[15px] leading-[1.45] text-slate-500">{g.tagline}</p>
+                  <span className="self-start rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+                    Coming soon
+                  </span>
+                </div>
               </div>
             ),
           )}
