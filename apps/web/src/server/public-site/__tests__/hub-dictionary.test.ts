@@ -119,6 +119,9 @@ export const W2_KEYS = [
   "table.col.setsWon", "table.col.setsLost", "table.col.gamesWon", "table.col.gamesLost",
   "table.col.for", "table.col.against", "table.col.difference",
   "table.col.ratio", "table.col.boardRatio", "table.col.pointRatio",
+  // Fix round 1 (review m2): the ratio columns' own short header — Dutch
+  // "verhouding" three times put carrom's md+ table past its card.
+  "table.abbr.ratio", "table.abbr.boardRatio", "table.abbr.pointRatio",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
   "leaders.title", "leaders.empty",
   "teams.title", "teams.seed", "teams.division", "info.title", "info.dates", "info.venues", "info.registration.open", "info.registration.closed", "info.calendar", "info.share",

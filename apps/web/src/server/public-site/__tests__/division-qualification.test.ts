@@ -142,9 +142,9 @@ describe("divisionQualification — the table's pool is the snapshot's", () => {
     expect(a.table).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 2 rounds left" });
     expect(b.table).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 1 round left" });
     expect(Object.fromEntries(Object.entries(a.rows).map(([id, r]) => [id, [r.label, r.ifYouLose]]))).toEqual({
-      e1: ["Needs help", "If you lose your next match: Needs help."],
-      e2: ["Needs help", "If you lose your next match: Out."],
-      e3: ["Needs help", "If you lose your next match: Needs help."],
+      e1: ["Needs help", "If you lose your next match, you'll need other results to go your way."],
+      e2: ["Needs help", "If you lose your next match, you're out."],
+      e3: ["Needs help", "If you lose your next match, you'll need other results to go your way."],
     });
     expect(Object.fromEntries(Object.entries(b.rows).map(([id, r]) => [id, [r.label, r.ifYouLose]]))).toEqual({
       e4: ["Through", null],
@@ -191,7 +191,9 @@ describe("divisionQualification — the walkover's ledger is the pinned sport's"
     rows: [row("A", 1, 2, 2, [2, 0]), row("B", 2, 1, 2, [7, 2]), row("C", 3, 1, 2, [1, 1]), row("D", 4, 0, 2, [6, 8])],
   };
   const LEAGUE = stage();
-  const RULE = "goal/run difference";
+  // The snapshot rows fold the plain for/against/diff keys (`snap` above), so
+  // the rule reads as plain "difference" whatever module shapes the bounds.
+  const RULE = "difference";
 
   it("premise: ice hockey declares a forfeit score, the shaped module carries it, the generic sport does not", () => {
     expect(divisionAwardAddsToLedger(ICEHOCKEY, {})).toBe(true);

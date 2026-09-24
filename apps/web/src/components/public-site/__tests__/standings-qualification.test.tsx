@@ -20,6 +20,13 @@
 // written from reading the source — so "a division with no cut renders
 // byte-for-byte as it does today" is a comparison with yesterday's output,
 // not with whatever the new code happens to print for null.
+// P4 (option C, 2026-09-24) re-captured it deliberately: the only bytes
+// that moved are the row header's `max-md:` two-line clamp (a wrapper span,
+// the clamped name with its `title`, a 7.5rem phone floor on the division
+// table). Stripping those back out of the new golden gives the old one
+// byte for byte, so nothing else in the no-cut path changed. Ruling (a) the
+// same day re-captured it again for one class on the name,
+// `max-md:hyphens-auto`; stripping that gives the P4 golden byte for byte.
 //
 // ---------------------------------------------------------------------------
 // Mutants killed (task-7 report has the run log)
@@ -103,9 +110,9 @@ const QUAL: QualificationView = {
   },
   rows: {
     a: { status: "through", label: "Through", ariaLabel: "Rank 1, Through, show details", headline: "Through to Finals, whatever happens next.", ifYouLose: null, whatIf: null, whatIfAssumption: null },
-    b: { status: "win_k", label: "Win and in", ariaLabel: "Rank 2, Win and in, show details", headline: "Win your next match and you're through to Finals.", ifYouLose: "If you lose your next match: Needs help.", whatIf: WHAT_IF, whatIfAssumption: ASSUMES },
-    c: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 3, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: "If you lose your next match: Out.", whatIf: null, whatIfAssumption: null },
-    d: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 4, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: "If you lose your next match: Out.", whatIf: null, whatIfAssumption: null },
+    b: { status: "win_k", label: "Win and in", ariaLabel: "Rank 2, Win and in, show details", headline: "Win your next match and you're through to Finals.", ifYouLose: "If you lose your next match, you'll need other results to go your way.", whatIf: WHAT_IF, whatIfAssumption: ASSUMES },
+    c: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 3, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: "If you lose your next match, you're out.", whatIf: null, whatIfAssumption: null },
+    d: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 4, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: "If you lose your next match, you're out.", whatIf: null, whatIfAssumption: null },
     e: { status: "out", label: "Out", ariaLabel: "Rank 5, Out, show details", headline: "Can no longer finish in the top 2.", ifYouLose: null, whatIf: null, whatIfAssumption: null },
   },
 };
@@ -140,6 +147,22 @@ const buttonIn = (cell: string) => /<button[^>]*>/.exec(cell)?.[0] ?? "";
 /** A string as React writes it into text: "you're" is `you&#x27;re`. */
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+
+describe("the QUAL fixture speaks today's copy", () => {
+  // A fixture holding a retired sentence ("If you lose your next match: Out.")
+  // still renders, so nothing else here would notice it drifting from what the
+  // product prints: every "if you lose" line must be one the dictionary makes.
+  it("each ifYouLose line is an English table.qual.ifYouLose.* sentence", () => {
+    const current = new Set(
+      Object.entries(en as Record<string, string>)
+        .filter(([k]) => k.startsWith("table.qual.ifYouLose."))
+        .map(([, v]) => v),
+    );
+    const lines = Object.values(QUAL.rows).flatMap((r) => (r.ifYouLose === null ? [] : [r.ifYouLose]));
+    expect(lines.length, "premise: the fixture carries if-you-lose lines").toBeGreaterThan(0);
+    expect(lines.filter((l) => !current.has(l))).toEqual([]);
+  });
+});
 
 describe("StandingsPopover — the trigger's accessible name (controller ruling M2)", () => {
   it("without ariaLabel the button carries NO aria-label: its content names it, as before", () => {

@@ -34,6 +34,7 @@ import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
+import { comparePools } from "@/lib/pool-order";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -72,6 +73,7 @@ import { PaymentRequiredError } from "@/lib/errors";
 import type { StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
+import { sportLedgerFamily } from "@/server/public-site/standings-view";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
 // v8: editors get a Settings tab (general/format/sharing/danger).
@@ -440,10 +442,14 @@ export default async function DivisionPage({
     tab === "standings"
       ? await Promise.all(
           tableStages.map(async (stage) => {
-            const pools = await withTenant(auth.orgId, (tx) =>
-              tx<{ id: string; key: string; name: string }[]>`
-                select id, key, name from pools where stage_id = ${stage.id} order by key`,
-            );
+            // Pool A above Pool B: the same helper every public surface uses
+            // (`lib/pool-order.ts`), so the console cannot drift from them.
+            const pools = [
+              ...(await withTenant(auth.orgId, (tx) =>
+                tx<{ id: string; key: string; name: string }[]>`
+                  select id, key, name from pools where stage_id = ${stage.id}`,
+              )),
+            ].sort(comparePools);
             const tables =
               pools.length > 0
                 ? await Promise.all(
@@ -880,7 +886,13 @@ export default async function DivisionPage({
                   {cascade.map((key, i) => (
                     <span key={key}>
                       {i > 0 && " → "}
-                      <span className="text-slate-500">{localizedTieBreakLabel(dict, key)}</span>
+                      <span className="text-slate-500">
+                        {localizedTieBreakLabel(
+                          dict,
+                          key,
+                          key === "diff" || key === "for" ? sportLedgerFamily(sportModule.metrics, key) : undefined,
+                        )}
+                      </span>
                     </span>
                   ))}
                   {" "}

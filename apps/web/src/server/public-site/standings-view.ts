@@ -20,9 +20,13 @@ import "server-only";
 // words over the columns and in the tie note (`columnHeader`, `tieBreakRule`),
 // which that component now reads from here too.
 import {
+  AGAINST_KEYS,
   DERIVED_METRICS,
+  DIFF_KEYS,
+  FOR_KEYS,
   RATIO_LEDGERS,
   derivedMetricText,
+  metricKeyOf,
   tieBreakLabel,
   type RatioKey,
   type StandingsRow,
@@ -118,10 +122,12 @@ export const METRIC_HEADER_KEYS: Readonly<Record<string, Readonly<Record<string,
   for: { For: word("table.col.for") },
   against: { Against: word("table.col.against") },
   diff: { Difference: word("table.col.difference") },
-  // derived cascade columns (`DERIVED_METRICS`)
-  set_ratio: { Ratio: word("table.col.ratio") },
-  board_ratio: { "Board ratio": word("table.col.boardRatio") },
-  point_ratio: { "Pts ratio": word("table.col.pointRatio") },
+  // derived cascade columns (`DERIVED_METRICS`). Their own short headers
+  // because Dutch spells a ratio "verhouding": carrom's three whole-word
+  // ratio columns needed an 828px table at md+, past the 734px hub card.
+  set_ratio: { Ratio: { abbr: "table.abbr.ratio", title: "table.col.ratio" } },
+  board_ratio: { "Board ratio": { abbr: "table.abbr.boardRatio", title: "table.col.boardRatio" } },
+  point_ratio: { "Pts ratio": { abbr: "table.abbr.pointRatio", title: "table.col.pointRatio" } },
 };
 
 /** The columns whose header is the sport's own NOTATION, printed as the engine
@@ -214,10 +220,96 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
  *  unranked one. */
 const UNRANKED = Number.MAX_SAFE_INTEGER;
 
+/** Which ledger a row's abstract `diff`/`for` resolves to, by the alias the
+ *  engine actually reads (`DIFF_KEYS`/`FOR_KEYS`/`AGAINST_KEYS`, first one the
+ *  row records — `metricKeyOf`). Keyed by ledger KEY, not by sport: football,
+ *  hockey and ice hockey fold `gf`/`ga`/`gd`, cricket `runs_for`/
+ *  `runs_against`, the generic module (and any stage PointsRule forfeit, which
+ *  writes `for`/`against`/`diff` into any sport's row) the plain keys.
+ *  `tie-break-ledger-words.test.tsx` pins it against the engine's three alias
+ *  lists exactly, so a new alias cannot arrive without a word. */
+export type LedgerFamily = "goals" | "runs" | "plain";
+export const LEDGER_ALIAS_FAMILY: Readonly<Record<string, LedgerFamily>> = {
+  gd: "goals",
+  gf: "goals",
+  ga: "goals",
+  run_diff: "runs",
+  runs_for: "runs",
+  runs_against: "runs",
+  diff: "plain",
+  for: "plain",
+  against: "plain",
+};
+
+/** The `diff` and `for` rules in the SPORT's word (owner copy fix,
+ *  2026-09-23): "goal difference" / "run difference" / plain "difference",
+ *  never the one catch-all "goal/run difference" every sport used to print.
+ *  The plain phrases keep the keys `TIE_BREAK_MSG_KEYS` already names, so the
+ *  registry there still routes both rules. Spelled out, like that map. */
+export const LEDGER_RULE_MSG_KEYS: Readonly<Record<"diff" | "for", Readonly<Record<LedgerFamily, TKey>>>> = {
+  diff: { goals: "table.tieBreak.diffGoals", runs: "table.tieBreak.diffRuns", plain: "table.tieBreak.diff" },
+  for: { goals: "table.tieBreak.forGoals", runs: "table.tieBreak.forRuns", plain: "table.tieBreak.for" },
+};
+
+/** The alias `rule` resolves to on one row: the one the engine compares for
+ *  that rule, else the row's other ledger aliases (a cricket snapshot folded
+ *  before cricket's ledger recorded `run_diff` has `runs_for` but no run
+ *  difference); undefined when it records none. */
+function ledgerAlias(row: StandingsRow, rule: "diff" | "for"): string | undefined {
+  const [own, other] = rule === "diff" ? [DIFF_KEYS, FOR_KEYS] : [FOR_KEYS, DIFF_KEYS];
+  return metricKeyOf(row, own) ?? metricKeyOf(row, other) ?? metricKeyOf(row, AGAINST_KEYS);
+}
+
+/** The family of the ledger `rule` was compared on for `row`. The row's own
+ *  alias first; a row that records NONE (an entrant yet to play: `zeroRow`
+ *  folds from `{}`) was compared against its tie partners' values, so their
+ *  alias is the one in play (review m1: a ledgerless hockey row split from two
+ *  losers read "difference" beside their "goal difference"); failing those,
+ *  any row of the table; else plain. */
+function ledgerFamily(
+  row: StandingsRow,
+  rule: "diff" | "for",
+  table: readonly StandingsRow[],
+  partners: readonly string[],
+): LedgerFamily {
+  const partnerRows = table.filter((r) => partners.includes(r.entrantId));
+  for (const candidate of [row, ...partnerRows, ...table]) {
+    const alias = ledgerAlias(candidate, rule);
+    if (alias !== undefined) return LEDGER_ALIAS_FAMILY[alias] ?? "plain";
+  }
+  return "plain";
+}
+
+/** The family a SPORT's declared ledger speaks (`module.metrics`), for a
+ *  surface with no row to read: the organiser console's cascade caption names
+ *  the rules before any tie exists. The same alias order as `ledgerAlias` —
+ *  the rule's own aliases, then the other ledger's, then against — so a sport
+ *  that declares a `for` alias but no difference of its own still reads its
+ *  own family, never plain. (Cricket declares both `runs_for` and `run_diff`
+ *  today; old snapshots have no `run_diff`, which `ledgerAlias` covers.) */
+export function sportLedgerFamily(metrics: readonly { key: string }[], rule: "diff" | "for"): LedgerFamily {
+  const declared = new Set(metrics.map((m) => m.key));
+  const [own, other] = rule === "diff" ? [DIFF_KEYS, FOR_KEYS] : [FOR_KEYS, DIFF_KEYS];
+  const alias = [...own, ...other, ...AGAINST_KEYS].find((k) => declared.has(k));
+  return alias === undefined ? "plain" : (LEDGER_ALIAS_FAMILY[alias] ?? "plain");
+}
+
 /** The rule a tie was split on, in the page's language — the dictionary's
- *  phrase where `TIE_BREAK_MSG_KEYS` has one, the engine's otherwise. Shared by
- *  both standings tables, like `columnHeader`. */
-export function tieBreakRule(key: string, msg: (key: TKey) => string): string {
+ *  phrase where `TIE_BREAK_MSG_KEYS` has one, the engine's otherwise; `diff`
+ *  and `for` in the word of the ledger they were compared on (`ledgerFamily`).
+ *  Shared by both standings tables and the what-if, like `columnHeader`.
+ *  `row` is the tied row, `table` every row it was ranked with, `partners`
+ *  the entrants it was split from (its own `tieBreak.with` unless the caller
+ *  names them — the what-if names its rival). All required but `partners`, so
+ *  no caller can print the catch-all by leaving the ledger out. */
+export function tieBreakRule(
+  key: string,
+  msg: (key: TKey) => string,
+  row: StandingsRow,
+  table: readonly StandingsRow[],
+  partners: readonly string[] = row.tieBreak?.with ?? [],
+): string {
+  if (key === "diff" || key === "for") return msg(LEDGER_RULE_MSG_KEYS[key][ledgerFamily(row, key, table, partners)]);
   const dictKey = TIE_BREAK_MSG_KEYS[key];
   return dictKey === undefined ? tieBreakLabel(key) : msg(dictKey);
 }
@@ -336,7 +428,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       tieBreakText: r.tieBreak
         ? input.msg("table.tieBreak", {
             with: r.tieBreak.with.map(name).join(", "),
-            rule: tieBreakRule(r.tieBreak.key, input.msg),
+            rule: tieBreakRule(r.tieBreak.key, input.msg, r, input.rows),
           })
         : null,
       // Keyed by entrant id, never by rank or position: a shared rank is two

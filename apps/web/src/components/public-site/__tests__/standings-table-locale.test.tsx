@@ -58,7 +58,7 @@ const headers = (html: string) =>
 
 describe("StandingsTable — every header word is the page dictionary's", () => {
   it("premise: every Spanish word asserted below differs from its English one", () => {
-    for (const k of ["table.team", "table.abbr.played", "table.abbr.won", "table.abbr.drawn", "table.col.played", "table.abbr.ga", "table.abbr.gd", "table.col.gf", "table.tieBreak", "table.tieBreak.diff"] as const) {
+    for (const k of ["table.team", "table.abbr.played", "table.abbr.won", "table.abbr.drawn", "table.col.played", "table.abbr.ga", "table.abbr.gd", "table.col.gf", "table.tieBreak", "table.tieBreak.diffGoals"] as const) {
       expect(es[k], k).not.toBe(en[k]);
     }
   });
@@ -78,10 +78,10 @@ describe("StandingsTable — every header word is the page dictionary's", () => 
 
   it("the tie note is the dictionary's sentence with the dictionary's rule name", () => {
     const html = table(es);
-    const sentence = es["table.tieBreak"].replace("{with}", "Beta").replace("{rule}", es["table.tieBreak.diff"]);
+    const sentence = es["table.tieBreak"].replace("{with}", "Beta").replace("{rule}", es["table.tieBreak.diffGoals"]);
     expect(html).toContain(`>${sentence}</span>`);
     expect(html).not.toContain("Level with");
-    expect(html).not.toContain(en["table.tieBreak.diff"]);
+    expect(html).not.toContain(en["table.tieBreak.diffGoals"]);
   });
 });
 

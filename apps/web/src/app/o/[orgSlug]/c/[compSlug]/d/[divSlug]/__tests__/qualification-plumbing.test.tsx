@@ -25,7 +25,7 @@
 // per-group cut on no pool is no view); the ORG's or English words used
 // instead of the viewer's locale (→ the French case); the entrant names not
 // handed to the builder (→ the cut test's what-if lines, which name the rival).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
@@ -113,6 +113,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import DivisionPage from "../page";
+import { resolveModule } from "@/server/engine-db";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import type { StageQualMetaRow } from "@/server/usecases/stage-qualification";
@@ -296,10 +297,10 @@ describe("organiser console — the standings tables get the same qualification 
     // The popover's what-if names the RIVAL by the page's entrant names — an
     // entrant id here means the page handed the builder no names.
     expect(qualification!.rows.A!.whatIf).toBe(
-      "If you finish level on points with Cy Swiss, you stay ahead on goal/run difference even after a heavy defeat.",
+      "If you finish level on points with Cy Swiss, you stay ahead on difference even after a heavy defeat.",
     );
     expect(qualification!.rows.C!.whatIf).toBe(
-      "If you finish level on points with Bo Swiss, goal/run difference decides. Now: you -1, Bo Swiss 0.",
+      "If you finish level on points with Bo Swiss, difference decides. Now: you -1, Bo Swiss 0.",
     );
     // …and the table draws it.
     expect(html).toContain('data-testid="qual-cut"');
@@ -350,6 +351,37 @@ describe("organiser console — the standings tables get the same qualification 
     expect(b.html).toContain("First place goes through to Finals · 1 round left");
   });
 
+  it("pools read Pool A above Pool B whatever their ids and the query's order (lib/pool-order.ts)", async () => {
+    // The two-pool scene with ids that sort OPPOSITE to the names ("f…" is
+    // Pool A's), handed back by the tenant read in B, A order: a console that
+    // sorts by id, or keeps query order, draws Pool B first.
+    twoPoolScene();
+    const POOL_A = "ffffffff-0000-4000-8000-00000000000a";
+    const POOL_B = "00000000-0000-4000-8000-00000000000b";
+    const id = (p: unknown) => (p === "pA" ? POOL_A : p === "pB" ? POOL_B : p);
+    scene.fixtures = scene.fixtures.map((f) => ({ ...(f as object), pool_id: id((f as { pool_id: unknown }).pool_id) }));
+    scene.pools = {
+      gr: [
+        { id: POOL_B, key: "B", name: "Pool B" },
+        { id: POOL_A, key: "A", name: "Pool A" },
+      ],
+    };
+    scene.snaps = Object.fromEntries(
+      Object.values(scene.snaps).map((v) => {
+        const pool = id((v as { pool_id: string }).pool_id) as string;
+        return [`gr:${pool}`, { ...(v as object), pool_id: pool }];
+      }),
+    );
+    expect([POOL_A, POOL_B].sort(), "premise: the ids sort B first").toEqual([POOL_B, POOL_A]);
+    qual.listStageQualificationMeta.mockResolvedValue(
+      new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" })]]),
+    );
+    const tables = await renderTables();
+    expect(tables.map((x) => x.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    // Each caption over its OWN pool's rows — the tables moved, not the labels.
+    expect(tables.map((x) => x.rowIds)).toEqual([["e1", "e2", "e3"], ["e4", "e5", "e6"]]);
+  });
+
   it("the console speaks the VIEWER's locale: a French viewer gets the French cut line", async () => {
     swissScene();
     scene.locale = "fr";
@@ -366,5 +398,60 @@ describe("organiser console — the standings tables get the same qualification 
     qual.listStageQualificationMeta.mockResolvedValue(new Map());
     await renderTables("entrants");
     expect(qual.listStageQualificationMeta).not.toHaveBeenCalled();
+  });
+});
+
+// The cascade caption under the tables names each tie-break rule. `diff` and
+// `for` used to read "goal/run difference" / "goals/runs scored" in every
+// sport; they now say the division's own word, as the public tables do —
+// resolved from the module's declared ledger (`sportLedgerFamily`).
+describe("organiser console — the tie-break cascade caption says the sport's word", () => {
+  const GENERIC = builtinModules.find((m) => m.key === "generic")!;
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    qual.listStageQualificationMeta.mockReset().mockResolvedValue(new Map());
+    scene.locale = "en";
+    vi.mocked(resolveModule).mockImplementation(() => GENERIC);
+  });
+  afterEach(() => {
+    vi.mocked(resolveModule).mockImplementation(() => GENERIC);
+  });
+
+  async function cascadeCaption(): Promise<string[]> {
+    const root = await DivisionPage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
+      searchParams: Promise.resolve({ tab: "standings" }),
+    });
+    const caption = elements(root).find(
+      (el) => el.type === "p" && String((el.props as { className?: string }).className).includes("border-slate-100 pt-3"),
+    );
+    expect(caption, "the cascade caption").toBeDefined();
+    return elements((caption!.props as { children: unknown }).children)
+      .filter((el) => el.type === "span" && (el.props as { className?: string }).className === "text-slate-500")
+      .map((el) => String((el.props as { children: unknown }).children));
+  }
+
+  it("generic: plain 'difference' and 'total scored', never the goal/run catch-all", async () => {
+    swissScene();
+    expect(GENERIC.defaultTiebreakers, "premise: generic splits on diff then for").toEqual(
+      expect.arrayContaining(["diff", "for"]),
+    );
+    expect(await cascadeCaption()).toEqual(["points", "difference", "total scored", "head-to-head", "drawing of lots"]);
+  });
+
+  it("hockey: 'goal difference' and 'goals scored'", async () => {
+    swissScene();
+    const hockey = builtinModules.find((m) => m.key === "hockey")!;
+    vi.mocked(resolveModule).mockImplementation(() => hockey);
+    expect(await cascadeCaption()).toEqual(["points", "goal difference", "goals scored", "head-to-head", "seeding"]);
+  });
+
+  it("a French viewer of a hockey division reads the French sport word", async () => {
+    swissScene();
+    scene.locale = "fr";
+    const hockey = builtinModules.find((m) => m.key === "hockey")!;
+    vi.mocked(resolveModule).mockImplementation(() => hockey);
+    const caption = await cascadeCaption();
+    expect(caption.slice(1, 3)).toEqual(["différence de buts", "buts marqués"]);
   });
 });

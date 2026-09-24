@@ -166,6 +166,66 @@ test.afterAll(async () => {
   await seedContext?.close().catch(() => {});
 });
 
+/** The long entrant's name cell, as painted: how many lines it takes, whether
+ *  the clamp cut it (content taller or wider than its box), how it may break a
+ *  word, and the title that carries the whole name. P4 option C
+ *  (owner-approved 2026-09-24): below `md` a name wraps to at most TWO lines
+ *  and ends in an ellipsis, the full name in `title`; from `md` up it is drawn
+ *  exactly as before. Ruling (a), same day: below `md` the name opts into
+ *  browser hyphenation (`hyphens: auto`), so a word too long for the column
+ *  can break at a hyphenation point rather than at an arbitrary letter
+ *  ("Northgat / e BC" in the hub's 62px column). What this pins is the
+ *  OPT-IN, not a hyphen on screen: Chromium never hyphenates a word that
+ *  starts with a capital (measured, Chromium 149), so in this runner the
+ *  name still breaks at a letter; WebKit (Safari) draws "North- / gate". */
+const LONG_NAME = NAMES.find((n) => n.startsWith("Riverside"))!;
+
+async function longName(scope: Locator) {
+  const el = scope.locator(`th[scope="row"] [title="${LONG_NAME}"]`);
+  await expect(el, "the long name carries its full text in a title").toHaveCount(1);
+  return el.evaluate((e) => {
+    const cs = getComputedStyle(e);
+    const box = e.getBoundingClientRect();
+    const lineHeight = parseFloat(cs.lineHeight);
+    return {
+      lines: Math.round(box.height / lineHeight),
+      clipped: e.scrollHeight > e.clientHeight + 1 || e.scrollWidth > e.clientWidth + 1,
+      clamp: cs.getPropertyValue("-webkit-line-clamp"),
+      hyphens: cs.hyphens,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      lineHeight,
+    };
+  });
+}
+
+/** At most two lines everywhere; at 320 exactly two, cut short by the clamp —
+ *  the name is longer than two lines of its cell, so a pass there cannot be
+ *  a name that merely happens to fit. */
+function expectLongNameClamped(m: Awaited<ReturnType<typeof longName>>, width: number, where: string) {
+  expect(LONG_NAME.length, "premise: a realistic long name (AGENTS.md: 43+ characters)").toBeGreaterThanOrEqual(43);
+  expect(Number.isFinite(m.lineHeight), `${where}: the name has a line height to count lines by`).toBe(true);
+  expect(m.lines, `${where}: the long name takes ${m.lines} lines (${m.height}px at ${m.lineHeight}px)`).toBeLessThanOrEqual(2);
+  if (width < 768) {
+    expect(m.lines, `${where}: the long name uses its two lines`).toBe(2);
+    expect(m.clamp, `${where}: the name is clamped to two lines`).toBe("2");
+    expect(m.clipped, `${where}: the name is cut short (ellipsis), not merely short`).toBe(true);
+    expect(m.hyphens, `${where}: the name opts into browser hyphenation`).toBe("auto");
+  } else {
+    // Pair: from `md` up the name is drawn as before P4 — no hyphenation.
+    expect(m.hyphens, `${where}: no hyphenation from md up`).toBe("manual");
+  }
+}
+
+/** `hyphens: auto` breaks words by the rules of the element's LANGUAGE, and
+ *  with no `lang` in scope the browser does not hyphenate at all. The /shared
+ *  org layout sets `<html lang>` to the ORG's locale (`HtmlLang`), and the
+ *  legend check beside each call reads this org's copy from the English
+ *  dictionary — so the page must say "en". */
+async function expectOrgLang(page: Page, where: string): Promise<void> {
+  await expect(page.locator("html"), `${where}: <html lang> is the org's locale, which hyphenation reads`).toHaveAttribute("lang", "en");
+}
+
 /** Load `path` until its standings show the cut line (ISR can hand the first
  *  visitor a page rendered a moment before the last result folded). */
 async function openWithCut(page: Page, path: string): Promise<void> {
@@ -342,10 +402,14 @@ for (const width of [1280, 768, 320] as const) {
     );
     expect(kinds).toEqual(["needs_help", "out", "through", "win_k"]);
     await expect(panel.getByTestId("qual-legend")).toContainText(dictString("en", "table.qual.legend.open"));
+    await expectOrgLang(page, `division ${width}`);
 
     // 1. No sideways page scroll.
     const widths = await pageWidths(page);
     await expectNoHorizontalScroll(page);
+    // 1b. The long name: at most two lines, the full name in its title.
+    const name = await longName(panel);
+    expectLongNameClamped(name, width, `division ${width}`);
 
     // 2. Every rank trigger is a 40px target: 19.5px either side of the
     //    centre at a phone width (a 38px box passes ±19, so ±19.5 is what
@@ -391,7 +455,7 @@ for (const width of [1280, 768, 320] as const) {
     await page.keyboard.press("Escape");
 
     shots[width] = await controlSet(panel);
-    const measured = { width, ...widths, hits, tiedFit, lastPanel: { panel: pop, trigger: btn }, controls: shots[width] };
+    const measured = { width, ...widths, name, hits, tiedFit, lastPanel: { panel: pop, trigger: btn }, controls: shots[width] };
     await testInfo.attach(`measurements-${width}.json`, { body: JSON.stringify(measured, null, 1), contentType: "application/json" });
     console.log(`MEASURED ${JSON.stringify(measured)}`);
   });
@@ -472,6 +536,7 @@ for (const width of [1280, 768, 320] as const) {
     const table = hubTable(page, "mh-table-");
     await expect(table).toHaveCount(1);
     await expect(table.getByTestId("qual-legend")).toContainText(dictString("en", "table.qual.legend.open"));
+    await expectOrgLang(page, `hub ${width}`);
 
     // Premise: every marker kind, as on the division page.
     const kinds = await table.locator("tbody [data-qual-marker]").evaluateAll((els) =>
@@ -484,6 +549,17 @@ for (const width of [1280, 768, 320] as const) {
     await expectNoHorizontalScroll(page);
     const geometry = [await cutGeometry(table)];
     expectCutSpansTable(geometry[0]!);
+    const name = await longName(table);
+    expectLongNameClamped(name, width, `hub ${width}`);
+    // 1c. Ruling (d): the 7.5rem team-column floor is phone-only. At 320 the
+    //     table scrolls inside its own box (the swipe test below); from `md`
+    //     up nothing changed, so the table still fits its card.
+    if (width >= 768) {
+      const box = await table
+        .locator('[role="region"]')
+        .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(box.scroll, `hub ${width}: the table fits its card, as before the phone floor`).toBeLessThanOrEqual(box.client);
+    }
 
     // 2. Every rank trigger is a 40px target (±19.5 at a phone width).
     const triggers = table.getByRole("button", { name: /^Rank \d+,/ });
@@ -543,6 +619,7 @@ for (const width of [1280, 768, 320] as const) {
     const measured = {
       hub: width,
       ...widths,
+      name,
       hits,
       geometry: geometry.map((g) => ({ ...g, table: g.table.map(r1), cut: g.cut.map(r1), name: r1(g.name) })),
       lastPanel: { panel: pop, trigger: btn },
@@ -559,6 +636,89 @@ test("the hub's phone shows the same controls as its desktop: markers, cut line,
   expect(hubShots[1280], "the 1280 leg did not run").toBeDefined();
   expect(hubShots[320]).toEqual(hubShots[1280]);
   expect(hubShots[768]).toEqual(hubShots[1280]);
+});
+
+/** "Northgate BC": its first word is the one the hub's phone column broke
+ *  mid-letter before the floor ("Northgat / e"). */
+const NORTHGATE = NAMES.find((n) => n.startsWith("Northgate"))!;
+
+/** The text an element paints on its FIRST line, read per character from the
+ *  layout (a line ends where a character's box drops below the first one). A
+ *  word the column broke — at a letter or at a hyphen — ends the line early. */
+async function firstLine(el: Locator): Promise<string> {
+  return el.evaluate((node) => {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    let text = "";
+    let top: number | null = null;
+    for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+      for (let i = 0; i < n.data.length; i++) {
+        const range = document.createRange();
+        range.setStart(n, i);
+        range.setEnd(n, i + 1);
+        const rect = range.getClientRects()[0];
+        if (!rect) continue; // collapsed whitespace
+        top ??= rect.top;
+        if (Math.abs(rect.top - top) > 2) return text.trim();
+        text += n.data[i];
+      }
+    }
+    return text.trim();
+  });
+}
+
+test("hub Table tab at 320: the team column keeps the division page's 7.5rem floor — a long first word stays whole, the table swipes inside its own box to PTS, the page never scrolls", async ({ browser }, testInfo) => {
+  // Owner ruling (d), 2026-09-24. Hyphenation (ruling (a)) cannot mend the
+  // mid-letter break in Chromium, which never hyphenates a word that starts
+  // with a capital; a floor can. Below `md` the name column gets the division
+  // page's 7.5rem, and at 320 the table becomes wider than its card, so it
+  // scrolls inside its own box (AGENTS.md #23: reachable, never clipped).
+  const page = await spectator(browser, { width: 320, height: 900 });
+  await openWithCut(page, `${seed.hubPath}?tab=table`);
+  const table = hubTable(page, "mh-table-");
+  await expect(table).toHaveCount(1);
+  const region = table.locator('[role="region"]');
+  await expect(region).toHaveCount(1);
+
+  // 1. The floor, and the word it keeps whole.
+  const nameTh = table.locator(`th[scope="row"]:has([title="${NORTHGATE}"])`);
+  await expect(nameTh).toHaveCount(1);
+  const thWidth = await nameTh.evaluate((el) => el.getBoundingClientRect().width);
+  expect(thWidth, "the team column is at least 7.5rem (120px) wide at 320").toBeGreaterThanOrEqual(119.5);
+  const word = NORTHGATE.split(" ")[0]!;
+  const line = await firstLine(nameTh.locator(`[title="${NORTHGATE}"]`));
+  expect(line.split(/\s+/)[0], `"${word}" is whole on the first line (first line: "${line}")`).toBe(word);
+
+  // 2. The box is reachable: it scrolls, it is an auto/scroll box, and a
+  //    keyboard can reach it (tabindex, role, name — the division table's
+  //    wrapper carries the same three).
+  const box = await region.evaluate((el) => ({
+    overflowX: getComputedStyle(el).overflowX,
+    scroll: el.scrollWidth,
+    client: el.clientWidth,
+    tabindex: el.getAttribute("tabindex"),
+    label: el.getAttribute("aria-label"),
+  }));
+  expect(box.scroll, `premise: the floor puts the table wider than its box (${JSON.stringify(box)})`).toBeGreaterThan(box.client);
+  expect(["auto", "scroll"], "the box that overflows is reachable, not clipped").toContain(box.overflowX);
+  expect(box.tabindex, "a keyboard can reach the box").toBe("0");
+  expect(box.label ?? "", "the box has an accessible name").not.toBe("");
+  await expectNoHorizontalScroll(page);
+
+  // 3. A swipe brings PTS into the box, and the page still does not move.
+  const pts = table.locator('thead th[data-col="points"]');
+  const ptsRight = () =>
+    Promise.all([pts.boundingBox(), region.boundingBox()]).then(([p, r]) => p!.x + p!.width - (r!.x + r!.width));
+  expect(await ptsRight(), "premise: PTS starts past the box's right edge").toBeGreaterThan(0.5);
+  // The region is taller than the viewport's lower half: the element
+  // screenshot scrolls the PAGE to it, which is what a reader does too.
+  await region.screenshot({ path: testInfo.outputPath("hub-320-floor.png") });
+  const rb = (await region.boundingBox())!;
+  await page.mouse.move(rb.x + rb.width / 2, rb.y + 12);
+  await page.mouse.wheel(rb.width, 0);
+  await expect.poll(ptsRight, { message: "after the swipe PTS is inside the box" }).toBeLessThanOrEqual(0.5);
+  await region.screenshot({ path: testInfo.outputPath("hub-320-floor-pts.png") });
+  await expectNoHorizontalScroll(page);
+  console.log(`MEASURED ${JSON.stringify({ floor: 320, thWidth, line, box })}`);
 });
 
 test("the hub Overview's preview at 320: markers and the cut line, NO legend, no sideways scroll", async ({ browser }, testInfo) => {

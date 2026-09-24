@@ -1115,6 +1115,31 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     expect(doc.tables[0]!.rows.every((r) => r.champion === false)).toBe(true);
   });
 
+  it("pools read Pool A above Pool B — never in pool-id order (lib/pool-order.ts)", async () => {
+    // Ids chosen to sort OPPOSITE to the names, and the snapshots handed over
+    // in id order: an id sort, what this builder used to do, reads B first.
+    const POOL_A = "ffffffff-0000-4000-8000-00000000000a";
+    const POOL_B = "00000000-0000-4000-8000-00000000000b";
+    const snap = (pool_id: string, entrantId: string): PublicStandings => ({
+      ...SNAPSHOT,
+      pool_id,
+      rows: [{ entrantId, played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: { gf: 1, ga: 0 }, rank: 1 }],
+    });
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        stages: [{ ...STAGE, kind: "group", name: "Groups" }],
+        pools: [
+          { id: POOL_B, stage_id: "st1", key: "B", name: "Pool B" },
+          { id: POOL_A, stage_id: "st1", key: "A", name: "Pool A" },
+        ],
+        standings: [snap(POOL_B, "e2"), snap(POOL_A, "e1")],
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables.map((v) => v.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(doc.tables.map((v) => v.id)).toEqual([`open-st1-${POOL_A}`, `open-st1-${POOL_B}`]);
+  });
+
   it("a COMPLETE league crowns rank 1 in the table it publishes", async () => {
     getPublicDivisionMock.mockResolvedValue(
       divisionDetail({ stages: [{ ...STAGE, status: "complete" }] }),
@@ -1135,7 +1160,10 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     expect(doc.tabs).not.toContain("table");
   });
 
-  it("pool tables are captioned with their pool and ordered by pool id", async () => {
+  // Retitled: it said "ordered by pool id", and its ids ("pA" < "pB") sort the
+  // same way as its names, so it could not tell the two orders apart. The
+  // test above it gives the ids the OPPOSITE order.
+  it("pool tables are captioned with their pool, Pool A first", async () => {
     const pools = [
       { id: "pB", stage_id: "st1", key: "B", name: "Pool B" },
       { id: "pA", stage_id: "st1", key: "A", name: "Pool A" },
@@ -2631,7 +2659,7 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     expect(byId.e4).toMatchObject({
       status: "needs_help",
       label: "Needs help",
-      ifYouLose: "If you lose your next match: Out.",
+      ifYouLose: "If you lose your next match, you're out.",
     });
     // Every row of this table has a status — none is keyed to the wrong row.
     expect(table.rows.map((r) => [r.entrantId, r.qual?.status])).toEqual([
@@ -2654,7 +2682,7 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     const latest = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
     const e4 = latest.rows.find((r) => r.entrantId === "e4")!.qual!;
     expect(e4.whatIf).toBe(
-      "If you finish level on points with Red Rockets, goal/run difference decides. Now: you -2, Red Rockets +5.",
+      "If you finish level on points with Red Rockets, goal difference decides. Now: you -2, Red Rockets +5.",
     );
     expect(e4.whatIfAssumption).toBeNull();
     // Its pair: the SAME division pinned to the old version — same sport key,
@@ -2664,7 +2692,7 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     const pinned = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!.tables[0]!;
     const p4 = pinned.rows.find((r) => r.entrantId === "e4")!.qual!;
     expect(p4.whatIf).toBe(
-      "If you finish level on points with Red Rockets, goal/run difference decides: win your next match by 8 or more to finish ahead.",
+      "If you finish level on points with Red Rockets, goal difference decides: win your next match by 8 or more to finish ahead.",
     );
     expect(p4.whatIfAssumption).toBe(
       "Assumes Red Rockets's figures stay the same and your next match is an average one.",
@@ -2730,9 +2758,9 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
 
     expect(a.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 2 rounds left" });
     expect(a.rows.map((x) => [x.entrantId, x.qual?.label ?? null, x.qual?.ifYouLose ?? null])).toEqual([
-      ["e1", "Needs help", "If you lose your next match: Needs help."],
-      ["e2", "Needs help", "If you lose your next match: Out."],
-      ["e3", "Needs help", "If you lose your next match: Needs help."],
+      ["e1", "Needs help", "If you lose your next match, you'll need other results to go your way."],
+      ["e2", "Needs help", "If you lose your next match, you're out."],
+      ["e3", "Needs help", "If you lose your next match, you'll need other results to go your way."],
     ]);
 
     expect(b.qualification).toMatchObject({ cutIndex: 1, label: "First place goes through to Finals · 1 round left" });

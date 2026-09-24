@@ -3875,6 +3875,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
         balls_faced_eff: ballsFaced,
         runs_against: runsAgainst,
         balls_bowled_eff: ballsBowled,
+        run_diff: runsFor - runsAgainst,
         ties: 0,
         no_results: 0,
       };
@@ -3884,6 +3885,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       balls_faced_eff: 0,
       runs_against: 0,
       balls_bowled_eff: 0,
+      run_diff: 0,
       ties: 0,
       no_results: 0,
     });
@@ -3950,6 +3952,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     { key: "balls_faced_eff", label: "Balls faced (eff.)", direction: "asc", display: false },
     { key: "runs_against", label: "Runs against", direction: "asc", display: false },
     { key: "balls_bowled_eff", label: "Balls bowled (eff.)", direction: "desc", display: false },
+    { key: "run_diff", label: "Run difference", direction: "desc", display: false },
     { key: "ties", label: "T", direction: "desc" },
     { key: "no_results", label: "NR", direction: "desc" },
   ],

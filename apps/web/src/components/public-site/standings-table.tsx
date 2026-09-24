@@ -161,7 +161,7 @@ export function StandingsTable({
     row.tieBreak
       ? msg("table.tieBreak", {
           with: row.tieBreak.with.map((id) => entrantNames[id] ?? "—").join(", "),
-          rule: tieBreakRule(row.tieBreak.key, msg),
+          rule: tieBreakRule(row.tieBreak.key, msg, row, rows),
         })
       : null;
 
@@ -308,35 +308,56 @@ export function StandingsTable({
                   )}
                 </td>
                 {/* An Out row reads muted, as its marker does (spec §5). */}
+                {/* Long names (P4 option C, owner-approved 2026-09-24): below
+                    `md` the name is a flex row — crest, then the name clamped
+                    to TWO lines with an ellipsis, the full name in `title` —
+                    over a 7.5rem floor, so auto layout cannot squeeze it to
+                    one word a line (a 43-character club took five). Every
+                    class here is `max-md:`, so from `md` up the cell draws
+                    exactly as before. `min-w-0` down the chain lets the
+                    clamped span shrink inside the flex row. The name opts
+                    into browser hyphenation (ruling (a), 2026-09-24, as the
+                    hub's name does), by the rules of `<html lang>` — the
+                    org's locale, set by the org layout. Safari (WebKit)
+                    breaks "North- / gate"; Chromium never hyphenates a word
+                    that starts with a capital, so there `break-words` stays
+                    the fallback and a long word still breaks at a letter. */}
                 <th
                   scope="row"
-                  className={`py-2.5 pr-3 text-left font-medium ${qual?.status === "out" ? "text-ink-muted" : "text-ink"}`}
+                  className={`py-2.5 pr-3 text-left font-medium max-md:min-w-[7.5rem] ${qual?.status === "out" ? "text-ink-muted" : "text-ink"}`}
                 >
-                  {entrantLogos && (
-                    <EntityLogo
-                      src={entrantLogos[row.entrantId]}
-                      name={entrantNames[row.entrantId] ?? ""}
-                      size={20}
-                      className="mr-2"
-                    />
-                  )}
-                  {entrantNames[row.entrantId] ?? row.entrantId}
-                  {(() => {
-                    const status = entrantStatuses?.[row.entrantId] ?? "";
-                    const chip = DEPARTED_STATUS_CHIPS[status as DepartedStatus];
-                    // An unknown or competing status is NOT a chip: this prop
-                    // carries the whole field, so marking on mere presence would
-                    // brand every entrant in the table.
-                    if (!chip) return null;
-                    return (
-                      <span
-                        data-testid={`standings-${status}`}
-                        className={`ml-2 rounded-full px-2 py-0.5 align-middle text-[10px] font-medium ${chip.className}`}
-                      >
-                        {msg(chip.label)}
-                      </span>
-                    );
-                  })()}
+                  <span className="max-md:flex max-md:min-w-0 max-md:items-center">
+                    {entrantLogos && (
+                      <EntityLogo
+                        src={entrantLogos[row.entrantId]}
+                        name={entrantNames[row.entrantId] ?? ""}
+                        size={20}
+                        className="mr-2"
+                      />
+                    )}
+                    <span
+                      className="max-md:line-clamp-2 max-md:min-w-0 max-md:break-words max-md:hyphens-auto"
+                      title={entrantNames[row.entrantId] ?? row.entrantId}
+                    >
+                      {entrantNames[row.entrantId] ?? row.entrantId}
+                    </span>
+                    {(() => {
+                      const status = entrantStatuses?.[row.entrantId] ?? "";
+                      const chip = DEPARTED_STATUS_CHIPS[status as DepartedStatus];
+                      // An unknown or competing status is NOT a chip: this prop
+                      // carries the whole field, so marking on mere presence would
+                      // brand every entrant in the table.
+                      if (!chip) return null;
+                      return (
+                        <span
+                          data-testid={`standings-${status}`}
+                          className={`ml-2 shrink-0 rounded-full px-2 py-0.5 align-middle text-[10px] font-medium ${chip.className}`}
+                        >
+                          {msg(chip.label)}
+                        </span>
+                      );
+                    })()}
+                  </span>
                 </th>
                 {columns.map((col) => (
                   <td

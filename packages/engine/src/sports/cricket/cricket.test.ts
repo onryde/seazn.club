@@ -504,6 +504,36 @@ describe("cricket golden (a): 2019 CWC final — tie, super over, boundary count
   });
 });
 
+// P1 (owner-approved): cricket records its own run difference, so the
+// abstract `diff` tie-break compares runs (DIFF_KEYS gd, run_diff, diff) and
+// never a stage rule's forfeit `diff` alone against an absent value.
+describe("cricket ledger: every delta records run_diff = runs_for − runs_against", () => {
+  it("a decided match: the winner's margin, the loser's mirror", () => {
+    const state = fold(
+      t20,
+      stream(
+        ["core.start"],
+        ["cricket.innings.summary", { runs: 180, wickets: 4, legalBalls: 120 }],
+        ["cricket.innings.summary", { runs: 150, wickets: 10, legalBalls: 100 }],
+      ),
+    );
+    const [home, away] = cricket.standingsDelta(state.outcome!, t20, league, state);
+    expect([home.metrics.run_diff, away.metrics.run_diff]).toEqual([30, -30]);
+  });
+
+  it("a forfeit (award) records it too, at 0, beside its zero runs", () => {
+    const state = fold(t20, stream(["core.start"], ["core.forfeit", { by: "A", reason: "no_show" }]));
+    expect(state.outcome).toMatchObject({ kind: "award" });
+    for (const side of cricket.standingsDelta(state.outcome!, t20, league, state)) {
+      expect(side.metrics).toMatchObject({ runs_for: 0, runs_against: 0, run_diff: 0 });
+    }
+  });
+
+  it("the module declares it, hidden from the table (display: false)", () => {
+    expect(cricket.metrics.find((m) => m.key === "run_diff")).toMatchObject({ direction: "desc", display: false });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // PROMPT-05 §8 (b) — all-out NRR rule (ESPNcricinfo/CricHeroes methodology:
 // a side bowled out is charged its full quota of overs, not balls faced).

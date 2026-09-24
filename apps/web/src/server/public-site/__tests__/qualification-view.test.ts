@@ -70,12 +70,14 @@ import {
   buildQualificationView,
   divisionAwardAddsToLedger,
   divisionPointsBounds,
+  ifYouLoseSentence,
   stageQualMeta,
   type QualFixture,
   type QualificationView,
   type QualificationViewInput,
   type StageQualMeta,
 } from "../qualification-view";
+import { LEDGER_RULE_MSG_KEYS, tieBreakRule } from "../standings-view";
 
 const moduleOf = (key: string) => {
   const m = builtinModules.find((x) => x.key === key);
@@ -590,14 +592,14 @@ describe("statuses equal the engine's on the derived input", () => {
     const seated = [...s.fixtures.filter((f) => f.round_no < 3), open(3, "A", "C"), open(3, "B", "D")];
     const d = must(view({ ...s, fixtures: seated })).rows.D!;
     expect(d.status).toBe("needs_help");
-    expect(d.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(d.ifYouLose).toBe("If you lose your next match, you're out.");
   });
   it("M7: a bye counts as a round played — D (bye in round 2) has exactly one round left", () => {
     // swiss5 engine outcomes by D's rounds left: 0 → Out; 1 → Needs help, a
     // loss is Out; 2 → Needs help, a loss still Needs help.
     const d = must(view(swiss5())).rows.D!;
     expect(d.status).toBe("needs_help");
-    expect(d.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(d.ifYouLose).toBe("If you lose your next match, you're out.");
   });
   it("M7: a withdrawn row gets no status, and its points AND its unplayed fixture decide a rival's verdict", () => {
     // rr4 after two rounds, cut 1: A (6, withdrawn, award mode) and B (6) meet
@@ -764,9 +766,94 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
 });
 
 describe("if you lose", () => {
+  // One sentence per post-loss status (owner copy fix, 2026-09-23): the old
+  // "If you lose your next match: {status}." glued a status CHIP's words into
+  // a sentence ("…: Win and in.", "…: Needs help."). Each status now has its
+  // own sentence, and win_k says what the engine means by it after the loss:
+  // win k of the r − 1 matches left (`qualificationStatus`, `r: r - 1`).
+  //
+  // Swiss of four after three rounds: A 9, B 6, C 3, D 0. Rounds and cut vary
+  // to put A's post-loss status on each branch; the engine's own verdict is
+  // checked first so the scene cannot drift from what it claims.
+  function after3Rounds(rounds: number, cut: number): Scene {
+    return {
+      kind: "swiss",
+      meta: { swissRounds: rounds, qualifyCount: cut },
+      rows: [row("A", 1, 3, 3, [6, 0]), row("B", 2, 2, 3, [4, 2]), row("C", 3, 1, 3, [2, 4]), row("D", 4, 0, 3, [0, 6])],
+      fixtures: [
+        won(1, "A", "D"), won(1, "B", "C"), won(2, "A", "C"), won(2, "B", "D"), won(3, "A", "B"), won(3, "C", "D"),
+        open(4, null, null), open(4, null, null),
+      ],
+    };
+  }
+  function engineAfterLoss(rounds: number, cut: number) {
+    const s = after3Rounds(rounds, cut);
+    return qualificationStatus({
+      rows: s.rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
+      remaining: new Map(s.rows.map((r) => [r.entrantId, rounds - 3])),
+      perMatch: BOUNDS,
+      cut,
+      anyPlayed: true,
+      complete: false,
+    })!.get("A")!.ifYouLose;
+  }
+  it("win_k, k = 1 with one match left after the loss: win your last one", () => {
+    expect(engineAfterLoss(5, 2)).toEqual({ kind: "win_k", k: 1 });
+    expect(must(view(after3Rounds(5, 2))).rows.A!.ifYouLose).toBe(
+      "If you lose your next match, you can still go through by winning your last one.",
+    );
+  });
+  it("win_k, k = 2 with two left after the loss: win both — all of your last 2", () => {
+    expect(engineAfterLoss(6, 2)).toEqual({ kind: "win_k", k: 2 });
+    expect(must(view(after3Rounds(6, 2))).rows.A!.ifYouLose).toBe(
+      "If you lose your next match, you can still go through by winning all of your last 2.",
+    );
+  });
+  it("win_k, k = 1 with two left after the loss: ANY one of them, never 'your last one'", () => {
+    expect(engineAfterLoss(6, 3)).toEqual({ kind: "win_k", k: 1 });
+    expect(must(view(after3Rounds(6, 3))).rows.A!.ifYouLose).toBe(
+      "If you lose your next match, you can still go through by winning one of your last 2.",
+    );
+  });
+  it("win_k, k = 2 with three left after the loss: 2 of your last 3", () => {
+    expect(engineAfterLoss(7, 3)).toEqual({ kind: "win_k", k: 2 });
+    expect(must(view(after3Rounds(7, 3))).rows.A!.ifYouLose).toBe(
+      "If you lose your next match, you can still go through by winning 2 of your last 3.",
+    );
+  });
+  it("needs_help and out each read as their own sentence", () => {
+    const v = must(view(swiss4()));
+    expect(v.rows.A!.ifYouLose).toBe("If you lose your next match, you'll need other results to go your way.");
+    expect(v.rows.D!.ifYouLose).toBe("If you lose your next match, you're out.");
+  });
+  it("through has a sentence too, though the engine never returns it after a loss", () => {
+    // Unreachable from the builder: a loss moves `lo` by the per-match min and
+    // takes one match away, so the worst case the through test reads —
+    // points + min + (r − 1)·min — is the pre-loss one, and the pre-loss
+    // status was open. The sentence exists so a future engine change cannot
+    // print a key. Asked through the builder's own msg/plural.
+    const i = input(swiss4());
+    expect(ifYouLoseSentence({ kind: "through" }, 2, i)).toBe("If you lose your next match, you're still through.");
+    // …and the other kinds through the same door, pinned against the view.
+    expect(ifYouLoseSentence({ kind: "out" }, 0, i)).toBe("If you lose your next match, you're out.");
+    expect(ifYouLoseSentence({ kind: "win_k", k: 3 }, 3, i)).toBe(
+      "If you lose your next match, you can still go through by winning all of your last 3.",
+    );
+  });
+  it("Spanish, French and Dutch word each sentence in their own language", () => {
+    const expected: [Dict, string, string][] = [
+      [es as Dict, "Si pierdes tu próximo partido, aún puedes pasar ganando {count} de los {r} últimos.", "Si pierdes tu próximo partido, aún puedes pasar ganando el último."],
+      [fr as Dict, "Si vous perdez votre prochain match, vous pouvez encore passer en gagnant {count} de vos {r} derniers.", "Si vous perdez votre prochain match, vous pouvez encore passer en gagnant le dernier."],
+      [nl as Dict, "Als je je volgende wedstrijd verliest, kun je nog door als je er {count} van je laatste {r} wint.", "Als je je volgende wedstrijd verliest, kun je nog door als je je laatste wint."],
+    ];
+    for (const [dict, kOf, last] of expected) {
+      expect(must(view(after3Rounds(7, 3), {}, dict)).rows.A!.ifYouLose).toBe(kOf.replace("{count}", "2").replace("{r}", "3"));
+      expect(must(view(after3Rounds(5, 2), {}, dict)).rows.A!.ifYouLose).toBe(last);
+    }
+  });
   it("open rows carry it; through and out rows do not", () => {
     const v = must(view(swiss4()));
-    expect(v.rows.A!.ifYouLose).toBe("If you lose your next match: Needs help.");
+    expect(v.rows.A!.ifYouLose).toBe("If you lose your next match, you'll need other results to go your way.");
     const settled = must(
       view({
         kind: "league",
@@ -809,7 +896,7 @@ describe("if you lose", () => {
     expect(half.status).toBe("needs_help");
     expect(half.ifYouLose).toBeNull();
     const full = must(view({ ...s, fixtures: [...early, open(3, "A", "C"), open(3, "D", "B")] })).rows.D!;
-    expect(full.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(full.ifYouLose).toBe("If you lose your next match, you're out.");
   });
   it("T2-C1 reads the EARLIEST unplayed seat, whatever order the fixtures arrive in", () => {
     // Four rounds; D seated in rounds 3 and 4. Two left: a loss still Needs help.
@@ -818,7 +905,7 @@ describe("if you lose", () => {
     const byeFirst = must(view({ ...s, fixtures: [...early, open(4, "D", "B"), open(3, "D", null)] })).rows.D!;
     expect(byeFirst.ifYouLose).toBeNull();
     const byeLater = must(view({ ...s, fixtures: [...early, open(4, "D", null), open(3, "D", "B")] })).rows.D!;
-    expect(byeLater.ifYouLose).toBe("If you lose your next match: Needs help.");
+    expect(byeLater.ifYouLose).toBe("If you lose your next match, you'll need other results to go your way.");
   });
   it("T2-C1: a bye next also hides the what-if's tying result — rule and values only", () => {
     // swiss4 with D −2 over 14 goals and B level: against a real opponent D
@@ -829,19 +916,22 @@ describe("if you lose", () => {
     );
     const early = s.fixtures.filter((f) => f.round_no < 3);
     const real = must(view({ ...s, rows, fixtures: [...early, open(3, "A", "B"), open(3, "D", "C")] })).rows.D!;
-    expect(real.whatIf).toBe("If you finish level on points with Bo, goal/run difference decides: win your next match by 3 or more to finish ahead.");
+    expect(real.whatIf).toBe("If you finish level on points with Bo, difference decides: win your next match by 3 or more to finish ahead.");
     const bye = must(view({ ...s, rows, fixtures: [...early, open(3, "A", "B"), open(3, "D", null)] })).rows.D!;
-    expect(bye.whatIf).toBe("If you finish level on points with Bo, goal/run difference decides. Now: you -2, Bo 0.");
+    expect(bye.whatIf).toBe("If you finish level on points with Bo, difference decides. Now: you -2, Bo 0.");
     expect(bye.whatIfAssumption).toBeNull();
   });
 });
 
 describe("what-if (§3.4) — a target only when the tying result is known and the rival is not the next opponent", () => {
-  const RULE = "goal/run difference";
+  // The word of the ledger the rows record (`tieBreakRule`, owner copy fix
+  // 2026-09-23): `row()` folds the generic module's for/against/diff, so plain
+  // "difference" — the football and cricket cases below name their own.
+  const RULE = "difference";
   it("win scenario (a loss is Out): win by m", () => {
     // D −2 over 14 goals, B 0: a win by 3 lands D ahead of B.
     const d = must(view(open4({ D: [6, 8], B: [1, 1] }))).rows.D!;
-    expect(d.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(d.ifYouLose).toBe("If you lose your next match, you're out.");
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 3 or more to finish ahead.`);
     expect(d.whatIfAssumption).toBe("Assumes Bo's figures stay the same and your next match is an average one.");
   });
@@ -883,7 +973,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     // loss is not Out, so which result ties them is unknown.
     const b = must(view(open4())).rows.B!;
     expect(b.status).toBe("needs_help");
-    expect(b.ifYouLose).toBe("If you lose your next match: Needs help.");
+    expect(b.ifYouLose).toBe("If you lose your next match, you'll need other results to go your way.");
     expect(b.whatIf).toBe(`If you finish level on points with Cy, ${RULE} decides. Now: you 0, Cy 0.`);
     expect(b.whatIfAssumption).toBeNull();
   });
@@ -904,7 +994,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(two.A!.whatIf).toBe(`If you finish level on points with Cy, ${RULE} decides. Now: you +3, Cy +1.`);
     expect(two.A!.whatIfAssumption).toBeNull();
     // D: a loss is Out (the win scenario), still two left.
-    expect(two.D!.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(two.D!.ifYouLose).toBe("If you lose your next match, you're out.");
     expect(two.D!.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -5, Bo +1.`);
     expect(two.D!.whatIfAssumption).toBeNull();
     // …and the safe reading, which is one heavy defeat, not two.
@@ -915,7 +1005,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   it("…its pair: the same table with ONE left does carry the target", () => {
     const one = must(view(after3(1))).rows;
     expect(one.A!.status).toBe("through");
-    expect(one.C!.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(one.C!.ifYouLose).toBe("If you lose your next match, you're out.");
     expect(one.C!.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 1 or more to finish ahead.`);
     expect(one.C!.whatIfAssumption).toBe("Assumes Bo's figures stay the same and your next match is an average one.");
   });
@@ -1044,9 +1134,9 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
     const cascade = ["points", "for"];
     const scored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, { cascade })).rows.D!;
-    expect(scored.whatIf).toBe("If you finish level on points with Bo, goals/runs scored decides. Now: you 1, Bo 4.");
+    expect(scored.whatIf).toBe("If you finish level on points with Bo, total scored decides. Now: you 1, Bo 4.");
     const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } }, { cascade })).rows.D!;
-    expect(unscored.whatIf).toBe("If you finish level on points with Bo, goals/runs scored decides: win your next match by 1 or more to finish ahead.");
+    expect(unscored.whatIf).toBe("If you finish level on points with Bo, total scored decides: win your next match by 1 or more to finish ahead.");
   });
 
   // Fix round 2: the rule's score counts only where the what-if READS it.
@@ -1096,11 +1186,55 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       ledgerRow("E", 5, 0, 2, 0, goals(0, 6)),
     ];
     const over = { cascade: ["points", "diff", "for"], bounds: FB, awardAddsToLedger: divisionAwardAddsToLedger(FOOTBALL, {}) };
-    const target = `If you finish level on points with Cy, ${RULE} decides: lose your next match by no more than 3 to finish ahead.`;
+    const target = `If you finish level on points with Cy, goal difference decides: lose your next match by no more than 3 to finish ahead.`;
     const plain = must(view({ kind: "swiss", rows: rows(false), fixtures }, over)).rows.D!;
     expect(plain.whatIf).toBe(target);
     const scored = must(view({ kind: "swiss", rows: rows(true), fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
     expect(scored.whatIf).toBe(target);
+  });
+  it("a cricket ledger names runs: `for` reads `runs_for`, and the what-if says \"runs scored\"", () => {
+    // open4's table with cricket's own ledger keys (no goals) and `for`
+    // deciding: D 3 runs for, Bo 5. The rows carry no `run_diff` (cricket's
+    // ledger folds one; `for` never reads it), so `runs_for` alone must name
+    // the family.
+    const runs = (f: number, a: number): Metrics => ({ runs_for: f, runs_against: a, balls_faced_eff: 60, balls_bowled_eff: 60 });
+    const rows = [
+      ledgerRow("A", 1, 2, 2, 2 * W, runs(9, 2)),
+      ledgerRow("B", 2, 1, 2, W, runs(5, 5)),
+      ledgerRow("C", 3, 1, 2, W, runs(4, 5)),
+      ledgerRow("D", 4, 0, 2, 0, runs(3, 9)),
+    ];
+    const d = must(view({ ...open4(), rows }, { cascade: ["points", "for"] })).rows.D!;
+    expect(d.whatIf).toMatch(/^If you finish level on points with Bo, runs scored decides[.:]/);
+    // …and the same table on the generic ledger says the plain phrase (pair).
+    const g = must(view(open4({ D: [3, 9], B: [5, 5] }), { cascade: ["points", "for"] })).rows.D!;
+    expect(g.whatIf).toMatch(/^If you finish level on points with Bo, total scored decides[.:]/);
+  });
+  it("a row with no ledger names the rule from its RIVAL's ledger, not the table's first one", () => {
+    // Review r1–r3 m4: the what-if passes the rival as the tie partner
+    // (`tieBreakRule(w.key, …, ordered, [rival.entrantId])`). A football league
+    // where Di has yet to play (three postponed matches: no ledger at all) and
+    // Ada, top, won both of hers by walkover under a scored stage rule, so her
+    // row records only the rule's generic `for`/`against`/`diff`. Di's rival
+    // Bo also played Cy for real: `gd` is on Bo's row. The word is Bo's, "goal
+    // difference"; read from the table instead it is Ada's plain "difference".
+    const FB = divisionPointsBounds(FOOTBALL, {})!;
+    expect(FB.winFloor).toBe(W);
+    const goals = (gf: number, ga: number): Metrics => ({ gf, ga, gd: gf - ga });
+    const rows = [
+      ledgerRow("A", 1, 2, 2, 2 * W, { for: 6, against: 0, diff: 6 }),
+      ledgerRow("B", 2, 1, 2, W, { ...ruleAward(0, 3), ...goals(2, 1) }),
+      ledgerRow("C", 3, 0, 2, 0, { ...ruleAward(0, 3), ...goals(1, 2) }),
+      ledgerRow("D", 4, 0, 0, 0, {}),
+    ];
+    const fixtures = [walkover(1, "A", "B"), open(1, "C", "D"), walkover(2, "A", "C"), open(2, "B", "D"), won(3, "B", "C"), open(3, "A", "D")];
+    const over = { cascade: ["points", "diff", "for"], bounds: FB, awardAddsToLedger: divisionAwardAddsToLedger(FOOTBALL, {}) };
+    const word = (family: "goals" | "plain") => t(en, LEDGER_RULE_MSG_KEYS.diff[family]);
+    expect(word("goals"), "premise: the two families word the rule differently").not.toBe(word("plain"));
+    // Premise: with no partner the table's first ledger (Ada's) names it plain.
+    expect(tieBreakRule("diff", (k: TKey) => t(en, k), rows[3]!, rows, [])).toBe(word("plain"));
+    const d = must(view({ kind: "league", rows, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
+    expect(d.whatIf).toMatch(new RegExp(`^If you finish level on points with Bo, ${word("goals")} decides[.:]`));
   });
   it("a badminton walkover under the rule: set ratio reads no goals, so the walkover stays out of the average", () => {
     // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Di's
@@ -1256,7 +1390,7 @@ describe("wording", () => {
     expect(v.rows.A!.label).toBe("Gana y pasa");
     expect(v.rows.A!.ariaLabel).toBe("Posición 1, Gana y pasa, ver detalles");
     expect(v.table.label).toBe("Los 2 primeros pasan a Finals · queda 1 ronda");
-    expect(v.rows.D!.ifYouLose).toBe("Si pierdes tu próximo partido: Eliminado.");
+    expect(v.rows.D!.ifYouLose).toBe("Si pierdes tu próximo partido, quedas eliminado.");
   });
 });
 
@@ -1264,7 +1398,7 @@ describe("copy coverage", () => {
   const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
   const qualKeys = Object.keys(en).filter((k) => k.startsWith("table.qual."));
   it("every table.qual key exists in es/fr/nl with the same placeholders", () => {
-    expect(qualKeys.length).toBe(28);
+    expect(qualKeys.length).toBe(34);
     for (const [name, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
       const d = dict as Record<string, string>;
       for (const k of qualKeys) {

@@ -266,14 +266,14 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     // second match the average halves and it would read "safe" instead.
     const d = view!.rows[r.id.Dan!]!;
     expect(d.label).toBe("Win and in");
-    expect(d.ifYouLose).toBe("If you lose your next match: Needs help.");
+    expect(d.ifYouLose).toBe("If you lose your next match, you'll need other results to go your way.");
     expect(d.whatIf).toBe(
-      "If you finish level on points with Ben, goal/run difference decides: lose your next match by no more than 3 to finish ahead.",
+      "If you finish level on points with Ben, difference decides: lose your next match by no more than 3 to finish ahead.",
     );
     expect(d.whatIfAssumption).toBe("Assumes Ben's figures stay the same and your next match is an average one.");
     // Real `diff` values, as the table prints them.
-    expect(view!.rows[r.id.Cat!]!.whatIf).toBe("If you finish level on points with Ben, goal/run difference decides. Now: you +2, Ben -2.");
-    expect(view!.rows[r.id.Ann!]!.ifYouLose).toBe("If you lose your next match: Out.");
+    expect(view!.rows[r.id.Cat!]!.whatIf).toBe("If you finish level on points with Ben, difference decides. Now: you +2, Ben -2.");
+    expect(view!.rows[r.id.Ann!]!.ifYouLose).toBe("If you lose your next match, you're out.");
   });
 
   it("Swiss of five: round 1's real bye counts as the bye entrant's round (two left for everyone)", async () => {

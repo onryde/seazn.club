@@ -234,11 +234,11 @@ const sgn = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
 
 // Ledger key aliases: the abstract `diff`/`for` tiebreaks map to whatever the
 // sport calls goal/run difference and goals/runs for (spec 04 per-sport).
-export const DIFF_KEYS = ["gd", "diff", "run_diff"] as const;
-export const FOR_KEYS = ["gf", "for", "runs_for"] as const;
+export const DIFF_KEYS = ["gd", "run_diff", "diff"] as const;
+export const FOR_KEYS = ["gf", "runs_for", "for"] as const;
 /** The "against" twin of FOR_KEYS, index for index — the what-if's average
  *  match size is for + against (tie-what-if.ts). No comparator reads it. */
-export const AGAINST_KEYS = ["ga", "against", "runs_against"] as const;
+export const AGAINST_KEYS = ["ga", "runs_against", "against"] as const;
 
 const FAIR_PLAY_KEYS = ["fair_play"] as const;
 
