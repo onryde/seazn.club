@@ -43,6 +43,8 @@ import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import { TableView } from "../competition-hub-schema";
 import {
   buildTableView,
@@ -53,6 +55,7 @@ import {
   STRUCTURAL_ABBR_KEYS,
   STRUCTURAL_KEYS,
   TIE_BREAK_MSG_KEYS,
+  tieBreakRule,
   type TableViewInput,
 } from "../standings-view";
 
@@ -436,6 +439,10 @@ describe("qualification (spec 2026-09-22)", () => {
   });
 
   it("carries the table line and each row's status through unchanged, on the row of the entrant it names", () => {
+    // The sentences are today's English copy, read from the dictionary (and
+    // the what-if's rule from the builder's own `tieBreakRule` over these
+    // rows), so a copy change moves them instead of leaving a retired line.
+    const english = (key: Parameters<typeof t>[1], vars?: Record<string, string | number>) => t(en as Dict, key, vars);
     const qualification = {
       table: {
         cutIndex: 1,
@@ -448,7 +455,7 @@ describe("qualification (spec 2026-09-22)", () => {
           label: "Win and in",
           ariaLabel: "Rank 1, Win and in, show details",
           headline: "Win your next match and you're through to KO.",
-          ifYouLose: "If you lose your next match: Needs help.",
+          ifYouLose: english("table.qual.ifYouLose.needsHelp"),
           whatIf: null,
           whatIfAssumption: null,
         },
@@ -457,8 +464,13 @@ describe("qualification (spec 2026-09-22)", () => {
           label: "Needs help",
           ariaLabel: "Rank 2, Needs help, show details",
           headline: "Still open: you need other results to go your way.",
-          ifYouLose: "If you lose your next match: Out.",
-          whatIf: "If you finish level on points with Alpha, goal/run difference decides. Now: you +1, Alpha +2.",
+          ifYouLose: english("table.qual.ifYouLose.out"),
+          whatIf: english("table.qual.whatIf.ruleValues", {
+            rival: "Alpha",
+            rule: tieBreakRule("diff", (k) => english(k), rows[0]!, rows),
+            mine: "+1",
+            theirs: "+2",
+          }),
           whatIfAssumption: null,
         },
       },

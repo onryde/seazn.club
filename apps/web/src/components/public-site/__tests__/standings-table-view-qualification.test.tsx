@@ -31,6 +31,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import type { QualRowT, QualTableT, TableRowT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import { StandingsTableView } from "../standings-table-view";
 import { QualCutRow } from "../qualification-bits";
@@ -106,9 +107,9 @@ const TABLE: QualTableT = {
 };
 const QUALS: Record<string, QualRowT> = {
   a: { status: "through", label: "Through", ariaLabel: "Rank 1, Through, show details", headline: "Through to Finals, whatever happens next.", ifYouLose: null, whatIf: null, whatIfAssumption: null },
-  b: { status: "win_k", label: "Win and in", ariaLabel: "Rank 2, Win and in, show details", headline: "Win your next match and you're through to Finals.", ifYouLose: "If you lose your next match: Needs help.", whatIf: WHAT_IF, whatIfAssumption: ASSUMES },
-  c: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 3, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: "If you lose your next match: Out.", whatIf: null, whatIfAssumption: null },
-  d: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 4, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: "If you lose your next match: Out.", whatIf: null, whatIfAssumption: null },
+  b: { status: "win_k", label: "Win and in", ariaLabel: "Rank 2, Win and in, show details", headline: "Win your next match and you're through to Finals.", ifYouLose: t(dict, "table.qual.ifYouLose.needsHelp"), whatIf: WHAT_IF, whatIfAssumption: ASSUMES },
+  c: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 3, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: t(dict, "table.qual.ifYouLose.out"), whatIf: null, whatIfAssumption: null },
+  d: { status: "needs_help", label: "Needs help", ariaLabel: "Rank 4, Needs help, show details", headline: "Still open: you need other results to go your way.", ifYouLose: t(dict, "table.qual.ifYouLose.out"), whatIf: null, whatIfAssumption: null },
   e: { status: "out", label: "Out", ariaLabel: "Rank 5, Out, show details", headline: "Can no longer finish in the top 2.", ifYouLose: null, whatIf: null, whatIfAssumption: null },
 };
 
