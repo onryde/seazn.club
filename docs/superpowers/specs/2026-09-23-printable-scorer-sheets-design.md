@@ -139,11 +139,15 @@ resolver.
 - `POST /o/[orgSlug]/c/[compSlug]/schedule/scorer-sheets.pdf` (POST: it may mint), body
   `{ date: "YYYY-MM-DD" }`. Session editor only; rate limited per user.
 - Fixtures: `scheduled_at` inside that day on the **org clock** (`organizations.timezone`
-  → UTC, `resolveVenueTz(null, orgTz)`), never a division's own tz override — the same
-  clock the competition schedule board's day grid uses (`c/[compSlug]/schedule/page.tsx`,
-  `loadSettings.orgTz`), so the sheet and the board never disagree about which day a
-  fixture is on (repo rule #397/#448; controller ruling 2026-09-24, Task 7 review). Times
-  print on that clock too. Exclude `finalized`, `cancelled`, `decided`, `forfeited`
+  → UTC, `resolveVenueTz(null, orgTz)`), never a division's own tz override. This follows
+  the repo rule in `usecases/schedule.ts` (`ScheduleSettingsOut`: "anything doing
+  calendar-day math wants `orgTz`"), because a printed sheet must not depend on the device
+  that prints it (controller ruling 2026-09-24, Task 7 review). Times print on that clock
+  too. The competition board's day TABS are a different clock: `dayKey`
+  (`lib/schedule-board.ts`) buckets on the VIEWER's device clock (ruling R8,
+  `c/[compSlug]/schedule/page.tsx`); `orgTz` there governs only the date/time controls
+  the organiser types in. So when the printing device is outside the org's zone, a
+  fixture can sit under one day tab on the board and on a different day's sheet. Exclude `finalized`, `cancelled`, `decided`, `forfeited`
   (byes), `abandoned`, and a bye line still waiting for its draw (an EMPTY seat stamped
   `bracket.slot.bye`).
 - Grouping: court order, then time, then match reference. No court → `Unassigned`
