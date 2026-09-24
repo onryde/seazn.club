@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 // raw file-download link (not a client <Link>), matching how every other
 // export button in this codebase links straight to the /api/v1 route.
 import { useMsg } from "@/components/i18n/dict-provider";
+import { downloadBlob } from "@/lib/download-blob";
 
 /** Should a pointerdown on `target` dismiss the menu? Extracted so the rule is
  *  testable: this workspace runs vitest with environment "node" and has no
@@ -118,15 +119,7 @@ export function DocumentsMenu({
         }));
         return;
       }
-      const blob = await res.blob();
-      const href = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = href;
-      a.download = `${row.base.split("/").pop()}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(href);
+      downloadBlob(await res.blob(), `${row.base.split("/").pop()}.${format}`);
     } catch {
       setErrors((e) => ({ ...e, [row.base]: msg("documents.error") }));
     } finally {

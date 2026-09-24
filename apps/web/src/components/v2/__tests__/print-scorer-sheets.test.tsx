@@ -10,7 +10,7 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 
 vi.mock("@/components/upgrade-gate", () => ({ UpgradeGate: vi.fn(() => null) }));
 import { UpgradeGate } from "@/components/upgrade-gate";
-import { PrintScorerSheets, downloadBlob } from "@/components/v2/print-scorer-sheets";
+import { PrintScorerSheets } from "@/components/v2/print-scorer-sheets";
 
 const byTestId = (tree: ReactElement[], id: string) => tree.find((e) => propsOf(e)["data-testid"] === id);
 const base: Parameters<typeof PrintScorerSheets>[0] = {
@@ -197,33 +197,5 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     expect(propsOf(gate!)).toMatchObject({ feature: "scoring.device_links", viewerPlan: "community" });
     expect(byTestId(island.tree(), "print-sheets-submit")).toBeUndefined();
     expect(byTestId(island.tree(), "print-sheets-day")).toBeUndefined();
-  });
-});
-
-describe("downloadBlob", () => {
-  it("clicks an attached anchor carrying the filename, then revokes the object URL", () => {
-    const order: string[] = [];
-    const anchor = {
-      click: vi.fn(() => order.push("click")),
-      remove: vi.fn(() => order.push("remove")),
-      href: "",
-      download: "",
-    };
-    const append = vi.fn(() => order.push("append"));
-    const revoke = vi.fn(() => order.push("revoke"));
-    const blob = new Blob(["x"]);
-    const create = vi.fn(() => "blob:1");
-    downloadBlob(blob, "s.pdf", {
-      createElement: () => anchor as unknown as HTMLAnchorElement,
-      append,
-      createObjectURL: create,
-      revokeObjectURL: revoke,
-    });
-    expect(create).toHaveBeenCalledWith(blob);
-    expect([anchor.href, anchor.download]).toEqual(["blob:1", "s.pdf"]);
-    expect(append).toHaveBeenCalledWith(anchor);
-    expect(anchor.click).toHaveBeenCalledTimes(1);
-    expect(revoke).toHaveBeenCalledWith("blob:1");
-    expect(order).toEqual(["append", "click", "remove", "revoke"]);
   });
 });

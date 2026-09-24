@@ -10,33 +10,7 @@ import { useState } from "react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { dayLabel } from "@/lib/day-label";
-
-interface DownloadEnv {
-  createElement: () => HTMLAnchorElement;
-  append: (a: HTMLAnchorElement) => void;
-  createObjectURL: (b: Blob) => string;
-  revokeObjectURL: (u: string) => void;
-}
-
-const browserEnv = (): DownloadEnv => ({
-  createElement: () => document.createElement("a"),
-  append: (a) => document.body.append(a),
-  createObjectURL: (b) => URL.createObjectURL(b),
-  revokeObjectURL: (u) => URL.revokeObjectURL(u),
-});
-
-/** Save a fetched file under its server-given name: an attached anchor with
- *  `download`, clicked once, then the object URL released. */
-export function downloadBlob(blob: Blob, filename: string, env: DownloadEnv = browserEnv()): void {
-  const url = env.createObjectURL(blob);
-  const a = env.createElement();
-  a.href = url;
-  a.download = filename;
-  env.append(a);
-  a.click();
-  a.remove();
-  env.revokeObjectURL(url);
-}
+import { downloadBlob } from "@/lib/download-blob";
 
 export function PrintScorerSheets({
   action,
