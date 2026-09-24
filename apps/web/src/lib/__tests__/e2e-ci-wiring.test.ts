@@ -420,6 +420,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // cache (an unrouted page — the body-digest ETag). No unit test can see the
   // server page re-render under a mounted Waiting, or the browser's cache.
   "scorer-sheets-scan-screens.spec.ts",
+  // Scorer sheets §4.4 (Task 9) — the schedule page's print control, en + fr,
+  // at 320/768/1280: it opens at the ORG's today (not the first option), sends
+  // the day the organiser picks, lands the file as a browser download, reads a
+  // "nothing on that day" refusal in the viewer's language, and gives a
+  // Community org the device-links upgrade pill instead. The control's unit
+  // suite drives a stubbed fetch and a fake anchor; only a browser shows the
+  // download and the header's phone stacking.
+  "scorer-sheets-print-control.spec.ts",
 ];
 
 afterEach(() => {
