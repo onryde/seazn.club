@@ -53,7 +53,7 @@ import {
   type ResolvedParse,
 } from "@/server/usecases/schedule-ai-parse";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
-import { MOVABLE_STATUS } from "./schedule";
+import { movableFixtureSql } from "./schedule";
 import { resolveVenueTz } from "@/lib/tz";
 
 /** Which endpoint asked. A preview is only ever valid for its own scope: the
@@ -312,8 +312,8 @@ async function resolveDivisionScope(
       );
     }
     const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from fixtures
-       where division_id = ${divisionId} and status = ${MOVABLE_STATUS}`;
+      select count(*)::int as n from fixtures f
+       where f.division_id = ${divisionId} and ${movableFixtureSql(tx)}`;
     return {
       competitionId: division.competition_id,
       divisions: [{ id: divisionId, name: division.name }],
@@ -354,7 +354,7 @@ async function resolveCompetitionScope(
     >`
       select d.id, d.name, d.schedule_locked,
              (select count(*)::int from fixtures f
-               where f.division_id = d.id and f.status = ${MOVABLE_STATUS}) as movable,
+               where f.division_id = d.id and ${movableFixtureSql(tx)}) as movable,
              o.timezone as org_tz
         from divisions d
         left join organizations o on o.id = d.org_id

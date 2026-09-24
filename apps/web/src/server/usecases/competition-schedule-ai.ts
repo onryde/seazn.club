@@ -52,7 +52,7 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { resolveVenueTz } from "@/lib/tz";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assessCapacity, type CapacityReport } from "@seazn/engine/scheduling/capacity";
-import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, peopleByEntrant, toSlotConfig } from "./schedule";
+import { FIXED_OCCUPYING, MOVABLE_STATUS, OCCUPYING, movableFixtureSql, peopleByEntrant, toSlotConfig } from "./schedule";
 import { fixtureHasResultSql } from "./fixture-results-sql";
 import { CAPACITY_IMPOSSIBLE_CODE, capacityInputForFixtures, logCapacityAssessed } from "./capacity-guard";
 import {
@@ -542,8 +542,8 @@ export async function buildCompetitionPack(
     // is exact for every mode this builder uses (it never passes a repair
     // `scope`); the post-union check below stays the authoritative one.
     const [count] = await tx<{ n: number }[]>`
-      select count(*)::int as n from fixtures
-      where division_id in ${tx(requested)} and status = ${MOVABLE_STATUS}`;
+      select count(*)::int as n from fixtures f
+      where f.division_id in ${tx(requested)} and ${movableFixtureSql(tx)}`;
     // The run's own FIXED board — court-holding fixtures that this run is not
     // re-placing. Excluding the run from the sibling sweep (so obstacle
     // attribution is sound) also took these out of every division's greedy
@@ -793,9 +793,10 @@ export async function buildCompetitionPack(
       //
       // The per-division builder refuses >500 movable with a 422 carrying this
       // same code, and inside a joint call that must read as the joint 409. But
-      // the pre-check above always fires first: it counts `status =
-      // MOVABLE_STATUS` over exactly these divisions, and a division's own
-      // `movable` is a strict subset of that count (same predicate, same
+      // the pre-check above always fires first: it counts `movableFixtureSql`
+      // (scheduled, holding no result) over exactly these divisions, and a
+      // division's own `movable` is a subset of that count (the same
+      // predicate — the pack filters by `isMovable`, its twin — the same
       // divisions, and this builder never passes a repair `scope`). So
       // `movable.length > 500` implies `movableCount > 500`, and the pre-check
       // has already thrown. Delete the pre-check and this becomes live again —
@@ -2728,8 +2729,9 @@ async function planForCompetition(
     if (!comp) throw new HttpError(404, "competition not found");
     // One query for every per-division gate below — locked state, slot config
     // and the movable count that decides the R6 drop. The count is un-scoped
-    // `status = MOVABLE_STATUS`, which is exactly what the joint builder plans
-    // (it never passes a repair `scope`), so it cannot disagree with the pack.
+    // `movableFixtureSql` (scheduled, holding no result: `isMovable`, which is
+    // what the joint builder plans, and it never passes a repair `scope`), so
+    // it cannot disagree with the pack.
     return tx<
       {
         id: string;
@@ -2742,7 +2744,7 @@ async function planForCompetition(
     >`
       select d.id, d.name, d.slug, d.schedule_locked, ss.config,
              (select count(*)::int from fixtures f
-               where f.division_id = d.id and f.status = ${MOVABLE_STATUS}) as movable
+               where f.division_id = d.id and ${movableFixtureSql(tx)}) as movable
         from divisions d
         left join schedule_settings ss on ss.division_id = d.id
        where d.competition_id = ${competitionId} and d.id in ${tx(requested)}`;
@@ -2839,8 +2841,9 @@ async function planForCompetition(
         winner_to_fixture: string | null;
       }[]
     >`
-      select id, division_id, home_entrant_id, away_entrant_id, pool_id, ext_key, winner_to_fixture from fixtures
-      where division_id in ${tx(kept)} and status = ${MOVABLE_STATUS}`;
+      select f.id, f.division_id, f.home_entrant_id, f.away_entrant_id, f.pool_id, f.ext_key, f.winner_to_fixture
+      from fixtures f
+      where f.division_id in ${tx(kept)} and ${movableFixtureSql(tx)}`;
     for (const id of kept) {
       const row = byId.get(id)!;
       const parsed = ScheduleConfig.safeParse(row.config ?? {});

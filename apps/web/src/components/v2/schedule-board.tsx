@@ -98,8 +98,11 @@ export function aiPricingInputs(
     // The fixtures themselves, not a count: a scoped repair is quoted on the
     // fixtures actually in scope (`movableForRun`), and a count cannot be
     // narrowed after the fact.
+    // `boardMovable`, not the status alone (review 4 of #857): a `held` card
+    // is one no run moves, so it is not priced either — the server's counts
+    // read the same predicate (`movableFixtureSql`).
     movableFixtures: divisionFixtures
-      .filter((f) => f.status === "scheduled")
+      .filter(boardMovable)
       .map((f) => ({
         id: f.id,
         scheduled_at: f.scheduled_at ? new Date(f.scheduled_at).toISOString() : null,

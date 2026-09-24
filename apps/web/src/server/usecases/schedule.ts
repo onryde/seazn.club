@@ -190,6 +190,14 @@ export function heldInPlace(f: { id: string; status: string }, played: ReadonlyS
   return f.status === MOVABLE_STATUS && !isMovable(f, played);
 }
 
+/** `isMovable`, as SQL: `scheduled` and holding no result. For the counts
+ *  that price, drop or size a run (competition-schedule-ai.ts,
+ *  schedule-ai-preview.ts), so they count exactly what a builder moves.
+ *  `on` names the `fixtures` row in the enclosing query. */
+export function movableFixtureSql(tx: Tx, on = "f") {
+  return tx`(${tx(on)}.status = ${MOVABLE_STATUS} and not ${fixtureHasResultSql(tx, on)})`;
+}
+
 /** The English sentence behind a refused board move or pin. Clients say it in
  *  the reader's own language off `PLAYED_REFUSAL_CODE`. */
 export const PLAYED_MOVE_MESSAGE = "this match has a result or scoring recorded, so it can't be moved or locked";
