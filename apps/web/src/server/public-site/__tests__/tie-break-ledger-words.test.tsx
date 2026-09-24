@@ -123,22 +123,22 @@ describe("the ledger family of a diff/for tie-break", () => {
     expect(tieBreakRule("nrr", msg, ledgerRow("cricket", "a"), [])).toBe("net run rate");
   });
 
-  it("the key the engine COMPARES decides: a cricket row a rule forfeit gave a plain `diff` reads plain", () => {
+  it("the key the engine COMPARES decides: a cricket row a rule forfeit also gave the generic keys still reads runs", () => {
     // `applyPointsRule` writes for/against/diff into a forfeit's delta, so a
-    // cricket row can record `diff` (and no `run_diff`, which cricket's ledger
-    // lacks). `metricKeyOf(row, DIFF_KEYS)` is then "diff" — that is the value
-    // the engine compares, so the note names it rather than claiming runs.
+    // cricket row can record those beside its own `runs_for`/`run_diff`. The
+    // engine reads the sport's own ledger first (DIFF_KEYS gd, run_diff, diff;
+    // FOR_KEYS gf, runs_for, for — P1, owner-approved), so that is what it
+    // compares and what the note names. Before P1 the generic keys came first
+    // and this row read "difference" / "total scored".
     const msg = (k: TKey) => t(en as unknown as Dict, k);
     const forfeited = ledgerRow("cricket", "a");
+    expect(Object.keys(forfeited.metrics), "premise: cricket's ledger records run_diff").toContain("run_diff");
     forfeited.metrics = { ...forfeited.metrics, for: 10, against: 0, diff: 10 };
-    expect(tieBreakRule("diff", msg, forfeited, [])).toBe("difference");
-    // Same for `for`: FOR_KEYS lists `for` before `runs_for`, so the engine
-    // compares the forfeit's `for`, and the note names that. (The alias-order
-    // proposal in this branch's report would reorder FOR_KEYS; this pin flips
-    // with it, to "runs scored".)
-    expect(tieBreakRule("for", msg, forfeited, [])).toBe("total scored");
-    // Each rule reads ITS OWN alias first, then the others: a row whose `for`
-    // resolves to runs but whose difference is the plain key names each.
+    expect(tieBreakRule("diff", msg, forfeited, [])).toBe("run difference");
+    expect(tieBreakRule("for", msg, forfeited, [])).toBe("runs scored");
+    // A row with no `run_diff` (a snapshot folded before cricket recorded one)
+    // compares the plain `diff` it does carry, and says so; each rule reads
+    // ITS OWN alias first, then the others.
     const split = { ...ledgerRow("cricket", "a"), metrics: { runs_for: 7, runs_against: 3, diff: 4 } };
     expect(tieBreakRule("diff", msg, split, [])).toBe("difference");
     expect(tieBreakRule("for", msg, split, [])).toBe("runs scored");

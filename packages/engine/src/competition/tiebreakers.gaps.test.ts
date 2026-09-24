@@ -9,6 +9,8 @@ import type { TiebreakerKey } from "../sport/module.ts";
 import { RATIO_LEDGERS } from "./display.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 import {
+  AGAINST_KEYS,
+  DIFF_KEYS,
   FOR_KEYS,
   buchholz,
   buildSwissTable,
@@ -195,11 +197,20 @@ describe("an absent metric is no data, not a zero (#429)", () => {
 
 // `metricKeyOf` names the alias `metricOf` reads. The what-if needs the name,
 // not the value: a stage rule's forfeit score lands in `for`/`against`/`diff`
-// only, and a sport's own `gf`/`gd` are read first (web qualification-view).
+// only, and a sport's own ledger — `gf`/`gd`, cricket's `runs_for`/`run_diff`
+// — is read first (web qualification-view). Cricket used to sit AFTER the
+// generic keys, so a walked-over cricket row compared the rule's award alone
+// against its rivals' real runs (tiebreak-rule-award-alias.test.ts).
 describe("metricKeyOf: the alias metricOf reads", () => {
   it("is the first alias the row records, a recorded zero included; none recorded is undefined", () => {
     expect(metricKeyOf(row("fb", 0, { for: 3, gf: 0 }), FOR_KEYS)).toBe("gf");
-    expect(metricKeyOf(row("cr", 0, { runs_for: 9, for: 3 }), FOR_KEYS)).toBe("for");
+    expect(metricKeyOf(row("cr", 0, { runs_for: 9, for: 3 }), FOR_KEYS)).toBe("runs_for");
+    expect(metricKeyOf(row("cr", 0, { run_diff: 4, diff: 3 }), DIFF_KEYS)).toBe("run_diff");
+    // The what-if reads `for` and `against` separately (tie-what-if.ts): both
+    // must land on the same ledger, so against follows the same order.
+    expect(metricKeyOf(row("cr", 0, { runs_against: 5, against: 3 }), AGAINST_KEYS)).toBe("runs_against");
+    // The generic module's own keys are still read when nothing sport-specific is there.
+    expect(metricKeyOf(row("gen", 0, { for: 3 }), FOR_KEYS)).toBe("for");
     expect(metricKeyOf(row("none", 0, { against: 1 }), FOR_KEYS)).toBeUndefined();
   });
 
