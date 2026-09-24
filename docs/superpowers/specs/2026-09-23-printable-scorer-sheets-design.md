@@ -138,8 +138,14 @@ resolver.
   without an Event Pass sees `UpgradeGate feature="scoring.device_links"`. Works at 320.
 - `POST /o/[orgSlug]/c/[compSlug]/schedule/scorer-sheets.pdf` (POST: it may mint), body
   `{ date: "YYYY-MM-DD" }`. Session editor only; rate limited per user.
-- Fixtures: `scheduled_at` inside that day in the venue tz (division override → org tz →
-  UTC); exclude `finalized`, `cancelled`, `decided`, `forfeited` (byes), `abandoned`.
+- Fixtures: `scheduled_at` inside that day on the **org clock** (`organizations.timezone`
+  → UTC, `resolveVenueTz(null, orgTz)`), never a division's own tz override — the same
+  clock the competition schedule board's day grid uses (`c/[compSlug]/schedule/page.tsx`,
+  `loadSettings.orgTz`), so the sheet and the board never disagree about which day a
+  fixture is on (repo rule #397/#448; controller ruling 2026-09-24, Task 7 review). Times
+  print on that clock too. Exclude `finalized`, `cancelled`, `decided`, `forfeited`
+  (byes), `abandoned`, and a bye line still waiting for its draw (an EMPTY seat stamped
+  `bracket.slot.bye`).
 - Grouping: court order, then time, then match reference. No court → `Unassigned`
   section last.
 - Page header: competition name, date, court, and "Scan to score. Check names on screen
