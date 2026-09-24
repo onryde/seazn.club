@@ -74,6 +74,23 @@ describe("useReportLedgerChanges", () => {
     expect(onEvents.mock.calls.map(([events]) => events)).toEqual([second, third]);
   });
 
+  // An ack moves an event from `pendingEnvelopes` into `ledgerEvents` in one
+  // batched render (`use-pad-pipeline.ts`'s `runDrain`: `commitLedgerEvents`
+  // then `commitPendingEnvelopes`), so `pipeline.events` keeps its LENGTH and
+  // swaps the row's client key for the server's id. Under soft-commit that ack
+  // is the only report the chrome gets once the server holds the row, so a
+  // guard that compared lengths would leave the console's Void naming an id
+  // the server has never seen.
+  it("reports a same-length change — an ack re-keying a pending row to the server's id", () => {
+    const onEvents = vi.fn<OnEvents>();
+    const pending = { ...envelope(1), id: "idem-local-key" } as EventEnvelope;
+    const island = renderIsland(Probe, { events: [pending], onEvents });
+    const acked = [{ ...envelope(1), id: "srv-row-uuid" } as EventEnvelope];
+    island.rerender({ events: acked, onEvents });
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    expect(onEvents.mock.calls[0]![0]).toBe(acked);
+  });
+
   it("a re-render with the SAME ledger reports nothing, even under a fresh callback identity", () => {
     const first = vi.fn<OnEvents>();
     const seed = [envelope(1)];
