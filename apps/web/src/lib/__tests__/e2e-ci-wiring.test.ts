@@ -413,6 +413,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // producer (a courtside INNER-pad tap) to its real consumer (the chrome's
   // View-only screen). No unit test can see the pipeline → registry → chrome hop.
   "device-pad-carried-forward.spec.ts",
+  // Scorer sheets §4.5 (Task 6) — every scan screen, en + fr, at 320/768/1280:
+  // a final's sheet scanned early waits, then moves to Confirm BY ITSELF when
+  // the semis are decided (a real side fill, zero events on the final); Start
+  // opens the pad; a cancel with no event reaches the phone through its HTTP
+  // cache (an unrouted page — the body-digest ETag). No unit test can see the
+  // server page re-render under a mounted Waiting, or the browser's cache.
+  "scorer-sheets-scan-screens.spec.ts",
 ];
 
 afterEach(() => {
