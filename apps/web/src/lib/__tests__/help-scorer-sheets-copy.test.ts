@@ -23,7 +23,9 @@
 // (print-scorer-sheets.tsx) and are pinned here at the fold, and the PDF's
 // "No court assigned" heading, which has no key on either branch yet. Until
 // then the only pin on the control is the NEGATIVE one below: there is no
-// separate "Print" button to press.
+// separate "Print" button to press. Likewise the owner-approved (2026-09-24)
+// "Not started yet" scan screen is being built on another branch: its heading
+// is pinned below as a LITERAL — swap it for its `en[...]` key at the fold.
 //
 // The article is read lazily so a missing file reds each assertion by name
 // rather than failing the whole file at collection.
@@ -133,6 +135,19 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
 
   it("links 'start the division first' to the division lifecycle, as batch-import.md does", () => {
     expect(sentences().some((s) => s.includes("](/help/divisions/lifecycle)") && /\bstart/i.test(s))).toBe(true);
+  });
+
+  it("an early scan lands on 'Not started yet', which moves on by itself once the division starts", () => {
+    const NOT_STARTED = "Not started yet"; // literal until the screen's key reaches this branch
+    const hits = withText(NOT_STARTED);
+    expect(hits, `the article never names the ${NOT_STARTED} screen`).not.toHaveLength(0);
+    expect(
+      hits.some((s) => /\b(?:moves on|updates)\b[^.]*\bby itself\b|\bon its own\b/i.test(s) && /\bstart/i.test(s)),
+      hits.join(" | "),
+    ).toBe(true);
+    // The retired claim: an early card simply "can't score", with no screen
+    // and nothing that happens next.
+    expect(sentences().filter((s) => /\bcan't score\.?$/i.test(s))).toEqual([]);
   });
 
   it("an undecided side prints as its place in the draw — the board's own 'Winner of' wording", () => {

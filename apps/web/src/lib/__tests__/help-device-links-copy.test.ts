@@ -189,6 +189,18 @@ describe("every way a device link ends is on the page, and no plan it lacks is c
     expect(device.some((s) => /\bPro\b/.test(s) && /\bEvent Pass\b/i.test(s)), device.join(" | ")).toBe(true);
   });
 
+  it("event-pass.md: the pass's feature list names device links, since the pass lifts them", () => {
+    // Owner-approved 2026-09-24 (relayed by the scorer-sheets controller): the
+    // pass page's "What the pass includes" list left out a key PASS_FEATURES
+    // holds, so an organiser deciding between Community and the pass could
+    // not see that match-day phones and printed sheets come with it.
+    const md = readFileSync(join(process.cwd(), "content/help/billing/event-pass.md"), "utf8");
+    const section = md.split(/^## /m).find((s) => s.startsWith("What the pass includes")) ?? "";
+    expect(section, "event-pass.md has no 'What the pass includes' section").not.toBe("");
+    const bullets = section.split("\n").filter((l) => l.startsWith("- "));
+    expect(bullets.some((b) => b.includes("](/help/scoring/device-links)")), bullets.join("\n")).toBe(true);
+  });
+
   it("conflicts.md: no sentence gives a court its own device link", () => {
     const offending = sentencesOf(CONFLICTS).filter(
       (s) => /device link/i.test(s) && /\bcourts?\b[^.]*\bown\b|\bown\b[^.]*\bcourts?\b|\bper court\b/i.test(s),

@@ -30,6 +30,7 @@ For the competition it covers, and every division inside it:
 - **Sponsor tiers and paid packages** — Title / Gold / Silver / Partner grouping, per-competition placement, and selling priced sponsorship by card ([sponsors](/help/sharing/sponsors)).
 - **The realtime scoreboard and slideshow** — live scores turn over on the venue screen *and* on the competition's public spectator pages, so your audience follows along live, not just your own noticeboard.
 - **Advanced formats** — americano and ladders.
+- **Device links and scorer sheets** — hand any phone a [device link](/help/scoring/device-links) that scores one match with no account, or [print scorer sheets](/help/scoring/scorer-sheets): cut-out cards for the day's matches, each with a QR your umpires scan to score it.
 - **AI credits**, once, added to your organisation's wallet when the pass is bought — **+25 AI credits**, to spend on scheduling the event ([AI Schedule](/help/scheduling/ai-scheduling)).
 
 ## What it doesn't include

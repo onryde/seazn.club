@@ -16,7 +16,7 @@ The control shows up once at least one match still to play has a time. The **Day
 - **Plans:** scorer sheets are made of device links, so they come with **Pro**, or with an [Event Pass](/help/billing/event-pass) for that competition. On Community you see an upgrade prompt in its place, once a match has a time.
 - **Which matches:** every match that day that has a time and is still to play or already in play. Matches with no time yet, byes, and matches that are already over are left off.
 - **Which day:** days and times on the sheet follow [your organisation's time zone](/help/scheduling/timezones), whatever the clock on the computer you print from.
-- **Start the division first.** A division that hasn't been [started](/help/divisions/lifecycle) can't be scored yet, so a card scanned before then can't score.
+- **Start the division first.** A division that hasn't been [started](/help/divisions/lifecycle) can't be scored yet. An umpire who scans a card before then sees **Not started yet**, and the screen moves on by itself once you start the division.
 
 The sheet never prints a card without a working QR. If a scoring link can't be made for a match, the download stops with an error instead.
 
@@ -46,6 +46,7 @@ In Swiss, a card belongs to its board. Unpairing a round does not delete its boa
 
 Sometimes the phone shows something else:
 
+- **Not started yet** — the organiser hasn't started this division yet. The screen moves on by itself once the division starts.
 - **Waiting for** — a side isn't decided yet (see above).
 - **The final score with no controls** — the match is over. The phone says why, for example "Match over — result finalised. Ask the organiser to correct it."
 - **This scoring link was revoked.** or **This scoring link is not valid.** — the card no longer works (see below).
