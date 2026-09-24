@@ -168,6 +168,45 @@ test.afterAll(async () => {
 
 /** Load `path` until its standings show the cut line (ISR can hand the first
  *  visitor a page rendered a moment before the last result folded). */
+/** The long entrant's name cell, as painted: how many lines it takes, whether
+ *  the clamp cut it (content taller or wider than its box), and the title that
+ *  carries the whole name. P4 option C (owner-approved 2026-09-24): below `md`
+ *  a name wraps to at most TWO lines and ends in an ellipsis, the full name in
+ *  `title`; from `md` up it is drawn exactly as before. */
+const LONG_NAME = NAMES.find((n) => n.startsWith("Riverside"))!;
+
+async function longName(scope: Locator) {
+  const el = scope.locator(`th[scope="row"] [title="${LONG_NAME}"]`);
+  await expect(el, "the long name carries its full text in a title").toHaveCount(1);
+  return el.evaluate((e) => {
+    const cs = getComputedStyle(e);
+    const box = e.getBoundingClientRect();
+    const lineHeight = parseFloat(cs.lineHeight);
+    return {
+      lines: Math.round(box.height / lineHeight),
+      clipped: e.scrollHeight > e.clientHeight + 1 || e.scrollWidth > e.clientWidth + 1,
+      clamp: cs.getPropertyValue("-webkit-line-clamp"),
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      lineHeight,
+    };
+  });
+}
+
+/** At most two lines everywhere; at 320 exactly two, cut short by the clamp —
+ *  the name is longer than two lines of its cell, so a pass there cannot be
+ *  a name that merely happens to fit. */
+function expectLongNameClamped(m: Awaited<ReturnType<typeof longName>>, width: number, where: string) {
+  expect(LONG_NAME.length, "premise: a realistic long name (AGENTS.md: 43+ characters)").toBeGreaterThanOrEqual(43);
+  expect(Number.isFinite(m.lineHeight), `${where}: the name has a line height to count lines by`).toBe(true);
+  expect(m.lines, `${where}: the long name takes ${m.lines} lines (${m.height}px at ${m.lineHeight}px)`).toBeLessThanOrEqual(2);
+  if (width < 768) {
+    expect(m.lines, `${where}: the long name uses its two lines`).toBe(2);
+    expect(m.clamp, `${where}: the name is clamped to two lines`).toBe("2");
+    expect(m.clipped, `${where}: the name is cut short (ellipsis), not merely short`).toBe(true);
+  }
+}
+
 async function openWithCut(page: Page, path: string): Promise<void> {
   await expect
     .poll(
@@ -346,6 +385,9 @@ for (const width of [1280, 768, 320] as const) {
     // 1. No sideways page scroll.
     const widths = await pageWidths(page);
     await expectNoHorizontalScroll(page);
+    // 1b. The long name: at most two lines, the full name in its title.
+    const name = await longName(panel);
+    expectLongNameClamped(name, width, `division ${width}`);
 
     // 2. Every rank trigger is a 40px target: 19.5px either side of the
     //    centre at a phone width (a 38px box passes ±19, so ±19.5 is what
@@ -391,7 +433,7 @@ for (const width of [1280, 768, 320] as const) {
     await page.keyboard.press("Escape");
 
     shots[width] = await controlSet(panel);
-    const measured = { width, ...widths, hits, tiedFit, lastPanel: { panel: pop, trigger: btn }, controls: shots[width] };
+    const measured = { width, ...widths, name, hits, tiedFit, lastPanel: { panel: pop, trigger: btn }, controls: shots[width] };
     await testInfo.attach(`measurements-${width}.json`, { body: JSON.stringify(measured, null, 1), contentType: "application/json" });
     console.log(`MEASURED ${JSON.stringify(measured)}`);
   });
@@ -484,6 +526,8 @@ for (const width of [1280, 768, 320] as const) {
     await expectNoHorizontalScroll(page);
     const geometry = [await cutGeometry(table)];
     expectCutSpansTable(geometry[0]!);
+    const name = await longName(table);
+    expectLongNameClamped(name, width, `hub ${width}`);
 
     // 2. Every rank trigger is a 40px target (±19.5 at a phone width).
     const triggers = table.getByRole("button", { name: /^Rank \d+,/ });
@@ -543,6 +587,7 @@ for (const width of [1280, 768, 320] as const) {
     const measured = {
       hub: width,
       ...widths,
+      name,
       hits,
       geometry: geometry.map((g) => ({ ...g, table: g.table.map(r1), cut: g.cut.map(r1), name: r1(g.name) })),
       lastPanel: { panel: pop, trigger: btn },

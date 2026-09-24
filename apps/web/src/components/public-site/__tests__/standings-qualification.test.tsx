@@ -20,6 +20,11 @@
 // written from reading the source — so "a division with no cut renders
 // byte-for-byte as it does today" is a comparison with yesterday's output,
 // not with whatever the new code happens to print for null.
+// P4 (option C, 2026-09-24) re-captured it deliberately: the only bytes
+// that moved are the row header's `max-md:` two-line clamp (a wrapper span,
+// the clamped name with its `title`, a 7.5rem phone floor on the division
+// table). Stripping those back out of the new golden gives the old one
+// byte for byte, so nothing else in the no-cut path changed.
 //
 // ---------------------------------------------------------------------------
 // Mutants killed (task-7 report has the run log)

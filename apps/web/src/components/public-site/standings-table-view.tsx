@@ -548,9 +548,14 @@ export function StandingsTableView({
                         <EntityLogo src={r.badgeUrl} name={r.name} colour={r.colour} size={20} />
                         {/* `truncate` needs `min-w-0` on the whole ancestor
                             chain, not just this span. An Out row reads muted,
-                            as its marker does (spec §5). */}
+                            as its marker does (spec §5). Below `md` (P4 option
+                            C, owner-approved 2026-09-24) the name takes up to
+                            TWO lines before its ellipsis instead of one — the
+                            98px phone column showed "Riversid…" of a club
+                            name; from `md` up it truncates to one line, as
+                            before. The full name stays in `title`. */}
                         <span
-                          className={`block min-w-0 truncate${r.qual?.status === "out" ? " text-ink-muted" : ""}`}
+                          className={`block min-w-0 truncate max-md:line-clamp-2 max-md:whitespace-normal max-md:break-words${r.qual?.status === "out" ? " text-ink-muted" : ""}`}
                           title={r.name}
                         >
                           {r.name}

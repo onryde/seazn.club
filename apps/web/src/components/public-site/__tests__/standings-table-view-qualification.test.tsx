@@ -16,6 +16,10 @@
 // not written from reading the source. "A table with no cut renders
 // byte-for-byte as it does today" is therefore a comparison with yesterday's
 // output, not with whatever the new code prints for null.
+// P4 (option C, 2026-09-24) re-captured both deliberately: the only bytes
+// that moved are the name span's three `max-md:` two-line clamp classes.
+// Stripping those back out of the new goldens gives the old ones byte for
+// byte, so nothing else in the no-cut path changed.
 //
 // ---------------------------------------------------------------------------
 // Mutants killed (task-8 report has the run log)
