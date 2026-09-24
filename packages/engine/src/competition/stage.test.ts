@@ -267,6 +267,46 @@ describe("withdrawal policies (spec 05 §5)", () => {
     expect(updates).toEqual([{ fixtureId: "p3", status: "walkover", walkoverTo: "C" }]);
   });
 
+  // Owner ruling 2026-09-24 ("case 2", option A): a Swiss withdrawal NEVER
+  // expunges. Expunging a Swiss board left it abandoned with no outcome, and
+  // the division stranded — Pair next, Unpair and Forfeit all refused it.
+  // Every input below expunges in a league; the swiss rows prove the
+  // exception, the league/group rows prove it is narrow.
+  describe("swiss never expunges; league and group still do under 50%", () => {
+    const early = {
+      played: [{ id: "p1", status: "decided" as const, result: fb("W", "A", 1, 0) }],
+      pending: [
+        { id: "p2", opponent: "B" },
+        { id: "p3", opponent: "C" },
+      ],
+    };
+    const nothingPlayed = { played: [], pending: [{ id: "p1", opponent: "A" }] };
+    const withdraw = (kind: TableStage["kind"], input: Parameters<typeof withdrawTableEntrant>[2]) =>
+      withdrawTableEntrant({ ...stage, kind }, "W", input);
+
+    it("swiss, 1 played of 3: the played result stands and both pending boards walk over", () => {
+      const { events, updates } = withdraw("swiss", early);
+      expect(events[0]).toMatchObject({ type: "entrant_withdrawn", entrantId: "W", mode: "award" });
+      expect(updates).toEqual([
+        { fixtureId: "p2", status: "walkover", walkoverTo: "B" },
+        { fixtureId: "p3", status: "walkover", walkoverTo: "C" },
+      ]);
+    });
+
+    it("swiss, nothing played and one board paired (the stranded Saturday shape): the board walks over", () => {
+      const { events, updates } = withdraw("swiss", nothingPlayed);
+      expect(events[0]).toMatchObject({ mode: "award" });
+      expect(updates).toEqual([{ fixtureId: "p1", status: "walkover", walkoverTo: "A" }]);
+    });
+
+    it.each(["league", "group"] as const)("%s, the same inputs: still expunges", (kind) => {
+      const early_ = withdraw(kind, early);
+      expect(early_.events[0]).toMatchObject({ mode: "expunge" });
+      expect(early_.updates.map((u) => u.status)).toEqual(["void", "void", "void"]);
+      expect(withdraw(kind, nothingPlayed).events[0]).toMatchObject({ mode: "expunge" });
+    });
+  });
+
   it("bracket_walkover advances the opponent in each pending fixture", () => {
     const koStage: BracketStage = { id: "ko", kind: "knockout" };
     const fixtures: BracketFixture[] = [

@@ -34,12 +34,15 @@
 //      bye (to S5), H is absent, H does not qualify. H is still ranked 6th in
 //      the swiss table. Confirm seeding refuses a flagged S1/A tie until the
 //      organiser picks the order.
-//   S2 withdraw BEFORE the forfeit: A-v-H is expunged to `abandoned` with no
-//      winner (A loses the point), and the division is then STUCK — Pair next
-//      refuses ("current swiss round has undecided fixtures": the pair gate's
-//      DECIDED set has no `abandoned`), Unpair refuses ("played results"), and
-//      the Forfeit button refuses the abandoned board too (WRONG_PHASE,
-//      "match already over").
+//   S2 withdraw BEFORE the forfeit: first recorded A-v-H expunged to
+//      `abandoned` with no winner (A lost the point) and the division STUCK —
+//      Pair next refused ("current swiss round has undecided fixtures": the
+//      pair gate's DECIDED set has no `abandoned`), Unpair refused ("played
+//      results"), and Forfeit refused the abandoned board (WRONG_PHASE, "match
+//      already over"). FIXED 2026-09-24 (owner ruling, option A: a Swiss
+//      withdrawal never expunges; focused regression in
+//      `swiss-withdrawal-walkover.test.ts`): policy "walkover", A-v-H walks
+//      over to A, and Pair next seats S1 v S2, A v S4, S5 bye — as in S1.
 //   S3 never withdraw: first recorded Pair next re-pairing A against H in
 //      round 2 — a rematch — because the pairer credited a two-sided walkover
 //      like a bye (winner into `byes`, pair never added to `played`) and the
@@ -457,69 +460,56 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
   });
 
   // ─── S2 — withdraw first, while A-v-H is still scheduled ────────────────
-  it("S2 withdraw H before the forfeit: A-v-H is expunged with no winner, and neither Pair next nor Unpair can move on", async () => {
+  it("S2 withdraw H before the forfeit: A-v-H walks over to A, and Pair next seats round 2 without H", async () => {
     const o: Record<string, unknown> = {};
     OBS.S2 = o;
     const rig = await seedRig();
     await prepareAndPublish(rig);
     await startDivision(rig.auth, rig.divisionId);
     await generateStageFixtures(rig.auth, rig.swissId);
-    const { H, ah } = labelAH(rig, await fixturesOf(rig.swissId));
+    const { H, A, ah } = labelAH(rig, await fixturesOf(rig.swissId));
 
     const withdraw = await withdrawEntrantCascade(rig.auth, H);
     o.withdraw = withdraw;
-    // H has played 0 of 1 → the table policy's <50% branch: EXPUNGE.
-    expect(withdraw).toMatchObject({ status: "withdrawn", policy: "expunge", walkovers: 0, voided: 1 });
+    // Fixed 2026-09-24 (owner ruling, "case 2" option A). This probe first
+    // recorded the table policy's <50% branch here — EXPUNGE, H having played
+    // 0 of 1 — which abandoned A-v-H with no outcome and then stranded the
+    // division: Pair next ("current swiss round has undecided fixtures"),
+    // Unpair ("played results") and Forfeit ("match already over") all
+    // refused. A Swiss withdrawal never expunges now: the paired board walks
+    // over to A.
+    expect(withdraw).toMatchObject({ status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_finalized: 0 });
 
-    // OBSERVED DEFECT (for the organiser, not for the policy): A gets no win.
-    // The board is abandoned with no outcome, so A has 0 points after R1.
-    const ahAfter = (await fixturesOf(rig.swissId)).find((f) => f.id === ah.id)!;
-    expect(ahAfter.status).toBe("abandoned");
-    expect(ahAfter.outcome).toBeNull();
+    const afterWithdraw = await fixturesOf(rig.swissId);
+    const ahAfter = afterWithdraw.find((f) => f.id === ah.id)!;
+    expect(ahAfter.status).toBe("forfeited");
+    expect(ahAfter.outcome).toEqual({ kind: "award", method: "entrant withdrew", winner: A });
+    // Round 2 is unseated, so the withdrawal leaves its shells alone.
+    expect(inRound(afterWithdraw, 2).every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
+    expect(inRound(afterWithdraw, 2).map((f) => f.ext_key)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3"]);
 
     await decideRound(rig, 1, new Set([ah.id]));
     o.r1 = record(rig, inRound(await fixturesOf(rig.swissId), 1));
     o.standings = await swissTable(rig);
+    // A has the win; H is still in the table with the walkover as a loss.
     expect(o.standings).toEqual([
       "1 S1 P1 W1 L0 2pts",
       "2 S2 P1 W1 L0 2pts",
-      "3 S4 P1 W0 L1 0pts",
-      "4 S5 P1 W0 L1 0pts",
-      "5 A P0 W0 L0 0pts",
-      "6 H P0 W0 L0 0pts",
+      "3 A P1 W1 L0 2pts",
+      "4 S4 P1 W0 L1 0pts",
+      "5 S5 P1 W0 L1 0pts",
+      "6 H P1 W0 L1 0pts",
     ]);
 
-    // OBSERVED DEFECT: stuck. The pair gate's DECIDED set is
-    // decided/finalized/forfeited — `abandoned` is none of those.
-    const pairNext = await refusalOf(generateStageFixtures(rig.auth, rig.swissId));
-    o.pairNext = pairNext;
-    expect(pairNext).toEqual({
-      engine: "STAGE_NOT_READY",
-      http: undefined,
-      code: "STAGE_NOT_READY",
-      message: "current swiss round has undecided fixtures",
-    });
-
-    const unpair = await refusalOf(unpairSwissRound(rig.auth, rig.swissId));
-    o.unpair = unpair;
-    expect(unpair).toEqual({
-      engine: "STAGE_NOT_READY",
-      http: undefined,
-      code: "STAGE_NOT_READY",
-      message: "swiss round has played results — unpair refused",
-    });
-
-    // Beyond the brief, recorded because it is the next thing an organiser
-    // would press: Forfeit on the abandoned board is refused as well.
-    const forfeit = await refusalOf(forfeitBy(rig.auth, ah.id, H));
-    o.forfeitAbandoned = forfeit;
-    expect(forfeit).toMatchObject({ code: "WRONG_PHASE", message: "match already over" });
-
-    // Round 2 still sits untouched on its six-shaped shells.
+    // Not stranded: Pair next reshapes round 2 for five — the same round S1
+    // reaches by forfeiting first and withdrawing after.
+    const pairNext = await generateStageFixtures(rig.auth, rig.swissId);
+    o.pairNext = { created: pairNext.created, reshaped: pairNext.reshaped };
+    expect(pairNext.reshaped).toEqual({ matches_added: 0, matches_removed: 1, byes_added: 1, byes_removed: 0 });
     const rows = await fixturesOf(rig.swissId);
     o.after = record(rig, rows);
-    expect(inRound(rows, 2).every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
-    expect(inRound(rows, 2).map((f) => f.ext_key)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3"]);
+    expect(roundShape(rig, rows, 2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-b2: A v S4", "sw-r2-bye: S5 bye"]);
+    expect(inRound(rows, 2).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]), "H is absent from round 2").not.toContain(H);
   });
 
   // ─── S3 — never withdraw ────────────────────────────────────────────────
