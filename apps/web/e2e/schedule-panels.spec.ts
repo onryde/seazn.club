@@ -244,9 +244,22 @@ test("constraints (PROMPT-24): edits save and persist across reload", async ({ p
   await clash.click();
   await expect(clash).toBeChecked({ checked: !startChecked, timeout: 20_000 });
 
+  // Minimum rest is NOT like the checkbox: it is draft-then-commit
+  // (constraints-panel.tsx `useDraftField`), so the input shows "12" the moment
+  // it is typed and its value says nothing about the save. Blur commits it
+  // through a queued GET+PUT; the reload below must wait for THAT PUT to come
+  // back, or the reloaded page's server render can read the row before the
+  // write commits and show 0 (CI run 35933680334: the reload was sent 11ms
+  // after the PUT, before its response, and rendered without restMin).
+  const restSaved = page.waitForResponse(
+    (res) =>
+      res.request().method() === "PUT" &&
+      res.url().includes(`/api/v1/divisions/${divisionId}/schedule-settings`) &&
+      res.request().postDataJSON()?.config?.constraints?.restMin === 12,
+  );
   await rest.fill("12");
   await rest.blur();
-  await expect(rest).toHaveValue("12", { timeout: 20_000 });
+  expect((await restSaved).ok()).toBe(true);
   await expect(page.getByText(/failed/i)).toHaveCount(0);
 
   // persisted server-side: a fresh load reflects both edits
