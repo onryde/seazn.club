@@ -87,3 +87,25 @@ idempotent and inside the division lock at all 4 call sites; wire it into
 addFixture and withdrawCore. (e) V417: safe (no V415 on any ref; the gap is
 allowed; the predicate matches `restByeSql`). (f) acceptable apart from R2-5.
 (g) acceptable scope.
+
+## Round 3 — reviewer (verdict: NEEDS FIXES; 1 MEDIUM / 2 LOW)
+
+All six round-2 findings are fixed and verified through real paths. Gate:
+795/795 across 41 files. The first full-suite run to cover the draw-label write
+shows only environmental failures (poster-image-budget, schedule-build-honours-locks,
+and org-posts-digest timing out on an accumulated DB). ext_key is selected at
+every predicate call site; the marker can't be dropped or forged; V417 equals
+V355 plus the exemption.
+
+1. MEDIUM — `stages.ts:4226/4234` `resolveBracketSeats` stamps the PLAIN bye
+   label on draw-made dead-feeder seats (double-elim losers'-bracket byes
+   `lb-r0-i*`, the `se-3p` third-place bye), so the ICS feed still emits "X vs Bye".
+   The orchestrator rules this a sit-out under the ICS ruling: stamp
+   `DRAW_BYE_SLOT_LABEL` when the dead feeder is draw-made; withdrawal voids
+   and walkovers keep the plain label.
+2. LOW — lock-order inversion: `patchEntrant` (`entrants.ts:732→753`) and
+   `withdrawCore` (`registrations.ts:4711→4719`) update the entrant row before
+   taking the division lock, while `deleteEntrant` takes the lock first. A
+   concurrent withdraw and delete of the same entrant can deadlock (40P01).
+3. LOW — addFixture in a new round writes a rest bye (3-entrant league;
+   `add-fixture.test.ts:138-147`). Owner ruled: no bye for hand-added matches.
