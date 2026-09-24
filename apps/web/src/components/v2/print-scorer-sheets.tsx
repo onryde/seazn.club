@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { UpgradeGate } from "@/components/upgrade-gate";
-import { fmtPublicDate, UTC } from "@/lib/format";
+import { dayLabel } from "@/lib/day-label";
 
 interface DownloadEnv {
   createElement: () => HTMLAnchorElement;
@@ -99,36 +99,41 @@ export function PrintScorerSheets({
   }
 
   return (
-    <div data-testid="print-sheets" className="flex min-w-0 flex-wrap items-end gap-2">
-      <label className="flex min-w-0 flex-col text-xs font-medium text-slate-600">
-        {msg("sheets.day")}
-        <select
-          data-testid="print-sheets-day"
-          value={day}
-          onChange={(e) => setPicked(e.target.value)}
-          className="select mt-1 h-11 w-auto min-w-0 py-0 text-sm"
+    <div data-testid="print-sheets" className="min-w-0">
+      <div className="flex min-w-0 flex-wrap items-end gap-2">
+        <label className="flex min-w-0 flex-col text-xs font-medium text-slate-600">
+          {msg("sheets.day")}
+          <select
+            data-testid="print-sheets-day"
+            value={day}
+            onChange={(e) => setPicked(e.target.value)}
+            className="select mt-1 h-11 w-auto min-w-0 py-0 text-sm"
+          >
+            {days.map((d) => (
+              <option key={d} value={d}>
+                {/* Named exactly as the board's day tabs beside it name a day
+                    (lib/day-label.ts), in the page's locale — never the
+                    runtime's, which differs between server and browser. */}
+                {dayLabel(d, locale)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          data-testid="print-sheets-submit"
+          onClick={() => void submit()}
+          disabled={busy}
+          className="btn btn-ghost h-11"
         >
-          {days.map((d) => (
-            <option key={d} value={d}>
-              {/* A calendar day, at UTC noon so no zone can shift it, in the
-                  page's locale — never the runtime's, which would differ
-                  between the server render and the browser. */}
-              {fmtPublicDate(locale, UTC, `${d}T12:00:00Z`)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button
-        type="button"
-        data-testid="print-sheets-submit"
-        onClick={() => void submit()}
-        disabled={busy}
-        className="btn btn-ghost h-11"
-      >
-        {busy ? msg("sheets.preparing") : msg("sheets.print")}
-      </button>
+          {busy ? msg("sheets.preparing") : msg("sheets.print")}
+        </button>
+      </div>
+      {/* Under the row, and `w-0 min-w-full` so the sentence adds nothing to
+          the control's intrinsic width: inside the wrapping row it widened
+          the control until a French refusal pushed it off the title's line. */}
       {error && (
-        <p data-testid="print-sheets-error" role="alert" className="w-full text-sm text-red-700">
+        <p data-testid="print-sheets-error" role="alert" className="mt-1 w-0 min-w-full text-sm text-red-700">
           {error}
         </p>
       )}

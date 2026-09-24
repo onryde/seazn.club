@@ -59,13 +59,13 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     expect(propsOf(byTestId(island.tree(), "print-sheets-day")!).value).toBe("2026-09-24");
   });
 
-  it("offers every printable day, in order, each named in the page's locale at UTC noon", () => {
+  it("offers every printable day, in order, each named as the board's day tabs name it", () => {
     const island = renderIsland(PrintScorerSheets, base);
     const options = island.tree().filter((e) => e.type === "option");
     expect(options.map((o) => propsOf(o).value)).toEqual(["2026-09-23", "2026-09-24"]);
-    // en-GB (intlLocaleFor("en")), day-month — never the runtime's locale,
-    // which would differ between the server render and the browser.
-    expect(options.map((o) => propsOf(o).children)).toEqual(["Wed 23 Sept", "Thu 24 Sept"]);
+    // `dayLabel(day, locale)` — the schedule board's own tab label — in the
+    // page's locale ("en" outside a provider), never the runtime's.
+    expect(options.map((o) => propsOf(o).children)).toEqual(["Wed, Sep 23", "Thu, Sep 24"]);
   });
 
   it("submit POSTs {date} as JSON to the action and hands the blob to the downloader", async () => {
