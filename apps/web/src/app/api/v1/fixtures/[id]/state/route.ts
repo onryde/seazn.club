@@ -4,14 +4,15 @@ import { fixtureStateEtag, getFixtureState } from "@/server/usecases/fixtures";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Live state (summary + fold + status). ETag = ledger seq (doc 08 §6). */
+/** Live state (summary + fold + status). ETag = a digest of this body
+ *  (`fixtureStateEtag`), so a change that appends no event still moves it. */
 export async function GET(req: Request, { params }: Ctx) {
   const { id } = await params;
   let etag: string | undefined;
   const res = await v1(async () => {
     const auth = await requireFixtureActor(req, id, "read");
     const state = await getFixtureState(auth, id);
-    etag = fixtureStateEtag(state.last_seq);
+    etag = fixtureStateEtag(state);
     return reply(200, state, { ETag: etag });
   });
   if (etag && req.headers.get("if-none-match") === etag) {

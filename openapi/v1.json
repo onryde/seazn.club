@@ -39432,7 +39432,7 @@
     },
     "/api/v1/fixtures/{id}/state": {
       "get": {
-        "summary": "Live state (ETag = ledger seq)",
+        "summary": "Live state (ETag = digest of the body)",
         "tags": [
           "scoring"
         ],
