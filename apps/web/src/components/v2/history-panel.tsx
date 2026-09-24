@@ -107,6 +107,11 @@ export function HistoryPanel({
    *  differently: "nothing to undo" answers a question, "undid 2 changes"
    *  confirms an action. */
   const [restored, setRestored] = useState<number | null>(null);
+  /** How many matches in play or finished the last schedule clear left in
+   *  place (`skipped.decided` — the server's played set). The clear never
+   *  takes them, and a live match keeping its slot on a board just cleared,
+   *  with nothing said, reads as a clear that did not work. */
+  const [keptPlayed, setKeptPlayed] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -135,6 +140,7 @@ export function HistoryPanel({
     // organiser just took, and a stale one beside an undo would be a lie.
     setEvicted(null);
     setRestored(null);
+    setKeptPlayed(null);
     setBusy(true);
     try {
       await fn();
@@ -646,16 +652,34 @@ export function HistoryPanel({
                 tone: "danger",
               });
               if (!ok) return;
-              void run(() =>
-                apiV1("/api/v1/schedule/clear", {
-                  method: "POST",
-                  json: { division_id: divisionId, scope: { excludeLocked: true }, confirm: true },
-                }),
-              );
+              void run(async () => {
+                const out = await apiV1<{ cleared: number; skipped: { locked: number; decided: number } }>(
+                  "/api/v1/schedule/clear",
+                  {
+                    method: "POST",
+                    json: { division_id: divisionId, scope: { excludeLocked: true }, confirm: true },
+                  },
+                );
+                setKeptPlayed(out.skipped.decided);
+              });
             }}
           >
             {msg("history.danger.clear")}
           </button>
+          {/* The locked ones are the danger zone's own sentence above; this
+              says the played ones, which no control on this page pins. `msg`
+              over the two plural forms for the reason given at the restore
+              notice. */}
+          {keptPlayed !== null && keptPlayed > 0 && (
+            <p
+              data-testid="schedule-clear-kept"
+              className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800"
+            >
+              {keptPlayed === 1
+                ? msg("history.danger.keptPlayed.one")
+                : msg("history.danger.keptPlayed.other", { count: String(keptPlayed) })}
+            </p>
+          )}
         </div>
       )}
     </section>

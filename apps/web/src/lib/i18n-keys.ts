@@ -2386,6 +2386,8 @@ export type DictionaryKey =
   | "history.danger.body"
   | "history.danger.clear"
   | "history.danger.frozen"
+  | "history.danger.keptPlayed.one"
+  | "history.danger.keptPlayed.other"
   | "history.danger.title"
   | "history.error.frozen"
   | "history.error.played"
