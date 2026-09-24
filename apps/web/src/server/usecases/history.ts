@@ -176,21 +176,37 @@ function snapshotIdKey(snapshot: unknown): string | undefined {
     .join(",");
 }
 
-/** A restored seat: the entrant it held, unless that entrant is gone since.
+/** A restored seat: the entrant it held, AS DRAWN (review 2 of #857, I4,
+ *  owner ruling), unless she is gone since.
  *  DELETED — the FK would refuse the insert (and a delete SET NULLs the seat
  *  of every live row, so an empty seat is what the row would hold had it
- *  never left). DEPARTED (withdrawn / disqualified, `DEPARTED_STATUSES`) — on
- *  a line still to be PLAYED only: F14 (stages.ts `walkoverDepartedQualifiers`,
- *  owner ruling 2026-09-21, re-review C2) never seats a departed entrant in a
- *  scheduled line, and the seed fill leaves her seat EMPTY rather than
- *  promoting anyone into it (`computeSeedProposal`). A line the generator
- *  already settled — F14's own walkover, a bye's award — keeps her in her
- *  drawn seat, as F14 does. The slot label is restored either way, so the
- *  emptied seat still reads as its placeholder. */
-const seatOf = (tx: Tx, entrantId: string | null | undefined, playable: boolean) =>
-  playable
+ *  never left).
+ *  DEPARTED (withdrawn / disqualified, `DEPARTED_STATUSES`) — kept in her drawn
+ *  seat, as the live rows keep her (a withdrawal before Start is a status
+ *  flip). The ONE exception is a seat her own bye FED (`byeFedSeats`): the
+ *  generator's third pass never carries a departed qualifier's bye into the
+ *  next round (stages.ts, F14), so that seat restores EMPTY — its slot label
+ *  is restored, so it still reads as its placeholder. */
+const seatOf = (tx: Tx, entrantId: string | null | undefined, byeFedDeparted: boolean) =>
+  byeFedDeparted
     ? tx`(select e.id from entrants e where e.id = ${entrantId ?? null} and e.status not in ${tx(DEPARTED)})`
     : tx`(select e.id from entrants e where e.id = ${entrantId ?? null})`;
+
+/** The seats a settled line's award fed, as `fixture:slot:winner` — a bye (or
+ *  any settled line) awarded to `winner` whose winner edge points at that
+ *  seat. From the rows restored together only: an edge INTO a restored row
+ *  from a row outside its snapshot was SET NULL by the delete. */
+function byeFedSeats(snapshots: readonly FixtureSnapshot[]): Set<string> {
+  const fed = new Set<string>();
+  for (const r of snapshots) {
+    const verdict = restoredVerdict(r);
+    const winner = (verdict.outcome as { winner?: unknown } | null)?.winner;
+    if (verdict.status === "scheduled" || typeof winner !== "string") continue;
+    if (!r.winner_to_fixture || (r.winner_to_slot !== 1 && r.winner_to_slot !== 2)) continue;
+    fed.add(`${r.winner_to_fixture}:${r.winner_to_slot}:${winner}`);
+  }
+  return fed;
+}
 
 // ---------------------------------------------------------------------------
 // Fixture snapshots (restore fidelity, 2026-09-23)
@@ -235,10 +251,11 @@ const seatOf = (tx: Tx, entrantId: string | null | undefined, playable: boolean)
 //     home/away_entrant_id (kept before this). org_id is re-derived by the
 //     insert trigger from the stage — the same value.
 //
-//   ...AS FAR AS THE ROSTER STILL HOLDS IT. What was deleted or left since the
-//   snapshot is never written back: a seat whose entrant was deleted, or on a
-//   line still to be played has departed, restores EMPTY with its placeholder
-//   label (`seatOf`, F14); a deleted court restores as no court and no venue,
+//   ...AS FAR AS THE ROSTER STILL HOLDS IT. What was deleted since the
+//   snapshot is never written back: a seat whose entrant was deleted restores
+//   EMPTY with its placeholder label, as does a seat her own bye fed if she
+//   has departed since (`seatOf`, F14; a departed entrant otherwise keeps her
+//   drawn seats, as the live rows do); a deleted court restores as no court and no venue,
 //   a deleted pool as no pool; a deleted stage's rows are skipped. Each of
 //   these used to be a foreign-key failure — the whole Undo refused, and every
 //   retry replayed the same snapshot.
@@ -358,11 +375,13 @@ async function restoreFixtures(
   const ordered = snapshots
     .filter((s) => liveStages.has(s.stage_id!))
     .sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0));
+  const fed = byeFedSeats(ordered);
+  const byeFed = (s: FixtureSnapshot, slot: 1 | 2, entrantId: string | null | undefined) =>
+    entrantId != null && fed.has(`${s.id}:${slot}:${entrantId}`);
   for (const s of ordered) {
     const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType });
     const courtId = court.write ? court.value : null;
     const verdict = restoredVerdict(s);
-    const playable = verdict.status === "scheduled";
     // Everything the roster may have lost since resolves to what is live
     // (`seatOf`, `liveCourt`; a pool deleted since restores as none — the FK
     // is SET NULL, so no pool is a state the table already allows).
@@ -383,7 +402,8 @@ async function restoreFixtures(
       values (${s.id}, ${s.stage_id!}, ${divisionId},
               (select p.id from pools p where p.id = ${s.pool_id ?? null}),
               ${s.round_no ?? 1}, ${s.seq_in_round ?? 1},
-              ${seatOf(tx, s.home_entrant_id, playable)}, ${seatOf(tx, s.away_entrant_id, playable)},
+              ${seatOf(tx, s.home_entrant_id, byeFed(s, 1, s.home_entrant_id))},
+              ${seatOf(tx, s.away_entrant_id, byeFed(s, 2, s.away_entrant_id))},
               ${s.at ?? null}, ${liveCourt(tx, courtId)}, ${venueOf(tx, courtId)},
               ${s.locked === true}, ${s.schedule_source ?? "none"},
               (select n.no from (select ${s.fixture_no ?? null}::int as no) n

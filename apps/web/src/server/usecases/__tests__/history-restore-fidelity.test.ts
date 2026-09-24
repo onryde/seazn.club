@@ -924,12 +924,12 @@ describe.skipIf(!HAS_DB)("every history write keeps a fixture's venue its court'
 });
 
 // G3 (gap hunt, #857). A restore wrote the snapshot back as it was, whatever the
-// roster had done since: a withdrawn entrant re-seated in a line to be played
-// (what F14 exists to prevent), and a deleted entrant, court, pool or stage
+// roster had done since: a withdrawn entrant carried by her bye into the next
+// round (what F14 exists to prevent), and a deleted entrant, court, pool or stage
 // written back as a dangling id — a foreign-key failure that refused the whole
 // Undo, on every retry, because every retry replays the same snapshot.
 describe.skipIf(!HAS_DB)("a restore respects what the roster lost since the snapshot", () => {
-  it("an entrant WITHDRAWN since: her seat on a line still to play restores EMPTY, its feed and labels kept; the bye the draw already awarded her keeps her (F14)", async () => {
+  it("an entrant WITHDRAWN since: the seat her bye fed restores EMPTY, its feed and labels kept; the bye the draw already awarded her keeps her (F14)", async () => {
     const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(6, "knockout", { thirdPlace: true });
     const generated = await wholeRows("stage_id", mainId);
     const seats = (r: Row, id: unknown) => r.home_entrant_id === id || r.away_entrant_id === id;
@@ -952,6 +952,32 @@ describe.skipIf(!HAS_DB)("a restore respects what the roster lost since the snap
     expect(await wholeRows("stage_id", mainId)).toEqual(
       generated.map((r) => (r.id === fed.id ? { ...r, [`${side}_entrant_id`]: null } : r)),
     );
+  });
+
+  // Review 2 of #857, I4 (owner ruling: restore as drawn). A departed entrant
+  // keeps her DRAWN seats: before Start a withdrawal is a status flip and the
+  // rows keep her, so a restore that emptied them handed back a board the
+  // forward path never makes — lines with a hole nobody can score. Only a seat
+  // her bye fed stays empty (the case above).
+  it("an entrant WITHDRAWN since keeps her drawn league seats: every line restores with both sides, and can be scored", async () => {
+    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(4, "league", {});
+    const generated = await wholeRows("stage_id", mainId);
+    const [leaver] = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${divisionId} and seed = 4`;
+    const hers = generated.filter((r) => r.home_entrant_id === leaver!.id || r.away_entrant_id === leaver!.id);
+    expect(hers).toHaveLength(3);
+    await withdrawEntrantCascade(auth, leaver!.id);
+
+    await undoThenRestore(auth, divisionId, mainId, laterId);
+
+    expect(await wholeRows("stage_id", mainId)).toEqual(generated);
+    await startDivision(auth, divisionId);
+    await scoreEvent(auth, hers[0]!.id as string, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, hers[0]!.id as string, {
+      expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 1 },
+    });
+    const [scored] = await sql<{ status: string }[]>`select status from fixtures where id = ${hers[0]!.id as string}`;
+    expect(scored!.status).toBe("decided");
   });
 
   it("an entrant DELETED since: every seat she held restores empty, and Undo completes", async () => {
