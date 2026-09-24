@@ -47,6 +47,12 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     expect(byTestId(island.tree(), "print-sheets")).toBeUndefined();
   });
 
+  it("each half of the empty case stands alone: no days, or no default day, renders nothing", () => {
+    // Mutated one at a time, each clause would otherwise be covered by the other.
+    expect(renderIsland(PrintScorerSheets, { ...base, days: [], defaultDay: "2026-09-24" }).tree()).toEqual([]);
+    expect(renderIsland(PrintScorerSheets, { ...base, defaultDay: null }).tree()).toEqual([]);
+  });
+
   it("the picker OPENS AT the default day, not the first option", () => {
     const island = renderIsland(PrintScorerSheets, base);
     expect(byTestId(island.tree(), "print-sheets")).toBeDefined();
@@ -79,6 +85,15 @@ describe("PrintScorerSheets (scorer sheets §4.4)", () => {
     );
     expect(download).toHaveBeenCalledWith(expect.any(Blob), "s-2026-09-24.pdf");
     expect(await (download.mock.calls[0]![0] as Blob).text()).toBe("%PDF-");
+  });
+
+  it("a response without a filename still saves, under the generic name", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Blob(["%PDF-"]), { status: 200 })));
+    const download = vi.fn();
+    const island = renderIsland(PrintScorerSheets, { ...base, download });
+    click(island.tree());
+    await flush();
+    expect(download).toHaveBeenCalledWith(expect.any(Blob), "scorer-sheets.pdf");
   });
 
   it("the day the organiser PICKS is the day that is POSTed", async () => {
