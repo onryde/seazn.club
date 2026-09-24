@@ -43,6 +43,7 @@ vi.mock("../data", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { resolveNameDisplay } from "@/lib/name-display";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
@@ -584,6 +585,103 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
     }
   });
 
+  // The publish rule lives in TWO places now — the view's person_id arm and
+  // this reader's `published` (V418's header names both). The open-division
+  // PARITY above cannot see a policy term added to one copy only, because
+  // every cell there shows full names. These cells can: the leader links iff
+  // the VIEW publishes the id AND the division shows full names, and a youth
+  // division whose organiser chose `full` is the cell where a youth term in
+  // either copy (and not the other) changes what a spectator gets.
+  it("PARITY across division name policies: publicProfile is exactly 'the view publishes the id' AND 'the division shows full names' — youth and player_name_display cells included", async () => {
+    const { auth, orgId } = await seedOrg();
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Policy Parity Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const POLICIES = [
+      { name: "Open", youth: false, player_name_display: null },
+      { name: "Youth Full", youth: true, player_name_display: "full" },
+      { name: "Youth", youth: true, player_name_display: null },
+      { name: "Initials", youth: false, player_name_display: "first_initial" },
+    ] as const;
+    const people = {
+      named: await seedPerson(orgId, "Pia Named", { public_name: true }),
+      refused: await seedPerson(orgId, "Rex Refused", { public_name: false }),
+      silent: await seedPerson(orgId, "Sam Silent", {}),
+    };
+    const divisions: { id: string; youth: boolean; player_name_display: string | null; name: string }[] = [];
+    for (const policy of POLICIES) {
+      const division = await createDivision(auth, competition.id, {
+        name: policy.name,
+        sport_key: "generic",
+        variant_key: "score",
+        config: DIVISION_CONFIG,
+      });
+      // Written to the ROW as well as handed to the reader, so a policy term
+      // on the SQL side of either copy would see it.
+      await sql`
+        update divisions set youth = ${policy.youth}, player_name_display = ${policy.player_name_display}
+        where id = ${division.id}`;
+      await createEntrants(auth, division.id, [
+        {
+          kind: "team",
+          display_name: `${policy.name} XI`,
+          seed: 1,
+          members: Object.values(people).map((person_id, i) => ({
+            person_id,
+            squad_number: i + 1,
+            default_position_key: null,
+            is_captain: i === 0,
+            roles: [],
+          })),
+        },
+      ]);
+      for (const id of Object.values(people)) await seedSnapshot(division.id, id, { runs: 5 });
+      divisions.push({ id: division.id, youth: policy.youth, player_name_display: policy.player_name_display, name: policy.name });
+    }
+    const policy = divisions.map(({ id, youth, player_name_display }) => ({ id, youth, player_name_display }));
+
+    for (const granted of [true, false]) {
+      await setFeature(orgId, "dashboard.player_profiles", granted);
+      const rows = await readLeaderRows(sql, policy);
+      const published = new Set(
+        (
+          await sql<{ key: string }[]>`
+            select en.division_id || ':' || (m->>'person_id') as key
+            from public_entrants_v en, jsonb_array_elements(en.members) m
+            where en.division_id in ${sql(divisions.map((d) => d.id))} and m->>'person_id' is not null`
+        ).map((r) => r.key),
+      );
+      expect(rows).toHaveLength(divisions.length * Object.keys(people).length);
+      for (const division of divisions) {
+        const showsFull = resolveNameDisplay(division.player_name_display, division.youth) === "full";
+        for (const [key, personId] of Object.entries(people)) {
+          const row = rows.find((r) => r.divisionId === division.id && r.personId === personId);
+          const cell = `${granted ? "granted" : "denied"}/${division.name}/${key}`;
+          expect(row, cell).toBeDefined();
+          expect(row!.publicProfile, cell).toBe(published.has(`${division.id}:${personId}`) && showsFull);
+        }
+      }
+      // Pinned, so the view and the reader cannot drift TOGETHER unnoticed:
+      // the youth division with full names links a consenting leader (the
+      // positive pair — without it every youth cell could be false for free),
+      // and the divisions that mask names never do.
+      const at = (name: string, personId: string) =>
+        rows.find((r) => r.divisionId === divisions.find((d) => d.name === name)!.id && r.personId === personId)!
+          .publicProfile;
+      expect(at("Youth Full", people.named)).toBe(granted);
+      expect(at("Open", people.named)).toBe(granted);
+      expect(at("Youth", people.named)).toBe(false);
+      expect(at("Initials", people.named)).toBe(false);
+      for (const d of divisions) {
+        expect(at(d.name, people.refused)).toBe(false);
+        expect(at(d.name, people.silent)).toBe(false);
+      }
+    }
+  });
+
   it("CALLS: the leader read asks the player-profiles entitlement once per division, however many leaders and members", async () => {
     const { auth, orgId } = await seedOrg();
     await setFeature(orgId, "dashboard.player_profiles", true);
@@ -593,30 +691,43 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
       visibility: "public",
       branding: {},
     });
-    const division = await createDivision(auth, competition.id, {
-      name: "Open",
-      sport_key: "generic",
-      variant_key: "score",
-      config: DIVISION_CONFIG,
-    });
+    // TWO divisions, so "once per division" is told apart from "once per
+    // query": the right answer (2) differs from both wrong ones (1 per query,
+    // 8 per leader row).
+    const divisions = [
+      await createDivision(auth, competition.id, {
+        name: "Open",
+        sport_key: "generic",
+        variant_key: "score",
+        config: DIVISION_CONFIG,
+      }),
+      await createDivision(auth, competition.id, {
+        name: "Vets",
+        sport_key: "generic",
+        variant_key: "score",
+        config: DIVISION_CONFIG,
+      }),
+    ];
     const names = ["Ann One", "Ben Two", "Cat Three", "Dan Four"];
     const ids: string[] = [];
     for (const name of names) ids.push(await seedPerson(orgId, name, { public_name: true, public_photo: true }));
-    await createEntrants(auth, division.id, [
-      {
-        kind: "team",
-        display_name: "Crowd",
-        seed: 1,
-        members: ids.map((person_id, i) => ({
-          person_id,
-          squad_number: i + 1,
-          default_position_key: null,
-          is_captain: i === 0,
-          roles: [],
-        })),
-      },
-    ]);
-    for (const id of ids) await seedSnapshot(division.id, id, { runs: 3 });
+    for (const division of divisions) {
+      await createEntrants(auth, division.id, [
+        {
+          kind: "team",
+          display_name: "Crowd",
+          seed: 1,
+          members: ids.map((person_id, i) => ({
+            person_id,
+            squad_number: i + 1,
+            default_position_key: null,
+            is_captain: i === 0,
+            roles: [],
+          })),
+        },
+      ]);
+      for (const id of ids) await seedSnapshot(division.id, id, { runs: 3 });
+    }
 
     // Counted as a delta inside one transaction: `pg_stat_xact_user_functions`
     // carries a pooled connection's unflushed calls from earlier transactions.
@@ -629,19 +740,24 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
         return n;
       };
       const start = await read();
-      const rows = await readLeaderRows(tx as unknown as Sql, [
-        { id: division.id, youth: false, player_name_display: null },
-      ]);
+      const rows = await readLeaderRows(
+        tx as unknown as Sql,
+        divisions.map((d) => ({ id: d.id, youth: false, player_name_display: null })),
+      );
       return { rows, calls: (await read()) - start };
     });
 
-    // The read really consulted the entitlement (every leader is linked) …
-    expect(rows).toHaveLength(names.length);
-    expect(rows.every((r) => r.publicProfile)).toBe(true);
-    expect(calls).toBeGreaterThanOrEqual(1);
-    // … once for the division — not once per leader row, and not twice per
-    // member of each leader's entrant as rebuilding `members` did.
-    expect(calls).toBe(1);
+    // The read really consulted the entitlement, in BOTH divisions (every
+    // leader is linked) …
+    expect(rows).toHaveLength(names.length * divisions.length);
+    for (const division of divisions) {
+      const inDivision = rows.filter((r) => r.divisionId === division.id);
+      expect(inDivision).toHaveLength(names.length);
+      expect(inDivision.every((r) => r.publicProfile)).toBe(true);
+    }
+    // … once per division — not once per query, not once per leader row, and
+    // not twice per member of each leader's entrant as rebuilding `members` did.
+    expect(calls).toBe(divisions.length);
   });
 
   it("SAFEGUARDING: a single-token youth name is masked, so no player-page link is offered", async () => {

@@ -75,7 +75,9 @@ export async function readLeaderRows(
   // actually found on a public entrant, exactly as the array lookup did. The
   // entitlement depends only on the competition, so `profiles` asks it once per
   // division (`materialized`, so it is never inlined back into each row).
-  // public-leaders.test.ts PARITY pins this to what the view publishes.
+  // This is a SECOND COPY of that arm (V418's header names this reader): change
+  // one, change both. public-leaders.test.ts PARITY pins it to what the view
+  // publishes, across open, youth and first-initial divisions.
   const divisionIds = divisions.map((d) => d.id);
   const rows = await sql<SnapshotQueryRow[]>`
     with profiles as materialized (

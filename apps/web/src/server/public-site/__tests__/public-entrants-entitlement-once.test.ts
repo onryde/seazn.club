@@ -17,7 +17,9 @@
 //    ORDER (squad_number nulls last, then full_name) is made to disagree with
 //    insertion order, with a squad-number tie and an unnumbered member, so an
 //    agg that lost its ORDER BY cannot pass by accident. A tombstoned member
-//    (`merged_into`) proves the #404 exclusion survived the rewrite.
+//    (`merged_into`) proves the #404 exclusion survived the rewrite. An empty
+//    roster (members `[]`) and a roster nobody consents on ride through every
+//    test, DIFFERENTIAL included.
 //  * DIFFERENTIAL — every column of every row is compared against the
 //    definition this migration replaced, read out of V416's own migration FILE
 //    (never a hand copy that could drift from what shipped), in both states.
@@ -92,7 +94,26 @@ const ROSTERS: { team: string; seats: Seat[] }[] = [
       { fullName: "Bea Stone", squad: 5, consent: { public_name: true, public_photo: true } },
     ],
   },
+  // The empty set: no roster at all — members must be exactly `[]`.
+  { team: "Cavity", seats: [] },
+  // Nobody consents (one explicit refusal, one `{}`): V416 never asked the
+  // entitlement for this entrant; V418 asks once. The stated trade, pinned in
+  // CALLS below rather than left to the migration's prose.
+  {
+    team: "Decliners",
+    seats: [
+      { fullName: "Dora Decline", squad: 4, consent: { public_name: false, public_photo: false } },
+      { fullName: "Eli Empty", squad: 3, consent: {} },
+    ],
+  },
 ];
+
+/** Consent keys that are TRUE across a roster's live seats — each one cost
+ *  V416 a call (`consent AND org_has_feature(...)` stops at a false consent). */
+const consentingKeys = (seats: readonly Seat[]): number =>
+  seats
+    .filter((s) => !s.merged)
+    .reduce((n, s) => n + (s.consent.public_photo === true ? 1 : 0) + (s.consent.public_name === true ? 1 : 0), 0);
 
 /** `order by em.squad_number nulls last, p.full_name`, spelled out here rather
  *  than read back from the database under test. */
@@ -231,7 +252,7 @@ async function readMembers(): Promise<Map<string, unknown[]>> {
  *  transaction's calls on the same pooled connection until the idle flush —
  *  a raw read double-counted here (5 + 5 = 10). No flush can happen inside a
  *  transaction block, so the delta is exactly this statement's calls. */
-async function featureCalls(statement: string): Promise<number> {
+async function featureCalls(statement: string, params: string[] = [scene.divisionId]): Promise<number> {
   return sql.begin(async (tx) => {
     await tx`set local track_functions = 'all'`;
     const read = async (): Promise<number> => {
@@ -241,7 +262,7 @@ async function featureCalls(statement: string): Promise<number> {
       return calls;
     };
     const start = await read();
-    await tx.unsafe(statement, [scene.divisionId]);
+    await tx.unsafe(statement, params);
     return (await read()) - start;
   });
 }
@@ -273,6 +294,8 @@ describe.skipIf(!HAS_DB)("public_entrants_v — the player-profiles entitlement,
     expect(squads("Anchors")).toEqual([2, 9]);
     expect(squads("Breakers")).toEqual([5, 5, null]);
     expect((members.get("Breakers") as { name: string }[])[0]!.name).toBe("Bea Stone");
+    // The empty roster publishes an empty array — not null, not a missing row.
+    expect(members.get("Cavity")).toEqual([]);
     // The positive half is really exercised: something WAS published.
     const anchors = members.get("Anchors") as { person_id: string | null; photo: string | null }[];
     expect(anchors.some((m) => m.person_id !== null && m.photo !== null)).toBe(true);
@@ -307,12 +330,9 @@ describe.skipIf(!HAS_DB)("public_entrants_v — the player-profiles entitlement,
 
   it("CALLS: org_has_feature runs at most once per entrant row — V416 ran it per consenting member, per arm", async () => {
     await setFeature(scene.orgId, scene.featureKey, true);
-    const seats = ROSTERS.flatMap((r) => r.seats.filter((s) => !s.merged));
     // V416: `consent AND org_has_feature(...)` per arm per member; AND stops at
     // a false consent, so each consent key that is TRUE costs one call.
-    const perMemberCalls =
-      seats.filter((s) => s.consent.public_photo === true).length +
-      seats.filter((s) => s.consent.public_name === true).length;
+    const perMemberCalls = ROSTERS.reduce((n, r) => n + consentingKeys(r.seats), 0);
 
     const before = await featureCalls(
       `select members from (${v416Body()}) v where v.division_id = $1`,
@@ -331,5 +351,32 @@ describe.skipIf(!HAS_DB)("public_entrants_v — the player-profiles entitlement,
     ).toBe(0);
     // Reported for the task log (visible with --reporter=verbose).
     console.info(`org_has_feature calls: V416=${before} now=${after} entrants=${ROSTERS.length}`);
+  });
+
+  it("CALLS per entrant: exactly one call for every entrant row — including the empty and no-consent rosters V416 answered for free (the stated trade)", async () => {
+    // One entrant per statement, so the count is the same whichever side of
+    // the join the planner evaluates the lateral on.
+    await setFeature(scene.orgId, scene.featureKey, true);
+    const ids = new Map(
+      (
+        await sql<{ id: string; display_name: string }[]>`
+          select id, display_name from entrants where division_id = ${scene.divisionId}`
+      ).map((r) => [r.display_name, r.id]),
+    );
+    const perEntrant: Record<string, { v416: number; v418: number }> = {};
+    for (const { team, seats } of ROSTERS) {
+      const id = ids.get(team)!;
+      const v416 = await featureCalls(`select members from (${v416Body()}) v where v.id = $1`, [id]);
+      const v418 = await featureCalls(`select members from public_entrants_v where id = $1`, [id]);
+      perEntrant[team] = { v416, v418 };
+      expect(v416, `${team} under V416`).toBe(consentingKeys(seats));
+      expect(v418, `${team} under V418`).toBe(1);
+    }
+    // The trade, literally: the rosters nobody consents on went from free to
+    // one call each; the consenting ones went from per-member to one.
+    expect(perEntrant["Cavity"]).toEqual({ v416: 0, v418: 1 });
+    expect(perEntrant["Decliners"]).toEqual({ v416: 0, v418: 1 });
+    expect(perEntrant["Anchors"]!.v416).toBeGreaterThan(1);
+    console.info(`org_has_feature calls per entrant: ${JSON.stringify(perEntrant)}`);
   });
 });

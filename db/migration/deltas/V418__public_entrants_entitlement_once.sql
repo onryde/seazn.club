@@ -24,6 +24,15 @@
 -- calls; it now costs one. The bound is one call per entrant row, against
 -- V416's up to two per member.
 --
+-- A SECOND COPY of the person_id rule exists, on purpose:
+-- `apps/web/src/server/public-site/public-leaders.ts` (`readLeaderRows`)
+-- re-states this view's person_id arm — `public_name` consent AND
+-- 'dashboard.player_profiles' for the competition — so a leader row no longer
+-- rebuilds a whole roster to find one id. Change the arm here and that reader
+-- must change with it; `public-leaders.test.ts` PARITY (open, youth, youth
+-- with full names, first-initial divisions, both entitlement states) reds on a
+-- divergence in either copy.
+--
 -- NOTHING ELSE CHANGES. The body is V416's verbatim — the consent masking of
 -- member names, the photo and person_id entitlement gates (same predicate,
 -- read once), the `merged_into` tombstone exclusion, the member ORDER BY, the
