@@ -117,6 +117,17 @@ export const HubDivision = z.object({
    *  the format cannot be described, in which case the renderer falls back to
    *  `variantKey`. */
   formatLine: Msg.nullable(),
+  /** Per-stage match rules (design 2026-09-17 §D3/T7): one line per stage
+   *  whose EFFECTIVE rule keys differ from the division's — "Swiss" /
+   *  "1 game, 15 points (cap 21)", "Best of 3, sets to 4, no-ad" — in stage
+   *  order, from the same describer that labels the stage's fixtures in the
+   *  match centre. A line is a list of `Msg` CLAUSES, resolved each and joined
+   *  with `rulesLineText` (`lib/rules-line.ts`). `formatLine` above stays the
+   *  division's default. ABSENT when no stage differs (never an empty list),
+   *  and OPTIONAL for the reason `description` below is: the hub API is cached
+   *  at the edge, so a new bundle can poll a document built before this field
+   *  existed. Absent reads as "every stage plays the division's format". */
+  stageFormatLines: z.array(z.object({ stageName: z.string(), line: z.array(Msg).min(1) })).optional(),
   variantKey: z.string(),
   href: z.string(),
   /** The division's organiser prose as SANITISED HTML — `renderProse`'s

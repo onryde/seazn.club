@@ -19,6 +19,7 @@ import type { ReactNode } from "react";
 import { UTC, fmtPublicDate } from "@/lib/format";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
+import { rulesLineText } from "@/lib/rules-line";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { CompetitionProse } from "../competition-prose";
 
@@ -206,18 +207,23 @@ export function InfoTab({
     ? new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format([...info.venues])
     : "";
 
-  // One box per division that has ANYTHING: prose, its calendar, or a ban. The
-  // calendar is found by the same structural href join `calendarSlug` uses —
-  // never by position. `description`/`suspensions` are optional on the schema
+  // One box per division that has ANYTHING: prose, its calendar, a ban, or a
+  // stage that plays different rules from the division. The calendar is found
+  // by the same structural href join `calendarSlug` uses — never by position.
+  // `description`/`suspensions`/`stageFormatLines` are optional on the schema
   // (a document cached before they existed), so absent reads as none.
   const boxes = doc.divisions
     .map((d) => ({
       d,
       description: d.description ?? null,
       suspensions: d.suspensions ?? [],
+      stageLines: d.stageFormatLines ?? [],
       calendar: info.calendars.find((cal) => cal.href === `${d.href}/calendar.ics`) ?? null,
     }))
-    .filter((b) => b.description !== null || b.calendar !== null || b.suspensions.length > 0);
+    .filter(
+      (b) =>
+        b.description !== null || b.calendar !== null || b.suspensions.length > 0 || b.stageLines.length > 0,
+    );
   // What did NOT move: an entry no division's href owns keeps the old list,
   // with its index-fallback testid. Every entry moved → no list at all.
   const unowned = info.calendars
@@ -281,7 +287,7 @@ export function InfoTab({
         <section data-testid="mh-info-divisions" className="min-w-0 space-y-3">
           <h2 className={SECTION_TITLE_CLASS}>{t(dict, "info.divisions")}</h2>
           <div className="space-y-3">
-            {boxes.map(({ d, description, suspensions, calendar }) => {
+            {boxes.map(({ d, description, suspensions, stageLines, calendar }) => {
               const headingId = `mh-info-division-${d.slug}-name`;
               const calendarId = `mh-info-calendar-${d.slug}`;
               return (
@@ -296,6 +302,35 @@ export function InfoTab({
                   {description !== null ? (
                     <div data-testid={`mh-info-division-${d.slug}-description`} className="min-w-0">
                       <CompetitionProse html={description} />
+                    </div>
+                  ) : null}
+                  {stageLines.length > 0 ? (
+                    // Per-stage rules (T7): only the stages whose effective
+                    // rules differ from the division's — the builder omits the
+                    // rest, so "every stage plays the division's format" needs
+                    // no row. Each line is a `Msg` resolved here, like every
+                    // other string on the tab.
+                    <div data-testid={`mh-info-formats-${d.slug}`} className="min-w-0 space-y-1">
+                      <h4 className={LABEL_CLASS}>{t(dict, "info.stageFormats")}</h4>
+                      <dl className="divide-y divide-zinc-100">
+                        {stageLines.map((s, i) => (
+                          <div
+                            key={i}
+                            data-testid={`mh-info-format-${d.slug}-${i}`}
+                            className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-2"
+                          >
+                            {/* `[overflow-wrap:anywhere]`: `min-w-0` lets a cell
+                                shrink, but an unbroken stage name is one word
+                                and would still overflow the box at 320. */}
+                            <dt className="min-w-0 text-sm font-medium text-ink [overflow-wrap:anywhere]">
+                              {s.stageName}
+                            </dt>
+                            <dd className="min-w-0 text-sm tabular-nums text-ink [overflow-wrap:anywhere]">
+                              {rulesLineText(dict, s.line)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
                     </div>
                   ) : null}
                   {calendar ? (

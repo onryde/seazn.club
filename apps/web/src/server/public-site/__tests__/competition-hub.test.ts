@@ -1099,6 +1099,96 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     });
   });
 
+  describe("stageFormatLines (design 2026-09-17 §D3/T7) — only the stages whose rules differ", () => {
+    // The prod shape (2026-09-24): a badminton `short` division whose Swiss
+    // stage plays Best-of-1 to 15 (cap 21). The division's config is the
+    // module's own parse of the variant, never typed here.
+    const badminton = resolveLatestModule("badminton");
+    const SHORT = badminton.configSchema.parse(badminton.variants.short) as Record<string, unknown>;
+    const SWISS_RULES = { bestOf: 1, setTo: 15, cap: 21, finalSetTo: 15, winBy: 2 };
+    const BADMINTON_DIV: PublicDivision = {
+      ...DIV,
+      sport_key: "badminton",
+      variant_key: "short",
+      sport_name: "Badminton",
+      module_version: badminton.version,
+      config: SHORT,
+    };
+    const swiss: PublicStage = { ...STAGE, id: "sw", seq: 1, kind: "swiss", name: "Swiss", rules: SWISS_RULES };
+    const league: PublicStage = { ...STAGE, id: "lg", seq: 2, kind: "league", name: "League" };
+    // An override that RESTATES the division's own best-of: stored rules, no
+    // difference — an identical line per stage is noise (brief decision).
+    const finals: PublicStage = {
+      ...STAGE,
+      id: "fn",
+      seq: 3,
+      kind: "knockout",
+      name: "Finals",
+      rules: { bestOf: SHORT.bestOf },
+    };
+
+    const load = async (stages: PublicStage[]) => {
+      getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [BADMINTON_DIV], liveNow: [] });
+      getPublicDivisionMock.mockResolvedValue(
+        divisionDetail({ division: BADMINTON_DIV, stages, fixtures: [], standings: [], entrants: [] }),
+      );
+      return (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    };
+
+    it("names ONLY the overriding stage, with its effective rules — 15 points, not the division's 11", async () => {
+      expect(SHORT.setTo, "the right answer must differ from the division's").not.toBe(SWISS_RULES.setTo);
+      const doc = await load([swiss, league, finals]);
+      expect(doc.divisions[0]!.stageFormatLines).toEqual([
+        {
+          stageName: "Swiss",
+          line: [
+            { key: "format.rules.oneGamePointsCap", params: { points: SWISS_RULES.setTo, cap: SWISS_RULES.cap } },
+          ],
+        },
+      ]);
+      // The division's own sentence is unchanged — it is the default.
+      expect(doc.divisions[0]!.formatLine).toEqual(describeFormat("badminton", badminton, SHORT));
+      expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
+    });
+
+    it("in STAGE order, not the order the reader handed them over", async () => {
+      const leagueBo5: PublicStage = { ...league, rules: { bestOf: 5 } };
+      const doc = await load([leagueBo5, swiss]);
+      expect(doc.divisions[0]!.stageFormatLines?.map((l) => l.stageName)).toEqual(["Swiss", "League"]);
+    });
+
+    it("a stage whose rule keys differ gets a line even where the words are vague (winBy alone) — never the preset (review round 2)", async () => {
+      const winByOnly: PublicStage = { ...league, rules: { winBy: (SHORT.winBy as number) - 1 } };
+      const doc = await load([winByOnly]);
+      expect(doc.divisions[0]!.stageFormatLines).toEqual([
+        {
+          stageName: "League",
+          line: [
+            {
+              key: "format.rules.bestOfPointsCap",
+              params: { n: SHORT.bestOf, points: SHORT.setTo, cap: SHORT.cap },
+            },
+          ],
+        },
+      ]);
+      // A line is at least one clause: the schema refuses an empty one.
+      const empty = structuredClone(doc);
+      empty.divisions[0]!.stageFormatLines![0]!.line = [];
+      expect(CompetitionHubDoc.safeParse(empty).success).toBe(false);
+      expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
+    });
+
+    it("a division with no overriding stage carries NO field at all — not an empty list", async () => {
+      const doc = await load([league, finals]);
+      expect(doc.divisions[0]).not.toHaveProperty("stageFormatLines");
+      // The football division the rest of this file uses has no stage rules.
+      getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [DIV], liveNow: [] });
+      getPublicDivisionMock.mockResolvedValue(divisionDetail());
+      const plain = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(plain.divisions[0]).not.toHaveProperty("stageFormatLines");
+    });
+  });
+
   it("a table per non-bracket stage, with the champion and the full-division href", async () => {
     // The league is not complete and not fully played, so nobody is crowned.
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
@@ -2781,8 +2871,10 @@ describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
     // document WITHOUT re-parsing it, so a v1 entry — which has no
     // `knockouts` — must never be served to a renderer that reads one. v4
     // since standings qualification status (a v3 table has no
-    // `qualification` and its rows no `qual`).
-    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v4", "comp-1"]);
+    // `qualification` and its rows no `qual`). v5 since per-stage format
+    // lines (a v4 division has no `stageFormatLines`, and the page would show
+    // no stage format for up to a revalidate window after a deploy).
+    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v5", "comp-1"]);
     // Derived from the SAME tag helpers the writers use, so the two halves of
     // the invalidation story cannot drift: `fireDivisionRevalidate` fires
     // `divisionTag` and `competitionTag`, and both are declared here.

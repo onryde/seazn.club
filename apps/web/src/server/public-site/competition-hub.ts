@@ -79,6 +79,7 @@ import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
 import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
 import { describeFormat } from "./describe-format";
+import { stageFormatLines } from "./stage-format-lines";
 import type {
   CompetitionHubDocT,
   HubDivisionT,
@@ -664,6 +665,12 @@ export async function loadCompetitionHub(
     }
     const divHref = `${base}/${d.slug}`;
     const squads = await divisionSquads({ division: d, entrants: field, bans, names, base });
+    // Per-stage match rules (§D3/T7): only the stages that play a DIFFERENT
+    // format from the division; the field is omitted, not emptied, when none do.
+    const stageLines = stageFormatLines(d.sport_key, module_, d.config, stages).map(({ stageName, line }) => ({
+      stageName,
+      line,
+    }));
 
     hubDivisions.push({
       id: d.id,
@@ -675,6 +682,7 @@ export async function loadCompetitionHub(
       tz,
       entrantCount: d.entrant_count,
       formatLine: describeFormat(d.sport_key, module_, d.config),
+      ...(stageLines.length > 0 ? { stageFormatLines: stageLines } : {}),
       variantKey: d.variant_key,
       href: divHref,
       // Sanitised by THE prose pipeline here, once, so no renderer holds raw
@@ -1081,13 +1089,16 @@ export async function getPublicCompetitionHub(
   // v2 since the Knockout tab added `knockouts`; v3 since squads, bans and
   // division prose (division-page parity, 2026-09-16); v4 since standings
   // qualification status (`qualification` on a table, `qual` on its rows,
-  // 2026-09-22). The page renders this cached document WITHOUT re-parsing it
+  // 2026-09-22); v5 since per-stage format lines (`stageFormatLines` on a
+  // division, 2026-09-24 — optional, so the Redis layer below needs no bump:
+  // an older hit parses and reads as "no stage overrides" until its TTL).
+  // The page renders this cached document WITHOUT re-parsing it
   // (unlike `usecases/public.ts`, whose Redis hit goes back through
   // `CompetitionHubDoc.safeParse` — so that key, `pub:v1:hub:{id}`, needs no
   // bump: `hub-cache-poisoned-entry.test.ts` pins an old-shape hit as a miss),
   // so an older entry must never reach a renderer that reads the new fields.
   // Bump again on any shape change a cached hit cannot satisfy.
-  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v4", shell.competition.id], {
+  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v5", shell.competition.id], {
     tags: [
       orgTag(orgSlug),
       competitionTag(shell.competition.id),

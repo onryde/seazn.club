@@ -52,6 +52,21 @@ const doc = hubDoc({
     division("premier", {
       description: "<p>Prose</p>",
       suspensions: [suspension("Arjun Mehta", 2, { entrantName: "Riverside FC" }), suspension("Dev P.", 1)],
+      // A stage on its own rules (per-stage rules, T7): the Info tab resolves
+      // its `format.` line client-side, so the slice must carry it.
+      stageFormatLines: [
+        { stageName: "Swiss", line: [{ key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } }] },
+        // A multi-clause (tennis) line, so the slice is proved for the
+        // `format.sets.`/`format.rules.tennis.` keys too (review round 2).
+        {
+          stageName: "Finals",
+          line: [
+            { key: "format.sets.bestOf", params: { n: 3 } },
+            { key: "format.rules.tennis.setsTo", params: { games: 4 } },
+            { key: "format.rules.tennis.noAd" },
+          ],
+        },
+      ],
     }),
     division("sunday-league"),
   ],

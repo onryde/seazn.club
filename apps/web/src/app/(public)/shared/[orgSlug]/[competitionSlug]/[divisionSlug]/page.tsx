@@ -33,8 +33,10 @@ import { getDictionary, t } from "@/lib/i18n";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { divisionQualification } from "@/server/public-site/division-qualification";
 import { msgFor } from "@/lib/messages-i18n";
+import { rulesLineText } from "@/lib/rules-line";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { variantLabel } from "@/server/public-site/variant-label";
+import { stageFormatLines } from "@/server/public-site/stage-format-lines";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
 
@@ -135,6 +137,17 @@ export default async function DivisionHomePage({ params }: Props) {
   // Accept-Language — a per-visitor choice would need a request-scoped read and
   // would make every cached copy wrong for somebody.
   const dict = await getDictionary(orgLocale, "public");
+  // Per-stage match rules (T7): a stage whose effective rules differ from the
+  // division's names them on its chip, in the org's words — the same line the
+  // hub's Info tab prints and the match page labels its fixtures with. A stage
+  // that plays the division's format gets nothing, so a division without
+  // overrides reads exactly as before.
+  const stageFormat = new Map(
+    stageFormatLines(division.sport_key, module_, division.config, stages).map((s) => [
+      s.stageId,
+      rulesLineText(dict, s.line),
+    ]),
+  );
   // Standings qualification status (spec 2026-09-22 §4.2): the same assembly
   // the embed and the competition hub use — bounds and the walkover's ledger
   // from the PINNED module and live cfg (a retired module gives no bounds, so
@@ -478,13 +491,20 @@ export default async function DivisionHomePage({ params }: Props) {
           {stages.map((s) => (
             <span
               key={s.id}
-              className={`rounded-full px-2 py-0.5 ${
+              data-stage-id={s.id}
+              // `min-w-0 max-w-full` + `[overflow-wrap:anywhere]`: a flex
+              // item's floor is its longest word, so an unbroken stage name
+              // (or name + rules line) would otherwise widen the page at 320.
+              className={`min-w-0 max-w-full rounded-full px-2 py-0.5 [overflow-wrap:anywhere] ${
                 s.status === "complete"
                   ? "bg-emerald-50 text-emerald-700"
                   : "bg-zinc-100 text-zinc-600"
               }`}
             >
               {stageById.get(s.id)?.name}
+              {stageFormat.has(s.id) ? (
+                <span data-testid="division-stage-format"> · {stageFormat.get(s.id)}</span>
+              ) : null}
               {s.status === "complete" ? " ✓" : ""}
             </span>
           ))}
