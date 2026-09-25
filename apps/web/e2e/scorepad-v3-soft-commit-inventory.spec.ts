@@ -34,18 +34,19 @@ test.beforeEach(async ({ page }) => {
 });
 
 /** How far `freezeClock` lets the page clock jump. Small beside what is left
- *  of the hold at that point (HOLD_MS − HOLD_PROOF_MS, less a ledger read). */
+ *  of the hold at that point (HOLD_MS − HOLD_PROOF_MS). */
 const FREEZE_JUMP_MS = 100;
 
 /**
  * Stop the page clock where it stands, so the open dock cannot flush itself
- * while it is photographed and Send now is pressed.
+ * while it is checked, photographed and Send now is pressed.
  *
  * Needed because the photograph outlasts the hold under load: CI's HOLD_MS is
  * 3000, the proof below spends HOLD_PROOF_MS of it, and a full-page capture on
  * a loaded machine took the rest — "tennis point holds" timed out on Send now
- * with the dock already gone. Frozen only AFTER the mid-hold ledger read, so
- * the proof that the hold lasts HOLD_PROOF_MS still runs on a live clock.
+ * with the dock already gone. Frozen only AFTER the proof's wait, so the hold
+ * still has to last HOLD_PROOF_MS on a live clock; the mid-hold checks run
+ * after the freeze, off the clock.
  *
  * `pauseAt(t)` pauses and then jumps FORWARD to `t`, firing every timer due on
  * the way, so the jump is kept small rather than generous: jumping past the
@@ -144,13 +145,16 @@ async function expectHeldThenFlush(
   // a meaningful fraction of HOLD_MS (not a 400ms glance that would pass if
   // submit were immediate under the dock).
   await page.waitForTimeout(HOLD_PROOF_MS);
+  // The hold has now run HOLD_PROOF_MS on a live clock; stop it there, before
+  // the checks below, so their round trips come out of no one's budget.
+  // Freezing stops timers, not the network: a tap that went straight out, or
+  // a hold that flushed early, has already posted by now and is still seen.
+  await freezeClock(page);
   await expect(dock(page), "dock must still be open mid-hold").toBeVisible();
   expect(
     (await ledger(request, fixtureId)).filter((e) => e.type === type).length,
     `${type} must not reach the ledger before Send now / HOLD_MS`,
   ).toBe(before);
-  await freezeClock(page);
-  await expect(dock(page), "freezing the clock must not have flushed the dock").toBeVisible();
   await shot(page, shotName);
   await sendNow(page);
   await expect
