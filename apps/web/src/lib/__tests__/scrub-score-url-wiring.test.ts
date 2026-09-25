@@ -69,6 +69,24 @@ afterEach(() => {
 });
 
 describe("PostHog (src/instrumentation-client.ts)", () => {
+  it("sends events to the same-origin /ingest rewrite unless a proxy host is configured", async () => {
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_API_HOST", "");
+    vi.stubGlobal("document", { cookie: "" });
+    await import("../../instrumentation-client");
+    const posthog = (await import("posthog-js")).default;
+    expect((vi.mocked(posthog.init).mock.calls[0]![1] as Options).api_host).toBe("/ingest");
+  });
+
+  it("sends events to NEXT_PUBLIC_POSTHOG_API_HOST when set (prod's managed proxy)", async () => {
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_API_HOST", "https://g.example.test");
+    vi.stubGlobal("document", { cookie: "" });
+    await import("../../instrumentation-client");
+    const posthog = (await import("posthog-js")).default;
+    expect((vi.mocked(posthog.init).mock.calls[0]![1] as Options).api_host).toBe("https://g.example.test");
+  });
+
   it("passes a before_send that scrubs a pageview, and keeps the options it already had", async () => {
     vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
     vi.stubGlobal("document", { cookie: "" });
