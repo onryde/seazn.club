@@ -159,6 +159,20 @@ describe("useBoardActions — a bulk tool passes over a match that holds a resul
     expect(patched()).toEqual(["f1"]);
   });
 
+  // Review 5 of #857, U6. Each run says what IT kept: one that keeps nothing
+  // clears the line the run before it left.
+  it("a run that keeps nothing clears the previous run's kept line", async () => {
+    reset(["f2"]);
+    const actions = driveHook(THREE);
+    await actions().shiftDay(DAY, 15);
+    expect(actions().notice).toBe(KEPT_ONE);
+
+    reset();
+    await actions().shiftDay(DAY, -15);
+    expect(patched()).toEqual(["f1", "f2", "f3"]);
+    expect(actions().notice).toBeNull();
+  });
+
   it("any OTHER refusal still ends the run, and the board is re-read anyway", async () => {
     reset();
     // A court clash: `fail` paints it and, unlike a stale seq, does not re-read
@@ -190,5 +204,23 @@ describe("useBoardActions — the board adopts the apply's own seq", () => {
 
     await actions().togglePin(THREE[0]!);
     expect(net.calls.map((c) => c.json.expected_seq)).toEqual([3]);
+  });
+
+  // Review 5 of #857, U1. The case above cannot tell "adopt the answer" from
+  // "never adopt": both leave 3. An apply that moved something answers a NEW
+  // seq, and the next write must carry it.
+  it("after an apply that moved something, the next write carries the new seq the server answered", async () => {
+    reset();
+    net.answers.set("/schedule/auto", {
+      assignments: [{ fixture_id: "f2", scheduled_at: AT(15), court_id: "crt-b" }],
+      conflicts: [],
+    });
+    net.answers.set("/schedule/apply", { applied: 1, skipped: 0, conflicts: [], seq: 4 });
+    const actions = driveHook(THREE);
+    await actions().autoRun("st-1", "d1", true);
+    expect(actions().error).toBeNull();
+
+    await actions().togglePin(THREE[0]!);
+    expect(net.calls.map((c) => c.json.expected_seq)).toEqual([4]);
   });
 });
