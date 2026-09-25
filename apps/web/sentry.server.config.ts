@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import { scrubScoreTokens, scrubSentryEvent } from "@/lib/scrub-score-url";
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -12,6 +13,13 @@ Sentry.init({
   // instead of duplicating call sites with Sentry.logger.*
   integrations: [Sentry.pinoIntegration()],
 
+  // A device link's token is a live scoring credential. It arrives in the
+  // request path (/score/<token>) and as `Authorization: Bearer dl_…` on every
+  // pad call, and both end up in a server event's request data and span
+  // attributes. Scrub it from everything sent.
+  beforeSend: scrubSentryEvent,
+  beforeSendTransaction: scrubSentryEvent,
+
   beforeSendLog(log) {
     if (
       process.env.NODE_ENV === "production" &&
@@ -19,7 +27,7 @@ Sentry.init({
     ) {
       return null;
     }
-    return log;
+    return scrubScoreTokens(log);
   },
 
   enabled: !!(process.env.SENTRY_DSN ?? process.env.NEXT_PUBLIC_SENTRY_DSN),

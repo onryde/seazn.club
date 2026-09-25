@@ -46,7 +46,7 @@ import type { MessageKey } from "@/lib/messages";
 import { type MsgFn } from "@/lib/scoring-vocab";
 import { deepEqual } from "../pipeline";
 import { refusalText } from "../refusal-copy";
-import type { PadAuthMode, PadTransport } from "../transport";
+import { terminalRefusalOf, type PadAuthMode, type PadTransport } from "../transport";
 import type { OwnIdentity } from "../types";
 import { usePadPipeline } from "../use-pad-pipeline";
 import type { RejectionInfo, UsePadPipelineResult } from "../use-pad-pipeline";
@@ -1504,6 +1504,10 @@ export interface PadHostV3Props {
   skin: SkinDefV3;
   onStateChange?: (state: unknown, summary: unknown) => void;
   onEvents?: (events: readonly EventEnvelope[]) => void;
+  /** Scorer sheets §4.5 — fired when the pipeline's latest refusal is one that
+   *  ends this surface's rights on the fixture (`CHROME_TERMINAL_CODES`), so the
+   *  chrome can leave the pad. The pad still shows its own refusal banner. */
+  onTerminalRefusal?: (rejection: RejectionInfo) => void;
   /** Load-bearing for REALTIME specifically, and for nothing else on this
    *  host. `transport` above is ALREADY built with the right credential by
    *  registry.tsx (`deviceLinkTransport` vs `sessionTransport`), so reads and
@@ -1608,6 +1612,11 @@ export function PadHostV3(props: PadHostV3Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.state, pipeline.summary]);
   useReportLedgerChanges(pipeline.events, props.onEvents);
+  useEffect(() => {
+    const terminal = terminalRefusalOf(pipeline.lastRejection);
+    if (terminal) props.onTerminalRefusal?.(terminal);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeline.lastRejection]);
 
   const personNames = props.personNames ?? NO_NAMES;
   const entitlements = props.entitlements ?? NO_ENTITLEMENTS;

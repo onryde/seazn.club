@@ -1,14 +1,17 @@
 import "server-only";
-// Day-of device links (doc 13 §7, PROMPT-21): account-less, fixture-scoped
-// scoring tokens. Mint/revoke are session-editor actions; the token's own
-// auth path lives in api-v1/auth.ts (requireFixtureActor). Capabilities are
-// strictly ⊂ scorer: append + void-own-link-events pre-finalize, read
-// fixture state/events, realtime token — nothing else.
+// Device links (doc 13 §7, PROMPT-21; scorer sheets §4): account-less,
+// fixture-scoped scoring tokens. Ensure (re-show the fixture's sealed link, or
+// mint one), Revoke & reissue, and revoke are session-editor actions; the
+// token's own auth path lives in api-v1/auth.ts (requireFixtureActor).
+// Capabilities are strictly ⊂ scorer: append + void-own-link-events
+// pre-finalize, read fixture state/events, realtime token — nothing else.
 import { createHash, randomBytes } from "node:crypto";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
+import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 
 export const DEVICE_LINK_PREFIX = "dl_";
 
@@ -16,7 +19,9 @@ export function hashDeviceLinkToken(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
 }
 
-/** Mint a new device-link secret. Shown once; only the sha256 is stored. */
+/** Mint a new device-link secret. Stored twice: its sha256 (the lookup key
+ *  the scoring door resolves by) and its sealed envelope (`secret_enc`, which
+ *  ensure re-opens so a printed QR can be shown again). */
 export function mintDeviceLinkSecret(): string {
   return DEVICE_LINK_PREFIX + randomBytes(32).toString("base64url");
 }
@@ -26,7 +31,8 @@ export interface DeviceLinkRow {
   fixture_id: string;
   label: string | null;
   issued_by: string;
-  expires_at: string;
+  /** null = no clock: a sealed link lives until its fixture is over (V417). */
+  expires_at: string | null;
   revoked_at: string | null;
   created_at: string;
 }
@@ -35,8 +41,9 @@ const COLS = ["id", "fixture_id", "label", "issued_by", "expires_at", "revoked_a
 
 /**
  * End of the CURRENT day in the fixture's venue timezone (doc 13 §7:
- * V305 venue lane: division override → org timezone → UTC). Day-of links —
- * whoever holds the phone scores today, the link dies at local midnight.
+ * V305 venue lane: division override → org timezone → UTC). The self-check-in
+ * QR (checkin-token.ts) dies here. Device links no longer do: a sealed link
+ * has no clock and lives until its fixture is over (scorer sheets §4.1).
  */
 export function endOfLocalDay(now: Date, tz: string): Date {
   let parts: { year: number; month: number; day: number };
@@ -114,9 +121,91 @@ async function competitionForFixture(fixtureId: string): Promise<string | undefi
   return row?.competition_id;
 }
 
+/** A link is live until its expiry; a sealed link (V417) has none — it lives
+ *  until the fixture is over, which the SCORING path enforces (scorer sheets
+ *  §4.3), not this clock. `new Date(null)` is the epoch, which is why this is
+ *  a function and not an inline comparison (P1). */
+export function isLiveExpiry(expiresAt: string | null, now: number = Date.now()): boolean {
+  return expiresAt === null || new Date(expiresAt).getTime() > now;
+}
+
+/** Serialise every mint/ensure on one fixture. Without it two organisers
+ *  printing at once both see "no live link", both mint, and the second revoke
+ *  kills the first sheet before it leaves the printer. */
+async function lockFixtureLinks(tx: Tx, fixtureId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"device_link:" + fixtureId}))`;
+}
+
+/** A finalized or cancelled match has nothing left to score, so no link. */
+export const isFinishedFixtureStatus = (status: string): boolean => status === "finalized" || status === "cancelled";
+
+/** The fixture's status; 404 when it is not in `competitionId` (or anywhere
+ *  this tenant can see). */
+async function linkableStatus(tx: Tx, fixtureId: string, competitionId?: string): Promise<string> {
+  const [fixture] = await tx<{ status: string; competition_id: string }[]>`
+    select f.status, d.competition_id from fixtures f
+    join divisions d on d.id = f.division_id
+    where f.id = ${fixtureId}`;
+  if (!fixture || (competitionId !== undefined && fixture.competition_id !== competitionId)) {
+    throw new HttpError(404, "fixture not found");
+  }
+  return fixture.status;
+}
+
+async function loadLinkableFixture(tx: Tx, fixtureId: string, competitionId?: string): Promise<void> {
+  const status = await linkableStatus(tx, fixtureId, competitionId);
+  if (isFinishedFixtureStatus(status)) {
+    throw new HttpError(422, `fixture is ${status} — nothing left to score`);
+  }
+}
+
+/** Owner ruling Q1 (2026-09-23): the key is always set, and a server without
+ *  it fails CLOSED with a configuration error the organiser can report. It
+ *  must not surface as a bare 500 or, worse, as an unsealed link. Only the
+ *  paths that need the key go through these; resolving a link by hash does not. */
+const KEK_MISSING = "Scoring links are not configured on this server (DEVICE_LINK_KEK missing or malformed)";
+
+function sealSecret(secret: string): Buffer {
+  try {
+    return sealWith("DEVICE_LINK_KEK", secret);
+  } catch {
+    throw new HttpError(503, KEK_MISSING, "DEVICE_LINK_KEK_MISSING");
+  }
+}
+
+function openSecret(enc: Uint8Array): string {
+  if (!hasValidKek("DEVICE_LINK_KEK")) {
+    throw new HttpError(503, KEK_MISSING, "DEVICE_LINK_KEK_MISSING");
+  }
+  return openWith("DEVICE_LINK_KEK", enc); // a tamper/wrong-key failure stays a 500 — it is not a config gap
+}
+
+/** Revoke every live link on the fixture and mint a sealed, unexpiring one.
+ *  Sealed BEFORE any write: a missing DEVICE_LINK_KEK throws with nothing revoked. */
+async function mintInTx(
+  tx: Tx,
+  auth: AuthCtx,
+  fixtureId: string,
+  label: string | null,
+): Promise<DeviceLinkRow & { secret: string }> {
+  const secret = mintDeviceLinkSecret();
+  const sealed = sealSecret(secret);
+  await tx`
+    update device_links set revoked_at = now()
+    where fixture_id = ${fixtureId} and revoked_at is null`;
+  const [created] = await tx<DeviceLinkRow[]>`
+    insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at)
+    values (${auth.orgId}, ${fixtureId}, ${hashDeviceLinkToken(secret)}, ${sealed},
+            ${label}, ${auth.userId}, null)
+    returning ${tx(COLS)}`;
+  return { ...created, secret };
+}
+
 /**
- * Mint a device link for a fixture (doc 13 §7). Revokes prior active links —
- * one live device per fixture. Secret returned exactly once.
+ * Revoke & reissue (scorer sheets §4.2): kill every live link for the fixture
+ * — a lost sheet, a phone that walked off — and mint a fresh sealed one. The
+ * ONLY path that changes a fixture's QR. Secret returned; re-showable later
+ * through ensureDeviceLink.
  */
 export async function createDeviceLink(
   auth: AuthCtx,
@@ -125,41 +214,101 @@ export async function createDeviceLink(
 ): Promise<DeviceLinkRow & { secret: string }> {
   requireSessionEditor(auth);
   // 402 for Community, unless an Event Pass covers this fixture's competition.
-  await requireFeature(
-    auth.orgId,
-    "scoring.device_links",
-    await competitionForFixture(fixtureId),
-  );
-  const secret = mintDeviceLinkSecret();
-  const row = await withTenant(auth.orgId, async (tx) => {
-    const [fixture] = await tx<{ id: string; division_id: string; status: string }[]>`
-      select id, division_id, status from fixtures where id = ${fixtureId}`;
-    if (!fixture) throw new HttpError(404, "fixture not found");
-    if (fixture.status === "finalized" || fixture.status === "cancelled") {
-      throw new HttpError(422, `fixture is ${fixture.status} — nothing left to score`);
-    }
-    // Venue lane (V305): division override → org timezone → UTC.
-    const [settings] = await tx<{ tz: string }[]>`
-      select coalesce(ss.tz, o.timezone, 'UTC') as tz
-      from divisions d
-      left join schedule_settings ss on ss.division_id = d.id
-      left join organizations o on o.id = d.org_id
-      where d.id = ${fixture.division_id}`;
-    const expiresAt = endOfLocalDay(new Date(), settings?.tz ?? "UTC");
-
-    // One live device per fixture: minting revokes prior active links.
-    await tx`
-      update device_links set revoked_at = now()
-      where fixture_id = ${fixtureId} and revoked_at is null`;
-
-    const [created] = await tx<DeviceLinkRow[]>`
-      insert into device_links (org_id, fixture_id, token_hash, label, issued_by, expires_at)
-      values (${auth.orgId}, ${fixtureId}, ${hashDeviceLinkToken(secret)},
-              ${label}, ${auth.userId}, ${expiresAt})
-      returning ${tx(COLS)}`;
-    return created;
+  await requireFeature(auth.orgId, "scoring.device_links", await competitionForFixture(fixtureId));
+  return withTenant(auth.orgId, async (tx) => {
+    await lockFixtureLinks(tx, fixtureId);
+    await loadLinkableFixture(tx, fixtureId);
+    return mintInTx(tx, auth, fixtureId, label);
   });
-  return { ...row, secret };
+}
+
+export interface EnsuredDeviceLink {
+  row: DeviceLinkRow;
+  secret: string;
+  /** false = an existing sealed link was re-opened (no write). */
+  minted: boolean;
+}
+
+async function ensureInTx(
+  tx: Tx,
+  auth: AuthCtx,
+  fixtureId: string,
+  label: string | null,
+  competitionId?: string,
+): Promise<EnsuredDeviceLink> {
+  await lockFixtureLinks(tx, fixtureId);
+  await loadLinkableFixture(tx, fixtureId, competitionId);
+  return ensureLocked(tx, auth, fixtureId, label);
+}
+
+/** Re-open the fixture's live sealed link, or mint one. The caller holds the
+ *  fixture's link lock and has checked the fixture is linkable. */
+async function ensureLocked(tx: Tx, auth: AuthCtx, fixtureId: string, label: string | null): Promise<EnsuredDeviceLink> {
+  const [live] = await tx<(DeviceLinkRow & { secret_enc: Uint8Array | null; token_hash: string })[]>`
+    select ${tx(COLS)}, secret_enc, token_hash from device_links
+    where fixture_id = ${fixtureId} and revoked_at is null
+      and (expires_at is null or expires_at > now())
+    order by created_at desc limit 1`;
+  if (live && live.secret_enc) {
+    const { secret_enc, token_hash, ...row } = live;
+    const secret = openSecret(secret_enc);
+    // Re-shown only if the envelope IS this row's secret (final review M2): one
+    // that opens under the KEK but hashes elsewhere — swapped from another row,
+    // or written behind the app's back — would print a QR the row does not
+    // resolve, or one that scores another match. It falls through to the
+    // reissue below, exactly like a missing envelope, and is never returned.
+    if (hashDeviceLinkToken(secret) === token_hash) return { row, secret, minted: false };
+    log.warn(
+      { linkId: row.id, fixtureId },
+      "device link: sealed secret does not match the row's token hash; revoking and reissuing",
+    );
+  }
+  // None, a legacy hash-only link (its secret is unrecoverable), or an envelope
+  // that is not this row's secret: replace it.
+  const { secret, ...row } = await mintInTx(tx, auth, fixtureId, label);
+  return { row, secret, minted: true };
+}
+
+/**
+ * The fixture's scoring link, re-shown if it exists (scorer sheets §4.2). A
+ * console hand-over and a reprinted sheet both call this, so neither ever
+ * kills a QR already on a court. TBD sides are allowed (D2).
+ */
+export async function ensureDeviceLink(
+  auth: AuthCtx,
+  fixtureId: string,
+  label: string | null = null,
+): Promise<EnsuredDeviceLink> {
+  requireSessionEditor(auth);
+  await requireFeature(auth.orgId, "scoring.device_links", await competitionForFixture(fixtureId));
+  return withTenant(auth.orgId, (tx) => ensureInTx(tx, auth, fixtureId, label));
+}
+
+/**
+ * The print path: one gate for the competition, one transaction, every
+ * fixture's link. Ids are locked in SORTED order so two overlapping prints
+ * cannot deadlock on each other's advisory locks. A fixture outside
+ * `competitionId` is a 404, never a silent mint. A fixture finished (or
+ * cancelled) since the sheet chose it is LEFT OUT of the map rather than
+ * refusing the batch — one match finalized mid-print must not cost the
+ * organiser every other sheet (controller ruling, scorer sheets T8).
+ */
+export async function ensureDeviceLinks(
+  auth: AuthCtx,
+  competitionId: string,
+  fixtureIds: readonly string[],
+): Promise<Map<string, EnsuredDeviceLink>> {
+  requireSessionEditor(auth);
+  await requireFeature(auth.orgId, "scoring.device_links", competitionId);
+  const out = new Map<string, EnsuredDeviceLink>();
+  await withTenant(auth.orgId, async (tx) => {
+    for (const id of [...new Set(fixtureIds)].sort()) {
+      await lockFixtureLinks(tx, id);
+      if (isFinishedFixtureStatus(await linkableStatus(tx, id, competitionId))) continue;
+      out.set(id, await ensureLocked(tx, auth, id, null));
+    }
+  });
+  return out;
 }
 
 /** Revoke one link (immediate 401 for the holder). */
@@ -188,7 +337,7 @@ export async function getActiveDeviceLink(
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<DeviceLinkRow[]>`
       select ${tx(COLS)} from device_links
-      where fixture_id = ${fixtureId} and revoked_at is null and expires_at > now()
+      where fixture_id = ${fixtureId} and revoked_at is null and (expires_at is null or expires_at > now())
       order by created_at desc limit 1`;
     return row ?? null;
   });
@@ -248,7 +397,7 @@ export async function requestDeviceLinkCoversFixture(
  */
 export async function resolveDeviceLinkToken(token: string): Promise<ResolvedDeviceLink> {
   const [link] = await sql<
-    (ResolvedDeviceLink & { expires_at: string; revoked_at: string | null })[]
+    (ResolvedDeviceLink & { expires_at: string | null; revoked_at: string | null })[]
   >`
     select id, org_id, fixture_id, issued_by, expires_at, revoked_at
     from device_links where token_hash = ${hashDeviceLinkToken(token)} limit 1`;
@@ -256,7 +405,7 @@ export async function resolveDeviceLinkToken(token: string): Promise<ResolvedDev
   if (link.revoked_at) {
     throw new HttpError(401, "This device link was revoked — ask the organiser", "LINK_REVOKED");
   }
-  if (new Date(link.expires_at).getTime() <= Date.now()) {
+  if (!isLiveExpiry(link.expires_at)) {
     throw new HttpError(401, "This device link has expired — ask the organiser", "LINK_EXPIRED");
   }
   return { id: link.id, org_id: link.org_id, fixture_id: link.fixture_id, issued_by: link.issued_by };

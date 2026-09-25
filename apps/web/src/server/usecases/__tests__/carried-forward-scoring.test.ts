@@ -1,0 +1,281 @@
+// Scorer sheets §4.3 — the device-link refusal once a result has moved the
+// competition on. Driven through the REAL producers (onDecided's fillSlot, the
+// Swiss Pair/Unpair calls, the bearer door) and the REAL consumer (scoreEvent),
+// never a fixture on both ends. One killing case per gate: winner feed
+// (knockout), loser feed, Swiss next round (+ its ad-hoc exclusion), stage
+// complete, and the scoring path's own status gate.
+import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { sql, withTenant } from "@/lib/db";
+import { cacheEnabled } from "@/lib/cache";
+import { seedOrg } from "./_seed";
+import { decide, deviceFor, fixturesOf, pairNextSwissRound, seedStage, voidEvent } from "./_sheets-rig";
+import { addFixture, unpairSwissRound } from "../stages";
+import { scoreEvent } from "../scoring";
+import { carriedForwardFacts, isCarriedForward, resultCarriedForward } from "../carried-forward";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+afterAll(async () => {
+  vi.unstubAllEnvs();
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const client = g._sql;
+  g._sql = undefined;
+  await client?.end();
+});
+
+const CARRIED = { status: 403, code: "RESULT_CARRIED_FORWARD" };
+
+describe.skipIf(!HAS_DB)("device-link refusal once a result is carried forward (scorer sheets §4.3)", () => {
+  it("empty case: a decided league fixture (no feeds, stage open) — the umpire may void their own result", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const [f] = await fixturesOf(stage.id);
+    const device = await deviceFor(auth, f!.id);
+    const own = await decide(device, f!.id);
+    await expect(voidEvent(device, f!.id, own)).resolves.toBeDefined();
+  });
+
+  it("knockout: the SF is carried the instant it is decided (P5) — device void 403, organiser void passes", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf1 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const device = await deviceFor(auth, sf1.id);
+    const own = await decide(device, sf1.id);
+    const [target] = await sql<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${sf1.winner_to_fixture}`;
+    expect(sf1.winner_to_slot === 1 ? target!.home_entrant_id : target!.away_entrant_id).not.toBeNull();
+    await expect(voidEvent(device, sf1.id, own)).rejects.toMatchObject(CARRIED);
+    // The organiser's session is unaffected (§4.3 last paragraph).
+    await expect(voidEvent(auth, sf1.id, own)).resolves.toBeDefined();
+  });
+
+  // Owner decision (rebase onto main with #856, knockout void un-fill): the
+  // refusal is evaluated LIVE, so it lifts when the organiser takes the result
+  // back. A device decides an SF — the final's seat fills, the SF is carried,
+  // the device's own void is refused. The organiser voids that result; #856
+  // empties the final's seat inside the void's own transaction; the device's
+  // NEXT write is accepted — here the corrected result the OTHER way, which
+  // the ordinary fill seats in the emptied seat, carrying the SF again.
+  //
+  // "Carried forward is false again" has TWO causes after the void, witnessed
+  // apart so neither covers for the other: the void takes the SF back to
+  // `in_play` (the scoring block only reads the facts for a settled status),
+  // and #856 empties the seat (the FACTS themselves stop saying carried). The
+  // status alone would let the write through; the facts, and the NEW winner
+  // landing in the final, are what only the un-fill makes true.
+  //
+  // Server side only: the chrome's View-only is sticky (device-score-pad.tsx),
+  // so on the phone the umpire rescans the sheet to get a pad back.
+  it("knockout: an organiser void of a carried SF empties the final's seat (#856), and the device link's next write is ACCEPTED", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf1 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const [sides] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${sf1.id}`;
+    const seat = async (): Promise<string | null> => {
+      const [t] = await sql<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+        select home_entrant_id, away_entrant_id from fixtures where id = ${sf1.winner_to_fixture}`;
+      return sf1.winner_to_slot === 1 ? t!.home_entrant_id : t!.away_entrant_id;
+    };
+    const tip = async (): Promise<number> => {
+      const [{ seq }] = await sql<{ seq: number }[]>`
+        select coalesce(max(seq), 0)::int as seq from score_events where fixture_id = ${sf1.id}`;
+      return seq;
+    };
+
+    const device = await deviceFor(auth, sf1.id);
+    const own = await decide(device, sf1.id); // 2–1: the home side wins
+    expect(await seat(), "premise: the device's result seated its winner in the final").toBe(sides!.home_entrant_id);
+    await expect(voidEvent(device, sf1.id, own), "premise: carried — the device may not undo it").rejects.toMatchObject(
+      CARRIED,
+    );
+
+    await voidEvent(auth, sf1.id, own);
+    expect(await seat(), "#856: the organiser's void emptied the final's seat").toBeNull();
+    const after = (await withTenant(auth.orgId, (tx) => carriedForwardFacts(tx, sf1.id)))!;
+    expect(after.status, "the void took the SF back to in play").toBe("in_play");
+    expect(isCarriedForward(after.facts), "the FACTS no longer say carried: the un-fill, not just the status").toBe(false);
+    expect(await withTenant(auth.orgId, (tx) => resultCarriedForward(tx, sf1.id))).toBe(false);
+
+    // The device link's next write — the corrected result, the other way — is
+    // accepted through the real door, and lands in the ledger as the next row.
+    const seq = await tip();
+    const accepted = await scoreEvent(device, sf1.id, {
+      expected_seq: seq,
+      type: "generic.result",
+      payload: { p1Score: 1, p2Score: 2 },
+    });
+    expect(accepted, "the device's next write is ACCEPTED").toMatchObject({ seq: seq + 1, status: "decided" });
+    expect(await seat(), "the ordinary fill seats the NEW winner in the emptied seat").toBe(sides!.away_entrant_id);
+
+    // …and the rule re-arms: the corrected result is carried forward in turn.
+    await expect(voidEvent(device, sf1.id, accepted.event_id), "carried again").rejects.toMatchObject(CARRIED);
+  });
+
+  it("loser feed: carried the INSTANT it is decided (onDecided seats the loser, P5/Q2); slot mapping witnessed both ways", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const [f, target] = await fixturesOf(stage.id);
+    // Empty the target's AWAY side and point f's loser at it. onDecided's
+    // fillSlot seats the loser there at decide time, for any stage kind:
+    // carried immediately (controller ruling).
+    await sql`update fixtures set away_entrant_id = null where id = ${target!.id}`;
+    await sql`update fixtures set loser_to_fixture = ${target!.id}, loser_to_slot = 2 where id = ${f!.id}`;
+    const device = await deviceFor(auth, f!.id);
+    const own = await decide(device, f!.id);
+    const [seated] = await sql<{ away_entrant_id: string | null }[]>`
+      select away_entrant_id from fixtures where id = ${target!.id}`;
+    expect(seated!.away_entrant_id, "precondition: decide seated the loser").not.toBeNull();
+    await expect(voidEvent(device, f!.id, own)).rejects.toMatchObject(CARRIED);
+    // The differential for the slot mapping: empty the AWAY side (slot 2) and
+    // leave HOME filled. Not carried now, so the void passes. A mapping that
+    // read slot 2 as `home` would still say "filled" and 403 here.
+    await sql`update fixtures set away_entrant_id = null where id = ${target!.id}`;
+    await expect(voidEvent(device, f!.id, own)).resolves.toBeDefined();
+  });
+
+  it("swiss: an ad-hoc match after the LAST round does not carry that round (C7 — ext_key 'adhoc-')", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D"], { rounds: 1 });
+    const r1 = (await fixturesOf(stage.id)).filter((x) => x.round_no === 1 && x.home_entrant_id && x.away_entrant_id);
+    expect(r1.length, "precondition: round 1 is seated (two boards)").toBe(2);
+    const device = await deviceFor(auth, r1[0]!.id);
+    const own = await decide(device, r1[0]!.id); // one board only: the stage stays open
+    await addFixture(auth, stage.id, { home_entrant_id: r1[1]!.home_entrant_id!, away_entrant_id: r1[1]!.away_entrant_id! });
+    const [adhoc] = await sql<{ round_no: number; ext_key: string }[]>`
+      select round_no, ext_key from fixtures where stage_id = ${stage.id} and ext_key like 'adhoc-%'`;
+    expect(adhoc, "precondition: the ad-hoc match sits at round_no + 1").toMatchObject({ round_no: 2 });
+    await expect(voidEvent(device, r1[0]!.id, own)).resolves.toBeDefined();
+  });
+
+  it("resultCarriedForward owns its status check: a scheduled fixture with a filled feed is NOT carried; decided is", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf2 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    const column = sf2.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = (select home_entrant_id from fixtures where id = ${sf2.id}) where id = ${sf2.winner_to_fixture}`;
+    expect(await withTenant(auth.orgId, (tx) => resultCarriedForward(tx, sf2.id))).toBe(false);
+    await sql`update fixtures set status = 'decided' where id = ${sf2.id}`;
+    expect(await withTenant(auth.orgId, (tx) => resultCarriedForward(tx, sf2.id))).toBe(true);
+  });
+
+  it("swiss: round N is carried while round N+1 is seated, and re-opens when it is unpaired", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D"], { rounds: 2 });
+    const r1 = (await fixturesOf(stage.id)).filter((x) => x.round_no === 1 && x.home_entrant_id && x.away_entrant_id);
+    expect(r1.length).toBe(2);
+    const device = await deviceFor(auth, r1[0]!.id);
+    const own = await decide(device, r1[0]!.id);
+    await decide(auth, r1[1]!.id);
+    await pairNextSwissRound(auth, stage.id);
+    await expect(voidEvent(device, r1[0]!.id, own)).rejects.toMatchObject(CARRIED);
+    await unpairSwissRound(auth, stage.id);
+    await expect(voidEvent(device, r1[0]!.id, own)).resolves.toBeDefined();
+  });
+
+  // Review m3: the next-round lookup is scoped to THIS stage. Another stage in
+  // the same org (RLS lets the lookup see it) with a seated round 2 must not
+  // carry this Swiss round — a league's round 2 is seated from generation.
+  it("swiss: a seated round 2 in ANOTHER stage of the same org does not carry this round (stage_id scope)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D"], { rounds: 2 });
+    const { stage: other } = await seedStage(auth, "league", ["E", "F", "G", "H"]);
+    const otherR2 = (await fixturesOf(other.id)).filter(
+      (x) => x.round_no === 2 && (x.home_entrant_id !== null || x.away_entrant_id !== null),
+    );
+    expect(otherR2.length, "precondition: the other stage's round 2 is seated").toBeGreaterThan(0);
+    const r1 = (await fixturesOf(stage.id)).filter((x) => x.round_no === 1 && x.home_entrant_id && x.away_entrant_id);
+    expect(r1.length, "precondition: round 1 is seated (two boards)").toBe(2);
+    const device = await deviceFor(auth, r1[0]!.id);
+    const own = await decide(device, r1[0]!.id);
+    await expect(voidEvent(device, r1[0]!.id, own)).resolves.toBeDefined();
+  });
+
+  it("stage complete: carried; stage re-opened: not carried", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const [f] = await fixturesOf(stage.id);
+    const device = await deviceFor(auth, f!.id);
+    const own = await decide(device, f!.id);
+    await sql`update stages set status = 'complete' where id = ${stage.id}`;
+    await expect(voidEvent(device, f!.id, own)).rejects.toMatchObject(CARRIED);
+    await sql`update stages set status = 'active' where id = ${stage.id}`;
+    await expect(voidEvent(device, f!.id, own)).resolves.toBeDefined();
+  });
+
+  // Review I1. The device's deciding tap is itself what carries a knockout SF
+  // (onDecided seats the winner in the same request). If its ack is lost, the
+  // pad resends the SAME key. With Redis absent (or the retry beating the
+  // cacheSet) the fast path misses, and the durable replay lives in appendEvent's
+  // catch — which a 403 thrown before appendEvent would never reach. The retry
+  // must get the ORIGINAL answer; a NEW keyed write must still be refused.
+  it("a keyed retry of the device's OWN deciding tap replays the original answer once carried (no Redis) — a new key still 403s (review I1)", async () => {
+    // Load-bearing: with Redis on, the fast path would answer the retry and this
+    // test would stop witnessing the ledger replay (scoring-durable-idempotency.test.ts).
+    expect(cacheEnabled(), "precondition: no Redis — the ledger replay is the path under test").toBe(false);
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf1 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 1)!;
+    const device = await deviceFor(auth, sf1.id);
+    await scoreEvent(device, sf1.id, { expected_seq: 0, type: "core.start", payload: {} });
+    const tap = {
+      expected_seq: 1,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 1 },
+      idempotency_key: `idem-${randomUUID()}`,
+    };
+    const first = await scoreEvent(device, sf1.id, tap);
+    // Precondition: the tap carried the SF — a fresh keyed write is refused.
+    await expect(
+      scoreEvent(device, sf1.id, { ...tap, expected_seq: first.seq, idempotency_key: `idem-${randomUUID()}` }),
+    ).rejects.toMatchObject(CARRIED);
+    const retry = await scoreEvent(device, sf1.id, tap);
+    expect(retry.event_id, "the retry names the row the original tap wrote").toBe(first.event_id);
+    expect(retry).toEqual(first);
+    const [{ total }] = await sql<{ total: number }[]>`
+      select count(*)::int as total from score_events where fixture_id = ${sf1.id}`;
+    expect(total, "core.start + the one result — the retry wrote nothing").toBe(2);
+  });
+
+  // The replay is RETURNED at the refusal, not left for appendEvent's catch to
+  // find. The difference shows on a void: falling through would re-run the undo
+  // checks against a target the original void already took back (409
+  // UNDO_ALREADY_VOIDED). A device may void its own post-decision note while the
+  // result stands; the stage then completes; the lost ack's retry arrives.
+  it("a keyed retry of the device's own VOID, after the stage completes, gets the original answer — not an undo re-check", async () => {
+    expect(cacheEnabled(), "precondition: no Redis — the ledger replay is the path under test").toBe(false);
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const [f] = await fixturesOf(stage.id);
+    const device = await deviceFor(auth, f!.id);
+    await decide(device, f!.id);
+    const note = await scoreEvent(device, f!.id, { expected_seq: 2, type: "core.note", payload: { text: "shuttle change" } });
+    const undo = {
+      expected_seq: note.seq,
+      type: "core.void",
+      payload: { event_id: note.event_id },
+      idempotency_key: `idem-${randomUUID()}`,
+    };
+    const first = await scoreEvent(device, f!.id, undo); // not carried yet: allowed
+    await sql`update stages set status = 'complete' where id = ${stage.id}`;
+    const retry = await scoreEvent(device, f!.id, undo);
+    expect(retry.event_id, "the retry names the void the original tap wrote").toBe(first.event_id);
+    expect(retry).toEqual(first);
+  });
+
+  it("a SCHEDULED fixture whose feed an organiser filled by hand still scores (Review Focus 2)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const sf2 = (await fixturesOf(stage.id)).find((x) => x.round_no === 1 && x.seq_in_round === 2)!;
+    const [anyEntrant] = await sql<{ id: string }[]>`
+      select home_entrant_id as id from fixtures where id = ${sf2.id}`;
+    const column = sf2.winner_to_slot === 1 ? sql`home_entrant_id` : sql`away_entrant_id`;
+    await sql`update fixtures set ${column} = ${anyEntrant!.id} where id = ${sf2.winner_to_fixture}`;
+    const device = await deviceFor(auth, sf2.id);
+    await expect(
+      scoreEvent(device, sf2.id, { expected_seq: 0, type: "core.start", payload: {} }),
+    ).resolves.toBeDefined();
+  });
+});

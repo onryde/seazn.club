@@ -6,10 +6,12 @@ import { describe, expect, it } from "vitest";
 import type { AppendEventBody } from "../pipeline";
 import {
   authHeadersFor,
+  CHROME_TERMINAL_CODES,
   deviceLinkTransport,
   isPermanentRefusal,
   sessionTransport,
   TERMINAL_CONFLICT_CODES,
+  terminalRefusalOf,
   type FixtureStateResult,
 } from "../transport";
 
@@ -684,5 +686,54 @@ describe("sessionTransport vs deviceLinkTransport — table-driven request-shape
     expect(headers["Authorization"]).toBe(authHeader);
     const otherKeys = Object.keys(headers).filter((k) => k !== "Authorization");
     expect(otherKeys).toEqual(["Content-Type"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scorer sheets §4.5 — refusals that end what the SURFACE may do, not only one
+// write. The transport already files them as `rejected` with their code; these
+// pin the chrome's reading of that code. The seam from the pipeline to the
+// chrome is proven end to end by e2e/walkthrough/device-pad-carried-forward.
+// ---------------------------------------------------------------------------
+describe("CHROME_TERMINAL_CODES (scorer sheets §4.5)", () => {
+  it("a carried-forward refusal is terminal for the chrome; an ordinary refusal is not", () => {
+    // Empty case first: nothing refused ⇒ nothing terminal.
+    expect(terminalRefusalOf(null)).toBeNull();
+    expect(terminalRefusalOf({ code: "RESULT_CARRIED_FORWARD", message: "m" })).toEqual({
+      code: "RESULT_CARRIED_FORWARD",
+      message: "m",
+    });
+    // Same status (403), different code: a refused write, not a finished match.
+    expect(terminalRefusalOf({ code: "FORBIDDEN", message: "m" })).toBeNull();
+    // The undo refusals are terminal for the QUEUE, never for the chrome.
+    for (const code of TERMINAL_CONFLICT_CODES) expect(terminalRefusalOf({ code, message: "m" })).toBeNull();
+    // Named, not only swept (rebase onto #856): the 409 NEXT_MATCH_STARTED
+    // joined that queue set, and the pad names the match to void in its own
+    // banner — it must never end the courtside surface. Pinned by name so it
+    // stays pinned if it ever leaves TERMINAL_CONFLICT_CODES.
+    expect(TERMINAL_CONFLICT_CODES.has("NEXT_MATCH_STARTED"), "premise: #856's code is queue-terminal").toBe(true);
+    expect(terminalRefusalOf({ code: "NEXT_MATCH_STARTED", message: "m" })).toBeNull();
+  });
+
+  it("every chrome-terminal code is one the server declares (usecases/carried-forward.ts)", () => {
+    // Read as TEXT: `@/server/**` is banned from this bundle (server-boundary
+    // test). A non-empty guard first — an empty set passes the loop vacuously.
+    expect(CHROME_TERMINAL_CODES.size).toBeGreaterThan(0);
+    const src = readFileSync(join(process.cwd(), "src/server/usecases/carried-forward.ts"), "utf8");
+    for (const code of CHROME_TERMINAL_CODES) expect(src).toContain(`"${code}"`);
+  });
+
+  it("the transport hands the code through: a 403 envelope → rejected carrying RESULT_CARRIED_FORWARD (P4 pin)", async () => {
+    const { fn } = fakeFetch(() =>
+      fakeResponse(403, { ok: false, error: { code: "RESULT_CARRIED_FORWARD", message: "over" } }),
+    );
+    const outcome = await deviceLinkTransport("dl_x", { fetchFn: fn }).appendEvent("fx-1", {
+      expected_seq: 3,
+      type: "core.void",
+      payload: {},
+      idempotency_key: "k",
+    });
+    expect(outcome).toEqual({ kind: "rejected", code: "RESULT_CARRIED_FORWARD", message: "over" });
+    expect(terminalRefusalOf(outcome.kind === "rejected" ? outcome : null)).not.toBeNull();
   });
 });

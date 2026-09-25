@@ -5,7 +5,7 @@
 // undo OWN events, nothing else. Every call presents the dl_ token as a
 // Bearer header; the token stays in this tab (component prop), never storage.
 // Offline-tolerant: sends retry with the SAME idempotency key (doc 08 §4).
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 // `OPPORTUNISTIC_RESYNC_MS` — the bound on this pad's opportunistic refresh
@@ -35,6 +35,11 @@ import type { MessageKey } from "@/lib/messages";
 // renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 import { entrantDisplayName } from "@/lib/entrant-name";
+import { deadLinkKey, VIEW_ONLY_COPY, type ViewOnlyReason } from "@/lib/scan-screen";
+import { officialLabelKey } from "@/lib/official-label";
+import { useTabReturn } from "@/components/v2/use-tab-return";
+import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
+import type { EventEnvelope } from "@seazn/engine/core";
 
 export type PadSideInfo = SideInfo;
 
@@ -46,6 +51,9 @@ export interface PadEventIn {
   recorded_at: string;
   voids_event_id: string | null;
   device_link_id: string | null;
+  /** Who recorded it — the post-Start seed (`padSeed`) carries it into the
+   *  inner pad's envelopes, whose timeline reads `recordedBy`. */
+  recorded_by?: string | null;
 }
 
 interface Props {
@@ -64,6 +72,15 @@ interface Props {
     court_label: string | null;
     competition_name: string;
     division_name: string;
+    /** Scorer sheets §4.5.1 — the Confirm card's "R1·3" (`matchRef`) and its
+     *  start time in the venue's zone, both resolved server-side. */
+    match_ref?: string | null;
+    scheduled_label?: string | null;
+    /** The scorebug's round, as the schedule board names it ("Final",
+     *  "Semi-finals"), or "Round n" where the board prints numbers (a league,
+     *  Swiss) — resolved server-side by `scanMatchNames`. The page always sends
+     *  it; "Round n" below is only for a caller that has no board to ask. */
+    round_label?: string | null;
   };
   sport: SportInfo;
   home: PadSideInfo | null;
@@ -76,9 +93,33 @@ interface Props {
    *  pad section then renders nothing rather than a fallback, since
    *  S13/#422 removed the v1 pad it used to fall back to. */
   scorePadV2?: ScorePadBootstrap | null;
+  /** Scorer sheets §4.5 — open on View-only (a final scoreboard, no controls)
+   *  for a reason the scan page already knows at load. `null`/absent opens
+   *  live; a refused write can still move a live screen here (`viewOnly`). */
+  initialViewOnly?: ViewOnlyReason | null;
 }
 
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
+
+/** How many times `resync` re-reads a ledger that is behind the `/state` it
+ *  was read beside, before it gives up (see there). One sequential re-read is
+ *  enough in principle — it is issued after `/state` answered, so every event
+ *  up to that tip is committed — and events are append-only (no path deletes a
+ *  `score_events` row; every `match_states.last_seq` writer takes it from the
+ *  ledger), so a lag cannot be permanent. The second is slack, and the bound is
+ *  what stops a server that ever broke that invariant from spinning a phone. */
+const LEDGER_CATCHUP_READS = 2;
+
+/** One scorebug-line separator. Below md, a fixed-width box (w-4) so the
+ *  wrapping line can hang every item's separator in a clipped gutter of
+ *  exactly that width (the row's `max-md:-ml-4`) — see the scorebug's comment;
+ *  change both together. From md up, the natural " · " the line had before. */
+const SCOREBUG_SEP = "whitespace-pre max-md:inline-block max-md:w-4 max-md:shrink-0 max-md:text-center";
+
+/** The ledger's tip: the seq of its last row (`listEvents` orders by seq,
+ *  voids included), 0 for an empty ledger — the same 0 `/state` reports for a
+ *  match with no events. */
+const ledgerTip = (events: readonly PadEventIn[]) => events[events.length - 1]?.seq ?? 0;
 
 export function DeviceScorePad({
   token,
@@ -91,6 +132,7 @@ export function DeviceScorePad({
   initialState,
   initialEvents,
   scorePadV2 = null,
+  initialViewOnly = null,
 }: Props) {
   const msg = useMsg();
   const statusLabel = (s: string) => {
@@ -101,7 +143,26 @@ export function DeviceScorePad({
   const [live, setLive] = useState<LiveState>(initialState);
   const [events, setEvents] = useState<PadEventIn[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
+  /** The resolver's CODE for a dead link (`LINK_REVOKED`, …), never its
+   *  English message: the screen says it through `deadLinkKey` (P12). */
   const [dead, setDead] = useState<string | null>(null);
+  /** Scorer sheets §4.5 — the link is alive but this fixture is over for it:
+   *  a final scoreboard, no controls. NOT `dead` (the link still resolves, so
+   *  `RESULT_CARRIED_FORWARD` is deliberately absent from `DEAD_CODES`). Two
+   *  ways in once mounted: this chrome's own `send()` refused, or the inner
+   *  pad's pipeline refused (`onTerminalRefusal`, via the registry). */
+  const [viewOnly, setViewOnly] = useState<ViewOnlyReason | null>(initialViewOnly);
+  // The server's verdict can change under a mounted screen (a re-render of the
+  // scan page after an organiser void lifts a carry, #856, or after one lands):
+  // a NEWER `initialViewOnly` replaces whatever this screen last knew, both
+  // ways. Adjusted during render (React's "adjusting state when a prop
+  // changes"), not in an effect, so no frame paints the stale screen. An
+  // unchanged prop leaves a live refusal's View-only alone.
+  const [seenInitialViewOnly, setSeenInitialViewOnly] = useState(initialViewOnly);
+  if (initialViewOnly !== seenInitialViewOnly) {
+    setSeenInitialViewOnly(initialViewOnly);
+    setViewOnly(initialViewOnly);
+  }
   const [busy, setBusy] = useState(false);
   /** True while an opportunistic post-pad-event `resync()` is in flight.
    *  Separate from `busy` on purpose: `busy` means "a send of MINE is
@@ -113,6 +174,13 @@ export function DeviceScorePad({
    *  bounded (it never voids the wrong event) but an unearned error where a
    *  clean undo was expected. Found in review (S13 follow-ups). */
   const [padSyncing, setPadSyncing] = useState(false);
+  /** What the inner pad mounts on. The page's bootstrap when the page itself
+   *  rendered the match started; otherwise the ledger of whichever read first
+   *  saw it started (`seededStarted`, below the dead-link return). */
+  const [padSeed, setPadSeed] = useState<readonly EventEnvelope[]>(scorePadV2?.initialEvents ?? []);
+  /** The `started` that `padSeed` was taken for. Starts as the page's own
+   *  status, whose ledger IS the bootstrap. */
+  const [seededStarted, setSeededStarted] = useState(initialState.status !== "scheduled");
 
   const authed = useCallback(
     <T,>(url: string, options?: Parameters<typeof apiV1>[1]) =>
@@ -141,12 +209,29 @@ export function DeviceScorePad({
           ? null
           : setTimeout(() => controller.abort(new Error(`resync exceeded its ${budget}ms budget`)), budget);
       try {
-        const [state, all] = await Promise.all([
-          authed<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
+        const readLedger = () =>
           authed<PadEventIn[]>(`/api/v1/fixtures/${fixture.id}/events?since_seq=0`, {
             signal: controller?.signal,
-          }),
+          });
+        const [state, first] = await Promise.all([
+          authed<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
+          readLedger(),
         ]);
+        let all = first;
+        // The two reads are CONCURRENT (review round 2), so the ledger's can be
+        // answered before an event `/state` then sees — a Start landing between
+        // them reads as "started" over a ledger without core.start, and the
+        // inner pad would mount on it (`seededStarted`). So the ledger must
+        // reach `/state`'s tip before either lands; a later re-read is issued
+        // after `/state` answered, so it sees what `/state` saw. Bounded by
+        // `LEDGER_CATCHUP_READS`; past it this refresh fails like any other (no
+        // message — see `ResyncShapeError` below) and lands nothing.
+        for (let reread = 0; Array.isArray(all) && state !== null && typeof state === "object"
+          && ledgerTip(all) < state.last_seq; reread++) {
+          if (reread === LEDGER_CATCHUP_READS) throw Object.assign(new Error(), { name: "ResyncLagError" });
+          controller?.signal.throwIfAborted();
+          all = await readLedger();
+        }
         // Never write an aborted refresh into state. `apiV1` now rejects on an
         // abort mid-body (review round 1), but before that it RESOLVED with
         // `undefined` there, and `setLive(undefined)` crashed the next render
@@ -166,8 +251,14 @@ export function DeviceScorePad({
         if (state === null || typeof state !== "object" || !Array.isArray(all)) {
           throw Object.assign(new Error(), { name: "ResyncShapeError" });
         }
-        setLive(state);
+        // The ledger lands BEFORE the status: the render in which the match
+        // first reads as started seeds the inner pad from `events` (see
+        // `seededStarted`), so that render must already hold this read's
+        // ledger. React batches the pair anyway; this order keeps it true
+        // where nothing batches.
         setEvents(all);
+        setLive(state);
+        return all;
       } finally {
         if (timer !== null) clearTimeout(timer);
       }
@@ -196,10 +287,28 @@ export function DeviceScorePad({
     setPadSyncing(true);
     void resync({ timeoutMs: OPPORTUNISTIC_RESYNC_MS })
       .catch((err: unknown) => {
-        if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) setDead(err.message);
+        if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) setDead(err.code);
       })
       .finally(() => setPadSyncing(false));
   }, [resync]);
+
+  /** Scorer sheets §4.5 — entering View-only while this screen is live, from
+   *  either way in: this chrome's own `send()` refused, or the inner pad's
+   *  (`onTerminalRefusal`, via the registry, for `transport.ts`'s
+   *  CHROME_TERMINAL_CODES — whose one member is the carried-forward refusal).
+   *
+   *  A write was just refused because the result moved the competition on,
+   *  and nothing told this chrome the match had even ended — that is how a
+   *  write got tapped at all — so its header can still read "Live" over a
+   *  stale score. View-only keeps the header as the FINAL scoreboard (§4.5.3),
+   *  so it re-reads the server's settled state once, through
+   *  `handlePadEvents`: bounded, and a dead link still lands on the dead
+   *  screen. Stable for the life of the link, and above the `if (dead)`
+   *  return (Rules of Hooks). */
+  const enterCarriedForward = useCallback(() => {
+    setViewOnly("carried_forward");
+    handlePadEvents();
+  }, [handlePadEvents]);
 
   const send: SendEvent = useCallback(
     async (type, payload) => {
@@ -230,11 +339,16 @@ export function DeviceScorePad({
             throw err;
           }
         }
+        // A Start's re-read is what seeds the inner pad (`seededStarted`).
         await resync();
         return true;
       } catch (err) {
         if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) {
-          setDead(err.message);
+          setDead(err.code);
+        } else if (err instanceof ApiV1Error && err.code === "RESULT_CARRIED_FORWARD") {
+          // Scorer sheets §4.5 — the chrome's own write (Start, "Void my last
+          // entry") refused because the result moved the competition on.
+          enterCarriedForward();
         } else if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
           await resync().catch(() => undefined);
           setError(msg("device.seqConflict"));
@@ -254,32 +368,13 @@ export function DeviceScorePad({
         setBusy(false);
       }
     },
-    [authed, fixture.id, live.last_seq, resync],
+    [authed, fixture.id, live.last_seq, resync, enterCarriedForward],
   );
 
-  // G1 — this pad's own freshness floor: the one W3 gave the console
-  // (`fixture-console.tsx`, its `visibilitychange`/`focus` effect), which this
-  // twin never got. Every other refresh here is this pad's own `send()` or its
-  // inner pad's ledger change (`handlePadEvents`), and the second is downstream
-  // of the very pipeline that stalls — a 403 at the realtime token door on a
-  // Community plan, a websocket that joined and died, a wedged drain. So a
-  // stalled pipeline left the SCORER's screen stale with no upper bound, while
-  // the watcher's screen had one.
-  //
-  // Deliberately not an interval: a second timer on the same fixture doubles
-  // the request rate of every courtside pad in the product. A human returning
-  // to the tab is the moment staleness is visible, and a tab nobody returns
-  // to costs nothing.
-  //
-  // BOTH events, because they do not always co-occur: a window-manager focus
-  // with no visibility transition fires only `focus`; a tab switch inside an
-  // already-focused window fires only `visibilitychange`. A real return fires
-  // both, so it costs two refreshes (four requests) — bounded per return, and
-  // the first to settle already applies fresh state.
-  //
-  // The `visibilityState` guard is load-bearing: `visibilitychange` fires on
-  // the HIDE as well as the show, and refreshing a tab the scorer just left is
-  // the request this exists not to make.
+  // G1 — this pad's own freshness floor (`useTabReturn`, whose doc carries the
+  // reasoning: why not an interval, why BOTH events, why the visibility guard,
+  // why the DOM guard has two clauses). A return costs two refreshes (four
+  // requests here: each is `/state` plus the ledger).
   //
   // `handlePadEvents`, NEVER `resync` directly: it is the only path that raises
   // `padSyncing`, which greys Start and "Void my last entry" while the ledger
@@ -290,37 +385,16 @@ export function DeviceScorePad({
   // (`OPPORTUNISTIC_RESYNC_MS`), so a refresh that fails or never answers
   // cannot strand the scorer on dead controls.
   //
+  // `!dead`: a dead link never answers again, so a dead pad stops listening —
+  // the hook's cleanup removes both listeners the moment `dead` flips, and
+  // nothing re-adds them. Without this, every later return would spend four
+  // requests on a link that can only refuse them. Same truthiness as the
+  // dead-screen `if (dead)` below, so "listening" and "live screen" agree.
+  //
   // Identity: `resync` is keyed on `[authed, fixture.id]`, `authed` on
   // `[token]`, `handlePadEvents` on `[resync]` — all stable for the life of the
   // link, so this subscribes once.
-  useEffect(() => {
-    // No DOM underneath ⇒ no listener. React never runs an effect during SSR,
-    // so this is the effect's real server behaviour; it is also reachable in
-    // `apps/web` vitest (`environment: "node"`), where `_hook-harness.tsx`
-    // commits effects with no browser. W3 shipped the console's copy of this
-    // effect unguarded and crashed three existing suites at mount.
-    // BOTH clauses, and they are not redundant: a suite may stub `document`
-    // without `window`, or neither, and a one-clause guard crashes in whichever
-    // shape it forgot. `device-score-pad-freshness-floor.test.tsx` mounts each
-    // partial DOM, so each clause has its own witness.
-    if (typeof document === "undefined" || typeof window === "undefined") return;
-    // A dead link never answers again, so a dead pad stops listening: the
-    // cleanup below removes both listeners the moment `dead` flips, and
-    // nothing re-adds them. Without this, every later return would spend four
-    // requests on a link that can only refuse them. Same truthiness as the
-    // dead-screen `if (dead)` below, so "listening" and "live screen" agree.
-    if (dead) return;
-    const refreshIfVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      handlePadEvents();
-    };
-    document.addEventListener("visibilitychange", refreshIfVisible);
-    window.addEventListener("focus", refreshIfVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", refreshIfVisible);
-      window.removeEventListener("focus", refreshIfVisible);
-    };
-  }, [handlePadEvents, dead]);
+  useTabReturn(handlePadEvents, !dead);
 
   // Owner ruling 17 (2026-09-06) — the SAME predicate fixture-console.tsx
   // shares (this file already imports plain types from there — `SportInfo`,
@@ -342,9 +416,11 @@ export function DeviceScorePad({
   // constantly while someone is scoring.
   //
   // Measured both ways against a real prod build and a real Supabase project
-  // (`device-links.spec.ts`, "reaches its own inner pad faster than the poll",
-  // E2E_REQUIRE_REALTIME=1). With the memo: the socket joins and the chrome's
-  // `core.start` paints on the inner pad well inside POLL_MS. Revert this one
+  // (`device-links.spec.ts`, then titled "reaches its own inner pad faster
+  // than the poll" — now "a second writer's event reaches a device link's
+  // inner pad, mounted after Start, faster than the poll" since the pad mounts
+  // only after Start; E2E_REQUIRE_REALTIME=1). With the memo: the socket joins
+  // and the event paints on the inner pad well inside POLL_MS. Revert this one
   // line to a fresh literal and the same test reds with "never moved off
   // \"0\" at all" — the teardown/re-handshake also restarts the polling
   // interval on every render, so while the component is re-rendering NEITHER
@@ -359,9 +435,9 @@ export function DeviceScorePad({
   // Doc 13 §7: the pad's dead-end when the link dies mid-day.
   if (dead) {
     return (
-      <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
+      <div data-testid="scan-dead-link" className="flex min-h-[60vh] flex-col items-center justify-center text-center">
         <p className="text-4xl">⏱️</p>
-        <h1 className="mt-3 text-lg font-semibold text-slate-100">{dead}</h1>
+        <h1 className="mt-3 text-lg font-semibold text-slate-100">{msg(deadLinkKey(dead))}</h1>
         <p className="mt-2 text-sm text-slate-400">{msg("device.askFreshLink")}</p>
       </div>
     );
@@ -370,8 +446,34 @@ export function DeviceScorePad({
   const summary = live.summary as { headline?: string } | null;
   const decided = live.outcome !== null;
   const started = live.status !== "scheduled";
+  // P8, for EVERY way into "started" (Task 6 review I1). The inner pad mounts
+  // only once the match is started (Confirm, §4.5.1), and its stream does not
+  // read on mount, so it must mount on the ledger of the read that FIRST saw
+  // the match started — never the page's pre-start bootstrap, or its first tap
+  // goes out at a stale seq for up to POLL_MS. That read may be this phone's
+  // own Start, a Start refused SEQ_CONFLICT because another device got there
+  // first, a tab return after another device started, or a second tap after a
+  // Start whose re-read failed: all of them go through `resync`, which lands
+  // `events` with `live`. Adjusted during render ("adjusting state when a prop
+  // changes"), so no frame mounts the pad on the old seed.
+  if (started !== seededStarted) {
+    setSeededStarted(started);
+    if (started) {
+      setPadSeed(events.map((e) => eventOutToEnvelope(fixture.id, { ...e, recorded_by: e.recorded_by ?? null })));
+    }
+  }
   const scoring = live.status !== "finalized" && live.status !== "cancelled";
   const inPlay = live.status === "in_play";
+  // Scorer sheets §4.5.3 — View-only is "final scoreboard, no controls": the
+  // header stays, every control and the inner pad go. A match finalised or
+  // cancelled while this screen is up (seen by any re-read) lands here too,
+  // with its own words — not a screen that silently lost its controls. A
+  // terminal status outranks a carried-forward refusal, the same order as the
+  // scan page's `scanScreen`.
+  const shownViewOnly: ViewOnlyReason | null =
+    live.status === "finalized" ? "finalized" : live.status === "cancelled" ? "cancelled" : viewOnly;
+  const canAct = shownViewOnly === null;
+  const confirming = canAct && live.status === "scheduled" && !!home && !!away;
 
   // Undo-own (doc 13 §7): only un-voided events THIS link recorded.
   const lastOwnVoidable = [...events]
@@ -395,9 +497,77 @@ export function DeviceScorePad({
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logo} alt="" className="h-5 w-5 shrink-0 rounded bg-white/10 object-cover" />
             )}
-            <span className="truncate">
-              {fixture.division_name} · {msg("schedule.round", { n: fixture.round_no })}
-              {fixture.court_label ? ` · ${fixture.court_label}` : ""}
+            {/* The round is the part a scorer checks against the sheet, so it
+                never shrinks; the division (and court) give way to it. As one
+                truncating span, the round was the first thing cut at 320
+                ("SCAN CUP … · FI…"). Never shrinking alone then CLIPPED the
+                longest board labels at 320 with no ellipsis (fr "Grande
+                finale (revanche)" beside a logo, review round 2), so below
+                md the line wraps: the round moves down as one unit when it
+                does not fit beside the division, and a label longer than a
+                whole line wraps inside itself (`max-w-full` caps it at the
+                line).
+
+                SEPARATORS never lead a line. CSS cannot tell which item a wrap
+                put first, so below md EVERY item — the division included —
+                carries its separator in front, `SCOREBUG_SEP`'s fixed w-4; the
+                row hangs exactly that far left of the clipping box (`-ml-4`),
+                so the first item on EVERY line has its separator in the
+                clipped gutter while an item mid-line shows its own. The two
+                widths must match (a unit test pins it). The whole trick is
+                `max-md:` (review round 3): ≥md the row never wraps, the
+                division shows no separator (`md:hidden`) and every other one
+                is its natural " · " — a fixed box at every width made each
+                one wider — so from 768 up the line is exactly the one before
+                the wrap work (AGENTS.md: at 768 and above nothing changes).
+
+                Below md the round is a FLEX item — its separator, then the
+                label as its own box. As plain inline text, a label that wraps inside
+                itself started its second line at the item's left edge, which
+                is in the clipped gutter: fr "Grande finale (revanche)" lost
+                the "(r" of its second line. In its own box the label's every
+                line starts after the separator.
+
+                Once the label wraps, its WIDEST WORD is its min-content
+                width — and beside a wide status at 320 with a logo (es "POR
+                INCOMPARECENCIA") that word can be wider than all the room
+                the line has: "PERDEDORES" painted "PERDEDOR" (review round
+                3). So below md the label may shrink below that word and
+                break inside it (`min-w-0`, `wrap-anywhere`) rather than
+                clip. */}
+            <span data-testid="scan-scorebug-clip" className="min-w-0 max-md:overflow-hidden">
+              <span data-testid="scan-scorebug-line" className="flex items-baseline max-md:-ml-4 max-md:flex-wrap">
+                <span className="flex min-w-0">
+                  <span aria-hidden data-scorebug-sep="" className={`md:hidden ${SCOREBUG_SEP}`}>
+                    {" · "}
+                  </span>
+                  <span data-testid="scan-scorebug-division" className="min-w-0 truncate">
+                    {fixture.division_name}
+                  </span>
+                </span>
+                <span
+                  data-testid="scan-scorebug-round"
+                  className="shrink-0 max-md:flex max-md:max-w-full max-md:items-baseline"
+                >
+                  <span data-scorebug-sep="" className={SCOREBUG_SEP}>
+                    {" · "}
+                  </span>
+                  <span
+                    data-testid="scan-scorebug-round-label"
+                    className="whitespace-pre max-md:min-w-0 max-md:whitespace-normal max-md:wrap-anywhere"
+                  >
+                    {fixture.round_label ?? msg("schedule.round", { n: fixture.round_no })}
+                  </span>
+                </span>
+                {fixture.court_label ? (
+                  <span className="min-w-0 truncate">
+                    <span data-scorebug-sep="" className={SCOREBUG_SEP}>
+                      {" · "}
+                    </span>
+                    {fixture.court_label}
+                  </span>
+                ) : null}
+              </span>
             </span>
           </p>
           {inPlay ? (
@@ -437,9 +607,21 @@ export function DeviceScorePad({
           </p>
         </div>
         <p className="border-t border-slate-800 px-4 py-2 text-center text-[10px] uppercase tracking-widest text-slate-400">
-          {msg("device.courtsideFooter", { scorer: sport.scorerLabel.toLowerCase() })}
+          {/* The sport's official in the viewer's language (Task 3's
+              `officialLabelKey`), never the engine's English `scorerLabel`. */}
+          {msg("device.courtsideFooter", { scorer: msg(officialLabelKey(sport.key)).toLowerCase() })}
         </p>
       </header>
+
+      {shownViewOnly !== null && (
+        <p
+          data-testid="scan-view-only"
+          role="status"
+          className="rounded-md border border-slate-700 bg-slate-900 px-3 py-3 text-center text-sm text-slate-200"
+        >
+          {msg(VIEW_ONLY_COPY[shownViewOnly])}
+        </p>
+      )}
 
       {error && (
         <p className="rounded-md border border-red-900/50 bg-red-950/60 px-3 py-2 text-sm text-red-300">
@@ -447,32 +629,73 @@ export function DeviceScorePad({
         </p>
       )}
 
-      {scoring && home && away && (!started || lastOwnVoidable) && (
+      {/* Scorer sheets §4.5.1 — Confirm: a scan of a match not yet started
+          shows WHICH match before anything can be scored, so an umpire at the
+          wrong court finds out before the first tap. Start lives here, and
+          the inner pad mounts only once the match is started. */}
+      {confirming && (
+        <section data-testid="scan-confirm" className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+          <h2 className="text-sm font-semibold text-slate-100">{msg("device.scan.confirmTitle")}</h2>
+          <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+            {fixture.court_label && (
+              <>
+                <dt className="text-slate-400">{msg("device.scan.court")}</dt>
+                <dd className="min-w-0 truncate text-slate-100">{fixture.court_label}</dd>
+              </>
+            )}
+            {fixture.scheduled_label && (
+              <>
+                <dt className="text-slate-400">{msg("device.scan.time")}</dt>
+                <dd className="min-w-0 truncate text-slate-100">{fixture.scheduled_label}</dd>
+              </>
+            )}
+            <dt className="text-slate-400">{msg("device.scan.match")}</dt>
+            {/* The board's code ("GF·1") is what the umpire checks against
+                the printed sheet, so it never shrinks and the division before
+                it truncates. As one truncating line the code was the first
+                thing cut at 320 ("Scan Cup … Open Ch…", review round 3).
+                `whitespace-pre` keeps the code's leading space, which a flex
+                item would otherwise drop. */}
+            <dd className="flex min-w-0 text-slate-100">
+              <span className="min-w-0 truncate">{fixture.division_name}</span>
+              {fixture.match_ref ? (
+                <span data-testid="scan-confirm-match-code" className="shrink-0 whitespace-pre">
+                  {` · ${fixture.match_ref}`}
+                </span>
+              ) : null}
+            </dd>
+          </dl>
+          <p className="mt-3 break-words text-base font-semibold text-slate-100">
+            {entrantDisplayName(home!)}{" "}
+            <span className="text-[10px] uppercase tracking-widest text-slate-400">{msg("schedule.vs")}</span>{" "}
+            {entrantDisplayName(away!)}
+          </p>
+          <p className="mt-2 text-xs text-slate-400">{msg("device.scan.confirmHint")}</p>
+          <button
+            type="button"
+            data-testid="score-start-match"
+            disabled={busy || padSyncing}
+            onClick={() => send("core.start", {})}
+            className="btn btn-primary mt-4 h-12 w-full text-base"
+          >
+            {msg("score.startMatch")}
+          </button>
+        </section>
+      )}
+
+      {canAct && scoring && home && away && lastOwnVoidable && (
         <div className="flex flex-wrap gap-2">
-          {!started && (
-            <button
-              type="button"
-              data-testid="score-start-match"
-              disabled={busy || padSyncing}
-              onClick={() => send("core.start", {})}
-              className="btn btn-primary h-12 flex-1 text-base"
-            >
-              {msg("score.startMatch")}
-            </button>
-          )}
-          {lastOwnVoidable && (
-            <button
-              type="button"
-              data-testid="device-void-mine"
-              disabled={busy || padSyncing}
-              onClick={() => send("core.void", { event_id: lastOwnVoidable.id })}
-              className="flex h-12 items-center justify-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-6 text-sm font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/20 active:scale-[0.98] disabled:opacity-50"
-              title={msg("score.voidLastTitle", { type: lastOwnVoidable.type, seq: lastOwnVoidable.seq })}
-            >
-              <span aria-hidden className="text-base leading-none">⟲</span>
-              {msg("device.undoMine")}
-            </button>
-          )}
+          <button
+            type="button"
+            data-testid="device-void-mine"
+            disabled={busy || padSyncing}
+            onClick={() => send("core.void", { event_id: lastOwnVoidable.id })}
+            className="flex h-12 items-center justify-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-6 text-sm font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/20 active:scale-[0.98] disabled:opacity-50"
+            title={msg("score.voidLastTitle", { type: lastOwnVoidable.type, seq: lastOwnVoidable.seq })}
+          >
+            <span aria-hidden className="text-base leading-none">⟲</span>
+            {msg("device.undoMine")}
+          </button>
         </div>
       )}
 
@@ -485,7 +708,7 @@ export function DeviceScorePad({
           narrower `!decided`): a decided fixture keeps the pad mounted iff
           its own `padSpec(cfg)` declares a post-phase panel, the same
           predicate `fixture-console.tsx` shares. */}
-      {scorePadV2 && scoring && shouldMountPad({ decided, padSpec: padSpecForMount }) && home && away && (
+      {canAct && started && scorePadV2 && scoring && shouldMountPad({ decided, padSpec: padSpecForMount }) && home && away && (
         <section className="card p-4">
           <ScoringErrorBoundary>
             <ScorePad
@@ -495,17 +718,18 @@ export function DeviceScorePad({
               resolvedConfig={scorePadV2.resolvedConfig}
               home={home}
               away={away}
-              initialEvents={scorePadV2.initialEvents}
+              initialEvents={padSeed}
               auth={padAuth}
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
               onEvents={handlePadEvents}
+              onTerminalRefusal={enterCarriedForward}
             />
           </ScoringErrorBoundary>
         </section>
       )}
 
-      {decided && scoring && (
+      {canAct && decided && scoring && (
         <p className="rounded-md border border-emerald-900/50 bg-emerald-950/60 px-3 py-2 text-sm text-emerald-300">
           {msg("device.resultRecorded")}
         </p>

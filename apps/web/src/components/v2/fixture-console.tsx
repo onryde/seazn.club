@@ -21,6 +21,7 @@ import {
 } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
+import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
@@ -778,11 +779,14 @@ export function FixtureConsole({
   // survives into the pad pipeline's `EventEnvelope` at all. This component
   // is the only surface that holds both. The wording is the deleted panel's
   // own, verbatim.
+  // The sport's official in the viewer's locale — never the engine's English
+  // `sport.scorerLabel` mid-sentence (scorer sheets T3, fix round 3).
+  const official = msg(officialLabelKey(sport.key));
   const provenanceOf = (e: EventIn): string | null =>
     e.device_link_id
-      ? msg("score.courtsidePad", { scorer: sport.scorerLabel.toLowerCase() })
+      ? msg("score.courtsidePad", { scorer: official.toLowerCase() })
       : e.recorded_by
-        ? (recorderNames[e.recorded_by] ?? sport.scorerLabel)
+        ? (recorderNames[e.recorded_by] ?? official)
         : null;
   const activityRows: ActivityEvent[] = events.map((e) => ({
     id: e.id,
@@ -964,7 +968,7 @@ export function FixtureConsole({
             )}
             {fixture.venue_name ? ` · ${fixture.venue_name}` : ""}
             {fixture.court_name ? ` · ${fixture.court_name}` : ""}
-            {` · ${msg("score.recordedBy", { scorer: sport.scorerLabel.toLowerCase() })}`}
+            {` · ${msg("score.recordedBy", { scorer: official.toLowerCase() })}`}
           </p>
         </div>
       </header>
@@ -1037,7 +1041,7 @@ export function FixtureConsole({
             <div className="mb-4">
               <DeviceLinkPanel
                 fixtureId={fixture.id}
-                scorerLabel={sport.scorerLabel}
+                sportKey={sport.key}
                 embedded
                 viewerPlan={viewerPlan}
               />

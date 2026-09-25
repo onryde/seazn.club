@@ -1,6 +1,7 @@
 import "server-only";
 // Fixture use-cases (doc 08 §3): schedule/venue/officials PATCH, lineups PUT,
-// ledger reads (events since_seq), live state (summary + last_seq for ETag).
+// ledger reads (events since_seq), live state (summary + a body-digest ETag).
+import { createHash } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -639,13 +640,19 @@ export interface FixtureStateOut {
   outcome: unknown;
 }
 
-/** The `/state` ETag: the ledger seq. The `-m2` suffix is kept as it is (the
- *  representation's name since the cricket margin became `{ kind, value? }`). */
-export function fixtureStateEtag(lastSeq: number): string {
-  return `"seq-${lastSeq}-m2"`;
+/** The `/state` ETag: a digest of the body the route serves (scorer sheets,
+ *  Task 6). It was the ledger seq alone, and a body change that appends no
+ *  event — a status flip, an outcome, a re-folded summary — then revalidated
+ *  to `304`, so the browser's HTTP cache kept handing the pad the stale body.
+ *  Hashing the body itself means nothing the client can read moves without the
+ *  validator moving too, and nobody has to remember to list a new field here.
+ *  The body is built field by field in `getFixtureState` and jsonb columns
+ *  parse to a stable key order, so equal bodies serialise identically. */
+export function fixtureStateEtag(state: FixtureStateOut): string {
+  return `"st-${createHash("sha256").update(JSON.stringify(state)).digest("base64url").slice(0, 27)}"`;
 }
 
-/** Live state: fold cache summary + status + outcome (ETag on last_seq). */
+/** Live state: fold cache summary + status + outcome (ETag: `fixtureStateEtag`). */
 export async function getFixtureState(auth: AuthCtx, fixtureId: string): Promise<FixtureStateOut> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<

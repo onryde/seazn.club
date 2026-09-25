@@ -26,6 +26,7 @@ import { ogTheme, type OgTheme } from "./model";
 import { OG_SIZE } from "./card";
 // Bytes only, never a URL — the one rule shared by every satori frame here.
 import { drawableImage } from "./drawable";
+import { brandFontDir } from "@/server/doc-theme";
 import { monogramInk, autoColour } from "@/components/ui/entity-logo";
 import type { MatchCentreDocT, SideT } from "@/server/public-site/match-centre-schema";
 
@@ -78,12 +79,11 @@ const FONT_FILES: ReadonlyArray<{ name: string; file: string; weight: 400 | 600 
   { name: POSTER_FONT_BODY, file: "Geist-Regular.ttf", weight: 400 },
 ];
 
-function fontDir(): string {
-  // Same override knob as `doc-theme.ts`'s `registerFonts`, so a test or a
-  // packaging step can point both readers at one fixture directory without
-  // this module inventing a second env var for the same fact.
-  return process.env.DOC_FONT_DIR ?? path.join(process.cwd(), "apps/web/assets/fonts");
-}
+// The same directory, `DOC_FONT_DIR` override and cwd rule as the PDFs: ONE
+// resolver (`brandFontDir`), so the two readers cannot drift apart again (both
+// once defaulted to `<cwd>/apps/web/assets/fonts`, which production's cwd —
+// /app/apps/web — never has).
+const fontDir = brandFontDir;
 
 let cached: Promise<PosterFont[]> | null = null;
 

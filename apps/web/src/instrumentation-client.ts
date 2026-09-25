@@ -4,6 +4,7 @@
 import posthog from "posthog-js";
 import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
+import { posthogBeforeSend } from "@/lib/scrub-score-url";
 
 // Sentry treats instrumentation-client as the client instrumentation entry once
 // it exists (sentry.client.config still runs Sentry.init on the client). The
@@ -47,6 +48,10 @@ if (key && !analyticsSuppressed()) {
       // banner. opt_in_capturing() (in cookie-consent) flips this on.
       opt_out_capturing_by_default: true,
       opt_out_persistence_by_default: true,
+      // Drops every event from a staff page (/admin, /admin/*), then scrubs
+      // device-link tokens (/score/<token> is a live scoring credential) out
+      // of every URL-valued property before anything leaves.
+      before_send: posthogBeforeSend,
     });
     if (analyticsConsented()) posthog.opt_in_capturing();
   } catch {

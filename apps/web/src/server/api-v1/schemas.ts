@@ -1570,14 +1570,20 @@ export const DeviceLink = z.object({
   fixture_id: Uuid,
   label: z.string().nullable(),
   issued_by: Uuid,
-  expires_at: z.string(),
+  expires_at: z.string().nullable(),
   revoked_at: z.string().nullable(),
   created_at: z.string(),
 });
 
 export const CreatedDeviceLink = DeviceLink.extend({
-  /** The dl_ secret — returned exactly once, at mint. QR payload = /score/{secret}. */
+  /** The dl_ secret. Re-shown unchanged by ensure (sealed, scorer sheets §4.1); replaced only by reissue. QR payload = /score/{secret}. */
   secret: z.string(),
+});
+
+/** POST /competitions/{id}/exports/scorer-sheets (scorer sheets §4.4). */
+export const ScorerSheetsRequest = z.object({
+  /** The day to print, `YYYY-MM-DD` on the organisation's clock. */
+  date: z.iso.date(),
 });
 
 // ---------------------------------------------------------------------------

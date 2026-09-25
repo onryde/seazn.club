@@ -85,3 +85,6 @@ export const WEBHOOK_LIMIT: RateLimitConfig = { max: 500, windowSeconds: 60 };
 
 /** General mutation endpoints: tournament result writes. */
 export const MUTATION_LIMIT: RateLimitConfig = { max: 60, windowSeconds: 60 };
+
+/** Device-link mint AND reissue (a reissue IS a mint): one bucket, one number. */
+export const DEVICE_LINK_MINT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };

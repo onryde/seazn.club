@@ -81,6 +81,8 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
       # The NAME is load-bearing. Actions strips job-env vars by name match, and
       # every "PRIVATE_KEY" spelling was proved to vanish from step envs (see
       # e2e.yml's own comment, run 34830995761). Same CI-only dummy keypair as

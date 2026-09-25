@@ -1,9 +1,9 @@
-// server/relay/crypto.ts — AES-256-GCM envelope (design §6.2). The ONLY module
-// that turns a plaintext credential into a *_enc column value and back
+// server/relay/crypto.ts — AES-256-GCM envelope (design §6.2), keyed by RELAY_KEK (stream keys) or DEVICE_LINK_KEK (device-link secrets, scorer sheets §4.1).
+// The ONLY module that turns a plaintext credential into a *_enc column value and back
 // (enc-boundary.test.ts holds every other file to that). Layout, one buffer:
 //
 //   [0]      version (0x01)
-//   [1..13)  wrap IV (12)        — for wrapping the DEK under RELAY_KEK
+//   [1..13)  wrap IV (12)        — for wrapping the DEK under the named KEK
 //   [13..45) wrapped DEK (32)
 //   [45..61) wrap auth tag (16)
 //   [61..73) data IV (12)
@@ -14,7 +14,7 @@
 // a re-encryption of every stream key; GCM's tag means a flipped byte throws
 // instead of decrypting to a plausible wrong key.
 // Lane-A minors, Task 6 review m5: the lane-wide `server-only` gap. This module
-// reads RELAY_KEK and holds the seal/open pair; a client import would pull the
+// reads RELAY_KEK and DEVICE_LINK_KEK and holds the seal/open pair; a client import would pull the
 // key read into a browser bundle, and this marker is what turns that into a
 // build failure rather than a shipped secret. See tokens.ts for the same note.
 import "server-only";
@@ -26,19 +26,31 @@ const TAG_LEN = 16;
 const KEY_LEN = 32;
 const HEADER_LEN = 1 + IV_LEN + KEY_LEN + TAG_LEN + IV_LEN + TAG_LEN; // 89
 
-/** RELAY_KEK is 32 bytes written as exactly 64 hex characters, matched WHOLE before decoding: Buffer.from(hex, "hex")
+/** A KEK is 32 bytes written as exactly 64 hex characters, matched WHOLE before decoding: Buffer.from(hex, "hex")
  *  stops at the first non-hex character, so a length check on the decoded key accepted 65 characters, a junk suffix
  *  or a pasted trailing newline. Neither message echoes the value. */
 const KEK_HEX = /^[0-9a-f]{64}$/i;
 
-function kek(): Buffer {
-  const hex = process.env.RELAY_KEK;
-  if (!hex) throw new Error("RELAY_KEK is not set (32 bytes as 64 hex chars; a Fly secret in prod)");
-  if (!KEK_HEX.test(hex)) throw new Error("RELAY_KEK must be exactly 64 hex characters (32 bytes)");
+/** The two envelope keys. Separate on purpose (scorer sheets §4.1): a leaked
+ *  RELAY_KEK opens stream keys, a leaked DEVICE_LINK_KEK opens printed scoring
+ *  QRs, and neither opens the other. */
+export type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK";
+
+function kek(name: KekName): Buffer {
+  const hex = process.env[name];
+  if (!hex) throw new Error(`${name} is not set (32 bytes as 64 hex chars; a Fly secret in prod)`);
+  if (!KEK_HEX.test(hex)) throw new Error(`${name} must be exactly 64 hex characters (32 bytes)`);
   return Buffer.from(hex, "hex");
 }
 
-export function seal(plain: string): Buffer {
+/** True when `name` holds a usable key: the SAME `KEK_HEX` rule `kek()`
+ *  enforces. It is exported so callers that must fail closed (device-links.ts,
+ *  owner ruling Q1) check it without re-implementing the pattern. */
+export function hasValidKek(name: KekName): boolean {
+  return KEK_HEX.test(process.env[name] ?? "");
+}
+
+export function sealWith(name: KekName, plain: string): Buffer {
   const dek = randomBytes(KEY_LEN);
   const dataIv = randomBytes(IV_LEN);
   const data = createCipheriv("aes-256-gcm", dek, dataIv);
@@ -46,14 +58,14 @@ export function seal(plain: string): Buffer {
   const dataTag = data.getAuthTag();
 
   const wrapIv = randomBytes(IV_LEN);
-  const wrap = createCipheriv("aes-256-gcm", kek(), wrapIv);
+  const wrap = createCipheriv("aes-256-gcm", kek(name), wrapIv);
   const wrapped = Buffer.concat([wrap.update(dek), wrap.final()]);
   const wrapTag = wrap.getAuthTag();
 
   return Buffer.concat([Buffer.from([VERSION]), wrapIv, wrapped, wrapTag, dataIv, dataTag, body]);
 }
 
-export function open(enc: Uint8Array): string {
+export function openWith(name: KekName, enc: Uint8Array): string {
   const b = Buffer.from(enc);
   if (b.length < HEADER_LEN) throw new Error("relay envelope too short");
   if (b[0] !== VERSION) throw new Error(`relay envelope version ${b[0]} is not supported`);
@@ -64,11 +76,20 @@ export function open(enc: Uint8Array): string {
   const dataTag = b.subarray(73, 89);
   const body = b.subarray(89);
 
-  const unwrap = createDecipheriv("aes-256-gcm", kek(), wrapIv);
+  const unwrap = createDecipheriv("aes-256-gcm", kek(name), wrapIv);
   unwrap.setAuthTag(wrapTag);
   const dek = Buffer.concat([unwrap.update(wrapped), unwrap.final()]);
 
   const data = createDecipheriv("aes-256-gcm", dek, dataIv);
   data.setAuthTag(dataTag);
   return Buffer.concat([data.update(body), data.final()]).toString("utf8");
+}
+
+/** The relay's envelope — RELAY_KEK. Unchanged contract for every stream caller. */
+export function seal(plain: string): Buffer {
+  return sealWith("RELAY_KEK", plain);
+}
+
+export function open(enc: Uint8Array): string {
+  return openWith("RELAY_KEK", enc);
 }

@@ -13,9 +13,16 @@ import {
   pagePlayoffPageGeometry,
 } from "./doc-bracket-geometry";
 
-const MARGIN = 40;
+// MARGIN, resolveLogo and drawMasthead are also the scorer sheet's chrome
+// (scorer-sheet-pdf.ts), so every printed document shares one masthead. The
+// sheet draws its own title block: two-line title bound, per-court heading.
+export const MARGIN = 40;
 
 const MAST_H = 64; // masthead band height, page 1
+const LOGO_H = 40; // org logo box height in the masthead
+const LOGO_MAX_W = 120; // a wide logo is capped at 3:1 so the org name keeps room
+const MAST_GAP = 3 * (72 / 25.4); // 3mm: org name ↔ logo, and org name ↔ wordmark
+const BALL_R = 4; // the brand's red ball, resting on the lime rule at the right margin
 
 import { publicStorageUrl } from "@/lib/supabase-storage";
 
@@ -23,7 +30,7 @@ import { publicStorageUrl } from "@/lib/supabase-storage";
  *  live in the PUBLIC Supabase bucket — there is no server-side byte reader,
  *  so fetch the public URL. Missing/broken → null, never throws (a broken
  *  export is worse than an unbranded one). */
-async function resolveLogo(logoPath: string | undefined): Promise<Buffer | null> {
+export async function resolveLogo(logoPath: string | undefined): Promise<Buffer | null> {
   if (!logoPath) return null;
   try {
     const url = /^https?:\/\//.test(logoPath) ? logoPath : publicStorageUrl(logoPath);
@@ -35,7 +42,7 @@ async function resolveLogo(logoPath: string | undefined): Promise<Buffer | null>
   }
 }
 
-function drawMasthead(
+export function drawMasthead(
   doc: PDFKit.PDFDocument,
   model: DocModel,
   logo: Buffer | null,
@@ -48,24 +55,48 @@ function drawMasthead(
   doc.font(FONT.displayBold).fontSize(18).fillColor(PALETTE.cream)
     .text("SEAZN", MARGIN, 16, { continued: true })
     .fillColor(PALETTE.lime).text(" CLUB", { continued: false });
-  // org name, right
-  if (b.orgName) {
-    doc.font(FONT.bodyMed).fontSize(10);
-    doc.fillColor(PALETTE.cream).text(b.orgName.toUpperCase(), MARGIN, 22, {
-      width: w - MARGIN * 2, align: "right", characterSpacing: 2,
-    });
-  }
-  // logo, aspect-locked, right of wordmark
+  const wordmarkRight = MARGIN + doc.widthOfString("SEAZN") + doc.widthOfString(" CLUB");
+  // Org logo and org name are ONE right-aligned unit: the logo against the
+  // right margin (by its own aspect, capped), the name ending MAST_GAP to its
+  // left — never under the logo, never into the wordmark.
+  let nameRight = w - MARGIN;
   if (logo) {
-    try { doc.image(logo, w - MARGIN - 40, 12, { height: 40 }); } catch { /* skip */ }
+    try {
+      const img = (doc as unknown as { openImage(src: Buffer): { width: number; height: number } }).openImage(logo);
+      const lw = Math.min((LOGO_H * img.width) / img.height, LOGO_MAX_W);
+      doc.image(logo, w - MARGIN - lw, 12, { fit: [lw, LOGO_H], valign: "center" });
+      nameRight = w - MARGIN - lw - MAST_GAP;
+    } catch { /* unreadable logo: skip it, the name takes the margin */ }
+  }
+  if (b.orgName) {
+    const spacing = { characterSpacing: 2 };
+    doc.font(FONT.bodyMed).fontSize(10);
+    const name = ellipsize(b.orgName.toUpperCase(), nameRight - (wordmarkRight + MAST_GAP), (s) => doc.widthOfString(s, spacing));
+    if (name) {
+      doc.fillColor(PALETTE.cream)
+        .text(name, nameRight - doc.widthOfString(name, spacing), 22, { ...spacing, lineBreak: false });
+    }
   }
   // red ball riding the lime line, right-aligned — mirrors ticket.png's mark
-  // (wordmark + ball + pitch line is the full SEAZN brand, not just the line)
-  doc.circle(w - MARGIN - 4, MAST_H - 10, 4).fill(PALETTE.ball);
+  // (wordmark + ball + pitch line is the full SEAZN brand, not just the line).
+  // It RESTS on the rule (bottom = MAST_H): floating higher put it inside the
+  // org logo's box (y 12–52), on the logo's bottom-right corner.
+  doc.circle(w - MARGIN - BALL_R, MAST_H - BALL_R, BALL_R).fill(PALETTE.ball);
   // lime pitch-line rule — the signature
   doc.rect(0, MAST_H, w, 4).fill(PALETTE.lime);
   doc.fillColor(PALETTE.ink);
   doc.y = MAST_H + 18;
+}
+
+/** `text` whole if it fits `maxW`, else its longest prefix + "…" that does;
+ *  "" when not even the ellipsis fits. */
+function ellipsize(text: string, maxW: number, width: (s: string) => number): string {
+  if (width(text) <= maxW) return text;
+  for (let n = text.length - 1; n > 0; n--) {
+    const cut = `${text.slice(0, n).trimEnd()}…`;
+    if (width(cut) <= maxW) return cut;
+  }
+  return "";
 }
 
 function drawTitleBlock(doc: PDFKit.PDFDocument, model: DocModel): void {

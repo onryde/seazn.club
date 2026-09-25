@@ -14,6 +14,8 @@ The timetable: every fixture's time, court and entrants for the day, in schedule
 
 Blank scoresheets, one per fixture, ready to print and clip to a board — for scorers working on paper instead of the live console, or as a backup if a device dies mid-match.
 
+Want a QR on each match that the umpire scans to score it on their phone instead? That's a [scorer sheet](/help/scoring/scorer-sheets), printed from the competition's **Schedule** page.
+
 ## Officials rota
 
 Every assignment for the day, grouped by official: who's covering which fixture, court and time. The same data your officials see on their own `/me` home, laid out for a printed sheet at the officials' table.

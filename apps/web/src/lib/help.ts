@@ -43,6 +43,7 @@ export const HELP_ARTICLE_SLUGS = [
   "scoring/basics",
   "scoring/conflicts",
   "scoring/device-links",
+  "scoring/scorer-sheets",
   "scoring/scorer-role",
   "scoring/cricket",
   "scoring/tennis",

@@ -10,6 +10,7 @@ import { cacheGet, cacheSet, cacheDel, sendAfterDeleteOrBound } from "@/lib/cach
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
+import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
@@ -33,6 +34,13 @@ import { subjectToScorerCapabilityGates } from "./scorers";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats } from "./stages";
 import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
+import {
+  RESULT_CARRIED_FORWARD,
+  RESULT_CARRIED_FORWARD_MESSAGE,
+  SETTLED_OPEN_STATUSES,
+  carriedForwardFacts,
+  isCarriedForward,
+} from "./carried-forward";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
 export interface ScoreOutcome {
@@ -163,7 +171,16 @@ export async function scoreEvent(
 
   await rateLimit(`scorev1:${fixtureId}`, SCORING_LIMIT);
 
-  await assertEntitledToScore(auth, fixtureId, input);
+  // Non-null only when a device link's keyed RETRY meets the carried-forward
+  // refusal and the ledger already holds that key (scorer sheets §4.3, review
+  // I1): the retry gets the original answer, exactly as the catch below would
+  // have given it had the refusal not stood in front of appendEvent.
+  const carriedReplay = await assertEntitledToScore(auth, fixtureId, input);
+  if (carriedReplay) {
+    await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
+    if (cacheKey) await cacheSet(cacheKey, carriedReplay, IDEM_TTL_SECONDS);
+    return carriedReplay;
+  }
   if (input.type === "core.void") await assertUndoTarget(auth, fixtureId, input);
 
   let result;
@@ -434,11 +451,14 @@ export const __assertUndoTargetForTests = assertUndoTarget;
 // every module, at every band. `cricket.dls` is untouched: it is a SEPARATE
 // gate keyed on the event's payload + the division's config, not on fidelity.
 // Unknown fixtures fall through — appendEvent owns that error.
+// Returns null, except for a device link's keyed RETRY on a carried-forward
+// fixture, where it returns the ledger's replay of the original write (review
+// I1; see the device-link block).
 async function assertEntitledToScore(
   auth: AuthCtx,
   fixtureId: string,
   input: AppendEventRequest,
-): Promise<void> {
+): Promise<ScoreOutcome | null> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
@@ -465,11 +485,13 @@ async function assertEntitledToScore(
     assertNotFrozen(frozen, row.competition_id);
     return row;
   });
-  if (!ctx) return;
+  if (!ctx) return null;
 
   // Doc 12 §1: scoring opens only after the explicit start action
   // (division_started). A published-but-unstarted timetable stays read-only.
-  if (ctx.division_status === "setup" || ctx.division_status === "scheduled") {
+  // The same predicate the scan page opens "Not started yet" on (scorer
+  // sheets, owner fix 2026-09-24), so that screen and this refusal agree.
+  if (divisionScoringClosed(ctx.division_status)) {
     throw new EngineError("WRONG_PHASE", "division has not started — scoring is closed", {
       divisionStatus: ctx.division_status,
     });
@@ -480,6 +502,30 @@ async function assertEntitledToScore(
   if (auth.via === "device_link") {
     if (input.type === "core.finalize") {
       throw new HttpError(403, "Finalizing needs an organiser or scorer account");
+    }
+    // Scorer sheets §4.3: once a settled result has moved the competition on —
+    // a feed seated, the next Swiss round seated, the stage complete — a
+    // device link may do nothing more with this fixture; corrections are the
+    // organiser's. Evaluated LIVE (unpairing re-opens it), and only for a
+    // settled fixture, so a live tap never pays for the query.
+    // ONE status gate on this path, and it is this one: the facts are read
+    // without resultCarriedForward's own status check, so neither guard
+    // covers for the other (pre-flight A15).
+    if (SETTLED_OPEN_STATUSES.has(ctx.fixture_status)) {
+      const loaded = await withTenant(auth.orgId, (tx) => carriedForwardFacts(tx, fixtureId));
+      if (loaded && isCarriedForward(loaded.facts)) {
+        // Review I1: a keyed RETRY of a write the ledger already holds is a
+        // replay, not a new write. The device's own deciding tap is what
+        // carries a knockout SF, so a lost ack's retry lands here; with Redis
+        // down (or the retry beating the cacheSet) the fast path misses, and
+        // appendEvent's catch — the durable replay — is behind this throw.
+        // Ask the ledger first. Only a settled, carried fixture pays for it.
+        if (input.idempotency_key) {
+          const replayed = await replayOutcomeFor(auth.orgId, fixtureId, input.idempotency_key);
+          if (replayed) return replayed;
+        }
+        throw new HttpError(403, RESULT_CARRIED_FORWARD_MESSAGE, RESULT_CARRIED_FORWARD);
+      }
     }
     if (input.type === "core.void") {
       if (ctx.fixture_status === "finalized") {
@@ -519,6 +565,7 @@ async function assertEntitledToScore(
   if (requiresDlsEntitlement(input.type, ctx.config, input.payload)) {
     await requireFeature(auth.orgId, "cricket.dls");
   }
+  return null;
 }
 
 /**

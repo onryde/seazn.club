@@ -399,6 +399,45 @@ const WALKTHROUGH_SPECS: string[] = [
   // the next match — the seam from the 409's `next_match` to the console copy
   // that no unit test drives end to end.
   "knockout-void-unfill.spec.ts",
+
+  // Printable scorer sheets, Task 3 — the console's device hand-over panel
+  // once links are durable: Show QR re-shows the SAME secret (a printed sheet
+  // keeps working), Revoke & reissue and Revoke both ask first, Keep sends no
+  // DELETE and a confirm sends exactly one (counted off the wire), a reissued
+  // secret no longer opens a pad, a finalized match's REAL 422 renders the
+  // localised refusal in en and fr, and the Rebuild confirm names printed
+  // sheets only when the stage has device links. The panel's unit suite
+  // drives a double and can see none of the wire.
+  "scorer-sheets-handover-panel.spec.ts",
+  // Scorer sheets §4.5 — the carried-forward seam, driven from its real
+  // producer (a courtside INNER-pad tap) to its real consumer (the chrome's
+  // View-only screen). No unit test can see the pipeline → registry → chrome hop.
+  "device-pad-carried-forward.spec.ts",
+  // Scorer sheets §4.5 (Task 6) — every scan screen, en + fr, at 320/768/1280:
+  // a final's sheet scanned early waits, then moves to Confirm BY ITSELF when
+  // the semis are decided (a real side fill, zero events on the final); Start
+  // opens the pad; a cancel with no event reaches the phone through its HTTP
+  // cache (an unrouted page — the body-digest ETag). No unit test can see the
+  // server page re-render under a mounted Waiting, or the browser's cache.
+  "scorer-sheets-scan-screens.spec.ts",
+  // Scorer sheets §4.4 (Task 9) — the schedule page's print control, en + fr,
+  // at 320/768/1280: it opens at the ORG's today (not the first option), sends
+  // the day the organiser picks, lands the file as a browser download, reads a
+  // "nothing on that day" refusal in the viewer's language, and gives a
+  // Community org the device-links upgrade pill instead. The control's unit
+  // suite drives a stubbed fetch and a fake anchor; only a browser shows the
+  // download and the header's phone stacking.
+  "scorer-sheets-print-control.spec.ts",
+  // Scorer sheets (Task 10) — the whole journey on the printed artefact: the
+  // day printed from the Schedule page, EVERY QR decoded from the downloaded
+  // PDF's pixels and scanned on a phone that must name that card's match, one
+  // scored to a result through the pad; a knockout final that waits then moves
+  // by itself; a Swiss result that goes View-only when the desk pairs round 2;
+  // the console's hand-over re-showing the printed QR and a reissue killing
+  // only that card; a viewer with no print control. The renderer's unit
+  // suites decode a sheet built in-process — only a browser prints the one a
+  // person downloads, with the prod build's embedded brand fonts.
+  "scorer-sheets-print-scan.spec.ts",
 ];
 
 afterEach(() => {

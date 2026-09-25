@@ -216,6 +216,17 @@ describe("attachmentWarning — what the rebuild clears besides fixtures", () =>
     expect(out).toContain("1 feuille(s) de match");
     expect(out).toContain("Elle supprime aussi");
   });
+
+  // Scorer sheets, owner ruling Q4 (2026-09-23): the rebuild's `delete from
+  // fixtures` CASCADEs `device_links`, so every printed QR on the stage dies
+  // with it. The count includes revoked links (known and accepted).
+  it("warns that printed scorer sheets stop working — only when device links are attached (owner ruling Q4)", () => {
+    const withLinks = attachmentWarning(drift({ officials: 0, lineups: 0, deviceLinks: 2 }), msg, "en");
+    expect(withLinks).toContain("Printed scorer sheets for this stage will stop working.");
+    const without = attachmentWarning(drift({ officials: 3, lineups: 0, deviceLinks: 0 }), msg, "en");
+    expect(without).not.toContain("scorer sheets");
+    expect(without).not.toBe(""); // the negative pair still warns about the officials
+  });
 });
 
 // F3 ultrareview findings 4 and 10 — how a failed generate/complete lands on

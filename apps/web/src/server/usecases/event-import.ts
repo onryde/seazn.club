@@ -31,6 +31,7 @@ import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
+import { divisionScoringClosed } from "@/lib/division-phase";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { EventImportRequest } from "@/server/api-v1/schemas";
 
@@ -445,6 +446,7 @@ async function runStream(
           sport_key: firstResult.sportKey,
           status: firstResult.status,
           fixture_id: fixtureId,
+          source: firstResult.source,
         },
       });
     }
@@ -708,8 +710,8 @@ async function runImport(
   // opens, never from inside one.
   assertNotFrozen(await frozenCompetitionIds(auth.orgId), division.competitionId);
   // Doc 12 §1 / R1: import inherits live scoring's phase gate — a published
-  // but unstarted timetable stays read-only.
-  if (division.status === "setup" || division.status === "scheduled") {
+  // but unstarted timetable stays read-only. The same predicate as that gate.
+  if (divisionScoringClosed(division.status)) {
     throw new HttpError(
       409,
       "division has not started — import is closed",

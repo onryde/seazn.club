@@ -22,6 +22,7 @@ import type { MessageKey } from "@/lib/messages";
 import { resolveModuleClient } from "./module-client";
 import { deviceLinkTransport, sessionTransport, type PadAuthMode } from "./transport";
 import type { OwnIdentity } from "./types";
+import type { RejectionInfo } from "./use-pad-pipeline";
 import { resolvePad } from "./v3/registry";
 import type { TFn } from "./v3/context-strip";
 import { PadHostV3 } from "./v3/pad-host";
@@ -202,6 +203,10 @@ export interface ScorePadProps {
    *  chrome around this pad (fixture console, device pad) keeps its own event
    *  list for "Undo last" and cannot otherwise see what the pad submitted. */
   onEvents?: (events: readonly EventEnvelope[]) => void;
+  /** Forwarded straight to `PadHostV3.onTerminalRefusal` (scorer sheets §4.5):
+   *  a refusal that ends this surface's rights on the fixture, so the chrome
+   *  can leave the pad. Only the device pad passes it. */
+  onTerminalRefusal?: (rejection: RejectionInfo) => void;
   auth: PadAuthMode;
   /**
    * R7/C1 (D-4) — the chrome around this pad already mounts the one activity
@@ -297,6 +302,7 @@ export function ScorePad(props: ScorePadProps) {
       entitlements={props.entitlements}
       initialEvents={props.initialEvents}
       onEvents={props.onEvents}
+      onTerminalRefusal={props.onTerminalRefusal}
       queueDbName={`scorepad-${props.fixtureId}`}
       personNames={personNames}
       showActivity={!props.hideActivity}

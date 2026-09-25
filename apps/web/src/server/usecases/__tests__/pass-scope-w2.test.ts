@@ -38,8 +38,8 @@
 // .max` call beside it already carries in its own comment).
 //
 // Real Postgres required; skipped without DATABASE_URL. Seeds are run-unique.
-import { afterAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { football } from "@seazn/engine/sports/football";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -48,7 +48,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createStages } from "../stages";
-import { createDeviceLink } from "../device-links";
+import { createDeviceLink, ensureDeviceLinks } from "../device-links";
 import { createCheckpoint } from "../history";
 import { putMyReport, submitMyReport } from "../match-reports";
 import { divisionPlayerStats, personCareerStats, personStats } from "../player-stats";
@@ -60,6 +60,11 @@ import {
   putDisciplineRules,
   suspensionsForFixture,
 } from "../discipline";
+
+// Every mint seals now (scorer sheets §4.1). A throwaway key of this file's own,
+// never the developer's .env.local one: CI's unit job has no DEVICE_LINK_KEK at
+// all. Never printed; restored in afterAll.
+vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex"));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -192,6 +197,7 @@ async function expectPaywall(p: Promise<unknown>, featureKey: string): Promise<v
 }
 
 afterAll(async () => {
+  vi.unstubAllEnvs();
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
   const client = globalForDb._sql;
@@ -211,6 +217,15 @@ describe.skipIf(!HAS_DB)("Event Pass grants resolve against the competition (W2 
 
     await expectPaywall(
       createDeviceLink(ctx.auth, await makeFixture(ctx, plain), "Pitch 1"),
+      "scoring.device_links",
+    );
+
+    // Scorer sheets: the print path gates on the SAME competition.
+    const sheetFixture = await makeFixture(ctx, passed);
+    const sheet = await ensureDeviceLinks(ctx.auth, passed.competitionId, [sheetFixture]);
+    expect(sheet.get(sheetFixture)!.secret).toMatch(/^dl_/);
+    await expectPaywall(
+      ensureDeviceLinks(ctx.auth, plain.competitionId, [await makeFixture(ctx, plain)]),
       "scoring.device_links",
     );
   });

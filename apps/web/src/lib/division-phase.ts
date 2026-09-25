@@ -3,6 +3,22 @@
 // answer renders on server and client and the matrix is unit-testable.
 
 export type DivisionStatus = "setup" | "scheduled" | "active" | "completed";
+
+/** Doc 12 §1: scoring opens only after the explicit start (`division_started`);
+ *  a published-but-unstarted timetable (`scheduled`) stays read-only. The ONE
+ *  predicate for it, and every site that asks asks this:
+ *   - the scoring door refuses WRONG_PHASE on it (usecases/scoring.ts);
+ *   - the batch import refuses `import.division_not_started` on it
+ *     (usecases/event-import.ts);
+ *   - the scan page opens on "Not started yet" on it (lib/scan-screen.ts), so a
+ *     scanned sheet never offers a Start the door would refuse;
+ *   - the division page offers its Start button on it (v2/launch-actions.tsx).
+ *  Takes a plain string: every caller reads the raw column, and anything other
+ *  than these two is scoring-open, as it was. */
+export function divisionScoringClosed(status: string): boolean {
+  return status === "setup" || status === "scheduled";
+}
+
 /** Every phase, as a VALUE, so an enumeration test can cross-product over
  *  the domain instead of hand-typing it — add one here and the five-rendering
  *  agreement sweep (`desk-renderings-agree.test.tsx`) fails until the new

@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page, type APIRequestContext } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   loginUi,
   seedRosteredFixture,
@@ -16,7 +17,21 @@ import {
 } from "./helpers";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
+import { officialLabelKey } from "../src/lib/official-label";
 import { gallerySportBudgetMs } from "./gallery-budget";
+
+/** en/ui.json, read as the page renders it — a JSON-backed `src` import would
+ *  stop this file collecting (the run-sheet.spec.ts idiom). */
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+
+/** The device-link chrome's footer for one sport, exactly as the page renders
+ *  it: `device.courtsideFooter` with that sport's official from the
+ *  dictionary (`officialLabelKey`), lower-cased — the same composition
+ *  device-score-pad.tsx makes, so a copy change moves this with it. */
+const courtsideFooter = (sportKey: string): string =>
+  UI_EN["device.courtsideFooter"]!.replace("{scorer}", UI_EN[officialLabelKey(sportKey)]!.toLowerCase());
 
 // ScoringPad v3 R1 Task 10 — the productized gallery capture harness.
 //
@@ -3235,12 +3250,15 @@ for (const sport of SPORTS) {
       // fixture-console.tsx, the CONSOLE route's own wrapper (confirmed by
       // reading both files live; the first cricket run against this harness
       // timed out on `pad()` here for exactly that reason). DeviceScorePad's
-      // own chrome instead carries a fixed, sport-agnostic dictionary
-      // string — `device.courtsideFooter`, "Courtside {scorer} pad · link
-      // active today only" — whose `{scorer}` half varies per sport
-      // (officialLabel.scorer: "Umpire", "Referee", …) but whose tail does
-      // not, so this matches on the constant half only.
-      await expect(dlPage.getByText(/link active today only/)).toBeVisible({ timeout: 20_000 });
+      // own chrome instead carries its footer — `device.courtsideFooter`,
+      // "Courtside {scorer} pad", with the sport's official from the
+      // dictionary — matched whole, built the way the page builds it
+      // (`courtsideFooter`). Its old constant tail, "link active today only",
+      // was dropped in scorer sheets Task 6: links live until the match is
+      // over. The fixture here is already in play, so the scan opens on its
+      // pad rather than the Confirm card.
+      const footer = courtsideFooter(sport.sportKey);
+      await expect(dlPage.getByText(footer, { exact: true })).toBeVisible({ timeout: 20_000 });
       await captureState(
         dlPage,
         dir,
@@ -3248,7 +3266,7 @@ for (const sport of SPORTS) {
         sport.slug,
         measurements,
         visibleProbe(
-          dlPage.getByText(/link active today only/),
+          dlPage.getByText(footer, { exact: true }),
           `gallery(${sport.slug}): 05-devicelink must render the courtside pad, not the console`,
         ),
       );

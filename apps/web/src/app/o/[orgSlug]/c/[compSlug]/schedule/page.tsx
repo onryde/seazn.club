@@ -26,6 +26,9 @@ import { RungConfigProvider } from "@/components/v2/board/rung-config-provider";
 import { resolveRungConfig } from "@/lib/ai-rung";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { PrintScorerSheets } from "@/components/v2/print-scorer-sheets";
+import { listSheetDays } from "@/server/usecases/scorer-sheets";
+import { defaultSheetDay, localDateOf } from "@/lib/scorer-sheets";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 
@@ -168,13 +171,39 @@ export default async function CompetitionSchedulePage({
   // Gating a schedule control on this one silently never fires.
   const billingFrozen = competition.frozen ?? false;
 
+  // Scorer sheets §4.4. Printing MINTS scoring links, so it is an editor's
+  // action on a competition that is not billing-frozen (D8) — the day list is
+  // not even read for anyone else. The device-links gate is asked for THIS
+  // competition: an Event Pass lifts one competition (pass-scoping-guard).
+  // "Today" is on the ORG clock, the clock the sheet's own day is on
+  // (usecases/scorer-sheets.ts) — never this server's or the viewer's device.
+  // The upgrade-gated branch above shows no board and gets no print control.
+  const printable = canEdit && !billingFrozen;
+  const [sheetsAllowed, sheetDayList] = printable
+    ? await Promise.all([hasFeature(auth.orgId, "scoring.device_links", id), listSheetDays(auth, id)])
+    : [false, [] as string[]];
+  const defaultDay = defaultSheetDay(sheetDayList, localDateOf(new Date().toISOString(), orgTz));
+
   return (
     <>
       <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="mb-4">
-          <h1 className="page-title mt-1">
+        {/* Phones stack the print control under the title; from md it sits
+            beside it. A grid rather than a wrapping row: the control's refusal
+            line lands in the row BELOW it (print-scorer-sheets.tsx), so it can
+            neither widen the control's column nor move the title. */}
+        <div className="mb-4 flex min-w-0 flex-col items-start gap-3 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-end md:gap-x-4 md:gap-y-1">
+          <h1 className="page-title mt-1 min-w-0 max-w-full">
             {t(dict, "comp.schedule.title", { name: competition.name })}
           </h1>
+          {printable && (
+            <PrintScorerSheets
+              action={`/api/v1/competitions/${id}/exports/scorer-sheets`}
+              days={sheetDayList}
+              defaultDay={defaultDay}
+              allowed={sheetsAllowed}
+              viewerPlan={viewerPlan}
+            />
+          )}
         </div>
 
         {/* #385: the AI rung weights and token budgets, resolved HERE — this is

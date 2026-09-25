@@ -1626,7 +1626,10 @@ export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, loca
   ].filter((p): p is string => p !== null);
   if (parts.length === 0) return "";
   const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);
-  return msg("progression.rosterDrift.alsoCleared", { items });
+  const cleared = msg("progression.rosterDrift.alsoCleared", { items });
+  // Owner ruling Q4 (2026-09-23): the cascade takes every printed QR on this
+  // stage with it — say so in the one dialog that precedes it.
+  return a.deviceLinks > 0 ? `${cleared} ${msg("progression.rosterDrift.sheetsStop")}` : cleared;
 }
 
 /**

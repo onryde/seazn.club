@@ -332,6 +332,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /fixtures/:id/device-links",
   "GET /fixtures/:id/device-links",
   "DELETE /fixtures/:id/device-links/:linkId",
+  "POST /fixtures/:id/device-links/reissue",
   "POST /registrations/:id/refund",
   // Destructive + money-adjacent (payments-hardening P0-1): deleting a
   // competition cascades registrations/passes; console has no button —
@@ -369,6 +370,9 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // Matchday documents (v12/Task 14): the caller's own cross-org rota — same
   // session-personal rule as every other /me surface.
   "GET /me/rota.pdf",
+  // Scorer sheets (§4.4): printing ensures device links, which are
+  // session-editor only (doc 13 §7) — a key must not mint scoring credentials.
+  "POST /competitions/:id/exports/scorer-sheets",
   // Club contacts (clubs-w1/Task 4): committee PII (email/phone) editable only
   // from the console — a session/editor surface, never key-accessible.
   "GET /clubs/:id/contacts",

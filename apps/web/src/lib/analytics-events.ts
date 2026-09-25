@@ -81,6 +81,12 @@ export const EVENTS = {
   /** v4 Task 16: organiser tapped the nudge's "Fix with AI" CTA, deep-linking
    *  into the console pre-armed in repair mode + the disrupted scope. */
   AI_REPAIR_NUDGE_CLICKED: "ai_repair_nudge_clicked",
+  /** Scorer sheets: an organiser printed a day's scorer sheets (the export
+   *  route, server-side, only once the PDF is built — a refusal prints nothing
+   *  and counts nothing). Carries { competition_id, date, fixture_count,
+   *  court_count, courtless_count }; never a token, URL or link id, because
+   *  every card's QR is a live scoring credential. */
+  SCORER_SHEETS_PRINTED: "scorer_sheets_printed",
 } as const;
 
 export type AnalyticsEvent = (typeof EVENTS)[keyof typeof EVENTS];

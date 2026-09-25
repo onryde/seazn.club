@@ -153,6 +153,17 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  * Nothing about a pass a customer already HOLDS changed: the "Event Pass M
  * active" marker, the receipt, and the pass's own grants are untouched, and the
  * rung is dormant in `plan_entitlements` rather than deleted.
+ *
+ * RE-PINNED 2026-09-24 — ONE surface added to event-pass.md, none changed or
+ * moved: a "Device links and scorer sheets" bullet in "What the pass includes"
+ * (surface 22, after "Advanced formats"). Owner-approved 2026-09-24 (relayed to
+ * the implementer by the printable-scorer-sheets controller). The list had left
+ * out a key the pass lifts. Read against: `lib/pass-features.ts`
+ * (`scoring.device_links` is in PASS_FEATURES); `plan_entitlements` (community
+ * FALSE — V240 seed, V117; event_pass and event_pass_l TRUE — V393); and
+ * `server/usecases/device-links.ts`, whose ensure, Revoke & reissue and print
+ * paths all resolve `requireFeature(…, "scoring.device_links", competition)`,
+ * so a pass on THAT competition lifts it. No figure, price or window moved.
  */
 export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "7af62a47607d7223",
@@ -176,6 +187,7 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "fcd1bcb9b15230dd",
   "9cdc77f8e4467e2c",
   "f8a66461cb7b0535",
+  "00924962c38ce30e",
   "adede976a539f9fa",
   "219ccaea5a3878ae",
   "6feca5577c55cf2b",

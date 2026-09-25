@@ -144,6 +144,13 @@ async function openDeviceLink(page: Page, secret: string): Promise<void> {
   // assertion below is what stops a recurrence being measured in silence.
   await dismissCookieBanner(page);
   await expectNoCookieBanner(page, "device-link pad");
+  // Scorer sheets §4.5.1 — a scan of a not-yet-started fixture opens on the
+  // Confirm card; the pad mounts only once the device taps Start match. That
+  // is the product's own flow, so the evidence is taken on the started pad.
+  await expect(page.getByTestId("scan-confirm"), "a not-yet-started scan opens on Confirm").toBeVisible({
+    timeout: 20_000,
+  });
+  await page.getByTestId("score-start-match").click();
   await expect(page.locator('[data-role="v3-scorebug"]'), "the v3 board must render").toBeVisible({
     timeout: 20_000,
   });

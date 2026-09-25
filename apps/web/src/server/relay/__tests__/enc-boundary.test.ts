@@ -1,11 +1,15 @@
-// design §6.2: server/relay/** is the only place a *_enc column is named.
-// Two claims, because an enumerating grep is only as good as its list:
-//  1. every *_enc column the migration declares is in ENC_COLUMNS (derived
-//     from the migration file, never typed here — a fifth encrypted column
-//     added later cannot walk past this test with the list still green);
-//  2. none of them appears in any .ts/.tsx under apps/web/src outside
+// design §6.2: every *_enc column is named only by its owner — server/relay/**
+// for the stream columns, device-links.ts for the device-link secret (scorer
+// sheets §4.1). Claims, because an enumerating grep is only as good as its list:
+//  1. every *_enc column ANY delta declares is owned (ENC_COLUMNS is derived
+//     from the migration files, never typed here — an encrypted column added
+//     later cannot walk past this test with the list still green);
+//  2. no stream column appears in any .ts/.tsx under apps/web/src outside
 //     server/relay/**. Mutant r3: reference `ingest_srt_key_enc` in a usecase
 //     → red.
+//  3. outside __tests__, device-links.ts is the ONLY file naming secret_enc —
+//     and it does (the positive half: an owner that stopped naming it would
+//     leave the column written by nobody, which an empty scan cannot see).
 // Pure (no DB); runs in every CI job. Same glob discipline as
 // redirect-origin.test.ts (a narrow glob was that review's finding).
 import { describe, expect, it } from "vitest";
@@ -26,19 +30,31 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const migration = readdirSync(DELTAS).find((f) => /^V\d+__stream_sessions\.sql$/.test(f));
-const ENC_COLUMNS = migration
-  ? [...readFileSync(join(DELTAS, migration), "utf8").matchAll(/^\s*([a-z_]+_enc)\s+bytea/gm)].map((m) => m[1]!)
-  : [];
+// Every *_enc column ANY delta declares — `create table` column lines and
+// `alter table … add column` alike. Deriving from one migration file (the old
+// form) could not see a column added anywhere else.
+const DELTA_FILES = readdirSync(DELTAS).filter((f) => /^V\d+__.+\.sql$/.test(f));
+const ENC_COLUMNS = [
+  ...new Set(
+    DELTA_FILES.flatMap((f) =>
+      [...readFileSync(join(DELTAS, f), "utf8").matchAll(/\b([a-z_]+_enc)\s+bytea\b/g)].map((m) => m[1]!),
+    ),
+  ),
+].sort();
 
-describe("*_enc columns never leave server/relay/**", () => {
-  it("the migration exists and declares exactly the three encrypted columns the design names", () => {
-    expect(migration, "V<n>__stream_sessions.sql is missing").toBeDefined();
-    expect([...ENC_COLUMNS].sort()).toEqual(["ingest_rtmps_key_enc", "ingest_srt_key_enc", "rtmp_enc"]);
+/** The relay's three stream columns: only server/relay/** may name them. */
+const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "rtmp_enc"];
+/** Scorer sheets §4.1: the sealed device-link secret, named by exactly one file. */
+const DEVICE_LINK_COLUMNS = ["secret_enc"];
+const DEVICE_LINK_OWNER = "server/usecases/device-links.ts";
+
+describe("*_enc columns never leave their owners", () => {
+  it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
+    expect(ENC_COLUMNS).toEqual([...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS].sort());
   });
 
-  it("no file outside server/relay/** names any of them (r3)", () => {
-    const pattern = new RegExp(`\\b(${ENC_COLUMNS.join("|")})\\b`);
+  it("no file outside server/relay/** names a stream column (r3)", () => {
+    const pattern = new RegExp(`\\b(${STREAM_COLUMNS.join("|")})\\b`);
     const offenders = walk(SRC)
       .filter((f) => !relative(SRC, f).startsWith("server/relay/"))
       .filter((f) => pattern.test(readFileSync(f, "utf8")))
@@ -46,12 +62,21 @@ describe("*_enc columns never leave server/relay/**", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("inside the boundary, only secret-columns.ts issues SQL over them", () => {
+  it("inside the boundary, only secret-columns.ts issues SQL over the stream columns", () => {
     const inside = walk(join(SRC, "server/relay"))
       .filter((f) => !f.includes("__tests__"))
-      .filter((f) => new RegExp(`\\b(${ENC_COLUMNS.join("|")})\\b`).test(readFileSync(f, "utf8")))
+      .filter((f) => new RegExp(`\\b(${STREAM_COLUMNS.join("|")})\\b`).test(readFileSync(f, "utf8")))
       .map((f) => relative(SRC, f));
     expect(inside).toEqual(["server/relay/secret-columns.ts"]);
+  });
+
+  it("outside __tests__, only device-links.ts names secret_enc — and it does", () => {
+    const pattern = new RegExp(`\\b(${DEVICE_LINK_COLUMNS.join("|")})\\b`);
+    const naming = walk(SRC)
+      .map((f) => relative(SRC, f))
+      .filter((f) => !f.split("/").includes("__tests__"))
+      .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
+    expect(naming).toEqual([DEVICE_LINK_OWNER]);
   });
 });
 

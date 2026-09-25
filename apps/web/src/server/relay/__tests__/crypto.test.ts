@@ -6,7 +6,7 @@
 // long-lived KEK is GCM nonce reuse); and RELAY_KEK is exactly 64 hex chars.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import { open, seal } from "../crypto";
+import { hasValidKek, type KekName, open, openWith, seal, sealWith } from "../crypto";
 
 // The developer's KEK (from .env.local) is put back afterwards, or removed when there was none — never assigned
 // `undefined`, which Node stores as the string "undefined". It is never printed: no assertion here reads it.
@@ -121,5 +121,111 @@ describe("RELAY_KEK — exactly 64 hex characters, checked whole", () => {
     });
     withKek(lower.toUpperCase(), () => expect(open(env)).toBe("kek-twin"));
     withKek(hex64(), () => expect(() => open(env)).toThrow());
+  });
+});
+
+// Scorer sheets §4.1 — the device-link secret is sealed under its OWN key. One
+// leaked KEK must not open both the stream keys and every printed scoring QR.
+describe("sealWith/openWith — DEVICE_LINK_KEK (scorer sheets §4.1)", () => {
+  const savedDl = process.env.DEVICE_LINK_KEK;
+  beforeAll(() => { process.env.DEVICE_LINK_KEK = randomBytes(32).toString("hex"); });
+  afterAll(() => {
+    if (savedDl === undefined) delete process.env.DEVICE_LINK_KEK;
+    else process.env.DEVICE_LINK_KEK = savedDl;
+  });
+
+  it("round-trips a dl_ secret", () => {
+    const secret = "dl_" + randomBytes(32).toString("base64url");
+    expect(openWith("DEVICE_LINK_KEK", sealWith("DEVICE_LINK_KEK", secret))).toBe(secret);
+  });
+
+  it("a blob sealed under DEVICE_LINK_KEK does not open under RELAY_KEK, and vice versa", () => {
+    expect(() => openWith("RELAY_KEK", sealWith("DEVICE_LINK_KEK", "dl_x"))).toThrow();
+    expect(() => openWith("DEVICE_LINK_KEK", seal("rtmps://x"))).toThrow();
+    // Positive pair: each key opens its own blob.
+    expect(open(sealWith("RELAY_KEK", "rtmps://x"))).toBe("rtmps://x");
+  });
+
+  it("a flipped byte in the body throws instead of returning a plausible wrong secret", () => {
+    const blob = sealWith("DEVICE_LINK_KEK", "dl_abc");
+    blob[blob.length - 1] ^= 0x01;
+    expect(() => openWith("DEVICE_LINK_KEK", blob)).toThrow();
+  });
+
+  it("names DEVICE_LINK_KEK when it is missing or malformed — never RELAY_KEK", () => {
+    const keep = process.env.DEVICE_LINK_KEK;
+    try {
+      delete process.env.DEVICE_LINK_KEK;
+      expect(() => sealWith("DEVICE_LINK_KEK", "dl_x")).toThrow(/DEVICE_LINK_KEK is not set/);
+      expect(messageOf(() => sealWith("DEVICE_LINK_KEK", "dl_x")), "missing").not.toContain("RELAY_KEK");
+      process.env.DEVICE_LINK_KEK = "abcd";
+      expect(() => sealWith("DEVICE_LINK_KEK", "dl_x")).toThrow(/DEVICE_LINK_KEK must be exactly 64 hex/);
+      expect(messageOf(() => sealWith("DEVICE_LINK_KEK", "dl_x")), "malformed").not.toContain("RELAY_KEK");
+    } finally {
+      process.env.DEVICE_LINK_KEK = keep;
+    }
+  });
+});
+
+/** Run `fn` with `name` set to `value`, or removed, restoring the previous state even when `fn` throws. */
+function withKey(name: KekName, value: string | undefined, fn: () => void): void {
+  const keep = process.env[name];
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+  try {
+    fn();
+  } finally {
+    if (keep === undefined) delete process.env[name];
+    else process.env[name] = keep;
+  }
+}
+
+// hasValidKek is the probe device-links.ts fails closed on (owner ruling Q1). It must say exactly what kek() says: a
+// looser probe waves a mint through to a throw inside sealWith, a stricter one refuses a server whose key works.
+describe("hasValidKek — kek()'s own whole-string rule, for the key it is asked about", () => {
+  const hex64 = () => randomBytes(32).toString("hex");
+
+  it("agrees with sealWith on every accepted and every refused value", () => {
+    const cases: Record<string, string | undefined> = {
+      unset: undefined,
+      empty: "",
+      short: "abcd",
+      "65 chars": hex64() + "a",
+      "junk suffix": hex64() + "zz",
+      "trailing newline": hex64() + "\n",
+      "non-hex inside": hex64().slice(0, 40) + "g" + hex64().slice(0, 23),
+      "64 lowercase": hex64(),
+      "64 UPPERCASE": hex64().toUpperCase(),
+    };
+    const accepted = ["64 lowercase", "64 UPPERCASE"];
+    for (const [label, value] of Object.entries(cases)) {
+      withKey("DEVICE_LINK_KEK", value, () => {
+        const seals = (() => {
+          try {
+            sealWith("DEVICE_LINK_KEK", "dl_x");
+            return true;
+          } catch {
+            return false;
+          }
+        })();
+        expect(seals, `${label}: sealWith`).toBe(accepted.includes(label));
+        expect(hasValidKek("DEVICE_LINK_KEK"), `${label}: hasValidKek`).toBe(accepted.includes(label));
+      });
+    }
+  });
+
+  it("reads the key it is asked about: one valid key never vouches for the other", () => {
+    withKey("RELAY_KEK", hex64(), () =>
+      withKey("DEVICE_LINK_KEK", undefined, () => {
+        expect(hasValidKek("RELAY_KEK")).toBe(true);
+        expect(hasValidKek("DEVICE_LINK_KEK")).toBe(false);
+      }),
+    );
+    withKey("DEVICE_LINK_KEK", hex64(), () =>
+      withKey("RELAY_KEK", undefined, () => {
+        expect(hasValidKek("DEVICE_LINK_KEK")).toBe(true);
+        expect(hasValidKek("RELAY_KEK")).toBe(false);
+      }),
+    );
   });
 });
