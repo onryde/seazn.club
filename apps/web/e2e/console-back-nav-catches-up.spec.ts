@@ -82,10 +82,19 @@ test("console: Back to a console left before kick-off shows the match started el
 
   // Back. The router serves the console from its cache — no server render —
   // which is the stale seed this test is about.
+  //
+  // A prefetch of the console (a link to it coming into view, or the router
+  // warming its cache) is also an `rsc: 1` request for this path, but it
+  // renders nothing into the page, so it cannot freshen the seed. Next marks
+  // those with `next-router-prefetch` (and, for a per-segment prefetch,
+  // `next-router-segment-prefetch` — app-router-headers.js); only the rest
+  // count as a render.
   const consoleRenders: string[] = [];
   page.on("request", (req) => {
     const url = new URL(req.url());
-    if (url.pathname === consolePath && req.headers()["rsc"] === "1") consoleRenders.push(req.url());
+    const headers = req.headers();
+    const prefetch = headers["next-router-prefetch"] !== undefined || headers["next-router-segment-prefetch"] !== undefined;
+    if (url.pathname === consolePath && headers["rsc"] === "1" && !prefetch) consoleRenders.push(req.url());
   });
   const remount = padTokenRequest();
   await page.goBack();
