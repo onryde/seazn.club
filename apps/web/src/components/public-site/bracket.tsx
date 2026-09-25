@@ -159,7 +159,7 @@ function FixtureCard({
       </div>
       <div className="mt-1.5 text-xs text-ink-muted">
         {live ? (
-          <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-emerald-600">
+          <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-emerald-700">
             {/* `shrink-0`: the rail's dot's squeeze class (N1h h1, review-n1g G1). */}
             <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
             {copy.live}

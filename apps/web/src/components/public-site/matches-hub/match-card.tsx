@@ -267,7 +267,7 @@ export function MatchCard({
         ) : null}
         <span className="ml-auto shrink-0">
           {m.bucket === "live" ? (
-            <span data-testid="mh-match-live" className="flex items-center gap-1 font-bold text-emerald-600">
+            <span data-testid="mh-match-live" className="flex items-center gap-1 font-bold text-emerald-700">
               <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
               {t(dict, "matchesHub.live")}
             </span>

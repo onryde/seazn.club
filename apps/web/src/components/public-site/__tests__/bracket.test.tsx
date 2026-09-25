@@ -20,6 +20,7 @@ import { t } from "@/lib/i18n-runtime";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { LOCALES } from "@/lib/i18n-constants";
+import { psColour, swatchContrast, textSwatchOf } from "./_tailwind-contrast";
 
 // R10d n4: `slotText` is compile-required: an unfilled side's text, which
 // every real caller takes from the public round namer's `slot`. None of the
@@ -755,6 +756,22 @@ describe("public Bracket — a card footer's Live / TBD are the org locale's wor
   it("en still reads 'Live' and 'TBD', the words the card always printed", async () => {
     expect(await wordsFor("en")).toEqual({ live: "Live", tbd: "TBD" });
     expect(footersOf(await render("en"))).toEqual({ "/f/live": "Live", "/f/timeless": "TBD", "/f/final": "TBD" });
+  });
+
+  // The green "Live" word shipped as `text-emerald-600` on the white card:
+  // 3.65:1, under WCAG AA's 4.5:1 for 12px bold (not "large" text). The hub's
+  // match card and the division Schedule carry the same word in the same green
+  // and are witnessed by axe in `spectator-hub.spec.ts` HB12L; no e2e seeds a
+  // live knockout, so this card's ratio is priced here, from Tailwind's own
+  // palette and the card's own ground (`_tailwind-contrast.ts`).
+  it("the live footer's green reads at least 4.5:1 on the card's surface", async () => {
+    const html = await render("en");
+    const card = /<a[^>]*href="\/f\/live"[^>]*class="([^"]*)"/.exec(html) ?? /<a[^>]*class="([^"]*)"[^>]*href="\/f\/live"/.exec(html);
+    expect(card?.[1]!.split(" "), "the live card's ground").toContain("bg-surface");
+    const word = /<span class="([^"]*)"><span class="[^"]*\banimate-live-pulse\b/.exec(html);
+    expect(word, "the live card's footer word").not.toBeNull();
+    const swatch = textSwatchOf(word![1]!);
+    expect(swatchContrast(swatch, psColour("surface")), `text-${swatch} on --ps-surface`).toBeGreaterThanOrEqual(4.5);
   });
 
   // The rail's dot got `shrink-0` in N1h h1 (review-n1g G1): an empty flex item
