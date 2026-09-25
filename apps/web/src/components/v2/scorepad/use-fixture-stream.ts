@@ -85,10 +85,11 @@ export interface UseFixtureStreamParams {
   pollMs?: number;
   fetchFn?: typeof fetch;
   connector?: RealtimeConnector;
-  /** True while some OTHER caller-owned network activity (a write drain) is
-   *  in flight — a poll tick due during it is skipped rather than racing it.
-   *  Defaults to "never skip". */
-  skipPollWhile?: () => boolean;
+  /** The caller's own write activity (a queue drain) while it is in flight,
+   *  else null. A poll tick or signal due during it is skipped rather than
+   *  racing it — the next one comes round. The catch-up read runs only once,
+   *  so it WAITS for this to settle instead. Defaults to "never writing". */
+  writeInFlight?: () => Promise<unknown> | null;
 }
 
 export interface UseFixtureStreamResult {
@@ -111,12 +112,14 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
     onEventsRef.current = onEvents;
   }, [onEvents]);
 
-  const skipRef = useRef(params.skipPollWhile);
+  const writeRef = useRef(params.writeInFlight);
   useEffect(() => {
-    skipRef.current = params.skipPollWhile;
-  }, [params.skipPollWhile]);
+    writeRef.current = params.writeInFlight;
+  }, [params.writeInFlight]);
 
-  const inFlight = useRef(false);
+  /** The read in flight, if any — a promise rather than a flag so the
+   *  catch-up can wait on it. */
+  const inFlight = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -131,19 +134,54 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
     let subscription: RealtimeSubscription | null = null;
     let interval: ReturnType<typeof setInterval> | null = null;
 
-    async function fetchOnce(): Promise<void> {
-      if (skipRef.current?.()) return;
-      if (inFlight.current) return; // no self-overlap
-      inFlight.current = true;
-      try {
-        const events = await listEventsSince(fixtureId, sinceRef.current);
-        if (!cancelled) onEventsRef.current(events);
-      } catch {
-        // No user-visible error state — a missed read is corrected by the
-        // next tick/signal.
-      } finally {
-        inFlight.current = false;
-      }
+    function read(): Promise<void> {
+      const run: Promise<void> = (async () => {
+        try {
+          const events = await listEventsSince(fixtureId, sinceRef.current);
+          if (!cancelled) onEventsRef.current(events);
+        } catch {
+          // No user-visible error state — a missed read is corrected by the
+          // next tick/signal.
+        }
+      })().finally(() => {
+        if (inFlight.current === run) inFlight.current = null;
+      });
+      inFlight.current = run;
+      return run;
+    }
+
+    /** What a read must not overlap: the caller's write, or another read. */
+    function busy(): Promise<unknown> | null {
+      return writeRef.current?.() ?? inFlight.current;
+    }
+
+    /** A poll tick or a realtime signal — skipped while anything is busy,
+     *  since the next one comes round. */
+    function fetchOnce(): void {
+      if (busy() !== null) return;
+      void read();
+    }
+
+    /** The catch-up — it is not repeated, so it waits out whatever is busy
+     *  rather than being skipped. Re-checked after every wait: a drain can
+     *  start another, and a read can land in the gap. A second request while
+     *  one is still waiting joins it: that read goes out after both, so it
+     *  covers both. */
+    let catchUpWaiting = false;
+    function catchUp(): void {
+      if (catchUpWaiting) return;
+      catchUpWaiting = true;
+      void (async () => {
+        for (let pending = busy(); pending !== null; pending = busy()) {
+          await pending.then(
+            () => undefined,
+            () => undefined,
+          );
+          if (cancelled) return;
+        }
+        catchUpWaiting = false;
+        await read();
+      })();
     }
 
     function startPolling(): void {
@@ -185,9 +223,15 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
         onStatus: (subscribed) => {
           if (cancelled) return;
           if (subscribed) {
+            // Joined, or rejoined after a drop: the channel signals only what
+            // is written from here on, and the catch-up below went out when
+            // the channel was REQUESTED. A write in between would never be
+            // read, so read once more now.
+            const joined = !realtimeConfirmed;
             realtimeConfirmed = true;
             setMode("realtime");
             stopPolling();
+            if (joined) catchUp();
           } else {
             realtimeConfirmed = false;
             startPolling();
@@ -201,7 +245,30 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
       startPolling();
     }
 
-    void attemptRealtime();
+    // Catch-up on subscribe: ONE read, once a transport is chosen (the channel
+    // requested, or polling armed), for whatever was written before it was.
+    // Neither transport covers that window by itself — a realtime channel only
+    // signals FUTURE writes, and the first poll tick is `pollMs` away. And the
+    // seed can be older than the page: browser Back/Forward re-uses the
+    // router's cached RSC payload, so a console remounts on the ledger it held
+    // when the scorer navigated away. The pad used to be rescued from that by
+    // its own mount-time report to the chrome, which forced a full re-read;
+    // that report greyed Start match under a scorer's tap (v3/pad-host.tsx,
+    // `useReportLedgerChanges`), and this read replaces it.
+    //
+    // On a fresh page it returns nothing new — the cursor is the seed's own
+    // count, and a server bootstrap is gapless — and the pad's pipeline treats
+    // an empty batch as a no-op, so nothing on screen moves or greys. It is
+    // the same read a tick makes and never overlaps a write or another read —
+    // but it WAITS for them where a tick is skipped (`catchUp`): a pad that
+    // reopens with a leftover queue drains it at mount, which is exactly when
+    // this comes due.
+    //
+    // A channel that has already joined by now has read on its join (see
+    // `onStatus`), later than this would, so this one is not needed.
+    void attemptRealtime().then(() => {
+      if (!cancelled && !realtimeConfirmed) catchUp();
+    });
 
     return () => {
       cancelled = true;
@@ -209,7 +276,7 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
       subscription?.unsubscribe();
     };
     // fixtureId/auth/listEventsSince/connector/fetchFn/pollMs are the real
-    // identity of "which stream" this is; sinceSeq/onEvents/skipPollWhile
+    // identity of "which stream" this is; sinceSeq/onEvents/writeInFlight
     // are read via the refs above precisely so THEY don't force a
     // resubscribe (a new token + a fresh realtime handshake) on every
     // render — and because they're read only via refs, exhaustive-deps has

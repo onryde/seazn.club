@@ -25,6 +25,48 @@ test.beforeAll(() => {
   expect(HOLD_PROOF_MS, "hold proof must leave room before auto-flush").toBeLessThan(HOLD_MS);
 });
 
+// The page clock is installed (flowing in real time) before every page opens,
+// so `expectHeldThenFlush` can pause it once the hold is proven. It has to be
+// in place before the tap: the hold is a `setTimeout` armed by the tap itself,
+// and a timer created before `install()` is a real one no pause can stop.
+test.beforeEach(async ({ page }) => {
+  await page.clock.install();
+});
+
+/** How far `freezeClock` lets the page clock jump. Small beside what is left
+ *  of the hold at that point (HOLD_MS − HOLD_PROOF_MS). */
+const FREEZE_JUMP_MS = 100;
+
+/**
+ * Stop the page clock where it stands, so the open dock cannot flush itself
+ * while it is checked, photographed and Send now is pressed.
+ *
+ * Needed because the photograph outlasts the hold under load: CI's HOLD_MS is
+ * 3000, the proof below spends HOLD_PROOF_MS of it, and a full-page capture on
+ * a loaded machine took the rest — "tennis point holds" timed out on Send now
+ * with the dock already gone. Frozen only AFTER the proof's wait, so the hold
+ * still has to last HOLD_PROOF_MS on a live clock; the mid-hold checks run
+ * after the freeze, off the clock.
+ *
+ * `pauseAt(t)` pauses and then jumps FORWARD to `t`, firing every timer due on
+ * the way, so the jump is kept small rather than generous: jumping past the
+ * hold's deadline would flush the very dock this protects. A target the page
+ * clock has already passed by the time the call lands is refused ("Cannot
+ * fast-forward to the past") — read the clock again and retry, never widen
+ * the jump.
+ */
+async function freezeClock(page: Page): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    const now = await page.evaluate(() => Date.now());
+    try {
+      await page.clock.pauseAt(now + FREEZE_JUMP_MS);
+      return;
+    } catch (error) {
+      if (attempt >= 5 || !String(error).includes("past")) throw error;
+    }
+  }
+}
+
 type LedgerEvent = { id: string; seq: number; type: string; payload: Record<string, unknown> };
 
 function pad(page: Page) {
@@ -103,6 +145,11 @@ async function expectHeldThenFlush(
   // a meaningful fraction of HOLD_MS (not a 400ms glance that would pass if
   // submit were immediate under the dock).
   await page.waitForTimeout(HOLD_PROOF_MS);
+  // The hold has now run HOLD_PROOF_MS on a live clock; stop it there, before
+  // the checks below, so their round trips come out of no one's budget.
+  // Freezing stops timers, not the network: a tap that went straight out, or
+  // a hold that flushed early, has already posted by now and is still seen.
+  await freezeClock(page);
   await expect(dock(page), "dock must still be open mid-hold").toBeVisible();
   expect(
     (await ledger(request, fixtureId)).filter((e) => e.type === type).length,
@@ -116,6 +163,7 @@ async function expectHeldThenFlush(
     })
     .toBe(before + 1);
   await expect(dock(page)).toHaveCount(0, { timeout: 5_000 });
+  await page.clock.resume();
 }
 
 test("inventory: cricket plain immediate; noball holds; wide immediate", async ({ page }) => {

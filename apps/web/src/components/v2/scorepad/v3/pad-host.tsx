@@ -1541,6 +1541,41 @@ interface HeldTap {
 const NO_ENTITLEMENTS: Readonly<Record<string, boolean>> = {};
 const NO_NAMES: Readonly<Record<string, string>> = {};
 
+/**
+ * Hand the chrome around the pad (`onEvents`) the pipeline's ledger each time
+ * it CHANGES — a submit, an ack, a foreign-write merge — and never the ledger
+ * it was seeded with.
+ *
+ * The seed is the server bootstrap the chrome rendered from in the same
+ * request, so reporting it tells the chrome nothing. It is not free, either:
+ * both consumers (`fixture-console.tsx` and `device-score-pad.tsx`) answer
+ * `onEvents` with a `/state` + `/events` resync under `padSyncing`, which
+ * greys Start match, Undo, Void and Forfeit until it returns. Fired at mount,
+ * that greyed the one filled button on the page for a round trip after every
+ * load, and a tap landing in it was dropped by the browser — found as a CI
+ * flake (run 35969236588: the trace's snapshot at the click shows the button
+ * `disabled`, and the ledger stayed `[]`).
+ *
+ * "Changed" is identity against the last list reported, starting from the
+ * seed: `pipeline.events` is a memo over `ledgerEvents` and
+ * `pendingEnvelopes`, so it moves exactly when one of those is committed.
+ * Identity rather than a first-run flag, so a development StrictMode
+ * mount/unmount/remount replays the SAME seed and still reports nothing. A
+ * restored offline queue is a real change (`commitPendingEnvelopes` after
+ * mount) and is still reported.
+ */
+export function useReportLedgerChanges(
+  events: readonly EventEnvelope[],
+  onEvents: ((events: readonly EventEnvelope[]) => void) | undefined,
+): void {
+  const reported = useRef(events);
+  useEffect(() => {
+    if (events === reported.current) return;
+    reported.current = events;
+    onEvents?.(events);
+  }, [events, onEvents]);
+}
+
 export function PadHostV3(props: PadHostV3Props) {
   const msg = useMsg();
   // Widens useMsg()'s MessageKey-only param to the loose `string` every v3
@@ -1572,10 +1607,7 @@ export function PadHostV3(props: PadHostV3Props) {
     props.onStateChange?.(pipeline.state, pipeline.summary);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipeline.state, pipeline.summary]);
-  useEffect(() => {
-    props.onEvents?.(pipeline.events);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipeline.events]);
+  useReportLedgerChanges(pipeline.events, props.onEvents);
 
   const personNames = props.personNames ?? NO_NAMES;
   const entitlements = props.entitlements ?? NO_ENTITLEMENTS;

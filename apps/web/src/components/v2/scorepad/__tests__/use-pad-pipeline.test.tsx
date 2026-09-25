@@ -707,15 +707,124 @@ describe("usePadPipeline — live stream wiring (review finding 3)", () => {
 
     const submitPromise = pad.current.submit("generic.score", { by: "H", points: 1 }); // drain starts, gated
     await vi.advanceTimersByTimeAsync(0); // let attemptRealtime settle into polling mode
+    // Whatever the stream's catch-up on subscribe did at mount is settled by
+    // now; only reads from here on are the ticks this test is about. (Here
+    // the catch-up comes due before the drain is out, so it has already read;
+    // the case where it comes due DURING a drain is the test below.)
+    const readsAtRest = listEventsSince.mock.calls.length;
 
     await vi.advanceTimersByTimeAsync(1_000); // a poll tick is due WHILE the drain is still in flight
-    expect(listEventsSince).not.toHaveBeenCalled(); // suppressed by skipPollWhile
+    expect(listEventsSince).toHaveBeenCalledTimes(readsAtRest); // suppressed by writeInFlight
 
     gate.resolve(success(1));
     await submitPromise;
 
     await vi.advanceTimersByTimeAsync(1_000); // drain finished — the NEXT tick may fetch
-    expect(listEventsSince).toHaveBeenCalled();
+    expect(listEventsSince).toHaveBeenCalledTimes(readsAtRest + 1);
+  });
+
+  // A pad that reopens with a leftover queue drains it at mount — the same
+  // moment the stream's catch-up comes due. A tick may skip a drain (the next
+  // tick comes round); the catch-up runs once, so it waits the drain out.
+  it("a leftover queue drained at mount does not swallow the stream's catch-up — the read goes out once the drain settles", async () => {
+    const DB_NAME = "catch-up-after-mount-drain";
+    const tokenDoor = deferred<void>();
+    const ack = deferred<AppendCallResult>();
+    const appendCalls: AppendEventBody[] = [];
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => []);
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        return ack.promise;
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    await enqueue(indexedDbQueueStore(DB_NAME), {
+      localId: "local-leftover-1",
+      idempotencyKey: "idem-leftover-1",
+      type: "generic.score",
+      payload: { by: "H", points: 1 },
+      expectedSeq: 0,
+      createdAt: "2026-09-25T00:00:00.000Z",
+      attempts: 0,
+    });
+    const pad = mountPipeline(
+      baseParams({
+        transport,
+        queueDbName: DB_NAME,
+        // The token door answers only once the drain is out, so the catch-up
+        // comes due DURING it.
+        streamFetchFn: (async () => {
+          await tokenDoor.promise;
+          return fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } });
+        }) as unknown as typeof fetch,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(appendCalls, "the leftover is on the wire").toHaveLength(1);
+    tokenDoor.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no read while the drain is out").not.toHaveBeenCalled();
+
+    ack.resolve(success(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(listEventsSince.mock.calls, "the catch-up, once the drain has settled").toEqual([["fx-1", 1]]);
+  });
+
+  // A realtime pad reads twice as it subscribes — as the channel is requested
+  // and again as it joins — and the second read can go out before the first
+  // one's rows have moved the cursor. Both then carry the same rows; the merge
+  // keys them by seq, so they land once.
+  it("the catch-up and the join read can both carry the same row — it lands in the ledger once", async () => {
+    let join!: () => void;
+    const joinsLater: RealtimeConnector = {
+      connect(params) {
+        join = () => params.onStatus(true);
+        return { unsubscribe() {} };
+      },
+    };
+    const joinWindowRow: LedgerSlotEvent = {
+      id: "foreign-join-window-1",
+      seq: 1,
+      type: "core.note",
+      payload: { text: "written while the channel joined" },
+      recorded_at: "2026-09-25T00:00:00.000Z",
+      recorded_by: "user-2",
+      device_link_id: null,
+    };
+    // Answers every read with the row, whatever the cursor: the two reads
+    // overlap by construction, not by timing.
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => [joinWindowRow]);
+    const transport: PadTransport = {
+      async appendEvent() {
+        throw new Error("not used by this test");
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      // `state: null` is reconcileAfterAck's no-op, so only the merge shapes
+      // the ledger below.
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport, streamConnector: joinsLater }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "the catch-up, as the channel is requested").toHaveBeenCalledTimes(1);
+    expect(pad.current.events.map((e) => e.id)).toEqual(["foreign-join-window-1"]);
+
+    join();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "the join's read").toHaveBeenCalledTimes(2);
+    expect(pad.current.events.map((e) => e.id)).toEqual(["foreign-join-window-1"]);
   });
 
   it("an inbound stream event moves the folded state to the server's own fold", async () => {
@@ -1047,7 +1156,7 @@ describe("usePadPipeline — offline queue survives a poll merge (S12/#421)", ()
 
     // The drain already STOPPED (a network error, not an in-flight send —
     // sendOne returns "stayed-queued" and runDrain's own `.finally` clears
-    // `drainInFlight`), so skipPollWhile does NOT suppress this poll tick.
+    // `drainInFlight`), so `writeInFlight` does NOT suppress this poll tick.
     await vi.advanceTimersByTimeAsync(0); // settle into polling
     await vi.advanceTimersByTimeAsync(1_000); // a poll tick merges the foreign core.note
     await vi.advanceTimersByTimeAsync(0);
@@ -1538,11 +1647,15 @@ describe("usePadPipeline — undo a pad-submitted event with no reload (S12/#421
       },
     };
     const pad = mountPipeline(baseParams({ transport, initialEvents }));
+    await tick(); // the stream's catch-up on subscribe lands before the tap
 
     await pad.current.submit("core.void", { event_id: "e-2" });
+    await tick();
 
     expect(appendCalls[0]?.payload).toEqual({ event_id: "e-2" });
-    expect(listEventsSince).not.toHaveBeenCalled();
+    // The ONE read is the stream's catch-up, from the seed's own count (2) —
+    // no resolution round trip joined it.
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 2]]);
   });
 
   it("MUTATION TARGET: a void whose target was never durably recorded (permanently rejected) surfaces via lastRejection instead of vanishing", async () => {
@@ -1904,19 +2017,26 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
   it("a hand-built legacy void resolves via pass G's own ownEventIds fallback rather than crashing", async () => {
     const DB_NAME = "pass-j-legacy-pending-event";
     const STALE_ID = "client-fabricated-pre-pass-h-id";
+    // A match already under way, as a reload finds it — and a seed that is
+    // not empty keeps the stream's catch-up off cursor 0, so the read below
+    // can be pinned exactly rather than excused.
+    const initialEvents = [
+      { id: "srv-start-1", fixtureId: "fx-1", seq: 1, type: "core.start", payload: {}, recordedAt: "2026-08-13T00:00:00.000Z", recordedBy: "user-1" },
+      { id: "srv-score-2", fixtureId: "fx-1", seq: 2, type: "generic.score", payload: { by: "H", points: 1 }, recordedAt: "2026-08-13T00:00:01.000Z", recordedBy: "user-1" },
+    ];
     const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => []);
     const appendCalls: AppendEventBody[] = [];
     const transport: PadTransport = {
       async appendEvent(_fixtureId, body) {
         appendCalls.push(body);
-        return success(1);
+        return success(3);
       },
       listEventsSince,
       async getLastSeq() {
-        return 0;
+        return 2;
       },
       async fetchState() {
-        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+        return { status: "in_play", last_seq: 3, state: null, summary: null, outcome: null };
       },
     };
 
@@ -1932,8 +2052,8 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
       idempotencyKey: "void-idem-legacy-1",
       type: "core.void",
       payload: { event_id: STALE_ID },
-      expectedSeq: 0,
-      createdAt: "2026-08-13T00:00:00.000Z",
+      expectedSeq: 2,
+      createdAt: "2026-08-13T00:00:02.000Z",
       attempts: 0,
       // voidTargetSeq deliberately absent — the exact shape under test.
     };
@@ -1942,7 +2062,7 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
     // A genuinely fresh mount — ownEventIds starts empty exactly like a real
     // reload, and nothing here ever calls submit(), so voidTargetSeq is never
     // set any other way either.
-    const pad = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    const pad = mountPipeline(baseParams({ transport, queueDbName: DB_NAME, initialEvents }));
     for (let i = 0; i < 5; i += 1) {
       await tick();
     }
@@ -1958,8 +2078,9 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
     // The "same" fast path never attempts a network resolution at all —
     // proves this took the SAME branch as any id this mount has never heard
     // of, not some voidTargetSeq-shaped code path that merely happens not to
-    // throw today.
-    expect(listEventsSince).not.toHaveBeenCalled();
+    // throw today. So the one read is the stream's catch-up on subscribe, and
+    // nothing else.
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 2]]);
     expect(pad.current.queueDepth).toBe(0);
     // pendingWithLocalVoidTarget's OWN no-op, directly: the LOCAL fold
     // envelope must still carry the ORIGINAL, unmodified `voids` id — proof
@@ -2369,36 +2490,39 @@ describe("usePadPipeline — a foreign void arriving by POLL still names its tar
 
   it("MUTATION TARGET: a polled core.void carrying voids_event_id reverts the locally-scored event it names — no rejection", async () => {
     const REAL_SERVER_ID = "server-real-score-id-poll-r5";
-    const listEventsSince = vi.fn(
-      async (): Promise<LedgerSlotEvent[]> => [
-        // The SERVER's own copy of the event this pad scored (same seq, REAL
-        // id) followed by the foreign void naming it — one poll batch, which
-        // is what a real `/events?since_seq=` read returns after someone
-        // else's undo lands.
-        {
-          id: REAL_SERVER_ID,
-          seq: 1,
-          type: "generic.score",
-          payload: { by: "H", points: 2 },
-          recorded_at: "2026-08-28T00:00:00.000Z",
-          recorded_by: "user-1",
-          device_link_id: null,
-          voids_event_id: null,
-        },
-        {
-          id: "poll-void-1",
-          seq: 2,
-          type: "core.void",
-          payload: {},
-          recorded_at: "2026-08-28T00:00:05.000Z",
-          recorded_by: "console-user",
-          device_link_id: null,
-          voids_event_id: REAL_SERVER_ID,
-        },
-      ],
-    );
+    // The SERVER's own copy of the event this pad scored (same seq, REAL id)
+    // followed by the foreign void naming it — one poll batch, which is what a
+    // real `/events?since_seq=` read returns after someone else's undo lands.
+    const undoneBatch: LedgerSlotEvent[] = [
+      {
+        id: REAL_SERVER_ID,
+        seq: 1,
+        type: "generic.score",
+        payload: { by: "H", points: 2 },
+        recorded_at: "2026-08-28T00:00:00.000Z",
+        recorded_by: "user-1",
+        device_link_id: null,
+        voids_event_id: null,
+      },
+      {
+        id: "poll-void-1",
+        seq: 2,
+        type: "core.void",
+        payload: {},
+        recorded_at: "2026-08-28T00:00:05.000Z",
+        recorded_by: "console-user",
+        device_link_id: null,
+        voids_event_id: REAL_SERVER_ID,
+      },
+    ];
+    // Neither row exists until this pad has scored: the stream's catch-up on
+    // subscribe reads at mount, and a batch served then would describe a
+    // score nobody had made yet.
+    let scored = false;
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => (scored ? undoneBatch : []));
     const transport: PadTransport = {
       async appendEvent() {
+        scored = true;
         return success(1);
       },
       listEventsSince,
@@ -2412,6 +2536,7 @@ describe("usePadPipeline — a foreign void arriving by POLL still names its tar
     const pad = mountPipeline(
       baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: 1_000 }),
     );
+    await vi.advanceTimersByTimeAsync(0); // the stream subscribes; its catch-up finds nothing yet
 
     await pad.current.submit("generic.score", { by: "H", points: 2 });
     expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({
@@ -2803,9 +2928,9 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
    *  a second rig. It only does the two settling steps every case here needs:
    *  `neverConfirmConnector` so a REAL poll interval is armed (the suite's
    *  default `autoConfirmConnector` confirms synchronously and never polls, so
-   *  `listEventsSince` would never be called at all and `lastSinceSeq()` would
-   *  be vacuously undefined), then one poll tick so the cursor actually
-   *  crosses the wire. */
+   *  `listEventsSince` would be called only once, by the stream's catch-up on
+   *  subscribe), then one poll tick so a cursor taken AFTER that read has
+   *  crossed the wire too. */
   async function renderPipeline(
     initialEvents: EventEnvelope[],
     opts: { appendResults?: AppendCallResult[]; serverLedger?: LedgerSlotEvent[] } = {},
@@ -2862,7 +2987,13 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
       rig.pad.current.events.map((e) => e.seq),
       "seq 4 sits above the count and at-or-below the tip — the under-shoot is what brings it back",
     ).toEqual([1, 2, 4, 5]);
-    expect(rig.lastSinceSeq(), "the poll cursor under-shoots the tip while the ledger is sparse").toBe(3);
+    // The read that brought it home is the FIRST one — the stream's catch-up on
+    // subscribe, asked from the mount-time count. Every later read asks from
+    // the count as it stands after seq 4 landed.
+    expect(
+      rig.listEventsSinceCalls[0]?.sinceSeq,
+      "the read cursor under-shoots the tip while the ledger is sparse",
+    ).toBe(3);
   });
 
   it("derives the next expectedSeq from the TIP, not the count", async () => {
@@ -2977,10 +3108,14 @@ describe("usePadPipeline — a sparse ledger after a 409 renegotiation (W3 task 
       serverLedger: [foreignRow(3), foreignRow(4)],
     });
 
-    expect(rig.lastSinceSeq()).toBe(2); // the mount-time cursor, as asked by the first tick
+    // The mount-time cursor, as asked by the first read (the stream's catch-up
+    // on subscribe)…
+    expect(rig.listEventsSinceCalls[0]?.sinceSeq).toBe(2);
     expect(rig.pad.current.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]); // …which delivered both rows
+    // …and the tick after it already asks from the NEW count.
+    expect(rig.lastSinceSeq()).toBe(4);
 
-    await vi.advanceTimersByTimeAsync(POLL_MS); // the NEXT tick, after the ledger moved
+    await vi.advanceTimersByTimeAsync(POLL_MS); // and so does the next one
     expect(rig.lastSinceSeq()).toBe(4);
   });
 
@@ -3087,6 +3222,25 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
   const running = (pad: { current: UsePadPipelineResult }) =>
     (pad.current.state as { running?: { home: number; away: number } }).running;
 
+  /** Every case here mounts on an EMPTY seed, so the stream's catch-up on
+   *  subscribe asks from 0 — the same cursor as Fix B's whole-ledger heal read.
+   *  The catch-up runs at mount, against a server that holds nothing yet
+   *  (`settleSubscribe` pins that); the heal runs once the server holds the
+   *  void. A transport double that fails or holds "the heal read" keys on
+   *  this, not on the cursor alone. */
+  const isHealRead = (sinceSeq: number, serverLedger: readonly LedgerSlotEvent[]) =>
+    sinceSeq === 0 && serverLedger.length > 0;
+
+  /** Let the stream subscribe before the first tap. Its catch-up read lands
+   *  against the still-empty server — pinned here, then cleared from the
+   *  record, so each case's call list starts with the reads its OWN story
+   *  makes. */
+  async function settleSubscribe(rig: { listEventsSinceCalls: { sinceSeq: number }[] }) {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rig.listEventsSinceCalls.map((c) => c.sinceSeq), "the stream's catch-up on subscribe").toEqual([0]);
+    rig.listEventsSinceCalls.length = 0;
+  }
+
   /** Score one event through the pad, then publish the server's truth. */
   async function scoreThenServer(opts: {
     ack: AppendCallResult;
@@ -3099,6 +3253,7 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
     const pad = mountPipeline(
       baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
     );
+    await settleSubscribe(rig);
     await pad.current.submit("generic.score", { by: "H", points: 2 });
     expect(running(pad), "the pad's own score must fold before anything is undone").toEqual({ home: 2, away: 0 });
     // The server's own ledger from here on: the row this pad scored under its
@@ -3185,7 +3340,7 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
         ...base,
         async listEventsSince(fixtureId, sinceSeq) {
           const rows = await base.listEventsSince(fixtureId, sinceSeq);
-          if (sinceSeq === 0 && healFailures === 0) {
+          if (isHealRead(sinceSeq, serverLedger) && healFailures === 0) {
             healFailures += 1;
             throw new Error("courtside wifi dropped the heal read");
           }
@@ -3224,7 +3379,7 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
         ...base,
         async listEventsSince(fixtureId, sinceSeq) {
           const rows = await base.listEventsSince(fixtureId, sinceSeq);
-          if (sinceSeq === 0 && healFailures === 0) {
+          if (isHealRead(sinceSeq, serverLedger) && healFailures === 0) {
             healFailures += 1;
             throw new Error("courtside wifi dropped the heal read");
           }
@@ -3261,7 +3416,7 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
         ...base,
         async listEventsSince(fixtureId, sinceSeq) {
           const rows = await base.listEventsSince(fixtureId, sinceSeq);
-          if (sinceSeq === 0) {
+          if (isHealRead(sinceSeq, serverLedger)) {
             healReads += 1;
             if (healReads === 1) throw new Error("dropped");
             if (healReads === 2) {
@@ -3304,6 +3459,7 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
     const pad = mountPipeline(
       baseParams({ transport: rig.transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
     );
+    await settleSubscribe(rig);
     await pad.current.submit("generic.score", { by: "H", points: 2 });
     await pad.current.submit("generic.score", { by: "A", points: 1 });
     expect(pad.current.lastRejection?.code, "the server refused the second tap").toBe("WRONG_PHASE");
@@ -3330,7 +3486,7 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
           // Recorded first, THEN held — so the call list shows the heal
           // read was made even while it hangs.
           const rows = await base.listEventsSince(fixtureId, sinceSeq);
-          if (sinceSeq === 0) await heal.promise;
+          if (isHealRead(sinceSeq, serverLedger)) await heal.promise;
           return rows;
         },
       }),
@@ -3357,11 +3513,12 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
       ...rig.transport,
       async listEventsSince(fixtureId, sinceSeq) {
         const rows = await rig.transport.listEventsSince(fixtureId, sinceSeq);
-        if (sinceSeq === 0) await heal.promise;
+        if (isHealRead(sinceSeq, serverLedger)) await heal.promise;
         return rows;
       },
     };
     const pad = mountPipeline(baseParams({ transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }));
+    await settleSubscribe(rig);
     await pad.current.submit("generic.score", { by: "H", points: 2 });
     serverLedger.push(scoredRow(REAL_ID), voidRow(2, REAL_ID));
     await vi.advanceTimersByTimeAsync(0);
@@ -3389,6 +3546,7 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
     const pad = mountPipeline(
       baseParams({ transport: rig.transport, streamConnector: neverConfirmConnector(), streamPollMs: POLL }),
     );
+    await settleSubscribe(rig);
     await pad.current.submit("generic.score", { by: "H", points: 2 });
     await pad.current.submit("generic.score", { by: "A", points: 1 });
     const firstMinted = pad.current.events.find((e) => e.seq === 1)!.id;

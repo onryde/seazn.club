@@ -108,8 +108,11 @@ describe("useFixtureStream — realtime path", () => {
 
     // No fallback polling should have been armed once realtime confirmed —
     // advancing well past pollMs must not call listEventsSince from a timer.
+    // The two reads already made are the catch-up on subscribe and the one on
+    // the join (their own describe block, below).
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(listEventsSince).not.toHaveBeenCalled();
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
   });
 
   it("a realtime broadcast signal triggers the SAME listEventsSince fetch a poll tick would", async () => {
@@ -128,11 +131,16 @@ describe("useFixtureStream — realtime path", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    // The catch-up on subscribe and the join have already read; measured from
+    // here so neither can stand in for the signal's.
+    const readsBefore = listEventsSince.mock.calls.length;
+    const deliveriesBefore = onEvents.mock.calls.length;
 
     fireSignal();
     await vi.advanceTimersByTimeAsync(0);
-    expect(listEventsSince).toHaveBeenCalledWith("fx-1", 4);
-    expect(onEvents).toHaveBeenCalledWith(rows);
+    expect(listEventsSince.mock.calls.slice(readsBefore)).toEqual([["fx-1", 4]]);
+    expect(onEvents.mock.calls.slice(deliveriesBefore)).toEqual([[rows]]);
   });
 });
 
@@ -155,10 +163,14 @@ describe("useFixtureStream — polling fallback", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(connectCalls).toEqual([]); // never attempted realtime
     expect(stream.current.mode).toBe("polling");
-    expect(listEventsSince).not.toHaveBeenCalled(); // not yet — the interval hasn't fired
+    // Only the catch-up on subscribe so far — the interval hasn't fired.
+    expect(listEventsSince).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(listEventsSince).toHaveBeenCalledWith("fx-1", 4);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(listEventsSince).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
+    expect(listEventsSince).toHaveBeenLastCalledWith("fx-1", 4);
     expect(onEvents).toHaveBeenCalledWith(rows);
   });
 
@@ -201,12 +213,13 @@ describe("useFixtureStream — polling fallback", () => {
       listEventsSince,
       pollMs: 1_000,
     });
-    await vi.advanceTimersByTimeAsync(0); // token fails, polling starts
-    await vi.advanceTimersByTimeAsync(1_000); // first tick fires, fetch in flight (never resolved yet)
+    await vi.advanceTimersByTimeAsync(0); // token fails, polling starts, the catch-up read goes out (never resolved yet)
     expect(listEventsSince).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(1_000); // second tick due WHILE the first is still in flight
+    await vi.advanceTimersByTimeAsync(1_000); // first tick due WHILE that read is still in flight
     expect(listEventsSince).toHaveBeenCalledTimes(1); // no overlap
+    await vi.advanceTimersByTimeAsync(1_000); // and the second
+    expect(listEventsSince).toHaveBeenCalledTimes(1);
 
     resolveFetch([]);
     await vi.advanceTimersByTimeAsync(0);
@@ -214,11 +227,14 @@ describe("useFixtureStream — polling fallback", () => {
     expect(listEventsSince).toHaveBeenCalledTimes(2);
   });
 
-  it("skipPollWhile suppresses a due tick without stopping the interval", async () => {
+  it("a write in flight suppresses a due tick without stopping the interval", async () => {
     const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
     const listEventsSince = vi.fn(async () => []);
     const { connector } = fakeConnector();
-    let skip = true;
+    // Never settles: the catch-up waits on it for the whole test, so every
+    // read counted below is a tick's.
+    const drain = new Promise<void>(() => {});
+    let writing = true;
     mountStream({
       fixtureId: "fx-1",
       auth: { kind: "session" },
@@ -228,13 +244,13 @@ describe("useFixtureStream — polling fallback", () => {
       connector,
       listEventsSince,
       pollMs: 1_000,
-      skipPollWhile: () => skip,
+      writeInFlight: () => (writing ? drain : null),
     });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(listEventsSince).not.toHaveBeenCalled(); // suppressed
 
-    skip = false;
+    writing = false;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(listEventsSince).toHaveBeenCalledTimes(1); // resumes on the next tick
   });
@@ -257,14 +273,242 @@ describe("useFixtureStream — polling fallback", () => {
       listEventsSince,
       pollMs: 1_000,
     });
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(0); // the catch-up read is the one that rejects
     expect(listEventsSince).toHaveBeenCalledTimes(1);
     expect(onEvents).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(listEventsSince).toHaveBeenCalledTimes(2);
     expect(onEvents).toHaveBeenCalledWith(rows);
+  });
+});
+
+// The seed a pad mounts with can be older than the page. Browser Back/Forward
+// re-uses the router's cached RSC payload, so the console remounts on the
+// ledger it had when the scorer left — and neither transport ever re-reads
+// what was written in between: a realtime channel only signals FUTURE
+// writes, and the first poll tick is `pollMs` away. So the stream reads once
+// as it subscribes. On a fresh page that read returns nothing new (the cursor
+// is the seed's own count), which the pipeline treats as a no-op.
+describe("useFixtureStream — catch-up on subscribe", () => {
+  it("realtime: reads once from the seed's cursor as it subscribes, and hands the rows over", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const onEvents = vi.fn();
+    const listEventsSince = vi.fn(async () => rows);
+    const { connector, fireStatus } = fakeConnector();
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 4]]);
+    expect(onEvents).toHaveBeenCalledWith(rows);
+
+    // Then once on the join (the join-window test below), and no more: a
+    // confirmed channel arms no timer.
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
+  });
+
+  it("polling fallback: reads once as it subscribes, BEFORE the first tick is due", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const onEvents = vi.fn();
+    const listEventsSince = vi.fn(async () => rows);
+    const { connector } = fakeConnector();
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents,
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      pollMs: 15_000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 4]]);
+    expect(onEvents).toHaveBeenCalledWith(rows);
+  });
+
+  it("a thrown token door still catches up", async () => {
+    const fn = (async () => {
+      throw new Error("offline");
+    }) as typeof fetch;
+    const listEventsSince = vi.fn(async () => []);
+    const { connector } = fakeConnector();
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 2, onEvents: () => {}, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 2]]);
+  });
+
+  // A tick due during the caller's write drain can be skipped, because the
+  // next tick comes round. The catch-up runs only once, so skipping it would
+  // lose it for good: a pad that reopens with a leftover queue drains that
+  // queue at mount, which is exactly when the catch-up comes due.
+  it("a catch-up due while the caller's write drain is out WAITS for it, then reads — it is never skipped", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const onEvents = vi.fn();
+    const listEventsSince = vi.fn(async () => rows);
+    const { connector } = fakeConnector();
+    let finishDrain!: () => void;
+    // As the pipeline's own drain does: the handle is cleared BEFORE the
+    // promise settles (`.finally` in `runDrain`).
+    let drain: Promise<void> | null = new Promise<void>((resolve) => {
+      finishDrain = () => {
+        drain = null;
+        resolve();
+      };
+    });
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents,
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      pollMs: 15_000,
+      writeInFlight: () => drain,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no read while the drain is out").not.toHaveBeenCalled();
+
+    finishDrain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls, "the catch-up, once the drain settles — not the first tick").toEqual([["fx-1", 4]]);
+    expect(onEvents).toHaveBeenCalledWith(rows);
+  });
+
+  it("an unmount while the catch-up waits on a drain makes no read", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const listEventsSince = vi.fn(async () => []);
+    const { connector } = fakeConnector();
+    let finishDrain!: () => void;
+    let drain: Promise<void> | null = new Promise<void>((resolve) => {
+      finishDrain = () => {
+        drain = null;
+        resolve();
+      };
+    });
+    const stream = mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 0,
+      onEvents: () => {},
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      writeInFlight: () => drain,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    stream.unmount();
+    finishDrain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).not.toHaveBeenCalled();
+  });
+
+  // The catch-up goes out as the channel is REQUESTED, but a channel only
+  // signals writes made after it is JOINED. A write in between is neither
+  // read nor signalled, so the join reads once more.
+  it("realtime: a write in the join window is read when the channel confirms", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const onEvents = vi.fn();
+    let written: LedgerSlotEvent[] = [];
+    const listEventsSince = vi.fn(async () => written);
+    const { connector, fireStatus } = fakeConnector();
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls, "the catch-up, as the channel is requested").toEqual([["fx-1", 4]]);
+
+    written = rows; // lands while the channel is still joining — no signal for it, ever
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls).toEqual([
+      ["fx-1", 4],
+      ["fx-1", 4],
+    ]);
+    expect(onEvents).toHaveBeenLastCalledWith(rows);
+  });
+
+  it("realtime: a confirm while the catch-up is still out waits for it, then reads — it is never dropped", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const answers: ((rows: LedgerSlotEvent[]) => void)[] = [];
+    const listEventsSince = vi.fn(
+      () =>
+        new Promise<LedgerSlotEvent[]>((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const { connector, fireStatus } = fakeConnector();
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents: () => {}, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(1);
+
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no overlap with the read still out").toHaveBeenCalledTimes(1);
+
+    answers[0]!([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "the join's read, once the catch-up has landed").toHaveBeenCalledTimes(2);
+  });
+
+  it("realtime: a channel that confirms before the catch-up goes out is read ONCE — the join read covers both", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const listEventsSince = vi.fn(async () => []);
+    const confirmsAtOnce: RealtimeConnector = {
+      connect(params) {
+        params.onStatus(true);
+        return { unsubscribe() {} };
+      },
+    };
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents: () => {}, fetchFn: fn, connector: confirmsAtOnce, listEventsSince });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 4]]);
+  });
+
+  it("realtime: a channel that drops and rejoins reads again on the rejoin — a repeated confirm does not", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const listEventsSince = vi.fn(async () => []);
+    const { connector, fireStatus } = fakeConnector();
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents: () => {},
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      pollMs: 15_000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(2); // catch-up + join
+
+    fireStatus(true); // the same status again, no drop in between
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
+
+    fireStatus(false); // dropped: polling re-arms, first tick 15s away
+    await vi.advanceTimersByTimeAsync(1_000);
+    fireStatus(true); // rejoined before that tick — writes during the drop were never signalled
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(3);
+  });
+
+  it("an unmount before the token door answers makes no catch-up read", async () => {
+    let answer!: (res: Response) => void;
+    const fn = (() =>
+      new Promise<Response>((resolve) => {
+        answer = resolve;
+      })) as typeof fetch;
+    const listEventsSince = vi.fn(async () => []);
+    const { connector } = fakeConnector();
+    const stream = mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 0, onEvents: () => {}, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    stream.unmount();
+    answer(fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).not.toHaveBeenCalled();
   });
 });
 
@@ -322,11 +566,12 @@ describe("useFixtureStream — unmount", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     fireStatus(false); // never confirmed — stays on polling
+    expect(listEventsSince).toHaveBeenCalledTimes(1); // the catch-up on subscribe
 
     stream.unmount();
     expect(unsubscribes.length).toBeGreaterThan(0);
 
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(listEventsSince).not.toHaveBeenCalled(); // interval cleared, no further ticks
+    expect(listEventsSince).toHaveBeenCalledTimes(1); // interval cleared, no further ticks
   });
 });
