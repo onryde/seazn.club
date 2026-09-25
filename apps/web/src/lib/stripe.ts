@@ -1,5 +1,11 @@
 import Stripe from "stripe";
 
+/** Per-request timeout of the server's Stripe client — see the `timeout`
+ *  comment in `getStripe` for why it is short and never retried. Exported so a
+ *  caller that has to wait out server-side Stripe work (event-pass.spec.ts)
+ *  derives its budget from the real figure rather than a copy of it. */
+export const STRIPE_REQUEST_TIMEOUT_MS = 10_000;
+
 let _stripe: Stripe | null = null;
 
 export function getStripe(): Stripe {
@@ -39,7 +45,7 @@ export function getStripe(): Stripe {
     // timeout WITH a retry, so a hanging Stripe would pin that row lock, an org
     // row lock and a pool connection for minutes, with attaches queued behind
     // it. Fail fast instead: the reconcile sweep exists to pick the work up.
-    timeout: 10_000,
+    timeout: STRIPE_REQUEST_TIMEOUT_MS,
     // Retries are wrong for this workload specifically: an automatic retry of a
     // subscription-item update is a retry of a CHARGE. Callers here are
     // idempotent by re-derivation (quantity is absolute, never incremented), so
