@@ -434,12 +434,30 @@ async function buyPassWithTestCard(page: Page, url: string): Promise<void> {
  * for real against Stripe test mode and hand-delivered this way — first
  * established here by U16's `charge.refunded`, reused by U14
  * (`customer.subscription.created`) and U15 (`customer.subscription.deleted`).
+ *
+ * NOT the only delivery on CI. The walkthrough leg runs a `stripe listen`
+ * forwarder (e2e.yml, "Start Stripe webhook forwarder") that relays every event
+ * the shared test account emits to this same server, so each hand-delivered
+ * event there races a REAL copy of itself under a different event id. A spec
+ * that reads money state right after this returns is reading after ITS OWN
+ * delivery, which is not necessarily the one that did the work — see U16.
  */
 async function postSignedStripeWebhook(
   page: Page,
   type: string,
   object: unknown,
 ): Promise<void> {
+  expect(await deliverSignedStripeWebhook(page, type, object)).toBeLessThan(300);
+}
+
+/** The delivery itself, returning the route's status rather than asserting it,
+ *  so a copy started in the background can be settled to a value and checked
+ *  later instead of rejecting unobserved. */
+async function deliverSignedStripeWebhook(
+  page: Page,
+  type: string,
+  object: unknown,
+): Promise<number> {
   const event = {
     id: `evt_${randomBytes(8).toString("hex")}`,
     object: "event",
@@ -462,7 +480,7 @@ async function postSignedStripeWebhook(
     },
     data: payload,
   });
-  expect(res.status()).toBeLessThan(300);
+  return res.status();
 }
 
 // ---------------------------------------------------------------------------
@@ -928,6 +946,28 @@ for (const vp of VIEWPORTS) {
       const pi = await stripe.paymentIntents.retrieve(passIntent, { expand: ["latest_charge"] });
       const charge = pi.latest_charge as Stripe.Charge;
       expect(charge.refunded).toBe(true);
+      // TWO deliveries of this one refund, the first left in flight. On CI the
+      // `stripe listen` forwarder (see postSignedStripeWebhook) relays Stripe's
+      // own `charge.refunded` for this charge to this same server, under its
+      // own event id, while the spec is delivering its copy. Both reach
+      // `reversePassCreditOnRefund`, both pass its `reversed_at` fast-path read,
+      // and both call createBalanceTransaction with the one idempotency key
+      // `pass-credit-refund-reversal-{intent}`; Stripe answers whichever lands
+      // second with 409 `idempotency_key_in_use` and that delivery returns 200
+      // having done nothing, while the other's debit is still in flight. Twice
+      // on CI (PR #860's run, run 35996498230) the spec's copy was the one that
+      // lost, so the balance read below saw the unreversed -1199.
+      //
+      // The race is modelled here on purpose rather than left to the forwarder's
+      // timing, so this test meets it on every run and every machine instead of
+      // on some CI runs only — and so the product's side of it is pinned too:
+      // however many copies arrive, exactly one debit (checked below).
+      // Settled to a value, never left to reject: a red further down must not
+      // leave an unobserved rejection behind it.
+      const forwardedCopy = deliverSignedStripeWebhook(page, "charge.refunded", charge).then(
+        (status) => ({ status, error: null as string | null }),
+        (err: unknown) => ({ status: 0, error: String(err) }),
+      );
       await postSignedStripeWebhook(page, "charge.refunded", charge);
 
       // Money back means the competition rejoins the quota.
@@ -948,6 +988,10 @@ for (const vp of VIEWPORTS) {
       const customerId = await stripeCustomerId(rig.orgId);
       const refundedCustomer = (await stripe.customers.retrieve(customerId!)) as Stripe.Customer;
       expect(refundedCustomer.balance).toBe(0);
+      expect(await forwardedCopy, "the concurrent copy was ACKed too").toEqual({
+        status: 200,
+        error: null,
+      });
 
       await page.goto(upgradeUrl(rig));
       await expect(page.locator("[data-pass-ticket]")).toContainText(passLabel("event_pass"));
