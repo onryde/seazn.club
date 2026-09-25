@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { sql } from "@/lib/db";
 import { msgFor } from "@/lib/messages-i18n";
+import type { SheetHeading } from "@/lib/scorer-sheets";
 import type { SlotLabelLookup } from "@/lib/slot-label";
 import { log } from "@/server/logger";
 import { seedOrg } from "./_seed";
@@ -31,6 +32,8 @@ const DAY = "2026-09-23";
 const PRINTED = "2026-09-23T06:00:00.000Z";
 const fr: SlotLabelLookup = (k, v) => msgFor("fr", k, v);
 const en: SlotLabelLookup = (k, v) => msgFor("en", k, v);
+/** A page heading as one line, as the sheet prints it before any fitting. */
+const line = (h: SheetHeading) => h.before + h.court + h.after;
 const realEnsure = (await vi.importActual<typeof import("../device-links")>("../device-links")).ensureDeviceLinks;
 
 afterAll(async () => {
@@ -82,8 +85,13 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(m.header).toMatchObject({ kind: "scoresheet", title: competition.name, meta: { printedAt: "2026-09-23 08:00" } });
     expect(m.header.description).toContain("23 septembre");
     expect(m.labels).toEqual({ eyebrow: msgFor("fr", "sheets.pdf.eyebrow"), checkNames: msgFor("fr", "sheets.pdf.checkNames") });
-    expect(m.pages.map((p) => p.heading)).toEqual([
-      msgFor("fr", "sheets.pdf.courtPage", { court: msgFor("fr", "sheets.pdf.noCourt"), n: 1, of: 1 }),
+    // The heading reads as the dictionary's line, with the court its own part
+    // (the renderer shortens only that part).
+    expect(m.pages.map((p) => [line(p.heading), p.heading.court])).toEqual([
+      [
+        msgFor("fr", "sheets.pdf.courtPage", { court: msgFor("fr", "sheets.pdf.noCourt"), n: 1, of: 1 }),
+        msgFor("fr", "sheets.pdf.noCourt"),
+      ],
     ]);
 
     // Every printed name is the loader's (the board's namer): the code, the
@@ -139,9 +147,9 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     }
     const m = await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
     const court1 = (await loadSheetCandidates(auth, competition.id, en, DAY))[0]!.court_name!;
-    expect(m.pages.map((p) => [p.heading, p.rows.length])).toEqual([
-      [msgFor("en", "sheets.pdf.courtPage", { court: court1, n: 1, of: 2 }), 9],
-      [msgFor("en", "sheets.pdf.courtPage", { court: court1, n: 2, of: 2 }), 1],
+    expect(m.pages.map((p) => [line(p.heading), p.heading.court, p.rows.length])).toEqual([
+      [msgFor("en", "sheets.pdf.courtPage", { court: court1, n: 1, of: 2 }), court1, 9],
+      [msgFor("en", "sheets.pdf.courtPage", { court: court1, n: 2, of: 2 }), court1, 1],
     ]);
   });
 

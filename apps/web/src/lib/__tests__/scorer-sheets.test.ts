@@ -3,9 +3,11 @@
 // with names, match refs and the venue zone already resolved, and its own DB
 // suite proves that half.
 import { describe, expect, it } from "vitest";
+import { msgFor } from "@/lib/messages-i18n";
 import {
   PRINTABLE_STATUSES,
   ROWS_PER_PAGE,
+  courtPageHeading,
   defaultSheetDay,
   localDateOf,
   paginateSheet,
@@ -239,5 +241,25 @@ describe("paginateSheet", () => {
       ["Court 1", false, 1, 1],
       ["No court", false, 1, 1],
     ]);
+  });
+});
+
+describe("courtPageHeading", () => {
+  // Every locale's own template: the three parts put back together are the
+  // dictionary's line, and the court is its own part, so the renderer can
+  // shorten it without touching the page count.
+  it.each(["en", "es", "fr", "nl"] as const)("%s: before + court + after is the dictionary's heading", (locale) => {
+    const t = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
+    const court = "Court 1 (E2E Venue Philippe-Chatrier)";
+    const h = courtPageHeading(t, court, 3, 12);
+    expect(h.court).toBe(court);
+    expect(h.before + h.court + h.after).toBe(msgFor(locale, "sheets.pdf.courtPage", { court, n: 3, of: 12 }));
+    // The page count is wholly in the parts the renderer never cuts.
+    expect(`${h.before}${h.after}`).toMatch(/\b3\b.*\b12\b/);
+  });
+
+  it("splits on the placeholder, not on a court name that repeats the template's words", () => {
+    const h = courtPageHeading((_k, v) => `page ${v!.n} of ${v!.of} · ${v!.court}`, "page 1 of 2", 1, 2);
+    expect(h).toEqual({ before: "page 1 of 2 · ", court: "page 1 of 2", after: "" });
   });
 });

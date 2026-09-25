@@ -11,12 +11,15 @@
 import fs from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import QRCode from "qrcode";
+import PDFDocument from "pdfkit";
 import { ROWS_PER_PAGE } from "@/lib/scorer-sheets";
 import { log } from "@/server/logger";
+import { MARGIN } from "../doc-render";
+import { FONT, registerFonts } from "../doc-theme";
 import { renderScorerSheetPdf } from "../scorer-sheet-pdf";
 import { pdfImages, pdfLines, pdfLinkUris, pdfLinks, pdfPageCount, pdfPageSvg, pdfTextRuns } from "../../../e2e/pdf-uris";
 import { CONDITIONS, decodeEveryCard, lumaAt, rasterPage, type Condition } from "./_sheet-raster";
-import { header, labels, model, row, rows, token, useBrandFonts } from "./_sheet-fixtures";
+import { header, heading, labels, model, row, rows, token, useBrandFonts } from "./_sheet-fixtures";
 
 beforeAll(useBrandFonts);
 
@@ -72,8 +75,8 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
     const pdf = await renderScorerSheetPdf({
       ...model([]),
       pages: [
-        { heading: "Court 1 · page 1 of 2", rows: rows(9) },
-        { heading: "Court 1 · page 2 of 2", rows: rows(1, 10) },
+        { heading: heading("Court 1", 1, 2), rows: rows(9) },
+        { heading: heading("Court 1", 2, 2), rows: rows(1, 10) },
       ],
     });
     const links = pdfLinks(pdf);
@@ -90,8 +93,8 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
     const pdf = await renderScorerSheetPdf({
       ...model([], { header: branded }),
       pages: [
-        { heading: "Court 1 · page 1 of 2", rows: rows(9) },
-        { heading: "Court 1 · page 2 of 2", rows: rows(1, 10) },
+        { heading: heading("Court 1", 1, 2), rows: rows(9) },
+        { heading: heading("Court 1", 2, 2), rows: rows(1, 10) },
       ],
     });
     const org = pdfTextRuns(pdf).filter((r) => r.text === "RIVERSIDE SHUTTLERS");
@@ -105,8 +108,8 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
     const pdf = await renderScorerSheetPdf({
       ...model([]),
       pages: [
-        { heading: "Court 1 · page 1 of 1", rows: [row(1)] },
-        { heading: "No court assigned · page 1 of 1", rows: [row(2)] },
+        { heading: heading("Court 1", 1, 1), rows: [row(1)] },
+        { heading: heading("No court assigned", 1, 1), rows: [row(2)] },
       ],
     });
     const onPage = (n: number) => pdfTextRuns(pdf).filter((r) => r.page === n).map((r) => r.text);
@@ -375,13 +378,50 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
     expect(Math.min(...links.map((l) => l.top))).toBeGreaterThan(check.y);
   });
 
-  it("an overlong heading is cut on its one line, never wrapped", async () => {
-    const heading = Array.from({ length: 8 }, () => "Court Philippe-Chatrier").join(" ");
-    const runs = pdfTextRuns(await renderScorerSheetPdf({ ...model([]), pages: [{ heading, rows: [row(1)] }] }));
+  it("an overlong court name is cut on its one line, never wrapped — and the page count still follows it", async () => {
+    const court = Array.from({ length: 8 }, () => "Court Philippe-Chatrier").join(" ");
+    const runs = pdfTextRuns(
+      await renderScorerSheetPdf({ ...model([]), pages: [{ heading: heading(court, 1, 1), rows: [row(1)] }] }),
+    );
     const cut = runs.filter((r) => r.text.startsWith("COURT PHILIPPE"));
     expect(cut).toHaveLength(1);
-    expect(cut[0]!.text.endsWith("…")).toBe(true);
+    expect(cut[0]!.text).toMatch(/^COURT PHILIPPE[^…]*… · PAGE 1 OF 1$/);
     expect(runs.filter((r) => /^(PHILIPPE|CHATRIER)/.test(r.text))).toEqual([]);
+  });
+
+  // Task 10's journey printed "COURT 1 (E2E VENUE …) · PA…": the whole line was
+  // cut, so the page count went first. Every locale, at the first page of two
+  // and at the widest count two digits can print; the literal is the line an
+  // organiser reads, not the dictionary's template.
+  it.each([
+    ["en", 1, 2, "PAGE 1 OF 2"],
+    ["fr", 1, 2, "PAGE 1 SUR 2"],
+    ["es", 1, 2, "PÁGINA 1 DE 2"],
+    ["nl", 1, 2, "PAGINA 1 VAN 2"],
+    ["en", 99, 99, "PAGE 99 OF 99"],
+    ["fr", 99, 99, "PAGE 99 SUR 99"],
+    ["es", 99, 99, "PÁGINA 99 DE 99"],
+    ["nl", 99, 99, "PAGINA 99 VAN 99"],
+  ] as const)("%s: a 60-character court name is shortened with …, and page %i of %i prints whole: %s", async (locale, n, of, pageOf) => {
+    const court = `Court 1 (E2E Venue ${"Philippe-Chatrier ".repeat(3)})`.slice(0, 60);
+    expect(court).toHaveLength(60);
+    const pdf = await renderScorerSheetPdf({ ...model([]), pages: [{ heading: heading(court, n, of, locale), rows: [row(1)] }] });
+    const runs = pdfTextRuns(pdf);
+    const head = runs.filter((r) => r.text.endsWith(` · ${pageOf}`));
+    expect(head, runs.map((r) => r.text).join(" | ")).toHaveLength(1);
+    const shown = head[0]!.text.slice(0, -` · ${pageOf}`.length);
+    // The NAME gives way: a real prefix of it, then the ellipsis.
+    expect(shown, shown).toMatch(/^COURT 1 \(E2E VENUE .*…$/);
+    expect(court.toUpperCase().startsWith(shown.slice(0, -1).trimEnd())).toBe(true);
+    // And the whole line fits its box: right of the header's middle, inside
+    // the right margin, measured in the font it is set in.
+    const measure = new PDFDocument({ size: "A4" });
+    registerFonts(measure);
+    measure.font(FONT.displayBold).fontSize(16);
+    const w = measure.widthOfString(head[0]!.text);
+    const pageW = 595.28;
+    expect(head[0]!.x).toBeGreaterThanOrEqual(pageW / 2 - 1);
+    expect(head[0]!.x + w).toBeLessThanOrEqual(pageW - MARGIN + 1);
   });
 
   it("refuses a page longer than ROWS_PER_PAGE rather than spill it onto a stray page", async () => {

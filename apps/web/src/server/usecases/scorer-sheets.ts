@@ -31,6 +31,7 @@ import { intlLocaleFor } from "@/lib/public-date-locale";
 import {
   BYE_SLOT_KEY,
   PRINTABLE_STATUSES,
+  courtPageHeading,
   isPrintable,
   paginateSheet,
   selectSheetFixtures,
@@ -320,7 +321,7 @@ export async function buildScorerSheet(
     },
     labels: { eyebrow: t("sheets.pdf.eyebrow"), checkNames: t("sheets.pdf.checkNames") },
     pages: paginateSheet(printed, t("sheets.pdf.noCourt")).map((p) => ({
-      heading: t("sheets.pdf.courtPage", { court: p.courtHeading ?? "", n: p.pageInCourt, of: p.pagesInCourt }),
+      heading: courtPageHeading(t, p.courtHeading ?? "", p.pageInCourt, p.pagesInCourt),
       rows: p.rows.map((r) => ({
         fixtureId: r.id,
         url: `${origin}/score/${links.get(r.id)!.secret}`,

@@ -30,7 +30,7 @@ import path from "node:path";
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import type { DocModel } from "@seazn/engine/exports";
-import { ROWS_PER_PAGE } from "@/lib/scorer-sheets";
+import { ROWS_PER_PAGE, type SheetHeading } from "@/lib/scorer-sheets";
 import { FONT, PALETTE, registerFonts } from "./doc-theme";
 import { MARGIN, drawMasthead, resolveLogo } from "./doc-render";
 import { log } from "./logger";
@@ -55,7 +55,9 @@ export interface SheetRow {
 export interface SheetModel {
   /** Masthead + title block only — `sections` stays empty. */
   header: DocModel;
-  pages: { heading: string; rows: SheetRow[] }[];
+  /** `heading` in parts (`courtPageHeading`): a long court name is shortened,
+   *  the page count never is. */
+  pages: { heading: SheetHeading; rows: SheetRow[] }[];
   /** No page counter here: numbering is per court and lives in each page's
    *  heading (owner ruling Q7). `checkNames` is the spec §4.4 page-header line. */
   labels: { eyebrow: string; checkNames: string };
@@ -88,6 +90,20 @@ const GAP = 16;
  *  the ellipsis when a `height` bound leaves no room for a second line. */
 function oneLine(width: number, size: number): PDFKit.Mixins.TextOptions {
   return { width, height: size * 1.5, lineBreak: false, ellipsis: true };
+}
+
+/** The court heading, upper-cased, on one line at most `max` wide in the
+ *  current font. Only the court's NAME gives way (ending in "…"): cutting the
+ *  whole line took "PAGE 1 OF 2" off a long venue name's sheet (Task 10's
+ *  journey printed "COURT 1 (E2E VENUE …) · PA…"). */
+function fitHeading(doc: PDFKit.PDFDocument, heading: SheetHeading, max: number): string {
+  const [before, court, after] = [heading.before, heading.court, heading.after].map((s) => s.toUpperCase());
+  const whole = `${before}${court}${after}`;
+  if (doc.widthOfString(whole) <= max) return whole;
+  const room = max - doc.widthOfString(`${before}…${after}`);
+  const kept = [...court];
+  while (kept.length > 0 && doc.widthOfString(kept.join("")) > room) kept.pop();
+  return `${before}${kept.join("").trimEnd()}…${after}`;
 }
 
 /** The Seazn app icon (public/logo-square.png; no vector exists). Everything
@@ -189,13 +205,13 @@ export async function renderScorerSheetPdf(model: SheetModel): Promise<Buffer> {
  *  (and so the QR size) is bounded — with the court heading on the title's
  *  baseline and the check-names line on the description's, right-aligned to
  *  the masthead's edge. Returns where the cards start. */
-function drawHeader(doc: PDFKit.PDFDocument, model: SheetModel, heading: string): number {
+function drawHeader(doc: PDFKit.PDFDocument, model: SheetModel, heading: SheetHeading): number {
   const left = MARGIN;
   const right = doc.page.width - MARGIN;
   const width = right - left;
-  const head = heading.toUpperCase();
   doc.font(FONT.displayBold).fontSize(16);
-  const headW = Math.min(doc.widthOfString(head), width / 2);
+  const head = fitHeading(doc, heading, width / 2);
+  const headW = doc.widthOfString(head);
   const barlowAscent = (doc as unknown as { _font: { ascender: number } })._font.ascender / 1000;
   doc.font(FONT.bodyMed).fontSize(9);
   const checkW = Math.min(doc.widthOfString(model.labels.checkNames), width * 0.7);

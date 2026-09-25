@@ -3,7 +3,7 @@
 // The loader (server/usecases/scorer-sheets.ts) resolves everything a row
 // PRINTS — names, the board's match ref, the org clock — before it gets here;
 // this module only decides membership, order and pages.
-import type { SlotLabel } from "@/lib/slot-label";
+import type { SlotLabel, SlotLabelLookup } from "@/lib/slot-label";
 
 /** The statuses a sheet prints. An allow-list: every other status the V214
  *  check permits (decided, finalized, forfeited — which is how a bye settles
@@ -140,6 +140,27 @@ export function sheetDays(candidates: readonly SheetDayRow[]): string[] {
 export function defaultSheetDay(days: readonly string[], today: string): string | null {
   if (days.length === 0) return null;
   return days.find((d) => d >= today) ?? days[days.length - 1]!;
+}
+
+/** A page's court heading ("Court 2 · page 1 of 2"), kept in three parts so
+ *  the renderer can shorten the court's NAME alone: a long venue name must
+ *  never cost the page count. `before`/`after` are whatever the locale's
+ *  template puts either side of `{court}` — no locale is assumed to lead with
+ *  the court. */
+export interface SheetHeading {
+  before: string;
+  court: string;
+  after: string;
+}
+
+/** `sheets.pdf.courtPage`, split round its `{court}`. */
+export function courtPageHeading(t: SlotLabelLookup, court: string, n: number, of: number): SheetHeading {
+  // A character no court name or dictionary line carries, so the split can
+  // only land on the placeholder.
+  const MARK = "\u0000";
+  const whole = t("sheets.pdf.courtPage", { court: MARK, n, of });
+  const at = whole.indexOf(MARK);
+  return { before: whole.slice(0, at), court, after: whole.slice(at + MARK.length) };
 }
 
 /** Pages of at most ROWS_PER_PAGE rows. Each court starts a page; a court

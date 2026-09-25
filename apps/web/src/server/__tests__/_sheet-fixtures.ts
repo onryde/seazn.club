@@ -3,7 +3,14 @@
 // describes a second time.
 import { resolve } from "node:path";
 import type { DocModel } from "@seazn/engine/exports";
+import type { Locale } from "@/lib/i18n-constants";
+import { msgFor } from "@/lib/messages-i18n";
+import { courtPageHeading, type SheetHeading } from "@/lib/scorer-sheets";
 import type { SheetModel, SheetRow } from "../scorer-sheet-pdf";
+
+/** A page's court heading as the builder makes it, from the real dictionary. */
+export const heading = (court: string, n: number, of: number, locale: Locale = "en"): SheetHeading =>
+  courtPageHeading((k, v) => msgFor(locale, k, v), court, n, of);
 
 export const header: DocModel = {
   kind: "scoresheet",
@@ -43,7 +50,7 @@ export const rows = (n: number, from = 1): SheetRow[] => Array.from({ length: n 
 export const model = (pages: SheetRow[][], over: Partial<SheetModel> = {}): SheetModel => ({
   header,
   labels,
-  pages: pages.map((rows, i) => ({ heading: `Court ${i + 1} · page 1 of 1`, rows })),
+  pages: pages.map((rows, i) => ({ heading: heading(`Court ${i + 1}`, 1, 1), rows })),
   ...over,
 });
 
