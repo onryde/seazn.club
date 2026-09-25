@@ -1076,3 +1076,205 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     await owner.context().close();
   }
 });
+
+// ── A SHEET SCANNED BEFORE THE DIVISION STARTS (owner fix 2026-09-24) ───────
+// Sheets are printed ahead of the day, so an umpire can scan one before the
+// organiser has pressed Start. The scan used to open on Confirm, and its Start
+// was refused with the generic "That action doesn't apply at this point in the
+// match." Now it opens on "Not started yet" — outranking Waiting, since no
+// seat matters while nothing can be scored — and, with the phone untouched,
+// moves on to Confirm the moment the organiser starts the division, through
+// the same page refresh Waiting uses. The server still refuses a Start before
+// then (defence in depth), asserted over the device link's own API.
+//
+// REACH, over the organiser's API: a drawn four-entrant knockout that is NOT
+// started, two mints, the start. THE TEST, in the browser: the new screen (en
+// + fr, strings read from the dictionaries), its precedence over Waiting, the
+// move to Confirm on an UNROUTED phone (a routed page never sees a 304, see
+// the top of this file), and Start opening the pad.
+/** Page loads: the journey phone once, the final's page, the French phone. */
+const NS_NAVIGATIONS = 3;
+/** Competition, division, entrants, stage, generate, the status read, the
+ *  draw, two mints, the refused Start and its ledger read, the start, the
+ *  status read after it, the ledger after Start. */
+const NS_REACHES = 14;
+/** Two screens (en + fr), every width. */
+const NS_CAPTURES = 2;
+/** The ref whole at 320, en + fr. */
+const NS_MEASURES = 2;
+const NS_BUDGET_MS = Math.max(
+  120_000,
+  WAITING_BUDGET_MS +
+    NS_NAVIGATIONS * STEP_MS +
+    NS_REACHES * REACH_MS +
+    NS_CAPTURES * WIDTHS.length * REACH_MS +
+    NS_MEASURES * REACH_MS +
+    STEP_MS,
+);
+
+test("a sheet scanned before the organiser starts the division: 'Not started yet' (en + fr), outranking Waiting, then Confirm by itself once the division starts, and Start opens the pad", async ({
+  browser,
+  request,
+}, testInfo) => {
+  test.setTimeout(NS_BUDGET_MS);
+
+  // ---- Reach: a drawn four-entrant knockout, NOT started ---------------------
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Scan Early ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition POST → ${JSON.stringify(comp.error)}`).toBe(201);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: DIVISION,
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, `division POST → ${JSON.stringify(div.error)}`).toBe(201);
+  const divisionId = div.data!.id;
+  const names = [LONG_NAME, `Bea ${TAG}`, `Cai ${TAG}`, `Dev ${TAG}`];
+  const added = await addEntrantsViaApi(request, divisionId, names);
+  expect(added.status).toBe(201);
+  const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+    seq: 1,
+    kind: "knockout",
+    name: "Cup",
+    config: {},
+  });
+  expect(stage.status, `stage POST → ${JSON.stringify(stage.error)}`).toBe(201);
+  const generated = await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  expect(generated.status, `generate → ${JSON.stringify(generated.error)}`).toBeLessThan(300);
+  // Read back, never assumed: drawn, and not started.
+  const statusOf = async () => {
+    const res = await apiJson<{ status: string }>(request, `/api/v1/divisions/${divisionId}`);
+    expect(res.status, `GET /divisions/${divisionId}`).toBe(200);
+    return res.data!.status;
+  };
+  expect(["setup", "scheduled"], "precondition: the division is drawn but not started").toContain(await statusOf());
+
+  const drawn = (await apiJson<Fx[]>(request, `/api/v1/divisions/${divisionId}/fixtures`)).data!.filter(
+    (f) => f.stage_id === stage.data!.id,
+  );
+  const longId = added.ids[0]!;
+  const semi = drawn.find((f) => f.round_no === 1 && (f.home_entrant_id === longId || f.away_entrant_id === longId))!;
+  const final = drawn.find((f) => f.round_no === 2)!;
+  expect(semi, "the long-named entrant is drawn into a semi, both sides known").toBeDefined();
+  expect(final, "…feeding a final whose sides are still TBD").toBeDefined();
+  const cup = { id: stage.data!.id, kind: "knockout" };
+  const refOf = (dict: Dict, id: string) => boardRef(dict, drawn, cup, id);
+  const opponent = nameOf.get(semi.home_entrant_id === longId ? semi.away_entrant_id! : semi.home_entrant_id!)!;
+  const mint = async (fixtureId: string) => {
+    const res = await apiJson<{ id: string; secret: string }>(request, `/api/v1/fixtures/${fixtureId}/device-links`, "POST", {});
+    expect([200, 201], `mint for ${fixtureId}: ${JSON.stringify(res.error)}`).toContain(res.status);
+    return res.data!;
+  };
+  const semiLink = await mint(semi.id);
+  const finalLink = await mint(final.id);
+
+  const phone = await phoneIn(browser, "en");
+  const frPhone = await phoneIn(browser, "fr");
+  const shots: string[] = [];
+  try {
+    // The journey phone's DOCUMENT loads: the move below must happen with the
+    // phone untouched (see the first test for why not `framenavigated`).
+    let phoneDocumentLoads = 0;
+    phone.on("request", (req) => {
+      if (req.isNavigationRequest() && req.frame() === phone.mainFrame()) phoneDocumentLoads += 1;
+    });
+    const stillFirstLoad = () =>
+      phone.evaluate(() => (window as unknown as { __scanFirstLoad?: true }).__scanFirstLoad === true);
+
+    // ---- 1. The semi, scanned before the start: Not started yet --------------
+    await phone.goto(`/score/${semiLink.secret}`);
+    const notStarted = phone.getByTestId("scan-not-started");
+    await expect(notStarted, "an unstarted division's sheet opens on Not started yet").toBeVisible({ timeout: STEP_MS });
+    await phone.evaluate(() => {
+      (window as unknown as { __scanFirstLoad?: true }).__scanFirstLoad = true;
+    });
+    await expect(
+      notStarted.getByRole("heading", { name: say(EN, "device.scan.notStarted.title") }),
+      "the headline is the screen's heading",
+    ).toBeVisible();
+    await expect(notStarted).toContainText(say(EN, "device.scan.notStarted.body"));
+    await expect(notStarted, "the match's two names, as the Waiting screen shows them").toContainText(LONG_NAME);
+    await expect(notStarted).toContainText(opponent);
+    await expectRefWhole(phone, notStarted.getByTestId("scan-waiting-ref"), notStarted, refOf(EN, semi.id), "en Not started");
+    await expect(phone.getByTestId("scan-confirm"), "no Confirm before the start").toHaveCount(0);
+    await expect(phone.getByTestId("score-start-match"), "…and no Start to be refused").toHaveCount(0);
+    await expect(phone.getByTestId("scan-waiting"), "not the sides' Waiting either").toHaveCount(0);
+    shots.push(...(await capture(phone, notStarted, testInfo, "en-not-started")));
+
+    // ---- 2. Defence in depth: the door still refuses a Start ------------------
+    // Over the device link's own API (the phone's anonymous context, the token
+    // as its bearer), exactly what the old Confirm's Start sent.
+    const refused = await phone.request.post(`/api/v1/fixtures/${semi.id}/events`, {
+      headers: { Authorization: `Bearer ${semiLink.secret}` },
+      data: { expected_seq: 0, type: "core.start", payload: {}, idempotency_key: randomUUID() },
+    });
+    const refusal = (await refused.json()) as { error?: { code?: string } };
+    expect([refused.status(), refusal.error?.code], "the scoring door refuses before the start").toEqual([422, "WRONG_PHASE"]);
+    expect(await ledger(request, semi.id), "…and writes nothing").toEqual([]);
+
+    // ---- 3. Precedence in the browser: a TBD final is Not started, not Waiting
+    const other = await phone.context().newPage();
+    try {
+      await other.goto(`/score/${finalLink.secret}`);
+      const finalNotStarted = other.getByTestId("scan-not-started");
+      await expect(finalNotStarted, "the final's TBD seats do not make it Waiting").toBeVisible({ timeout: STEP_MS });
+      await expect(finalNotStarted).toContainText(say(EN, "slot.winner_match", { ext: refOf(EN, semi.id) }));
+      await expect(other.getByTestId("scan-waiting")).toHaveCount(0);
+    } finally {
+      await other.close();
+    }
+
+    // ---- 4. The same screen in French, strings from the French dictionary -----
+    await frPhone.goto(`/score/${semiLink.secret}`);
+    const frNotStarted = frPhone.getByTestId("scan-not-started");
+    await expect(
+      frNotStarted.getByRole("heading", { name: say(FR, "device.scan.notStarted.title") }),
+    ).toBeVisible({ timeout: STEP_MS });
+    await expect(frNotStarted).toContainText(say(FR, "device.scan.notStarted.body"));
+    expect(say(FR, "device.scan.notStarted.body"), "French, not the English fallback").not.toBe(
+      say(EN, "device.scan.notStarted.body"),
+    );
+    await expect(frPhone.locator("html"), "the page says it is French").toHaveAttribute("lang", "fr");
+    await expectRefWhole(frPhone, frNotStarted.getByTestId("scan-waiting-ref"), frNotStarted, refOf(FR, semi.id), "fr Not started");
+    shots.push(...(await capture(frPhone, frNotStarted, testInfo, "fr-not-started")));
+
+    // ---- 5. The organiser starts the division (another context: the API) -----
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start → ${JSON.stringify(started.error)}`).toBe(200);
+    expect(await statusOf(), "the record: the division is started").toBe("active");
+
+    // ---- 6. The phone moves to Confirm by itself, untouched -------------------
+    const confirm = phone.getByTestId("scan-confirm");
+    await expect(confirm, "Not started yet moves to Confirm by itself once the division starts").toBeVisible({
+      timeout: WAITING_BUDGET_MS,
+    });
+    expect(phoneDocumentLoads, "…with the phone untouched: no reload, no navigation").toBe(1);
+    expect(await stillFirstLoad(), "…the same window it first loaded").toBe(true);
+    await expect(phone.getByTestId("scan-not-started")).toHaveCount(0);
+    await expect(confirm).toContainText(say(EN, "device.scan.confirmTitle"));
+    await expect(confirm).toContainText(LONG_NAME);
+    await expect(confirm).toContainText(opponent);
+    await expect(confirm, "the Match line is the board's name for it").toContainText(refOf(EN, semi.id));
+
+    // ---- 7. Start works now ----------------------------------------------------
+    await confirm.getByTestId("score-start-match").click();
+    await expect(phone.locator('[data-role="pad-v3"]'), "Start opens the pad").toBeVisible({ timeout: STEP_MS });
+    await expect.poll(async () => (await ledger(request, semi.id)).map((e) => e.type)).toEqual(["core.start"]);
+    await expect(phone.getByText(say(EN, "engineError.WRONG_PHASE")), "no refusal on the way").toHaveCount(0);
+    expect(phoneDocumentLoads, "the journey phone never reloaded").toBe(1);
+
+    // The pictures exist and DIFFER (AGENTS.md 10).
+    expect(shots).toHaveLength(NS_CAPTURES * WIDTHS.length);
+    expect(new Set(shots.map((p) => readFileSync(p).toString("base64"))).size, "no two captures are identical").toBe(
+      shots.length,
+    );
+  } finally {
+    await phone.context().close();
+    await frPhone.context().close();
+  }
+});
