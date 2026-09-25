@@ -17,6 +17,17 @@ export function isCacheablePublicPath(pathname: string): boolean {
   return CACHEABLE_PUBLIC.test(pathname);
 }
 
+/** The PostHog first-party proxy origin (prod), as a ` <origin>` connect-src suffix; "" when events ride the same-origin /ingest rewrite. */
+function posthogApiOrigin(): string {
+  const host = process.env.NEXT_PUBLIC_POSTHOG_API_HOST;
+  if (!host?.startsWith("https://")) return "";
+  try {
+    return ` ${new URL(host).origin}`;
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Build the Content-Security-Policy for a page request (doc 04 §5).
  *
@@ -31,7 +42,7 @@ export function isCacheablePublicPath(pathname: string): boolean {
  * browser console on staging) to switch to blocking. Enforcing nonce CSP forces
  * dynamic rendering (no static/CDN caching), which is why it is opt-in.
  */
-function cspHeader(nonce: string, opts: { forceReportOnly?: boolean } = {}): { name: string; value: string } {
+export function cspHeader(nonce: string, opts: { forceReportOnly?: boolean } = {}): { name: string; value: string } {
   const isDev = process.env.NODE_ENV === "development";
   const enforce = process.env.CSP_MODE === "enforce" && !opts.forceReportOnly;
   const value = [
@@ -44,7 +55,7 @@ function cspHeader(nonce: string, opts: { forceReportOnly?: boolean } = {}): { n
     `img-src 'self' blob: data: https:`,
     `font-src 'self' data:`,
     // Stripe: api.stripe.com for tokenization; supabase + sentry as before.
-    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.sentry.io`,
+    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}`,
     // Embedded Checkout renders inside a Stripe-hosted iframe.
     `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com`,
     `object-src 'none'`,

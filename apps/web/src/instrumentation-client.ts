@@ -32,10 +32,13 @@ function analyticsSuppressed(): boolean {
 if (key && !analyticsSuppressed()) {
   try {
     posthog.init(key, {
-      // Reverse-proxy through our own origin (next.config rewrites) so
-      // ad-blockers don't drop events. ui_host keeps in-app links pointed at
-      // the real PostHog dashboard.
-      api_host: "/ingest",
+      // First-party reverse proxy so ad-blockers don't drop events. Prod sets
+      // NEXT_PUBLIC_POSTHOG_API_HOST to PostHog's managed proxy on our own
+      // domain (Cloudflare), keeping event traffic off this Node process:
+      // Next 16.3's rewrite proxy stacks 10 `close` listeners on every proxied
+      // response. Unset (local, stg) falls back to the /ingest rewrite in
+      // next.config. ui_host keeps in-app links on the real PostHog dashboard.
+      api_host: process.env.NEXT_PUBLIC_POSTHOG_API_HOST || "/ingest",
       ui_host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.posthog.com",
       // Only create person profiles for identified (logged-in) users; anonymous
       // marketing traffic still counts toward web analytics (feature 7) without
