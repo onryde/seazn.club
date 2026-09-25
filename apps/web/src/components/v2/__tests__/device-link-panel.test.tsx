@@ -277,6 +277,41 @@ describe("device-link panel — what it says about a sealed link (null expiry)",
   });
 });
 
+describe("device-link panel — the live link never reaches a session replay (fix batch 2, item 1)", () => {
+  // PostHog replay gzips its full-snapshot and mutation frames before
+  // `before_send` runs, so the URL scrub cannot see a secret painted into the
+  // DOM. Its recorder BLOCKS any element carrying the `ph-no-capture` class
+  // (rrweb `blockClass`, posthog-js default): no children, no `src`, just a
+  // same-size placeholder. The pad URL text and the QR that encodes it are the
+  // two places the live secret is painted. Standalone and embedded (the
+  // fixture console's hand-over card) are the same component, so both run.
+  // Anchored on the class TOKEN: `ph-no-capture-x` or `no-ph-no-capture`
+  // would not block anything.
+  const classTokens = (el: ReactElement | undefined) =>
+    String(propsOf(el!).className ?? "").split(/\s+/).filter(Boolean);
+
+  it.each([
+    ["standalone", false],
+    ["embedded in the console", true],
+  ] as const)("%s: the pad URL text and the QR image are both ph-no-capture", async (_, embedded) => {
+    const island = renderIsland(DeviceLinkPanel, { ...PROPS, embedded });
+    await flush();
+    click(byTestId(island.tree(), "device-link-show"));
+    await flush();
+    const url = byTestId(island.tree(), "device-link-url");
+    expect(textOf(url!), "the element holds the live secret").toContain("dl_sealed_secret");
+    expect(classTokens(url), "pad URL text").toContain("ph-no-capture");
+    const img = island.tree().find((el) => el.type === "img");
+    expect(String(propsOf(img!).src), "the QR image is rendered").toMatch(/^data:image\/png;base64,/);
+    expect(classTokens(img), "QR image").toContain("ph-no-capture");
+    // The positive pair: the controls around them stay recordable, so a
+    // replay still shows what the organiser tapped.
+    for (const button of buttons(island.tree())) {
+      expect(classTokens(button), textOf(button)).not.toContain("ph-no-capture");
+    }
+  });
+});
+
 describe("device-link panel — a server with no DEVICE_LINK_KEK (owner ruling Q1, controller ruling)", () => {
   const SERVER_ENGLISH = "Scoring links are not configured on this server (DEVICE_LINK_KEK missing or malformed)";
 

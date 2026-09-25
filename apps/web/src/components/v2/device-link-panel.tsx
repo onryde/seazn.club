@@ -235,11 +235,15 @@ export function DeviceLinkPanel({
 
       {minted ? (
         <div className="mt-3 space-y-3 text-center">
+          {/* `ph-no-capture` on the QR and the URL text: both paint the live
+              secret, and PostHog replay compresses its DOM frames before the
+              `before_send` scrub can see them — its recorder blocks this class
+              outright (no children, no src). */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={minted.qr} alt={msg("dlink.alt")} className="mx-auto h-56 w-56" />
+          <img src={minted.qr} alt={msg("dlink.alt")} className="ph-no-capture mx-auto h-56 w-56" />
           <p
             data-testid="device-link-url"
-            className="break-all rounded bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-500"
+            className="ph-no-capture break-all rounded bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-500"
           >
             {padUrl}
           </p>
