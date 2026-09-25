@@ -58,7 +58,7 @@ import {
 import { waitForHydration } from "../directory-kit";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { padPollMs } from "../realtime-propagation-kit";
-import { pdfLines, pdfLinkUris, pdfLinks, pdfTextRuns } from "../pdf-uris";
+import { pdfLines, pdfLinks, pdfTextRuns } from "../pdf-uris";
 import { decodeEveryCard } from "../../src/server/__tests__/_sheet-raster";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import { composeMatchRef } from "../../src/lib/match-ref";
@@ -226,19 +226,36 @@ interface Card {
   uri: string;
   /** What a decoder reads from the symbol's PIXELS (null: unreadable). */
   decoded: string | null;
-  /** Every text line printed on this card, in drawing order. */
+  /** Every text run printed on this card, trimmed, in drawing order — the
+   *  time, the board's match code, the division, then each side's line(s).
+   *  One run per `doc.text` call, so a field is ONE entry: compare a field
+   *  with `lines.includes(x)`, never a substring of `text` ("F·1" is inside
+   *  "Winner of SF·1"). */
+  lines: string[];
+  /** `lines` joined with spaces — for names, which may wrap over two runs. */
   text: string;
 }
 
 /**
  * Every card of a printed sheet: its QR decoded from the page's pixels (the
  * raster path the renderer's own tests gate on, `_sheet-raster.ts`), and the
- * text printed on it. A text line belongs to the card whose QR is the nearest
- * one BELOW it in the same column (a card prints its time, code, division and
- * names above its QR); the column is the QR whose centre is nearest, because
- * each QR is centred in an equal-width card, so the midpoint between two
- * centres IS the cut line. The page header sits above the grid's top cut line
- * and is not any card's.
+ * text printed on it.
+ *
+ * This MIRRORS the renderer's layout (`src/server/scorer-sheet-pdf.ts`) and
+ * must move with it:
+ * - `renderScorerSheetPdf`'s cell loop — COLS = 3 equal-width cards per row,
+ *   `cardW = (pageW - EDGE * 2) / COLS`, rows stacked from the header's bottom;
+ * - `drawCutLines` — the first dashed horizontal line spans the full page
+ *   width at the grid's top, and everything above it is the page header
+ *   (`drawHeader`: eyebrow, title, court heading, check-names line);
+ * - `drawCard` — every text line (time, `matchRef`, division, `drawSide` ×2)
+ *   is drawn ABOVE the card's QR, which is centred horizontally in the card
+ *   and carries the `doc.link` annotation.
+ * So a text run belongs to the card whose QR is the nearest one BELOW it in
+ * the same column, the column being the QR whose centre is nearest (each QR is
+ * centred in an equal-width card, so the midpoint between two centres IS the
+ * cut line). If the renderer ever puts text below the QR or spans a card over
+ * two columns, this reader — not the product — is what must change.
  */
 async function readCards(pdf: Buffer): Promise<Card[]> {
   const links = pdfLinks(pdf);
@@ -258,9 +275,15 @@ async function readCards(pdf: Buffer): Promise<Card[]> {
     const below = onPage
       .filter(({ l }) => Math.abs(dx(l) - nearest) < 1 && l.top >= run.y)
       .sort((a, b) => a.l.top - b.l.top)[0];
-    if (below) texts[below.i]!.push(run.text);
+    if (below && run.text.trim() !== "") texts[below.i]!.push(run.text.trim());
   }
-  return links.map((l, i) => ({ page: l.page, uri: l.uri, decoded: decoded[i] ?? null, text: texts[i]!.join(" ") }));
+  return links.map((l, i) => ({
+    page: l.page,
+    uri: l.uri,
+    decoded: decoded[i] ?? null,
+    lines: texts[i]!,
+    text: texts[i]!.join(" "),
+  }));
 }
 
 /** Every card's QR decodes, from pixels, to the link its card carries; each is
@@ -380,6 +403,16 @@ async function asPhone(
 
 const tokenOf = (uri: string) => new URL(uri).pathname.split("/score/")[1]!;
 
+/** The device-link row id behind a printed card: `POST …/device-links` is the
+ *  console's Show QR door — it re-shows the fixture's live sealed link (200,
+ *  never a mint) with its secret, so the secret must be the card's token. */
+async function linkIdOfCard(request: APIRequestContext, fixtureId: string, card: Card): Promise<string> {
+  const shown = await apiJson<{ id: string; secret: string }>(request, `/api/v1/fixtures/${fixtureId}/device-links`, "POST", {});
+  expect(shown.status, "the print already made this match's link: a re-show, not a mint").toBe(200);
+  expect(shown.data!.secret, "…and it is the very link this card carries").toBe(tokenOf(card.decoded!));
+  return shown.data!.id;
+}
+
 /** The pad's own score-entry sheet (generic's v3 skin): two number steps,
  *  home then away, each with its own Confirm. */
 async function enterResultOnPad(phone: Page, home: number, away: number) {
@@ -485,9 +518,9 @@ test("golden: the day printed from the Schedule page — EVERY QR, decoded from 
   page,
   browser,
 }, testInfo) => {
-  // Seed (~4 navs of API), two prints, six scans, the scored match's scan and
-  // reload, a finalize; one pad entry; three screens captured.
-  test.setTimeout(budgetFor({ navs: 4 + 2 + 6 + 3, acts: 45, sends: 1, captures: 3 }));
+  // Seed (~4 navs of API) and the first print, budgeted before the card count
+  // is known; re-budgeted below once it is.
+  test.setTimeout(budgetFor({ navs: 4 + 1, acts: 10 }));
   const names = [LONG_NAME, `Nia ${TAG}`, `Ben ${TAG}`, `Cai ${TAG}`];
   const seeded = await seedScoredDivision(page.request, names, { decide: false });
   await expectStarted(page.request, seeded.divisionId);
@@ -503,6 +536,13 @@ test("golden: the day printed from the Schedule page — EVERY QR, decoded from 
   expectBrandFontsEmbedded(pdf);
   const cards = await readCards(pdf);
   expect(cards.length, "one card per scheduled match on the day").toBe(onDay.length);
+  // The whole budget, now that the scans are countable: seed and two prints,
+  // one scan per card (≈5 checks each), the scored card's scan and reload, a
+  // finalize; one pad entry; three screens captured. `setTimeout` mid-test
+  // replaces the budget for the whole test, time already spent included.
+  test.setTimeout(
+    budgetFor({ navs: 4 + 2 + cards.length + 3, acts: 15 + 5 * cards.length, sends: 1, captures: 3 }),
+  );
   expectEveryQrDecodes(cards, pdf);
   // The print control, where the journey starts (its own spec owns the rest).
   const control = page.getByTestId("print-sheets");
@@ -513,8 +553,13 @@ test("golden: the day printed from the Schedule page — EVERY QR, decoded from 
   ]);
 
   // ---- 2. A reprint keeps every printed QR alive -----------------------------
-  expect(pdfLinkUris(await printDay(page, schedulePath, day)).sort(), "a reprint carries the same QRs").toEqual(
-    cards.map((c) => c.uri).sort(),
+  // Compared by what a phone READS off the reprint's pixels, not its link
+  // annotations (a camera never sees an annotation).
+  const reprintPdf = await printDay(page, schedulePath, day);
+  const reprint = await readCards(reprintPdf);
+  expectEveryQrDecodes(reprint, reprintPdf);
+  expect(reprint.map((c) => c.decoded).sort(), "a reprint's QRs decode to the same links").toEqual(
+    cards.map((c) => c.decoded).sort(),
   );
 
   // ---- 3. Every card, scanned: the phone names THAT card's match -------------
@@ -543,7 +588,7 @@ test("golden: the day printed from the Schedule page — EVERY QR, decoded from 
       }
       const code = (await phone.getByTestId("scan-confirm-match-code").innerText()).replace(/^\s*·\s*/, "").trim();
       expect(code.length, `card ${i}: the phone shows the board's code`).toBeGreaterThan(0);
-      expect(squash(card.text), `card ${i}: the card prints the code the phone shows`).toContain(squash(code));
+      expect(card.lines, `card ${i}: the card prints the code the phone shows, as its own line`).toContain(code);
     }
     expect(
       fixtureOfCard.map((f) => f.id).sort(),
@@ -554,6 +599,10 @@ test("golden: the day printed from the Schedule page — EVERY QR, decoded from 
     const at = fixtureOfCard.findIndex((f) => pairOf(f).includes(LONG_NAME));
     expect(at, "the long name plays on the day").toBeGreaterThanOrEqual(0);
     const scored = fixtureOfCard[at]!;
+    // Which link IS this card: the console's own re-show door (ensure, never
+    // mint) hands back the fixture's live link with its secret. Asked before
+    // the result, because a decided match no longer re-shows a link.
+    const cardLinkId = await linkIdOfCard(page.request, scored.id, cards[at]!);
     await phone.goto(new URL(cards[at]!.decoded!).pathname);
     const confirm = phone.getByTestId("scan-confirm");
     await expect(confirm).toBeVisible({ timeout: STEP_MS });
@@ -572,7 +621,7 @@ test("golden: the day printed from the Schedule page — EVERY QR, decoded from 
     expect(decided.outcome?.winner, "3–1 to the home side, as entered").toBe(scored.home_entrant_id);
     const events = await ledger(page.request, scored.id);
     const result = events.find((e) => e.type === "generic.result");
-    expect(result?.device_link_id, "the result was written by the printed card's link, not the organiser").toBeTruthy();
+    expect(result?.device_link_id, "the result was written by THIS card's link, not the organiser").toBe(cardLinkId);
 
     // ---- 5. The organiser finalises: the card's scan says the match is over ---
     const finalized = await apiJson(page.request, `/api/v1/fixtures/${scored.id}/events`, "POST", {
@@ -625,10 +674,16 @@ test("knockout: the final's printed QR waits on 'Winner of …' and moves to Con
   expect(cards.length, "one card per match of the bracket").toBe(3);
   expectEveryQrDecodes(cards, pdf);
   const finalCard = cardNaming(cards, semis.map(winnerOf), "the final's two feeders");
-  expect(squash(finalCard.text), "…under the final's board code").toContain(squash(refOf(final.id)));
+  // The code is its OWN line on the card: a substring test is vacuous here,
+  // because "F·1" is inside "Winner of SF·1" on this very card.
+  expect(finalCard.lines, "…under the final's board code, printed as its own line").toContain(refOf(final.id));
+  expect(squash(finalCard.text), "…never the round form the board does not print").not.toContain(
+    squash(roundForm(final)),
+  );
   for (const s of semis) {
     const card = cardNaming(cards, [nameOf.get(s.home_entrant_id!)!, nameOf.get(s.away_entrant_id!)!], `semi ${s.id}'s players`);
-    expect(squash(card.text), "a semi's card carries its own board code").toContain(squash(refOf(s.id)));
+    expect(card.lines, "a semi's card carries its own board code as its own line").toContain(refOf(s.id));
+    expect(squash(card.text), "…never the round form").not.toContain(squash(roundForm(s)));
   }
 
   // ---- 2. The final, scanned before either semi: Waiting, naming both feeders
@@ -693,8 +748,10 @@ test("swiss: a round-1 result scored from a printed card goes View-only once the
 }, testInfo) => {
   // Seed (~4 navs of API), one print, one scan, the desk, two phone reloads,
   // the desk's refresh; one pad entry; one screen captured.
-  test.setTimeout(budgetFor({ navs: 4 + 1 + 1 + 1 + 2 + 1, acts: 40, sends: 1, captures: 1 }));
-  const names = [`Ivy ${TAG}`, `Jo ${TAG}`, `Kai ${TAG}`, `Lu ${TAG}`];
+  test.setTimeout(budgetFor({ navs: 4 + 1 + 1 + 1 + 2 + 1, acts: 45, sends: 1, captures: 1 }));
+  // The 43-character name plays on the target board, so the carried View-only
+  // screen is captured with the name that stresses its layout.
+  const names = [LONG_NAME, `Jo ${TAG}`, `Kai ${TAG}`, `Lu ${TAG}`];
   const seeded = await seedStarted(page.request, "Sheets Swiss", names, {
     kind: "swiss",
     name: "Swiss",
@@ -716,8 +773,11 @@ test("swiss: a round-1 result scored from a printed card goes View-only once the
   await timeOnOneDay(page.request, r1);
   const { day, onDay } = dayOf(await fixturesOf(page.request, seeded.divisionId), await orgZone(page.request));
   expect(onDay.map((f) => f.id).sort(), "precondition: round 1 is the day").toEqual(r1.map((f) => f.id).sort());
-  const [target, other] = r1 as [Fx, Fx];
   const pairOf = (f: Fx) => [nameOf.get(f.home_entrant_id!)!, nameOf.get(f.away_entrant_id!)!];
+  const withLongName = r1.find((f) => pairOf(f).includes(LONG_NAME));
+  expect(withLongName, "precondition: the long name is paired in round 1").toBeDefined();
+  const target = withLongName!;
+  const other = r1.find((f) => f.id !== target.id)!;
 
   const pdf = await printDay(page, await competitionPath(page.request, seeded.competitionId, "/schedule"), day);
   const cards = await readCards(pdf);
@@ -797,6 +857,23 @@ test("swiss: a round-1 result scored from a printed card goes View-only once the
     });
     await expect(undo, "…and it can be pressed").toBeEnabled();
     await expect(phone.getByTestId("scan-view-only"), "…and View-only is gone").toHaveCount(0);
+    // The positive twin of step 3's refusal: the SAME bearer, the SAME void,
+    // now accepted — so the 403 above was the carried-forward rule, not a
+    // bearer or payload that could never void anything.
+    const tip = await ledger(page.request, target.id);
+    const accepted = await asPhone(phone, token, `/api/v1/fixtures/${target.id}/events`, "POST", {
+      expected_seq: tip.at(-1)!.seq,
+      type: "core.void",
+      payload: { event_id: result!.id },
+    });
+    expect(accepted, "with round 2 unpaired, the card's bearer voids its own result").toEqual({ status: 201, code: null });
+    expect((await ledger(page.request, target.id)).length, "…writing exactly the void").toBe(tip.length + 1);
+    await expect
+      .poll(async () => (await fixture(page.request, target.id)).status, {
+        timeout: STEP_MS,
+        message: "the voided result no longer decides the match",
+      })
+      .not.toBe("decided");
   } finally {
     await phone.context().close();
   }
@@ -909,11 +986,22 @@ test("regression: a member without edit rights sees the Schedule page but no pri
   const { org_id: orgId, name } = comp.data!;
   const schedulePath = await competitionPath(page.request, seeded.competitionId, "/schedule");
   const { day } = dayOf(await fixturesOf(page.request, seeded.divisionId), await orgZone(page.request));
-  const title = (p: Page) => p.locator("main h1.page-title");
+  // The marker that THIS page — the Schedule page — rendered, which the
+  // competition overview cannot satisfy: its h1 also carries the name, so a
+  // "contains the name" marker passed on a redirect to the overview. The
+  // schedule's own title, whole, AND the schedule's own path.
+  const pathRe = new RegExp(`^[^?#]*${schedulePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[?#].*)?$`);
+  const expectOnSchedule = async (p: Page, who: string) => {
+    await expect(p, `${who}: still on the Schedule page (no redirect)`).toHaveURL(pathRe, { timeout: STEP_MS });
+    await expect(p.locator("main h1.page-title"), `${who}: the Schedule page's own title`).toHaveText(
+      say("comp.schedule.title", { name }),
+      { timeout: STEP_MS },
+    );
+  };
 
   // The positive pair first: the organiser's own page carries the control.
   await page.goto(schedulePath);
-  await expect(title(page)).toContainText(name, { timeout: STEP_MS });
+  await expectOnSchedule(page, "the organiser");
   await expect(page.getByTestId("print-sheets"), "the organiser has the print control").toHaveCount(1);
 
   // A viewer of this org, signed in on a context of their own (a bare
@@ -933,9 +1021,9 @@ test("regression: a member without edit rights sees the Schedule page but no pri
     expect(orgs.data?.find((o) => o.id === orgId)?.role, "precondition: a viewer of this org").toBe("viewer");
 
     await viewer.goto(schedulePath);
-    // FIRST the marker that the page rendered FOR THIS VIEWER — a redirect or
-    // an error page has no such title — THEN the absence.
-    await expect(title(viewer), "the schedule page renders for a viewer").toContainText(name, { timeout: STEP_MS });
+    // FIRST the marker that the Schedule page rendered FOR THIS VIEWER — a
+    // redirect, the overview or an error page fails it — THEN the absence.
+    await expectOnSchedule(viewer, "the viewer");
     await expect(viewer.getByTestId("print-sheets"), "…with no print control").toHaveCount(0);
     await expect(viewer.getByTestId("print-sheets-submit")).toHaveCount(0);
     // Hiding is not the guard: the route refuses a viewer by itself.
