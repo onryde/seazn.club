@@ -2017,19 +2017,26 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
   it("a hand-built legacy void resolves via pass G's own ownEventIds fallback rather than crashing", async () => {
     const DB_NAME = "pass-j-legacy-pending-event";
     const STALE_ID = "client-fabricated-pre-pass-h-id";
+    // A match already under way, as a reload finds it — and a seed that is
+    // not empty keeps the stream's catch-up off cursor 0, so the read below
+    // can be pinned exactly rather than excused.
+    const initialEvents = [
+      { id: "srv-start-1", fixtureId: "fx-1", seq: 1, type: "core.start", payload: {}, recordedAt: "2026-08-13T00:00:00.000Z", recordedBy: "user-1" },
+      { id: "srv-score-2", fixtureId: "fx-1", seq: 2, type: "generic.score", payload: { by: "H", points: 1 }, recordedAt: "2026-08-13T00:00:01.000Z", recordedBy: "user-1" },
+    ];
     const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => []);
     const appendCalls: AppendEventBody[] = [];
     const transport: PadTransport = {
       async appendEvent(_fixtureId, body) {
         appendCalls.push(body);
-        return success(1);
+        return success(3);
       },
       listEventsSince,
       async getLastSeq() {
-        return 0;
+        return 2;
       },
       async fetchState() {
-        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+        return { status: "in_play", last_seq: 3, state: null, summary: null, outcome: null };
       },
     };
 
@@ -2045,8 +2052,8 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
       idempotencyKey: "void-idem-legacy-1",
       type: "core.void",
       payload: { event_id: STALE_ID },
-      expectedSeq: 0,
-      createdAt: "2026-08-13T00:00:00.000Z",
+      expectedSeq: 2,
+      createdAt: "2026-08-13T00:00:02.000Z",
       attempts: 0,
       // voidTargetSeq deliberately absent — the exact shape under test.
     };
@@ -2055,7 +2062,7 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
     // A genuinely fresh mount — ownEventIds starts empty exactly like a real
     // reload, and nothing here ever calls submit(), so voidTargetSeq is never
     // set any other way either.
-    const pad = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    const pad = mountPipeline(baseParams({ transport, queueDbName: DB_NAME, initialEvents }));
     for (let i = 0; i < 5; i += 1) {
       await tick();
     }
@@ -2071,11 +2078,9 @@ describe("usePadPipeline — a pre-pass-H PendingEvent (no voidTargetSeq) still 
     // The "same" fast path never attempts a network resolution at all —
     // proves this took the SAME branch as any id this mount has never heard
     // of, not some voidTargetSeq-shaped code path that merely happens not to
-    // throw today. The stream's catch-up on subscribe is the only read it may
-    // see (from the empty seed's count, 0 — and skipped outright if the
-    // resumed drain is still out when it comes due), so at most that one.
-    expect(listEventsSince.mock.calls.length).toBeLessThanOrEqual(1);
-    for (const call of listEventsSince.mock.calls) expect(call).toEqual(["fx-1", 0]);
+    // throw today. So the one read is the stream's catch-up on subscribe, and
+    // nothing else.
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 2]]);
     expect(pad.current.queueDepth).toBe(0);
     // pendingWithLocalVoidTarget's OWN no-op, directly: the LOCAL fold
     // envelope must still carry the ORIGINAL, unmodified `voids` id — proof
