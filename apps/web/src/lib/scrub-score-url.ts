@@ -17,13 +17,31 @@ type Integration = Parameters<typeof Sentry.addIntegration>[0];
 
 /** `/score/` plus the token: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
 const SCORE_PATH = /\/score\/[^/?#\s"'<>]+/g;
-/** A bare secret, e.g. in an `Authorization` header. `mintDeviceLinkSecret` makes `dl_` + 43 base64url chars. */
-const BARE_TOKEN = /\bdl_[A-Za-z0-9_-]{32,}/g;
+/**
+ * The same path URL-ENCODED inside another URL (a login `next=`, a referrer
+ * carried as a param): `%2Fscore%2F<token>`, at any encoding depth (`%252F`…),
+ * either hex case. The token ends at the next `%` (its encoded delimiter), `&`,
+ * `/`, `?`, `#`, quote, angle bracket or space. The prefix is kept as it was.
+ */
+const ENCODED_SCORE_PATH = /(%(?:25)*2[Ff]score%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
+/**
+ * A bare secret, e.g. in an `Authorization` header. `mintDeviceLinkSecret`
+ * makes `dl_` + 43 base64url chars. No `\b` in front: a secret glued to a word
+ * character (`x_dl_…`, `%2Fdl_…`) has no word boundary before its `d`. The
+ * 32-character floor is what keeps ordinary words (`model_dl_config`,
+ * `handl_…`) from being eaten.
+ */
+const BARE_TOKEN = /dl_[A-Za-z0-9_-]{32,}/g;
+/** Cheap pre-check: nothing any of the three patterns could match. */
+const MAYBE_TOKEN = /\/score\/|%(?:25)*2[Ff]score%|dl_/;
 
-/** One string: `/score/<token>` becomes `/score/[token]`, and a bare `dl_…` secret becomes `dl_[token]`. */
+/** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, and a bare `dl_…` secret becomes `dl_[token]`. */
 export function scrubScoreUrl(value: string): string {
-  if (!value.includes("/score/") && !value.includes("dl_")) return value;
-  return value.replace(SCORE_PATH, "/score/[token]").replace(BARE_TOKEN, "dl_[token]");
+  if (!MAYBE_TOKEN.test(value)) return value;
+  return value
+    .replace(SCORE_PATH, "/score/[token]")
+    .replace(ENCODED_SCORE_PATH, "$1[token]")
+    .replace(BARE_TOKEN, "dl_[token]");
 }
 
 /**

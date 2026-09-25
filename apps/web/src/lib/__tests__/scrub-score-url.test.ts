@@ -56,6 +56,67 @@ describe("scrubScoreUrl", () => {
   });
 });
 
+describe("scrubScoreUrl — encoded and glued forms (fix batch 2, item 2)", () => {
+  // A URL travels ENCODED inside another URL's query (a login `next=`, a
+  // referrer carried as a param), and a secret can sit glued to a word
+  // character (`x_dl_…`). `\bdl_` saw neither: there is no word boundary
+  // between `F` and `d`, or between `_` and `d`.
+  const IN_QUERY = `https://seazn.club/login?next=https%3A%2F%2Fseazn.club%2Fscore%2F${TOKEN}`;
+
+  it.each([
+    ["an encoded absolute URL in a query param", IN_QUERY, "https://seazn.club/login?next=https%3A%2F%2Fseazn.club%2Fscore%2F[token]"],
+    [
+      "an encoded URL with its own encoded query, then another param",
+      `/login?next=%2Fscore%2F${TOKEN}%3Ffrom%3Dsheet&lang=fr`,
+      "/login?next=%2Fscore%2F[token]%3Ffrom%3Dsheet&lang=fr",
+    ],
+    ["lower-case percent hex", `?next=%2fscore%2f${TOKEN}`, "?next=%2fscore%2f[token]"],
+    [
+      "a double-encoded URL",
+      `?r=https%253A%252F%252Fseazn.club%252Fscore%252F${TOKEN}`,
+      "?r=https%253A%252F%252Fseazn.club%252Fscore%252F[token]",
+    ],
+    // The encoded PATH form scrubs any segment, like `/score/<x>` does: the
+    // route is the secret's only home, whatever the token looks like.
+    ["an encoded path whose token is not dl_-shaped", "?next=%2Fscore%2Fabc123&x=1", "?next=%2Fscore%2F[token]&x=1"],
+    // No `dl_` in these two, so only the encoded-path pattern (and its
+    // pre-check) can catch them.
+    ["the same, lower-case hex", "?next=%2fscore%2fabc123", "?next=%2fscore%2f[token]"],
+    ["the same, double-encoded", "?r=%252Fscore%252Fabc123", "?r=%252Fscore%252F[token]"],
+    ["a secret glued to a word character", `session_${TOKEN}`, "session_dl_[token]"],
+    ["a secret glued to a digit", `9${TOKEN}`, "9dl_[token]"],
+  ])("%s", (_, input, expected) => {
+    expect(scrubScoreUrl(input)).toBe(expected);
+    expectNoToken(scrubScoreUrl(input));
+  });
+
+  it.each([
+    ["a short dl_ word", "dl_x"],
+    ["a snake_case name holding dl_", "model_dl_config"],
+    ["a word ending in dl_", "handl_request_body"],
+    ["31 token characters: one short of a secret", `dl_${"A".repeat(31)}`],
+    ["an encoded /scoreboard path", "?next=%2Fscoreboard%2Fabc"],
+    ["an encoded /score/ with nothing after it", "?next=%2Fscore%2F&x=1"],
+    ["an encoded, already-scrubbed URL", "?next=%2Fscore%2F%5Btoken%5D"],
+  ])("leaves %s untouched", (_, input) => {
+    expect(scrubScoreUrl(input)).toBe(input);
+  });
+
+  it("scrubs 32 token characters (the guard's exact floor)", () => {
+    expect(scrubScoreUrl(`x_dl_${"A".repeat(32)}`)).toBe("x_dl_[token]");
+  });
+
+  it("the PostHog hook scrubs an encoded token out of a pageview's URL properties", () => {
+    const out = posthogBeforeSend({
+      uuid: "u1",
+      event: "$pageview",
+      properties: { $current_url: IN_QUERY, $pathname: "/login", $referrer: IN_QUERY },
+    } as unknown as CaptureResult);
+    expectNoToken(out);
+    expect(out?.properties.$pathname).toBe("/login");
+  });
+});
+
 describe("scrubScoreTokens (deep)", () => {
   it("scrubs every string in nested objects and arrays, and leaves everything else as it was", () => {
     const when = new Date("2026-09-26T09:00:00Z");
