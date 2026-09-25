@@ -21,7 +21,9 @@ import { startDivision } from "@/server/usecases/schedule";
 import { createDeviceLink, ensureDeviceLink } from "@/server/usecases/device-links";
 import { seedCourts, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { decide, deviceFor, fixturesOf, seedStage } from "@/server/usecases/__tests__/_sheets-rig";
-import { DeviceScorePad } from "@/components/v2/device-score-pad";
+import { DeviceScorePad, type PadSideInfo } from "@/components/v2/device-score-pad";
+import { buildScorerSheet } from "@/server/usecases/scorer-sheets";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
@@ -776,5 +778,73 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
     expect(find(tree, DeviceScorePad), "precondition: the pad renders").not.toBeNull();
     expect(find(tree, DictProvider), "no second copy of ui.json in every English scan's payload").toBeNull();
+  });
+});
+
+// Final review I1: the scorer holds a PRINTED card and checks the phone against
+// it, so every scan screen must name a side exactly as that card does. The card
+// is the real builder's output (`buildScorerSheet`), and the phone opens the
+// token printed on it: the real producer and the real consumer, no fixture on
+// either end. The entrants' stored snapshot names deliberately DIFFER from
+// their one rostered person, which is the name the card prints.
+describe.skipIf(!HAS_DB)("the scan names each side the way its printed card does (final review I1)", () => {
+  const DAY = "2026-09-23";
+  const PRINTED = "2026-09-23T06:00:00.000Z";
+  const ORIGIN = "http://localhost:3000";
+  const PERSON: Record<string, string> = {
+    "Stored A": "Asha Rao",
+    "Stored B": "Bala Iyer",
+    "Stored C": "Chen Wu",
+    "Stored D": "Dev Nair",
+  };
+  const rostered = { members: (n: string) => [PERSON[n]!] };
+  const schedule = (ids: string[]) =>
+    sql`update fixtures set scheduled_at = ${`${DAY}T09:00:00Z`}::timestamptz where id = any(${ids})`;
+  const cardFor = async (auth: Awaited<ReturnType<typeof seedOrg>>["auth"], competitionId: string, fixtureId: string) => {
+    const sheet = await buildScorerSheet(auth, competitionId, DAY, ORIGIN, "en", { printedAt: PRINTED });
+    const card = sheet.pages.flatMap((p) => p.rows).find((r) => r.fixtureId === fixtureId);
+    expect(card, "precondition: the fixture is on the day's sheet").toBeDefined();
+    return { ...card!, token: card!.url.split("/score/")[1]! };
+  };
+
+  it("Confirm and the pad header name each side exactly as its card prints it", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "league", ["Stored A", "Stored B"], {}, rostered);
+    const [fixture] = await fixturesOf(stage.id);
+    await schedule([fixture!.id]);
+    const card = await cardFor(auth, competition.id, fixture!.id);
+    expect([card.home, card.away].sort(), "precondition: the card prints each rostered person, not the snapshot").toEqual([
+      "Asha Rao",
+      "Bala Iyer",
+    ]);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: card.token }) });
+    const pad = find(tree, DeviceScorePad);
+    expect(pad, "precondition: both sides seated, so the pad (Confirm)").not.toBeNull();
+    const { home, away } = pad!.props as { home: PadSideInfo; away: PadSideInfo };
+    // device-score-pad.tsx renders Confirm and the pad header through
+    // `entrantDisplayName` over exactly these props.
+    expect([entrantDisplayName(home), entrantDisplayName(away)], "each seat, in its place").toEqual([card.home, card.away]);
+  });
+
+  it("Waiting names its seated side exactly as the card prints it", async () => {
+    const { auth } = await seedOrg("pro");
+    const names = ["Stored A", "Stored B", "Stored C", "Stored D"];
+    const { competition, stage } = await seedStage(auth, "knockout", names, {}, rostered);
+    const fixtures = await fixturesOf(stage.id);
+    const sf1 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const final = fixtures.find((f) => f.round_no === 2)!;
+    await decide(await deviceFor(auth, sf1.id), sf1.id);
+    await schedule([final.id]);
+    const card = await cardFor(auth, competition.id, final.id);
+    expect([card.homeTbd, card.awayTbd], "precondition: SF1's winner seated at HOME, AWAY still TBD").toEqual([
+      false,
+      true,
+    ]);
+    expect(Object.values(PERSON), "precondition: the card prints the seated person").toContain(card.home);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: card.token }) });
+    const waiting = find(tree, ScanWaiting);
+    expect(waiting, "precondition: one TBD side still waits").not.toBeNull();
+    const { home, away } = waiting!.props as WaitingProps;
+    expect([home, away], "each seat, in its place").toEqual([card.home, card.away]);
   });
 });

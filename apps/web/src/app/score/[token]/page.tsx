@@ -34,6 +34,7 @@ import { deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
 import { resultCarriedForward } from "@/server/usecases/carried-forward";
 import { scanMatchNames } from "@/server/usecases/scan-match-names";
 import { venueTzForDivision } from "@/server/venue-tz";
+import { entrantDisplayName, type EntrantNameSource } from "@/lib/entrant-name";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -92,11 +93,16 @@ export default async function ScorePadPage({
         /** `fixtures.status` — the same column `getFixtureState` reports, read
          *  here so the screen is picked before any of the pad's own loads. */
         status: string;
-        /** Each seated side's `entrants.display_name`: all the waiting screens
-         *  print for a seated side (the pad's `side()` carries no `kind`, so
-         *  `entrantDisplayName` over it was this snapshot name anyway). */
+        /** Each seated side's `entrants.display_name` (the snapshot), `kind`
+         *  and roster in roster order: what the waiting screens resolve a
+         *  seated side's name from, through `entrantDisplayName` — the way its
+         *  printed card and the pad name it (final review I1). */
         home_name: string | null;
         away_name: string | null;
+        home_kind: string | null;
+        away_kind: string | null;
+        home_members: { person_id: string; full_name: string }[];
+        away_members: { person_id: string; full_name: string }[];
         division_id: string;
         sport_key: string;
         module_version: string;
@@ -112,7 +118,9 @@ export default async function ScorePadPage({
     >`
       select f.id, f.round_no, ven.name as venue_name, crt.name as court_name,
              f.scheduled_at, f.home_entrant_id, f.away_entrant_id, f.status,
-             he.display_name as home_name, ae.display_name as away_name, d.id as division_id,
+             he.display_name as home_name, ae.display_name as away_name,
+             he.kind as home_kind, ae.kind as away_kind,
+             hm.members as home_members, am.members as away_members, d.id as division_id,
              d.sport_key, d.module_version, d.config, d.status as division_status,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding
@@ -121,6 +129,17 @@ export default async function ScorePadPage({
       left join venues ven on ven.id = f.venue_id
       left join entrants he on he.id = f.home_entrant_id
       left join entrants ae on ae.id = f.away_entrant_id
+      -- Roster order as the sheet reads it (usecases/scorer-sheets.ts readSides).
+      left join lateral (
+        select coalesce(json_agg(json_build_object('person_id', p.id, 'full_name', p.full_name)
+                                 order by em.squad_number nulls last, p.full_name), '[]'::json) as members
+        from entrant_members em join persons p on p.id = em.person_id
+        where em.entrant_id = he.id) hm on true
+      left join lateral (
+        select coalesce(json_agg(json_build_object('person_id', p.id, 'full_name', p.full_name)
+                                 order by em.squad_number nulls last, p.full_name), '[]'::json) as members
+        from entrant_members em join persons p on p.id = em.person_id
+        where em.entrant_id = ae.id) am on true
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
       where f.id = ${link.fixture_id}`;
@@ -180,13 +199,16 @@ export default async function ScorePadPage({
     // and a refresh is a fresh dynamic render (no ETag, no cache), so the first
     // refresh after the start renders Confirm.
     const notStarted = screen.screen === "division_not_started";
+    // A seated side by the name its printed card carries (final review I1).
+    const seated = (name: string | null, kind: string | null, members: EntrantNameSource["members"]) =>
+      name === null ? null : entrantDisplayName({ name, kind: kind ?? undefined, members });
     return (
       <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
         <HtmlLang lang={locale} />
         <div className="mx-auto max-w-2xl">
           <ScanWaiting
-            home={fixture.home_name ?? names.home}
-            away={fixture.away_name ?? names.away}
+            home={seated(fixture.home_name, fixture.home_kind, fixture.home_members) ?? names.home}
+            away={seated(fixture.away_name, fixture.away_kind, fixture.away_members) ?? names.away}
             matchRef={ref}
             meta={[fixture.court_name, scheduledLabel, fixture.division_name].filter((m): m is string => !!m)}
             waitingOn={notStarted ? "division_start" : "sides"}
@@ -242,6 +264,10 @@ export default async function ScorePadPage({
     return {
       id: entrant.id,
       name: entrant.display_name,
+      // Without it `entrantDisplayName` falls back to the stored snapshot, and
+      // Confirm and the pad header disagree with the printed card, which names
+      // a one-person individual (or a pair) by its roster (final review I1).
+      kind: entrant.kind,
       members: entrant.members as PadSideInfo["members"],
       lineup: lineup.slots as PadSideInfo["lineup"],
     };
