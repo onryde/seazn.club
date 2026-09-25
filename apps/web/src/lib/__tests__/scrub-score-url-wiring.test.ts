@@ -89,6 +89,12 @@ describe("PostHog (src/instrumentation-client.ts)", () => {
     let out: unknown = pageview;
     for (const fn of [options.before_send].flat()) out = run(fn, out);
     expectScrubbed(out);
+
+    // Fix batch 7: the same before_send drops a staff page's events.
+    const staff = { uuid: "u2", event: "$pageview", properties: { $pathname: "/admin/orgs/x" } };
+    let dropped: unknown = staff;
+    for (const fn of [options.before_send].flat()) dropped = dropped === null ? null : run(fn, dropped);
+    expect(dropped).toBeNull();
   });
 });
 

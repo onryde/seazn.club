@@ -48,8 +48,9 @@ if (key && !analyticsSuppressed()) {
       // banner. opt_in_capturing() (in cookie-consent) flips this on.
       opt_out_capturing_by_default: true,
       opt_out_persistence_by_default: true,
-      // A device link's URL (/score/<token>) is a live scoring credential:
-      // scrub it out of every URL-valued property before anything leaves.
+      // Drops every event from a staff page (/admin, /admin/*), then scrubs
+      // device-link tokens (/score/<token> is a live scoring credential) out
+      // of every URL-valued property before anything leaves.
       before_send: posthogBeforeSend,
     });
     if (analyticsConsented()) posthog.opt_in_capturing();

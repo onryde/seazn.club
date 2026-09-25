@@ -65,13 +65,31 @@ function deep(value: unknown, seen: WeakMap<object, unknown>): unknown {
 }
 
 /**
- * PostHog `before_send`. It runs in `capture()` on every event: pageview,
- * pageleave, autocapture (`$elements` hrefs, `$external_click_url`) and
- * `$snapshot`. It scrubs the properties plus `$set` / `$set_once`, where the
- * `$initial_*` URLs live. A dropped event (null) stays dropped.
+ * Staff pages (fix batch 7, owner-approved 2026-09-25): the route is app/admin
+ * at the top level, not under [lang], so the match is exact. It is "/admin"
+ * itself or anything under "/admin/", never "/administrators" or "/o/admin-club".
+ */
+export function isAdminPath(pathname: string): boolean {
+  return pathname === "/admin" || pathname.startsWith("/admin/");
+}
+
+/**
+ * The app's PostHog `before_send`. It runs in `capture()` on every event:
+ * pageview, pageleave, autocapture (`$elements` hrefs, `$external_click_url`),
+ * custom captures and `$snapshot`.
+ *  1. It drops every event from a staff page. posthog-js stamps `$pathname` on
+ *     every event it builds, cookie-consent's manual `$pageview` included.
+ *     Server-side captureServer is not involved: staff are filtered there
+ *     through PostHog's internal-user filter.
+ *  2. It scrubs device-link tokens from the properties plus `$set` /
+ *     `$set_once`, where the `$initial_*` URLs live.
+ * A dropped event (null) stays dropped.
  */
 export function posthogBeforeSend(event: CaptureResult | null): CaptureResult | null {
-  return event === null ? null : scrubScoreTokens(event);
+  if (event === null) return null;
+  const pathname: unknown = event.properties?.$pathname;
+  if (typeof pathname === "string" && isAdminPath(pathname)) return null;
+  return scrubScoreTokens(event);
 }
 
 /**

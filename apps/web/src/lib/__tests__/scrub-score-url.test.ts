@@ -122,6 +122,54 @@ describe("posthogBeforeSend", () => {
   });
 });
 
+// Fix batch item 7 (owner-approved 2026-09-25): staff pages send nothing from
+// the browser. The route is app/admin at the top level (not under [lang]), so
+// the rule is exact: "/admin" itself or anything under "/admin/". posthog-js
+// stamps $pathname on every event it builds, so this also covers pageleave,
+// autocapture, and cookie-consent's manual $pageview.
+describe("posthogBeforeSend drops staff (/admin) pages (fix batch 7)", () => {
+  const on = (pathname: string, event = "$pageview"): CaptureResult => ({
+    uuid: "u",
+    event,
+    properties: { $pathname: pathname, $current_url: `https://seazn.club${pathname}` },
+  });
+
+  it.each([
+    ["/admin", "$pageview"],
+    ["/admin/", "$pageview"],
+    ["/admin/orgs/x", "$pageview"],
+    ["/admin/orgs/x", "$pageleave"],
+    ["/admin/users/y", "$autocapture"],
+    ["/admin/revenue", "pricing_viewed"],
+  ])("drops %s (%s)", (pathname, event) => {
+    expect(posthogBeforeSend(on(pathname, event))).toBeNull();
+  });
+
+  it.each([
+    ["/administrator"],
+    ["/administrators/list"],
+    ["/o/admin-club"],
+    ["/fr/admin-x"],
+    ["/"],
+  ])("keeps %s", (pathname) => {
+    const out = posthogBeforeSend(on(pathname));
+    expect(out).not.toBeNull();
+    expect(out!.properties.$pathname).toBe(pathname);
+  });
+
+  it("keeps a scan page, and scrubs its token", () => {
+    const out = posthogBeforeSend(on(`/score/${TOKEN}`));
+    expect(out).not.toBeNull();
+    expect(out!.properties.$pathname).toBe("/score/[token]");
+    expectNoToken(out);
+  });
+
+  it("an event with no $pathname is kept (nothing says it is a staff page)", () => {
+    const out = posthogBeforeSend({ uuid: "u", event: "custom", properties: { a: 1 } });
+    expect(out?.properties).toEqual({ a: 1 });
+  });
+});
+
 describe("scrubSentryEvent", () => {
   it("an error event: request URL, transaction, breadcrumbs, tags and stack frames", () => {
     const event: Event = {
