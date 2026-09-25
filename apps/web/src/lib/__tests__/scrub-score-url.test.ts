@@ -76,13 +76,21 @@ describe("scrubScoreUrl — encoded and glued forms (fix batch 2, item 2)", () =
       `?r=https%253A%252F%252Fseazn.club%252Fscore%252F${TOKEN}`,
       "?r=https%253A%252F%252Fseazn.club%252Fscore%252F[token]",
     ],
+    // Three deep (a redirect's `next` carried inside another's): "ANY depth"
+    // is `(?:25)*`, and double-encoding alone cannot tell it from `(?:25)?`.
+    [
+      "a triple-encoded URL",
+      `?r=https%25253A%25252F%25252Fseazn.club%25252Fscore%25252F${TOKEN}`,
+      "?r=https%25253A%25252F%25252Fseazn.club%25252Fscore%25252F[token]",
+    ],
     // The encoded PATH form scrubs any segment, like `/score/<x>` does: the
     // route is the secret's only home, whatever the token looks like.
     ["an encoded path whose token is not dl_-shaped", "?next=%2Fscore%2Fabc123&x=1", "?next=%2Fscore%2F[token]&x=1"],
-    // No `dl_` in these two, so only the encoded-path pattern (and its
+    // No `dl_` in these three, so only the encoded-path pattern (and its
     // pre-check) can catch them.
     ["the same, lower-case hex", "?next=%2fscore%2fabc123", "?next=%2fscore%2f[token]"],
     ["the same, double-encoded", "?r=%252Fscore%252Fabc123", "?r=%252Fscore%252F[token]"],
+    ["the same, triple-encoded", "?r=%25252Fscore%25252Fabc123", "?r=%25252Fscore%25252F[token]"],
     ["a secret glued to a word character", `session_${TOKEN}`, "session_dl_[token]"],
     ["a secret glued to a digit", `9${TOKEN}`, "9dl_[token]"],
   ])("%s", (_, input, expected) => {
