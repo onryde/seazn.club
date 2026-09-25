@@ -1,4 +1,11 @@
-import { expect, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  request as playwrightRequest,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 // Type-only, so nothing from the app is pulled into the Playwright runtime —
 // the same import event-pass.spec.ts already makes. Naming the rung union here
 // rather than re-declaring it is what keeps a new rung from needing a sixth
@@ -1163,6 +1170,10 @@ export async function seedBareRegistrationSql(
  *  two-int advisory forms in separate lock spaces. */
 const STAFF_BORROW_LOCK_NS = 70070072;
 
+/** The override `invalidateOrgEntitlements` sets and clears to make the route
+ *  drop the cache. Exported so a test can find the audit rows it leaves. */
+export const ENTITLEMENT_CACHE_BUST_KEY = "e2e.cache.bust";
+
 /** A stable signed 32-bit key from an id string — the second half of that
  *  two-int form, which is what makes the lock per-owner rather than global.
  *  Collisions only cost a wait, never correctness. */
@@ -1170,6 +1181,84 @@ function advisoryKey32(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (Math.imul(h, 31) + id.charCodeAt(i)) | 0;
   return h;
+}
+
+/** Same default as playwright.config.ts's BASE (and api-keys/device-links). */
+const E2E_BASE = process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000";
+
+/**
+ * The account `invalidateOrgEntitlements` borrows superadmin for. It owns no
+ * org, and no spec signs in as it, so flipping its staff bit reaches nobody.
+ * A fixed address rather than a TAG-derived one: TAG is per process, and one
+ * row for every worker keeps it to one account per database.
+ */
+const ENTITLEMENTS_STAFF_EMAIL = "delivered+e2e-entitlements-staff@resend.dev";
+
+/** The borrowed account, and a context signed in as it. */
+export interface EntitlementsStaff {
+  request: APIRequestContext;
+  userId: string;
+}
+
+let entitlementsStaffSession: Promise<{ userId: string; cookie: string }> | undefined;
+
+/**
+ * Sign the staff account in once per worker process and keep the session
+ * cookie. A failed attempt is forgotten, so the next caller retries instead of
+ * inheriting the rejection.
+ */
+function staffSession(): Promise<{ userId: string; cookie: string }> {
+  entitlementsStaffSession ??= mintStaffSession().catch((err: unknown) => {
+    entitlementsStaffSession = undefined;
+    throw err;
+  });
+  return entitlementsStaffSession;
+}
+
+async function mintStaffSession(): Promise<{ userId: string; cookie: string }> {
+  const token = new URL(await mintLoginPathBySql(ENTITLEMENTS_STAFF_EMAIL), E2E_BASE).searchParams.get(
+    "token",
+  );
+  if (!token) throw new Error("invalidateOrgEntitlements: minted a login path with no token");
+  // Explicitly empty: a context made while a test runs otherwise inherits the
+  // project's storageState, which is the shared user's session.
+  const ctx = await playwrightRequest.newContext({
+    baseURL: E2E_BASE,
+    storageState: { cookies: [], origins: [] },
+  });
+  try {
+    // Probe first, as `apiJson` does (#864): the probe takes any pooled
+    // keep-alive socket the server is reaping, and only the probe is retried.
+    // The consume is never retried, because a reset can come after the token
+    // was spent.
+    const probe = await ctx.fetch(POOL_PROBE_PATH, { maxRetries: 1 });
+    await probe.dispose();
+    // `next: "/"`: with no safe `next`, consuming the link provisions an org
+    // for an account that has none (postAuthLanding), and this one must own
+    // nothing.
+    const res = await ctx.post("/api/auth/magic-link/consume", { data: { token, next: "/" } });
+    if (!res.ok()) {
+      throw new Error(`invalidateOrgEntitlements: staff sign-in failed (${res.status()})`);
+    }
+    // Read off the response and sent as an explicit header, so this does not
+    // depend on how the jar treats a production build's `Secure` cookie on
+    // plain http.
+    const cookie = res
+      .headersArray()
+      .filter((h) => h.name.toLowerCase() === "set-cookie")
+      .map((h) => h.value.split(";")[0]?.trim() ?? "")
+      .find((kv) => kv.startsWith("seazn_session="));
+    if (!cookie) throw new Error("invalidateOrgEntitlements: staff sign-in set no seazn_session cookie");
+    const userId = await withDb(async (sql) => {
+      const [row] = await sql<{ id: string }[]>`
+        select id from users where email = ${ENTITLEMENTS_STAFF_EMAIL} and deleted_at is null`;
+      return row?.id;
+    });
+    if (!userId) throw new Error(`invalidateOrgEntitlements: no users row for ${ENTITLEMENTS_STAFF_EMAIL}`);
+    return { userId, cookie };
+  } finally {
+    await ctx.dispose();
+  }
 }
 
 /**
@@ -1180,8 +1269,42 @@ function advisoryKey32(id: string): number {
  * the cache layer is inert there and this is a cheap no-op round-trip.
  *
  * There is no public invalidation endpoint, so this rides the superadmin
- * entitlement-override route (upsert and delete both invalidate): the calling
- * session's user is flipped to superadmin for the two calls, then restored.
+ * entitlement-override route (upsert and delete both invalidate). The
+ * privilege is borrowed for a DEDICATED staff account
+ * (`ENTITLEMENTS_STAFF_EMAIL`), and both calls go out under that account's own
+ * session.
+ *
+ * NEVER THE CALLER'S ACCOUNT. This helper used to flip the org OWNER, and every
+ * caller passes an org it owns, so on the shared Pro org (`official-marks-
+ * reports`, `public-dashboards`) it made the shared AUTH_STATE user superadmin
+ * while every other worker in the leg was signed in as that user. `_caller`
+ * stays so the call sites need not change. It is deliberately unused: sending
+ * through it would need the caller to hold the privilege. The proof is
+ * `walkthrough/settings-competition-gates.spec.ts`'s "never borrows the
+ * caller's privilege" test.
+ */
+export async function invalidateOrgEntitlements(
+  _caller: APIRequestContext,
+  orgId: string,
+): Promise<void> {
+  const staff = await staffSession();
+  const ctx = await playwrightRequest.newContext({
+    baseURL: E2E_BASE,
+    storageState: { cookies: [], origins: [] },
+    extraHTTPHeaders: { cookie: staff.cookie },
+  });
+  try {
+    await dropEntitlementCacheAs({ request: ctx, userId: staff.userId }, orgId);
+  } finally {
+    await ctx.dispose();
+  }
+}
+
+/**
+ * The borrow itself: flip `staff.userId` to superadmin, POST and DELETE the
+ * override through `staff.request`, and flip it back. Exported as the seam the
+ * W8/F10 tests inject a stubbed `request` through, because an
+ * `APIRequestContext` cannot be routed.
  *
  * BOTH responses are checked, and either one being non-ok THROWS (W8/F10). It
  * used to read neither: a 401 (the staff flip lost a race with another spec's
@@ -1189,45 +1312,23 @@ function advisoryKey32(id: string): number {
  * clear and had not dropped — the failure mode this helper exists to prevent,
  * arriving silently. Callers already `await` it, so a throw surfaces in the
  * test that asked for the drop instead of as a wrong-plan assertion later on.
- * Proven by `walkthrough/settings-competition-gates.spec.ts`'s "W8/F10" test.
  *
- * THE BORROW IS SERIALISED BY A POSTGRES ADVISORY LOCK (W8 final review). The
- * privilege borrowed here is not scoped to the org — `users.is_staff` is a
- * single global row — so two callers landing on the same owner interleave into
- * a hand-back that arrives mid-flight:
+ * THE BORROW IS SERIALISED BY A POSTGRES ADVISORY LOCK keyed on the borrowed
+ * account (W8 final review). `users.is_staff` is one global row, so two callers
+ * borrowing the same account interleave into a hand-back that arrives
+ * mid-flight:
  *
  *     A: staff := true → A: POST → B: staff := true (no-op, already true)
  *     → A: DELETE → A: staff := FALSE → B: DELETE → 401
  *
- * SIX root specs call this helper (counted by grepping the call site, not the
- * import — `payments-hardening.spec.ts` only NAMES the helper in a comment,
- * and `directory-kit.ts` re-exports without calling), but only TWO land on
- * the SAME shared auth-state org (traced by argument, not by call count):
- * `official-marks-reports` (×1, in `parallel`) and `public-dashboards` (×6,
- * in `serial` via `SERIAL_SPECS`). The other four — `scoring-free`,
- * `pass-scope-w2`, `pass-scope-officials`,
- * `scorepad-v3-swap-off-step-enforcement` — each mint their own fresh
- * email/org first, so they cannot interleave with anything else. `serial` is
- * `fullyParallel: false` at `--workers=1` with its own job-scoped Postgres in
- * CI, so `public-dashboards` cannot race there either; the reachable window
- * is a bare `npx playwright test` invocation running `parallel` and `serial`
- * concurrently on one shared local DB, which is the shape `official-marks-
- * reports` and `public-dashboards` can actually collide in. Before the F10
- * fix above the collision was silent; that fix turned it into a hard throw,
- * which makes the lock the other half of the same repair.
+ * Every caller now borrows the same account, so the lock serialises all of
+ * them across workers. Each borrow is two fetches long.
  * `rs007-money-kit.ts`'s `claimConnectAccount` takes the same kind of lock for
- * the same kind of reason (its own docblock: a lock, not a comment saying "run
- * with --workers=1").
+ * the same kind of reason.
  */
-export async function invalidateOrgEntitlements(
-  request: APIRequestContext,
-  orgId: string,
-): Promise<void> {
-  // Flip the org's owner (== the calling session in every e2e spec). NEVER
-  // key on the *Email() helpers here — TAG is per-process, so a spec worker
-  // computes a different tag than the setup worker that minted the account.
-  const setStaff = (on: boolean) => setOwnerStaffSql(orgId, on);
-  const KEY = "e2e.cache.bust";
+export async function dropEntitlementCacheAs(staff: EntitlementsStaff, orgId: string): Promise<void> {
+  const setStaff = (on: boolean) => setUserStaffSql(staff.userId, on);
+  const KEY = ENTITLEMENT_CACHE_BUST_KEY;
   // `withDb` opens ONE connection (`max: 1`) and holds it for the whole
   // callback, which is what an advisory lock needs — `pg_advisory_lock` is
   // SESSION-scoped, so a lock taken on a connection that is then returned to a
@@ -1237,33 +1338,31 @@ export async function invalidateOrgEntitlements(
   // fine — nothing holds a ROW lock across the two fetches, so there is no
   // lock-ordering cycle to deadlock on.
   await withDb(async (sql) => {
-    // Keyed on the OWNER, not the org: `setOwnerStaffSql` uses the org id only
-    // to pick WHICH `users` row to flip, so the owner is the contended
-    // resource and two different orgs sharing one owner have to serialise too.
-    // Falls back to the org id when there is no owner — nothing to flip, so
-    // any key does, and this keeps the helper's behaviour for a bogus or
-    // already-released org id exactly what it was.
-    const [owner] = await sql<{ user_id: string }[]>`
-      select user_id from org_members where org_id = ${orgId} and role = 'owner'`;
-    const lockKey = advisoryKey32(owner?.user_id ?? orgId);
+    const lockKey = advisoryKey32(staff.userId);
     await sql`select pg_advisory_lock(${STAFF_BORROW_LOCK_NS}, ${lockKey})`;
     try {
       await setStaff(true);
       try {
-        const setRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
+        // `maxRetries` for a reaped keep-alive socket (#864). `apiJson` never
+        // retries its caller's request, because a replayed POST can apply
+        // twice. These two can be replayed safely: one upserts and one deletes
+        // a single fixed key.
+        const setRes = await staff.request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           data: { feature_key: KEY, reason: "e2e: drop cached entitlements after SQL flip" },
+          maxRetries: 1,
         });
         if (!setRes.ok()) {
           throw new Error(
             `invalidateOrgEntitlements: set override failed (${setRes.status()}) for org ${orgId}`,
           );
         }
-        const clearRes = await request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
+        const clearRes = await staff.request.fetch(`/api/admin/orgs/${orgId}/entitlement-override`, {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           data: { feature_key: KEY },
+          maxRetries: 1,
         });
         if (!clearRes.ok()) {
           throw new Error(
@@ -1577,13 +1676,23 @@ export async function setOwnerStaffRoleSql(
   );
 }
 
+/** Flip ONE user's staff bit to superadmin and back, by id. The borrow
+ *  `invalidateOrgEntitlements` makes, on the account it borrows for. */
+export async function setUserStaffSql(userId: string, on: boolean): Promise<void> {
+  await withDb((sql) =>
+    on
+      ? sql`update users set is_staff = true, staff_role = 'superadmin' where id = ${userId}`
+      : sql`update users set is_staff = false, staff_role = null where id = ${userId}`,
+  );
+}
+
 /**
  * Read the org owner's staff bit back — the pair the two setters above never
  * had, and the only way to witness that a helper which BORROWS superadmin gave
  * it back.
  *
- * `invalidateOrgEntitlements` flips the bit, throws on a refusal (W8/F10), and
- * relies on its `finally` to restore. Every assertion available before this
+ * `dropEntitlementCacheAs` flips the bit of the account it borrows for, throws
+ * on a refusal (W8/F10), and relies on its `finally` to restore. Every assertion available before this
  * helper existed could see the throw's MESSAGE and nothing else, so moving
  * those throws out from under the `finally` — leaking superadmin onto the
  * shared Pro user for the rest of the run — was a change no test could fail
@@ -1633,6 +1742,37 @@ export async function userRowSql(userId: string): Promise<UserRowSnapshot> {
       is_staff: row.is_staff,
       staff_role: row.staff_role,
     };
+  });
+}
+
+/** The database's clock, for a lower bound on rows the server is about to
+ *  write. Read from Postgres rather than the runner, so the bound and the rows'
+ *  `default now()` share one clock. */
+export async function dbNowSql(): Promise<string> {
+  return withDb(async (sql) => {
+    const [row] = await sql<{ now: string }[]>`select now()::text as now`;
+    if (!row) throw new Error("dbNowSql: select now() returned no row");
+    return row.now;
+  });
+}
+
+/** The `staff_audit_log` rows the entitlement-override route wrote for
+ *  `orgId` and `featureKey` at or after `since`, oldest first. The route
+ *  audits its CALLER (`logStaffAction(staff.id, …)`), so `actor_id` names the
+ *  account that held superadmin for the write. */
+export async function entitlementOverrideAuditSql(
+  orgId: string,
+  featureKey: string,
+  since: string,
+): Promise<{ actor_id: string; action: string }[]> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ actor_id: string; action: string }[]>`
+      select actor_id, action from staff_audit_log
+       where target_type = 'entitlement' and target_id = ${orgId}
+         and detail->>'feature_key' = ${featureKey}
+         and created_at >= ${since}::timestamptz
+       order by created_at`;
+    return rows.map((r) => ({ actor_id: r.actor_id, action: r.action }));
   });
 }
 

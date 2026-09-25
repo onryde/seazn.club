@@ -13,12 +13,18 @@ import {
 import {
   apiJson,
   TAG,
+  dbNowSql,
+  ENTITLEMENT_CACHE_BUST_KEY,
+  entitlementOverrideAuditSql,
+  dropEntitlementCacheAs,
   invalidateOrgEntitlements,
   ownerIsStaffSql,
   setBoolEntitlementOverrideSql,
   setEntitlementOverrideSql,
+  type UserRowSnapshot,
 } from "../helpers";
 import { freshOrg } from "../directory-kit";
+import { signedInUserId, userColumns } from "../own-account";
 import { routes } from "../../src/lib/routes";
 
 /**
@@ -228,24 +234,15 @@ const overridden = new Set<string>();
 /**
  * `invalidateOrgEntitlements`, but only where it can actually do something.
  *
- * The helper has no public invalidation endpoint to ride, so it flips the org
- * OWNER to superadmin for two fetches and back (`setOwnerStaffSql`,
- * helpers.ts:961-983). That write lands on a GLOBAL `users` row — the `org_id`
- * only picks WHICH user — and this file has no `test.use({ storageState })` of
- * its own, so its owner IS the shared Pro user.
- *
- * `settings-admin.spec.ts` is also unscoped and flips the same bit ~11 times
- * for its own 401/403 assertions. The walkthrough leg runs `--workers=3`
- * (e2e.yml) and `mode: "default"` only serialises WITHIN a file, so the two
- * files' superadmin windows overlap: one file's restore-to-false can land
- * mid-assertion in the other's window. The three existing walkthrough callers
- * (directory-clubs-import-limits, directory-officials-roles,
- * directory-import-paywall-preview) all mint their own user first, which is
- * why this collision is new here rather than pre-existing.
+ * The helper has no public invalidation endpoint to ride, so it borrows
+ * superadmin for two fetches. It used to borrow it from the org OWNER, which
+ * for this file's seeded org is the shared Pro user. It now borrows it for a
+ * dedicated staff account (helpers.ts, `invalidateOrgEntitlements`), so that
+ * concern is gone. The gate below stays because the call is still a round
+ * trip that does nothing where there is no cache.
  *
  * Local and CI have no Redis on purpose (e2e.yml), so `lib/cache.ts` is inert
- * and the round-trip buys NOTHING there while the `is_staff` side effect is
- * paid on every call. Gating on `REDIS_URL` drops the call wherever it is a
+ * and the round-trip buys NOTHING there. Gating on `REDIS_URL` drops the call wherever it is a
  * no-op — which, per `e2e/global-setup.ts:63-70`, is EVERY environment this
  * suite can actually run in (a set `REDIS_URL` aborts the run before any spec
  * executes), so in practice this predicate always skips the call. It reads
@@ -843,9 +840,10 @@ test("case #18: an end before the start is refused both in one body (400, issue 
 // ---------------------------------------------------------------------------
 
 /**
- * `invalidateOrgEntitlements` flips the org owner to superadmin, POSTs an
- * override, DELETEs it, and flips the owner back. Until W8 it read neither
- * response: a 401, a 404 or a 5xx left the caller believing a cache it had
+ * `invalidateOrgEntitlements` flips a dedicated staff account to superadmin,
+ * POSTs an override as it, DELETEs it, and flips it back
+ * (`dropEntitlementCacheAs` is the borrow, with the account and its context
+ * injectable). Until W8 it read neither response: a 401, a 404 or a 5xx left the caller believing a cache it had
  * not dropped was clear (`FINDINGS.md` F10).
  *
  * The proof lives HERE rather than in one of the other callers because this
@@ -878,17 +876,10 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy
   test.setTimeout(budget(2, 0, 2));
 
   // (a) The REAL server refuses, and the helper says so — no stub in this
-  //     half. An org id nothing was seeded under: `setOwnerStaffSql` matches
-  //     zero `org_members` rows, so the calling session is never made
-  //     superadmin and `requireSuperadmin` throws an `AuthError`, which
-  //     `lib/http.ts` answers 401. (If a sibling spec's superadmin window
-  //     happens to be open — `settings-admin.spec.ts` flips the same shared
-  //     `users` row — the route gets past that check and answers 404
-  //     "Organization not found" instead. Both are non-ok, which is the whole
-  //     assertion.) Nothing real is touched either way: both
-  //     `update users … where id in (select … where org_id = <nowhere>)`
-  //     statements match zero rows, so the shared Pro user's `is_staff` bit is
-  //     never written.
+  //     half. An org id nothing was seeded under: the borrowed staff account
+  //     passes `requireSuperadmin`, and the route answers 404 "Organization
+  //     not found". The org id only names the target; it no longer picks whose
+  //     bit is flipped.
   const nowhere = randomUUID();
   await expect(
     invalidateOrgEntitlements(request, nowhere),
@@ -900,8 +891,9 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy
   //     routing is no help — `page.route` AND `context.route` were both
   //     measured on 1.61.1 intercepting ZERO of `page.request`'s calls, so an
   //     `APIRequestContext` is unroutable and there is no network seam to
-  //     inject through. The seam that does exist is the helper's own first
-  //     parameter. Without this case, deleting the second `if` leaves this
+  //     inject through. The seam that does exist is `dropEntitlementCacheAs`'s
+  //     `request`, borrowed for an account id nothing holds (`nobody`: its
+  //     staff flips match zero rows). Without this case, deleting the second `if` leaves this
   //     file green: two guards covering for each other are each untested
   //     (AGENTS.md failure class 3).
   const stub = (ok: (method: string) => boolean): APIRequestContext =>
@@ -912,45 +904,34 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy
       },
     }) as unknown as APIRequestContext;
 
+  const nobody = randomUUID();
   await expect(
-    invalidateOrgEntitlements(
-      stub((m) => m !== "DELETE"),
-      nowhere,
-    ),
+    dropEntitlementCacheAs({ request: stub((m) => m !== "DELETE"), userId: nobody }, nowhere),
     "a refused override CLEAR must be reported too",
   ).rejects.toThrow(/invalidateOrgEntitlements: clear override failed \(503\)/);
 
   // (c) The positive pair for both of the above. Both halves ok ⇒ the helper
   //     RESOLVES, and every caller keeps working.
   await expect(
-    invalidateOrgEntitlements(
-      stub(() => true),
-      nowhere,
-    ),
+    dropEntitlementCacheAs({ request: stub(() => true), userId: nobody }, nowhere),
     "a helper that throws on the happy path breaks all eleven of its callers",
   ).resolves.toBeUndefined();
 
-  // (d) WHERE the throws sit, not just what they test. (a)-(c) all pass an org
-  //     id nothing was seeded under, so the `finally { setStaff(false) }` is a
-  //     zero-row no-op in every one of them: hoist both throws out from under
+  // (d) WHERE the throws sit, not just what they test. (a) borrows for the
+  //     dedicated staff account and (b)-(c) for an id nothing holds, and none
+  //     of them reads a borrowed bit back after a throw: hoist both throws out from under
   //     the try/finally and all three stay green, with identical messages,
   //     while the helper leaks superadmin on whichever `users` row it borrowed.
   //     That is the mutant this case exists for.
   //
-  //     It needs a REAL org, and — importantly — its own FRESH user. The bit
-  //     is a global `users` row (`setOwnerStaffSql`: the org id only picks
-  //     WHICH user), so asserting on it demands sole ownership of that row.
-  //     This file's seeded `org` belongs to the shared Pro user, which
-  //     `settings-admin.spec.ts` flips ~11 times, concurrently, at the
-  //     walkthrough leg's `--workers=3` — reading that row back would be a
-  //     coin toss AND would reintroduce the contention W5 removed by gating
-  //     `dropEntitlementCache` on `REDIS_URL`. `freshOrg` mints a user nobody
-  //     else touches; the org it leaves behind is inert, like the directory
-  //     specs' own.
+  //     It borrows for a FRESH user, the owner of a fresh org, so the bit it
+  //     reads back sits on a row nobody else touches. `freshOrg` mints that
+  //     user; the org it leaves behind is inert, like the directory specs' own.
   const mine = await freshOrg(page, "w8f10");
+  const mineUserId = await signedInUserId(page.request);
   await expect(
-    invalidateOrgEntitlements(
-      stub((m) => m !== "DELETE"),
+    dropEntitlementCacheAs(
+      { request: stub((m) => m !== "DELETE"), userId: mineUserId },
       mine.orgId,
     ),
     "the refusal still has to be reported for a real org",
@@ -964,35 +945,28 @@ test("W8/F10: a refused entitlement-cache drop throws, on either half, the happy
 /**
  * The race the F10 fix above turned from silent into loud (W8 final review).
  *
- * `invalidateOrgEntitlements` BORROWS a privilege that is global — the org
- * owner's `users.is_staff` row — and hands it back in a `finally`. Two callers
- * on the same owner interleave into a hand-back that lands mid-flight:
+ * `invalidateOrgEntitlements` BORROWS a privilege that is global — one
+ * account's `users.is_staff` row — and hands it back in a `finally`. Two
+ * callers borrowing the same account interleave into a hand-back that lands
+ * mid-flight:
  *
  *     A: staff := true → A: POST → B: staff := true (no-op, already true)
  *     → A: DELETE → A: staff := FALSE → B: DELETE → 401
  *
  * Before W8 that 401 was swallowed; F10's fix makes it a hard throw, so the
- * interleave stopped being invisible and started being a flake. Six root specs
- * call this helper, but only TWO land on the SAME shared auth-state org —
- * `official-marks-reports` (×1, `parallel`) and `public-dashboards` (×6,
- * routed to `serial` via `SERIAL_SPECS`). The other four
- * (`scoring-free`, `pass-scope-w2`, `pass-scope-officials`,
- * `scorepad-v3-swap-off-step-enforcement`) each mint their own fresh
- * email/org first and cannot interleave with anything else. `serial` runs
- * `fullyParallel: false` at `--workers=1` with its own job-scoped Postgres in
- * CI, so `public-dashboards` cannot race there either — the reachable window
- * is a bare `npx playwright test` invocation running `parallel` and `serial`
- * concurrently on one shared local DB.
+ * interleave stopped being invisible and started being a flake. Every caller
+ * now borrows the SAME dedicated staff account, so any two calls in flight at
+ * once are this race.
  *
  * The fix is a Postgres advisory lock around the whole borrow, keyed on the
- * owner whose bit is being flipped (`rs007-money-kit.ts`'s Connect fixture
+ * account whose bit is being flipped (`rs007-money-kit.ts`'s Connect fixture
  * takes the same kind of lock for the same kind of reason). This test is what
  * fails without it: the stub holds each fetch open long enough that two
  * unserialised borrows are guaranteed to overlap, so the recorded order reads
  * `ABAB` rather than `AABB`.
  *
- * No browser, no server, no seeded org — the org id is one nothing was seeded
- * under, so both `setOwnerStaffSql` statements match zero rows and the only
+ * No browser, no server, no seeded org — the account id is one nothing holds,
+ * so both staff flips match zero rows and the only
  * thing under test is the mutual exclusion itself.
  */
 test("W8/F10: two concurrent entitlement-cache drops on one org serialize instead of stealing each other's superadmin", async ({}) => {
@@ -1013,12 +987,67 @@ test("W8/F10: two concurrent entitlement-cache drops on one org serialize instea
 
   const contested = randomUUID();
   await Promise.all([
-    invalidateOrgEntitlements(slow("A"), contested),
-    invalidateOrgEntitlements(slow("B"), contested),
+    dropEntitlementCacheAs({ request: slow("A"), userId: contested }, contested),
+    dropEntitlementCacheAs({ request: slow("B"), userId: contested }, contested),
   ]);
 
   expect(
     seq.join(""),
     "each borrow must hold the owner's staff bit for BOTH of its calls — an interleaved ABAB means the first caller's restore lands while the second is still using the privilege, and the second's DELETE 401s",
   ).toMatch(/^(AABB|BBAA)$/);
+});
+
+/**
+ * The borrowed superadmin must never be the CALLER's. `invalidateOrgEntitlements`
+ * used to flip the org OWNER to superadmin for its two fetches, and every
+ * caller passes an org it owns. On the shared Pro org, that made the shared
+ * AUTH_STATE user a superadmin while every other worker in the leg was signed
+ * in as that user (`official-marks-reports`, `public-dashboards`).
+ *
+ * The test runs on this file's seeded org, which the shared user owns, and
+ * goes through the REAL server. It has three witnesses, because a wrong helper
+ * can satisfy any one of them on its own:
+ *  - DURING: `spy` wraps the caller's context and reads the shared user's
+ *    staff columns every time the helper sends through it. The old helper sent
+ *    both fetches that way while it held the bit, so this is the witness that
+ *    fails on it. Its `finally` restore hides the leak from any read taken after.
+ *  - AFTER: the row is as the test found it.
+ *  - WHO: the override route audits its caller (`logStaffAction`). Both the set
+ *    and the clear must have landed, and neither may have run as the shared
+ *    user. Without this witness, a helper that did nothing would pass the
+ *    first two.
+ */
+test("the entitlement-cache drop never borrows the caller's privilege: the shared Pro user's staff bit is untouched during and after, and the override round trip is audited to another account", async ({
+  request,
+}) => {
+  const sharedUserId = await signedInUserId(request);
+  const STAFF = ["is_staff", "staff_role"] as const;
+  const before = await userColumns(sharedUserId, STAFF);
+  const during: Pick<UserRowSnapshot, (typeof STAFF)[number]>[] = [];
+  const spy = {
+    fetch: async (...args: Parameters<APIRequestContext["fetch"]>) => {
+      during.push(await userColumns(sharedUserId, STAFF));
+      return request.fetch(...args);
+    },
+  } as unknown as APIRequestContext;
+  const since = await dbNowSql();
+
+  await invalidateOrgEntitlements(spy, org.orgId);
+
+  for (const seen of during) {
+    expect(seen, "the helper made the shared Pro user superadmin while it worked").toEqual(before);
+  }
+  expect(await userColumns(sharedUserId, STAFF), "the shared Pro user's staff bit moved").toEqual(
+    before,
+  );
+
+  const audit = await entitlementOverrideAuditSql(org.orgId, ENTITLEMENT_CACHE_BUST_KEY, since);
+  expect(
+    audit.map((a) => a.action),
+    "the override set AND its clear must both have landed, or nothing was dropped",
+  ).toEqual(expect.arrayContaining(["entitlement_override", "entitlement_override_removed"]));
+  expect(
+    audit.filter((a) => a.actor_id === sharedUserId),
+    "the override route ran as the shared Pro user",
+  ).toEqual([]);
 });

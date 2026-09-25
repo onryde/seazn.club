@@ -199,7 +199,12 @@ const ROWS: Row[] = [
       // An empty `role=alert` node is always in the DOM (the panel's error
       // slot); what must be empty is its TEXT. Asserting `toHaveCount(0)`
       // here fails on a working page, which is its own kind of vacuous.
-      expect((await page.locator("[role=alert]:visible").allInnerTexts()).join("").trim()).toBe("");
+      // Next's route announcer is also a `role=alert` (inside the
+      // <next-route-announcer> shadow root) and reads out the page TITLE after a
+      // client navigation — not an error, so it is excluded by its id.
+      expect(
+        (await page.locator("[role=alert]:visible:not(#__next-route-announcer__)").allInnerTexts()).join("").trim(),
+      ).toBe("");
     },
   },
   {
