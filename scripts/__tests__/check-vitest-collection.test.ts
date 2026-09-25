@@ -135,6 +135,12 @@ const REST = [
   // Standings follow-ups (#862): the tie-break note's ledger-derived diff/for
   // word. Begins with "t", so it belongs here.
   "src/server/public-site/__tests__/tie-break-ledger-words.test.tsx",
+  // Per-stage rules public format label (#872): the rules describer, the
+  // match-centre label regression and the hub's per-stage lines. None begin
+  // with "c", so all three belong here.
+  "src/server/public-site/__tests__/describe-rules.test.ts",
+  "src/server/public-site/__tests__/public-fixture-stage-rules-label.test.ts",
+  "src/server/public-site/__tests__/stage-format-lines-db.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
