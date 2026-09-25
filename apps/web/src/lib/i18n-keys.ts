@@ -5738,6 +5738,7 @@ export type DictionaryKey =
   | "slideshow.col.entrant"
   | "slideshow.col.lost"
   | "slideshow.col.played"
+  | "slideshow.col.pointRatio"
   | "slideshow.col.points"
   | "slideshow.col.won"
   | "slideshow.empty.body"

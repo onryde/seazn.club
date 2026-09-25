@@ -5390,6 +5390,7 @@
   "slideshow.col.drawn": "G",
   "slideshow.col.lost": "V",
   "slideshow.col.points": "Ptn",
+  "slideshow.col.pointRatio": "Ptn verh.",
   "slideshow.round": "R{round}",
   "slideshow.status.scheduled": "Gepland",
   "slideshow.status.ended": "Afgelopen",

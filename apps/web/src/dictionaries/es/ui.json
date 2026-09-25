@@ -5390,6 +5390,7 @@
   "slideshow.col.drawn": "E",
   "slideshow.col.lost": "P",
   "slideshow.col.points": "Pts",
+  "slideshow.col.pointRatio": "Ratio de puntos",
   "slideshow.round": "R{round}",
   "slideshow.status.scheduled": "Programado",
   "slideshow.status.ended": "Finalizado",

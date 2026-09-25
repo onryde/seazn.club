@@ -55,6 +55,9 @@ const PLAIN_KEYS = [
   "slideshow.col.drawn",
   "slideshow.col.lost",
   "slideshow.col.points",
+  // Shown only on a standings slide whose division ranks on point_ratio (the
+  // EVERY_BRANCH standings row below carries one, so the es board renders it).
+  "slideshow.col.pointRatio",
   "schedule.vs",
   "bracket.tbd",
   "sponsors.title",
@@ -246,7 +249,7 @@ const EVERY_BRANCH: Slide[] = [
     kind: "standings",
     division: "Open",
     caption: "Groups — Pool A",
-    rows: [{ rank: 1, name: "Mexico", played: 3, won: 3, drawn: 0, lost: 0, points: 9 }],
+    rows: [{ rank: 1, name: "Mexico", played: 3, won: 3, drawn: 0, lost: 0, points: 9, pointRatio: "1.50" }],
   },
   {
     kind: "fixtures",

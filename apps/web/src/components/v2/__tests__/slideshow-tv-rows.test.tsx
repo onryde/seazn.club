@@ -398,3 +398,93 @@ describe("K-2: the standings slide already gives its free space to the team name
     expect(tracksOf(grids[0]!).flatMap((tr, i) => (grows(tr) ? [i] : []))).toEqual([1]);
   });
 });
+
+// The standings slide's "Pts ratio" column (the normal table's `point_ratio`
+// derived column, shown on the wall only when the division's cascade earns it —
+// the builder decides that and hands the text down as `pointRatio`, see
+// server/__tests__/slideshow-point-ratio.test.ts). What this pins is the BOARD
+// half: the column is there with the row that carries it, sits after Pts as it
+// does in the normal table, takes one track without taking the name's free
+// space, and a slide with no ratio is the slide it always was.
+describe("the standings slide's Pts ratio column (layout half)", () => {
+  /** The template the slide had before the column existed. The "exactly as
+   *  before" claim is this literal, so it is typed on purpose. */
+  const TEMPLATE_BEFORE = "4rem_minmax(0,1fr)_repeat(4,4rem)_7rem";
+  const played = { played: 3, won: 3, drawn: 0, lost: 0, points: 9 };
+  const slide = (ratios: (string | undefined)[]): Slide => ({
+    kind: "standings",
+    division: "Cup",
+    caption: "Table",
+    rows: ratios.map((pointRatio, i) => ({
+      rank: i + 1,
+      name: ["North Harbour Rovers", "West", "Ghana"][i]!,
+      ...played,
+      ...(pointRatio !== undefined ? { pointRatio } : {}),
+    })),
+  });
+  const withRatio = slide(["1.50", "∞"]);
+  const withoutRatio = slide([undefined, undefined]);
+
+  /** Every `grid-cols-[…]` class list on the board (header, then rows). */
+  const gridsOf = (html: string) =>
+    [...html.matchAll(/class="([^"]*\bgrid-cols-\[[^"]*)"/g)].map((m) => m[1]!.split(/\s+/).filter(Boolean));
+  const sharedTemplate = (html: string): string => {
+    const templates = new Set(gridsOf(html).map((tk) => one(tk, /^grid-cols-\[(.+)\]$/, "grid-cols")[1]!));
+    expect([...templates], "the header and every row share one template").toHaveLength(1);
+    return [...templates][0]!;
+  };
+  /** The header's labels, in order. */
+  const headerOf = (html: string): string[] => {
+    const m = /<div class="[^"]*\bgrid-cols-\[[^"]*">((?:<span[^>]*>[^<]*<\/span>)+)<\/div>/.exec(html);
+    if (!m) throw new Error("no header row in the rendered board");
+    return [...m[1]!.matchAll(/<span[^>]*>([^<]*)<\/span>/g)].map((x) => x[1]!);
+  };
+  /** Each body row's text nodes, in order: rank, name, P, W, D, L, Pts[, ratio]. */
+  const rowsOf = (html: string): string[][] =>
+    [...html.matchAll(/<div class="relative grid grid-cols-\[[^"]*"[^>]*>(.*?)<\/div>/g)].map((m) =>
+      [...m[1]!.matchAll(/>([^<>]+)</g)].map((x) => x[1]!),
+    );
+
+  it("a slide with no ratio is the slide it always was: the old template, seven columns, no ratio label", () => {
+    const html = board(withoutRatio);
+    const labels = slideshowLabels("en");
+    expect(sharedTemplate(html)).toBe(TEMPLATE_BEFORE);
+    expect(headerOf(html)).toEqual(["#", labels.entrant, labels.played, labels.won, labels.drawn, labels.lost, labels.points]);
+    for (const cells of rowsOf(html)) expect(cells).toHaveLength(7);
+    expect(rowsOf(html)).toHaveLength(withoutRatio.kind === "standings" ? withoutRatio.rows.length : -1);
+    expect(html).not.toContain(`>${labels.pointRatio}<`);
+  });
+
+  it("a slide whose rows carry a ratio adds ONE fixed track after Pts, and the name still takes the free space", () => {
+    const html = board(withRatio);
+    const template = sharedTemplate(html);
+    expect(template.startsWith(`${TEMPLATE_BEFORE}_`), `"${template}" extends the old template on the right`).toBe(true);
+    const tracks = tracksOf(gridsOf(html)[0]!);
+    expect(tracks).toHaveLength(tracksOf(gridsOf(board(withoutRatio))[0]!).length + 1);
+    expect(tracks.at(-1)!.kind).toBe("fixed");
+    expect(tracks.flatMap((tr, i) => (grows(tr) ? [i] : []))).toEqual([1]);
+  });
+
+  it("the header names the column after Pts, and each row prints its own ratio in the last cell", () => {
+    const html = board(withRatio);
+    const labels = slideshowLabels("en");
+    expect(headerOf(html)).toEqual([
+      "#", labels.entrant, labels.played, labels.won, labels.drawn, labels.lost, labels.points, labels.pointRatio,
+    ]);
+    expect(rowsOf(html).map((cells) => cells.at(-1))).toEqual(["1.50", "∞"]);
+    for (const cells of rowsOf(html)) expect(cells).toHaveLength(8);
+  });
+
+  it("the header is the board's own locale (es), and differs from English so the probe can see a leak", () => {
+    const en = slideshowLabels("en");
+    const es = slideshowLabels("es");
+    expect(es.pointRatio).not.toBe(en.pointRatio);
+    expect(headerOf(board(withRatio, "es")).at(-1)).toBe(es.pointRatio);
+  });
+
+  it("the column is the slide's, not a row's: a row with no ratio prints the table's dash under it", () => {
+    const html = board(slide(["1.50", undefined]));
+    expect(rowsOf(html).map((cells) => cells.at(-1))).toEqual(["1.50", "—"]);
+    expect(headerOf(html).at(-1)).toBe(slideshowLabels("en").pointRatio);
+  });
+});
