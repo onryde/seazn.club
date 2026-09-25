@@ -23,9 +23,9 @@
 // (scorer-sheet-pdf.ts), each quoted as the article shows it. The NEGATIVE pin
 // below still holds too: there is no separate "Print" button to press.
 //
-// NOT PINNED HERE YET: the owner-approved (2026-09-24) "Not started yet" scan
-// screen is being built on another branch, so its heading is pinned below as a
-// LITERAL — swap it for its `en[...]` key once that key reaches this branch.
+// The owner-approved (2026-09-24) "Not started yet" scan screen is pinned by
+// its heading's own key, `en["device.scan.notStarted.title"]` (scan-waiting.tsx
+// via score/[token]/page.tsx), so a relabel of the screen moves this test.
 //
 // The article is read lazily so a missing file reds each assertion by name
 // rather than failing the whole file at collection.
@@ -155,7 +155,9 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
   });
 
   it("an early scan lands on 'Not started yet', which moves on by itself once the division starts", () => {
-    const NOT_STARTED = "Not started yet"; // literal until the screen's key reaches this branch
+    const NOT_STARTED = en["device.scan.notStarted.title"];
+    // An empty heading would be "in" every sentence.
+    expect(NOT_STARTED).toMatch(/\w/);
     const hits = withText(NOT_STARTED);
     expect(hits, `the article never names the ${NOT_STARTED} screen`).not.toHaveLength(0);
     expect(
