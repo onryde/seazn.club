@@ -2141,7 +2141,7 @@ describe("InfoTab — a stage that plays different rules names them (per-stage r
   const knockout: StageLine = {
     stageName: "Knockout",
     line: [
-      { key: "format.sets.bestOf", params: { n: 3 } },
+      { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
       { key: "format.rules.tennis.setsTo", params: { games: 4 } },
       { key: "format.rules.tennis.noAd" },
     ],
@@ -2179,7 +2179,7 @@ describe("InfoTab — a stage that plays different rules names them (per-stage r
       [
         "Knockout",
         [
-          t(dict, "format.sets.bestOf", { n: 3 }),
+          t(dict, "format.rules.tennis.bestOfSets", { n: 3 }),
           t(dict, "format.rules.tennis.setsTo", { games: 4 }),
           t(dict, "format.rules.tennis.noAd"),
         ].join(", "),

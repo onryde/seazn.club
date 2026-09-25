@@ -2250,6 +2250,7 @@ export type DictionaryKey =
   | "format.rules.oneSetPoints"
   | "format.rules.oneSetPointsCap"
   | "format.rules.tennis.advantageSetsTo"
+  | "format.rules.tennis.bestOfSets"
   | "format.rules.tennis.finalSetTiebreak"
   | "format.rules.tennis.matchTiebreak"
   | "format.rules.tennis.noAd"
