@@ -428,6 +428,16 @@ const WALKTHROUGH_SPECS: string[] = [
   // suite drives a stubbed fetch and a fake anchor; only a browser shows the
   // download and the header's phone stacking.
   "scorer-sheets-print-control.spec.ts",
+  // Scorer sheets (Task 10) — the whole journey on the printed artefact: the
+  // day printed from the Schedule page, EVERY QR decoded from the downloaded
+  // PDF's pixels and scanned on a phone that must name that card's match, one
+  // scored to a result through the pad; a knockout final that waits then moves
+  // by itself; a Swiss result that goes View-only when the desk pairs round 2;
+  // the console's hand-over re-showing the printed QR and a reissue killing
+  // only that card; a viewer with no print control. The renderer's unit
+  // suites decode a sheet built in-process — only a browser prints the one a
+  // person downloads, with the prod build's embedded brand fonts.
+  "scorer-sheets-print-scan.spec.ts",
 ];
 
 afterEach(() => {
