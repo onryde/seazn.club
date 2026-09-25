@@ -3369,6 +3369,8 @@ export type DictionaryKey =
   | "pad.activity.showAll"
   | "pad.activity.showLatest"
   | "pad.activity.void"
+  | "pad.activity.voidCancel"
+  | "pad.activity.voidConfirm"
   | "pad.activity.voided"
   | "pad.activity.voiding"
   | "pad.badminton.action.expediteStart"

@@ -4961,6 +4961,8 @@
   "lineup.phone.hide": "Hide lineup",
   "pad.activity.voiding": "Voiding…",
   "pad.activity.voided": "Voided",
+  "pad.activity.voidCancel": "Cancel",
+  "pad.activity.voidConfirm": "Confirm void",
   "pad.activity.partial": "Partial",
   "pad.activity.partial.amend": "Partial — the hold window closed before every detail was added. Tap to add it now.",
   "pad.activity.partial.hint": "Recorded, but the hold window closed before every detail was added.",

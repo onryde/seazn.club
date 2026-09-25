@@ -4961,6 +4961,8 @@
   "lineup.phone.hide": "Opstelling verbergen",
   "pad.activity.voiding": "Bezig…",
   "pad.activity.voided": "Ongeldig",
+  "pad.activity.voidCancel": "Terug",
+  "pad.activity.voidConfirm": "Ongeldig maken bevestigen",
   "pad.activity.partial": "Gedeeltelijk",
   "pad.activity.partial.amend": "Gedeeltelijk — het wachtvenster sloot voordat alle details waren toegevoegd. Tik om ze nu toe te voegen.",
   "pad.activity.partial.hint": "Vastgelegd, maar het wachtvenster sloot voordat alle details waren toegevoegd.",

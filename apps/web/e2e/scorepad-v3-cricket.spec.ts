@@ -662,6 +662,7 @@ test("cricket v3: voiding an OLDER event from the activity panel writes core.voi
   const rows = panel.locator('[data-role="v3-activity-row"]');
   await expect.poll(async () => rows.count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(3);
   await rows.nth(1).locator('[data-role="v3-activity-void"]').click();
+  await rows.nth(1).locator('[data-role="v3-activity-void-confirm"]').click();
 
   await expect
     .poll(
@@ -753,6 +754,14 @@ test("cricket v3: after a RELOAD, a per-row void addressed by the panel's own da
   // merely-VISIBLE control is dropped. Wait for enabled, then click.
   await expect(voidControl).toBeEnabled({ timeout: 30_000 });
   await voidControl.click();
+  // First tap only ARMS: a scroll-tap on Void must never write a core.void.
+  const confirmControl = row.locator('[data-role="v3-activity-void-confirm"]');
+  await expect(confirmControl).toBeVisible();
+  expect(
+    (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "core.void"),
+    "one tap on Void must not void anything",
+  ).toHaveLength(0);
+  await confirmControl.click();
 
   await expect
     .poll(
