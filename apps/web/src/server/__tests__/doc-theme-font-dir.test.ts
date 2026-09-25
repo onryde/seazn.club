@@ -9,6 +9,7 @@ import os from "node:os";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocModel } from "@seazn/engine/exports";
+import { log } from "@/server/logger";
 import { renderScorerSheetPdf } from "../scorer-sheet-pdf";
 import { docModelToPdf } from "../doc-render";
 import { pdfTextRuns } from "../../../e2e/pdf-uris";
@@ -50,7 +51,11 @@ describe("brand fonts with DOC_FONT_DIR unset", () => {
 
   it("control: a cwd with no fonts falls back to Helvetica, and the name no longer reads back (what production printed)", async () => {
     at(os.tmpdir());
+    // Nothing is found from there, the app icon included: its warning is
+    // expected here, so it is captured rather than printed into the run.
+    const warned = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
     const pdf = await sheet();
+    expect(warned).toHaveBeenCalledWith({ cwd: os.tmpdir() }, expect.stringContaining("logo-square.png not found"));
     expect(embedded(pdf).some((f) => f.startsWith("Helvetica"))).toBe(true);
     expect(pdfTextRuns(pdf).some((r) => r.text === NAME)).toBe(false);
   });

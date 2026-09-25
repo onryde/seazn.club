@@ -12,6 +12,7 @@ import fs from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import QRCode from "qrcode";
 import { ROWS_PER_PAGE } from "@/lib/scorer-sheets";
+import { log } from "@/server/logger";
 import { renderScorerSheetPdf } from "../scorer-sheet-pdf";
 import { pdfImages, pdfLines, pdfLinkUris, pdfLinks, pdfPageCount, pdfPageSvg, pdfTextRuns } from "../../../e2e/pdf-uris";
 import { CONDITIONS, decodeEveryCard, lumaAt, rasterPage, type Condition } from "./_sheet-raster";
@@ -166,10 +167,18 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
   it("without the icon file (a broken deploy) prints plain, full QR codes that still decode — never a failed print", async () => {
     const real = fs.existsSync;
     const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => !String(p).endsWith("logo-square.png") && real(p));
+    // The broken deploy is told to the operator once per print, as a warning —
+    // captured so this expected line does not print into the run.
+    const warned = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
     try {
       const page = rows(3);
       const pdf = await renderScorerSheetPdf(model([page]));
       expect(exists).toHaveBeenCalled();
+      expect(warned).toHaveBeenCalledTimes(1);
+      expect(warned).toHaveBeenCalledWith(
+        { cwd: process.cwd() },
+        "scorer sheets: logo-square.png not found; printing QR codes without the centre icon",
+      );
       expect(pdfImages(pdf)).toEqual([]);
       expect(await decodeEveryCard(pdf, "dpi90")).toEqual(page.map((r) => r.url));
       // No knock-out either: the centre of each symbol keeps its data modules.
@@ -183,6 +192,7 @@ describe("renderScorerSheetPdf — the 3×3 card grid (scorer sheets §4.4)", ()
       expect(centres).toEqual([true, true, true]);
     } finally {
       exists.mockRestore();
+      warned.mockRestore();
     }
   });
 
