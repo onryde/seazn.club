@@ -77,6 +77,9 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { createVenue, createCourt } from "../venues";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
+import { patchFixture } from "../fixtures";
 import { aiPlanForDivision } from "../schedule-ai";
 import { aiPlanForCompetition } from "../competition-schedule-ai";
 import { hashInstruction, previewScheduleAi, PREVIEW_TTL_MS } from "../schedule-ai-preview";
@@ -165,6 +168,7 @@ async function seedDivision(
   competitionId: string,
   name: string,
   courtLabels: string[] = ["Court 1", "Court 2"],
+  entrants = 4,
 ): Promise<SeededDivision> {
   const slug = `${name.toLowerCase()}-${randomUUID().slice(0, 6)}`;
   const division = await createDivision(auth, competitionId, {
@@ -177,7 +181,7 @@ async function seedDivision(
   await createEntrants(
     auth,
     division.id,
-    Array.from({ length: 4 }, (_, i) => ({
+    Array.from({ length: entrants }, (_, i) => ({
       kind: "individual" as const,
       display_name: `${slug}-E${i + 1}`,
       seed: i + 1,
@@ -759,6 +763,48 @@ describe.skipIf(!HAS_DB)("a joint preview is bound to its division SET (W5 #400 
     expect(parseCalls()).toBe(0);
     expect(architectCalls()).toBe(1);
     expect(run.proposal).toHaveLength(divisions.flatMap((d) => d.fixtureIds).length);
+  });
+
+  // Review 5 of #857, Minor 1. The preview and the run each drop a division
+  // with nothing movable (ruling R6), and the run's gate checks that the two
+  // kept sets are EQUAL. A start taken back leaves its fixture `scheduled`, yet
+  // every builder holds it in place — so if the preview counted by status alone
+  // it would keep the division the run drops, and every confirm would come back
+  // 409 PREVIEW_STALE, with a re-preview reproducing it exactly.
+  it("a division whose only fixture is a start taken back is dropped by the preview AND the run, so the confirm goes through", async () => {
+    const { auth, competitionId, divisions } = await seedJoint();
+    const gamma = await seedDivision(auth, competitionId, "Gamma", ["Court 5"], 2);
+    expect(gamma.fixtureIds).toHaveLength(1);
+    const voided = gamma.fixtureIds[0]!;
+    await patchFixture(auth, voided, { scheduled_at: "2026-08-01T09:00:00.000Z" });
+    await startDivision(auth, gamma.id, { acknowledge_warnings: true });
+    const start = await scoreEvent(auth, voided, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, voided, { expected_seq: 1, type: "core.void", payload: { event_id: start.event_id } });
+    const [f] = await sql<{ status: string }[]>`select status from fixtures where id = ${voided}`;
+    expect(f!.status).toBe("scheduled");
+
+    const requested = [...divisions.map((d) => d.id), gamma.id];
+    const p = await previewScheduleAi(auth, { kind: "competition", id: competitionId }, {
+      instruction: INSTRUCTION,
+      division_ids: requested,
+    });
+    expect(p.preview_id).toBeTruthy();
+    const [row] = await sql<{ division_ids: string[] }[]>`
+      select division_ids from ai_parse_previews where id = ${p.preview_id!}`;
+    expect([...row!.division_ids].sort()).toEqual(divisions.map((d) => d.id).sort());
+    parseInstructionMock.mockClear();
+
+    chat.mockResolvedValueOnce(chatResponse(legalPlan(divisions)));
+    const run = await aiPlanForCompetition(auth, competitionId, {
+      division_ids: requested,
+      instruction: INSTRUCTION,
+      mode: "generate",
+      preview_id: p.preview_id,
+    });
+    expect(parseCalls()).toBe(0);
+    expect(architectCalls()).toBe(1);
+    expect(run.skipped_divisions.map((d) => d.id)).toEqual([gamma.id]);
+    expect(run.proposal.map((a) => a.fixture_id)).not.toContain(voided);
   });
 });
 

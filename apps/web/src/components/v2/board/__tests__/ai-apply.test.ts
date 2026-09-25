@@ -121,7 +121,10 @@ describe("applyAiPlans — chained accept", () => {
   });
 
   it("applies each stage separately with a forward-walking expected_seq", async () => {
-    const { api, calls } = recorder(okHandlers);
+    const { api, calls } = recorder({
+      ...okHandlers,
+      "/schedule/apply": ({ json }) => ({ applied: 1, skipped: 0, conflicts: [], seq: (json as { expected_seq: number }).expected_seq + 1 }),
+    });
     await applyAiPlans(
       baseInput({
         scheduleAssignments: [
@@ -138,6 +141,30 @@ describe("applyAiPlans — chained accept", () => {
       "/api/v1/stages/st-2/schedule/apply",
     ]);
     expect(applies.map((c) => (c.json as { expected_seq: number }).expected_seq)).toEqual([7, 8]);
+  });
+
+  // Review 4 of #857, Minor 1. A stage whose every fixture holds a result
+  // moves nothing, writes no ledger step and leaves the seq where it was. The
+  // chain assumed +1 and sent the next stage a seq the server refuses.
+  it("a stage that moved nothing leaves the next stage's expected_seq where the server says it is", async () => {
+    const { api, calls } = recorder({
+      ...okHandlers,
+      "/stages/st-1/schedule/apply": () => ({ applied: 0, skipped: 1, conflicts: [], seq: 7 }),
+      "/stages/st-2/schedule/apply": () => ({ applied: 1, skipped: 0, conflicts: [], seq: 8 }),
+    });
+    const out = await applyAiPlans(
+      baseInput({
+        scheduleAssignments: [
+          { fixture_id: "fa", scheduled_at: "t", court_id: "c0000000-0000-4000-8000-000000000002", stage_id: "st-1" },
+          { fixture_id: "fb", scheduled_at: "t", court_id: "c0000000-0000-4000-8000-000000000002", stage_id: "st-2" },
+        ],
+        officials: null,
+      }),
+      api,
+    );
+    const applies = calls.filter((c) => c.url.includes("/schedule/apply"));
+    expect(applies.map((c) => (c.json as { expected_seq: number }).expected_seq)).toEqual([7, 7]);
+    expect(out).toMatchObject({ schedule: "applied", stagesApplied: 2 });
   });
 
   // ------------------------------------------------------------- outcome branches

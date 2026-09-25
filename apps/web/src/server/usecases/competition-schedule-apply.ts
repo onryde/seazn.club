@@ -115,6 +115,7 @@ import {
 } from "@seazn/engine/scheduling";
 import {
   MOVABLE_STATUS,
+  heldInPlace,
   afterScheduleWrite,
   applyWindow,
   assertFreshSeq,
@@ -144,6 +145,7 @@ import {
   type CompetitionPackDivision,
 } from "./competition-schedule-ai";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
+import { playedFixtureIds } from "./fixture-results-sql";
 
 type Tx = postgres.TransactionSql;
 
@@ -199,6 +201,13 @@ export interface CompetitionApplyInput {
 
 export interface CompetitionApplyOut {
   applied: number;
+  /** Each listed division's seq after this call, in domain order: advanced by
+   *  the one `schedule_applied` step a division gets when something of it
+   *  moved, unchanged when nothing did (review 4 of #857, Minor 1). */
+  divisions: { division_id: string; seq: number }[];
+  /** Listed fixtures left where they are because they hold a result
+   *  (`heldInPlace`, schedule.ts), across every division. */
+  skipped: number;
   /**
    * The ENGINE verifier's `Conflict`, verbatim — the same camelCase shape the
    * joint ai-plan response carries, NOT the snake_case `ScheduleConflict` the
@@ -416,6 +425,7 @@ export async function applyCompetitionSchedule(
     }
 
     const loaded: LoadedDivision[] = [];
+    let skipped = 0;
     for (const d of input.divisions) {
       const row = rowById.get(d.division_id)!;
       const lockState = await divisionLockState(tx, d.division_id);
@@ -432,6 +442,16 @@ export async function applyCompetitionSchedule(
       }
       const settings = await loadSettings(tx, d.division_id);
       const fixtures = await divisionFixtures(tx, d.division_id);
+      const byId = new Map(fixtures.map((f) => [f.id, f]));
+      // A `scheduled` row that holds a result is SKIPPED here, before
+      // anything reads the assignments, exactly as the per-stage apply
+      // skips it (`heldInPlace`).
+      const played = await playedFixtureIds(tx, d.division_id);
+      const assignments = d.assignments.filter((a) => {
+        const f = byId.get(a.fixture_id);
+        return !(f && heldInPlace(f, played));
+      });
+      skipped += d.assignments.length - assignments.length;
       loaded.push({
         id: d.division_id,
         name: row.name,
@@ -439,9 +459,9 @@ export async function applyCompetitionSchedule(
         sport: row.sport_key,
         settings,
         fixtures,
-        byId: new Map(fixtures.map((f) => [f.id, f])),
+        byId,
         scopes: lockState.scopes,
-        input: d,
+        input: { ...d, assignments },
       });
     }
 
@@ -767,10 +787,19 @@ export async function applyCompetitionSchedule(
     // court, never accepted from the client (see `courtVenueIds`' own note).
     const courtVenues = await courtVenueIds(tx);
     let applied = 0;
+    const seqs: { division_id: string; seq: number }[] = [];
     for (const d of order) {
       // Interleaved with the writes on purpose — see the module header. A
       // pre-pass here would make the rollback test pass without atomicity.
       await assertFreshSeq(tx, d.id, d.input.expected_seq);
+      if (d.input.assignments.length === 0) {
+        // Every fixture listed for it holds a result and was skipped: nothing
+        // written, so no ledger step and no seq bump — as `applySchedule`.
+        const [current] = await tx<{ seq: string | number }[]>`
+          select seq from divisions where id = ${d.id}`;
+        seqs.push({ division_id: d.id, seq: Number(current!.seq) });
+        continue;
+      }
       const moves: { fixture: string; from: unknown; to: unknown }[] = [];
       for (const a of d.input.assignments) {
         const f = d.byId.get(a.fixture_id)!;
@@ -797,13 +826,19 @@ export async function applyCompetitionSchedule(
           where id = ${a.fixture_id}`;
         // `court` here is a courts.id, not a label — see `applySchedule`'s
         // identical note on its own `moves` ledger payload.
+        // `venue` rides along, as in `applySchedule` (review 3 of #857, m5).
         moves.push({
           fixture: a.fixture_id,
           from: {
             at: f.scheduled_at !== null ? iso(ms(f.scheduled_at)) : null,
             court: f.court_id,
+            venue: f.venue_id,
           },
-          to: { at: a.scheduled_at, court: a.court_id },
+          to: {
+            at: a.scheduled_at,
+            court: a.court_id,
+            venue: a.court_id !== null ? (courtVenues.get(a.court_id) ?? null) : null,
+          },
         });
       }
       // The same `schedule_applied` row the per-stage apply writes, so the
@@ -820,6 +855,7 @@ export async function applyCompetitionSchedule(
         ...(ai !== undefined ? { ai } : {}),
       });
       await tx`update divisions set seq = ${seq} where id = ${d.id}`;
+      seqs.push({ division_id: d.id, seq });
       applied += d.input.assignments.length;
     }
 
@@ -840,6 +876,8 @@ export async function applyCompetitionSchedule(
 
     return {
       applied,
+      skipped,
+      divisions: seqs,
       // #461's contract (schedule.ts's `applySchedule`/`moveFixture`),
       // generalized to N divisions: a widened sibling exists so the GATE
       // above can see it, not so its own — possibly pre-existing and
@@ -855,7 +893,9 @@ export async function applyCompetitionSchedule(
         .filter((c) => !allSiblingIds.has(c.fixtureId))
         .map((c) => withLegacyDetail(withJointCourtNames(c))),
       // R10d n2: each written division, with the fixtures its input assigned.
-      written: order.map((d) => ({ divisionId: d.id, fixtureIds: d.input.assignments.map((a) => a.fixture_id) })),
+      written: order
+        .filter((d) => d.input.assignments.length > 0)
+        .map((d) => ({ divisionId: d.id, fixtureIds: d.input.assignments.map((a) => a.fixture_id) })),
     };
   });
 
@@ -863,7 +903,7 @@ export async function applyCompetitionSchedule(
   for (const { divisionId, fixtureIds } of out.written) {
     afterScheduleWrite(divisionId, competitionId, "schedule", fixtureIds);
   }
-  return { applied: out.applied, conflicts: out.conflicts };
+  return { applied: out.applied, skipped: out.skipped, divisions: out.divisions, conflicts: out.conflicts };
 }
 
 /** Conflicts in reading order: division (domain order), then playing order

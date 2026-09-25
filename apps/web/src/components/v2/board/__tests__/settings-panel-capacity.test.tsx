@@ -159,6 +159,20 @@ describe("capacityRequestFromDraft", () => {
     expect(req.fixtures).toEqual([{ home: "A", away: "B", poolId: undefined, id: "f1" }]);
   });
 
+  // Review 5 of #857, Minor 3. A start taken back reads `scheduled` but holds a
+  // result: the board flags it `held`, every builder leaves it in place, and the
+  // server's capacity guards no longer count it as demand. Neither does the card.
+  it("does not count a held card (a start taken back) as demand, though it reads scheduled", () => {
+    const req = capacityRequestFromDraft(
+      [MOVABLE("f1", "A", "B"), { ...MOVABLE("f2", "C", "D"), held: true }, { ...MOVABLE("f3", "E", "F"), held: false }],
+      baseDraft(),
+      baseConfig(),
+      "UTC",
+      [],
+    );
+    expect(req.fixtures.map((f) => f.id)).toEqual(["f1", "f3"]);
+  });
+
   it("falls back to every org court (via venues) when the draft's own court selection is empty — mirrors resolveCandidateCourts' server-side UNCONSTRAINED fallback", () => {
     const req = capacityRequestFromDraft([], baseDraft({ courts: [] }), baseConfig({ courts: [] }), "UTC", orgVenues());
     expect(req.config.courts).toEqual(["court-1", "court-2"]);

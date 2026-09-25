@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { ClientTime } from "@/components/client-time";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { DateTimeField } from "../shared/datetime-field";
@@ -93,6 +94,11 @@ export const SCHEDULE_ERROR_FALLBACK_KEY = "schedule.error.failed" satisfies Mes
 export function scheduleErrorKey(err: unknown): MessageKey {
   if (err instanceof ApiV1Error && err.code === "SCHEDULE_CONFLICT") {
     return "schedule.error.conflict";
+  }
+  // A start taken back leaves the row `scheduled`, so the editor opens on it;
+  // the server refuses the move because the match holds a result.
+  if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) {
+    return "schedule.error.played";
   }
   return SCHEDULE_ERROR_FALLBACK_KEY;
 }

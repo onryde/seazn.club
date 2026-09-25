@@ -7,6 +7,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { type BoardFixtureRow, type FixtureRow } from "./stages";
+import { fixtureHasResultSql } from "./fixture-results-sql";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fireDivisionRevalidate } from "../public-site/revalidate";
 // #14: `courtNamesById` is the venue-qualified label map (via
@@ -203,21 +204,27 @@ export async function listDivisionFixturesForBoard(
         is_final: boolean;
         third_place: boolean;
         conditional: boolean;
+        held: boolean;
       })[]
     >`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
              f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
              f.scheduled_at, f.court_id,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
+             -- held (review 4 of #857): a scheduled row every board write
+             -- refuses to move. The status test comes first, so the evidence
+             -- lookups run for scheduled rows only.
+             (f.status = 'scheduled' and ${fixtureHasResultSql(tx)}) as held
       from fixtures f
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
     // Omitted, not nulled: the RSC flight serialises an undefined value as
     // "$undefined" and a null/false as the key plus its value — only a key
     // that is not there costs nothing.
-    return rows.map(({ ext_key, lane, is_final, third_place, conditional, ...row }) => ({
+    return rows.map(({ ext_key, lane, is_final, third_place, conditional, held, ...row }) => ({
       ...row,
+      ...(held ? { held: true as const } : {}),
       ...(ext_key !== null && ext_key.startsWith("pp-") ? { ext_key } : {}),
       ...(lane !== null ? { lane } : {}),
       ...(is_final ? { is_final } : {}),

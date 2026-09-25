@@ -51,6 +51,11 @@ describe("aiPricingInputs", () => {
     expect(out.movableFixtures.map((f) => f.id)).toEqual(["a", "b"]);
   });
 
+  it("does not price a held card: a start taken back is `scheduled`, but no run moves it (review 4 of #857)", () => {
+    const out = aiPricingInputs([fx({ id: "a" }), fx({ id: "b", held: true })], "d1", { d1: 10 });
+    expect(out.movableFixtures.map((f) => f.id)).toEqual(["a"]);
+  });
+
   it("carries the court and time each fixture is at, so a repair can be scoped", () => {
     // These two fields are the whole reason this is a fixture LIST rather than
     // a count: `movableForRun` narrows on them to price a scoped repair.

@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
@@ -24,6 +25,7 @@ import type {
 export type AutoScheduleMode = AutoScheduleRequest["mode"];
 import {
   CONFLICT_HELP,
+  boardMovable,
   cardTitle,
   type BoardConflict,
   type BoardDivision,
@@ -333,6 +335,10 @@ export function useBoardActions(
         // hardcoded English. The board is the only surface that calls a limited
         // endpoint, so the code is unambiguous here.
         setNotice(msg("board.action.cooldown"));
+      } else if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) {
+        // A drag or pin on a match that holds a result (schedule.ts
+        // `moveFixture`). The server's sentence is English.
+        setError(msg("schedule.error.played"));
       } else if (err instanceof ApiV1Error && err.code === "SCHEDULE_CONFLICT") {
         const list = (err.extra.conflicts as BoardConflict[] | undefined) ?? [];
         const titleOf = (id: string) => {
@@ -386,7 +392,7 @@ export function useBoardActions(
       if (!canEdit) return false;
       setError(null);
       const prev = board.find((f) => f.id === fixtureId);
-      if (!prev || prev.status !== "scheduled") return false;
+      if (!prev || !boardMovable(prev)) return false;
       // After the two guards, so a refused drag does not throw the report away.
       setLastRun(null);
       setPublishAllOutcome(null);
@@ -500,7 +506,7 @@ export function useBoardActions(
           });
 
         const applyOnce = (assignments: Proposal["assignments"], expectedSeq: number | undefined) =>
-          apiV1<{ applied: number; conflicts: BoardConflict[] }>(
+          apiV1<{ applied: number; conflicts: BoardConflict[]; seq: number }>(
             `/api/v1/stages/${stageId}/schedule/apply`,
             {
               method: "POST",
@@ -536,7 +542,7 @@ export function useBoardActions(
         if (!out) return;
 
         let expectedSeq = seqRef.current[divisionId];
-        let applied: { applied: number; conflicts: BoardConflict[] };
+        let applied: { applied: number; conflicts: BoardConflict[]; seq: number };
         try {
           applied = await applyOnce(out.assignments, expectedSeq);
         } catch (err) {
@@ -565,7 +571,10 @@ export function useBoardActions(
           // one automatic retry, per owner ruling.
           applied = await applyOnce(retryOut.assignments, expectedSeq);
         }
-        seqRef.current[divisionId] = (expectedSeq ?? 0) + 1;
+        // The apply's own answer, never `expectedSeq + 1`: one that moved
+        // nothing (every fixture held a result) writes no ledger step and
+        // leaves the seq where it was (review 4 of #857, Minor 1).
+        seqRef.current[divisionId] = applied.seq;
         setConflicts(applied.conflicts);
         setNotice(
           applied.conflicts.length > 0
@@ -678,69 +687,79 @@ export function useBoardActions(
 
   // Bulk tools (doc 12 §2): shift a day ±N minutes / swap two courts. These
   // run as sequential single moves; the seq token rides along and self-heals.
-  const shiftDay = useCallback(
-    async (day: string, minutes: number) => {
+  //
+  // Review 4 of #857: a match that holds a result is never moved. A `held`
+  // card is not sent at all, and one the server refuses as played anyway (a
+  // start taken back after this board was read) is passed over rather than
+  // ending the run part-way, with the day half moved. Both are counted and
+  // said, and the board is re-read whatever happened.
+  const bulkMove = useCallback(
+    async (bodyFor: (f: BoardFixture) => Record<string, unknown> | null) => {
       setBusy(true);
       setError(null);
+      setNotice(null);
       setLastRun(null);
       setPublishAllOutcome(null);
+      let kept = 0;
       try {
         for (const f of board) {
           if (f.scheduled_at === null || f.status !== "scheduled") continue;
-          if (dayKey(f.scheduled_at as string) !== day) continue;
-          await apiV1(`/api/v1/fixtures/${f.id}`, {
-            method: "PATCH",
-            json: {
+          const body = bodyFor(f);
+          if (body === null) continue;
+          if (!boardMovable(f)) {
+            kept += 1;
+            continue;
+          }
+          try {
+            await apiV1(`/api/v1/fixtures/${f.id}`, {
+              method: "PATCH",
+              json: { ...body, expected_seq: seqRef.current[f.division_id] },
+            });
+          } catch (err) {
+            if (!(err instanceof ApiV1Error) || err.code !== PLAYED_REFUSAL_CODE) throw err;
+            kept += 1;
+            continue;
+          }
+          seqRef.current[f.division_id] = (seqRef.current[f.division_id] ?? 0) + 1;
+        }
+        if (kept > 0) setNotice(plural("history.danger.keptPlayed", kept));
+        queueValidate();
+      } catch (err) {
+        fail(err);
+      } finally {
+        router.refresh();
+        setBusy(false);
+      }
+    },
+    [board, fail, plural, queueValidate, router],
+  );
+
+  const shiftDay = useCallback(
+    (day: string, minutes: number) =>
+      bulkMove((f) =>
+        dayKey(f.scheduled_at as string) !== day
+          ? null
+          : {
               scheduled_at: new Date(
                 new Date(f.scheduled_at as string).getTime() + minutes * 60_000,
               ).toISOString(),
-              expected_seq: seqRef.current[f.division_id],
             },
-          });
-          seqRef.current[f.division_id] = (seqRef.current[f.division_id] ?? 0) + 1;
-        }
-        router.refresh();
-        queueValidate();
-      } catch (err) {
-        fail(err);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [board, fail, queueValidate, router],
+      ),
+    [bulkMove],
   );
 
   const swapCourts = useCallback(
-    async (day: string, a: string, b: string) => {
-      setBusy(true);
-      setError(null);
-      setLastRun(null);
-      setPublishAllOutcome(null);
-      try {
-        for (const f of board) {
-          if (f.scheduled_at === null || f.status !== "scheduled") continue;
-          if (dayKey(f.scheduled_at as string) !== day) continue;
-          // P9 pass 4a: court_id — court_label is frozen legacy and null for
-          // anything scheduled since the cutover, so this could no longer
-          // match either side; `a`/`b` are court ids (BoardConfig.courts).
-          const target = f.court_id === a ? b : f.court_id === b ? a : null;
-          if (!target) continue;
-          await apiV1(`/api/v1/fixtures/${f.id}`, {
-            method: "PATCH",
-            // PatchFixture (schemas.ts) is `.strict()` — court_label 400s.
-            json: { court_id: target, expected_seq: seqRef.current[f.division_id] },
-          });
-          seqRef.current[f.division_id] = (seqRef.current[f.division_id] ?? 0) + 1;
-        }
-        router.refresh();
-        queueValidate();
-      } catch (err) {
-        fail(err);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [board, fail, queueValidate, router],
+    (day: string, a: string, b: string) =>
+      bulkMove((f) => {
+        if (dayKey(f.scheduled_at as string) !== day) return null;
+        // P9 pass 4a: court_id — court_label is frozen legacy and null for
+        // anything scheduled since the cutover, so this could no longer
+        // match either side; `a`/`b` are court ids (BoardConfig.courts).
+        const target = f.court_id === a ? b : f.court_id === b ? a : null;
+        // PatchFixture (schemas.ts) is `.strict()` — court_label 400s.
+        return target ? { court_id: target } : null;
+      }),
+    [bulkMove],
   );
 
   // Realtime board refresh on division:{id} (doc 12 §6 — two organisers).

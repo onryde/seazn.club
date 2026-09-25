@@ -104,6 +104,9 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
+import { patchFixture } from "../fixtures";
 import { aiPlanForCompetition } from "../competition-schedule-ai";
 import { aiPlanForDivision, buildSchedulePack } from "../schedule-ai";
 import { aiMarginReport, listAiRuns } from "../ai-runs-admin";
@@ -1115,6 +1118,39 @@ describe.skipIf(!HAS_DB)("aiPlanForCompetition drops zero-movable divisions (R6)
     expect(payload.division_ids).not.toContain(divisions[2]!.id);
     expect(payload.divisions.map((d) => d.id)).not.toContain(divisions[2]!.id);
     expect(payload.skipped_division_ids).toEqual([divisions[2]!.id]);
+  });
+
+  // Review 4 of #857, Minor 2. A start taken back leaves its fixture
+  // `scheduled`, and every builder holds it in place (`isMovable`) — yet the
+  // counts that price and drop a division read the status alone, so a division
+  // whose only fixture is one such was priced and planned with nothing to move.
+  it("a division whose only scheduled fixture is a start taken back has nothing movable: dropped, not priced", async () => {
+    const auth = await seedPaidOrg();
+    const walletId = await walletIdFor(auth.orgId);
+    const before = await balance(walletId);
+    const { competitionId, divisions } = await seedCompetition(auth, "Voided", [
+      { name: "Alpha" },
+      { name: "Bravo", courts: ["Court 3", "Court 4"] },
+      { name: "Charlie", courts: ["Court 5"], entrants: 2 },
+    ]);
+    const charlie = divisions[2]!;
+    expect(charlie.fixtureIds).toHaveLength(1);
+    const voided = charlie.fixtureIds[0]!;
+    await patchFixture(auth, voided, { scheduled_at: "2026-08-01T09:00:00.000Z" });
+    await startDivision(auth, charlie.id, { acknowledge_warnings: true });
+    await scoreEvent(auth, voided, { expected_seq: 0, type: "core.start", payload: {} });
+    const [start] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${voided} and seq = 1`;
+    await scoreEvent(auth, voided, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+    const [row] = await sql<{ status: string }[]>`select status from fixtures where id = ${voided}`;
+    expect(row!.status).toBe("scheduled");
+
+    parse.mockResolvedValue(planResponse(jointPlan(divisions.slice(0, 2))));
+    const out = await run(auth, competitionId, divisions.map((d) => d.id));
+
+    expect(out.skipped_divisions).toEqual([{ id: charlie.id, name: "Charlie", reason: "no_movable_fixtures" }]);
+    expect(out.credits).toBe(1);
+    expect(await balance(walletId)).toBe(before - 1);
   });
 
   it("fewer than 2 divisions left after the drop → the single-division 400, no spend", async () => {

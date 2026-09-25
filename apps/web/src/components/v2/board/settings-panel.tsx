@@ -26,7 +26,7 @@ import {
   zonedDateInput,
   zonedDateTimeInput,
 } from "@/lib/zoned-datetime";
-import type { BoardConfig } from "./types";
+import { boardMovable, type BoardConfig } from "./types";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { Tip } from "@/components/ui/tip";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
@@ -105,6 +105,8 @@ export function capacityRequestFromDraft(
     home_entrant_id: string | null;
     away_entrant_id: string | null;
     pool_id: string | null;
+    /** The board read's flag for a `scheduled` match that holds a result. */
+    held?: boolean;
   }[],
   draft: {
     startAt: string;
@@ -129,7 +131,10 @@ export function capacityRequestFromDraft(
           from: startIso ? zonedTimeToUtc(dayKeyInTz(Date.parse(startIso), orgTz), "00:00", orgTz) : -Infinity,
           to: endIso ? zonedTimeToUtc(ymdAddDays(dayKeyInTz(Date.parse(endIso), orgTz), 1), "00:00", orgTz) : Infinity,
         };
-  const movable = fixtures.filter((f) => f.status === "scheduled"); // MOVABLE_STATUS (schedule.ts) — a client component can't import it (server-only)
+  // The board's twin of the server's `isMovable` (schedule.ts, server-only): a
+  // `scheduled` card that holds no result. A `held` one stays where it is, so it
+  // is no demand on the capacity the draft would re-plan.
+  const movable = fixtures.filter(boardMovable);
   const effectiveCourts = draft.courts.length > 0 ? draft.courts : flattenCourts(venues).map((c) => c.id);
   return {
     // `id` lets an `id`-kind fixture_on_date/fixture_on_weekday selector

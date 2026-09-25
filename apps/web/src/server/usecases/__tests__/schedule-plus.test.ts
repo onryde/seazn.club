@@ -12,10 +12,11 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { patchFixture } from "../fixtures";
-import { putScheduleSettings } from "../schedule";
+import { putScheduleSettings, startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { createVenue, createCourt } from "../venues";
 import { PutScheduleSettings } from "@/server/api-v1/schemas";
-import { undoDivision } from "../history";
+import { redoDivision, undoDivision } from "../history";
 import { shiftDivisionSchedule, divisionScheduleReport } from "../schedule-plus";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -125,6 +126,46 @@ describe.skipIf(!HAS_DB)("scheduling constraints v2 (Jul3/04)", () => {
     const [back] = await sql<{ scheduled_at: string }[]>`
       select scheduled_at::text as scheduled_at from fixtures where id = ${fixtures[0]!.id}`;
     expect(new Date(back!.scheduled_at).toISOString()).toBe(at(0));
+  });
+
+  // Review 2 of #857, I1. History's results-guard refuses any undo/redo that
+  // touches an in-play, decided or finalized fixture; the shift skipped only
+  // `decided`, so a rain delay moved a live or finalized kick-off and the
+  // shift itself could then be neither undone nor redone. Both read ONE
+  // played set now (`fixtureHasResultSql`, ./fixture-results-sql.ts).
+  it("a rain-delay shift leaves an in-play and a finalized fixture where they are — and its Undo and Redo complete", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures } = await seedDivision(auth);
+    for (let i = 0; i < 3; i++) await patchFixture(auth, fixtures[i]!.id, { scheduled_at: at(i * 30) });
+    await startDivision(auth, division.id);
+    const [inPlay, finalized, open] = [fixtures[0]!.id, fixtures[1]!.id, fixtures[2]!.id];
+    await scoreEvent(auth, inPlay, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, finalized, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, finalized, { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    await scoreEvent(auth, finalized, { expected_seq: 2, type: "core.finalize", payload: {} });
+    const times = async () => {
+      const rows = await sql<{ id: string; scheduled_at: string }[]>`
+        select id, scheduled_at::text as scheduled_at from fixtures where id in ${sql([inPlay, finalized, open])}`;
+      const byId = new Map(rows.map((r) => [r.id, new Date(r.scheduled_at).toISOString()]));
+      return [byId.get(inPlay), byId.get(finalized), byId.get(open)];
+    };
+    expect(await sql`select status from fixtures where id in ${sql([inPlay, finalized])} order by status`).toEqual([
+      { status: "finalized" },
+      { status: "in_play" },
+    ]);
+
+    const result = await shiftDivisionSchedule(auth, {
+      division_id: division.id,
+      scope: { excludeLocked: true },
+      delta_minutes: 15,
+    });
+
+    expect(result).toMatchObject({ shifted: 1, skipped: { decided: 2 } });
+    expect(await times()).toEqual([at(0), at(30), at(75)]);
+    expect((await undoDivision(auth, division.id)).applied.type).toBe("schedule_shifted");
+    expect(await times()).toEqual([at(0), at(30), at(60)]);
+    expect((await redoDivision(auth, division.id)).applied.type).toBe("schedule_shifted");
+    expect(await times()).toEqual([at(0), at(30), at(75)]);
   });
 
   // P9 sweep (pass 3c-4): shiftSchedule's `scope.courts` (report.ts) and its

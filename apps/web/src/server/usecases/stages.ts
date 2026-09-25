@@ -123,6 +123,7 @@ import {
   type SlotDescriptor,
   type SlotLabel,
 } from "./stage-seeding";
+import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
 
 type Tx = postgres.TransactionSql;
 type StageInput = z.infer<typeof CreateStage>;
@@ -206,7 +207,12 @@ export const FIXTURE_COLS = [
 export type BoardFixtureRow = Omit<
   FixtureRow,
   "venue" | "court_label" | "court_name" | "venue_name" | "venue_id"
->;
+> & {
+  /** A `scheduled` row that holds a result or scoring (`fixtureHasResultSql`:
+   *  a start taken back, a walkover recorded in play), which every board
+   *  write refuses to move (review 4 of #857). Sent only when true. */
+  held?: true;
+};
 
 export const BOARD_FIXTURE_COLS = [
   "id", "stage_id", "division_id", "pool_id", "round_no", "seq_in_round", "fixture_no",
@@ -1989,34 +1995,7 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
   return (await generateStageFixturesWrite(auth, stageId, {})).outcome;
 }
 
-/**
- * The result-evidence tables EVERY destructive fixture path must consult,
- * as one SQL fragment. `f` must be the `fixtures` alias in the enclosing
- * query; the caller supplies its own status clause and its own row scope.
- *
- * Shared deliberately (2026-09-20 review, C1): `unpairSwissRound` shipped
- * with a subset of this list — `score_events` only — and a bye predicate that
- * excluded real results from even that. A subset guard on a destructive path
- * is exactly how the defect happened, so the list is written once and both
- * callers read it.
- *
- * Why `config_snapshot` is in here and not only the event tables: V347 freezes
- * the resolved cfg onto the fixture when the FIRST event lands
- * (`append-event.ts`), and `fixture-cfg.ts`'s own header states that
- * `config_snapshot is null` is precisely "not scored yet". It is monotonic,
- * which `fixtures.status` is NOT — `fixtureStatusFromFold` walks a fixture
- * back to `scheduled` when a `core.start` is voided, so a status test alone
- * can silently stop refusing.
- */
-function fixtureEvidenceSql(tx: Tx) {
-  return tx`
-    f.config_snapshot is not null
-    or exists (select 1 from score_events se where se.fixture_id = f.id)
-    or exists (select 1 from match_states ms where ms.fixture_id = f.id)
-    or exists (select 1 from match_reports mr where mr.fixture_id = f.id)
-    or exists (select 1 from official_marks om where om.fixture_id = f.id)
-    or exists (select 1 from suspensions s where s.fixture_id = f.id)`;
-}
+// `fixtureEvidenceSql` / `fixtureHasResultSql`: ./fixture-results-sql.ts.
 
 /**
  * THE clear-onto-shells write — the one place a seated swiss row is put back
@@ -3025,14 +3004,15 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     }
 
     // Never destroy a real result (hard constraint 1). Mirrors deleteStage's
-    // guard above (same three statuses), with one refinement: 'forfeited'
-    // alone doesn't distinguish a generation-time BYE (structural — one side
-    // never had an opponent, isBye in stages-panel.tsx) from a mid-tournament
-    // WITHDRAWAL WALKOVER (withdrawal.ts's core.forfeit — append-event.ts:116
-    // maps it to this SAME 'forfeited' status). A walkover has two real
-    // entrants and a real winner; destroying it would erase the reason the
-    // opponent advanced. Only a two-sided 'forfeited' fixture blocks — a bye
-    // (one side null by construction) does not.
+    // guard above (same three statuses), with one refinement for 'forfeited'.
+    // The status alone covers three different rows: a generation-time BYE
+    // (one side null by construction), the generator's own F14 walkover for a
+    // qualifier who departed before the draw (both seats filled, nothing
+    // played), and a WALKOVER RECORDED IN PLAY (withdrawal.ts's core.forfeit
+    // — append-event.ts maps it to this same status). Only the last holds a
+    // result, and it is the only one with evidence: its core.forfeit is a
+    // score event. So a 'forfeited' fixture blocks through its evidence
+    // alone (review 3 of #857, N2, owner ruling), never through its status.
     // Status alone is NOT a sufficient test, because `delete from fixtures`
     // CASCADEs into score_events, match_states, match_reports, lineups,
     // official_marks, fixture_officials and device_links, and SET NULLs
@@ -3100,15 +3080,16 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     // implied by `exists(score_events)` for this guard — nothing in apps/web
     // ever deletes a score event — so it adds no refusal here, only
     // monotonicity where status is unreliable.)
+    //
+    // This guard's whole set — status clause and evidence — is
+    // `fixtureHasResultSql`, which history reads as its played set (review 2
+    // of #857, I3), so what rebuild refuses history never deletes. A walkover
+    // blocks only through its evidence (review 3 of #857, N2): the one a
+    // scorer records posts `core.forfeit`; the generator's F14 walkover has
+    // nothing played behind it, so a stage holding one rebuilds.
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
-      where f.stage_id = ${stageId}
-        and (
-          f.status in ('in_play', 'decided', 'finalized')
-          or (f.status = 'abandoned' and f.outcome is not null)
-          or (f.status = 'forfeited' and f.home_entrant_id is not null and f.away_entrant_id is not null)
-          or (${fixtureEvidenceSql(tx)})
-        )
+      where f.stage_id = ${stageId} and ${fixtureHasResultSql(tx)}
       limit 1`;
     if (blocked) {
       throw new HttpError(
@@ -3156,7 +3137,11 @@ interface CrossFeed {
   slot: 1 | 2;
 }
 
-async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> {
+/** Wire every declared `cross_feeds` edge whose source and target both exist,
+ *  filling NULL edges only — so it is safe to re-run at any time. Also called
+ *  by history.ts `restoreFixtures`: an undo's delete SET NULLs the edges into
+ *  the rows it removes, and restoring them re-derives the declared ones. */
+export async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> {
   const stages = await tx<{ id: string; seq: number; config: Record<string, unknown> }[]>`
     select id, seq, config from stages where division_id = ${divisionId}`;
   const bySeq = new Map(stages.map((s) => [s.seq, s]));

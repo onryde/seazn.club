@@ -162,6 +162,27 @@ describe("computeDisruptions", () => {
     },
   );
 
+  // Review 5 of #857, Minor 2. A start taken back leaves its fixture
+  // `scheduled`, but it holds a result, so the board reads it `held` and every
+  // builder keeps it where it is. Flagging it pre-armed a repair nothing could
+  // perform. The plain card beside it is the positive pair: same slot, same
+  // blackout, same gone court — flagged.
+  it("never flags a held card (a start taken back), even in a blackout on a removed court", () => {
+    const s = settings({
+      courts: ["Court 1"],
+      blackouts: [{ from: "2026-08-01T09:30:00.000Z", to: "2026-08-01T10:30:00.000Z" }],
+    });
+    const out = computeDisruptions(
+      [fx({ id: "held", court_id: "Ghost Court", held: true }), fx({ id: "plain", court_id: "Other Ghost" })],
+      s,
+    );
+    expect(out).toEqual({
+      fixtureIds: ["plain"],
+      reasons: ["blackout", "court_gone"],
+      scope: { courts: ["Other Ghost"], from: "2026-08-01T10:00:00.000Z" },
+    });
+  });
+
   it("does not flag an unscheduled fixture even if its court is gone", () => {
     const out = computeDisruptions(
       [fx({ id: "a", court_id: "Ghost Court", scheduled_at: null })],

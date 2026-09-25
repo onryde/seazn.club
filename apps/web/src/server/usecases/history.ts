@@ -25,11 +25,13 @@ import { sql, withTenant } from "@/lib/db";
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
-import { generateStageFixtures } from "./stages";
+import { generateStageFixtures, wireCrossFeeds } from "./stages";
+import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
@@ -53,11 +55,21 @@ async function loadLedger(tx: Tx, divisionId: string): Promise<LedgerEvent[]> {
   return rows.map((r) => ({ seq: Number(r.seq), type: r.type, payload: r.payload }));
 }
 
-async function decidedFixtureIds(tx: Tx, divisionId: string): Promise<Set<string>> {
-  const rows = await tx<{ id: string }[]>`
-    select id from fixtures where division_id = ${divisionId} and status = 'decided'`;
-  return new Set(rows.map((r) => r.id));
-}
+// What history treats as PLAYED is rebuild's refusal set,
+// `fixtureHasResultSql` (./fixture-results-sql.ts; review 2 of #857, I3). It
+// was `'decided'` alone, then three statuses: undoing a generation, and
+// redoing or making a pool clear, deleted an in-play, a finalized, an
+// abandoned or a walkover fixture outright, its score events cascading with
+// it — the results-guard ("never silently discard a scoresheet", engine
+// history.ts) never saw those scoresheets. `playedFixtureIds` is the guard's
+// input: any undo/redo whose op touches one is refused whole
+// (`UNDO_BLOCKED_HAS_RESULTS`).
+
+/** The same rule at the row, for every write `execute()` makes: the engine
+ *  refuses first, and this still skips a row that started playing since. On
+ *  the target row itself (`fixtures`, unaliased), not a re-read of it, so a
+ *  write parked on the row's lock re-checks the row it finally gets. */
+const unplayed = (tx: Tx) => tx`not ${fixtureHasResultSql(tx, "fixtures")}`;
 
 interface DivisionMeta {
   seq: number;
@@ -122,12 +134,337 @@ function resolveCourtWrite(value: unknown, context: Record<string, unknown>): Co
   return { write: false };
 }
 
+/** The venue a court sits in: the ONE rule every fixture write derives
+ *  `venue_id` by (schedule.ts `courtVenueIds`, moveFixture's "#5 fix") — a
+ *  court belongs to a venue, so a fixture's venue is its court's, and no court
+ *  means no venue. Every history write that sets `court_id` sets `venue_id`
+ *  from it in the same statement; one that left it alone kept a cross-venue
+ *  move's Undo in the venue it was moved to. */
+const venueOf = (tx: Tx, courtId: string | null) =>
+  tx`(select c.venue_id from courts c where c.id = ${courtId})`;
+
+/** The court a history write puts a fixture back on, if it still exists. A
+ *  court deleted since (deleteCourt refuses only while a fixture is ON it, so
+ *  a move away frees it) writes as no court — and `venueOf` then as no venue —
+ *  never a dangling id: the court FK is DEFERRED, so that failed at COMMIT,
+ *  and every retry replays the same court. Undo stuck for good. */
+const liveCourt = (tx: Tx, courtId: string | null) =>
+  tx`(select c.id from courts c where c.id = ${courtId})`;
+
+/** The `venue_id` a replay that writes `court_id = liveCourt(courtId)` sets:
+ *  the new court's venue when the court CHANGES, the row's own otherwise — as
+ *  `moveFixture` leaves the venue alone whenever the court is. A fixture can
+ *  hold a venue with no court (`addFixture` takes a venue alone), and deriving
+ *  it from the payload's court every time wiped that venue on the Undo of a
+ *  time-only move, a pin or a shift. (`court_id` on the right of a SET is the
+ *  row's value BEFORE the update.) */
+const venueWith = (tx: Tx, courtId: string | null) =>
+  tx`case when court_id is distinct from ${liveCourt(tx, courtId)} then ${venueOf(tx, courtId)} else venue_id end`;
+
+/** The `venue_id` a move replay writes. With NO court to put the fixture on, a
+ *  payload side that carries the venue it stood in (`venue`, review 3 of #857,
+ *  m5) puts that venue back: a venue-only fixture dragged onto a court and then
+ *  undone lost its venue, because an absent court names none. A payload written
+ *  before carries no `venue` key and replays exactly as before (`venueWith`).
+ *  A venue deleted since writes as no venue, never a dangling id. */
+const venueBack = (tx: Tx, courtId: string | null, side: { venue?: unknown }) => {
+  if (courtId !== null || side.venue === undefined) return venueWith(tx, courtId);
+  const venue = typeof side.venue === "string" && UUID_RE.test(side.venue) ? side.venue : null;
+  return tx`(select v.id from venues v where v.id = ${venue})`;
+};
+
+const DEPARTED: string[] = [...DEPARTED_STATUSES];
+
+/** The history events that delete fixture rows, each carrying them as they
+ *  stood (`snapshotFixtures`) just before. */
+const DELETE_SIDE_EVENTS: ReadonlySet<string> = new Set(["fixtures_cleared", "pool_entrants_cleared"]);
+
+/** The set of rows a snapshot holds, as one comparable key. */
+function snapshotIdKey(snapshot: unknown): string | undefined {
+  if (!Array.isArray(snapshot)) return undefined;
+  return (snapshot as FixtureSnapshot[])
+    .map((f) => f.id)
+    .sort()
+    .join(",");
+}
+
+/** A restored seat: the entrant it held, AS DRAWN (review 2 of #857, I4,
+ *  owner ruling), unless she is gone since.
+ *  DELETED — the FK would refuse the insert (and a delete SET NULLs the seat
+ *  of every live row, so an empty seat is what the row would hold had it
+ *  never left).
+ *  DEPARTED (withdrawn / disqualified, `DEPARTED_STATUSES`) — kept in her drawn
+ *  seat, as the live rows keep her (a withdrawal before Start is a status
+ *  flip). The ONE exception is a seat her own bye FED (`byeFedSeats`): the
+ *  generator's third pass never carries a departed qualifier's bye into the
+ *  next round (stages.ts, F14), so that seat restores EMPTY — its slot label
+ *  is restored, so it still reads as its placeholder. */
+const seatOf = (tx: Tx, entrantId: string | null | undefined, byeFedDeparted: boolean) =>
+  byeFedDeparted
+    ? tx`(select e.id from entrants e where e.id = ${entrantId ?? null} and e.status not in ${tx(DEPARTED)})`
+    : tx`(select e.id from entrants e where e.id = ${entrantId ?? null})`;
+
+/** The seats a settled line's award fed, as `fixture:slot:winner` — a bye (or
+ *  any settled line) awarded to `winner` whose winner edge points at that
+ *  seat. From the rows restored together only: an edge INTO a restored row
+ *  from a row outside its snapshot was SET NULL by the delete. */
+function byeFedSeats(snapshots: readonly FixtureSnapshot[]): Set<string> {
+  const fed = new Set<string>();
+  for (const r of snapshots) {
+    const verdict = restoredVerdict(r);
+    const winner = (verdict.outcome as { winner?: unknown } | null)?.winner;
+    if (verdict.status === "scheduled" || typeof winner !== "string") continue;
+    if (!r.winner_to_fixture || (r.winner_to_slot !== 1 && r.winner_to_slot !== 2)) continue;
+    fed.add(`${r.winner_to_fixture}:${r.winner_to_slot}:${winner}`);
+  }
+  return fed;
+}
+
+// ---------------------------------------------------------------------------
+// Fixture snapshots (restore fidelity, 2026-09-23)
+//
+// Two history writes DELETE fixtures — undoing a generation (`fixtures_cleared`,
+// snapshotted in `stepWrite`) and clearing a pool's entrants
+// (`pool_entrants_cleared`, snapshotted in `clearPoolEntrants`) — and their
+// inverses re-insert the snapshot raw. The snapshot used to carry nine
+// columns, so a restored bracket came back without its ext_key, its V368
+// round role, its placeholders, its feed edges (winners stopped advancing),
+// its byes' awards and its fixture numbers: the schedule board fell back to
+// R{n}, and a regeneration no longer recognised a single row.
+//
+// `snapshotFixtures` is the ONE read both destructive paths record and
+// `restoreFixtures` the ONE writer both inverses use. Every column of
+// `fixtures` is decided here:
+//
+//   KEPT
+//   - The generator's structure: ext_key (regeneration is idempotent by it;
+//     page-playoff round names read it), lane / is_final / third_place /
+//     conditional (V368 round role), home/away_slot_label (TBD placeholders),
+//     winner_to/loser_to fixture+slot (the feed edges), fixture_no (the
+//     number printed on sheets — renumbered only when taken since).
+//   - ...except an ext_key a LIVE row of the same stage holds by the time of
+//     the restore. Rows are minted outside the ledger — the Swiss shell
+//     top-up (stages.ts reconcileSwissRoundShells) inserts `sw-rN-bK` shells
+//     no undo ever removes — so the key can be taken again, and `(stage_id,
+//     ext_key)` is unique: a raw restore raised 23505, and since every retry
+//     replays the same snapshot, Undo was stuck for good. The restored row
+//     comes back WITHOUT the key instead (logged). The live row keeps it
+//     because it is the one the generator already recognises; the restored
+//     row is a board the generator no longer claims — exactly what every
+//     restored row was before this fix, now confined to the colliding one.
+//   - status / outcome of a row that carried no score events — on such a row
+//     they can only be the generator's own verdicts (a bye's award, a
+//     departed qualifier's walkover or void) or 'scheduled' (see
+//     `restoredVerdict`).
+//   - The schedule placement: scheduled_at, court_id (both kept before this),
+//     schedule_locked, schedule_source — and venue_id, re-derived from the
+//     restored court rather than stored (its writer's own rule).
+//   - Identity: id, stage_id, division_id, pool_id, round_no, seq_in_round,
+//     home/away_entrant_id (kept before this). org_id is re-derived by the
+//     insert trigger from the stage — the same value.
+//
+//   ...AS FAR AS THE ROSTER STILL HOLDS IT. What was deleted since the
+//   snapshot is never written back: a seat whose entrant was deleted restores
+//   EMPTY with its placeholder label, as does a seat her own bye fed if she
+//   has departed since (`seatOf`, F14; a departed entrant otherwise keeps her
+//   drawn seats, as the live rows do); a deleted court restores as no court and no venue,
+//   a deleted pool as no pool; a deleted stage's rows are skipped. Each of
+//   these used to be a foreign-key failure — the whole Undo refused, and every
+//   retry replayed the same snapshot.
+//
+//   NOT KEPT
+//   - Play state whose evidence the delete cascaded away: the status/outcome
+//     of a scored row (it returns 'scheduled', as it always did — a DECIDED
+//     row never gets here, the results-guard blocks the undo) and
+//     config_snapshot / config_snapshot_at (frozen at match start).
+//   - Match-day setup, which history has never restored: `officials` is a
+//     mirror of `fixture_officials` (officials.ts), whose rows the delete
+//     cascaded — restoring the mirror would contradict the table — and
+//     `stream_url` sits with lineups and device links, which cascade too.
+//   - created_at (the row really is inserted again); venue / court_label
+//     (legacy free text, superseded by venue_id / court_id); parent_fixture_id
+//     (nothing in apps/web writes it).
+//
+// Feed edges INTO a restored row from a row outside its snapshot were SET NULL
+// by the delete, and the snapshot (outgoing edges only) cannot carry them. The
+// ones a stage DECLARES — `cross_feeds` — are re-derived after every restore
+// by the generator's own `wireCrossFeeds`, which fills null edges only. That
+// is what re-wires a multi-step restore: undo B then A, and A's snapshot is
+// taken after B's delete nulled A→B, so A comes back without it; restoring B
+// next re-derives it. Known residual: an INTRA-stage edge that a later,
+// partial regeneration's feed pass wrote from an older row into one of its
+// own new rows (stages.ts, "Second pass: feeds") is declared nowhere but that
+// pass, so undoing that regeneration and restoring it does not re-wire it.
+// ---------------------------------------------------------------------------
+
+/** What `snapshotFixtures` returns: every field present (the SQL selects them
+ *  all), which a snapshot read back from an older ledger row cannot promise. */
+interface SnapshotRow extends FixtureSnapshot {
+  stage_id: string;
+  pool_id: string | null;
+  round_no: number;
+  at: string | null;
+  court: string | null;
+  locked: boolean;
+  status: string;
+}
+
+/** The one snapshot read. Unordered: `restoreFixtures` owns the order. */
+async function snapshotFixtures(
+  tx: Tx,
+  by: { ids: readonly string[] } | { poolId: string },
+): Promise<SnapshotRow[]> {
+  if ("ids" in by && by.ids.length === 0) return [];
+  const where = "ids" in by ? tx`f.id in ${tx(by.ids as string[])}` : tx`f.pool_id = ${by.poolId}`;
+  // `court` is a courts.id (P9 pass 3a — aliased off court_id, never the
+  // legacy court_label): the restore writes it straight back into an id
+  // column, so a label here would be a display string in a uuid.
+  return tx<SnapshotRow[]>`
+    select f.id, f.stage_id, f.pool_id, f.round_no, f.seq_in_round,
+           f.home_entrant_id, f.away_entrant_id,
+           f.scheduled_at::text as at, f.court_id as court,
+           f.schedule_locked as locked, f.schedule_source, f.fixture_no,
+           f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
+           f.home_slot_label, f.away_slot_label,
+           f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
+           f.status, f.outcome,
+           exists (select 1 from score_events se where se.fixture_id = f.id) as scored
+    from fixtures f where ${where}`;
+}
+
+/** A row that carried no score events comes back with the status and outcome
+ *  it had. Every play-driven status is a fold of score events
+ *  (engine-db/append-event.ts), so on an unscored row they can only be the
+ *  generator's own — a bye's award, a departed qualifier's walkover or void
+ *  (stages.ts first pass) — or plain 'scheduled'. A scored row's evidence went
+ *  with the delete's cascade, so it returns unplayed, as it always has.
+ *  `scored` must be literally false: a snapshot from before it existed
+ *  restores 'scheduled', as it always did. */
+function restoredVerdict(s: FixtureSnapshot): { status: string; outcome: Record<string, unknown> | null } {
+  if (s.scored === false) return { status: s.status ?? "scheduled", outcome: s.outcome ?? null };
+  return { status: "scheduled", outcome: null };
+}
+
+/** The one raw re-insert (`pool_entrants_restored` in execute(), and a
+ *  snapshot-carrying `fixtures_generated` in stepWrite). Returns the ids it
+ *  inserted — a row that already exists is left alone (`on conflict`).
+ *
+ *  P9 dispatch #9: the court goes through `resolveCourtWrite` — a stale
+ *  pre-cutover snapshot's non-uuid court raised 22P02 and aborted the whole
+ *  undo. There is no existing row to "leave untouched" the way an UPDATE can,
+ *  so an unresolvable court inserts as null (logged). */
+async function restoreFixtures(
+  tx: Tx,
+  divisionId: string,
+  snapshots: readonly FixtureSnapshot[],
+  eventType: string,
+): Promise<string[]> {
+  const jsonb = (value: Record<string, unknown> | null | undefined) =>
+    value === null || value === undefined ? null : tx.json(value as never);
+  const restored: FixtureSnapshot[] = [];
+  // Insert order IS renumber order: a row whose number was taken gets the
+  // trigger's max + 1, so rows go in by their original number and two that
+  // both lost theirs keep their relative order. A legacy snapshot carries no
+  // numbers at all, and the stable sort leaves its rows as they were.
+  //
+  // A row of a stage deleted since is skipped — nothing it could be restored
+  // into, and the stage FK would refuse it (`deleteStage` appends a
+  // non-reversible `stage_deleted`, so an older undo of that stage's
+  // generation is still reachable behind it).
+  const stageIds = [...new Set(snapshots.map((s) => s.stage_id!))];
+  const liveStages = new Set(
+    stageIds.length === 0
+      ? []
+      : (await tx<{ id: string }[]>`select id from stages where id in ${tx(stageIds)}`).map((r) => r.id),
+  );
+  const orphaned = snapshots.filter((s) => !liveStages.has(s.stage_id!));
+  if (orphaned.length > 0) {
+    log.warn(
+      { divisionId, eventType, stageIds: [...new Set(orphaned.map((s) => s.stage_id))], fixtures: orphaned.length },
+      "history: snapshot rows of a stage deleted since — skipped",
+    );
+  }
+  const ordered = snapshots
+    .filter((s) => liveStages.has(s.stage_id!))
+    .sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0));
+  const fed = byeFedSeats(ordered);
+  const byeFed = (s: FixtureSnapshot, slot: 1 | 2, entrantId: string | null | undefined) =>
+    entrantId != null && fed.has(`${s.id}:${slot}:${entrantId}`);
+  for (const s of ordered) {
+    const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType });
+    const courtId = court.write ? court.value : null;
+    const verdict = restoredVerdict(s);
+    // Everything the roster may have lost since resolves to what is live
+    // (`seatOf`, `liveCourt`; a pool deleted since restores as none — the FK
+    // is SET NULL, so no pool is a state the table already allows).
+    // venue_id: derived from the court being restored (`venueOf`) — never
+    // stored apart from the court it must agree with.
+    // fixture_no: its own number unless something took it since, in which
+    // case null lets the insert trigger hand out the next free one.
+    // ext_key: its own key unless a live row of the stage holds it now (see
+    // the KEPT list above) — then null, never a 23505 that sticks Undo.
+    // Feed edges are written after every row is in (below): an edge may
+    // point at a row later in this same list.
+    const inserted = await tx<{ id: string; ext_key: string | null }[]>`
+      insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
+                            home_entrant_id, away_entrant_id, scheduled_at, court_id,
+                            venue_id, schedule_locked, schedule_source, fixture_no,
+                            ext_key, lane, is_final, third_place, conditional,
+                            home_slot_label, away_slot_label, status, outcome)
+      values (${s.id}, ${s.stage_id!}, ${divisionId},
+              (select p.id from pools p where p.id = ${s.pool_id ?? null}),
+              ${s.round_no ?? 1}, ${s.seq_in_round ?? 1},
+              ${seatOf(tx, s.home_entrant_id, byeFed(s, 1, s.home_entrant_id))},
+              ${seatOf(tx, s.away_entrant_id, byeFed(s, 2, s.away_entrant_id))},
+              ${s.at ?? null}, ${liveCourt(tx, courtId)}, ${venueOf(tx, courtId)},
+              ${s.locked === true}, ${s.schedule_source ?? "none"},
+              (select n.no from (select ${s.fixture_no ?? null}::int as no) n
+                where not exists (select 1 from fixtures t
+                                  where t.division_id = ${divisionId} and t.fixture_no = n.no)),
+              (select k.key from (select ${s.ext_key ?? null}::text as key) k
+                where not exists (select 1 from fixtures t
+                                  where t.stage_id = ${s.stage_id!} and t.ext_key = k.key)),
+              ${s.lane ?? null}, ${s.is_final === true},
+              ${s.third_place === true}, ${s.conditional === true},
+              ${jsonb(s.home_slot_label)}, ${jsonb(s.away_slot_label)},
+              ${verdict.status}, ${jsonb(verdict.outcome)})
+      on conflict (id) do nothing returning id, ext_key`;
+    const [row] = inserted;
+    if (row === undefined) continue;
+    restored.push(s);
+    if (s.ext_key && row.ext_key === null) {
+      log.warn(
+        { divisionId, fixtureId: s.id, extKey: s.ext_key, eventType },
+        "history: a live fixture of this stage holds the restored row's ext_key — restored without it",
+      );
+    }
+  }
+  // An edge whose target no longer exists is dropped with its slot, never
+  // written as a dangling id (the FK would refuse it).
+  for (const s of restored) {
+    if (!s.winner_to_fixture && !s.loser_to_fixture) continue;
+    await tx`
+      update fixtures set
+        winner_to_fixture = (select t.id from fixtures t where t.id = ${s.winner_to_fixture ?? null}),
+        winner_to_slot = (select ${s.winner_to_slot ?? null}::int from fixtures t
+                          where t.id = ${s.winner_to_fixture ?? null}),
+        loser_to_fixture = (select t.id from fixtures t where t.id = ${s.loser_to_fixture ?? null}),
+        loser_to_slot = (select ${s.loser_to_slot ?? null}::int from fixtures t
+                         where t.id = ${s.loser_to_fixture ?? null})
+      where id = ${s.id}`;
+  }
+  // Edges INTO the restored rows that a stage declares (`cross_feeds`): the
+  // generator's own re-derivation, null edges only — see the header above.
+  await wireCrossFeeds(tx, divisionId);
+  return restored.map((s) => s.id);
+}
+
 // Execute one history event against the fixture tables. Undo/redo of a
 // fixtures_generated with no snapshots re-runs the deterministic generator.
 //
 // R10e: returns the ids of the fixtures its own statements wrote (each one
 // `returning id`), so a caller publishes exactly those, never the payload's
-// list — a row the `status <> 'decided'` filter skipped was not changed.
+// list — a row the `unplayed` filter skipped was not changed.
 async function execute(
   tx: Tx,
   divisionId: string,
@@ -151,39 +488,44 @@ async function execute(
     // after a restore), not merely a rename.
     case "schedule_applied":
     case "schedule_shifted": {
-      const moves = (p.moves as { fixture: string; to: { at: string | null; court: string | null } }[]) ?? [];
+      const moves =
+        (p.moves as { fixture: string; to: { at: string | null; court: string | null; venue?: unknown } }[]) ?? [];
       for (const m of moves) {
         const court = resolveCourtWrite(m.to.court, { divisionId, fixtureId: m.fixture, eventType: event.type });
         if (court.write) {
-          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${court.value}
-                   where id = ${m.fixture} and status <> 'decided' returning id`);
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${liveCourt(tx, court.value)},
+                                                             venue_id = ${venueBack(tx, court.value, m.to)}
+                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}
-                   where id = ${m.fixture} and status <> 'decided' returning id`);
+                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
         }
       }
       break;
     }
     case "schedule_edited": {
-      const to = p.to as { at: string | null; court: string | null; locked?: boolean };
+      const to = p.to as { at: string | null; court: string | null; venue?: unknown; locked?: boolean };
       const court = resolveCourtWrite(to.court, { divisionId, fixtureId: p.fixture, eventType: event.type });
       if (court.write) {
         wrote(await tx<{ id: string }[]>`
-          update fixtures set scheduled_at = ${to.at}, court_id = ${court.value},
+          update fixtures set scheduled_at = ${to.at}, court_id = ${liveCourt(tx, court.value)},
+                              venue_id = ${venueBack(tx, court.value, to)},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and status <> 'decided' returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
       } else {
         wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and status <> 'decided' returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
       }
       break;
     }
     case "schedule_cleared": {
       for (const s of (p.cleared as FixtureSnapshot[]) ?? []) {
-        wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = null, court_id = null
-                 where id = ${s.id} and status <> 'decided' returning id`);
+        // The venue goes with a court; a venue held with no court stays.
+        wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = null, court_id = null,
+                                                           venue_id = case when court_id is null then venue_id end
+                 where id = ${s.id} and ${unplayed(tx)} returning id`);
       }
       break;
     }
@@ -191,11 +533,12 @@ async function execute(
       for (const s of (p.restored as FixtureSnapshot[]) ?? []) {
         const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
         if (court.write) {
-          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${court.value}
-                   where id = ${s.id} and status <> 'decided' returning id`);
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${liveCourt(tx, court.value)},
+                                                             venue_id = ${venueWith(tx, court.value)}
+                   where id = ${s.id} and ${unplayed(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}
-                   where id = ${s.id} and status <> 'decided' returning id`);
+                   where id = ${s.id} and ${unplayed(tx)} returning id`);
         }
       }
       break;
@@ -213,7 +556,7 @@ async function execute(
         // caller refreshes the division's player stats when one did.
         const removed = await tx<{ id: string; scored: boolean }[]>`
           with gone as (
-            delete from fixtures where id in ${tx(ids)} and status <> 'decided' returning id
+            delete from fixtures where id in ${tx(ids)} and ${unplayed(tx)} returning id
           )
           select gone.id, exists (select 1 from score_events se where se.fixture_id = gone.id) as scored
           from gone`;
@@ -223,23 +566,9 @@ async function execute(
       break;
     }
     case "pool_entrants_restored": {
-      // P9 dispatch #9: this INSERT bypassed resolveCourtWrite entirely
-      // (review wave 1, finding 1 only touched the UPDATE sites above) — a
-      // stale pre-cutover snapshot's non-uuid court raised the same 22P02
-      // here, aborting the whole undo/redo transaction. Same guard, same
-      // "unresolvable -> insert without a court, log it" fallback; there is
-      // no existing row to "leave untouched" the way an UPDATE can, so the
-      // safe fallback for a fresh INSERT is court_id = null.
-      for (const s of (p.fixtures as FixtureSnapshot[]) ?? []) {
-        const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
-        wrote(await tx<{ id: string }[]>`
-          insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
-                                home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
-          values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
-                  ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
-                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
-          on conflict (id) do nothing returning id`);
-      }
+      // The raw re-insert of `clearPoolEntrants`'s snapshot — see
+      // `restoreFixtures` for what comes back and the court guard.
+      written.push(...(await restoreFixtures(tx, divisionId, (p.fixtures as FixtureSnapshot[]) ?? [], event.type)));
       break;
     }
     case "fixtures_generated": {
@@ -325,31 +654,58 @@ async function stepWrite(
       throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
     const ledger = await loadLedger(tx, divisionId);
-    const decided = await decidedFixtureIds(tx, divisionId);
+    const played = await playedFixtureIds(tx, divisionId);
     let result;
     try {
       result =
         direction === "undo"
-          ? engineUndo(ledger, meta.edit_watermark, decided)
-          : engineRedo(ledger, meta.edit_watermark, decided);
+          ? engineUndo(ledger, meta.edit_watermark, played)
+          : engineRedo(ledger, meta.edit_watermark, played);
     } catch (err) {
       toEngineError(err);
     }
-    // Undoing a generation needs the row snapshots for redo — enrich before
-    // the delete so the appended event is self-contained.
-    if (result.event.type === "fixtures_cleared" && result.event.payload.fixtures === undefined) {
+    // A delete-side event records the rows it deletes AS THEY STAND NOW —
+    // before the delete, so the appended event is self-contained. (A plain
+    // Redo of a generation never reads them: it re-runs the generator. They
+    // are re-inserted when a later undo walks back past this one — below.)
+    //
+    // ALWAYS a fresh read, never the snapshot the event inherited: an undo of
+    // a restore (`fixtures_generated` / `pool_entrants_restored` carrying
+    // rows) and a redo of a clear both hand back the payload of the event
+    // they invert or copy, whose snapshot is from BEFORE the restore. It used
+    // to be kept whenever present, so a change made outside the ledger since
+    // the restore — a seed fill (`confirmSeedProposal`), any writer that
+    // appends no division event — was deleted here and quietly reverted by
+    // the next restore.
+    if (result.event.type === "fixtures_cleared") {
       const ids = (result.event.payload.fixture_ids as string[]) ?? [];
-      if (ids.length > 0) {
-        // P9 pass 3a: `court` is a courts.id now (aliased off court_id, not
-        // the legacy court_label) — this snapshot rides on `fixtures_cleared`
-        // and its redo re-inserts these rows verbatim (below), so a label
-        // here would silently write a display string into an id column.
-        const rows = await tx<FixtureSnapshot[]>`
-          select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
-                 away_entrant_id, scheduled_at::text as at, court_id as court
-          from fixtures where id in ${tx(ids)}`;
-        result.event.payload.fixtures = rows;
-      }
+      if (ids.length > 0) result.event.payload.fixtures = await snapshotFixtures(tx, { ids });
+    } else if (result.event.type === "pool_entrants_cleared") {
+      const ids = ((result.event.payload.fixtures as FixtureSnapshot[]) ?? []).map((f) => f.id);
+      result.event.payload.fixtures = await snapshotFixtures(tx, { ids });
+    }
+    // ...and a restore restores the rows as they were LAST deleted: the
+    // snapshot of the newest delete-side event of the same rows, never merely
+    // the one it inverts. The two differ whenever the step inverts an older
+    // delete: Undo after a Redo inverts the ORIGINAL clear, not the redo's
+    // copy (the engine's `redo` moves the watermark back onto the original);
+    // walking back past a restore deletes the rows again (the Undo of that
+    // restore, an `__undo_of` inverse) and then inverts the delete the
+    // restore had undone. Either way the older snapshot predates a change
+    // made while the rows were back, and the round trip reverted it.
+    const restoring =
+      result.event.type === "pool_entrants_restored" ||
+      (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined);
+    if (restoring) {
+      const rows = snapshotIdKey(result.event.payload.fixtures);
+      // Only a restore that names its rows, and only a DELETE of them: a
+      // payload with no snapshot keys as `undefined`, and would otherwise
+      // match any event that carries none.
+      const newest =
+        rows === undefined
+          ? undefined
+          : ledger.findLast((e) => DELETE_SIDE_EVENTS.has(e.type) && snapshotIdKey(e.payload.fixtures) === rows);
+      if (newest !== undefined) result.event.payload.fixtures = newest.payload.fixtures;
     }
     const effects = { scoredFixtureRemoved: false };
     const fixtureIds = await execute(tx, divisionId, result.event, effects);
@@ -360,24 +716,13 @@ async function stepWrite(
       result.event.type === "fixtures_generated" && result.event.payload.fixtures === undefined
         ? ((result.event.payload.stage_id as string) ?? undefined)
         : undefined;
-    // A fixtures_generated with snapshots re-inserts directly.
-    //
-    // P9 dispatch #9: this is history.ts's SECOND raw insert — it never
-    // routes through execute() at all, so it also bypassed resolveCourtWrite
-    // (review wave 1, finding 1 only touched execute()'s own UPDATE sites).
-    // Same guard, same "unresolvable -> insert without a court, log it"
-    // fallback as pool_entrants_restored above.
+    // A fixtures_generated with snapshots re-inserts directly — the undo of
+    // an undone generation (Undo past a later edit, or a save-point restore).
+    // It never routes through execute(); `restoreFixtures` is shared with
+    // pool_entrants_restored there, so both inverses restore the same row.
     if (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined) {
-      for (const s of (result.event.payload.fixtures as FixtureSnapshot[]) ?? []) {
-        const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: result.event.type });
-        fixtureIds.push(...(await tx<{ id: string }[]>`
-          insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
-                                home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
-          values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
-                  ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
-                  ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
-          on conflict (id) do nothing returning id`).map((row) => row.id));
-      }
+      const snapshots = (result.event.payload.fixtures as FixtureSnapshot[]) ?? [];
+      fixtureIds.push(...(await restoreFixtures(tx, divisionId, snapshots, result.event.type)));
     }
     return {
       out: {
@@ -836,11 +1181,12 @@ export type ClearScheduleInput = z.infer<typeof ClearScheduleInput>;
 async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableFixture[]> {
   const rows = await tx<{
     id: string; stage_id: string; pool_id: string | null; round_no: number | null;
-    court_id: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
+    court_id: string | null; scheduled_at: string | null; schedule_locked: boolean;
   }[]>`
     select id, stage_id, pool_id, round_no, court_id, scheduled_at::text as scheduled_at,
-           schedule_locked, status
+           schedule_locked
     from fixtures where division_id = ${divisionId}`;
+  const played = await playedFixtureIds(tx, divisionId);
   return rows.map((f) => ({
     id: f.id,
     stageId: f.stage_id,
@@ -849,7 +1195,7 @@ async function clearableFixtures(tx: Tx, divisionId: string): Promise<ClearableF
     court: f.court_id,
     at: f.scheduled_at,
     locked: f.schedule_locked,
-    decided: f.status === "decided",
+    decided: played.has(f.id),
   }));
 }
 
@@ -937,14 +1283,10 @@ export async function clearPoolEntrants(
     if (lockState.frozen) {
       throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
-    const rows = await tx<{
-      id: string; stage_id: string; pool_id: string | null; round_no: number | null;
-      seq_in_round: number | null; home_entrant_id: string | null; away_entrant_id: string | null;
-      court_id: string | null; scheduled_at: string | null; schedule_locked: boolean; status: string;
-    }[]>`
-      select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id, away_entrant_id,
-             court_id, scheduled_at::text as scheduled_at, schedule_locked, status
-      from fixtures where pool_id = ${poolId}`;
+    // The snapshot IS the read: the same row `pool_entrants_restored` puts
+    // back on Undo (`snapshotFixtures` / `restoreFixtures` above).
+    const rows = await snapshotFixtures(tx, { poolId });
+    const played = await playedFixtureIds(tx, divisionId);
     let result;
     try {
       result = engineRemovePool(
@@ -953,21 +1295,11 @@ export async function clearPoolEntrants(
           stageId: f.stage_id,
           poolId: f.pool_id,
           roundNo: f.round_no,
-          court: f.court_id,
-          at: f.scheduled_at,
-          locked: f.schedule_locked,
-          decided: f.status === "decided",
-          snapshot: {
-            id: f.id,
-            stage_id: f.stage_id,
-            pool_id: f.pool_id,
-            round_no: f.round_no ?? undefined,
-            seq_in_round: f.seq_in_round ?? undefined,
-            home_entrant_id: f.home_entrant_id,
-            away_entrant_id: f.away_entrant_id,
-            at: f.scheduled_at,
-            court: f.court_id,
-          },
+          court: f.court,
+          at: f.at,
+          locked: f.locked,
+          decided: played.has(f.id),
+          snapshot: f,
         })),
         poolId,
       );

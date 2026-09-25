@@ -11,10 +11,11 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { Tip } from "@/components/ui/tip";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 // Zero imports of its own, so a client component may hold it. The CODE is the
 // contract between a schedule-lock refusal and this panel; the SENTENCE is not.
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
@@ -82,6 +83,7 @@ export function HistoryPanel({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  const plural = useMsgPlural();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [history, setHistory] = useState<HistoryOut | null>(null);
@@ -106,6 +108,11 @@ export function HistoryPanel({
    *  differently: "nothing to undo" answers a question, "undid 2 changes"
    *  confirms an action. */
   const [restored, setRestored] = useState<number | null>(null);
+  /** How many matches with a result or scoring recorded the last schedule
+   *  clear left in place (`skipped.decided` — the server's played set). The clear never
+   *  takes them, and a live match keeping its slot on a board just cleared,
+   *  with nothing said, reads as a clear that did not work. */
+  const [keptPlayed, setKeptPlayed] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -134,6 +141,7 @@ export function HistoryPanel({
     // organiser just took, and a stale one beside an undo would be a lie.
     setEvicted(null);
     setRestored(null);
+    setKeptPlayed(null);
     setBusy(true);
     try {
       await fn();
@@ -163,6 +171,11 @@ export function HistoryPanel({
         // sentence to decide how to render it breaks the moment the sentence is
         // reworded, which is exactly what `@/lib/schedule-lock` makes cheap.
         setError(msg("history.error.frozen"));
+      } else if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) {
+        // An undo/redo whose change touches a match that has started or
+        // finished. The server's sentence is English; say it locally, off the
+        // code, like the two refusals above.
+        setError(msg("history.error.played"));
       } else {
         // Deliberately NOT blanket-suppressed. Every refusal this client can
         // recognise now has its own sentence; what is left is the unanticipated
@@ -380,19 +393,14 @@ export function HistoryPanel({
               data-testid="history-restore-notice"
               className="rounded-md bg-purple-50 px-2.5 py-1.5 text-[11px] leading-snug text-purple-800"
             >
-              {/* `msg` over the two plural forms, not `usePlural`: that hook
-                  THROWS outside a DictProvider, and this panel is mounted in
-                  node-environment tests that have no provider tree (`useMsg`
-                  falls back to the English catalog there, which is the
-                  production copy). All four shipped locales use one/other, so
-                  picking the form here loses nothing a plural runtime would
-                  give — and a fifth locale with more categories would need a
-                  provider-safe plural hook anyway. */}
+              {/* `useMsgPlural`, not `usePlural`: that hook THROWS outside a
+                  DictProvider, and this panel is mounted in node-environment
+                  tests that have no provider tree; this one falls back to the
+                  English catalog there, which is the production copy. And the
+                  locale's own plural rule, not `=== 1` (review 4 of #857). */}
               {restored === 0
                 ? msg("history.restore.noop")
-                : restored === 1
-                  ? msg("history.restore.done.one")
-                  : msg("history.restore.done.other", { count: String(restored) })}
+                : plural("history.restore.done", restored)}
             </p>
           )}
           {evicted && (
@@ -640,16 +648,31 @@ export function HistoryPanel({
                 tone: "danger",
               });
               if (!ok) return;
-              void run(() =>
-                apiV1("/api/v1/schedule/clear", {
-                  method: "POST",
-                  json: { division_id: divisionId, scope: { excludeLocked: true }, confirm: true },
-                }),
-              );
+              void run(async () => {
+                const out = await apiV1<{ cleared: number; skipped: { locked: number; decided: number } }>(
+                  "/api/v1/schedule/clear",
+                  {
+                    method: "POST",
+                    json: { division_id: divisionId, scope: { excludeLocked: true }, confirm: true },
+                  },
+                );
+                setKeptPlayed(out.skipped.decided);
+              });
             }}
           >
             {msg("history.danger.clear")}
           </button>
+          {/* The locked ones are the danger zone's own sentence above; this
+              says the played ones, which no control on this page pins.
+              `useMsgPlural` for the reason given at the restore notice. */}
+          {keptPlayed !== null && keptPlayed > 0 && (
+            <p
+              data-testid="schedule-clear-kept"
+              className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800"
+            >
+              {plural("history.danger.keptPlayed", keptPlayed)}
+            </p>
+          )}
         </div>
       )}
     </section>

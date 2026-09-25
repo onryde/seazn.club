@@ -115,9 +115,10 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AiPlanRequest, AiPlanResponse } from "@/server/api-v1/schemas";
 import { AiSchedulePlan, SINGLE_SYSTEM_PROMPT } from "./schedule-ai-prompt";
+import { playedFixtureIds } from "./fixture-results-sql";
 import type { ConflictDetail, CourtCalendar } from "@seazn/engine/scheduling";
 import {
-  MOVABLE_STATUS,
+  isMovable,
   divisionFixtures,
   withCourtNames,
   divisionLockState,
@@ -886,7 +887,10 @@ export async function buildSchedulePack(
     const courtDirectory = buildCourtDirectory(courtDirRows);
 
     const all = await divisionFixtures(tx, divisionId);
-    const candidates = all.filter((f) => f.status === MOVABLE_STATUS);
+    // Not a fixture that holds a result (`isMovable`): it stays in `all`, so
+    // it is fixed occupancy below like any decided one.
+    const played = await playedFixtureIds(tx, divisionId);
+    const candidates = all.filter((f) => isMovable(f, played));
     // Scope only narrows a repair round; generate/refine re-plan the whole set.
     const movable = opts.mode === "repair" ? candidates.filter((f) => inScope(f, opts.scope)) : candidates;
 

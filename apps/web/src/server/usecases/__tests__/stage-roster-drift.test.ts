@@ -474,18 +474,24 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
     });
     const { fixtures } = await generateStageFixtures(auth, stage!.id);
     // 4 entrants: a clean bracket, no byes — every round-1 fixture already
-    // has both sides filled. Simulate a walkover the way withdrawal.ts's
-    // core.forfeit really leaves it: 'forfeited' status, BOTH entrant ids
-    // still populated (the cascade never nulls the FK, only appends a
-    // scoring event) — append-event.ts:116 maps core.forfeit to this exact
-    // status, so it is indistinguishable from a bye by status alone.
+    // has both sides filled. The walkover comes from the REAL cascade
+    // (review 3 of #857, N2): after the start, withdrawal.ts posts
+    // `core.forfeit`, which append-event.ts maps to 'forfeited' with BOTH
+    // entrant ids still populated — indistinguishable from a bye by status
+    // alone. It blocks through that score event: a walkover counts as a
+    // result only with evidence, so a raw status write no longer stands in.
     const round1 = fixtures.filter((f) => f.round_no === Math.min(...fixtures.map((x) => x.round_no)));
     const target = round1[0]!;
     expect(target.home_entrant_id).not.toBeNull();
     expect(target.away_entrant_id).not.toBeNull();
-    await sql`
-      update fixtures set status = 'forfeited', outcome = ${sql.json({ kind: "award", winner: target.home_entrant_id } as never)}
-      where id = ${target.id}`;
+    await startDivision(auth, divisionId, { acknowledge_warnings: true });
+    await withdrawEntrantCascade(auth, target.away_entrant_id!);
+    const [walked] = await sql<{ status: string; home_entrant_id: string | null; away_entrant_id: string | null; events: number }[]>`
+      select f.status, f.home_entrant_id, f.away_entrant_id,
+             (select count(*)::int from score_events se where se.fixture_id = f.id) as events
+      from fixtures f where f.id = ${target.id}`;
+    expect(walked).toMatchObject({ status: "forfeited", home_entrant_id: target.home_entrant_id, away_entrant_id: target.away_entrant_id });
+    expect(walked!.events).toBeGreaterThan(0);
 
     await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({
       status: 409,

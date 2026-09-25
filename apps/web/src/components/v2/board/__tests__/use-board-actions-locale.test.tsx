@@ -46,6 +46,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { ApiV1Error } from "@/lib/client-v1";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { useBoardActions, type BoardActions } from "../use-board-actions";
 import type { BoardDivision, BoardFixture } from "../types";
 
@@ -120,5 +121,22 @@ describe("useBoardActions — fail()'s SCHEDULE_CONFLICT reason list", () => {
 
     expect(actions().error).toContain("Ganador del Grupo A");
     expect(actions().error).not.toContain("Winner of Group A");
+  });
+});
+
+// Review 3 of #857, N1: a drag or a pin on a match that holds a result is
+// refused by the server (schedule.ts `moveFixture`) in an English sentence.
+// The board says it in the reader's language, off the code.
+describe("useBoardActions — fail()'s played refusal", () => {
+  it("a refused drag reads the played copy in this org's locale, never the server's English", async () => {
+    const english = "this match has a result or scoring recorded, so it can't be moved or locked";
+    net.reject = () => Promise.reject(new ApiV1Error(english, 422, PLAYED_REFUSAL_CODE));
+
+    const actions = driveHook();
+    await actions().moveCard(TBD_ID, "2026-09-01T10:00:00.000Z", "Court 1");
+
+    const { msgFor } = await import("@/lib/messages-i18n");
+    expect(actions().error).toBe(msgFor("es", "schedule.error.played"));
+    expect(actions().error).not.toBe(english);
   });
 });

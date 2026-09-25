@@ -179,6 +179,16 @@ describe("constraints panel i18n — newly-converted strings", () => {
     const keyPattern = /"(constraints\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)"/g;
     let m: RegExpExecArray | null;
     while ((m = keyPattern.exec(src))) found.add(m[1]);
+    // A plural("k", n) base key lives in the dictionaries only as k.one + k.other.
+    const pluralPattern = /plural\(\s*"(constraints\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)"/g;
+    let plurals = 0;
+    while ((m = pluralPattern.exec(src))) {
+      plurals++;
+      found.delete(m[1]);
+      found.add(`${m[1]}.one`);
+      found.add(`${m[1]}.other`);
+    }
+    expect(plurals, "source scan found no plural() keys; the plural branch is untested").toBeGreaterThan(0);
 
     // A regression net on the scan itself: if this collapses toward 0, the
     // loop below passes vacuously (0 checks) instead of proving anything.

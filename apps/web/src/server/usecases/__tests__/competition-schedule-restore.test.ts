@@ -37,6 +37,9 @@ import { JOINT_APPLY_EVENT } from "../competition-schedule-ai";
 import { restoreCompetitionSchedule } from "../competition-schedule-restore";
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { seedOrg } from "./_seed";
 
 /**
@@ -556,6 +559,29 @@ describe.skipIf(!HAS_DB)("restoreCompetitionSchedule (#386)", () => {
     // `parse(onWire)` against `onWire`, and zod strips an undeclared key from
     // the parse alone, so a schema that forgot `code` fails this line rather
     // than passing quietly.
+    wireRoundTrip(out);
+  }, 120_000);
+
+  // Review 2 of #857, I2. A division whose rewind touches a match that has
+  // started since the apply is refused by the history results-guard — an
+  // EngineError, not an HttpError, so the spread above dropped its code and the
+  // card could only print the engine's English. It carries the code now, and
+  // the card says it locally (ai-joint-console-wiring.test.tsx).
+  it("carries the played refusal's CODE as well — an EngineError, not an HttpError", async () => {
+    const { auth, competitionId, checkpoints, divisions } = await seedAppliedJoint(2);
+    const played = divisions[1]!;
+    await startDivision(auth, played.id);
+    await scoreEvent(auth, played.fixtureIds[0]!, { expected_seq: 0, type: "core.start", payload: {} });
+
+    const out = await restoreCompetitionSchedule(auth, competitionId, {
+      checkpoints: checkpoints.map((c) => ({ division_id: c.divisionId, checkpoint_id: c.checkpointId })),
+      confirm: true,
+    });
+
+    expect(out.restored.map((r) => r.division_id)).toEqual([divisions[0]!.id]);
+    expect(out.failed).toHaveLength(1);
+    expect(out.failed[0]).toMatchObject({ division_id: played.id, code: PLAYED_REFUSAL_CODE });
+    expect(out.failed[0]!.reason, "the engine's sentence names a fixture id").not.toContain(played.fixtureIds[0]!);
     wireRoundTrip(out);
   }, 120_000);
 

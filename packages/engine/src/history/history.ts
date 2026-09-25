@@ -233,7 +233,10 @@ function guard(op: ReversibleOp, payload: Payload, decided: ReadonlySet<string>)
   if (hit !== undefined) {
     throw new HistoryError(
       "UNDO_BLOCKED_HAS_RESULTS",
-      `fixture ${hit} already has a result — force-clear results first`,
+      // No fixture id and no remedy that does not exist: this sentence
+      // reaches organisers (a joint AI undo reports it per division). The
+      // app says it in the reader's own language off the CODE.
+      "a match this change touches has started or finished, so it can't be undone or redone",
     );
   }
 }
@@ -340,7 +343,7 @@ export function removeEntrantsFromPool(
   if (decided) {
     throw new HistoryError(
       "UNDO_BLOCKED_HAS_RESULTS",
-      `fixture ${decided.id} in this pool already has a result`,
+      "a match in this pool has started or finished, so its entrants can't be removed",
     );
   }
   return {

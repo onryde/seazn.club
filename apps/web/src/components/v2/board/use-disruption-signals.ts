@@ -12,6 +12,7 @@
 // unit-tested in isolation; `useDisruptionSignals` is the thin memo the board
 // renders through.
 import { useMemo } from "react";
+import { boardMovable } from "./types";
 
 export type DisruptionReason = "blackout" | "court_gone" | "outside_window" | "postponed";
 
@@ -25,6 +26,9 @@ export interface DisruptionFixtureInput {
    *  null for anything scheduled since the cutover) is never compared. */
   court_id: string | null;
   status: string;
+  /** The board read's flag for a `scheduled` match that holds a result (a start
+   *  taken back) — see `BoardFixture.held`. */
+  held?: boolean;
 }
 
 /** The config fields the signal reads — a structural subset of ScheduleConfig /
@@ -52,14 +56,18 @@ export interface DisruptionResult {
 }
 
 /**
- * Statuses that hold a slot yet remain re-schedulable. Mirrors the board's
- * `movable = status === "scheduled"` (lib/schedule-board / fixture-block), plus
+ * Fixtures that hold a slot yet remain re-schedulable: what the board itself
+ * can move (`boardMovable` — `scheduled` and holding no result), plus
  * `postponed`, which shouldn't be holding a slot at all. Every other status is
  * live or finished (in_play, decided, finalized, abandoned, forfeited,
  * cancelled) and is NEVER flagged — you don't reschedule a match that's already
- * been played or is underway.
+ * been played or is underway. Nor a `held` one: a start taken back reads
+ * `scheduled`, but every builder keeps it in place (`isMovable`), so flagging it
+ * would pre-arm a repair that nothing can perform.
  */
-const FLAGGABLE_STATUS = new Set(["scheduled", "postponed"]);
+function flaggable(f: DisruptionFixtureInput): boolean {
+  return f.status === "postponed" || boardMovable(f);
+}
 
 /** Canonical reason order so the reasons array is deterministic for tests. */
 const REASON_ORDER: readonly DisruptionReason[] = [
@@ -101,9 +109,9 @@ export function computeDisruptions(
   let earliestMs: number | null = null;
 
   for (const f of fixtures) {
-    // Live/finished fixtures are never flagged; a fixture with no slot (in the
-    // tray) has nothing to be disrupted.
-    if (!FLAGGABLE_STATUS.has(f.status) || f.scheduled_at === null) continue;
+    // Live, finished and held fixtures are never flagged; a fixture with no slot
+    // (in the tray) has nothing to be disrupted.
+    if (!flaggable(f) || f.scheduled_at === null) continue;
     const startMs = toMs(f.scheduled_at);
     if (Number.isNaN(startMs)) continue;
     const endMs = startMs + durMs;

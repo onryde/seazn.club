@@ -91,6 +91,18 @@ export interface BoardFixture {
    *  full `FixtureRow` still satisfies this shape; the board read never sends
    *  one.) */
   ext_key?: string | null;
+  /** A `scheduled` row that holds a result or scoring — a start taken back, a
+   *  walkover recorded in play (`fixtureHasResultSql`, server side). Every
+   *  board write refuses to move or pin it, so the board offers neither
+   *  (review 4 of #857). Sent only when true (`listDivisionFixturesForBoard`);
+   *  any other status already says it is not movable. */
+  held?: boolean;
+}
+
+/** Whether the board may move or pin this card: `scheduled`, and holding no
+ *  result (`held`). The server refuses the rest (schedule.ts `isMovable`). */
+export function boardMovable(f: Pick<BoardFixture, "status" | "held">): boolean {
+  return f.status === "scheduled" && f.held !== true;
 }
 
 export interface BoardConfig {

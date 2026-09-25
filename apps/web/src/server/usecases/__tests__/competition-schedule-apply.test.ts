@@ -44,6 +44,9 @@ import {
   type CompetitionApplyDivision,
   type CompetitionApplyOut,
 } from "../competition-schedule-apply";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
+import { undoDivision } from "../history";
 import { seedCourts, seedOrg } from "./_seed";
 
 /**
@@ -499,6 +502,28 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     expect((await venueOf(board.alpha.id)).every((v) => v === venueB)).toBe(true);
   });
 
+  // Review 3 of #857, m5. A fixture can stand in a venue with no court; the
+  // joint step named courts only, so its Undo took the court off and left no
+  // venue behind. The step now carries the venue each side stood in.
+  it("undoing a joint apply gives venue-only fixtures their own venue back", async () => {
+    const [{ id: hall }] = await sql<{ id: string }[]>`
+      insert into venues (org_id, name) values (${auth.orgId}, 'Own Hall') returning id`;
+    await sql`update fixtures set venue_id = ${hall} where division_id = ${board.alpha.id}`;
+    const placed = async () =>
+      sql<{ court_id: string | null; venue_id: string | null }[]>`
+        select court_id, venue_id from fixtures where division_id = ${board.alpha.id} order by id`;
+    const before = await placed();
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.every((r) => r.court_id === null && r.venue_id === hall)).toBe(true);
+
+    const { alpha } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, { divisions: [alpha], source: "ai", ai: AI });
+    expect((await placed()).every((r) => r.court_id === board.courts.court1 && r.venue_id !== hall)).toBe(true);
+
+    expect((await undoDivision(auth, board.alpha.id)).applied.type).toBe("schedule_applied");
+    expect(await placed()).toEqual(before);
+  }, 60_000);
+
   it("writes every division's assignments in one go", async () => {
     const { alpha, bravo } = await clean();
     const out = await applyCompetitionSchedule(auth, board.competitionId, {
@@ -523,6 +548,73 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
 
     // A clean, well-spaced board: no conflict is invented.
     expect(out.conflicts).toEqual([]);
+  }, 60_000);
+
+  // Review 3 of #857, N1. A start taken back leaves the row `scheduled` WITH its
+  // events. Written by an apply, it made a ledger step the results-guard
+  // refuses, and the division's Undo stuck on it.
+  it("a voided start in the plan is skipped and counted, and the division's Undo still completes", async () => {
+    const { alpha } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, { divisions: [alpha], source: "ai", ai: AI });
+    await startDivision(auth, board.alpha.id);
+    const voided = board.alpha.fixtureIds[0]!;
+    await scoreEvent(auth, voided, { expected_seq: 0, type: "core.start", payload: {} });
+    const [start] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${voided} and seq = 1`;
+    await scoreEvent(auth, voided, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+    const before = (await slots(board.alpha.id)).find((r) => r.id === voided);
+    expect(before?.court).toBe(board.courts.court1);
+
+    // The same times on Alpha's own second court: a legal board either way.
+    const again = lineUp(board.alpha, await divisionSeq(board.alpha.id), board.courts.court2, 0);
+    const out = await applyCompetitionSchedule(auth, board.competitionId, { divisions: [again], source: "ai", ai: AI });
+
+    expect(out).toMatchObject({ applied: board.alpha.fixtureIds.length - 1, skipped: 1 });
+    expect((await slots(board.alpha.id)).find((r) => r.id === voided)).toEqual(before);
+    expect((await undoDivision(auth, board.alpha.id)).applied.type).toBe("schedule_applied");
+  }, 60_000);
+
+  // Review 4 of #857, Minor 1. A division whose every listed fixture was
+  // skipped still got an empty `schedule_applied` step and a seq bump, while
+  // the per-stage apply wrote none — two answers to one question. Neither
+  // writes a step now, and each division's current seq comes back.
+  it("a division whose every listed fixture holds a result writes no step, and its seq comes back unchanged", async () => {
+    const { alpha, bravo } = await clean();
+    await applyCompetitionSchedule(auth, board.competitionId, { divisions: [alpha], source: "ai", ai: AI });
+    await startDivision(auth, board.alpha.id);
+    const voided = board.alpha.fixtureIds[0]!;
+    await scoreEvent(auth, voided, { expected_seq: 0, type: "core.start", payload: {} });
+    const [start] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${voided} and seq = 1`;
+    await scoreEvent(auth, voided, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+    const alphaSeq = await divisionSeq(board.alpha.id);
+    const steps = async (divisionId: string) =>
+      Number((await sql<{ n: number }[]>`
+        select count(*)::int as n from division_events where division_id = ${divisionId}`)[0]!.n);
+    const alphaSteps = await steps(board.alpha.id);
+
+    const onlyVoided: CompetitionApplyDivision = {
+      division_id: board.alpha.id,
+      expected_seq: alphaSeq,
+      assignments: [alpha.assignments[0]!].map((a) => ({ ...a, court_id: board.courts.court2 })),
+    };
+    const bravoNow = { ...bravo, expected_seq: await divisionSeq(board.bravo.id) };
+    const out = await applyCompetitionSchedule(auth, board.competitionId, {
+      divisions: [onlyVoided, bravoNow],
+      source: "ai",
+      ai: AI,
+    });
+
+    expect(out).toMatchObject({ applied: bravo.assignments.length, skipped: 1 });
+    expect(await steps(board.alpha.id)).toBe(alphaSteps);
+    expect(await divisionSeq(board.alpha.id)).toBe(alphaSeq);
+    expect(out.divisions).toEqual([
+      { division_id: board.alpha.id, seq: alphaSeq },
+      { division_id: board.bravo.id, seq: await divisionSeq(board.bravo.id) },
+    ]);
+    expect(out.divisions[1]!.seq).toBe(bravoNow.expected_seq + 1);
+    // The published shape carries it.
+    expect(ApplyCompetitionScheduleResult.parse(out).divisions).toEqual(out.divisions);
   }, 60_000);
 
   it("a stale expected_seq on the SECOND division rolls back the FIRST", async () => {
@@ -804,6 +896,8 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // Real engine conflicts, carrying `direct`, through the published shape.
     const parsed = ApplyCompetitionScheduleResult.parse({
       applied: 0,
+      skipped: 0,
+      divisions: [],
       conflicts: blocking.conflicts,
     });
     expect(parsed.conflicts.some((c) => c.direct === true)).toBe(true);

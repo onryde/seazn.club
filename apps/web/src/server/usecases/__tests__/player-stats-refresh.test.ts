@@ -218,7 +218,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { importEvents } from "../event-import";
 import { putLineup } from "../fixtures";
-import { redoDivision, undoDivision } from "../history";
+import { undoDivision } from "../history";
 import { mergePersons, reverseMerge } from "../person-merge";
 import { startDivision } from "../schedule";
 import {
@@ -240,6 +240,8 @@ import {
 import { REFRESH_TIMING, reconcileCheckCap, refreshDivisionPlayerStats } from "../player-stats-refresh";
 import { publicCompetitionHub } from "../public";
 import { finalizeFixture, scoreEvent } from "../scoring";
+import { EngineError } from "@seazn/engine/core";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { createStages, deleteStage, generateStageFixtures } from "../stages";
 import { football } from "@seazn/engine/sports/football";
 import { seedFootballCatalog, seedOrg } from "./_seed";
@@ -793,20 +795,27 @@ describe.skipIf(!HAS_DB)("a result refreshes player stats after the response", (
 });
 
 describe.skipIf(!HAS_DB)("writes that change a fold's input without a result (review m3/m4)", () => {
-  it("a history undo that deletes a scored fixture queues a refresh that takes its goals off", async () => {
+  // History never deletes a scored fixture (review 2 of #857, I3): its played
+  // set is rebuild's (`fixtureHasResultSql`), and a row with events on it is
+  // played whatever its status says. An abandoned match is the case the old
+  // three-status test let through — deleted, its goals cascading away.
+  it("a history undo refuses to delete a scored fixture — its goals stay folded and nothing is queued", async () => {
     const s = await scene();
-    const live = match(s, s.fixture("Reds", "Blues").id);
-    await live.start();
-    await live.goal(s.ada, s.reds);
-    // A stats read folded the live goal in.
+    const abandoned = match(s, s.fixture("Reds", "Blues").id);
+    await abandoned.start();
+    await abandoned.goal(s.ada, s.reds);
+    await abandoned.abandon();
+    await runAfterResponse();
+    // A stats read folded the abandoned match's goal in.
     await withTenant(s.auth.orgId, (tx) => recomputePlayerStats(tx, s.divisionId));
     expect(await goalsOf(s.divisionId, s.ada)).toBe(1);
 
-    const out = await undoDivision(s.auth, s.divisionId);
-    expect(out.applied.type).toBe("fixtures_cleared");
-    expect(probe.tasks).toHaveLength(1);
+    await expect(undoDivision(s.auth, s.divisionId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, PLAYED_REFUSAL_CODE),
+    );
+    expect(probe.tasks).toHaveLength(0);
     await runAfterResponse();
-    expect(await goalsOf(s.divisionId, s.ada)).toBeNull();
+    expect(await goalsOf(s.divisionId, s.ada)).toBe(1);
   }, 60_000);
 
   it("a history undo that deletes only fixtures with no events queues nothing", async () => {
@@ -818,22 +827,32 @@ describe.skipIf(!HAS_DB)("writes that change a fold's input without a result (re
 
   it("a scored fixture deleted and as many events recorded elsewhere is NOT current: the refresh folds", async () => {
     const s = await scene();
-    const live = match(s, s.fixture("Reds", "Blues").id);
-    await live.start();
-    await live.goal(s.ada, s.reds);
-    await live.half();
+    const abandoned = match(s, s.fixture("Reds", "Blues").id);
+    await abandoned.start();
+    await abandoned.goal(s.ada, s.reds);
+    await abandoned.abandon();
+    await runAfterResponse();
     // A stats read folded three events, Ada's goal among them.
     await withTenant(s.auth.orgId, (tx) => recomputePlayerStats(tx, s.divisionId));
     expect(await goalsOf(s.divisionId, s.ada)).toBe(1);
 
-    // The deletion's own refresh never runs (a machine stopped, say).
-    await undoDivision(s.auth, s.divisionId);
+    // History refuses to take a scored fixture (see the undo case above); a
+    // stage delete still does — its guard is status-only, and an abandoned
+    // match's events go with its row. The deletion's own refresh never runs
+    // (a machine stopped, say).
+    await expect(undoDivision(s.auth, s.divisionId)).rejects.toSatisfy((err: unknown) =>
+      EngineError.is(err, PLAYED_REFUSAL_CODE),
+    );
+    const [{ stage_id: stageId }] = await sql<{ stage_id: string }[]>`
+      select stage_id from fixtures where id = ${s.fixture("Reds", "Blues").id}`;
+    await deleteStage(s.auth, stageId);
     probe.tasks.length = 0;
-    await redoDivision(s.auth, s.divisionId);
+    const [again] = await createStages(s.auth, s.divisionId, { seq: 1, kind: "league", name: "League", config: {} });
+    await generateStageFixtures(s.auth, again!.id);
     probe.tasks.length = 0;
 
     // Three new events on another fixture: the ledger holds three again. The
-    // redo regenerated the board, so the fixture is looked up afresh.
+    // board was generated afresh, so the fixture is looked up afresh.
     const [regenerated] = await sql<{ id: string }[]>`
       select id from fixtures
       where division_id = ${s.divisionId}

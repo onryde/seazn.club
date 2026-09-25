@@ -26,6 +26,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import enUi from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({
@@ -235,6 +236,22 @@ describe("HistoryPanel — a refused write says so in the reader's language", ()
       shown,
       "the server's diagnostic reached the organiser instead of the recognised sentence",
     ).not.toContain("stale seq");
+  });
+
+  // Review 2 of #857, I2. An undo whose change touches a match that has
+  // started or finished is refused by the engine's results-guard; the banner
+  // used to paint its English sentence — a fixture UUID and a "force-clear"
+  // control that does not exist. The code is what the server-side test
+  // (history-restore-fidelity.test.ts) proves reaches `ApiV1Error.code`.
+  it("says the played refusal in the reader's language, never the engine's sentence", async () => {
+    const LOCAL = EN["history.error.played"]!;
+    expect(typeof LOCAL, "history.error.played is missing from en/ui.json").toBe("string");
+    const ENGINE = "a match this change touches has started or finished, so it can't be undone or redone";
+
+    const shown = await refuse(new ApiV1Error(ENGINE, 422, PLAYED_REFUSAL_CODE));
+
+    expect(shown, "the played refusal is not said in the reader's language").toBe(LOCAL);
+    expect(shown, "the engine's English reached the card").not.toBe(ENGINE);
   });
 
   it("shows no banner at all when the write succeeds", async () => {

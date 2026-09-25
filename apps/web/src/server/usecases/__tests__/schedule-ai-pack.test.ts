@@ -15,6 +15,8 @@ import { createStages, generateStageFixtures } from "../stages";
 import { validateAssignments } from "@seazn/engine/scheduling";
 import { buildSchedulePack, isBlocking, toEngineAssignments, toModelPayload, verifyConfig } from "../schedule-ai";
 import { createVenue, createCourt } from "../venues";
+import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -333,6 +335,29 @@ describe.skipIf(!HAS_DB)("buildSchedulePack (v4/01 §2)", () => {
     expect(a.pack.draft.every((d) => /[+-]\d{2}:\d{2}$/.test(String(d.scheduled_at)))).toBe(true);
     expect(a.pack.settings.constraints?.crossPersonClash).toBe("hard");
     expect(a.movableIds.size).toBe(RR);
+  });
+
+  // Review 3 of #857, N1. A start taken back leaves the row `scheduled` WITH its
+  // events; offered to the model as movable, its move became a ledger step the
+  // results-guard refuses. It is fixed court time instead, like a decided one.
+  it("a voided start is not movable: it is fixed court time in the pack", async () => {
+    const board = await seedRrBoard();
+    await startDivision(board.auth, board.divisionId, { acknowledge_warnings: true });
+    const [voided] = await sql<{ id: string }[]>`
+      select id from fixtures where division_id = ${board.divisionId} order by round_no, seq_in_round limit 1`;
+    await scoreEvent(board.auth, voided!.id, { expected_seq: 0, type: "core.start", payload: {} });
+    const [start] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${voided!.id} and seq = 1`;
+    await scoreEvent(board.auth, voided!.id, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+    const [row] = await sql<{ status: string }[]>`select status from fixtures where id = ${voided!.id}`;
+    expect(row!.status).toBe("scheduled");
+
+    const { pack, movableIds } = await buildSchedulePack(board.auth, board.divisionId, {
+      now: NOW_W2, mode: "generate", instruction: "Finish by 6pm.",
+    });
+    expect(movableIds.has(voided!.id)).toBe(false);
+    expect(movableIds.size).toBe(RR - 1);
+    expect(pack.fixtures.obstacles).toHaveLength(1);
   });
 
   it("repair scope excludes out-of-scope fixtures from movable and adds them as obstacles", async () => {

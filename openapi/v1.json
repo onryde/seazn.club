@@ -31222,7 +31222,12 @@
                       "properties": {
                         "applied": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "skipped": {
+                          "type": "integer",
+                          "minimum": 0,
                           "maximum": 9007199254740991
                         },
                         "conflicts": {
@@ -31405,11 +31410,18 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
                         "applied",
-                        "conflicts"
+                        "skipped",
+                        "conflicts",
+                        "seq"
                       ],
                       "additionalProperties": false
                     },
@@ -31422,7 +31434,8 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "applied": -9007199254740991,
+                    "applied": 0,
+                    "skipped": 0,
                     "conflicts": [
                       {
                         "fixture_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -31430,7 +31443,8 @@
                         "blocking": true,
                         "detail": "example"
                       }
-                    ]
+                    ],
+                    "seq": 0
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -91264,8 +91278,36 @@
                       "properties": {
                         "applied": {
                           "type": "integer",
-                          "minimum": -9007199254740991,
+                          "minimum": 0,
                           "maximum": 9007199254740991
+                        },
+                        "skipped": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "divisions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "division_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "seq": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "division_id",
+                              "seq"
+                            ],
+                            "additionalProperties": false
+                          }
                         },
                         "conflicts": {
                           "type": "array",
@@ -91429,6 +91471,8 @@
                       },
                       "required": [
                         "applied",
+                        "skipped",
+                        "divisions",
                         "conflicts"
                       ],
                       "additionalProperties": false
@@ -91442,7 +91486,14 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "applied": -9007199254740991,
+                    "applied": 0,
+                    "skipped": 0,
+                    "divisions": [
+                      {
+                        "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "seq": 0
+                      }
+                    ],
                     "conflicts": [
                       {
                         "fixtureId": "example",

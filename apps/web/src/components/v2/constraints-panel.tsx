@@ -8,7 +8,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { Tip } from "@/components/ui/tip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { RestFloorNote, restFloorNoteShown } from "@/components/v2/rest-floor-note";
@@ -371,6 +371,8 @@ export function ConstraintsPanel({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  // The locale's own plural rule, not `=== 1`: French says 0 in the singular.
+  const plural = useMsgPlural();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [error, setError] = useState<string | null>(null);
@@ -394,6 +396,10 @@ export function ConstraintsPanel({
     constraints,
   };
   const [shiftMinutes, setShiftMinutes] = useState(15);
+  // What the last shift did (review 3 of #857, m2): how many it moved, and how
+  // many it left in place because they hold a result. The locked ones are the
+  // hint's own sentence below.
+  const [shiftOutcome, setShiftOutcome] = useState<{ shifted: number; kept: number } | null>(null);
   const [report, setReport] = useState<{ worst: WaitRow[] } | null>(null);
   // Blackouts are edited as a DRAFT and committed with one button, unlike the
   // instant-save rows above. A datetime pair cannot be saved per keystroke, and
@@ -993,18 +999,22 @@ export function ConstraintsPanel({
                     confirmLabel: msg("confirm.shiftAll.label"),
                   });
                   if (!ok) return;
-                  void run(
-                    () =>
-                      apiV1("/api/v1/schedule/shift", {
+                  setShiftOutcome(null);
+                  void run(async () => {
+                    const out = await apiV1<{ shifted: number; skipped: { decided: number } }>(
+                      "/api/v1/schedule/shift",
+                      {
                         method: "POST",
                         json: {
                           division_id: divisionId,
                           scope: { excludeLocked: true },
                           delta_minutes: shiftMinutes,
                         },
-                      }),
-                    true,
-                  );
+                      },
+                    );
+                    // `apiV1` can resolve undefined on a dropped connection.
+                    setShiftOutcome({ shifted: out?.shifted ?? 0, kept: out?.skipped?.decided ?? 0 });
+                  }, true);
                 }}
               >
                 {msg("constraints.bulkShift.button")}
@@ -1013,6 +1023,19 @@ export function ConstraintsPanel({
             <p className="text-xs text-slate-500">
               {msg("constraints.bulkShift.hint")}
             </p>
+            {shiftOutcome !== null && (
+              <p data-testid="bulk-shift-outcome" className="text-xs text-slate-600">
+                {plural("constraints.bulkShift.done", shiftOutcome.shifted)}
+              </p>
+            )}
+            {shiftOutcome !== null && shiftOutcome.kept > 0 && (
+              <p
+                data-testid="bulk-shift-kept"
+                className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800"
+              >
+                {plural("history.danger.keptPlayed", shiftOutcome.kept)}
+              </p>
+            )}
           </div>
         )}
 
