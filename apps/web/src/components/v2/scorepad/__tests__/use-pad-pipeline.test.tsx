@@ -778,6 +778,55 @@ describe("usePadPipeline — live stream wiring (review finding 3)", () => {
     expect(listEventsSince.mock.calls, "the catch-up, once the drain has settled").toEqual([["fx-1", 1]]);
   });
 
+  // A realtime pad reads twice as it subscribes — as the channel is requested
+  // and again as it joins — and the second read can go out before the first
+  // one's rows have moved the cursor. Both then carry the same rows; the merge
+  // keys them by seq, so they land once.
+  it("the catch-up and the join read can both carry the same row — it lands in the ledger once", async () => {
+    let join!: () => void;
+    const joinsLater: RealtimeConnector = {
+      connect(params) {
+        join = () => params.onStatus(true);
+        return { unsubscribe() {} };
+      },
+    };
+    const joinWindowRow: LedgerSlotEvent = {
+      id: "foreign-join-window-1",
+      seq: 1,
+      type: "core.note",
+      payload: { text: "written while the channel joined" },
+      recorded_at: "2026-09-25T00:00:00.000Z",
+      recorded_by: "user-2",
+      device_link_id: null,
+    };
+    // Answers every read with the row, whatever the cursor: the two reads
+    // overlap by construction, not by timing.
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => [joinWindowRow]);
+    const transport: PadTransport = {
+      async appendEvent() {
+        throw new Error("not used by this test");
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      // `state: null` is reconcileAfterAck's no-op, so only the merge shapes
+      // the ledger below.
+      async fetchState() {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport, streamConnector: joinsLater }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "the catch-up, as the channel is requested").toHaveBeenCalledTimes(1);
+    expect(pad.current.events.map((e) => e.id)).toEqual(["foreign-join-window-1"]);
+
+    join();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "the join's read").toHaveBeenCalledTimes(2);
+    expect(pad.current.events.map((e) => e.id)).toEqual(["foreign-join-window-1"]);
+  });
+
   it("an inbound stream event moves the folded state to the server's own fold", async () => {
     const mod = resolveModuleClient("generic", "1.0.0");
     const cfg = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };

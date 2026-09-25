@@ -108,11 +108,11 @@ describe("useFixtureStream — realtime path", () => {
 
     // No fallback polling should have been armed once realtime confirmed —
     // advancing well past pollMs must not call listEventsSince from a timer.
-    // The one read already made is the catch-up on subscribe (its own
-    // describe block, below).
-    expect(listEventsSince).toHaveBeenCalledTimes(1);
+    // The two reads already made are the catch-up on subscribe and the one on
+    // the join (their own describe block, below).
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(listEventsSince).toHaveBeenCalledTimes(1);
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
   });
 
   it("a realtime broadcast signal triggers the SAME listEventsSince fetch a poll tick would", async () => {
@@ -131,8 +131,9 @@ describe("useFixtureStream — realtime path", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     fireStatus(true);
-    // The catch-up on subscribe has already read once; measured from here so
-    // that read cannot stand in for the signal's.
+    await vi.advanceTimersByTimeAsync(0);
+    // The catch-up on subscribe and the join have already read; measured from
+    // here so neither can stand in for the signal's.
     const readsBefore = listEventsSince.mock.calls.length;
     const deliveriesBefore = onEvents.mock.calls.length;
 
@@ -297,13 +298,14 @@ describe("useFixtureStream — catch-up on subscribe", () => {
     const { connector, fireStatus } = fakeConnector();
     mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents, fetchFn: fn, connector, listEventsSince });
     await vi.advanceTimersByTimeAsync(0);
-    fireStatus(true);
     expect(listEventsSince.mock.calls).toEqual([["fx-1", 4]]);
     expect(onEvents).toHaveBeenCalledWith(rows);
 
-    // ONE read, not a loop: a confirmed channel arms no timer.
+    // Then once on the join (the join-window test below), and no more: a
+    // confirmed channel arms no timer.
+    fireStatus(true);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(listEventsSince).toHaveBeenCalledTimes(1);
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
   });
 
   it("polling fallback: reads once as it subscribes, BEFORE the first tick is due", async () => {
@@ -401,6 +403,96 @@ describe("useFixtureStream — catch-up on subscribe", () => {
     finishDrain();
     await vi.advanceTimersByTimeAsync(0);
     expect(listEventsSince).not.toHaveBeenCalled();
+  });
+
+  // The catch-up goes out as the channel is REQUESTED, but a channel only
+  // signals writes made after it is JOINED. A write in between is neither
+  // read nor signalled, so the join reads once more.
+  it("realtime: a write in the join window is read when the channel confirms", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const onEvents = vi.fn();
+    let written: LedgerSlotEvent[] = [];
+    const listEventsSince = vi.fn(async () => written);
+    const { connector, fireStatus } = fakeConnector();
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls, "the catch-up, as the channel is requested").toEqual([["fx-1", 4]]);
+
+    written = rows; // lands while the channel is still joining — no signal for it, ever
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls).toEqual([
+      ["fx-1", 4],
+      ["fx-1", 4],
+    ]);
+    expect(onEvents).toHaveBeenLastCalledWith(rows);
+  });
+
+  it("realtime: a confirm while the catch-up is still out waits for it, then reads — it is never dropped", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const answers: ((rows: LedgerSlotEvent[]) => void)[] = [];
+    const listEventsSince = vi.fn(
+      () =>
+        new Promise<LedgerSlotEvent[]>((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const { connector, fireStatus } = fakeConnector();
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents: () => {}, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(1);
+
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no overlap with the read still out").toHaveBeenCalledTimes(1);
+
+    answers[0]!([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "the join's read, once the catch-up has landed").toHaveBeenCalledTimes(2);
+  });
+
+  it("realtime: a channel that confirms before the catch-up goes out is read ONCE — the join read covers both", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const listEventsSince = vi.fn(async () => []);
+    const confirmsAtOnce: RealtimeConnector = {
+      connect(params) {
+        params.onStatus(true);
+        return { unsubscribe() {} };
+      },
+    };
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents: () => {}, fetchFn: fn, connector: confirmsAtOnce, listEventsSince });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 4]]);
+  });
+
+  it("realtime: a channel that drops and rejoins reads again on the rejoin — a repeated confirm does not", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const listEventsSince = vi.fn(async () => []);
+    const { connector, fireStatus } = fakeConnector();
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents: () => {},
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      pollMs: 15_000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(2); // catch-up + join
+
+    fireStatus(true); // the same status again, no drop in between
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
+
+    fireStatus(false); // dropped: polling re-arms, first tick 15s away
+    await vi.advanceTimersByTimeAsync(1_000);
+    fireStatus(true); // rejoined before that tick — writes during the drop were never signalled
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(3);
   });
 
   it("an unmount before the token door answers makes no catch-up read", async () => {

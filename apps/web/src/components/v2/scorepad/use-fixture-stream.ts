@@ -162,18 +162,26 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
       void read();
     }
 
-    /** The catch-up — it runs once, so it waits out whatever is busy rather
-     *  than being skipped. Re-checked after every wait: a drain can start
-     *  another, and a read can land in the gap. */
-    async function catchUp(): Promise<void> {
-      for (let pending = busy(); pending !== null; pending = busy()) {
-        await pending.then(
-          () => undefined,
-          () => undefined,
-        );
-        if (cancelled) return;
-      }
-      await read();
+    /** The catch-up — it is not repeated, so it waits out whatever is busy
+     *  rather than being skipped. Re-checked after every wait: a drain can
+     *  start another, and a read can land in the gap. A second request while
+     *  one is still waiting joins it: that read goes out after both, so it
+     *  covers both. */
+    let catchUpWaiting = false;
+    function catchUp(): void {
+      if (catchUpWaiting) return;
+      catchUpWaiting = true;
+      void (async () => {
+        for (let pending = busy(); pending !== null; pending = busy()) {
+          await pending.then(
+            () => undefined,
+            () => undefined,
+          );
+          if (cancelled) return;
+        }
+        catchUpWaiting = false;
+        await read();
+      })();
     }
 
     function startPolling(): void {
@@ -215,9 +223,15 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
         onStatus: (subscribed) => {
           if (cancelled) return;
           if (subscribed) {
+            // Joined, or rejoined after a drop: the channel signals only what
+            // is written from here on, and the catch-up below went out when
+            // the channel was REQUESTED. A write in between would never be
+            // read, so read once more now.
+            const joined = !realtimeConfirmed;
             realtimeConfirmed = true;
             setMode("realtime");
             stopPolling();
+            if (joined) catchUp();
           } else {
             realtimeConfirmed = false;
             startPolling();
@@ -249,8 +263,11 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
     // but it WAITS for them where a tick is skipped (`catchUp`): a pad that
     // reopens with a leftover queue drains it at mount, which is exactly when
     // this comes due.
+    //
+    // A channel that has already joined by now has read on its join (see
+    // `onStatus`), later than this would, so this one is not needed.
     void attemptRealtime().then(() => {
-      if (!cancelled) void catchUp();
+      if (!cancelled && !realtimeConfirmed) catchUp();
     });
 
     return () => {
