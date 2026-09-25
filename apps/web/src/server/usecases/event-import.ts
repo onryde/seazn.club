@@ -446,6 +446,7 @@ async function runStream(
           sport_key: firstResult.sportKey,
           status: firstResult.status,
           fixture_id: fixtureId,
+          source: firstResult.source,
         },
       });
     }

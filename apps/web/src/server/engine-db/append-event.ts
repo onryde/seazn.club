@@ -148,7 +148,12 @@ export function fixtureStatusFromFold(
   return has("core.start") ? "in_play" : "scheduled";
 }
 
-export type FirstResult = { distinctId: string; sportKey: string; status: string };
+/** Which door the DECIDING append came through (`result_entered.source`, fix
+ *  batch 6b): a device link stamps `deviceLinkId` on its appends (scoring.ts,
+ *  from the dl_ bearer door); everything else is the organiser side. */
+export type ResultSource = "device_link" | "organiser";
+
+export type FirstResult = { distinctId: string; sportKey: string; status: string; source: ResultSource };
 
 /** The transactional body of an append (spec 03 §5), callable inside a caller's
  *  transaction. `appendEvent` wraps it in `withTenant`; the P11 importer calls
@@ -389,7 +394,12 @@ export async function appendEventInTx(
   // the two can never disagree about when a fixture was decided.
   const firstResult: FirstResult | null =
     fixture.outcome === null && outcome !== null
-      ? { distinctId: candidate.recordedBy ?? `org:${orgId}`, sportKey: division.sport_key, status }
+      ? {
+          distinctId: candidate.recordedBy ?? `org:${orgId}`,
+          sportKey: division.sport_key,
+          status,
+          source: input.deviceLinkId ? "device_link" : "organiser",
+        }
       : null;
   // Also rewrite when a void erased a previously-stored outcome — otherwise
   // fixtures.outcome would go stale against the fold (doc 08 §4 undo).
@@ -496,7 +506,12 @@ export async function appendEvent(
       event: EVENTS.RESULT_ENTERED,
       distinctId: firstResult.distinctId,
       orgId,
-      properties: { sport_key: firstResult.sportKey, status: firstResult.status, fixture_id: fixtureId },
+      properties: {
+        sport_key: firstResult.sportKey,
+        status: firstResult.status,
+        fixture_id: fixtureId,
+        source: firstResult.source,
+      },
     });
   }
   return appended;
