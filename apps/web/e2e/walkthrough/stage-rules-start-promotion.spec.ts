@@ -105,7 +105,7 @@ const POLL_MS = 20_000;
  * which the set-based kernel's schema requires.
  */
 const LEAGUE_BEST_OF = 5;
-/** The Finals' own, different again — so the last save in this file cannot be
+/** The Finals' own, different again — so the lock test's last save cannot be
  *  confused with either the division's format or the league stage's. */
 const FINALS_BEST_OF = 1;
 /** The value the API writes to the Finals AFTER the UI already wrote
@@ -144,8 +144,8 @@ let divId = "";
 let leagueStageId = "";
 let finalsStageId = "";
 let leagueFixtureId = "";
-/** A Finals placeholder — the public page's control: its stage ends this file
- *  back on the division's own format. */
+/** A Finals placeholder — the public page's control: its stage is back on
+ *  the division's own format by the time the spectator test reads it. */
 let finalsFixtureId = "";
 /** The division's own `bestOf`, READ from the created division rather than
  *  typed here — the inherited summary line is derived from it. */
@@ -574,7 +574,7 @@ test("a spectator reads the league stage's own format: on its match page, on the
   expect(cap, "the cap clause is only said when the cap exceeds the target").toBeGreaterThan(setTo);
   expect(
     FINALS_BEST_OF_VIA_API,
-    "the Finals must end this file back on the division's own format, or they are no control",
+    "the Finals must be back on the division's own format for the spectator test, or they are no control",
   ).toBe(divisionBestOf);
   // The league stage's EFFECTIVE rules, described the way the product does:
   // its own bestOf over the division's points and cap.
@@ -650,8 +650,13 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   ).not.toBe(BO1_POINTS);
 
   // --- 1. A stage that OVERRIDES to best of 1 -------------------------------
-  // The Finals left the previous test at best of 3 (the API write), so the
-  // picker really moves here, and the stage has fixtures but has not begun.
+  // The Finals were left at best of 3 by the lock test's API write (the
+  // spectator test between only reads), so the picker really moves here, and
+  // the stage has fixtures but has not begun. Pinned, not assumed: were the
+  // Finals already at best of 1, an untouched save would pass this section.
+  expect(stageById(await readStages(request), finalsStageId).config.rules).toEqual({
+    bestOf: FINALS_BEST_OF_VIA_API,
+  });
   await page.goto(await divisionPath(request, divId, "?tab=fixtures"));
   const finals = stageSheet(page, FINALS_HEADING);
   await setBestOfInUi(page, FINALS_HEADING, 1, "schedule.stageFormat.overridden");
