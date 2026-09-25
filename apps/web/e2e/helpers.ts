@@ -276,27 +276,45 @@ export const communityEmail = () => `${COMMUNITY_EMAIL_PREFIX}${TAG}@resend.dev`
 // the DB and the specs that assert dev exposure skip themselves.
 export const PROD_TARGET = !!process.env.E2E_PROD_TARGET;
 
+// A GET that changes nothing (`select 1`), so sending it twice is harmless.
+// See apiJson.
+const POOL_PROBE_PATH = "/api/health";
+
 // Thin JSON helpers over the app's own endpoints — used to set up heavy state
 // (scoring, entrants) fast so specs assert on UI, not on data entry speed.
+//
+// The worker's keep-alive pool (`read ECONNRESET` on `GET /api/orgs`, CI run
+// 35966856075; on `POST /api/orgs` twice in #867's repeat run). Every
+// APIRequestContext in a worker shares one process-global keep-alive agent
+// that never expires an idle socket. The server reaps an idle socket at 6s. If
+// its loop is busy across that deadline, it resets a request that has already
+// landed on the socket, unread. So:
+// - the caller's request is NEVER retried. A reset can also come after the
+//   server has acted, and a client cannot tell the two apart. A replayed POST
+//   applies twice.
+// - a probe goes first, and only the probe is retried (`maxRetries` retries
+//   only ECONNRESET). It takes any parked socket the server is reaping. The
+//   caller's request then follows on the socket the probe just used, because
+//   the agent hands back the most recently freed socket. So it never lands on
+//   a socket that sat idle.
+// - never `Connection: close`. A new connection to `localhost` costs 300ms
+//   against an IPv4-only server: ::1 is refused, and Playwright's Happy
+//   Eyeballs connector still waits out its 300ms attempt delay before it tries
+//   127.0.0.1. Paying that on every call doubled the parallel shards.
+// Witnessed by api-json-keep-alive.spec.ts.
 export async function apiJson<T = unknown>(
   request: APIRequestContext,
   path: string,
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<{ status: number; data?: T; error?: { code?: string; message?: string } }> {
+  const probe = await request.fetch(/^https?:\/\//.test(path) ? new URL(POOL_PROBE_PATH, path).href : POOL_PROBE_PATH, {
+    maxRetries: 1,
+  });
+  await probe.dispose();
   const res = await request.fetch(path, {
     method,
-    // Never on a pooled keep-alive socket (CI run 35966856075: `read
-    // ECONNRESET` on a test's first call). Every APIRequestContext in a worker
-    // shares one process-global keep-alive agent with no idle limit, while the
-    // server reaps an idle socket at 6s and, when busy across that deadline,
-    // resets a request already on it unread. `Connection: close` means this
-    // helper never parks a socket; `maxRetries` covers the socket a bare
-    // `request.get`/`post` parked, which a close request still takes. A reaped
-    // request is reset unread, so its one retry cannot apply it twice.
-    // Witnessed by api-json-keep-alive.spec.ts.
-    headers: { "Content-Type": "application/json", Connection: "close" },
-    maxRetries: 1,
+    headers: { "Content-Type": "application/json" },
     ...(body !== undefined ? { data: body } : {}),
   });
   const json = (await res.json().catch(() => ({ ok: false }))) as {
