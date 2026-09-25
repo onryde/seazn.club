@@ -86,9 +86,10 @@ export interface UseFixtureStreamParams {
   fetchFn?: typeof fetch;
   connector?: RealtimeConnector;
   /** The caller's own write activity (a queue drain) while it is in flight,
-   *  else null. A poll tick or signal due during it is skipped rather than
-   *  racing it — the next one comes round. The catch-up read runs only once,
-   *  so it WAITS for this to settle instead. Defaults to "never writing". */
+   *  else null. A poll tick due during it is skipped rather than racing it —
+   *  the next one comes round. The catch-up read and a realtime signal's read
+   *  do not come round again, so they WAIT for this to settle instead.
+   *  Defaults to "never writing". */
   writeInFlight?: () => Promise<unknown> | null;
 }
 
@@ -155,15 +156,19 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
       return writeRef.current?.() ?? inFlight.current;
     }
 
-    /** A poll tick or a realtime signal — skipped while anything is busy,
-     *  since the next one comes round. */
+    /** A poll tick — skipped while anything is busy, since the next one comes
+     *  round. */
     function fetchOnce(): void {
       if (busy() !== null) return;
       void read();
     }
 
-    /** The catch-up — it is not repeated, so it waits out whatever is busy
-     *  rather than being skipped. Re-checked after every wait: a drain can
+    /** A read that is not repeated — the catch-up on subscribe and on a join,
+     *  and a realtime signal's read (on realtime no tick comes round, so a
+     *  skipped signal would leave that write unread until the next one). It
+     *  waits out whatever is busy rather than being skipped: the caller's own
+     *  drain, or a read already out, which may have gone out before the write
+     *  it would be standing in for. Re-checked after every wait: a drain can
      *  start another, and a read can land in the gap. A second request while
      *  one is still waiting joins it: that read goes out after both, so it
      *  covers both. */
@@ -219,7 +224,7 @@ export function useFixtureStream(params: UseFixtureStreamParams): UseFixtureStre
       subscription = connector.connect({
         token: token.token,
         channel: token.channel,
-        onSignal: () => void fetchOnce(),
+        onSignal: () => catchUp(),
         onStatus: (subscribed) => {
           if (cancelled) return;
           if (subscribed) {

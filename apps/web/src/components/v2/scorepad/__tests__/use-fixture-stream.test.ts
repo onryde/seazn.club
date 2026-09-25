@@ -142,6 +142,79 @@ describe("useFixtureStream — realtime path", () => {
     expect(listEventsSince.mock.calls.slice(readsBefore)).toEqual([["fx-1", 4]]);
     expect(onEvents.mock.calls.slice(deliveriesBefore)).toEqual([[rows]]);
   });
+
+  // On realtime no tick ever comes round, so a signal that is skipped is lost
+  // until the next write elsewhere signals again. A foreign write whose signal
+  // lands while this pad is sending its own must still be read.
+  it("a signal that lands during the caller's own drain is read once the drain settles — never dropped", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const onEvents = vi.fn();
+    let written: LedgerSlotEvent[] = [];
+    const listEventsSince = vi.fn(async () => written);
+    const { connector, fireStatus, fireSignal } = fakeConnector();
+    let drain: Promise<void> | null = null;
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents,
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      writeInFlight: () => drain,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    fireStatus(true);
+    await vi.advanceTimersByTimeAsync(0);
+    const readsBefore = listEventsSince.mock.calls.length; // the catch-up and the join
+
+    let finishDrain!: () => void;
+    drain = new Promise<void>((resolve) => {
+      finishDrain = () => {
+        drain = null;
+        resolve();
+      };
+    });
+    written = rows; // a foreign write, signalled while this pad's drain is out
+    fireSignal();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(listEventsSince, "no read overlaps the drain").toHaveBeenCalledTimes(readsBefore);
+
+    finishDrain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls.slice(readsBefore), "the signal's read, once the drain settles").toEqual([["fx-1", 4]]);
+    expect(onEvents).toHaveBeenLastCalledWith(rows);
+  });
+
+  it("a signal that lands while a read is out gets a read of its own after it — the earlier read may predate the write", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } }));
+    const answers: ((rows: LedgerSlotEvent[]) => void)[] = [];
+    const listEventsSince = vi.fn(
+      () =>
+        new Promise<LedgerSlotEvent[]>((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const { connector, fireStatus, fireSignal } = fakeConnector();
+    mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 4, onEvents: () => {}, fetchFn: fn, connector, listEventsSince });
+    await vi.advanceTimersByTimeAsync(0);
+    fireStatus(true);
+    answers[0]!([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "the catch-up, then the join's read (still out)").toHaveBeenCalledTimes(2);
+
+    fireSignal();
+    fireSignal(); // a burst while that read is out still costs one read, not two
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(2);
+
+    answers[1]!([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(3);
+    answers[2]!([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("useFixtureStream — polling fallback", () => {
@@ -375,6 +448,51 @@ describe("useFixtureStream — catch-up on subscribe", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(listEventsSince.mock.calls, "the catch-up, once the drain settles — not the first tick").toEqual([["fx-1", 4]]);
     expect(onEvents).toHaveBeenCalledWith(rows);
+  });
+
+  it("a drain that starts just as the first settles is waited out too — the catch-up re-checks after every wait", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const listEventsSince = vi.fn(async () => rows);
+    const { connector } = fakeConnector();
+    let current: Promise<void> | null = null;
+    let finishSecond!: () => void;
+    const second = new Promise<void>((resolve) => {
+      finishSecond = () => {
+        current = null;
+        resolve();
+      };
+    });
+    let finishFirst!: () => void;
+    // The second drain is already the caller's write by the time the first
+    // one's waiters run, as when a queued tap starts sending the moment the
+    // leftover queue empties.
+    current = new Promise<void>((resolve) => {
+      finishFirst = () => {
+        current = second;
+        resolve();
+      };
+    });
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents: () => {},
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      pollMs: 15_000,
+      writeInFlight: () => current,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).not.toHaveBeenCalled();
+
+    finishFirst();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no read while the second drain is out").not.toHaveBeenCalled();
+
+    finishSecond();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 4]]);
   });
 
   it("an unmount while the catch-up waits on a drain makes no read", async () => {
