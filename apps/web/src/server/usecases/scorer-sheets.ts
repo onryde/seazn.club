@@ -237,6 +237,20 @@ async function unprovenLinks(
   });
 }
 
+/** What one print covered, for the `scorer_sheets_printed` event: counts only,
+ *  never a token, URL or link id (a card's QR is a live credential). */
+export interface SheetSummary {
+  /** Cards printed. */
+  fixtureCount: number;
+  /** Distinct courts among them, as the board names them. */
+  courtCount: number;
+  /** Cards with no court (the "Unassigned" pages). */
+  courtlessCount: number;
+}
+
+/** The renderer's model plus the print's summary (the renderer ignores it). */
+export type ScorerSheet = SheetModel & { summary: SheetSummary };
+
 /**
  * The printable model for one day (§4.4). Shaped like exports.ts's
  * `buildAdmitTicketsDoc`: branding resolved OUTSIDE any tenant transaction,
@@ -254,7 +268,7 @@ export async function buildScorerSheet(
   origin: string,
   locale: Locale,
   opts: { printedAt: string },
-): Promise<SheetModel> {
+): Promise<ScorerSheet> {
   const t: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
   const chosen = await loadSheetCandidates(auth, competitionId, t, day);
   const nothing = () => new HttpError(422, "No fixtures to print on that day", "NO_FIXTURES_ON_DAY");
@@ -336,5 +350,10 @@ export async function buildScorerSheet(
         awayPair: pairOf(r.away),
       })),
     })),
+    summary: {
+      fixtureCount: printed.length,
+      courtCount: new Set(printed.flatMap((r) => (r.court_name === null ? [] : [r.court_name]))).size,
+      courtlessCount: printed.filter((r) => r.court_name === null).length,
+    },
   };
 }

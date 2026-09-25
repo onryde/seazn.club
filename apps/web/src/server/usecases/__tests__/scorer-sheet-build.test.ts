@@ -134,6 +134,27 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(await urls()).toEqual(await urls());
   });
 
+  // Fix batch item 6a: the `scorer_sheets_printed` event reports what a print
+  // covered. Three different numbers, so a swapped field cannot pass.
+  it("summarises the print: fixtures printed, distinct courts, and fixtures with no court", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const fx = await fixturesOf(stage.id);
+    expect(fx).toHaveLength(6); // premise: a four-entrant league is six matches
+    const hall = await createVenue(auth, { name: "Hall", sort: 0 });
+    const c1 = await createCourt(auth, hall.id, { name: "Court 1", sort: 0, tags: [] });
+    const c2 = await createCourt(auth, hall.id, { name: "Court 2", sort: 1, tags: [] });
+    // Two on Court 1, one on Court 2, three with no court.
+    for (const [i, f] of fx.entries()) {
+      const court = i < 2 ? c1.id : i === 2 ? c2.id : null;
+      if (court !== null) await patchFixture(auth, f.id, { court_id: court });
+    }
+    await schedule(fx.map((f) => f.id));
+    const m = await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
+    expect(m.summary).toEqual({ fixtureCount: 6, courtCount: 2, courtlessCount: 3 });
+    expect(m.summary.fixtureCount, "the summary counts the cards that were printed").toBe(cards(m).length);
+  });
+
   it("a court's tenth match spills to its own second page: 9 + 1, headed page 1 of 2 and page 2 of 2", async () => {
     const { auth } = await seedOrg("pro");
     const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D", "E"]);

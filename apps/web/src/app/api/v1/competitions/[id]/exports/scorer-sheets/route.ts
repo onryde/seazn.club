@@ -7,6 +7,8 @@ import { baseUrl } from "@/lib/oauth";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { buildScorerSheet } from "@/server/usecases/scorer-sheets";
 import { renderScorerSheetPdf } from "@/server/scorer-sheet-pdf";
+import { captureServer } from "@/lib/posthog-server";
+import { EVENTS } from "@/lib/analytics-events";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -30,6 +32,23 @@ export async function POST(req: Request, { params }: Ctx) {
       printedAt: new Date().toISOString(),
     });
     const bytes = await renderScorerSheetPdf(model);
+    // Counted only once the PDF exists: every refusal above (403, 429, 400,
+    // 402, 422, 500) prints nothing and counts nothing. Fire-and-forget like
+    // scoring.ts's post_auto_drafted: captureServer never throws, and the
+    // download must not wait on PostHog. Counts and ids only; the model's
+    // URLs are live scoring credentials.
+    void captureServer({
+      event: EVENTS.SCORER_SHEETS_PRINTED,
+      distinctId: auth.userId ?? `org:${auth.orgId}`,
+      orgId: auth.orgId,
+      properties: {
+        competition_id: id,
+        date,
+        fixture_count: model.summary.fixtureCount,
+        court_count: model.summary.courtCount,
+        courtless_count: model.summary.courtlessCount,
+      },
+    });
     return new NextResponse(new Uint8Array(bytes), {
       headers: {
         "Content-Type": "application/pdf",

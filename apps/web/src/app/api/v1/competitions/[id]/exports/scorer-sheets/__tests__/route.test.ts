@@ -10,21 +10,31 @@ import { baseUrl } from "@/lib/oauth";
 import type { Locale } from "@/lib/i18n-constants";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
-import type { SheetModel } from "@/server/scorer-sheet-pdf";
+import type { ScorerSheet } from "@/server/usecases/scorer-sheets";
 
 const PDF = Buffer.from("%PDF-1.3 scorer sheets");
-const MODEL = { header: {}, pages: [], labels: {} } as unknown as SheetModel;
+// One real-shaped card, so a capture that leaked the model (its QR URL IS the
+// scoring credential) would be caught by the no-token assertion below.
+const TOKEN = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
+const MODEL = {
+  header: {},
+  pages: [{ heading: {}, rows: [{ fixtureId: "f1", url: `https://print.example/score/${TOKEN}` }] }],
+  labels: {},
+  summary: { fixtureCount: 7, courtCount: 2, courtlessCount: 1 },
+} as unknown as ScorerSheet;
 
 const h = vi.hoisted(() => ({
   auth: vi.fn<(req: Request, kind: string, id: string, scope: string) => Promise<unknown>>(),
   build: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   render: vi.fn<(model: unknown) => Promise<Buffer>>(),
   locale: vi.fn<() => Promise<Locale>>(),
+  capture: vi.fn<(args: unknown) => Promise<void>>(),
 }));
 vi.mock("@/server/api-v1/auth", async (orig) => ({ ...(await orig<object>()), requireResourceAuth: h.auth }));
 vi.mock("@/server/usecases/scorer-sheets", () => ({ buildScorerSheet: h.build }));
 vi.mock("@/server/scorer-sheet-pdf", () => ({ renderScorerSheetPdf: h.render }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: h.locale }));
+vi.mock("@/lib/posthog-server", () => ({ captureServer: h.capture }));
 
 import { POST } from "../route";
 
@@ -56,6 +66,7 @@ beforeEach(() => {
   h.build.mockResolvedValue(MODEL);
   h.render.mockResolvedValue(PDF);
   h.locale.mockResolvedValue("fr");
+  h.capture.mockResolvedValue(undefined);
 });
 
 describe("POST /competitions/{id}/exports/scorer-sheets", () => {
@@ -146,5 +157,54 @@ describe("POST /competitions/{id}/exports/scorer-sheets", () => {
       ["rl:sheets:u1", 60],
       ["rl:sheets:u1", 60],
     ]);
+  });
+});
+
+// Fix batch item 6a (owner-approved 2026-09-25): `scorer_sheets_printed`, sent
+// server-side once a PDF has been BUILT. Counts and ids only: a card's QR URL
+// is a live scoring credential, so no token, URL or link id is ever sent.
+describe("POST /competitions/{id}/exports/scorer-sheets: the scorer_sheets_printed event", () => {
+  it("a built sheet is counted once, after the PDF exists: the acting user, the org, and the print's counts", async () => {
+    const res = await POST(req({ date: "2026-09-23" }), ctx);
+    expect(res.status).toBe(200);
+    expect(h.capture).toHaveBeenCalledTimes(1);
+    expect(h.capture).toHaveBeenCalledWith({
+      event: "scorer_sheets_printed",
+      distinctId: "u1",
+      orgId: "o1",
+      properties: { competition_id: "c1", date: "2026-09-23", fixture_count: 7, court_count: 2, courtless_count: 1 },
+    });
+    expect(h.capture.mock.invocationCallOrder[0]!).toBeGreaterThan(h.render.mock.invocationCallOrder[0]!);
+    const sent = JSON.stringify(h.capture.mock.calls[0]);
+    expect(sent).not.toContain("dl_");
+    expect(sent).not.toContain("/score/");
+    expect(sent, "no fixture/link id either").not.toContain("f1");
+  });
+
+  it("the download never waits on PostHog (fire-and-forget)", async () => {
+    h.capture.mockReturnValue(new Promise<void>(() => {}));
+    const hung = Symbol("hung");
+    const outcome = await Promise.race([
+      POST(req({ date: "2026-09-23" }), ctx),
+      new Promise<typeof hung>((resolve) => setTimeout(() => resolve(hung), 1000)),
+    ]);
+    expect(outcome, "the PDF came back while PostHog never answered").not.toBe(hung);
+    expect((outcome as Response).status).toBe(200);
+  });
+
+  it.each([
+    ["403: auth refuses", () => h.auth.mockRejectedValueOnce(new HttpError(403, "Insufficient permissions")), 403],
+    ["400: the body is invalid", null, 400],
+    ["429: the limiter refuses", () => __setRateLimitCounterForTests(counter(7)), 429],
+    ["402: the build refuses on plan", () => h.build.mockRejectedValueOnce(new HttpError(402, "Upgrade", "PLAN_REQUIRED")), 402],
+    ["422: nothing to print", () => h.build.mockRejectedValueOnce(new HttpError(422, "No fixtures", "NO_FIXTURES_ON_DAY")), 422],
+    ["500: links not proven", () => h.build.mockRejectedValueOnce(new HttpError(500, "incomplete", "SHEET_LINKS_INCOMPLETE")), 500],
+    ["500: a QR cannot be encoded", () => h.render.mockRejectedValueOnce(new Error("QR generation failed")), 500],
+  ] as const)("%s → nothing is counted", async (_name, arrange, status) => {
+    vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    arrange?.();
+    const res = await POST(req(status === 400 ? { date: "23/09/2026" } : { date: "2026-09-23" }), ctx);
+    expect(res.status).toBe(status);
+    expect(h.capture).not.toHaveBeenCalled();
   });
 });
