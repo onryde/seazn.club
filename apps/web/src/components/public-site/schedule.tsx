@@ -208,7 +208,7 @@ function ScorebugRow({
         : "truncate text-[15px] font-medium leading-6 text-ink";
   const scoreCls = (id: string | null) => {
     const weight = winner && id === winner ? "font-bold" : "font-semibold";
-    const color = live ? "text-emerald-600" : winner && id !== winner ? "text-ink-muted" : "text-ink";
+    const color = live ? "text-emerald-700" : winner && id !== winner ? "text-ink-muted" : "text-ink";
     return `pl-2 text-right font-display text-lg tabular-nums leading-6 ${weight} ${color}`;
   };
 
@@ -232,7 +232,7 @@ function ScorebugRow({
           as a last resort, break — INSIDE the column instead. */}
       <span className="row-span-2 flex min-w-0 flex-col items-start">
         {live ? (
-          <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-emerald-600">
+          <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-emerald-700">
             {/* `shrink-0` (N1h h1, review-n1g G1): when the word and the dot
                 are wider than the track together (fr "EN DIRECT"), this row
                 shrinks its items, and an empty dot has no minimum, so without
@@ -425,7 +425,7 @@ export function Schedule({
             {(() => {
               const anchor = list.find((x) => x.scheduled_at)?.scheduled_at;
               return anchor ? (
-                <span className="font-sans text-[10px] font-medium normal-case tracking-normal text-ink-muted/70">
+                <span className="font-sans text-[10px] font-medium normal-case tracking-normal text-ink-muted">
                   {copy.timesIn.replace("{zone}", fmtPublicZoneAbbrev(locale, tz, anchor))}
                 </span>
               ) : null;

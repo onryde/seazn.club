@@ -29,6 +29,7 @@ vi.mock("../player-matches-data", () => ({ fetchPlayerMatches: vi.fn() }));
 import { fetchPlayerMatches } from "../player-matches-data";
 import { PlayerMatches, type PlayerMatchesProps } from "../player-matches";
 import { HUB_IDLE_POLL_MS, HUB_POLL_MS } from "../use-live-competition";
+import { psColour, swatchContrast, textSwatchOf } from "./_tailwind-contrast";
 
 const PERSON = "11111111-2222-3333-4444-555555555555";
 const HELD_AT = "2026-09-05T12:00:00.000Z";
@@ -543,5 +544,42 @@ describe("PlayerMatches — a score breaks only between its parts (R11)", () => 
     expect(cls(scoreTag)).toEqual(expect.arrayContaining(["max-md:col-start-2", "md:max-w-[10rem]", "md:text-right"]));
     expect(cls(scoreTag)).not.toContain("max-w-[10rem]");
     expect(cls(scoreTag)).not.toContain("text-right");
+  });
+});
+
+// The live green on a match ROW (a player live in two matches at once: the
+// newest leads as the dark slab, the other is a row on the white list). Its
+// "Live" word and its figures shipped as `text-emerald-600`, 3.65:1 on the
+// list's `bg-surface`, under WCAG AA's 4.5:1: the word is 11px bold and the
+// figures 18px bold, and neither is "large" text (14pt bold is 18.67px). The
+// hub card and the division Schedule share the green and are witnessed by axe
+// in `spectator-hub.spec.ts` HB12L; its seed has one live match, so it can
+// only reach the slab, and this row's ratio is priced here instead.
+describe("PlayerMatches — a live row's green reads at least 4.5:1 on the list", () => {
+  const html = renderToStaticMarkup(
+    <PlayerMatches
+      orgSlug="riverside"
+      competitionSlug="autumn-cup"
+      personId={PERSON}
+      initial={doc([line("f3", "17 (12)", { result: "live" }), line("f2", "54 (40)", { result: "live" })])}
+      dict={en as Dict}
+      locale="en"
+    />,
+  );
+  const classOf = (testid: string) => {
+    const m = new RegExp(`<[a-z]+ data-testid="${testid}" class="([^"]*)"`).exec(html) ?? new RegExp(`<[a-z]+ class="([^"]*)" data-testid="${testid}"`).exec(html);
+    expect(m, `${testid} rendered`).not.toBeNull();
+    return m![1]!;
+  };
+
+  it("premise: the second live match is a ROW on the white list, the first the slab", () => {
+    expect(html).toContain('data-testid="mh-player-slab-live"');
+    expect(html).toContain('data-testid="mh-player-row-live"');
+    expect(html).toMatch(/<ul class="[^"]*\bbg-surface\b[^"]*">[\s\S]*data-testid="mh-player-row-live"/);
+  });
+
+  it.each(["mh-player-row-live", "mh-player-row-figures"])("%s: its green on --ps-surface", (testid) => {
+    const swatch = textSwatchOf(classOf(testid));
+    expect(swatchContrast(swatch, psColour("surface")), `text-${swatch} on --ps-surface`).toBeGreaterThanOrEqual(4.5);
   });
 });

@@ -319,6 +319,52 @@ async function openTab(page: Page, id: string, extra = ""): Promise<void> {
   await expect(page.getByTestId(`mh-tab-panel-${id}`), `?tab=${id} opened a different tab`).toBeVisible();
 }
 
+/**
+ * Wait until no FINITE animation or CSS transition is running, so a colour
+ * check reads what a spectator rests on rather than one frame of an ease.
+ *
+ * A deep link to any tab but the first starts one on every hub load. The route
+ * is ISR, so `useTabParam` has no `?tab=` on the server and the SSR/hydration
+ * render paints the FIRST tab active; the client render then flips to the
+ * linked tab, and the pill that stops being active eases from `bg-accent` and
+ * white ink to its inactive colours over its `transition` (150ms). HB12's axe
+ * scan landing inside that window read the Overview pill as #736f80 on
+ * #f2f0f8, 4.3:1 (CI, PR 864's run). At rest it is #6f6a7c on #f6f5f8, 4.79:1,
+ * and hovered #6931c9 on #f5effe, 6.47:1 — neither end state fails, and the
+ * pointer is not involved. `openTab` returns the moment the linked panel is
+ * visible, which is the START of the ease.
+ *
+ * Infinite animations (a live pulse) never finish and are skipped. The loop
+ * re-reads because a finished ease can hand over to another one.
+ */
+async function settleMotion(page: Page): Promise<void> {
+  const left = await page.evaluate(async () => {
+    const running = () =>
+      document
+        .getAnimations()
+        .filter((a) => a.playState === "running" && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)));
+    for (let round = 0; round < 10; round++) {
+      const now = running();
+      if (now.length === 0) return 0;
+      await Promise.all(now.map((a) => a.finished.catch(() => undefined)));
+    }
+    return running().length;
+  });
+  expect(left, "finite animations still running after ten rounds").toBe(0);
+}
+
+/** axe (WCAG 2 A/AA) over the settled page: no serious or critical violation.
+ *  SOFT, so a test scanning several pages reports every red page, not the first. */
+async function axeScan(page: Page, test: string, label: string): Promise<void> {
+  await settleMotion(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const bad = results.violations
+    .filter((v) => v.impact === "serious" || v.impact === "critical")
+    .map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`);
+  console.log(`${test} ${label}: ${bad.length} serious/critical ${JSON.stringify(bad)}`);
+  expect.soft(bad, `${label}: serious/critical axe violations`).toEqual([]);
+}
+
 /** A card's two score spans, whitespace dropped (score line + its sub line). */
 async function cardScores(card: Locator): Promise<string[]> {
   const out: string[] = [];
@@ -392,6 +438,42 @@ test("HB6: the Stats tab's top runs row is the ledger's top scorer, live match A
   await expect(first).toHaveAttribute("data-testid", `mh-leaders-${cricketSlug}-runs-row-${topId}`);
   await expect(first.locator("span.font-display.tabular-nums")).toHaveText(String(topRuns));
   await expect(first.locator(`a[href="/shared/${org.slug}/${comp.slug}/players/${topId}"]`)).toHaveCount(1);
+});
+
+// HB12L — axe while a match is LIVE. HB12 scans after HB2 has ended match A,
+// so it never saw a live label, and the green "Live" word shipped at 3.65:1
+// (emerald-600 on the white card): the hub's match card, and the division
+// Schedule's row, whose live score is the same green. The player card leads
+// with A as its dark slab (a different green on a different ground); the white
+// ROW that shares the old green needs a second live match, which this seed does
+// not have, so `player-matches.test.tsx` prices it instead. Nothing scanned the
+// division page before this case, and its first scan also found the Schedule's
+// "times in {zone}" caption at `text-ink-muted/70` (10px on the canvas), red
+// with or without a live match; it is solid ink-muted now. Each page is
+// asserted to be SHOWING A live before it is scanned, so a scan cannot pass on
+// a page with nothing live on it, and the scans are soft so one red does not
+// hide the next surface's. Runs before HB2 ends A.
+test("HB12L: axe finds no serious or critical violation at 320 on the Overview, the division Schedule and a player's card while a match is live", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(Math.max(FLOOR_MS, 4 * STEP_MS));
+  const live = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${matchA}`);
+  expect(live.data?.status, "match A is still in play").toBe("in_play");
+  const page = await spectator(browser, { width: 320 });
+
+  await openTab(page, "overview");
+  await expect(page.getByTestId(`mh-match-${matchA}`).getByTestId("mh-match-live"), "the Overview shows A's live label").toBeVisible();
+  await axeScan(page, "HB12L", "overview, A live");
+
+  await page.goto(`/shared/${org.slug}/${comp.slug}/${cricketSlug}`, { waitUntil: "load" });
+  const row = page.locator(`#panel-schedule a[href*="${matchA}"]`);
+  await expect(row.locator(".animate-live-pulse"), "the Schedule shows A's row live").toBeVisible();
+  await axeScan(page, "HB12L", "division schedule, A live");
+
+  await page.goto(`/shared/${org.slug}/${comp.slug}/players/${teams.kestrels.order[0]}`);
+  await expect(page.getByTestId(`mh-player-match-${matchA}`).getByTestId("mh-player-slab-live"), "the player card leads with A live").toBeVisible();
+  await axeScan(page, "HB12L", "player card, A live");
 });
 
 // HB2 — R10 on the Matches card, the Overview's Live now and the Table. A
@@ -1090,14 +1172,7 @@ test("HB12: axe finds no serious or critical violation at 320 on Overview, Match
   const page = await spectator(browser, { width: 320 });
   const doc = await hubDoc();
   const view = doc.tables.find((t) => t.divisionSlug === cricketSlug)!;
-  const scan = async (label: string) => {
-    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
-    const bad = results.violations
-      .filter((v) => v.impact === "serious" || v.impact === "critical")
-      .map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")}`);
-    console.log(`HB12 ${label}: ${bad.length} serious/critical ${JSON.stringify(bad)}`);
-    expect(bad, `${label}: serious/critical axe violations`).toEqual([]);
-  };
+  const scan = (label: string) => axeScan(page, "HB12", label);
   await openTab(page, "overview");
   await scan("overview");
   await openTab(page, "matches");

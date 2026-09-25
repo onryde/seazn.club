@@ -247,7 +247,7 @@ function row(line: PlayerMatchLineT, dict: Dict, locale: Locale, showDivision: b
               {live ? (
                 <span
                   data-testid="mh-player-row-live"
-                  className="flex shrink-0 items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-emerald-600"
+                  className="flex shrink-0 items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-emerald-700"
                 >
                   <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
                   {t(dict, "player.result.live")}
@@ -269,7 +269,7 @@ function row(line: PlayerMatchLineT, dict: Dict, locale: Locale, showDivision: b
         <span
           data-testid="mh-player-row-figures"
           className={`min-w-0 font-display text-lg font-bold tabular-nums max-md:col-start-2 md:max-w-[10rem] md:text-right ${
-            line.line === NO_FIGURES ? "text-ink-muted" : live ? "text-emerald-600" : "text-ink"
+            line.line === NO_FIGURES ? "text-ink-muted" : live ? "text-emerald-700" : "text-ink"
           }`}
         >
           {scoreRuns(line.line)}
