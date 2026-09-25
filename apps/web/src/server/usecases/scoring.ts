@@ -10,6 +10,7 @@ import { cacheGet, cacheSet, cacheDel, sendAfterDeleteOrBound } from "@/lib/cach
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
+import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
@@ -488,7 +489,9 @@ async function assertEntitledToScore(
 
   // Doc 12 §1: scoring opens only after the explicit start action
   // (division_started). A published-but-unstarted timetable stays read-only.
-  if (ctx.division_status === "setup" || ctx.division_status === "scheduled") {
+  // The same predicate the scan page opens "Not started yet" on (scorer
+  // sheets, owner fix 2026-09-24), so that screen and this refusal agree.
+  if (divisionScoringClosed(ctx.division_status)) {
     throw new EngineError("WRONG_PHASE", "division has not started — scoring is closed", {
       divisionStatus: ctx.division_status,
     });

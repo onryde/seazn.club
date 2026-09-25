@@ -16,6 +16,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { startDivision } from "@/server/usecases/schedule";
 import { createDeviceLink, ensureDeviceLink } from "@/server/usecases/device-links";
 import { seedCourts, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { decide, deviceFor, fixturesOf, seedStage } from "@/server/usecases/__tests__/_sheets-rig";
@@ -77,7 +78,8 @@ type WaitingProps = {
   away: string;
   matchRef: string;
   meta: string[];
-  copy: { waitingFor: string; vs: string; hint: string };
+  copy: { lead: string; vs: string; hint: string };
+  waitingOn?: "sides" | "division_start";
 };
 
 // The page resolves the viewer's locale from the request (cookie, user,
@@ -112,10 +114,15 @@ function find(node: ReactNode, type: unknown): ReactElement | null {
   return find((node.props as { children?: ReactNode }).children, type);
 }
 
-async function seedScorableFixture(): Promise<{
+/** A two-entrant league's one fixture, both sides known. STARTED by default —
+ *  "scorable" is the point, and since the owner fix of 2026-09-24 an unstarted
+ *  division's scan opens on "Not started yet", not the pad. `start: false`
+ *  leaves it drawn but unstarted, the way a sheet printed early finds it. */
+async function seedScorableFixture({ start = true }: { start?: boolean } = {}): Promise<{
   auth: Awaited<ReturnType<typeof seedOrg>>["auth"];
   courtId: string;
   fixtureId: string;
+  divisionId: string;
 }> {
   const { auth } = await seedOrg("pro");
   const [courtId] = await seedCourts(auth.orgId, 1);
@@ -144,7 +151,8 @@ async function seedScorableFixture(): Promise<{
   );
   const [stage] = await createStages(auth, div.id, { seq: 1, kind: "league", name: "L", config: {} });
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
-  return { auth, courtId: courtId!, fixtureId: fixtures[0]!.id };
+  if (start) await startDivision(auth, div.id);
+  return { auth, courtId: courtId!, fixtureId: fixtures[0]!.id, divisionId: div.id };
 }
 
 afterAll(async () => {
@@ -217,10 +225,103 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     expect(matchRef).not.toMatch(/^R\d/);
     expect(home).not.toMatch(/R\d·/);
     expect(copy, "Waiting's own words, in the viewer's language").toEqual({
-      waitingFor: en["device.scan.waitingFor"],
+      lead: en["device.scan.waitingFor"],
       vs: en["schedule.vs"],
       hint: en["device.scan.waitingHint"],
     });
+    expect((waiting!.props as WaitingProps).waitingOn, "a started division waits on its sides").toBe("sides");
+  });
+
+  // Owner fix 2026-09-24: a sheet printed before the organiser presses Start
+  // opened on Confirm, and its Start was refused (generic WRONG_PHASE copy).
+  // Real producers end to end: the division is drawn by the real generator and
+  // started by the real `startDivision`; the page reads the status itself.
+  it("an unstarted division → Not started yet, with its own words, the match's names and ref, and no pad — then the pad once started", async () => {
+    const { auth, fixtureId, divisionId } = await seedScorableFixture({ start: false });
+    const [{ stage_id: stageId }] = await sql<{ stage_id: string }[]>`select stage_id from fixtures where id = ${fixtureId}`;
+    const board = await boardNames(stageId!, en);
+    const { secret } = await ensureDeviceLink(auth, fixtureId);
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    const waiting = find(tree, ScanWaiting);
+    expect(waiting, "an unstarted division's scan is a waiting screen").not.toBeNull();
+    expect(find(tree, DeviceScorePad), "…with no pad, so no Start to be refused").toBeNull();
+    const { home, away, matchRef, copy, waitingOn } = waiting!.props as WaitingProps;
+    expect(waitingOn, "…waiting on the division's start, not on a side").toBe("division_start");
+    expect(copy).toEqual({
+      lead: en["device.scan.notStarted.title"],
+      vs: en["schedule.vs"],
+      hint: en["device.scan.notStarted.body"],
+    });
+    expect([home, away].sort(), "the match's two sides, by name, as Waiting names a known side").toEqual(["A", "B"]);
+    expect(matchRef).toBe(board.ref(fixtureId));
+    // The same token after the organiser's start: the page reads the division's
+    // status in its own render, so the next refresh is Confirm (the pad).
+    await startDivision(auth, divisionId);
+    const after = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
+    expect(find(after, ScanWaiting), "started: no waiting screen").toBeNull();
+    const pad = find(after, DeviceScorePad);
+    expect(pad, "started: the pad (Confirm) renders").not.toBeNull();
+    expect((pad!.props as { initialViewOnly: string | null }).initialViewOnly).toBeNull();
+  });
+
+  it("Not started outranks Waiting: an unstarted knockout's TBD final waits on the start, naming its feeders by the board's codes", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Early " + Math.random().toString(36).slice(2, 8),
+      visibility: "private",
+      branding: {},
+    });
+    const div = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(
+      auth,
+      div.id,
+      ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+    );
+    const [stage] = await createStages(auth, div.id, { seq: 1, kind: "knockout", name: "Cup", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    const fixtures = await fixturesOf(stage!.id);
+    const final = fixtures.find((f) => f.round_no === 2)!;
+    expect(final.home_entrant_id, "precondition: the final's seats are TBD").toBeNull();
+    const board = await boardNames(stage!.id, en);
+    const waiting = find(
+      await ScorePadPage({ params: Promise.resolve({ token: (await ensureDeviceLink(auth, final.id)).secret }) }),
+      ScanWaiting,
+    );
+    expect(waiting).not.toBeNull();
+    const { home, away, matchRef, waitingOn } = waiting!.props as WaitingProps;
+    expect(waitingOn, "the division's start, not the seats").toBe("division_start");
+    expect([home, away].sort()).toEqual(fixtures.filter((f) => f.round_no === 1).map((s) => board.winnerOf(s.id)).sort());
+    expect(matchRef).toBe(board.ref(final.id));
+  });
+
+  it("a French viewer's Not started yet carries its own French strings, with NO dictionary provider, and says the page is French", async () => {
+    locale.value = "fr";
+    try {
+      const { auth, fixtureId } = await seedScorableFixture({ start: false });
+      const tree = await ScorePadPage({
+        params: Promise.resolve({ token: (await ensureDeviceLink(auth, fixtureId)).secret }),
+      });
+      const waiting = find(tree, ScanWaiting);
+      expect(waiting, "precondition: the not-started screen").not.toBeNull();
+      expect(find(tree, DictProvider), "no dictionary rides on every refresh").toBeNull();
+      expect((find(tree, HtmlLang)!.props as { lang?: string }).lang).toBe("fr");
+      const { copy } = waiting!.props as WaitingProps;
+      expect(copy).toEqual({
+        lead: fr["device.scan.notStarted.title"],
+        vs: fr["schedule.vs"],
+        hint: fr["device.scan.notStarted.body"],
+      });
+      expect(copy.hint, "French, not the English fallback").not.toBe(en["device.scan.notStarted.body"]);
+    } finally {
+      locale.value = "en";
+    }
   });
 
   // Task 6 review I2: Waiting re-renders this page every POLL_MS. Inside a
@@ -248,11 +349,11 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
       expect((lang!.props as { lang?: string }).lang).toBe("fr");
       const { home, away, matchRef, copy } = waiting!.props as WaitingProps;
       expect(copy).toEqual({
-        waitingFor: fr["device.scan.waitingFor"],
+        lead: fr["device.scan.waitingFor"],
         vs: fr["schedule.vs"],
         hint: fr["device.scan.waitingHint"],
       });
-      expect(copy.waitingFor, "French, not the English fallback").not.toBe(en["device.scan.waitingFor"]);
+      expect(copy.lead, "French, not the English fallback").not.toBe(en["device.scan.waitingFor"]);
       expect([home, away].sort()).toEqual(
         fixtures.filter((f) => f.round_no === 1).map((s) => board.winnerOf(s.id)).sort(),
       );
@@ -477,6 +578,9 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     // The second generate is the one that finds both ends and wires the edge
     // (`wireCrossFeeds` is re-entrant: "wired once both stages generated").
     await generateStageFixtures(auth, league.id);
+    // Started, so the TBD seat is what the scan waits on: an unstarted
+    // division opens on "Not started yet" instead (owner fix 2026-09-24).
+    await startDivision(auth, div.id);
 
     // The board's own path, over the board's own selects (schedule/page.tsx's
     // feed rows, the board projection's code columns), for the whole division.
@@ -500,7 +604,8 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
       ScanWaiting,
     );
     expect(waiting, "precondition: the cross-fed match waits").not.toBeNull();
-    const { home, away } = waiting!.props as WaitingProps;
+    const { home, away, waitingOn } = waiting!.props as WaitingProps;
+    expect(waitingOn, "precondition: on its TBD seat, not on the division's start").toBe("sides");
     expect(away, "the seat names the feeder in the other stage, as the board card does").toBe(boardAway);
     expect(`${home} vs ${away}`, "…and the whole title is the board card's").toBe(cardTitle(row, {}, feeds, lookup));
   });

@@ -2517,6 +2517,8 @@
   "device.scan.match": "Partido",
   "device.scan.waitingFor": "Esperando a",
   "device.scan.waitingHint": "Esta página se actualiza sola.",
+  "device.scan.notStarted.title": "Aún no ha empezado",
+  "device.scan.notStarted.body": "El organizador todavía no ha iniciado esta división. Esta pantalla se actualiza sola.",
   "device.dead.invalid": "Este enlace de puntuación no es válido.",
   "device.dead.revoked": "Este enlace de puntuación se ha revocado.",
   "device.dead.expired": "Este enlace de puntuación ha caducado.",

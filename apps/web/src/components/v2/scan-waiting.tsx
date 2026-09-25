@@ -12,16 +12,30 @@
 // review I2). This screen looks nothing up: a dictionary provider around it
 // would ride along on every one of those refreshes — the whole merged `ui`
 // dictionary, to say three sentences.
+//
+// Owner fix 2026-09-24: the same screen also waits on the DIVISION's start
+// (`waitingOn: "division_start"`, "Not started yet"). A sheet scanned before
+// the organiser presses Start used to open on Confirm, whose Start the scoring
+// door refused. Same refresh, so it moves on to Confirm by itself; the page
+// reads the division's status in that same render (`scanScreen`).
 import { useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTabReturn } from "@/components/v2/use-tab-return";
 import { POLL_MS } from "@/components/v2/scorepad/use-fixture-stream";
 
 export interface ScanWaitingCopy {
-  waitingFor: string;
+  /** The line above the names: "Waiting for" — or, waiting on the division's
+   *  start, the screen's headline ("Not started yet"). */
+  lead: string;
   vs: string;
+  /** The line under the names — for the division's start, why, and that the
+   *  screen moves on by itself. */
   hint: string;
 }
+
+/** What the screen is waiting on: a TBD side ("sides", §4.5.2), or the
+ *  organiser's start of the division (the scoring door is closed until then). */
+export type ScanWaitingOn = "sides" | "division_start";
 
 export function ScanWaiting({
   home,
@@ -29,6 +43,7 @@ export function ScanWaiting({
   matchRef,
   meta,
   copy,
+  waitingOn = "sides",
   pollMs = POLL_MS,
 }: {
   home: string;
@@ -38,6 +53,7 @@ export function ScanWaiting({
   /** Court, time, division — whichever are known, in that order. */
   meta: readonly string[];
   copy: ScanWaitingCopy;
+  waitingOn?: ScanWaitingOn;
   pollMs?: number;
 }) {
   const router = useRouter();
@@ -47,10 +63,11 @@ export function ScanWaiting({
     return () => clearInterval(id);
   }, [refresh, pollMs]);
   useTabReturn(refresh, true);
+  const notStarted = waitingOn === "division_start";
 
   return (
     <section
-      data-testid="scan-waiting"
+      data-testid={notStarted ? "scan-not-started" : "scan-waiting"}
       aria-live="polite"
       className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-6 text-center"
     >
@@ -62,13 +79,19 @@ export function ScanWaiting({
           {matchRef}
         </span>
       </p>
-      <p className="mt-3 text-sm text-slate-300">{copy.waitingFor}</p>
+      {notStarted ? (
+        <h1 data-testid="scan-not-started-title" className="mt-3 text-lg font-semibold text-slate-100">
+          {copy.lead}
+        </h1>
+      ) : (
+        <p className="mt-3 text-sm text-slate-300">{copy.lead}</p>
+      )}
       <p className="mt-1 flex min-w-0 flex-wrap items-baseline justify-center gap-x-2 text-base font-semibold text-slate-100">
         <strong className="min-w-0 break-words">{home}</strong>
         <span className="text-[10px] uppercase tracking-widest text-slate-400">{copy.vs}</span>
         <strong className="min-w-0 break-words">{away}</strong>
       </p>
-      <p className="mt-4 text-xs text-slate-400">{copy.hint}</p>
+      <p className={notStarted ? "mt-4 text-sm text-slate-300" : "mt-4 text-xs text-slate-400"}>{copy.hint}</p>
     </section>
   );
 }

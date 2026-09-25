@@ -1535,6 +1535,8 @@ export type DictionaryKey =
   | "device.scan.confirmTitle"
   | "device.scan.court"
   | "device.scan.match"
+  | "device.scan.notStarted.body"
+  | "device.scan.notStarted.title"
   | "device.scan.time"
   | "device.scan.viewOnly.cancelled"
   | "device.scan.viewOnly.carried"

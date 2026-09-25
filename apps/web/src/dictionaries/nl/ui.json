@@ -2517,6 +2517,8 @@
   "device.scan.match": "Wedstrijd",
   "device.scan.waitingFor": "Wachten op",
   "device.scan.waitingHint": "Deze pagina werkt zichzelf bij.",
+  "device.scan.notStarted.title": "Nog niet begonnen",
+  "device.scan.notStarted.body": "De organisator heeft deze divisie nog niet gestart. Dit scherm werkt zichzelf bij.",
   "device.dead.invalid": "Deze scorelink is niet geldig.",
   "device.dead.revoked": "Deze scorelink is ingetrokken.",
   "device.dead.expired": "Deze scorelink is verlopen.",

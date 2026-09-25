@@ -97,12 +97,15 @@ export default async function ScorePadPage({
         competition_id: string;
         competition_name: string;
         division_name: string;
+        /** Read in THIS render, so the refresh after the organiser's start
+         *  sees it (`scanScreen`'s "not started" row). */
+        division_status: string;
         competition_branding: unknown;
       }[]
     >`
       select f.id, f.round_no, ven.name as venue_name, crt.name as court_name,
              f.scheduled_at, f.home_entrant_id, f.away_entrant_id, d.id as division_id,
-             d.sport_key, d.module_version, d.config,
+             d.sport_key, d.module_version, d.config, d.status as division_status,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding
       from fixtures f
@@ -173,6 +176,7 @@ export default async function ScorePadPage({
     homeKnown: fixture.home_entrant_id !== null,
     awayKnown: fixture.away_entrant_id !== null,
     carriedForward: carried,
+    divisionStatus: fixture.division_status,
   });
   // The venue's zone through the one authority for that join (`venue-tz.ts`),
   // never a fourth copy of it.
@@ -183,7 +187,7 @@ export default async function ScorePadPage({
   // viewer's language.
   const names = await withTenant(link.org_id, (tx) => scanMatchNames(tx, fixture.id, t));
   const ref = names.ref;
-  if (screen.screen === "waiting") {
+  if (screen.screen === "waiting" || screen.screen === "division_not_started") {
     // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
     // until both sides exist, when it renders the pad fresh — the Waiting →
     // Confirm hop needs no client state. Its words go down as props, already
@@ -192,6 +196,12 @@ export default async function ScorePadPage({
     // POLL_MS refresh, to say three sentences (Task 6 review I2). The provider
     // was also what set `<html lang>`; a scanning phone rarely carries the
     // locale cookie the root layout's fallback reads, so the page says it.
+    //
+    // Owner fix 2026-09-24: an unstarted division waits the same way, on the
+    // organiser's Start. `division_status` is read by this render's own query,
+    // and a refresh is a fresh dynamic render (no ETag, no cache), so the first
+    // refresh after the start renders Confirm.
+    const notStarted = screen.screen === "division_not_started";
     return (
       <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
         <HtmlLang lang={locale} />
@@ -201,11 +211,20 @@ export default async function ScorePadPage({
             away={away ? entrantDisplayName(away) : names.away}
             matchRef={ref}
             meta={[fixture.court_name, scheduledLabel, fixture.division_name].filter((m): m is string => !!m)}
-            copy={{
-              waitingFor: t("device.scan.waitingFor"),
-              vs: t("schedule.vs"),
-              hint: t("device.scan.waitingHint"),
-            }}
+            waitingOn={notStarted ? "division_start" : "sides"}
+            copy={
+              notStarted
+                ? {
+                    lead: t("device.scan.notStarted.title"),
+                    vs: t("schedule.vs"),
+                    hint: t("device.scan.notStarted.body"),
+                  }
+                : {
+                    lead: t("device.scan.waitingFor"),
+                    vs: t("schedule.vs"),
+                    hint: t("device.scan.waitingHint"),
+                  }
+            }
           />
         </div>
       </main>

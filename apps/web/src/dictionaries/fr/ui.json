@@ -2562,6 +2562,8 @@
   "device.scan.match": "Match",
   "device.scan.waitingFor": "En attente de",
   "device.scan.waitingHint": "Cette page se met à jour toute seule.",
+  "device.scan.notStarted.title": "Pas encore commencé",
+  "device.scan.notStarted.body": "L'organisateur n'a pas encore démarré cette division. Cet écran se met à jour tout seul.",
   "device.dead.invalid": "Ce lien de score n'est pas valide.",
   "device.dead.revoked": "Ce lien de score a été révoqué.",
   "device.dead.expired": "Ce lien de score a expiré.",

@@ -14,7 +14,7 @@ import en from "@/dictionaries/en/ui.json";
 
 /** Sentinels, so a string the screen looked up itself cannot pass for one it
  *  was handed. */
-const COPY = { waitingFor: "«waiting-for»", vs: "«vs»", hint: "«hint»" };
+const COPY = { lead: "«waiting-for»", vs: "«vs»", hint: "«hint»" };
 const props = (over: Partial<Parameters<typeof ScanWaiting>[0]> = {}) => ({
   home: "A",
   away: "B",
@@ -132,5 +132,48 @@ describe("ScanWaiting (scorer sheets §4.5.2)", () => {
         /\b(truncate|overflow-hidden|text-ellipsis)\b/,
       );
     }
+  });
+});
+
+// Owner-approved fix 2026-09-24: a sheet scanned before the organiser starts the
+// division gets its own screen, "Not started yet" — the same component, so it
+// moves on to Confirm through the same refresh Waiting uses.
+describe("ScanWaiting, waiting on the division's start (owner fix 2026-09-24)", () => {
+  /** The screen's root: `tree()` walks pre-order, so the first element. */
+  const rootOf = (island: { tree: () => unknown }) => (island.tree() as El[])[0]!;
+
+  it("the everyday case first: with no `waitingOn` it is the sides' Waiting, never Not started", () => {
+    const island = renderIsland(ScanWaiting, props());
+    expect(rootOf(island).props["data-testid"]).toBe("scan-waiting");
+    expect(pathTo(island.tree() as ReactNode, "scan-not-started-title"), "no headline on Waiting").toBeNull();
+  });
+
+  it("an unstarted division: its own screen, the handed headline as a heading, both names, the ref and the body", () => {
+    const island = renderIsland(ScanWaiting, props({ waitingOn: "division_start", home: "Ada", away: "Ben" }));
+    const root = rootOf(island);
+    expect(root.props["data-testid"]).toBe("scan-not-started");
+    const title = pathTo(island.tree() as ReactNode, "scan-not-started-title")?.at(-1);
+    expect(title, "the headline has its own element").toBeDefined();
+    expect(title!.type, "…and it is the page heading").toBe("h1");
+    expect(title!.props.children).toBe(COPY.lead);
+    const text = island.text();
+    for (const s of ["Ada", "Ben", "SF·1", COPY.vs, COPY.hint]) expect(text).toContain(s);
+    for (const key of ["device.scan.notStarted.title", "device.scan.notStarted.body"] as const) {
+      expect(text, `no ${key} from the English catalog`).not.toContain(en[key]);
+    }
+  });
+
+  it("re-renders the page every POLL_MS and on a tab return — the way it moves on to Confirm by itself", () => {
+    const doc = { ...recordingTarget(), visibilityState: "visible" as DocumentVisibilityState };
+    const win = recordingTarget();
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("window", win);
+    renderIsland(ScanWaiting, props({ waitingOn: "division_start" }));
+    vi.advanceTimersByTime(POLL_MS - 1);
+    expect(router.refresh).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+    fire(win, "focus");
+    expect(router.refresh).toHaveBeenCalledTimes(2);
   });
 });
