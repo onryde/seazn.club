@@ -61,6 +61,18 @@ describe("device-links.md says what a device link does since Task 2", () => {
     expect(BODY).toContain("until the match is finalized or cancelled");
   });
 
+  // Final review M3: the link also stops scoring once its result moves the
+  // competition on (RESULT_CARRIED_FORWARD), usually long before it is
+  // finalized. The body already says so for UNDO, so a page-wide search would
+  // pass without this fix: every sentence that STATES THE LIFETIME must carry
+  // the bound itself, in scorer-sheets.md's own words for it.
+  it("every lifetime sentence also ends it when the result moves the competition on (review M3)", () => {
+    expect(FRONTMATTER).toMatch(/^description: .*until the match is finalized or cancelled, or its result moves the competition on/m);
+    const lifetime = SENTENCES.filter((s) => s.includes("until the match is finalized or cancelled"));
+    expect(lifetime, "the description and the Lifetime list both state it").toHaveLength(2);
+    for (const s of lifetime) expect(s, s).toContain("finalized or cancelled, or its result moves the competition on");
+  });
+
   it("names the hand-over path by the controls the organiser actually taps", () => {
     expect(ARTICLE).toContain(HAND_OVER);
     expect(ARTICLE).toContain(CREATE);

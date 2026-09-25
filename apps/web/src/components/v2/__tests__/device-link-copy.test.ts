@@ -48,6 +48,28 @@ describe("dlink.desc says how long a device link lives (no expiry since Task 2)"
   });
 });
 
+// Final review M3: a device link also stops scoring once its result moves the
+// competition on (403 RESULT_CARRIED_FORWARD; the pad goes View-only), which in
+// a knockout is the moment the result is entered, long before anyone
+// finalizes. "Until finalized or cancelled" alone promised more than the link
+// does. The clause is pinned per locale, in the verb that locale's own
+// carried-forward refusal uses (`scorepad.refusal.carriedForward`), and it
+// must follow the lifetime it qualifies.
+const MOVED_ON: Record<string, string> = {
+  en: "or its result moves the competition on",
+  es: "o su resultado haga avanzar la competición",
+  fr: "ou que son résultat fasse avancer la compétition",
+  nl: "of de uitslag de competitie verder zet",
+};
+
+describe("dlink.desc also says the link stops once its result moves the competition on (review M3)", () => {
+  it.each(Object.keys(DESC))("%s: the carried-forward bound, right after the lifetime", (locale) => {
+    const desc = DESC[locale]!;
+    expect(desc).toContain(MOVED_ON[locale]);
+    expect(desc.indexOf(MOVED_ON[locale]!)).toBeGreaterThan(desc.indexOf(LIFETIME[locale]!));
+  });
+});
+
 // Owner ruling (2026-09-23): the plain-Revoke warning says NO replacement is
 // made and points at Revoke & reissue by ITS ON-SCREEN LABEL in that locale —
 // read from the same dictionary, so a relabel moves this test with it. Its first

@@ -1,6 +1,6 @@
 ---
 title: Device links
-description: Hand any phone a link that can score one match — no account, no app. It works until the match is finalized or cancelled.
+description: Hand any phone a link that can score one match — no account, no app. It works until the match is finalized or cancelled, or its result moves the competition on.
 order: 3
 ---
 
@@ -18,7 +18,7 @@ Score that one match, with the same pad a signed-in scorer gets — [choosing a 
 
 ## Lifetime and revocation
 
-- A device link works until the match is finalized or cancelled. There is no daily cut-off.
+- A device link works until the match is finalized or cancelled, or its result moves the competition on (see above). There is no daily cut-off.
 - Handing the same match over again never replaces the link — you get the same QR.
 - If a sheet is lost, or the link reached the wrong person, choose **Revoke & reissue**: the old QR stops working and you get a new one.
 - **Revoke** turns the link off with no replacement — the device is signed out on its next tap.

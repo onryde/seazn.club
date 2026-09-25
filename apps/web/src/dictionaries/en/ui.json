@@ -2749,7 +2749,7 @@
   "dlink.error.forbidden": "You don't have permission to manage scoring links for this match.",
   "dlink.error.signedOut": "Your session has expired. Sign in again to manage scoring links.",
   "dlink.title": "Hand this device over",
-  "dlink.desc": "Whoever holds the phone scores this fixture as the {scorer} — no account needed. The link works for this fixture only, until it's finalized or cancelled; they can't finalize.",
+  "dlink.desc": "Whoever holds the phone scores this fixture as the {scorer} — no account needed. The link works for this fixture only, until it's finalized or cancelled, or its result moves the competition on; they can't finalize.",
   "dlink.alt": "Scoring link QR",
   "dlink.sameQr": "Same QR every time — Revoke & reissue if a sheet is lost.",
   "dlink.copy": "Copy link",
