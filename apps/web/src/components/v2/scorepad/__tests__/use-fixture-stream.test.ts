@@ -226,11 +226,14 @@ describe("useFixtureStream — polling fallback", () => {
     expect(listEventsSince).toHaveBeenCalledTimes(2);
   });
 
-  it("skipPollWhile suppresses a due tick without stopping the interval", async () => {
+  it("a write in flight suppresses a due tick without stopping the interval", async () => {
     const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
     const listEventsSince = vi.fn(async () => []);
     const { connector } = fakeConnector();
-    let skip = true;
+    // Never settles: the catch-up waits on it for the whole test, so every
+    // read counted below is a tick's.
+    const drain = new Promise<void>(() => {});
+    let writing = true;
     mountStream({
       fixtureId: "fx-1",
       auth: { kind: "session" },
@@ -240,13 +243,13 @@ describe("useFixtureStream — polling fallback", () => {
       connector,
       listEventsSince,
       pollMs: 1_000,
-      skipPollWhile: () => skip,
+      writeInFlight: () => (writing ? drain : null),
     });
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(listEventsSince).not.toHaveBeenCalled(); // suppressed
 
-    skip = false;
+    writing = false;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(listEventsSince).toHaveBeenCalledTimes(1); // resumes on the next tick
   });
@@ -332,6 +335,72 @@ describe("useFixtureStream — catch-up on subscribe", () => {
     mountStream({ fixtureId: "fx-1", auth: { kind: "session" }, sinceSeq: 2, onEvents: () => {}, fetchFn: fn, connector, listEventsSince });
     await vi.advanceTimersByTimeAsync(0);
     expect(listEventsSince.mock.calls).toEqual([["fx-1", 2]]);
+  });
+
+  // A tick due during the caller's write drain can be skipped, because the
+  // next tick comes round. The catch-up runs only once, so skipping it would
+  // lose it for good: a pad that reopens with a leftover queue drains that
+  // queue at mount, which is exactly when the catch-up comes due.
+  it("a catch-up due while the caller's write drain is out WAITS for it, then reads — it is never skipped", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const onEvents = vi.fn();
+    const listEventsSince = vi.fn(async () => rows);
+    const { connector } = fakeConnector();
+    let finishDrain!: () => void;
+    // As the pipeline's own drain does: the handle is cleared BEFORE the
+    // promise settles (`.finally` in `runDrain`).
+    let drain: Promise<void> | null = new Promise<void>((resolve) => {
+      finishDrain = () => {
+        drain = null;
+        resolve();
+      };
+    });
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents,
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      pollMs: 15_000,
+      writeInFlight: () => drain,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no read while the drain is out").not.toHaveBeenCalled();
+
+    finishDrain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls, "the catch-up, once the drain settles — not the first tick").toEqual([["fx-1", 4]]);
+    expect(onEvents).toHaveBeenCalledWith(rows);
+  });
+
+  it("an unmount while the catch-up waits on a drain makes no read", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const listEventsSince = vi.fn(async () => []);
+    const { connector } = fakeConnector();
+    let finishDrain!: () => void;
+    let drain: Promise<void> | null = new Promise<void>((resolve) => {
+      finishDrain = () => {
+        drain = null;
+        resolve();
+      };
+    });
+    const stream = mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 0,
+      onEvents: () => {},
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      writeInFlight: () => drain,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    stream.unmount();
+    finishDrain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).not.toHaveBeenCalled();
   });
 
   it("an unmount before the token door answers makes no catch-up read", async () => {

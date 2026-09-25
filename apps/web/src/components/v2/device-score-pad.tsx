@@ -349,7 +349,7 @@ export function DeviceScorePad({
   // \"0\" at all" — the teardown/re-handshake also restarts the polling
   // interval on every render, so while the component is re-rendering NEITHER
   // transport ever delivers. `use-fixture-stream.ts` already
-  // reads `sinceSeq`/`onEvents`/`skipPollWhile` through refs for exactly this
+  // reads `sinceSeq`/`onEvents`/`writeInFlight` through refs for exactly this
   // reason, and its comment says so; the identity hazard was re-introduced
   // from the CALLER, which is why nothing in that file could see it.
   //

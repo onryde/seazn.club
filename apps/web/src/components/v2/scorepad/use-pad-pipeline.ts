@@ -1389,7 +1389,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     },
     [fixtureId, transport, commitLedgerEvents, reconcileAfterAck, clearHealedRefusal],
   );
-  const skipPollWhileDraining = useCallback(() => drainInFlight.current !== null, []);
+  const drainNow = useCallback(() => drainInFlight.current, []);
   useFixtureStream({
     fixtureId,
     auth: params.auth ?? SESSION_AUTH,
@@ -1420,7 +1420,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     sinceSeq: ledgerEvents.length,
     listEventsSince: transport.listEventsSince,
     onEvents: onStreamEvents,
-    skipPollWhile: skipPollWhileDraining,
+    writeInFlight: drainNow,
     fetchFn: params.streamFetchFn,
     connector: params.streamConnector,
     pollMs: params.streamPollMs,
@@ -1626,7 +1626,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // at acked.seq if a poll tick (onStreamEvents) or an initialEvents
           // re-seed observed the server's committed row for this SAME event
           // before this append's own HTTP response made it back -
-          // skipPollWhileDraining only blocks a NEW poll from starting, not
+          // `writeInFlight: drainNow` only blocks a NEW poll from starting, not
           // an initialEvents prop change (no such guard on that effect) or a
           // poll already in flight when the drain began. The raw spread
           // never checked for that, so both entries survived - permanent for

@@ -708,17 +708,74 @@ describe("usePadPipeline — live stream wiring (review finding 3)", () => {
     const submitPromise = pad.current.submit("generic.score", { by: "H", points: 1 }); // drain starts, gated
     await vi.advanceTimersByTimeAsync(0); // let attemptRealtime settle into polling mode
     // Whatever the stream's catch-up on subscribe did at mount is settled by
-    // now; only reads from here on are the ticks this test is about.
+    // now; only reads from here on are the ticks this test is about. (Here
+    // the catch-up comes due before the drain is out, so it has already read;
+    // the case where it comes due DURING a drain is the test below.)
     const readsAtRest = listEventsSince.mock.calls.length;
 
     await vi.advanceTimersByTimeAsync(1_000); // a poll tick is due WHILE the drain is still in flight
-    expect(listEventsSince).toHaveBeenCalledTimes(readsAtRest); // suppressed by skipPollWhile
+    expect(listEventsSince).toHaveBeenCalledTimes(readsAtRest); // suppressed by writeInFlight
 
     gate.resolve(success(1));
     await submitPromise;
 
     await vi.advanceTimersByTimeAsync(1_000); // drain finished — the NEXT tick may fetch
     expect(listEventsSince).toHaveBeenCalledTimes(readsAtRest + 1);
+  });
+
+  // A pad that reopens with a leftover queue drains it at mount — the same
+  // moment the stream's catch-up comes due. A tick may skip a drain (the next
+  // tick comes round); the catch-up runs once, so it waits the drain out.
+  it("a leftover queue drained at mount does not swallow the stream's catch-up — the read goes out once the drain settles", async () => {
+    const DB_NAME = "catch-up-after-mount-drain";
+    const tokenDoor = deferred<void>();
+    const ack = deferred<AppendCallResult>();
+    const appendCalls: AppendEventBody[] = [];
+    const listEventsSince = vi.fn(async (): Promise<LedgerSlotEvent[]> => []);
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        return ack.promise;
+      },
+      listEventsSince,
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    await enqueue(indexedDbQueueStore(DB_NAME), {
+      localId: "local-leftover-1",
+      idempotencyKey: "idem-leftover-1",
+      type: "generic.score",
+      payload: { by: "H", points: 1 },
+      expectedSeq: 0,
+      createdAt: "2026-09-25T00:00:00.000Z",
+      attempts: 0,
+    });
+    const pad = mountPipeline(
+      baseParams({
+        transport,
+        queueDbName: DB_NAME,
+        // The token door answers only once the drain is out, so the catch-up
+        // comes due DURING it.
+        streamFetchFn: (async () => {
+          await tokenDoor.promise;
+          return fakeResponse(200, { ok: true, data: { token: "t", channel: "c" } });
+        }) as unknown as typeof fetch,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(appendCalls, "the leftover is on the wire").toHaveLength(1);
+    tokenDoor.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no read while the drain is out").not.toHaveBeenCalled();
+
+    ack.resolve(success(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(listEventsSince.mock.calls, "the catch-up, once the drain has settled").toEqual([["fx-1", 1]]);
   });
 
   it("an inbound stream event moves the folded state to the server's own fold", async () => {
@@ -1050,7 +1107,7 @@ describe("usePadPipeline — offline queue survives a poll merge (S12/#421)", ()
 
     // The drain already STOPPED (a network error, not an in-flight send —
     // sendOne returns "stayed-queued" and runDrain's own `.finally` clears
-    // `drainInFlight`), so skipPollWhile does NOT suppress this poll tick.
+    // `drainInFlight`), so `writeInFlight` does NOT suppress this poll tick.
     await vi.advanceTimersByTimeAsync(0); // settle into polling
     await vi.advanceTimersByTimeAsync(1_000); // a poll tick merges the foreign core.note
     await vi.advanceTimersByTimeAsync(0);
