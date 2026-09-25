@@ -18,11 +18,10 @@ import type { PassKey } from "../../src/lib/currency";
 // visits — the same discipline the components' own `Record<PassLockReason, …>`
 // props enforce.
 import type { PassLockReason } from "../../src/lib/entitlements";
-// The one RUNTIME import from the app side, and deliberately not
-// `@/lib/currency`: see e2e/price-kit.ts for why importing that here collects
-// zero tests instead of failing loudly. Every money figure below — rendered or
-// charged — comes from the seed through this, because these numbers have now
-// moved three times and a literal has rotted every time.
+// Not `@/lib/currency`: see e2e/price-kit.ts for why importing that here
+// collects zero tests instead of failing loudly. Every money figure below —
+// rendered or charged — comes from the seed through this, because these numbers
+// have now moved three times and a literal has rotted every time.
 import {
   HIDDEN_PASS_RUNGS,
   SELLABLE_PASS_RUNGS,
@@ -30,6 +29,9 @@ import {
   passLabel,
   passMinor,
 } from "../price-kit";
+// Runtime, by relative path (no `@/` alias to resolve): the server Stripe
+// client's per-request timeout, which PASS_CREDIT_SETTLE_MS is derived from.
+import { STRIPE_REQUEST_TIMEOUT_MS } from "../../src/lib/stripe";
 
 // Event Pass, end to end, through a REAL Stripe test-mode purchase (task 22).
 //
@@ -246,6 +248,40 @@ async function passRows(orgId: string): Promise<{ competition_id: string; stripe
     from competition_passes where org_id = ${orgId}`);
 }
 
+/** The product's own record of the pass's subscription credit
+ *  (`pass_credit_redemptions`), or null while there is none. Both money writes
+ *  land in it only AFTER Stripe has confirmed them — the grant inserts the row
+ *  once `createBalanceTransaction` returned (credit-then-insert), and the
+ *  reversal stamps `reversed_at` once its debit returned — and only the delivery
+ *  that actually moved the money writes it. That makes it the one completion
+ *  signal that also covers a delivery the spec did not send. */
+async function passCreditRedemption(intent: string): Promise<{
+  amount_minor: number;
+  reversed: boolean;
+  reversed_minor: number | null;
+  undetermined: boolean;
+} | null> {
+  return withDb(async (sql) => {
+    const [row] = await sql<
+      { amount_minor: number; reversed: boolean; reversed_minor: number | null; undetermined: boolean }[]
+    >`
+      select amount_minor, reversed_at is not null as reversed, reversed_minor,
+             reversal_undetermined_at is not null as undetermined
+      from pass_credit_redemptions where payment_intent = ${intent}`;
+    return row ?? null;
+  });
+}
+
+/**
+ * How long the server can still be moving pass-credit money after the spec's
+ * OWN webhook delivery has returned — which on CI is not zero (see U16). Either
+ * path makes at most three Stripe calls against this file's customers (grant:
+ * read the charge, scan the balance history, credit; reversal: scan the history,
+ * read the customer, debit), each capped by the server client's own per-request
+ * timeout and never retried; the margin covers the DB write that follows.
+ */
+const PASS_CREDIT_SETTLE_MS = 3 * STRIPE_REQUEST_TIMEOUT_MS + 5_000;
+
 async function stripeCustomerId(orgId: string): Promise<string | null> {
   return withDb(async (sql) => {
     const [row] = await sql<{ stripe_customer_id: string | null }[]>`
@@ -447,17 +483,40 @@ async function postSignedStripeWebhook(
   type: string,
   object: unknown,
 ): Promise<void> {
-  expect(await deliverSignedStripeWebhook(page, type, object)).toBeLessThan(300);
+  const { payload, headers } = signedStripeEvent(type, object);
+  const res = await page.request.post("/api/webhooks/stripe", { headers, data: payload });
+  expect(res.status()).toBeLessThan(300);
 }
 
-/** The delivery itself, returning the route's status rather than asserting it,
- *  so a copy started in the background can be settled to a value and checked
- *  later instead of rejecting unobserved. */
-async function deliverSignedStripeWebhook(
-  page: Page,
+/**
+ * The forwarder's copy, as the forwarder sends it: its own event id, its own
+ * connection (Node's fetch, not the page's request context), and nobody waiting
+ * on it. Returns the route's status, or the error as text, rather than
+ * asserting — a copy left running in the background must settle to a value the
+ * test checks later, never to a rejection nothing observes.
+ */
+async function forwardSignedStripeWebhook(
+  baseURL: string,
   type: string,
   object: unknown,
-): Promise<number> {
+): Promise<number | string> {
+  const { payload, headers } = signedStripeEvent(type, object);
+  try {
+    const res = await fetch(new URL("/api/webhooks/stripe", baseURL), {
+      method: "POST",
+      headers,
+      body: payload,
+    });
+    return res.status;
+  } catch (err) {
+    return String(err);
+  }
+}
+
+function signedStripeEvent(
+  type: string,
+  object: unknown,
+): { payload: string; headers: Record<string, string> } {
   const event = {
     id: `evt_${randomBytes(8).toString("hex")}`,
     object: "event",
@@ -470,7 +529,8 @@ async function deliverSignedStripeWebhook(
     data: { object },
   };
   const payload = JSON.stringify(event);
-  const res = await page.request.post("/api/webhooks/stripe", {
+  return {
+    payload,
     headers: {
       "stripe-signature": stripe.webhooks.generateTestHeaderString({
         payload,
@@ -478,9 +538,7 @@ async function deliverSignedStripeWebhook(
       }),
       "content-type": "application/json",
     },
-    data: payload,
-  });
-  return res.status();
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -819,6 +877,16 @@ for (const vp of VIEWPORTS) {
       expect(sub.status).toBe("trialing");
       proSubscriptionId = sub.id;
       await postSignedStripeWebhook(page, "customer.subscription.created", sub);
+      // On CI the forwarder relays Stripe's own `customer.subscription.created`
+      // too, and either copy can be the one that credits — the other returns
+      // having done nothing (U16 has the whole story). So wait for the product
+      // to record the credit, never merely for this delivery, before reading
+      // the balance it moved.
+      await expect
+        .poll(async () => (await passCreditRedemption(passIntent))?.amount_minor ?? null, {
+          timeout: PASS_CREDIT_SETTLE_MS,
+        })
+        .toBe(passMinor("event_pass"));
 
       // What was PAID sits on the customer BALANCE (D12 — Checkout refuses
       // `discounts` alongside `allow_promotion_codes`, so a balance credit is
@@ -925,6 +993,7 @@ for (const vp of VIEWPORTS) {
 
     test(`U16 · a full refund revokes the pass and the offer comes back (${vp.name})`, async ({
       page,
+      baseURL,
     }) => {
       test.skip(!stripeUsable, "Stripe not usable — U1 skipped the pass money path");
       test.setTimeout(180_000);
@@ -946,28 +1015,31 @@ for (const vp of VIEWPORTS) {
       const pi = await stripe.paymentIntents.retrieve(passIntent, { expand: ["latest_charge"] });
       const charge = pi.latest_charge as Stripe.Charge;
       expect(charge.refunded).toBe(true);
-      // TWO deliveries of this one refund, the first left in flight. On CI the
-      // `stripe listen` forwarder (see postSignedStripeWebhook) relays Stripe's
-      // own `charge.refunded` for this charge to this same server, under its
-      // own event id, while the spec is delivering its copy. Both reach
-      // `reversePassCreditOnRefund`, both pass its `reversed_at` fast-path read,
-      // and both call createBalanceTransaction with the one idempotency key
-      // `pass-credit-refund-reversal-{intent}`; Stripe answers whichever lands
-      // second with 409 `idempotency_key_in_use` and that delivery returns 200
-      // having done nothing, while the other's debit is still in flight. Twice
-      // on CI (PR #860's run, run 35996498230) the spec's copy was the one that
-      // lost, so the balance read below saw the unreversed -1199.
+      // TWO deliveries of this one refund, and the spec's is not the one that
+      // does the work. On CI the `stripe listen` forwarder (see
+      // postSignedStripeWebhook) relays Stripe's own `charge.refunded` for this
+      // charge to this same server, under its own event id, while the spec is
+      // delivering its copy. Both reach `reversePassCreditOnRefund`, both pass
+      // its `reversed_at` fast-path read, and both call createBalanceTransaction
+      // with the one idempotency key `pass-credit-refund-reversal-{intent}`.
+      // Stripe answers the later one with 409 `idempotency_key_in_use`, and that
+      // delivery logs "pass credit reversal failed" and returns 200 having done
+      // nothing while the other's debit is still in flight. Twice on CI (PR
+      // #860's run, run 35996498230) the spec's copy was the later one, and this
+      // test read the balance straight after it returned: -1199, the credit
+      // U14 granted, not yet reversed. The product converges — the other copy
+      // lands the debit and stamps the row — so the defect was the READ.
       //
-      // The race is modelled here on purpose rather than left to the forwarder's
-      // timing, so this test meets it on every run and every machine instead of
-      // on some CI runs only — and so the product's side of it is pinned too:
-      // however many copies arrive, exactly one debit (checked below).
-      // Settled to a value, never left to reject: a red further down must not
-      // leave an unobserved rejection behind it.
-      const forwardedCopy = deliverSignedStripeWebhook(page, "charge.refunded", charge).then(
-        (status) => ({ status, error: null as string | null }),
-        (err: unknown) => ({ status: 0, error: String(err) }),
-      );
+      // Modelled here on purpose, in the order the two red runs had it (Stripe's
+      // copy ahead: it has already revoked the pass before the spec's copy is
+      // sent), so every run meets the race rather than some CI runs only.
+      // Arranged on observable state, not a sleep.
+      const forwardedCopy = forwardSignedStripeWebhook(baseURL!, "charge.refunded", charge);
+      await expect
+        .poll(async () => (await passRows(rig.orgId)).length, {
+          message: "Stripe's copy revoked the pass before the spec's copy was sent",
+        })
+        .toBe(0);
       await postSignedStripeWebhook(page, "charge.refunded", charge);
 
       // Money back means the competition rejoins the quota.
@@ -985,13 +1057,31 @@ for (const vp of VIEWPORTS) {
       // `reverseAmount`'s own `min(granted, max(-balance, 0))` formula would
       // hand back LESS than the full amount if anything upstream had spent
       // part of it, which would be a real finding about U15, not this test.
+      //
+      // Waited for on the product's own stamp, not on the spec's delivery (see
+      // above): `reversed_at` is written only after the debit returned, by
+      // whichever copy made it. The full amount, and NOT undetermined — a
+      // stamp that clawed back nothing would satisfy a bare `reversed`.
+      await expect
+        .poll(() => passCreditRedemption(passIntent), { timeout: PASS_CREDIT_SETTLE_MS })
+        .toEqual({
+          amount_minor: passMinor("event_pass"),
+          reversed: true,
+          reversed_minor: passMinor("event_pass"),
+          undetermined: false,
+        });
       const customerId = await stripeCustomerId(rig.orgId);
       const refundedCustomer = (await stripe.customers.retrieve(customerId!)) as Stripe.Customer;
       expect(refundedCustomer.balance).toBe(0);
-      expect(await forwardedCopy, "the concurrent copy was ACKed too").toEqual({
-        status: 200,
-        error: null,
-      });
+      // However many copies arrived, ONE debit: the idempotency key collapsed
+      // them, and nothing debited twice.
+      const history = await stripe.customers.listBalanceTransactions(customerId!, { limit: 20 });
+      expect(
+        history.data
+          .filter((t) => t.metadata?.pass_payment_intent === passIntent && t.amount > 0)
+          .map((t) => t.amount),
+      ).toEqual([passMinor("event_pass")]);
+      expect(await forwardedCopy, "Stripe's copy was ACKed too").toBe(200);
 
       await page.goto(upgradeUrl(rig));
       await expect(page.locator("[data-pass-ticket]")).toContainText(passLabel("event_pass"));
