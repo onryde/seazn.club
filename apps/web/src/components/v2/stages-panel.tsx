@@ -40,6 +40,7 @@ import { TagChipInput } from "@/components/ui/tag-chip-input";
 import { MatchRuleFields } from "@/components/v2/match-rules";
 import {
   STAGE_RULES_SPORTS,
+  alignBestOfOnePoints,
   buildRuleOverride,
   hydrateRuleValues,
   ruleOptionLabel,
@@ -2098,7 +2099,7 @@ function StageFormatRow({
       // into "I cleared everything".
       await apiV1(`/api/v1/stages/${stageId}/rules`, {
         method: "PUT",
-        json: { rules: stageFormatSaveFragment(sportKey, rules, opened, values) },
+        json: { rules: stageFormatSaveFragment(sportKey, rules, opened, values, divisionConfig) },
       });
       setOpen(false);
       onSaved();
@@ -2167,7 +2168,16 @@ function StageFormatRow({
           {/* `MatchRuleFields` unchanged, and unwrapped: its own
               `grid gap-4 sm:grid-cols-3` is what stacks these fields on a
               phone, so nothing here needs a width class. */}
-          <MatchRuleFields sportKey={sportKey} values={values} onChange={setValues} disabled={saving} />
+          {/* `inherited`: the fragment's blanks fall back to the DIVISION, so
+              a stage that names no best-of but inherits best of 1 still gets
+              the single "Points to win" field (owner ruling 2026-09-25). */}
+          <MatchRuleFields
+            sportKey={sportKey}
+            values={values}
+            onChange={setValues}
+            disabled={saving}
+            inherited={divisionConfig}
+          />
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -2236,17 +2246,26 @@ export function stageFormatEditorValues(
  * genuine no-op. Only an actual edit goes through `buildRuleOverride`.
  * Clearing is NOT reachable from here at all; `{rules: null}` belongs to the
  * explicit "Use division format" control.
+ *
+ * One exception to "verbatim" (owner ruling 2026-09-25): on an effective best
+ * of 1 the editor shows a single points field reading `finalSetTo`, and every
+ * save writes that number to both keys — so a stored pair that disagrees is
+ * aligned even when nothing was touched (`alignBestOfOnePoints`). `inherited`
+ * is the division config, for the stage that names no best-of of its own.
  */
 export function stageFormatSaveFragment(
   sportKey: string,
   stored: Record<string, unknown>,
   opened: Record<string, string>,
   values: Record<string, string>,
+  inherited: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const untouched =
     Object.keys(opened).length === Object.keys(values).length &&
     Object.keys(opened).every((k) => opened[k] === values[k]);
-  return untouched ? stored : buildRuleOverride(sportKey, values);
+  return untouched
+    ? alignBestOfOnePoints(sportKey, stored, inherited)
+    : buildRuleOverride(sportKey, values, inherited);
 }
 
 /**

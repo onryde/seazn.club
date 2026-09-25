@@ -570,7 +570,14 @@ export function DivisionSettings({
       // fields didn't themselves resend. Merge points separately; everything
       // else a rule field returns is a fine top-level Object.assign, exactly
       // as before.
-      const { points: rulePoints, ...ruleOverrideRest } = buildRuleOverride(division.sport_key, ruleValues);
+      // `division.config` as the inherited config: a blank best-of here keeps
+      // the saved one (the `{...config}` base above), so it is also what
+      // decides whether the single best-of-1 points field applies.
+      const { points: rulePoints, ...ruleOverrideRest } = buildRuleOverride(
+        division.sport_key,
+        ruleValues,
+        (division.config as Record<string, unknown>) ?? {},
+      );
       Object.assign(override, ruleOverrideRest);
       if (rulePoints && typeof rulePoints === "object") {
         const mergedPoints: Record<string, unknown> = {
@@ -941,6 +948,7 @@ export function DivisionSettings({
               values={ruleValues}
               onChange={setRuleValues}
               disabled={!canEdit}
+              inherited={(division.config as Record<string, unknown>) ?? {}}
             />
 
             {stages.length > 0 && (
