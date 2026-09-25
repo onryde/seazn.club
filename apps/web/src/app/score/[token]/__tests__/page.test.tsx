@@ -14,7 +14,8 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { sql } from "@/lib/db";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
-import { createEntrants } from "@/server/usecases/entrants";
+import { createEntrants, getEntrant } from "@/server/usecases/entrants";
+import { getFixtureState, getLineup, listEvents, loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { startDivision } from "@/server/usecases/schedule";
 import { createDeviceLink, ensureDeviceLink } from "@/server/usecases/device-links";
@@ -86,6 +87,24 @@ type WaitingProps = {
 // header); there is no request here. Hoisted so one test can switch it.
 const locale = vi.hoisted(() => ({ value: "en" as "en" | "fr" }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => locale.value }));
+
+// The pad's own loads, passed through to the real ones and recorded, so a test
+// can say which of them a screen paid for (review 2026-09-25: a waiting screen
+// re-renders every POLL_MS, and must not load the pad to print two names).
+vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/usecases/fixtures")>();
+  return {
+    ...real,
+    loadFixturePadCfg: vi.fn(real.loadFixturePadCfg),
+    getFixtureState: vi.fn(real.getFixtureState),
+    listEvents: vi.fn(real.listEvents),
+    getLineup: vi.fn(real.getLineup),
+  };
+});
+vi.mock("@/server/usecases/entrants", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/usecases/entrants")>();
+  return { ...real, getEntrant: vi.fn(real.getEntrant) };
+});
 
 // Every mint seals now (scorer sheets §4.1). A throwaway key of this file's own,
 // never the developer's .env.local one: CI's unit job has no DEVICE_LINK_KEK at
@@ -312,7 +331,10 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
       expect(waiting, "precondition: the not-started screen").not.toBeNull();
       expect(find(tree, DictProvider), "no dictionary rides on every refresh").toBeNull();
       expect((find(tree, HtmlLang)!.props as { lang?: string }).lang).toBe("fr");
-      const { copy } = waiting!.props as WaitingProps;
+      const { copy, waitingOn } = waiting!.props as WaitingProps;
+      // The French words alone do not say WHICH wait this is: a page that
+      // handed them to the sides' Waiting would still pass the copy pin.
+      expect(waitingOn, "…the division's start, not the sides").toBe("division_start");
       expect(copy).toEqual({
         lead: fr["device.scan.notStarted.title"],
         vs: fr["schedule.vs"],
@@ -361,6 +383,66 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     } finally {
       locale.value = "en";
     }
+  });
+
+  // Review 2026-09-25: a phone scanned early sits on a waiting screen that
+  // re-renders the page every POLL_MS, all morning. Each of those renders used
+  // to pay for the pad's cfg, fold state, ledger, rosters and lineups, only to
+  // print two names. The screen is picked from the fixture row first, and both
+  // waiting screens return before any of it. The positive pair first, so a
+  // spy that recorded nothing could not pass the negatives.
+  it("the waiting screens load nothing only the pad needs; the pad loads all of it", async () => {
+    const padLoaders = { loadFixturePadCfg, getFixtureState, listEvents, getLineup, getEntrant };
+    const callsNow = () =>
+      Object.fromEntries(Object.entries(padLoaders).map(([name, fn]) => [name, vi.mocked(fn).mock.calls.length]));
+    const clear = () => Object.values(padLoaders).forEach((fn) => vi.mocked(fn).mockClear());
+    const none = Object.fromEntries(Object.keys(padLoaders).map((name) => [name, 0]));
+
+    // The pad (Confirm): every loader runs, both sides' roster and lineup.
+    const started = await seedScorableFixture();
+    const padToken = (await ensureDeviceLink(started.auth, started.fixtureId)).secret;
+    clear();
+    const padTree = await ScorePadPage({ params: Promise.resolve({ token: padToken }) });
+    expect(find(padTree, DeviceScorePad), "precondition: the pad").not.toBeNull();
+    expect(callsNow(), "the pad pays for its own loads").toEqual({
+      loadFixturePadCfg: 1,
+      getFixtureState: 1,
+      listEvents: 1,
+      getLineup: 2,
+      getEntrant: 2,
+    });
+
+    // "Not started yet": both sides seated, so a pad-first page would load both.
+    const early = await seedScorableFixture({ start: false });
+    const earlyToken = (await ensureDeviceLink(early.auth, early.fixtureId)).secret;
+    clear();
+    const earlyTree = await ScorePadPage({ params: Promise.resolve({ token: earlyToken }) });
+    const notStarted = find(earlyTree, ScanWaiting);
+    expect((notStarted?.props as WaitingProps | undefined)?.waitingOn, "precondition: Not started yet").toBe(
+      "division_start",
+    );
+    expect(callsNow(), "Not started yet loads none of the pad").toEqual(none);
+
+    // Waiting with ONE side seated, so a pad-first page would load that side.
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
+    const fixtures = await fixturesOf(stage.id);
+    const sf1 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const final = fixtures.find((f) => f.round_no === 2)!;
+    await decide(await deviceFor(auth, sf1.id), sf1.id);
+    const waitToken = (await ensureDeviceLink(auth, final.id)).secret;
+    clear();
+    const waitTree = await ScorePadPage({ params: Promise.resolve({ token: waitToken }) });
+    const waiting = find(waitTree, ScanWaiting);
+    expect((waiting?.props as WaitingProps | undefined)?.waitingOn, "precondition: Waiting on its sides").toBe(
+      "sides",
+    );
+    const { home, away } = waiting!.props as WaitingProps;
+    expect(
+      [home, away].filter((s) => ["A", "B", "C", "D"].includes(s)),
+      "…still naming its seated side, from the fixture row",
+    ).toHaveLength(1);
+    expect(callsNow(), "Waiting loads none of the pad").toEqual(none);
   });
 
   it("one side filled, the other still TBD → still Waiting, the known side by name", async () => {

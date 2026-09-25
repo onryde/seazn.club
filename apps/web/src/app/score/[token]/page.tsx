@@ -30,7 +30,6 @@ import { hasFeature } from "@/lib/entitlements";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
-import { entrantDisplayName } from "@/lib/entrant-name";
 import { deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
 import { resultCarriedForward } from "@/server/usecases/carried-forward";
 import { scanMatchNames } from "@/server/usecases/scan-match-names";
@@ -90,6 +89,14 @@ export default async function ScorePadPage({
         scheduled_at: string | null;
         home_entrant_id: string | null;
         away_entrant_id: string | null;
+        /** `fixtures.status` — the same column `getFixtureState` reports, read
+         *  here so the screen is picked before any of the pad's own loads. */
+        status: string;
+        /** Each seated side's `entrants.display_name`: all the waiting screens
+         *  print for a seated side (the pad's `side()` carries no `kind`, so
+         *  `entrantDisplayName` over it was this snapshot name anyway). */
+        home_name: string | null;
+        away_name: string | null;
         division_id: string;
         sport_key: string;
         module_version: string;
@@ -104,13 +111,16 @@ export default async function ScorePadPage({
       }[]
     >`
       select f.id, f.round_no, ven.name as venue_name, crt.name as court_name,
-             f.scheduled_at, f.home_entrant_id, f.away_entrant_id, d.id as division_id,
+             f.scheduled_at, f.home_entrant_id, f.away_entrant_id, f.status,
+             he.display_name as home_name, ae.display_name as away_name, d.id as division_id,
              d.sport_key, d.module_version, d.config, d.status as division_status,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding
       from fixtures f
       left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
+      left join entrants he on he.id = f.home_entrant_id
+      left join entrants ae on ae.id = f.away_entrant_id
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
       where f.id = ${link.fixture_id}`;
@@ -120,11 +130,86 @@ export default async function ScorePadPage({
 
   // Same brand chain as the public pages / noticeboard (Pro entitlements
   // resolved inside orgBoardChrome): the volunteer's pad wears club colors.
+  // Every scan screen does — the waiting screens' `bg-court` is `--ps-court` —
+  // so this stays above their early return.
   const chrome = await orgBoardChrome(read);
   const themeStyle = chrome.themed
     ? publicThemeStyleChain(fixture.competition_branding, chrome.branding)
     : undefined;
 
+  // Scorer sheets §4.5 — which screen this scan opens on. One table
+  // (`scanScreen`); `resultCarriedForward` is the same live predicate the
+  // scoring path refuses on, status gate included (a SCHEDULED fixture whose
+  // feed target was hand-seated is still the umpire's to score).
+  //
+  // Picked from the fixture row alone, BEFORE any load only the pad needs
+  // (review 2026-09-25): a phone scanned early sits on a waiting screen that
+  // re-renders this page every POLL_MS, possibly all morning, and each of
+  // those renders used to pay for the pad's cfg, fold state, ledger, both
+  // rosters and both lineups, to print two names. Pinned by page.test.tsx
+  // ("the waiting screens load nothing only the pad needs").
+  const carried = await withTenant(link.org_id, (tx) => resultCarriedForward(tx, fixture.id));
+  const screen = scanScreen({
+    status: fixture.status,
+    homeKnown: fixture.home_entrant_id !== null,
+    awayKnown: fixture.away_entrant_id !== null,
+    carriedForward: carried,
+    divisionStatus: fixture.division_status,
+  });
+  // The venue's zone through the one authority for that join (`venue-tz.ts`),
+  // never a fourth copy of it.
+  const tz = await venueTzForDivision(fixture.division_id);
+  const scheduledLabel = fixtureTimeLabel(fixture.scheduled_at, tz, intlLocaleFor(locale));
+  // The match and each still-empty seat, named the way the schedule board
+  // names them (owner ruling 2026-09-24: "QF·1", "Winner of QF·2"), in the
+  // viewer's language.
+  const names = await withTenant(link.org_id, (tx) => scanMatchNames(tx, fixture.id, t));
+  const ref = names.ref;
+  if (screen.screen === "waiting" || screen.screen === "division_not_started") {
+    // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
+    // until both sides exist, when it renders the pad fresh — the Waiting →
+    // Confirm hop needs no client state. Its words go down as props, already
+    // in the viewer's language, and NO dictionary provider wraps it: that
+    // provider would re-send the whole merged `ui` dictionary on every
+    // POLL_MS refresh, to say three sentences (Task 6 review I2). The provider
+    // was also what set `<html lang>`; a scanning phone rarely carries the
+    // locale cookie the root layout's fallback reads, so the page says it.
+    //
+    // Owner fix 2026-09-24: an unstarted division waits the same way, on the
+    // organiser's Start. `division_status` is read by this render's own query,
+    // and a refresh is a fresh dynamic render (no ETag, no cache), so the first
+    // refresh after the start renders Confirm.
+    const notStarted = screen.screen === "division_not_started";
+    return (
+      <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
+        <HtmlLang lang={locale} />
+        <div className="mx-auto max-w-2xl">
+          <ScanWaiting
+            home={fixture.home_name ?? names.home}
+            away={fixture.away_name ?? names.away}
+            matchRef={ref}
+            meta={[fixture.court_name, scheduledLabel, fixture.division_name].filter((m): m is string => !!m)}
+            waitingOn={notStarted ? "division_start" : "sides"}
+            copy={
+              notStarted
+                ? {
+                    lead: t("device.scan.notStarted.title"),
+                    vs: t("schedule.vs"),
+                    hint: t("device.scan.notStarted.body"),
+                  }
+                : {
+                    lead: t("device.scan.waitingFor"),
+                    vs: t("schedule.vs"),
+                    hint: t("device.scan.waitingHint"),
+                  }
+            }
+          />
+        </div>
+      </main>
+    );
+  }
+
+  // Everything below is the pad's alone (Confirm, View-only, the pad itself).
   const sportModule = resolveModule(fixture.sport_key, fixture.module_version);
   // §T4 — the cfg this pad renders against. `fixture.config` is NOT the
   // fixture's own config: the query above aliases `d.config`, the DIVISION's,
@@ -165,71 +250,6 @@ export default async function ScorePadPage({
     side(fixture.home_entrant_id),
     side(fixture.away_entrant_id),
   ]);
-
-  // Scorer sheets §4.5 — which screen this scan opens on. One table
-  // (`scanScreen`); `resultCarriedForward` is the same live predicate the
-  // scoring path refuses on, status gate included (a SCHEDULED fixture whose
-  // feed target was hand-seated is still the umpire's to score).
-  const carried = await withTenant(link.org_id, (tx) => resultCarriedForward(tx, fixture.id));
-  const screen = scanScreen({
-    status: state.status,
-    homeKnown: fixture.home_entrant_id !== null,
-    awayKnown: fixture.away_entrant_id !== null,
-    carriedForward: carried,
-    divisionStatus: fixture.division_status,
-  });
-  // The venue's zone through the one authority for that join (`venue-tz.ts`),
-  // never a fourth copy of it.
-  const tz = await venueTzForDivision(fixture.division_id);
-  const scheduledLabel = fixtureTimeLabel(fixture.scheduled_at, tz, intlLocaleFor(locale));
-  // The match and each still-empty seat, named the way the schedule board
-  // names them (owner ruling 2026-09-24: "QF·1", "Winner of QF·2"), in the
-  // viewer's language.
-  const names = await withTenant(link.org_id, (tx) => scanMatchNames(tx, fixture.id, t));
-  const ref = names.ref;
-  if (screen.screen === "waiting" || screen.screen === "division_not_started") {
-    // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
-    // until both sides exist, when it renders the pad fresh — the Waiting →
-    // Confirm hop needs no client state. Its words go down as props, already
-    // in the viewer's language, and NO dictionary provider wraps it: that
-    // provider would re-send the whole merged `ui` dictionary on every
-    // POLL_MS refresh, to say three sentences (Task 6 review I2). The provider
-    // was also what set `<html lang>`; a scanning phone rarely carries the
-    // locale cookie the root layout's fallback reads, so the page says it.
-    //
-    // Owner fix 2026-09-24: an unstarted division waits the same way, on the
-    // organiser's Start. `division_status` is read by this render's own query,
-    // and a refresh is a fresh dynamic render (no ETag, no cache), so the first
-    // refresh after the start renders Confirm.
-    const notStarted = screen.screen === "division_not_started";
-    return (
-      <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
-        <HtmlLang lang={locale} />
-        <div className="mx-auto max-w-2xl">
-          <ScanWaiting
-            home={home ? entrantDisplayName(home) : names.home}
-            away={away ? entrantDisplayName(away) : names.away}
-            matchRef={ref}
-            meta={[fixture.court_name, scheduledLabel, fixture.division_name].filter((m): m is string => !!m)}
-            waitingOn={notStarted ? "division_start" : "sides"}
-            copy={
-              notStarted
-                ? {
-                    lead: t("device.scan.notStarted.title"),
-                    vs: t("schedule.vs"),
-                    hint: t("device.scan.notStarted.body"),
-                  }
-                : {
-                    lead: t("device.scan.waitingFor"),
-                    vs: t("schedule.vs"),
-                    hint: t("device.scan.waitingHint"),
-                  }
-            }
-          />
-        </div>
-      </main>
-    );
-  }
 
   // The pad's copy (Confirm, View-only, the pad itself) reads through
   // `useMsg`, which outside a provider falls back to English — so a French
