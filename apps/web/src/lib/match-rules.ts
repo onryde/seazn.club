@@ -794,14 +794,135 @@ export const SPORT_RULES: Record<string, RuleField[]> = {
   ],
 };
 
-/** Merge every non-blank field into one override object. */
+// ---------------------------------------------------------------------------
+// Best of 1 — ONE "Points to win" field (owner ruling 2026-09-25, Option A;
+// docs/superpowers/specs/2026-09-25-bo1-points-editor-trap.md).
+//
+// The set-based kernel plays the LAST possible set to `finalSetTo`
+// (`setTarget`: setIndex === bestOf-1), and on best of 1 the only set IS the
+// last, so `setTo` is never read. The editor used to offer "Points to win a
+// set" first — the field an organiser naturally edits — and it did nothing.
+//
+// So on an EFFECTIVE best of 1 the editor shows one field, bound to
+// `finalSetTo` (reopen therefore shows the number actually played, even over
+// mismatched data), labelled "Points to win", and a save writes that number to
+// BOTH keys. Everywhere else the editor is exactly the table. No engine
+// change: rejected alternatives were greying the dead field out (B) and
+// playing best of 1 to `setTo` (C — changes every existing config and frozen
+// snapshot).
+//
+// "Effective" matters for the stage editor, whose values are a FRAGMENT: a
+// stage that names no best-of plays at the division's, so callers pass the
+// config their values inherit from. Which sports collapse is derived from the
+// table (a `bestOf` picker plus both points keys) — badminton, table tennis,
+// volleyball; never tennis or carrom.
+// ---------------------------------------------------------------------------
+
+/** The one points field's label on best of 1. Sport-rules vocabulary, canonical
+ *  English like every label in this table (per-stage rules ruling D4). */
+export const SINGLE_SET_POINTS_LABEL = "Points to win";
+
+/** The pair: `shown` is the key the engine plays at best of 1 and the one the
+ *  single field is bound to; `shadow` is hidden and written to match it. */
+const BEST_OF_ONE_PAIR = { shown: "finalSetTo", shadow: "setTo" } as const;
+
+function declaresPointsPair(sportKey: string): boolean {
+  const keys = new Set(rulesFor(sportKey).map((f) => f.key));
+  return keys.has("bestOf") && keys.has(BEST_OF_ONE_PAIR.shown) && keys.has(BEST_OF_ONE_PAIR.shadow);
+}
+
+/** The best-of these values will be played at: the edited value when there is
+ *  one (blank is "Default", i.e. none), else the one they inherit. */
+function effectiveBestOf(
+  values: Record<string, string>,
+  inherited: Record<string, unknown>,
+): number | undefined {
+  const raw = values.bestOf;
+  if (raw !== undefined && raw !== "") return Number(raw);
+  return typeof inherited.bestOf === "number" ? inherited.bestOf : undefined;
+}
+
+/**
+ * Whether the editor shows ONE points field for these values. `inherited` is
+ * the config the values fall back to — the division's for a stage fragment,
+ * the saved config for division settings, nothing for the builder (whose blank
+ * best-of is a variant default no shipped variant sets to 1).
+ */
+export function showsOnePointsField(
+  sportKey: string,
+  values: Record<string, string>,
+  inherited: Record<string, unknown> = {},
+): boolean {
+  return declaresPointsPair(sportKey) && effectiveBestOf(values, inherited) === 1;
+}
+
+/** The fields the editor renders, in table order: the table itself, or — on
+ *  best of 1 — the table without `setTo` and with `finalSetTo` relabelled. The
+ *  table is never mutated; the relabelled field is a copy. */
+export function visibleRuleFields(
+  sportKey: string,
+  values: Record<string, string>,
+  inherited: Record<string, unknown> = {},
+): RuleField[] {
+  const fields = rulesFor(sportKey);
+  if (!showsOnePointsField(sportKey, values, inherited)) return fields;
+  return fields
+    .filter((f) => f.key !== BEST_OF_ONE_PAIR.shadow)
+    .map((f) => (f.key === BEST_OF_ONE_PAIR.shown ? { ...f, label: SINGLE_SET_POINTS_LABEL } : f));
+}
+
+/** One edit to the editor's raw values. On best of 1 the single points field
+ *  writes both keys, so switching back to best of 3 shows the number typed in
+ *  both fields rather than a stale `setTo` the organiser never saw. */
+export function setRuleValue(
+  sportKey: string,
+  values: Record<string, string>,
+  key: string,
+  raw: string,
+  inherited: Record<string, unknown> = {},
+): Record<string, string> {
+  const next = { ...values, [key]: raw };
+  if (key === BEST_OF_ONE_PAIR.shown && showsOnePointsField(sportKey, next, inherited))
+    next[BEST_OF_ONE_PAIR.shadow] = raw;
+  return next;
+}
+
+/**
+ * The stage editor's untouched save re-sends the stored fragment verbatim
+ * (`stageFormatSaveFragment`). On best of 1 that one save still writes the
+ * played number to both keys, as every other save does: a fragment carrying
+ * both, mismatched, comes back with `setTo` aligned to `finalSetTo`. Anything
+ * else — including a fragment with `setTo` but no `finalSetTo`, where aligning
+ * would pin an inherited value — comes back as the SAME object.
+ */
+export function alignBestOfOnePoints(
+  sportKey: string,
+  fragment: Record<string, unknown>,
+  inherited: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const bestOf = typeof fragment.bestOf === "number" ? fragment.bestOf : inherited.bestOf;
+  const shown = fragment[BEST_OF_ONE_PAIR.shown];
+  if (!declaresPointsPair(sportKey) || bestOf !== 1 || typeof shown !== "number") return fragment;
+  if (!Object.hasOwn(fragment, BEST_OF_ONE_PAIR.shadow) || fragment[BEST_OF_ONE_PAIR.shadow] === shown)
+    return fragment;
+  return { ...fragment, [BEST_OF_ONE_PAIR.shadow]: shown };
+}
+
+/** Merge every non-blank field into one override object. On an effective best
+ *  of 1 `setTo` is built from the single field's value, so the pair is always
+ *  saved equal — and a blank single field saves neither key. */
 export function buildRuleOverride(
   sportKey: string,
   values: Record<string, string>,
+  inherited: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const override: Record<string, unknown> = {};
+  const single = showsOnePointsField(sportKey, values, inherited);
   for (const field of rulesFor(sportKey)) {
-    const value = values[field.key];
+    const value =
+      single && field.key === BEST_OF_ONE_PAIR.shadow
+        ? values[BEST_OF_ONE_PAIR.shown]
+        : values[field.key];
     if (value !== undefined && value !== "") {
       Object.assign(override, field.build(value, values));
     } else if (field.buildOnBlank) {
