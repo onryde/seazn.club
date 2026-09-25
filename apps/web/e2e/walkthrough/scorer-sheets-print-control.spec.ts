@@ -117,6 +117,34 @@ const pageBox = (el: Locator) =>
     return { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height };
   });
 
+/** Every box in the schedule board's action bar stays inside the bar's own
+ *  column. A page-overflow check alone is blind to a box that eats the page's
+ *  side gutter but stops at the viewport edge. That is what the Spanish solver
+ *  group did at 320 on a Mac (x 16→320 in a 16→304 column, 0px of page
+ *  overflow). CI's Linux text renders it about 20px wider, so there it ran 20px
+ *  past the viewport (e2e run 36127251596). Returns the worst intrusion, for
+ *  the message. */
+async function expectActionBarInsideItsColumn(page: Page, label: string) {
+  const bar = page.getByTestId("schedule-action-bar");
+  if ((await bar.count()) === 0) return;
+  const worst = await bar.evaluate((root) => {
+    const col = root.getBoundingClientRect();
+    let px = 0;
+    let who = "";
+    for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const out = Math.max(r.right - col.right, col.left - r.left);
+      if (out > px) {
+        px = out;
+        who = `${el.tagName.toLowerCase()}${el.dataset.testid ? `[${el.dataset.testid}]` : ""} "${el.innerText.split("\n")[0]}"`;
+      }
+    }
+    return { px: Math.round(px * 10) / 10, who };
+  });
+  expect(worst.px, `${label}: ${worst.who} runs ${worst.px}px outside the action bar's column`).toBeLessThanOrEqual(1);
+}
+
 /** The title's and the control's page boxes at each width the control sits
  *  beside the title — read idle, then again once a refusal has landed. */
 async function rowBoxes(page: Page, control: Locator) {
@@ -150,6 +178,7 @@ async function capture(
     await page.setViewportSize({ width: w, height: 900 });
     await expect(control).toBeVisible();
     await expectNoHorizontalScroll(page);
+    await expectActionBarInsideItsColumn(page, `${name} ${w}`);
     const title = await page.locator("main h1.page-title").boundingBox();
     const box = await control.boundingBox();
     const head = await header(page).boundingBox();

@@ -1391,8 +1391,16 @@ export function ScheduleBoard({
               selector beside it carries the same fact visually; this is the
               one an organiser gets by hovering the thing they are about to
               click, and it is why the buttons themselves can stay short. */}
+          {/* Below md the group may WRAP: its longest words (Spanish:
+              "automáticamente", "desbloqueados") sum wider than a 320
+              column, and an unwrappable group ran 20px past the viewport
+              (e2e run 36127251596). Each button grows from a zero basis, so
+              a line breaks on min-content: one row whenever the words fit,
+              two only when they cannot, never a word split. `max-w-max` caps
+              each at its natural width, so a width where the row already fits
+              lays out as before. md and up is untouched. */}
           <div
-            className="isolate inline-flex"
+            className="isolate inline-flex max-md:max-w-full max-md:flex-wrap"
             // Gated on the DIVISION's stage count, not on how many can still
             // run: the surface names its target whenever there is more than one
             // stage to confuse it with, which is the rule the old interpolated
@@ -1415,7 +1423,7 @@ export function ScheduleBoard({
                     ...actionCounts(activeStage.id, "build"),
                   })
                 }
-                className="btn btn-primary relative min-h-11 rounded-r-none px-3 py-1.5 text-xs focus-visible:z-10"
+                className="btn btn-primary relative min-h-11 rounded-r-none px-3 py-1.5 text-xs focus-visible:z-10 max-md:grow max-md:basis-0 max-md:max-w-max"
                 title={msg("board.autoScheduleTitle")}
               >
                 {msg("board.autoSchedule")}
@@ -1432,7 +1440,7 @@ export function ScheduleBoard({
                     ...actionCounts(activeStage.id, "reflow"),
                   })
                 }
-                className="btn btn-ghost relative -ml-px min-h-11 rounded-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
+                className="btn btn-ghost relative -ml-px min-h-11 rounded-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10 max-md:grow max-md:basis-0 max-md:max-w-max"
                 title={msg("board.reflowTitle")}
               >
                 {msg("board.reflow")}
@@ -1455,7 +1463,7 @@ export function ScheduleBoard({
                     ...actionCounts(activeStage.id, "polish"),
                   })
                 }
-                className="btn btn-ghost relative -ml-px min-h-11 rounded-l-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
+                className="btn btn-ghost relative -ml-px min-h-11 rounded-l-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10 max-md:grow max-md:basis-0 max-md:max-w-max"
                 title={msg("board.polishTitle")}
               >
                 {msg("board.polish")}
