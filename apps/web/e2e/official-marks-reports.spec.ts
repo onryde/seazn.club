@@ -128,7 +128,21 @@ test.describe.serial("official marks & match reports", () => {
     await expect(rate).toBeVisible();
     await expectNoHorizontalScroll(page);
     const tile = rate.getByRole("button", { name: "Rate 4 out of 5" });
-    await tile.click();
+    // Wait for the PUT itself. The tile lights OPTIMISTICALLY (mark-tiles.tsx
+    // `set` calls setMark before it awaits the save), so aria-pressed says
+    // nothing about whether the mark landed. Without this wait the reload
+    // below can abort the save in flight. CI run 36096374588: `PUT …/mark`
+    // failed with net::ERR_ABORTED when the reload fired 13ms after it, and the
+    // reloaded tile was unlit.
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          /\/api\/v1\/fixture-officials\/[^/]+\/mark$/.test(new URL(r.url()).pathname) &&
+          r.request().method() === "PUT" &&
+          r.ok(),
+      ),
+      tile.click(),
+    ]);
     await expect(tile).toHaveAttribute("aria-pressed", "true");
 
     // Persists: a reload prefills the lit tile from the saved mark.
