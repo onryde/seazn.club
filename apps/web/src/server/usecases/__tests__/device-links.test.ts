@@ -27,6 +27,7 @@ import {
   isLiveExpiry,
 } from "../device-links";
 import { eventRecorderNames } from "../fixtures";
+import { log } from "@/server/logger";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
@@ -462,6 +463,43 @@ describe.skipIf(!HAS_DB)("ensureDeviceLink (scorer sheets §4.2)", () => {
     expect(ensured.secret).not.toBe(legacy.secret);
     await expect(resolveDeviceLinkToken(legacy.secret)).rejects.toMatchObject({ code: "LINK_REVOKED" });
     await expect(resolveDeviceLinkToken(ensured.secret)).resolves.toMatchObject({ id: ensured.row.id });
+  });
+
+  // Final review M2: an envelope is re-shown only if it IS the row's secret.
+  // One that still opens under the KEK but hashes to something else (here the
+  // other fixture's envelope, swapped onto this fixture's live row) would print
+  // a QR that scores the WRONG match. It is treated like a missing envelope:
+  // revoked and replaced, never handed back.
+  it("an envelope whose secret the row's hash does not match is never re-shown: revoked and reissued (review M2)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const mine = await ensureDeviceLink(owner, fixtures[0].id);
+    const other = await ensureDeviceLink(owner, fixtures[1].id);
+    await sql`update device_links
+              set secret_enc = (select secret_enc from device_links where id = ${other.row.id})
+              where id = ${mine.row.id}`;
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const ensured = await ensureDeviceLink(owner, fixtures[0].id);
+      expect(ensured.secret, "never the other fixture's secret").not.toBe(other.secret);
+      expect(ensured.minted, "reissued, like a missing envelope").toBe(true);
+      expect(ensured.row.id).not.toBe(mine.row.id);
+      await expect(resolveDeviceLinkToken(ensured.secret)).resolves.toMatchObject({
+        id: ensured.row.id,
+        fixture_id: fixtures[0].id,
+      });
+      await expect(resolveDeviceLinkToken(mine.secret)).rejects.toMatchObject({ code: "LINK_REVOKED" });
+      await expect(resolveDeviceLinkToken(other.secret), "the other fixture's link is untouched").resolves.toMatchObject({
+        id: other.row.id,
+      });
+      expect(warn, "the mismatch is logged, by link and fixture, never the secret").toHaveBeenCalledWith(
+        { linkId: mine.row.id, fixtureId: fixtures[0].id },
+        expect.stringContaining("does not match"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("after Revoke & reissue, ensure hands back the REISSUED secret", async () => {

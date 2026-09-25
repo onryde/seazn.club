@@ -11,6 +11,7 @@ import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 
 export const DEVICE_LINK_PREFIX = "dl_";
 
@@ -243,16 +244,27 @@ async function ensureInTx(
 /** Re-open the fixture's live sealed link, or mint one. The caller holds the
  *  fixture's link lock and has checked the fixture is linkable. */
 async function ensureLocked(tx: Tx, auth: AuthCtx, fixtureId: string, label: string | null): Promise<EnsuredDeviceLink> {
-  const [live] = await tx<(DeviceLinkRow & { secret_enc: Uint8Array | null })[]>`
-    select ${tx(COLS)}, secret_enc from device_links
+  const [live] = await tx<(DeviceLinkRow & { secret_enc: Uint8Array | null; token_hash: string })[]>`
+    select ${tx(COLS)}, secret_enc, token_hash from device_links
     where fixture_id = ${fixtureId} and revoked_at is null
       and (expires_at is null or expires_at > now())
     order by created_at desc limit 1`;
   if (live && live.secret_enc) {
-    const { secret_enc, ...row } = live;
-    return { row, secret: openSecret(secret_enc), minted: false };
+    const { secret_enc, token_hash, ...row } = live;
+    const secret = openSecret(secret_enc);
+    // Re-shown only if the envelope IS this row's secret (final review M2): one
+    // that opens under the KEK but hashes elsewhere — swapped from another row,
+    // or written behind the app's back — would print a QR the row does not
+    // resolve, or one that scores another match. It falls through to the
+    // reissue below, exactly like a missing envelope, and is never returned.
+    if (hashDeviceLinkToken(secret) === token_hash) return { row, secret, minted: false };
+    log.warn(
+      { linkId: row.id, fixtureId },
+      "device link: sealed secret does not match the row's token hash; revoking and reissuing",
+    );
   }
-  // None, or only a legacy hash-only link (its secret is unrecoverable): replace it.
+  // None, a legacy hash-only link (its secret is unrecoverable), or an envelope
+  // that is not this row's secret: replace it.
   const { secret, ...row } = await mintInTx(tx, auth, fixtureId, label);
   return { row, secret, minted: true };
 }
