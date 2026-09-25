@@ -17,15 +17,15 @@
 // deletes the match, so the link cascades), the pin is that the article names
 // the control AND says the card stops working in the same sentence.
 //
-// NOT PINNED HERE, because the keys do not exist on this branch yet: the print
-// control's labels `en["sheets.day"]` ("Day") and `en["sheets.print"]` ("Print
-// scorer sheets"), which live on feat/scorer-sheets-print-control
-// (print-scorer-sheets.tsx) and are pinned here at the fold, and the PDF's
-// "No court assigned" heading, which has no key on either branch yet. Until
-// then the only pin on the control is the NEGATIVE one below: there is no
-// separate "Print" button to press. Likewise the owner-approved (2026-09-24)
-// "Not started yet" scan screen is being built on another branch: its heading
-// is pinned below as a LITERAL — swap it for its `en[...]` key at the fold.
+// Pinned at the scorer-sheets fold: the print control's labels
+// `en["sheets.day"]` and `en["sheets.print"]` (print-scorer-sheets.tsx), and
+// the PDF's own lines `en["sheets.pdf.noCourt"]` and `en["sheets.pdf.checkNames"]`
+// (scorer-sheet-pdf.ts), each quoted as the article shows it. The NEGATIVE pin
+// below still holds too: there is no separate "Print" button to press.
+//
+// NOT PINNED HERE YET: the owner-approved (2026-09-24) "Not started yet" scan
+// screen is being built on another branch, so its heading is pinned below as a
+// LITERAL — swap it for its `en[...]` key once that key reaches this branch.
 //
 // The article is read lazily so a missing file reds each assertion by name
 // rather than failing the whole file at collection.
@@ -112,6 +112,23 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
     expect(plans, "no sentence names both Pro and the Event Pass").not.toHaveLength(0);
     const everyPlan = /\b(?:on|for|with)\s+(?:any|every|all)\s+plans?\b|\bwhatever (?:your|the) plan\b/i;
     expect(sentences().filter((s) => everyPlan.test(s))).toEqual([]);
+  });
+
+  it("quotes the print control as it is labelled: the Day select and the Print scorer sheets button", () => {
+    // Bold, as the article sets every control it names: a bare "Day" matches
+    // any sentence about days.
+    expect(en["sheets.day"]).toMatch(/\w/);
+    expect(article()).toContain(`**${en["sheets.day"]}**`);
+    const press = withText(en["sheets.print"]);
+    expect(press, `the article never names the ${en["sheets.print"]} button`).not.toHaveLength(0);
+    expect(press.some((s) => s.includes(en["sheets.day"]) && /\bpress\b/i.test(s)), press.join(" | ")).toBe(true);
+  });
+
+  it("quotes the sheet's own lines: the courtless heading and the check-names reminder", () => {
+    expect(article()).toContain(`**${en["sheets.pdf.noCourt"]}**`);
+    // The reminder is WHY a Swiss card is safe to reuse after re-pairing; the
+    // article quotes it word for word, so a reworded sheet moves this test.
+    expect(sentencesOf(article()).join(" ")).toContain(en["sheets.pdf.checkNames"]);
   });
 
   it("names ONE print button — there is no bare \"Print\" to press after picking the day", () => {

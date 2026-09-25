@@ -36,7 +36,7 @@ There's no box for the score. The score goes in on the phone. The scoring link i
 
 You can print before the draw fills in. A side that isn't known yet prints as its place in the draw, like "Winner of QF·2", with a line under it to write the name in. An unpaired Swiss board prints **TBD** for both sides, with the same lines. The card belongs to the match, not to the players, so it works as soon as the side is filled. An umpire who scans early sees **Waiting for** both sides as they stand, and "This page updates by itself." When the other result comes in, the screen moves on to the match. There's no need to scan again.
 
-In Swiss, a card belongs to its board. Unpairing a round does not delete its boards, so after you pair again the same card scores whoever is now on that board. That is why every sheet reminds the umpire to check the names on screen before starting: the phone always shows the match as it stands now.
+In Swiss, a card belongs to its board. Unpairing a round does not delete its boards, so after you pair again the same card scores whoever is now on that board. That is why the top of every sheet says **Scan to score. Check names on screen before you start.** The phone always shows the match as it stands now.
 
 ## What the umpire does
 
