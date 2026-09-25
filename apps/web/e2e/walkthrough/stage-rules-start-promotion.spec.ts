@@ -12,6 +12,10 @@
 //      format, not the division's preset name, and the hub and division page
 //      name the league stage's format — while the Finals, back on the
 //      division's format, stay as they were.
+//   5. best of 1's ONE "Points to win" field (owner ruling 2026-09-25, Option
+//      A): on a stage that overrides to best of 1, on one that INHERITS it from
+//      its division, and in the division settings editor — the three places
+//      `MatchRuleFields` is told which config its blanks fall back to.
 //
 // They are one file because they are one journey: the confirmation's own
 // fourth line PROMISES the lock behaviour this file then drives ("Match rules
@@ -54,7 +58,7 @@ import {
 // Directive-free and JSX-free on purpose (design §T0), which is why a spec can
 // import it. The picker's own option label, so a rename of "Best of 3" moves
 // this file with it instead of leaving it asserting yesterday's copy.
-import { ruleOptionLabel } from "../../src/lib/match-rules";
+import { SINGLE_SET_POINTS_LABEL, SPORT_RULES, ruleOptionLabel } from "../../src/lib/match-rules";
 
 /** Every user-facing string this file asserts comes from the dictionary the
  *  product renders — never retyped here (house pattern: run-sheet.spec.ts,
@@ -117,6 +121,23 @@ const FINALS_HEADING = "2. Finals";
 /** `SPORT_RULES.badminton`'s `bestOf` field label — sport-rules vocabulary,
  *  canonical English and deliberately NOT localized (`lib/match-rules.ts`). */
 const BEST_OF_LABEL = "Best of (sets)";
+
+/** The two labels the best-of-1 single field replaces — the table's own, so a
+ *  relabel moves this file rather than leaving it asserting yesterday's copy. */
+const SET_TO_LABEL = SPORT_RULES[SPORT]!.find((f) => f.key === "setTo")!.label;
+const FINAL_SET_TO_LABEL = SPORT_RULES[SPORT]!.find((f) => f.key === "finalSetTo")!.label;
+/** Every points input on screen. Neither "Hard cap (deciding point)" nor "Win
+ *  margin (points)" starts with it, so at best of 1 this must be exactly one. */
+const ANY_POINTS_FIELD = /^Points/;
+/** What the Finals is played to once it is best of 1. Asserted below to differ
+ *  from the division's own deciding-game number: a save that silently kept
+ *  inheriting would otherwise read the same. In badminton's declared range
+ *  (11–30) and under the bwf cap (30). */
+const BO1_POINTS = 15;
+/** The inheriting stage's number, different again from both. */
+const BO1_INHERITED_POINTS = 13;
+/** The division settings editor's number, different again. */
+const BO1_SETTINGS_POINTS = 17;
 
 let compId = "";
 let divId = "";
@@ -603,4 +624,176 @@ test("a spectator reads the league stage's own format: on its match page, on the
   await expect(finalsChip).toContainText("Finals");
   await expect(finalsChip.getByTestId("division-stage-format")).toHaveCount(0);
   await expect(page.getByText(preset!, { exact: true })).toBeVisible();
+});
+
+test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, one that inherits it, and in division settings", async ({
+  page,
+  request,
+}) => {
+  // Derived from the waits this test actually spends (AGENTS.md 20): ~22
+  // page/state waits and 4 record polls.
+  test.setTimeout(Math.max(120_000, 22 * STEP_MS + 4 * POLL_MS));
+
+  // Why this test exists. The set-based kernel plays the LAST possible game to
+  // `finalSetTo`, and on best of 1 the only game is the last, so `setTo` is
+  // never read — yet the editor offered "Points to win a set" first, and an
+  // organiser who set it changed nothing. Owner ruling: one field, "Points to
+  // win", writing both keys; reopen shows `finalSetTo`, the number played.
+  const division = await apiJson<{ config: Record<string, unknown> }>(
+    request,
+    `/api/v1/divisions/${divId}`,
+  );
+  expect(division.status, `GET /divisions/${divId}`).toBe(200);
+  expect(
+    Number(division.data!.config.finalSetTo),
+    "the Finals' number must differ from the division's deciding game, or an inherit reads the same",
+  ).not.toBe(BO1_POINTS);
+
+  // --- 1. A stage that OVERRIDES to best of 1 -------------------------------
+  // The Finals left the previous test at best of 3 (the API write), so the
+  // picker really moves here, and the stage has fixtures but has not begun.
+  await page.goto(await divisionPath(request, divId, "?tab=fixtures"));
+  const finals = stageSheet(page, FINALS_HEADING);
+  await setBestOfInUi(page, FINALS_HEADING, 1, "schedule.stageFormat.overridden");
+
+  await finals.getByTestId("stage-format-edit").click();
+  const single = finals.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
+  await expect(single).toBeVisible({ timeout: STEP_MS });
+  // The control SET: one points field, and neither of the pair it replaces.
+  await expect(finals.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
+  await expect(finals.getByText(SET_TO_LABEL, { exact: true })).toHaveCount(0);
+  await expect(finals.getByText(FINAL_SET_TO_LABEL, { exact: true })).toHaveCount(0);
+  // Opens at what the FRAGMENT carries — no points key yet, so blank
+  // ("inherit"), never a number the stage does not store.
+  await expect(single).toHaveValue("");
+  await single.fill(String(BO1_POINTS));
+
+  // 1 → 3 in the open editor restores BOTH fields, each showing the number
+  // just typed — the single field wrote both, not only the one the engine
+  // reads. 3 → 1 collapses back onto it.
+  const picker = finals.getByLabel(BEST_OF_LABEL);
+  await picker.selectOption("3");
+  await expect(finals.getByRole("spinbutton", { name: SET_TO_LABEL, exact: true })).toHaveValue(
+    String(BO1_POINTS),
+  );
+  await expect(
+    finals.getByRole("spinbutton", { name: FINAL_SET_TO_LABEL, exact: true }),
+  ).toHaveValue(String(BO1_POINTS));
+  await expect(single).toHaveCount(0);
+  await picker.selectOption("1");
+  await expect(single).toHaveValue(String(BO1_POINTS));
+
+  await finals.getByTestId("stage-format-save").click();
+  await expect(finals.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
+  await expect(finals.getByTestId("stage-format-summary")).toHaveText(
+    summaryLine(1, "schedule.stageFormat.overridden"),
+  );
+  // The record: BOTH keys at the number typed. `finalSetTo` is the one a best
+  // of 1 is played to; `setTo` rides along so the pair can never disagree.
+  await expect
+    .poll(async () => stageById(await readStages(request), finalsStageId).config.rules, {
+      timeout: POLL_MS,
+    })
+    .toEqual({ bestOf: 1, setTo: BO1_POINTS, finalSetTo: BO1_POINTS });
+  // Reopen shows the number played.
+  await finals.getByTestId("stage-format-edit").click();
+  await expect(single).toHaveValue(String(BO1_POINTS));
+  await finals.getByTestId("stage-format-edit").click(); // the toggle now reads Cancel
+
+  // --- 2. A stage that INHERITS best of 1 ------------------------------------
+  // A division that is best of 1 itself, and a stage naming no best-of of its
+  // own. Seeded with the pair DISAGREEING — the shape the old editor could
+  // save — so the field must show `finalSetTo` (the number played), not
+  // `setTo`, and a save must align them.
+  const bo1 = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${compId}/divisions`,
+    "POST",
+    { name: `Bo1 ${TAG}`, sport_key: SPORT, variant_key: "bwf", config: { bestOf: 1 } },
+  );
+  expect(bo1.status, `Bo1 division → ${JSON.stringify(bo1.error)}`).toBeLessThan(300);
+  const bo1DivId = bo1.data!.id;
+  const pool = await apiJson<{ id: string }[]>(
+    request,
+    `/api/v1/divisions/${bo1DivId}/stages`,
+    "POST",
+    [{ seq: 1, kind: "league", name: "Pool", config: {}, progression: null }],
+  );
+  expect(pool.status, `Pool stage → ${JSON.stringify(pool.error)}`).toBeLessThan(300);
+  const poolStageId = pool.data![0]!.id;
+  const bo1Config = (
+    await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${bo1DivId}`)
+  ).data!.config;
+  expect(bo1Config.bestOf, "the division itself is best of 1").toBe(1);
+  const played = Number(bo1Config.finalSetTo);
+  const dead = 11;
+  expect(played, "the seeded pair must disagree, or the field cannot show which it reads").not.toBe(
+    dead,
+  );
+  const seeded = await apiJson(request, `/api/v1/stages/${poolStageId}/rules`, "PUT", {
+    rules: { setTo: dead, finalSetTo: played },
+  });
+  expect(seeded.status, `seeding the mismatched pair → ${JSON.stringify(seeded.error)}`).toBe(200);
+
+  await page.goto(await divisionPath(request, bo1DivId, "?tab=fixtures"));
+  const poolSheet = stageSheet(page, "1. Pool");
+  await expect(poolSheet.getByTestId("stage-format-summary")).toHaveText(
+    summaryLine(1, "schedule.stageFormat.overridden"),
+    { timeout: STEP_MS },
+  );
+  await poolSheet.getByTestId("stage-format-edit").click();
+  const inheritedSingle = poolSheet.getByRole("spinbutton", {
+    name: SINGLE_SET_POINTS_LABEL,
+    exact: true,
+  });
+  await expect(inheritedSingle).toHaveValue(String(played), { timeout: STEP_MS });
+  await expect(poolSheet.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
+  // The picker says "Default" — the best of 1 is the division's, not the stage's.
+  await expect(poolSheet.getByLabel(BEST_OF_LABEL)).toHaveValue("");
+
+  // Save with nothing touched: still a save, and it writes the played number
+  // to both keys.
+  await poolSheet.getByTestId("stage-format-save").click();
+  await expect(poolSheet.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
+  await expect
+    .poll(async () => (await apiJson<StageRow[]>(request, `/api/v1/divisions/${bo1DivId}/stages`)).data?.[0]?.config.rules, {
+      timeout: POLL_MS,
+    })
+    .toEqual({ setTo: played, finalSetTo: played });
+
+  // An edit: both keys at the number typed, and NO best-of pinned — the stage
+  // keeps inheriting the division's format.
+  await poolSheet.getByTestId("stage-format-edit").click();
+  await inheritedSingle.fill(String(BO1_INHERITED_POINTS));
+  await poolSheet.getByTestId("stage-format-save").click();
+  await expect(poolSheet.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
+  await expect
+    .poll(async () => (await apiJson<StageRow[]>(request, `/api/v1/divisions/${bo1DivId}/stages`)).data?.[0]?.config.rules, {
+      timeout: POLL_MS,
+    })
+    .toEqual({ setTo: BO1_INHERITED_POINTS, finalSetTo: BO1_INHERITED_POINTS });
+
+  // --- 3. The division settings editor ----------------------------------------
+  // No fixtures in this division, so its format is still editable.
+  await page.goto(await divisionPath(request, bo1DivId, "?tab=settings"));
+  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
+  await page.getByRole("button", { name: /Format/ }).click();
+  const settingsSingle = page.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
+  await expect(settingsSingle).toHaveValue(String(played), { timeout: STEP_MS });
+  await expect(page.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
+  await settingsSingle.fill(String(BO1_SETTINGS_POINTS));
+  // "Default" on the picker keeps the SAVED best-of here, so the single field
+  // must survive it — the grid is told what a blank falls back to.
+  await page.getByLabel(BEST_OF_LABEL).selectOption("");
+  await expect(settingsSingle).toHaveValue(String(BO1_SETTINGS_POINTS));
+  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
+  await expect
+    .poll(
+      async () =>
+        (await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${bo1DivId}`))
+          .data?.config,
+      { timeout: POLL_MS },
+    )
+    .toMatchObject({ bestOf: 1, setTo: BO1_SETTINGS_POINTS, finalSetTo: BO1_SETTINGS_POINTS });
 });
