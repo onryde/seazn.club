@@ -1577,6 +1577,37 @@ export async function ownerIsStaffSql(orgId: string): Promise<boolean> {
   });
 }
 
+/** The columns of a `users` row a spec can move through the product: the
+ *  profile (`PATCH /api/users/me`), the address (`change-email/confirm`) and
+ *  the staff bit (`setOwnerStaffSql` / `setOwnerStaffRoleSql`). */
+export interface UserRowSnapshot {
+  email: string;
+  display_name: string;
+  timezone: string | null;
+  locale: string | null;
+  is_staff: boolean;
+  staff_role: string | null;
+}
+
+/** Read those columns straight off the row. Throws on a missing row, so an id
+ *  that names nobody cannot read as "unchanged". */
+export async function userRowSql(userId: string): Promise<UserRowSnapshot> {
+  return withDb(async (sql) => {
+    const [row] = await sql<UserRowSnapshot[]>`
+      select email, display_name, timezone, locale, is_staff, staff_role
+        from users where id = ${userId}`;
+    if (!row) throw new Error(`userRowSql: no users row for ${userId}`);
+    return {
+      email: row.email,
+      display_name: row.display_name,
+      timezone: row.timezone,
+      locale: row.locale,
+      is_staff: row.is_staff,
+      staff_role: row.staff_role,
+    };
+  });
+}
+
 /**
  * The global platform fee default, read straight off `platform_settings`.
  *

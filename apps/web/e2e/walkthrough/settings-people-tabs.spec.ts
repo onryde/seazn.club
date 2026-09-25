@@ -6,6 +6,7 @@ import {
   type SeededOrg,
 } from "../settings-support";
 import { apiJson, TAG } from "../helpers";
+import { ownTest, signInOwnAccount } from "../own-account";
 
 /**
  * W2 Task 3 — the four PEOPLE-facing panels of `/o/{org}/settings`:
@@ -31,7 +32,7 @@ import { apiJson, TAG } from "../helpers";
  * opt out, so this file's tests would otherwise be SPLIT ACROSS WORKERS — and a
  * `beforeAll` runs once per worker, which would seed one org PER WORKER and
  * spend the shared Pro user's five-owner cap (`assertMayOwnAnotherOrg`) inside
- * a single file. `default` also fixes declaration order, which the restore
+ * a single file. `default` also fixes declaration order, which the shared-user
  * verification below depends on.
  *
  * `default` rather than `serial`: serial aborts every remaining test in the
@@ -93,9 +94,10 @@ interface Profile {
  * /api/users/me/export` carries `display_name` but not the other two, and
  * `PATCH` refuses an empty body (`updateProfileSchema` ends in a `.refine`
  * that demands at least one field), so there is no no-op read through the API
- * either. The column IS the thing being restored, so the column is what gets
- * asserted — and unlike any API shape it can express the difference between
- * `null` and `"en"`, which is exactly the distinction a sloppy restore loses.
+ * either. The column IS the thing the shared user must keep, so the column is
+ * what gets asserted — and unlike any API shape it can express the difference
+ * between `null` and `"en"`, which is exactly the distinction a stray write
+ * loses.
  */
 async function readProfile(userId: string): Promise<Profile> {
   return withDb(async (sql) => {
@@ -185,7 +187,8 @@ async function pickZone(page: Page, combobox: Locator, city: string): Promise<vo
 // ---------------------------------------------------------------------------
 
 let org: SeededOrg;
-let userId = "";
+/** The shared Pro user every walkthrough in the leg is signed in as. */
+let sharedUserId = "";
 let originalProfile: Profile;
 /** A competition in the seeded org, so the api tab's pin control renders. */
 let competition: { id: string; name: string };
@@ -198,8 +201,8 @@ test.beforeAll(async ({ browser }) => {
     // never created. Ask the app who it is.
     const whoami = await apiJson<{ id: string }>(ctx.request, "/api/users/me");
     expect(whoami.data?.id, "GET /api/users/me carried no id").toBeTruthy();
-    userId = whoami.data!.id;
-    originalProfile = await readProfile(userId);
+    sharedUserId = whoami.data!.id;
+    originalProfile = await readProfile(sharedUserId);
 
     org = await seedSettingsOrg(ctx.request, { label: "people-tabs" });
 
@@ -225,12 +228,15 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async ({ browser }) => {
-  // Safety net for the shared user. It runs AFTER the verification test at the
-  // bottom of this file (a root-suite afterAll runs once every test in the file
-  // has finished), so it cannot make that test vacuous — it only stops a failed
-  // restore from also breaking a stranger's spec.
-  if (userId && originalProfile) {
-    const now = await readProfile(userId);
+  // Safety net for the shared user. Nothing in this file writes it any more —
+  // the profile tests below run on accounts of their own, and each of them
+  // asserts the shared row is untouched — so this only fires if that ever
+  // regresses, and then keeps the damage this spec's rather than a stranger's.
+  // It runs AFTER the verification test at the bottom of this file (a
+  // root-suite afterAll runs once every test in the file has finished), so it
+  // cannot make that test vacuous.
+  if (sharedUserId && originalProfile) {
+    const now = await readProfile(sharedUserId);
     const drifted =
       now.display_name !== originalProfile.display_name ||
       now.timezone !== originalProfile.timezone ||
@@ -242,7 +248,7 @@ test.afterAll(async ({ browser }) => {
             display_name = ${originalProfile.display_name},
             timezone     = ${originalProfile.timezone},
             locale       = ${originalProfile.locale}
-          where id = ${userId}`,
+          where id = ${sharedUserId}`,
       );
     }
   }
@@ -596,43 +602,40 @@ test("preferences tab: the org's timezone, public language and entry-fee currenc
 });
 
 // ---------------------------------------------------------------------------
-// The SHARED Pro user's own fields. Everything in here is borrowed.
+// A user's OWN fields — on an account nobody else is signed in as.
 // ---------------------------------------------------------------------------
 
-test.describe("the shared Pro user's own profile", () => {
-  /**
-   * Restored in `afterAll`, NEVER in a `finally` inside a test — a Playwright
-   * `test.setTimeout` skips `finally`, and what leaks is not this spec's
-   * problem but the next spec's: every walkthrough in the leg is signed in as
-   * this same account.
-   */
-  test.afterAll(async ({ browser }) => {
-    const ctx = await browser.newContext();
-    try {
-      const res = await ctx.request.patch("/api/users/me", {
-        headers: { "Content-Type": "application/json" },
-        data: {
-          // `updateProfileSchema` wants a non-empty display name and a locale
-          // inside its enum; fall back rather than 400 the restore itself.
-          display_name: originalProfile.display_name?.trim() || "E2e Pro",
-          timezone: originalProfile.timezone,
-          locale: ["en", "fr", "es", "nl"].includes(originalProfile.locale ?? "")
-            ? originalProfile.locale
-            : null,
-        },
-      });
-      expect(res.ok(), `restoring the shared Pro user failed: ${res.status()}`).toBe(true);
-    } finally {
-      await ctx.close();
-    }
-  });
+/**
+ * Sign `page` in as a brand-new account (with the org the settings page needs)
+ * and return its id and its profile as it starts out.
+ */
+async function ownAccount(page: Page, label: string): Promise<{ id: string; start: Profile }> {
+  const { userId } = await signInOwnAccount(page, `people-${label}`, sharedUserId);
+  return { id: userId, start: await readProfile(userId) };
+}
 
-  // Account BEFORE the language flip below, on purpose: switching the user's
-  // locale re-renders every English label on the page, so it is the last thing
-  // this file does to the shared account.
-  test("account tab: the display name persists, and the export carries it", async ({ page }) => {
+ownTest.describe("a user's own profile, on an account of its own", () => {
+  /**
+   * Every test here signs in a fresh account (e2e/own-account.ts says why) —
+   * NOT the shared Pro user with a restore afterwards, which is what this
+   * block used to do. For the seconds between its language save and that
+   * restore, pages other workers rendered came back in French: CI run
+   * 35975872571's settings-schedule-drive reloaded into a "Heure" select
+   * holding its saved 09:00 and could not find `getByLabel("Time")`.
+   *
+   * Each test ends by reading the SHARED row back, so a regression to driving
+   * the shared account fails here, deterministically, instead of as a
+   * stranger's flake.
+   */
+  ownTest("account tab: the display name persists, and the export carries it", async ({
+    ownPage: page,
+  }) => {
+    const me = await ownAccount(page, "account");
     const wanted = `W2 Walkthrough ${TAG}`;
-    await page.goto(settingsUrl(org.slug, "account"));
+    expect(me.start.display_name, "the fresh account already carries the name").not.toBe(wanted);
+    // The legacy shim forwards to the ACTIVE org's settings — the org
+    // `freshOrg` just created and made active.
+    await page.goto("/settings?tab=account");
 
     const input = page.getByPlaceholder("Your name");
     await expect(input).toBeVisible({ timeout: 20_000 });
@@ -648,7 +651,7 @@ test.describe("the shared Pro user's own profile", () => {
 
     // The store...
     await expect
-      .poll(async () => (await readProfile(userId)).display_name, { timeout: 20_000 })
+      .poll(async () => (await readProfile(me.id)).display_name, { timeout: 20_000 })
       .toBe(wanted);
 
     // ...the product's own read of it (this tab's Download JSON target)...
@@ -664,17 +667,24 @@ test.describe("the shared Pro user's own profile", () => {
     // ...and one reload for render-back.
     await page.reload();
     await expect(page.getByPlaceholder("Your name")).toHaveValue(wanted, { timeout: 20_000 });
+
+    expect(await readProfile(sharedUserId), "the shared Pro user's row moved").toEqual(
+      originalProfile,
+    );
   });
 
-  test("preferences tab: your own timezone and language persist", async ({ page }) => {
-    await page.goto(settingsUrl(org.slug, "preferences"));
+  ownTest("preferences tab: your own timezone and language persist", async ({
+    ownPage: page,
+  }) => {
+    const me = await ownAccount(page, "prefs");
+    await page.goto("/settings?tab=preferences");
 
     const myTz = page.getByRole("combobox", { name: "Your timezone" });
     await expect(myTz).toBeVisible({ timeout: 20_000 });
 
     // Pick a zone the account is not already on, so a save that does nothing
     // cannot pass by coincidence.
-    const city = originalProfile.timezone === "Asia/Kolkata" ? "Lisbon" : "Kolkata";
+    const city = me.start.timezone === "Asia/Kolkata" ? "Lisbon" : "Kolkata";
     const zone = city === "Lisbon" ? "Europe/Lisbon" : "Asia/Kolkata";
 
     await pickZone(page, myTz, city);
@@ -685,7 +695,7 @@ test.describe("the shared Pro user's own profile", () => {
       saveNear(page, myTz).click(),
     ]);
     await expect
-      .poll(async () => (await readProfile(userId)).timezone, { timeout: 20_000 })
+      .poll(async () => (await readProfile(me.id)).timezone, { timeout: 20_000 })
       .toBe(zone);
 
     await page.reload();
@@ -705,22 +715,32 @@ test.describe("the shared Pro user's own profile", () => {
       saveNear(page, myLang).click(),
     ]);
     await expect
-      .poll(async () => (await readProfile(userId)).locale, { timeout: 20_000 })
+      .poll(async () => (await readProfile(me.id)).locale, { timeout: 20_000 })
       .toBe(nextLang);
+
+    // The repaint landed on THIS account. The one every other worker renders
+    // as — this is the moment the old version had it in another language —
+    // reads exactly as the file found it.
+    expect(await readProfile(sharedUserId), "the shared Pro user's row moved").toEqual(
+      originalProfile,
+    );
   });
 });
 
 // ---------------------------------------------------------------------------
-// The restore, proven
+// The shared user, proven untouched
 // ---------------------------------------------------------------------------
 
 /**
- * Declared after the describe above, so it runs after that group's `afterAll`.
- * Without this the restore is an unverified claim and the next spec in the leg
- * inherits whatever this one happened to leave behind.
+ * Declared after the describe above, so it runs once every test in this file
+ * has had its chance to write. Without this "nothing here writes the shared
+ * account" is an unverified claim, and the rest of the leg would inherit
+ * whatever this file happened to leave behind.
  */
-test("the shared Pro user's display name, timezone and locale came back", async ({ page }) => {
-  expect(await readProfile(userId)).toEqual(originalProfile);
+test("the shared Pro user's display name, timezone and locale are as this file found them", async ({
+  page,
+}) => {
+  expect(await readProfile(sharedUserId)).toEqual(originalProfile);
 
   // And what a PERSON sees, not only what the column holds.
   await page.goto(settingsUrl(org.slug, "account"));
