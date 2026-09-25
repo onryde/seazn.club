@@ -1,0 +1,221 @@
+// Final review I2: a device link's secret IS its URL (`/score/<token>`), and it
+// is now long-lived, re-showable and printed on paper. Every telemetry surface
+// that records a URL (PostHog's pageview/pageleave properties, Sentry's error
+// and transaction events, breadcrumbs, the replay's own URL list and its
+// recording) would otherwise carry a working scoring credential off the court.
+// One helper scrubs it; these tests pin it on the shapes each SDK really sends.
+import { describe, expect, it } from "vitest";
+import type { CaptureResult } from "posthog-js";
+import type { Event } from "@sentry/nextjs";
+import {
+  posthogBeforeSend,
+  scrubRecordingEvent,
+  scrubScoreTokens,
+  scrubScoreUrl,
+  scrubSentryEvent,
+} from "../scrub-score-url";
+
+/** The real shape: `dl_` + 32 random bytes as base64url (device-links.ts). */
+const TOKEN = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
+const OTHER = "dl_ZmVlZGJhY2sgZnJvbSBhIHNlY29uZCBwaG9uZSBoZXJlXw-_x";
+const PAGE = `https://seazn.club/score/${TOKEN}`;
+
+/** No trace of either secret, anywhere in the serialised value. */
+function expectNoToken(value: unknown): void {
+  const text = JSON.stringify(value);
+  expect(text).not.toContain(TOKEN);
+  expect(text).not.toContain(OTHER);
+  expect(text).not.toMatch(/\/score\/dl_/);
+}
+
+describe("scrubScoreUrl", () => {
+  it.each([
+    ["a full URL", PAGE, "https://seazn.club/score/[token]"],
+    ["a bare path", `/score/${TOKEN}`, "/score/[token]"],
+    ["a trailing slash", `/score/${TOKEN}/`, "/score/[token]/"],
+    ["a query", `/score/${TOKEN}?from=sheet`, "/score/[token]?from=sheet"],
+    ["a hash", `/score/${TOKEN}#pad`, "/score/[token]#pad"],
+    ["two occurrences", `from /score/${TOKEN} to /score/${OTHER}`, "from /score/[token] to /score/[token]"],
+    ["a quoted URL in a message", `GET "/score/${TOKEN}" failed`, 'GET "/score/[token]" failed'],
+  ])("%s", (_, input, expected) => {
+    expect(scrubScoreUrl(input)).toBe(expected);
+  });
+
+  it.each([
+    ["no /score at all", "https://seazn.club/o/club/c/cup/schedule?day=2026-09-26"],
+    ["a longer segment that only starts with score", "/scoreboard/abc"],
+    ["the bare route", "/score"],
+    ["the route with nothing after it", "/score/"],
+    ["an already-scrubbed URL", "https://seazn.club/score/[token]"],
+  ])("leaves %s untouched", (_, input) => {
+    expect(scrubScoreUrl(input)).toBe(input);
+  });
+
+  it("scrubs a bare bearer token too (an Authorization header on a server event)", () => {
+    expect(scrubScoreUrl(`Bearer ${TOKEN}`)).toBe("Bearer dl_[token]");
+  });
+});
+
+describe("scrubScoreTokens (deep)", () => {
+  it("scrubs every string in nested objects and arrays, and leaves everything else as it was", () => {
+    const when = new Date("2026-09-26T09:00:00Z");
+    const input = { a: PAGE, n: 3, ok: true, none: null, at: when, list: [PAGE, { deep: `/score/${OTHER}` }] };
+    const out = scrubScoreTokens(input);
+    expectNoToken(out);
+    expect(out).toEqual({
+      a: "https://seazn.club/score/[token]",
+      n: 3,
+      ok: true,
+      none: null,
+      at: when,
+      list: ["https://seazn.club/score/[token]", { deep: "/score/[token]" }],
+    });
+    expect(out.at, "a Date is not a plain object: passed through, not rebuilt").toBe(when);
+    expect(input.a, "the input is not mutated").toBe(PAGE);
+  });
+});
+
+describe("posthogBeforeSend", () => {
+  // A real `$pageview` as posthog-js 1.399 builds it (properties trimmed to the
+  // URL-bearing ones and a couple that must survive untouched).
+  const pageview = (): CaptureResult => ({
+    uuid: "0192-uuid",
+    event: "$pageview",
+    properties: {
+      token: "phc_project_key",
+      distinct_id: "anon-1",
+      $current_url: `${PAGE}?from=sheet`,
+      $host: "seazn.club",
+      $pathname: `/score/${TOKEN}`,
+      $referrer: `https://seazn.club/score/${OTHER}`,
+      $referring_domain: "seazn.club",
+      $initial_current_url: PAGE,
+      $prev_pageview_pathname: `/score/${OTHER}`,
+      $session_entry_url: PAGE,
+      $elements: [{ tag_name: "a", attr__href: `/score/${TOKEN}`, $el_text: "Open pad" }],
+      $screen_height: 800,
+    },
+    $set_once: { $initial_current_url: PAGE, $initial_pathname: `/score/${TOKEN}` },
+    $set: { $current_url: PAGE },
+  });
+
+  it("scrubs the token from every URL-valued property, person properties included", () => {
+    const out = posthogBeforeSend(pageview());
+    expect(out).not.toBeNull();
+    expectNoToken(out);
+    expect(out!.properties.$current_url).toBe("https://seazn.club/score/[token]?from=sheet");
+    expect(out!.properties.$pathname).toBe("/score/[token]");
+    expect(out!.$set_once?.$initial_pathname).toBe("/score/[token]");
+  });
+
+  it("keeps the event and every property that carries no token", () => {
+    const out = posthogBeforeSend(pageview())!;
+    expect(out.event).toBe("$pageview");
+    expect(out.uuid).toBe("0192-uuid");
+    expect(out.properties.token).toBe("phc_project_key");
+    expect(out.properties.$host).toBe("seazn.club");
+    expect(out.properties.$screen_height).toBe(800);
+  });
+
+  it("passes a dropped event (null) through as dropped", () => {
+    expect(posthogBeforeSend(null)).toBeNull();
+  });
+});
+
+describe("scrubSentryEvent", () => {
+  it("an error event: request URL, transaction, breadcrumbs, tags and stack frames", () => {
+    const event: Event = {
+      event_id: "e1",
+      transaction: `/score/${TOKEN}`,
+      request: { url: PAGE, headers: { Referer: PAGE, authorization: `Bearer ${TOKEN}` } },
+      tags: { url: PAGE, route: "/score/[token]" },
+      breadcrumbs: [
+        { category: "navigation", data: { from: `/score/${OTHER}`, to: `/score/${TOKEN}` } },
+        { category: "fetch", data: { url: `/api/v1/fixtures/f1/state`, method: "GET" } },
+        { category: "console", message: `opened ${PAGE}` },
+      ],
+      exception: {
+        values: [
+          {
+            type: "Error",
+            value: "boom",
+            stacktrace: { frames: [{ filename: PAGE, abs_path: PAGE, function: "onTap" }] },
+          },
+        ],
+      },
+    };
+    const out = scrubSentryEvent(event);
+    expect(out).not.toBeNull();
+    expectNoToken(out);
+    expect(out!.request?.url).toBe("https://seazn.club/score/[token]");
+    expect(out!.transaction).toBe("/score/[token]");
+    expect(out!.breadcrumbs?.[1]?.data?.url, "a URL with no token is left alone").toBe("/api/v1/fixtures/f1/state");
+  });
+
+  it("a transaction event: its spans' descriptions and URL attributes", () => {
+    const event: Event = {
+      type: "transaction",
+      transaction: `/score/${TOKEN}`,
+      spans: [
+        {
+          span_id: "s1",
+          trace_id: "t1",
+          start_timestamp: 1,
+          description: `GET ${PAGE}`,
+          data: { "http.url": PAGE, "url.full": PAGE },
+        },
+      ],
+    };
+    const out = scrubSentryEvent(event);
+    expectNoToken(out);
+    expect(out!.spans?.[0]?.description).toBe("GET https://seazn.club/score/[token]");
+  });
+
+  it("a replay event: its URL list", () => {
+    const event = { type: "replay_event", replay_id: "r1", urls: [PAGE, "https://seazn.club/"] } as unknown as Event;
+    const out = scrubSentryEvent(event) as unknown as { urls: string[] };
+    expect(out.urls).toEqual(["https://seazn.club/score/[token]", "https://seazn.club/"]);
+  });
+});
+
+describe("scrubRecordingEvent (Sentry Replay's beforeAddRecordingEvent)", () => {
+  // Only CUSTOM frames (rrweb type 5) reach this hook: @sentry/replay 10.62
+  // gates the callback on `isCustomEvent`. These are the two custom frames that
+  // carry URLs.
+  it("scrubs a navigation breadcrumb frame and a performance-span frame, and keeps them", () => {
+    const crumb = {
+      type: 5,
+      timestamp: 2,
+      data: { tag: "breadcrumb", payload: { category: "navigation", data: { from: `/score/${OTHER}`, to: `/score/${TOKEN}` } } },
+    };
+    const span = {
+      type: 5,
+      timestamp: 3,
+      data: { tag: "performanceSpan", payload: { op: "navigation.push", description: PAGE, startTimestamp: 1, endTimestamp: 2 } },
+    };
+    const outCrumb = scrubRecordingEvent(crumb);
+    const outSpan = scrubRecordingEvent(span);
+    expectNoToken([outCrumb, outSpan]);
+    expect(outCrumb.data.payload.data.to).toBe("/score/[token]");
+    expect(outSpan.data.payload.description).toBe("https://seazn.club/score/[token]");
+    expect(outSpan.data.payload.op, "the frame is kept, not dropped").toBe("navigation.push");
+  });
+});
+
+describe("a Sentry log (beforeSendLog)", () => {
+  // Next logs a failed RSC fetch with the page URL through console.error; the
+  // console logging integration forwards it as a Sentry log.
+  it("scrubs the message and URL attributes", () => {
+    const log = {
+      level: "error" as const,
+      message: `Failed to fetch RSC payload for ${PAGE}?_rsc=1x2y. Falling back to browser navigation.`,
+      attributes: { "url.path": `/score/${TOKEN}`, "sentry.origin": "auto.console.logging" },
+    };
+    const out = scrubScoreTokens(log);
+    expectNoToken(out);
+    expect(out.message).toBe(
+      "Failed to fetch RSC payload for https://seazn.club/score/[token]?_rsc=1x2y. Falling back to browser navigation.",
+    );
+    expect(out.attributes["sentry.origin"]).toBe("auto.console.logging");
+  });
+});
