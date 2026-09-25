@@ -33,7 +33,7 @@ import { ScanWaiting } from "@/components/v2/scan-waiting";
 import { deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
 import { resultCarriedForward } from "@/server/usecases/carried-forward";
 import { scanMatchNames } from "@/server/usecases/scan-match-names";
-import { venueTzForDivision } from "@/server/venue-tz";
+import { resolveVenueTz } from "@/lib/tz";
 import { entrantDisplayName, type EntrantNameSource } from "@/lib/entrant-name";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -114,6 +114,8 @@ export default async function ScorePadPage({
          *  sees it (`scanScreen`'s "not started" row). */
         division_status: string;
         competition_branding: unknown;
+        /** `organizations.timezone`: the clock the printed sheet uses. */
+        org_tz: string | null;
       }[]
     >`
       select f.id, f.round_no, ven.name as venue_name, crt.name as court_name,
@@ -123,7 +125,7 @@ export default async function ScorePadPage({
              hm.members as home_members, am.members as away_members, d.id as division_id,
              d.sport_key, d.module_version, d.config, d.status as division_status,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
-             c.branding as competition_branding
+             c.branding as competition_branding, o.timezone as org_tz
       from fixtures f
       left join courts crt on crt.id = f.court_id
       left join venues ven on ven.id = f.venue_id
@@ -142,6 +144,7 @@ export default async function ScorePadPage({
         where em.entrant_id = ae.id) am on true
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
+      left join organizations o on o.id = c.org_id
       where f.id = ${link.fixture_id}`;
     return row ?? null;
   });
@@ -175,9 +178,12 @@ export default async function ScorePadPage({
     carriedForward: carried,
     divisionStatus: fixture.division_status,
   });
-  // The venue's zone through the one authority for that join (`venue-tz.ts`),
-  // never a fourth copy of it.
-  const tz = await venueTzForDivision(fixture.division_id);
+  // The ORG clock, resolved exactly as the printed sheet resolves it
+  // (usecases/scorer-sheets.ts `competitionClock`): the scorer checks this
+  // time against the card in their hand, so a division's own
+  // `schedule_settings.tz` must not move it (final review M1; owner ruling:
+  // the org time zone only).
+  const tz = resolveVenueTz(null, fixture.org_tz);
   const scheduledLabel = fixtureTimeLabel(fixture.scheduled_at, tz, intlLocaleFor(locale));
   // The match and each still-empty seat, named the way the schedule board
   // names them (owner ruling 2026-09-24: "QF·1", "Winner of QF·2"), in the

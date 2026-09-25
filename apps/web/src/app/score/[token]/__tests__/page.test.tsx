@@ -24,6 +24,7 @@ import { decide, deviceFor, fixturesOf, seedStage } from "@/server/usecases/__te
 import { DeviceScorePad, type PadSideInfo } from "@/components/v2/device-score-pad";
 import { buildScorerSheet } from "@/server/usecases/scorer-sheets";
 import { entrantDisplayName } from "@/lib/entrant-name";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
@@ -497,17 +498,14 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     );
   });
 
-  it("scheduled, both sides → the pad with no View-only, a match ref and a venue-tz time", async () => {
+  it("scheduled, both sides → the pad with no View-only, a match ref and an org-clock time", async () => {
     const { auth, fixtureId } = await seedScorableFixture();
     const [{ stage_id: leagueStage }] = await sql<{ stage_id: string }[]>`select stage_id from fixtures where id = ${fixtureId}`;
     await sql`update fixtures set scheduled_at = '2026-09-23T10:30:00Z' where id = ${fixtureId}`;
-    // The venue's zone, not UTC: a division override to Auckland moves 10:30Z
-    // to 22:30 on the card.
-    await sql`
-      insert into schedule_settings (division_id, org_id, tz)
-      select f.division_id, d.org_id, 'Pacific/Auckland'
-      from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
-      on conflict (division_id) do update set tz = excluded.tz`;
+    // The ORG's zone, not UTC (final review M1, owner ruling: the org time zone
+    // only, as the printed sheet): an org in Auckland moves 10:30Z to 22:30 on
+    // the card. A division's own override may not move it — the M1 case below.
+    await sql`update organizations set timezone = 'Pacific/Auckland' where id = ${auth.orgId}`;
     const { secret } = await ensureDeviceLink(auth, fixtureId);
     const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
     const p = find(tree, DeviceScorePad)!.props as {
@@ -787,7 +785,7 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
 // token printed on it: the real producer and the real consumer, no fixture on
 // either end. The entrants' stored snapshot names deliberately DIFFER from
 // their one rostered person, which is the name the card prints.
-describe.skipIf(!HAS_DB)("the scan names each side the way its printed card does (final review I1)", () => {
+describe.skipIf(!HAS_DB)("the scan agrees with its printed card: names (final review I1), time (M1)", () => {
   const DAY = "2026-09-23";
   const PRINTED = "2026-09-23T06:00:00.000Z";
   const ORIGIN = "http://localhost:3000";
@@ -846,5 +844,34 @@ describe.skipIf(!HAS_DB)("the scan names each side the way its printed card does
     expect(waiting, "precondition: one TBD side still waits").not.toBeNull();
     const { home, away } = waiting!.props as WaitingProps;
     expect([home, away], "each seat, in its place").toEqual([card.home, card.away]);
+  });
+
+  // Final review M1 (owner ruling: the ORG time zone only). The card prints the
+  // match's time on the org clock; the scan printed it in the division's own
+  // `schedule_settings.tz`, so a division whose zone differs from its org's put
+  // two different times in the scorer's hands. The zones here split by a
+  // non-whole hour (+5:30 against −7), so no coincidence can pass.
+  it("the scan prints the match's time on the ORG clock, as its card does (review M1)", async () => {
+    const ORG_TZ = "Asia/Kolkata";
+    const DIVISION_TZ = "America/Los_Angeles";
+    const { auth } = await seedOrg("pro");
+    const { competition, division, stage } = await seedStage(auth, "league", ["Stored A", "Stored B"], {}, rostered);
+    await sql`update organizations set timezone = ${ORG_TZ} where id = ${auth.orgId}`;
+    await sql`insert into schedule_settings (division_id, tz, config) values (${division.id}, ${DIVISION_TZ}, '{}'::jsonb)`;
+    const [fixture] = await fixturesOf(stage.id);
+    await schedule([fixture!.id]);
+    const card = await cardFor(auth, competition.id, fixture!.id);
+    const clock = (timeZone: string) =>
+      new Intl.DateTimeFormat(intlLocaleFor("en"), { timeZone, hour: "2-digit", minute: "2-digit" }).format(
+        new Date(`${DAY}T09:00:00Z`),
+      );
+    expect(card.time, "precondition: the card is on the org clock").toBe(clock(ORG_TZ));
+    expect(clock(DIVISION_TZ), "precondition: the two clocks disagree").not.toBe(clock(ORG_TZ));
+    const tree = await ScorePadPage({ params: Promise.resolve({ token: card.token }) });
+    const pad = find(tree, DeviceScorePad);
+    expect(pad, "precondition: the pad (Confirm)").not.toBeNull();
+    const label = (pad!.props as { fixture: { scheduled_label: string | null } }).fixture.scheduled_label;
+    expect(label, "the card's time").toContain(card.time);
+    expect(label, "never the division's own zone").not.toContain(clock(DIVISION_TZ));
   });
 });
