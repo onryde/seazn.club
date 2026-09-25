@@ -155,6 +155,30 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(m.summary.fixtureCount, "the summary counts the cards that were printed").toBe(cards(m).length);
   });
 
+  // Fix batch 2, item 4 (re-review minor c): the count is by the board's
+  // court NAME, which is venue-qualified wherever two venues share one
+  // (`courtNamesById` → `buildCourtDirectory`, unique per court id). So two
+  // venues' "Court 1" are two names, two page groups and two courts. This pins
+  // it: a card court name that skipped the directory would count them as one.
+  it("courtCount counts COURTS: two venues that each name a court 'Court 1' are two courts (fix batch 2, item 4)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C"]);
+    const fx = await fixturesOf(stage.id);
+    expect(fx).toHaveLength(3); // premise: a three-entrant league is three matches
+    const east = await createVenue(auth, { name: "East hall", sort: 0 });
+    const west = await createVenue(auth, { name: "West hall", sort: 1 });
+    const eastCourt = await createCourt(auth, east.id, { name: "Court 1", sort: 0, tags: [] });
+    const westCourt = await createCourt(auth, west.id, { name: "Court 1", sort: 0, tags: [] });
+    await patchFixture(auth, fx[0]!.id, { court_id: eastCourt.id });
+    await patchFixture(auth, fx[1]!.id, { court_id: westCourt.id });
+    await patchFixture(auth, fx[2]!.id, { court_id: eastCourt.id });
+    await schedule(fx.map((f) => f.id));
+    const m = await buildScorerSheet(auth, competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
+    expect(m.summary).toEqual({ fixtureCount: 3, courtCount: 2, courtlessCount: 0 });
+    // The count agrees with what printed: one page group per court.
+    expect(new Set(m.pages.map((p) => p.heading.court)).size).toBe(m.summary.courtCount);
+  });
+
   it("a court's tenth match spills to its own second page: 9 + 1, headed page 1 of 2 and page 2 of 2", async () => {
     const { auth } = await seedOrg("pro");
     const { competition, stage } = await seedStage(auth, "league", ["A", "B", "C", "D", "E"]);
