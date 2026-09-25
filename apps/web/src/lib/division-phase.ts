@@ -6,11 +6,15 @@ export type DivisionStatus = "setup" | "scheduled" | "active" | "completed";
 
 /** Doc 12 §1: scoring opens only after the explicit start (`division_started`);
  *  a published-but-unstarted timetable (`scheduled`) stays read-only. The ONE
- *  predicate for it: the scoring door refuses WRONG_PHASE on it
- *  (usecases/scoring.ts) and the scan page opens on "Not started yet" on it
- *  (lib/scan-screen.ts), so a scanned sheet never offers a Start the door would
- *  refuse. Takes a plain string: the page and the door both read the raw
- *  column, and anything other than these two is scoring-open, as it was. */
+ *  predicate for it, and every site that asks asks this:
+ *   - the scoring door refuses WRONG_PHASE on it (usecases/scoring.ts);
+ *   - the batch import refuses `import.division_not_started` on it
+ *     (usecases/event-import.ts);
+ *   - the scan page opens on "Not started yet" on it (lib/scan-screen.ts), so a
+ *     scanned sheet never offers a Start the door would refuse;
+ *   - the division page offers its Start button on it (v2/launch-actions.tsx).
+ *  Takes a plain string: every caller reads the raw column, and anything other
+ *  than these two is scoring-open, as it was. */
 export function divisionScoringClosed(status: string): boolean {
   return status === "setup" || status === "scheduled";
 }

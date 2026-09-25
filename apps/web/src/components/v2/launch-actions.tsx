@@ -18,6 +18,7 @@ import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startClosesEntrantList } from "@/lib/open-entry-stages";
 import { startPromotesCompetition } from "@/lib/start-promotes-competition";
 import { formatAlreadyLocked } from "@/lib/format-already-locked";
+import { divisionScoringClosed } from "@/lib/division-phase";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
 
 interface Props {
@@ -128,7 +129,7 @@ export function LaunchActions({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {canEdit && (status === "setup" || status === "scheduled") && (
+      {canEdit && divisionScoringClosed(status) && (
         <button
           type="button"
           data-testid="launch-start-division"
