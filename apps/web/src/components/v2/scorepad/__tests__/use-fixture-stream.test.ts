@@ -377,6 +377,51 @@ describe("useFixtureStream — catch-up on subscribe", () => {
     expect(onEvents).toHaveBeenCalledWith(rows);
   });
 
+  it("a drain that starts just as the first settles is waited out too — the catch-up re-checks after every wait", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
+    const listEventsSince = vi.fn(async () => rows);
+    const { connector } = fakeConnector();
+    let current: Promise<void> | null = null;
+    let finishSecond!: () => void;
+    const second = new Promise<void>((resolve) => {
+      finishSecond = () => {
+        current = null;
+        resolve();
+      };
+    });
+    let finishFirst!: () => void;
+    // The second drain is already the caller's write by the time the first
+    // one's waiters run, as when a queued tap starts sending the moment the
+    // leftover queue empties.
+    current = new Promise<void>((resolve) => {
+      finishFirst = () => {
+        current = second;
+        resolve();
+      };
+    });
+    mountStream({
+      fixtureId: "fx-1",
+      auth: { kind: "session" },
+      sinceSeq: 4,
+      onEvents: () => {},
+      fetchFn: fn,
+      connector,
+      listEventsSince,
+      pollMs: 15_000,
+      writeInFlight: () => current,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince).not.toHaveBeenCalled();
+
+    finishFirst();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince, "no read while the second drain is out").not.toHaveBeenCalled();
+
+    finishSecond();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listEventsSince.mock.calls).toEqual([["fx-1", 4]]);
+  });
+
   it("an unmount while the catch-up waits on a drain makes no read", async () => {
     const { fn } = fakeFetch(() => fakeResponse(403, { ok: false, error: { code: "FORBIDDEN", message: "no" } }));
     const listEventsSince = vi.fn(async () => []);
