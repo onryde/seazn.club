@@ -207,15 +207,22 @@ test("a challenge is legal once the rungs between have left, and the refusal say
   await page.getByRole("button", { name: /issue challenge/i }).click();
   await expect(banner).toHaveCount(0);
 
-  const fixtures = await apiJson<{ home_entrant_id: string; away_entrant_id: string }[]>(
-    request,
-    `/api/v1/divisions/${rig.divisionId}/fixtures`,
-  );
-  expect(fixtures.status, JSON.stringify(fixtures.error)).toBe(200);
-  expect(
-    fixtures.data!.some(
-      (f) => f.home_entrant_id === rig.order[4]! && f.away_entrant_id === rig.order[0]!,
-    ),
-    "the live-legal challenge produced no fixture",
-  ).toBe(true);
+  // Poll, don't read once: the old refusal banner clears as soon as the click
+  // lands, so `toHaveCount(0)` can pass while the challenge POST is still in
+  // flight — a single read then races the insert (seen on CI, run 36093472811).
+  await expect
+    .poll(
+      async () => {
+        const fixtures = await apiJson<{ home_entrant_id: string; away_entrant_id: string }[]>(
+          request,
+          `/api/v1/divisions/${rig.divisionId}/fixtures`,
+        );
+        expect(fixtures.status, JSON.stringify(fixtures.error)).toBe(200);
+        return fixtures.data!.some(
+          (f) => f.home_entrant_id === rig.order[4]! && f.away_entrant_id === rig.order[0]!,
+        );
+      },
+      { message: "the live-legal challenge produced no fixture", timeout: 15_000 },
+    )
+    .toBe(true);
 });
