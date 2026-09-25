@@ -526,160 +526,197 @@ export async function reversePassCreditOnRefund(
    */
   passKey: PassKey | null,
 ): Promise<void> {
-  const [redemption] = await sql<
-    {
-      subscription_id: string;
+  // SERIALISED per intent on the redemption row, and the lock is held ACROSS the
+  // Stripe round trips below — the same deliberate trade `syncGroupQuantity`
+  // makes (billing-groups.ts), bounded the same way. Two deliveries of one
+  // `charge.refunded` (Stripe delivers at least once; the e2e walkthrough leg's
+  // `stripe listen` forwarder doubles every refund) used to run this
+  // read-debit-stamp concurrently, and the stamp's `reversed_at is null` guard
+  // came too late to help: the debit is money that has already moved. A second
+  // copy that read the balance after the first's debit landed, but before the
+  // first stamped the row, saw 0 — the same shape as "an invoice consumed the
+  // whole credit" — stamped `reversed_minor = 0` ahead of the first and mailed
+  // staff a "consumed" write-off for money that had in fact come back. A second
+  // copy one step earlier instead collided on the idempotency key (409
+  // `idempotency_key_in_use`, logged as a failed reversal) and ACKed while the
+  // first's debit was still in flight. Queued behind the lock, the second copy
+  // simply finds the row stamped and stops.
+  //
+  // The alert and its lookups run AFTER the transaction closes: they go through
+  // the pool, and a pooled query issued while this transaction pins a
+  // connection is the self-deadlock lib/db.ts describes.
+  let settled: {
+    redemption: {
       org_id: string;
       competition_id: string;
       amount_minor: number;
       currency: string;
-      redeemed_at: string | Date;
-      reversed_at: string | Date | null;
-    }[]
-  >`
-    select subscription_id, org_id, competition_id, amount_minor, currency, redeemed_at, reversed_at
-    from pass_credit_redemptions
-    where payment_intent = ${intent}`;
-  // No row: covers three silent-no-op cases — a non-pass charge refund, a
-  // duplicate-pass-payment refund (refundDuplicatePassPayment, lib/billing.ts:
-  // that intent was never the one mostRecentPass credited, so it never earns a
-  // row here), and a pass refunded before it ever earned a credit. Already
-  // reversed: a webhook replay — in ADDITION to, not instead of, the Stripe
-  // idempotency key below; this DB check protects the write and skips the
-  // network round trip, the key protects the Stripe call itself. (It is only
-  // a fast-path skip, not the sole race guard — the UPDATE below re-checks
-  // `reversed_at is null` for two genuinely concurrent deliveries that both
-  // pass this read before either writes.)
-  if (!redemption || redemption.reversed_at) return;
+    };
+    reverseAmount: number;
+    unsafe: boolean;
+  } | null;
+  try {
+    settled = await sql.begin(async (tx) => {
+      // A queued copy waits at most this long for the one ahead of it; past
+      // that it gives up (caught below) and leaves the reversal to that copy.
+      await tx`set local lock_timeout = '5s'`;
+      await tx`set local statement_timeout = '30s'`;
+      const [redemption] = await tx<
+        {
+          subscription_id: string;
+          org_id: string;
+          competition_id: string;
+          amount_minor: number;
+          currency: string;
+          redeemed_at: string | Date;
+          reversed_at: string | Date | null;
+        }[]
+      >`
+        select subscription_id, org_id, competition_id, amount_minor, currency, redeemed_at, reversed_at
+        from pass_credit_redemptions
+        where payment_intent = ${intent}
+        for update`;
+      // No row: covers three silent-no-op cases — a non-pass charge refund, a
+      // duplicate-pass-payment refund (refundDuplicatePassPayment,
+      // lib/billing.ts: that intent was never the one mostRecentPass credited,
+      // so it never earns a row here), and a pass refunded before it ever
+      // earned a credit. Already reversed: a webhook replay, or a concurrent
+      // copy that queued on the lock above behind the one that did the work —
+      // in ADDITION to, not instead of, the Stripe idempotency key below; this
+      // check protects the write and skips the network round trips, the key
+      // protects the Stripe call itself.
+      if (!redemption || redemption.reversed_at) return null;
 
-  const [sub] = await sql<{ stripe_customer_id: string | null }[]>`
-    select stripe_customer_id from subscriptions where id = ${redemption.subscription_id}`;
-  if (!sub?.stripe_customer_id) {
-    // Should not happen — the redemption row only ever gets written for a
-    // group that already had a customer id at credit time — but never assume.
-    // This file's rule is "unproven state yields no credit outcome"; the
-    // mirror of that here is "unproven state performs no reversal".
-    log.error(
-      { intent, subscriptionId: redemption.subscription_id },
-      "billing: pass credit reversal — subscription has no stripe_customer_id",
-    );
+      const [sub] = await tx<{ stripe_customer_id: string | null }[]>`
+        select stripe_customer_id from subscriptions where id = ${redemption.subscription_id}`;
+      if (!sub?.stripe_customer_id) {
+        // Should not happen — the redemption row only ever gets written for a
+        // group that already had a customer id at credit time — but never
+        // assume. This file's rule is "unproven state yields no credit
+        // outcome"; the mirror of that here is "unproven state performs no
+        // reversal".
+        log.error(
+          { intent, subscriptionId: redemption.subscription_id },
+          "billing: pass credit reversal — subscription has no stripe_customer_id",
+        );
+        return null;
+      }
+
+      // Checked BEFORE reading the live balance: if the pool is not provably
+      // pass-money-only, no amount computed from `customer.balance` can be
+      // trusted, so there is nothing safe to compute — skip straight to the
+      // undetermined outcome without spending a second Stripe call on the
+      // balance read.
+      const unsafe = await otherCreditActivitySince(
+        sub.stripe_customer_id,
+        intent,
+        new Date(redemption.redeemed_at),
+      );
+
+      let reverseAmount = 0;
+      if (!unsafe) {
+        let customer: Stripe.Customer | Stripe.DeletedCustomer;
+        try {
+          customer = await getStripe().customers.retrieve(sub.stripe_customer_id);
+        } catch (err) {
+          log.error({ err, intent }, "billing: pass credit reversal failed");
+          return null;
+        }
+        if (customer.deleted) {
+          log.error(
+            { intent, customerId: sub.stripe_customer_id },
+            "billing: pass credit reversal — customer is deleted",
+          );
+          return null;
+        }
+
+        // Stripe's customer balance is ONE POOL per currency, shared with any
+        // other credit source that customer might ever have — but `unsafe`
+        // above has already proven nothing else has touched it since this
+        // grant, and the lock above proves no other copy of THIS reversal is
+        // mid-flight, so this min() is exactly correct here:
+        //   - capped at redemption.amount_minor — never reverses more than THIS
+        //     pass ever granted, however large the current balance is for
+        //     unrelated reasons.
+        //   - capped at max(-customer.balance, 0) — never creates a positive
+        //     (debt-inducing) balance. If less credit remains than was granted,
+        //     the difference was already consumed by an invoice and is written
+        //     off — see the alert below.
+        reverseAmount = Math.min(redemption.amount_minor, Math.max(-(customer.balance ?? 0), 0));
+
+        if (reverseAmount > 0) {
+          try {
+            await getStripe().customers.createBalanceTransaction(
+              sub.stripe_customer_id,
+              {
+                // POSITIVE = debit = reduces the customer's credit, mirroring
+                // the negative-is-credit comment on the grant call above.
+                amount: reverseAmount,
+                currency: redemption.currency,
+                description: `Event Pass credit reversal — pass refunded`,
+                metadata: { [PASS_CREDIT_INTENT_KEY]: intent, reversal: "refunded" },
+              },
+              // Distinct namespace from the group-cap lost-race reversal above
+              // (`pass-credit-reversal-${intent}`) even though the two can
+              // never fire for the same intent (that path only runs when NO
+              // redemption row was written for the insert; this path requires
+              // one to exist) — a shared key string across two semantically
+              // different reversal reasons is a landmine for whoever reads the
+              // Stripe dashboard or greps for the key next. With concurrent
+              // copies serialised on the lock above, the key now only has to
+              // cover a retry of THIS call whose first response never arrived.
+              { idempotencyKey: `pass-credit-refund-reversal-${intent}` },
+            );
+          } catch (err) {
+            // No `reversed_at` write below: a redelivered webhook must get a
+            // genuine retry, not a false "already handled".
+            log.error({ err, intent }, "billing: pass credit reversal failed");
+            return null;
+          }
+        }
+      }
+
+      // #286: `reversed_at` is stamped on every call — it still doubles as the
+      // "this webhook delivery has been handled" idempotency guard the
+      // early-return at the top of this transaction reads. But when `unsafe`
+      // is true nothing was actually clawed back, so
+      // `reversal_undetermined_at` is ALSO stamped, and V337's widened partial
+      // index keeps pass_credit_redemptions_group_cap HELD for this row even
+      // though reversed_at is set — the bug this migration exists to close.
+      // This wave the hold is PERMANENT: nothing ever clears
+      // `reversal_undetermined_at`, so the group's one lifetime pass credit
+      // stays blocked until staff resolution tooling ships — there is no
+      // self-serve release path, and resolving the balance in Stripe does not
+      // touch this row. The staff alert below says so in as many words
+      // (`sendPassCreditReversalIncompleteAlertEmail`, reason "undetermined"),
+      // because holding the cap forever is only defensible while a human is
+      // being told about every row that does it.
+      //
+      // `reversed_at is null` stays on the UPDATE as a belt: under the row
+      // lock it cannot miss, and if it ever does, nothing is logged or alerted.
+      const [won] = unsafe
+        ? await tx<{ payment_intent: string }[]>`
+            update pass_credit_redemptions
+            set reversed_at = now(), reversed_minor = ${reverseAmount}, reversal_undetermined_at = now()
+            where payment_intent = ${intent} and reversed_at is null
+            returning payment_intent`
+        : await tx<{ payment_intent: string }[]>`
+            update pass_credit_redemptions
+            set reversed_at = now(), reversed_minor = ${reverseAmount}
+            where payment_intent = ${intent} and reversed_at is null
+            returning payment_intent`;
+      if (!won) return null;
+      return { redemption, reverseAmount, unsafe };
+    });
+  } catch (err) {
+    // `lock_timeout`: another copy of this reversal has held the row past the
+    // wait above and is still doing the work — or a DB fault. Either way this
+    // function never throws (see its doc comment); the webhook still ACKs.
+    log.warn({ err, intent }, "billing: pass credit reversal skipped — could not take the row");
     return;
   }
-
-  // Checked BEFORE reading the live balance: if the pool is not provably
-  // pass-money-only, no amount computed from `customer.balance` can be
-  // trusted, so there is nothing safe to compute — skip straight to the
-  // undetermined outcome without spending a second Stripe call on the
-  // balance read.
-  const unsafe = await otherCreditActivitySince(
-    sub.stripe_customer_id,
-    intent,
-    new Date(redemption.redeemed_at),
-  );
-
-  let reverseAmount = 0;
-  if (!unsafe) {
-    let customer: Stripe.Customer | Stripe.DeletedCustomer;
-    try {
-      customer = await getStripe().customers.retrieve(sub.stripe_customer_id);
-    } catch (err) {
-      log.error({ err, intent }, "billing: pass credit reversal failed");
-      return;
-    }
-    if (customer.deleted) {
-      log.error(
-        { intent, customerId: sub.stripe_customer_id },
-        "billing: pass credit reversal — customer is deleted",
-      );
-      return;
-    }
-
-    // Stripe's customer balance is ONE POOL per currency, shared with any
-    // other credit source that customer might ever have — but `unsafe` above
-    // has already proven nothing else has touched it since this grant, so
-    // this min() is exactly correct here:
-    //   - capped at redemption.amount_minor — never reverses more than THIS
-    //     pass ever granted, however large the current balance is for
-    //     unrelated reasons.
-    //   - capped at max(-customer.balance, 0) — never creates a positive
-    //     (debt-inducing) balance. If less credit remains than was granted,
-    //     the difference was already consumed by an invoice and is written
-    //     off — see the alert below.
-    reverseAmount = Math.min(redemption.amount_minor, Math.max(-(customer.balance ?? 0), 0));
-
-    if (reverseAmount > 0) {
-      try {
-        await getStripe().customers.createBalanceTransaction(
-          sub.stripe_customer_id,
-          {
-            // POSITIVE = debit = reduces the customer's credit, mirroring the
-            // negative-is-credit comment on the grant call above.
-            amount: reverseAmount,
-            currency: redemption.currency,
-            description: `Event Pass credit reversal — pass refunded`,
-            metadata: { [PASS_CREDIT_INTENT_KEY]: intent, reversal: "refunded" },
-          },
-          // Distinct namespace from the group-cap lost-race reversal above
-          // (`pass-credit-reversal-${intent}`) even though the two can never
-          // fire for the same intent (that path only runs when NO redemption
-          // row was written for the insert; this path requires one to exist)
-          // — a shared key string across two semantically different reversal
-          // reasons is a landmine for whoever reads the Stripe dashboard or
-          // greps for the key next.
-          //
-          // Two genuinely concurrent deliveries reaching here with DIFFERENT
-          // `reverseAmount`s (each read `customer.balance` at a slightly
-          // different moment) hit this SAME idempotency key with DIFFERENT
-          // params — Stripe's documented behaviour is to reject the second
-          // call outright (idempotency-key-reused-with-different-parameters),
-          // landing it in the catch below: logged, no `reversed_at` write, a
-          // later retry can still succeed cleanly. Degrades safely without
-          // any extra handling.
-          { idempotencyKey: `pass-credit-refund-reversal-${intent}` },
-        );
-      } catch (err) {
-        // No `reversed_at` write below: a redelivered webhook must get a
-        // genuine retry, not a false "already handled".
-        log.error({ err, intent }, "billing: pass credit reversal failed");
-        return;
-      }
-    }
-  }
-
-  // `and reversed_at is null` + `returning`: the earlier read-check above is
-  // only a fast-path skip, not the real race guard. Two concurrent deliveries
-  // can both pass that read before either writes; this UPDATE is the actual
-  // optimistic-concurrency check — only the caller that flips the row from
-  // NULL to set gets a row back, so only that caller sends the staff alert
-  // below. The loser returns having done nothing further, exactly as if it
-  // had lost the earlier read-check.
-  // #286: `reversed_at` is stamped on every call — it still doubles as the
-  // "this webhook delivery has been handled" idempotency guard the
-  // early-return at the top of this function reads (line 524). But when
-  // `unsafe` is true nothing was actually clawed back, so
-  // `reversal_undetermined_at` is ALSO stamped, and V337's widened partial
-  // index keeps pass_credit_redemptions_group_cap HELD for this row even
-  // though reversed_at is set — the bug this migration exists to close.
-  // This wave the hold is PERMANENT: nothing ever clears
-  // `reversal_undetermined_at`, so the group's one lifetime pass credit stays
-  // blocked until staff resolution tooling ships — there is no self-serve
-  // release path, and resolving the balance in Stripe does not touch this row.
-  // The staff alert below says so in as many words
-  // (`sendPassCreditReversalIncompleteAlertEmail`, reason "undetermined"),
-  // because holding the cap forever is only defensible while a human is being
-  // told about every row that does it.
-  const [won] = unsafe
-    ? await sql<{ payment_intent: string }[]>`
-        update pass_credit_redemptions
-        set reversed_at = now(), reversed_minor = ${reverseAmount}, reversal_undetermined_at = now()
-        where payment_intent = ${intent} and reversed_at is null
-        returning payment_intent`
-    : await sql<{ payment_intent: string }[]>`
-        update pass_credit_redemptions
-        set reversed_at = now(), reversed_minor = ${reverseAmount}
-        where payment_intent = ${intent} and reversed_at is null
-        returning payment_intent`;
-  if (!won) return;
+  if (!settled) return;
+  const { redemption, reverseAmount, unsafe } = settled;
   log.info(
     { intent, orgId: redemption.org_id, reverseAmount, unsafe },
     "billing: pass credit reversed",

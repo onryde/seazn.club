@@ -391,6 +391,64 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     expect(row?.reversed_minor).toBe(1000);
   });
 
+  it("a second delivery that arrives while the first's debit is landing does not book it as a write-off", async () => {
+    // Two deliveries of one charge.refunded — the e2e walkthrough leg makes this
+    // on every run (its `stripe listen` forwarder relays Stripe's own copy while
+    // the spec delivers one), and Stripe's at-least-once delivery can in prod.
+    // The first's debit has landed at Stripe but its response has not reached
+    // it, so its row is not stamped yet. A second copy that runs now reads a
+    // balance of 0 — the SAME shape as "an invoice consumed the whole credit" —
+    // and, before the fix, stamped `reversed_minor = 0` ahead of the first and
+    // mailed staff a "consumed" write-off for money that had in fact come back.
+    const customerId = "cus_" + uniq();
+    const { orgId, subscriptionId } = await seedOrgAndSubscription(customerId);
+    const intent = "pi_" + uniq();
+    ledger.push(grantEntry(intent));
+    await seedRedemption({ subscriptionId, orgId, intent, amountMinor: 2500 });
+
+    let release!: () => void;
+    const responseHeld = new Promise<void>((r) => (release = r));
+    let debitLanded!: () => void;
+    const firstDebitLanded = new Promise<void>((r) => (debitLanded = r));
+    stripeMock.createBalance.mockImplementationOnce(async (_c: string, params: FakeBalanceTxn) => {
+      ledger.push(params); // Stripe has applied the debit…
+      debitLanded();
+      await responseHeld; // …and the first delivery has not heard back yet.
+      return { id: `cbtxn_${uniq()}` };
+    });
+
+    const first = reversePassCreditOnRefund(intent, "event_pass");
+    await firstDebitLanded;
+    let secondDone = false;
+    const second = reversePassCreditOnRefund(intent, "event_pass").then(() => {
+      secondDone = true;
+    });
+    // The second copy either runs to the end on its own (the defect) or queues
+    // behind the first on the redemption row. Proceed once one of those is
+    // OBSERVED, never after a guessed delay.
+    await vi.waitFor(
+      async () => {
+        if (secondDone) return;
+        const [{ n }] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'
+            and query ilike '%from pass_credit_redemptions%for update%'`;
+        if (n > 0) return;
+        throw new Error("the second delivery has neither finished nor queued yet");
+      },
+      { timeout: 10_000, interval: 20 },
+    );
+    release();
+    await Promise.all([first, second]);
+
+    const row = await redemptionRow(intent);
+    expect(row?.reversed_minor).toBe(2500);
+    expect(row?.reversal_undetermined_at).toBeNull();
+    expect(sendPassCreditReversalIncompleteAlertEmail).not.toHaveBeenCalled();
+    // …and the money moved once.
+    expect(stripeMock.createBalance).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the group's lifetime cap HELD after an undetermined reversal — the money bug this closes", async () => {
     const customerId = "cus_" + uniq();
     const { orgId, subscriptionId } = await seedOrgAndSubscription(customerId);
