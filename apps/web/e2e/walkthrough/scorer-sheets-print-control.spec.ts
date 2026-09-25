@@ -21,14 +21,18 @@
 // 320. A refusal hands the button back and moves neither the title nor the
 // control (page-relative boxes, idle vs refused, at 768 and 1280).
 //
-// ── THE ROUTE IS STUBBED HERE, DELIBERATELY ─────────────────────────────────
+// ── THE ROUTE IS STUBBED IN THE FIRST TEST, DELIBERATELY ────────────────────
 // `POST /api/v1/competitions/{id}/exports/scorer-sheets` is Task 8's, built in
-// parallel with this task. This spec answers it with `page.route` in exactly
-// Task 8's contract (200 application/pdf + `attachment; filename="scorer-
-// sheets-<day>.pdf"`; a refusal in the v1 envelope with code
+// parallel with this task. The first test answers it with `page.route` in
+// exactly Task 8's contract (200 application/pdf + `attachment; filename=
+// "scorer-sheets-<day>.pdf"`; a refusal in the v1 envelope with code
 // NO_FIXTURES_ON_DAY), so what it proves is the BROWSER half: the request the
-// control sends, the download it produces, the copy a refusal shows. The real
-// PDF, and a QR taken from its bytes, are Task 10's golden journey
+// control sends, the download it produces, the copy a refusal shows, at every
+// width. Since the fold the real route is on this branch too, so the second
+// test drives the SAME control against it, unstubbed: the file saved is Task
+// 8's real PDF (one QR per match on the day, the scoring link never printed as
+// text, the same QR on a reprint), and the refusal is the route's own 422.
+// Scanning a QR taken from those bytes is Task 10's golden journey
 // (scorer-sheets-print-scan.spec.ts), which prints through this control.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -43,6 +47,7 @@ import {
   TAG,
 } from "../helpers";
 import { dismissConsent, freshOrg, waitForHydration } from "../directory-kit";
+import { pdfLinkUris, pdfTextRuns } from "../pdf-uris";
 
 const dict = (locale: "en" | "fr" | "es") =>
   JSON.parse(
@@ -205,6 +210,61 @@ async function capture(
   await page.setViewportSize({ width: 1280, height: 900 });
 }
 
+/** The REACH, over the API: a league division whose last round's two matches
+ *  move to the ORG's today and two days on, every other match staying on the
+ *  seed's 2026-09-15 — three printable days, today the default and NOT the
+ *  first option. */
+async function reachThreeDays(page: Page) {
+  const seeded = await seedScoredDivision(page.request, [`Ada ${TAG}`, `Bo ${TAG}`, `Cy ${TAG}`, `Di ${TAG}`], {
+    decide: false,
+  });
+  const orgId = await activeOrgIdFromRequest(page.request);
+  // resolveVenueTz(null, org.timezone): the org's zone, else UTC.
+  const tz = (await orgTimezoneSql(orgId)) ?? "UTC";
+  const listed = await apiJson<{ id: string; round_no: number; seq_in_round: number }[]>(
+    page.request,
+    `/api/v1/divisions/${seeded.divisionId}/fixtures`,
+  );
+  // The LAST round's two matches move — the board refuses a round that
+  // starts on an earlier day than the round before it (rule H6), so only
+  // the final round can go later. One to the ORG's today, one two days on
+  // (minute-rounded); every other match stays on the seed's 2026-09-15.
+  const lastRound = Math.max(...(listed.data ?? []).map((f) => f.round_no));
+  const last = (listed.data ?? [])
+    .filter((f) => f.round_no === lastRound)
+    .sort((a, b) => a.seq_in_round - b.seq_in_round);
+  expect(last.length, "precondition: the last round has two matches").toBe(2);
+  const now = new Date(Math.floor(Date.now() / 60_000) * 60_000);
+  const moves = [now, new Date(now.getTime() + 2 * DAY_MS)];
+  for (const [i, at] of moves.entries()) {
+    const res = await apiJson(page.request, `/api/v1/fixtures/${last[i]!.id}`, "PATCH", {
+      scheduled_at: at.toISOString(),
+    });
+    expect(res.status, `re-dating match ${i} of the last round: ${JSON.stringify(res.error)}`).toBe(200);
+  }
+  const relisted = (
+    await apiJson<{ scheduled_at: string | null; status: string }[]>(
+      page.request,
+      `/api/v1/divisions/${seeded.divisionId}/fixtures`,
+    )
+  ).data!;
+  // The org-clock days the fixtures now sit on — what the SQL day list must
+  // return — and the default the spec rules: today if it has fixtures.
+  const expectedDays = [
+    ...new Set(
+      relisted
+        .filter((f) => f.status === "scheduled" && f.scheduled_at !== null)
+        .map((f) => localDate(new Date(f.scheduled_at!), tz)),
+    ),
+  ].sort();
+  const today = localDate(now, tz);
+  expect(expectedDays, "precondition: today is a printable day").toContain(today);
+  expect(expectedDays.length, "precondition: three days on offer").toBe(3);
+  expect(expectedDays[0], "precondition: the default is NOT the first option").not.toBe(today);
+  const earlier = expectedDays[0]!;
+  return { seeded, today, earlier, expectedDays, todays: last[0]!.id, laterAt: moves[1]! };
+}
+
 test.describe("an organiser on a plan with device links", () => {
   test("the picker opens at the org's today; Print sends the picked day and saves the file; a refusal reads localised (en + fr)", async ({
     page,
@@ -213,53 +273,7 @@ test.describe("an organiser on a plan with device links", () => {
     // Navs: seed (~12 API calls ≈ 3 navs), 3 page loads. Acts: ~20.
     // Captures: 4 states (en idle, en refusal, fr idle, fr refusal).
     test.setTimeout(budgetFor(6, 20, 4));
-    const seeded = await seedScoredDivision(page.request, [`Ada ${TAG}`, `Bo ${TAG}`, `Cy ${TAG}`, `Di ${TAG}`], {
-      decide: false,
-    });
-    const orgId = await activeOrgIdFromRequest(page.request);
-    // resolveVenueTz(null, org.timezone): the org's zone, else UTC.
-    const tz = (await orgTimezoneSql(orgId)) ?? "UTC";
-    const listed = await apiJson<{ id: string; round_no: number; seq_in_round: number }[]>(
-      page.request,
-      `/api/v1/divisions/${seeded.divisionId}/fixtures`,
-    );
-    // The LAST round's two matches move — the board refuses a round that
-    // starts on an earlier day than the round before it (rule H6), so only
-    // the final round can go later. One to the ORG's today, one two days on
-    // (minute-rounded); every other match stays on the seed's 2026-09-15.
-    const lastRound = Math.max(...(listed.data ?? []).map((f) => f.round_no));
-    const last = (listed.data ?? [])
-      .filter((f) => f.round_no === lastRound)
-      .sort((a, b) => a.seq_in_round - b.seq_in_round);
-    expect(last.length, "precondition: the last round has two matches").toBe(2);
-    const now = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const moves = [now, new Date(now.getTime() + 2 * DAY_MS)];
-    for (const [i, at] of moves.entries()) {
-      const res = await apiJson(page.request, `/api/v1/fixtures/${last[i]!.id}`, "PATCH", {
-        scheduled_at: at.toISOString(),
-      });
-      expect(res.status, `re-dating match ${i} of the last round: ${JSON.stringify(res.error)}`).toBe(200);
-    }
-    const relisted = (
-      await apiJson<{ scheduled_at: string | null; status: string }[]>(
-        page.request,
-        `/api/v1/divisions/${seeded.divisionId}/fixtures`,
-      )
-    ).data!;
-    // The org-clock days the fixtures now sit on — what the SQL day list must
-    // return — and the default the spec rules: today if it has fixtures.
-    const expectedDays = [
-      ...new Set(
-        relisted
-          .filter((f) => f.status === "scheduled" && f.scheduled_at !== null)
-          .map((f) => localDate(new Date(f.scheduled_at!), tz)),
-      ),
-    ].sort();
-    const today = localDate(now, tz);
-    expect(expectedDays, "precondition: today is a printable day").toContain(today);
-    expect(expectedDays.length, "precondition: three days on offer").toBe(3);
-    expect(expectedDays[0], "precondition: the default is NOT the first option").not.toBe(today);
-    const earlier = expectedDays[0]!;
+    const { seeded, today, earlier, expectedDays } = await reachThreeDays(page);
 
     // Task 8's route, in its contract. Records every body the control sends.
     const sent: { date: string }[] = [];
@@ -361,6 +375,68 @@ test.describe("an organiser on a plan with device links", () => {
     expect(await rowBoxes(page, control), "fr: a refusal moves neither the title nor the control").toEqual(idleFr);
     await capture(page, control, testInfo, "fr-2-refused", [day, submit], { error });
     expect(sent.length, "every click sent exactly one POST").toBe(4);
+  });
+
+  test("against Task 8's REAL route, unstubbed: Print saves the day's real PDF, a reprint carries the same QR, and a day emptied since the page loaded reads the route's own 422 in French", async ({
+    page,
+    context,
+  }) => {
+    // Navs: seed (~12 API calls ≈ 3 navs), 1 page load, 1 re-date. Acts: ~12.
+    test.setTimeout(budgetFor(5, 12, 0));
+    const { seeded, today, todays, laterAt } = await reachThreeDays(page);
+    await context.clearCookies({ name: "seazn_locale" });
+    await setLocale(page, "fr");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(await competitionPath(page.request, seeded.competitionId, "/schedule"));
+    const control = page.getByTestId("print-sheets");
+    const day = page.getByTestId("print-sheets-day");
+    const submit = page.getByTestId("print-sheets-submit");
+    await expect(control).toBeVisible({ timeout: STEP_MS });
+    await waitForHydration(control);
+    await expect(day).toHaveValue(today);
+
+    // 1. The real file, under the route's own filename: a PDF with ONE QR —
+    //    today holds one match — whose link is a scoring link, never printed
+    //    as text (the link is a bearer secret).
+    const printToday = async () => {
+      const [download] = await Promise.all([page.waitForEvent("download", { timeout: STEP_MS }), submit.click()]);
+      expect(download.suggestedFilename()).toBe(`scorer-sheets-${today}.pdf`);
+      return readFileSync((await download.path())!);
+    };
+    const pdf = await printToday();
+    expect(pdf.subarray(0, 5).toString("latin1"), "the saved file is a PDF").toBe("%PDF-");
+    const uris = pdfLinkUris(pdf);
+    expect(uris, "one QR, for today's one match").toHaveLength(1);
+    const token = new URL(uris[0]!).pathname.match(/^\/score\/([^/]+)$/)?.[1];
+    expect(token, `a scoring link: ${uris[0]}`).toBeTruthy();
+    expect(pdfTextRuns(pdf).filter((r) => r.text.includes(token!))).toEqual([]);
+    await expect(submit).toBeEnabled();
+
+    // 2. A reprint carries the same QR: a link is ensured, never rotated.
+    expect(pdfLinkUris(await printToday())).toEqual(uris);
+
+    // 3. Today's one match moves off the day AFTER the page loaded: the list on
+    //    screen still offers today, and the real route refuses it — its 422
+    //    NO_FIXTURES_ON_DAY, read in French, never the route's English.
+    const moved = await apiJson(page.request, `/api/v1/fixtures/${todays}`, "PATCH", {
+      scheduled_at: new Date(laterAt.getTime() + 60 * 60_000).toISOString(),
+    });
+    expect(moved.status, `moving today's match: ${JSON.stringify(moved.error)}`).toBe(200);
+    await expect(day).toHaveValue(today);
+    let downloads = 0;
+    page.on("download", () => downloads++);
+    const answered = page.waitForResponse(
+      (r) => r.url().endsWith("/exports/scorer-sheets") && r.request().method() === "POST",
+    );
+    await submit.click();
+    const res = await answered;
+    expect(res.status(), "the real route's refusal").toBe(422);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("NO_FIXTURES_ON_DAY");
+    const error = page.getByTestId("print-sheets-error");
+    await expect(error).toHaveText(FR["sheets.error.noFixtures"]!);
+    await expect(page.locator("main")).not.toContainText("No fixtures to print on that day");
+    await expect(submit).toBeEnabled();
+    expect(downloads).toBe(0);
   });
 });
 
