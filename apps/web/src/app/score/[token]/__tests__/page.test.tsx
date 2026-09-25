@@ -450,16 +450,26 @@ describe.skipIf(!HAS_DB)("ScorePadPage screens (scorer sheets §4.5)", () => {
     const { stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
     const fixtures = await fixturesOf(stage.id);
     const sf1 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const sf2 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 2)!;
     const final = fixtures.find((f) => f.round_no === 2)!;
     await decide(await deviceFor(auth, sf1.id), sf1.id);
+    const board = await boardNames(stage.id, en);
+    // Who the decide actually seated, read back — never assumed from the draw.
+    const [seated] = await sql<{ home_entrant_id: string | null; away_entrant_id: string | null; home_name: string | null }[]>`
+      select f.home_entrant_id, f.away_entrant_id, e.display_name as home_name
+      from fixtures f left join entrants e on e.id = f.home_entrant_id
+      where f.id = ${final.id}`;
+    expect(seated!.home_entrant_id, "precondition: SF1's winner took the final's HOME seat").not.toBeNull();
+    expect(seated!.away_entrant_id, "precondition: the AWAY seat is still TBD").toBeNull();
     const { secret } = await ensureDeviceLink(auth, final.id);
     const tree = await ScorePadPage({ params: Promise.resolve({ token: secret }) });
     const waiting = find(tree, ScanWaiting);
     expect(waiting, "one TBD side still waits").not.toBeNull();
-    const { home, away } = waiting!.props as { home: string; away: string };
-    const named = [home, away].filter((s) => !s.startsWith("Winner of"));
-    expect(named, "the filled side reads as its entrant, not a slot label").toHaveLength(1);
-    expect(["A", "B", "C", "D"]).toContain(named[0]);
+    const { home, away } = waiting!.props as WaitingProps;
+    // Each seat in ITS place: a swapped pair of names is exactly what a scorer
+    // would notice, and a sorted or filtered comparison cannot.
+    expect(home, "home is the entrant seated at home, by name").toBe(seated!.home_name);
+    expect(away, "away is still its feeder, by the board's code").toBe(board.winnerOf(sf2.id));
   });
 
   it("carried forward → the pad renders View-only from its first paint", async () => {
