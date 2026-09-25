@@ -138,7 +138,11 @@ const POLLED: Array<[string, Call]> = [
   ],
   ["orgs/{org}/live", (ip) => orgLive(from(ip), params({ orgSlug: "o" }))],
 ];
-const NOT_POLLED: Array<[string, Call]> = [
+// A third element names the route's OWN tighter per-IP bucket, spent on top of
+// the 60 (bot hardening 2026-09-25); registrations/__tests__/route-rate-limits
+// .test.ts pins those. The 60-bucket case below empties it before each request
+// so it still measures the 60 bucket alone.
+const NOT_POLLED: Array<[string, Call, string?]> = [
   ["divisions/{div}/standings", (ip) => standings(from(ip), params(division))],
   ["competitions/{slug}", (ip) => competition(from(ip), params({ orgSlug: "o", slug: "c" }))],
   ["discovery", (ip) => discovery(from(ip))],
@@ -149,9 +153,9 @@ const NOT_POLLED: Array<[string, Call]> = [
   ["competitions/{slug}/registration", (ip) => registrationInfo(from(ip), params({ orgSlug: "o", slug: "c" }))],
   ["registrations/{id}", (ip) => registrationStatus(withToken(ip), params({ id: REG }))],
   ["registrations/{id}/ics", (ip) => registrationIcs(withToken(ip), params({ id: REG }))],
-  ["POST registrations/{id}/checkout", (ip) => checkout(posted(ip), params({ id: REG }))],
+  ["POST registrations/{id}/checkout", (ip) => checkout(posted(ip), params({ id: REG })), "regcheckout"],
   ["POST registrations/{id}/withdraw", (ip) => withdraw(posted(ip), params({ id: REG }))],
-  ["POST registrations/groups/{id}/resend", (ip) => resend(posted(ip), params({ id: REG }))],
+  ["POST registrations/groups/{id}/resend", (ip) => resend(posted(ip), params({ id: REG })), "regresend"],
 ];
 
 /** Send `n` requests one after another; the statuses, in order. */
@@ -186,12 +190,20 @@ describe("every other public endpoint: still 60 a minute", () => {
     expect(new Set(NOT_POLLED.map(([route]) => route)).size).toBe(13);
   });
 
-  it.each(NOT_POLLED)("%s serves 60 from one IP, refuses the 61st, and never touches the poll bucket", async (_route, call) => {
+  it.each(NOT_POLLED)("%s serves 60 from one IP, refuses the 61st, and never touches the poll bucket", async (_route, call, own) => {
     const ip = "198.51.100.4";
-    const statuses = await send(call, ip, 61);
+    const ownKey = own && `rl:${own}:${ip}`;
+    const isolated: Call = ownKey
+      ? (i) => {
+          counters.delete(ownKey);
+          return call(i);
+        }
+      : call;
+    const statuses = await send(isolated, ip, 61);
     expect(statuses.slice(0, 60).filter((s) => s !== 200), "the first 60").toEqual([]);
     expect(statuses[60], "the 61st").toBe(429);
-    expect(Object.fromEntries(counters), "counted in the 60 bucket only").toEqual({ [`rl:pubv1:${ip}`]: 61 });
+    const shared = Object.fromEntries([...counters].filter(([key]) => key !== ownKey));
+    expect(shared, "counted in the 60 bucket only").toEqual({ [`rl:pubv1:${ip}`]: 61 });
   });
 });
 

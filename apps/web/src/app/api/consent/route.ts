@@ -3,6 +3,7 @@ import { handler } from "@/lib/http";
 import { sql } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { COOKIE_POLICY_VERSION } from "@/lib/consent";
+import { rateLimit, CONSENT_LIMIT } from "@/lib/rate-limit";
 
 const Body = z.object({
   choice: z.enum(["accepted", "rejected"]),
@@ -26,10 +27,12 @@ function clientIp(req: Request): string | null {
  *  Works logged-in or out; the banner calls it best-effort. */
 export async function POST(req: Request) {
   return handler(async () => {
+    const ip = clientIp(req);
+    await rateLimit(`consent:${ip ?? "unknown"}`, CONSENT_LIMIT);
+
     const { choice, policy_version } = Body.parse(await req.json());
     const user = await getCurrentUser();
     const ua = req.headers.get("user-agent")?.slice(0, 500) ?? null;
-    const ip = clientIp(req);
     await sql`
       insert into cookie_consents (user_id, choice, policy_version, user_agent, ip_address)
       values (${user?.id ?? null}, ${choice}, ${policy_version}, ${ua}, ${ip})`;

@@ -3,12 +3,17 @@ import { sql } from "@/lib/db";
 import { createSession, postAuthLanding } from "@/lib/auth";
 import { handler } from "@/lib/http";
 import { consumeVerificationToken } from "@/lib/verification";
+import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
+import { headers } from "next/headers";
 
 const schema = z.object({ token: z.string().min(10) }).strict();
 
 /** Verify an email token, mark the account verified, and sign the user in. */
 export async function POST(req: Request) {
   return handler(async () => {
+    const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    await rateLimit(`verify-email:${ip}`, AUTH_LIMIT);
+
     const body = await req.json();
     const { token } = schema.parse(body);
     const next = (body as { next?: unknown })?.next;
