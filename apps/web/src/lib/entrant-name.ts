@@ -40,13 +40,21 @@ export interface EntrantNameSource {
 /** Doubles notation. One separator, one place. */
 const PAIR_SEPARATOR = " / ";
 
-function pairOrdered(side: EntrantNameSource): readonly { full_name: string }[] {
+/**
+ * A pair's members in its saved `pair_order` where the lineup has one, roster
+ * order otherwise. Exported for a surface that prints the members one per
+ * line (the scorer sheet's card), so its lines follow the name's order.
+ */
+export function pairOrdered<M extends { readonly person_id: string }>(
+  members: readonly M[],
+  lineup: EntrantNameSource["lineup"],
+): readonly M[] {
   const order = new Map<string, number>();
-  for (const slot of side.lineup ?? []) {
+  for (const slot of lineup ?? []) {
     if (typeof slot.pair_order === "number") order.set(slot.person_id, slot.pair_order);
   }
-  if (order.size === 0) return side.members;
-  return [...side.members].sort(
+  if (order.size === 0) return members;
+  return [...members].sort(
     (a, b) => (order.get(a.person_id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.person_id) ?? Number.MAX_SAFE_INTEGER),
   );
 }
@@ -65,7 +73,7 @@ export function entrantDisplayName(side: EntrantNameSource): string {
   }
   if (side.kind === "pair") {
     if (side.members.length !== 2) return side.name;
-    return pairOrdered(side)
+    return pairOrdered(side.members, side.lineup)
       .map((m) => m.full_name)
       .join(PAIR_SEPARATOR);
   }

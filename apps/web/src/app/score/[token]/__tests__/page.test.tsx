@@ -15,7 +15,7 @@ import { sql } from "@/lib/db";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants, getEntrant } from "@/server/usecases/entrants";
-import { getFixtureState, getLineup, listEvents, loadFixturePadCfg } from "@/server/usecases/fixtures";
+import { getFixtureState, getLineup, listEvents, loadFixturePadCfg, putLineup } from "@/server/usecases/fixtures";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { startDivision } from "@/server/usecases/schedule";
 import { createDeviceLink, ensureDeviceLink } from "@/server/usecases/device-links";
@@ -844,6 +844,79 @@ describe.skipIf(!HAS_DB)("the scan agrees with its printed card: names (final re
     expect(waiting, "precondition: one TBD side still waits").not.toBeNull();
     const { home, away } = waiting!.props as WaitingProps;
     expect([home, away], "each seat, in its place").toEqual([card.home, card.away]);
+  });
+
+  // Fix batch 2, item 3: a pair's order is the fixture's SAVED LINEUP
+  // (`pair_order`, the doubles serve order the pad and Confirm read), not its
+  // roster order. A lineup that reverses the roster is the one case where the
+  // two disagree: the card said "Ana / Ben" while Confirm said "Ben / Ana".
+  // One fixture through all three screens: the final, with SF1's winner
+  // seated, is Waiting; SF2 decided, it is Confirm. A lineup is PER FIXTURE:
+  // the pair's reversed lineup is saved on SF1 first, so the final (no lineup
+  // of its own yet) must still print and wait in roster order; then the
+  // final gets its own reversed lineup.
+  it("a pair whose saved lineup reverses its roster: the card, Waiting and Confirm all name it in LINEUP order", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "knockout", ["P1", "P2", "P3", "P4"], {}, {
+      entrantKind: "pair",
+      members: (n) => [`${n} Ana`, `${n} Ben`],
+    });
+    const fixtures = await fixturesOf(stage.id);
+    const sf1 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const sf2 = fixtures.find((f) => f.round_no === 1 && f.seq_in_round === 2)!;
+    // `decide` scores HOME 2–1, so SF1's home pair is the one the final seats.
+    const seatedId = sf1.home_entrant_id!;
+    const roster = await sql<{ person_id: string; full_name: string }[]>`
+      select p.id as person_id, p.full_name from entrant_members em join persons p on p.id = em.person_id
+      where em.entrant_id = ${seatedId} order by p.full_name`;
+    const [ana, ben] = roster;
+    expect([ana!.full_name, ben!.full_name], "precondition: the roster puts Ana first").toEqual([
+      expect.stringMatching(/ Ana$/),
+      expect.stringMatching(/ Ben$/),
+    ]);
+    const slot = (personId: string, pairOrder: number) => ({
+      person_id: personId,
+      slot: "starting" as const,
+      position_key: null,
+      order_no: pairOrder,
+      roles: [],
+      role: "player" as const,
+      pair_order: pairOrder,
+    });
+    const reversed = { slots: [slot(ben!.person_id, 1), slot(ana!.person_id, 2)] };
+    const rosterOrder = [ana!.full_name, ben!.full_name];
+    const lineupOrder = [ben!.full_name, ana!.full_name];
+    await putLineup(auth, sf1.id, seatedId, reversed);
+    await decide(await deviceFor(auth, sf1.id), sf1.id);
+    const [final] = (await fixturesOf(stage.id)).filter((f) => f.round_no === 2);
+    expect(final!.home_entrant_id, "precondition: SF1's winner is seated at the final's HOME").toBe(seatedId);
+    await schedule([final!.id]);
+
+    // SF1's lineup is not the final's: nothing saved for the final yet.
+    const before = await cardFor(auth, competition.id, final!.id);
+    expect(before.home, "no lineup on THIS fixture: roster order").toBe(rosterOrder.join(" / "));
+    const waitingBefore = find(await ScorePadPage({ params: Promise.resolve({ token: before.token }) }), ScanWaiting);
+    expect(waitingBefore, "precondition: AWAY still TBD, so Waiting").not.toBeNull();
+    expect((waitingBefore!.props as WaitingProps).home, "Waiting == the card, roster order").toBe(before.home);
+
+    await putLineup(auth, final!.id, seatedId, reversed);
+    const card = await cardFor(auth, competition.id, final!.id);
+    expect(card.token, "precondition: the same printed link").toBe(before.token);
+    expect(card.homeTbd, "precondition: HOME is seated on the card").toBe(false);
+    expect(card.home, "the card names the pair in lineup order").toBe(lineupOrder.join(" / "));
+    expect(card.homePair, "and prints its two lines in that order").toEqual(lineupOrder);
+
+    const waitingTree = await ScorePadPage({ params: Promise.resolve({ token: card.token }) });
+    const waiting = find(waitingTree, ScanWaiting);
+    expect(waiting, "precondition: AWAY still TBD, so Waiting").not.toBeNull();
+    expect((waiting!.props as WaitingProps).home, "Waiting == the card").toBe(card.home);
+
+    await decide(await deviceFor(auth, sf2.id), sf2.id);
+    const padTree = await ScorePadPage({ params: Promise.resolve({ token: card.token }) });
+    const pad = find(padTree, DeviceScorePad);
+    expect(pad, "precondition: both sides seated, so the pad (Confirm)").not.toBeNull();
+    const { home } = pad!.props as { home: PadSideInfo };
+    expect(entrantDisplayName(home), "Confirm == the card").toBe(card.home);
   });
 
   // Final review M1 (owner ruling: the ORG time zone only). The card prints the

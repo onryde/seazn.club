@@ -7,7 +7,9 @@ import "server-only";
 //    the whole competition, and a feeder may sit on another day or be over;
 //  - the court as the board names it (`courtDisplayName` over
 //    `courtNamesById`, venue-qualified where two venues share a name);
-//  - each side through `entrantDisplayName`, with its roster;
+//  - each side through `entrantDisplayName`, with its roster and THIS
+//    fixture's saved lineup, so a pair reads in its `pair_order` exactly as
+//    Confirm and the pad name it (fix batch 2, item 3);
 //  - the day and the times on the ORG clock (`resolveVenueTz(null, orgTz)`),
 //    never a division's own tz override: the repo rule is that calendar-day
 //    math wants `orgTz` (schedule.ts `ScheduleSettingsOut`), and a printed
@@ -21,7 +23,7 @@ import "server-only";
 import { withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { entrantDisplayName } from "@/lib/entrant-name";
+import { entrantDisplayName, pairOrdered, type EntrantNameSource } from "@/lib/entrant-name";
 import type { SlotLabel, SlotLabelLookup } from "@/lib/slot-label";
 import { resolveVenueTz } from "@/lib/tz";
 import { courtDisplayName } from "@/components/v2/board/types";
@@ -100,7 +102,7 @@ interface EntrantRow {
 
 /** Every entrant of the competition, with its roster in roster order
  *  (usecases/entrants.ts `withMembers`: squad number, then name). */
-async function readSides(tx: Tx, competitionId: string): Promise<Map<string, SheetSide>> {
+async function readEntrants(tx: Tx, competitionId: string): Promise<Map<string, EntrantRow>> {
   const rows = await tx<EntrantRow[]>`
     select e.id, e.display_name as name, e.kind,
            coalesce((
@@ -111,7 +113,39 @@ async function readSides(tx: Tx, competitionId: string): Promise<Map<string, She
     from entrants e
     join divisions d on d.id = e.division_id
     where d.competition_id = ${competitionId}`;
-  return new Map(rows.map((e) => [e.id, { name: entrantDisplayName(e), kind: e.kind, members: e.members }]));
+  return new Map(rows.map((e) => [e.id, e]));
+}
+
+type PairOrderSlot = { person_id: string; pair_order: number };
+const lineupKey = (fixtureId: string, entrantId: string) => `${fixtureId}:${entrantId}`;
+
+/** Every saved `pair_order` in the competition's lineups, by fixture and
+ *  entrant: the rows `getLineup` hands Confirm and the pad, narrowed to the
+ *  one column a name reads. */
+async function readPairOrders(tx: Tx, competitionId: string): Promise<Map<string, PairOrderSlot[]>> {
+  const rows = await tx<(PairOrderSlot & { fixture_id: string; entrant_id: string })[]>`
+    select l.fixture_id, l.entrant_id, l.person_id, l.pair_order
+    from lineups l
+    join fixtures f on f.id = l.fixture_id
+    join divisions d on d.id = f.division_id
+    where d.competition_id = ${competitionId} and l.pair_order is not null`;
+  const out = new Map<string, PairOrderSlot[]>();
+  for (const r of rows) {
+    const key = lineupKey(r.fixture_id, r.entrant_id);
+    out.set(key, [...(out.get(key) ?? []), { person_id: r.person_id, pair_order: r.pair_order }]);
+  }
+  return out;
+}
+
+/** One seated side as this fixture's card prints it: named through
+ *  `entrantDisplayName` with the fixture's lineup, and a pair's members in that
+ *  same order, since the card prints them one per line. */
+function sheetSide(e: EntrantRow, lineup: EntrantNameSource["lineup"]): SheetSide {
+  return {
+    name: entrantDisplayName({ ...e, lineup }),
+    kind: e.kind,
+    members: e.kind === "pair" ? [...pairOrdered(e.members, lineup)] : e.members,
+  };
 }
 
 /**
@@ -132,18 +166,22 @@ export async function loadSheetCandidates(
     const stages = await tx<{ id: string; kind: string }[]>`
       select s.id, s.kind from stages s join divisions d on d.id = s.division_id
       where d.competition_id = ${competitionId}`;
-    const sides = await readSides(tx, competitionId);
+    const entrants = await readEntrants(tx, competitionId);
+    const pairOrders = await readPairOrders(tx, competitionId);
     const courtNames = Object.fromEntries(await courtNamesById(tx));
-    return { tz, rows, stages, sides, courtNames };
+    return { tz, rows, stages, entrants, pairOrders, courtNames };
   });
   const { tz } = read;
   const name = boardMatchNamer(read.rows, read.stages, lookup);
-  const side = (id: string | null) => (id === null ? null : (read.sides.get(id) ?? null));
+  const side = (fixtureId: string, entrantId: string | null) => {
+    const e = entrantId === null ? undefined : read.entrants.get(entrantId);
+    return e === undefined ? null : sheetSide(e, read.pairOrders.get(lineupKey(fixtureId, e.id)));
+  };
   const candidates: SheetCandidate[] = [];
   for (const r of read.rows) {
     const scheduled_at = isoOf(r.scheduled_at);
-    const home = side(r.home_entrant_id);
-    const away = side(r.away_entrant_id);
+    const home = side(r.id, r.home_entrant_id);
+    const away = side(r.id, r.away_entrant_id);
     const home_slot_label = r.home_slot_label as SlotLabel | null;
     const away_slot_label = r.away_slot_label as SlotLabel | null;
     if (!isPrintable({ status: r.status, scheduled_at, tz, home, away, home_slot_label, away_slot_label })) continue;

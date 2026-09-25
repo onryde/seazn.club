@@ -96,13 +96,17 @@ export default async function ScorePadPage({
         /** Each seated side's `entrants.display_name` (the snapshot), `kind`
          *  and roster in roster order: what the waiting screens resolve a
          *  seated side's name from, through `entrantDisplayName` — the way its
-         *  printed card and the pad name it (final review I1). */
+         *  printed card and the pad name it (final review I1). Plus each
+         *  side's saved `pair_order` for THIS fixture, so a pair reads in its
+         *  lineup order as Confirm and the card do (fix batch 2, item 3). */
         home_name: string | null;
         away_name: string | null;
         home_kind: string | null;
         away_kind: string | null;
         home_members: { person_id: string; full_name: string }[];
         away_members: { person_id: string; full_name: string }[];
+        home_lineup: { person_id: string; pair_order: number }[];
+        away_lineup: { person_id: string; pair_order: number }[];
         division_id: string;
         sport_key: string;
         module_version: string;
@@ -122,7 +126,8 @@ export default async function ScorePadPage({
              f.scheduled_at, f.home_entrant_id, f.away_entrant_id, f.status,
              he.display_name as home_name, ae.display_name as away_name,
              he.kind as home_kind, ae.kind as away_kind,
-             hm.members as home_members, am.members as away_members, d.id as division_id,
+             hm.members as home_members, am.members as away_members,
+             hl.slots as home_lineup, al.slots as away_lineup, d.id as division_id,
              d.sport_key, d.module_version, d.config, d.status as division_status,
              c.id as competition_id, c.name as competition_name, d.name as division_name,
              c.branding as competition_branding, o.timezone as org_tz
@@ -131,7 +136,7 @@ export default async function ScorePadPage({
       left join venues ven on ven.id = f.venue_id
       left join entrants he on he.id = f.home_entrant_id
       left join entrants ae on ae.id = f.away_entrant_id
-      -- Roster order as the sheet reads it (usecases/scorer-sheets.ts readSides).
+      -- Roster order as the sheet reads it (usecases/scorer-sheets.ts readEntrants).
       left join lateral (
         select coalesce(json_agg(json_build_object('person_id', p.id, 'full_name', p.full_name)
                                  order by em.squad_number nulls last, p.full_name), '[]'::json) as members
@@ -142,6 +147,15 @@ export default async function ScorePadPage({
                                  order by em.squad_number nulls last, p.full_name), '[]'::json) as members
         from entrant_members em join persons p on p.id = em.person_id
         where em.entrant_id = ae.id) am on true
+      -- This fixture's saved pair order per side (usecases/scorer-sheets.ts readPairOrders).
+      left join lateral (
+        select coalesce(json_agg(json_build_object('person_id', l.person_id, 'pair_order', l.pair_order)), '[]'::json) as slots
+        from lineups l
+        where l.fixture_id = f.id and l.entrant_id = he.id and l.pair_order is not null) hl on true
+      left join lateral (
+        select coalesce(json_agg(json_build_object('person_id', l.person_id, 'pair_order', l.pair_order)), '[]'::json) as slots
+        from lineups l
+        where l.fixture_id = f.id and l.entrant_id = ae.id and l.pair_order is not null) al on true
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
       left join organizations o on o.id = c.org_id
@@ -205,16 +219,21 @@ export default async function ScorePadPage({
     // and a refresh is a fresh dynamic render (no ETag, no cache), so the first
     // refresh after the start renders Confirm.
     const notStarted = screen.screen === "division_not_started";
-    // A seated side by the name its printed card carries (final review I1).
-    const seated = (name: string | null, kind: string | null, members: EntrantNameSource["members"]) =>
-      name === null ? null : entrantDisplayName({ name, kind: kind ?? undefined, members });
+    // A seated side by the name its printed card carries (final review I1),
+    // a pair in this fixture's lineup order (fix batch 2, item 3).
+    const seated = (
+      name: string | null,
+      kind: string | null,
+      members: EntrantNameSource["members"],
+      lineup: EntrantNameSource["lineup"],
+    ) => (name === null ? null : entrantDisplayName({ name, kind: kind ?? undefined, members, lineup }));
     return (
       <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
         <HtmlLang lang={locale} />
         <div className="mx-auto max-w-2xl">
           <ScanWaiting
-            home={seated(fixture.home_name, fixture.home_kind, fixture.home_members) ?? names.home}
-            away={seated(fixture.away_name, fixture.away_kind, fixture.away_members) ?? names.away}
+            home={seated(fixture.home_name, fixture.home_kind, fixture.home_members, fixture.home_lineup) ?? names.home}
+            away={seated(fixture.away_name, fixture.away_kind, fixture.away_members, fixture.away_lineup) ?? names.away}
             matchRef={ref}
             meta={[fixture.court_name, scheduledLabel, fixture.division_name].filter((m): m is string => !!m)}
             waitingOn={notStarted ? "division_start" : "sides"}

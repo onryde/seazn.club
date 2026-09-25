@@ -28,7 +28,9 @@ export interface SheetSide {
    *  is its person's name, not the entrant snapshot. */
   name: string;
   kind: "individual" | "team" | "pair";
-  /** Roster order (squad number, then name), so a team prints its players. */
+  /** Roster order (squad number, then name), so a team prints its players. A
+   *  pair's two are in the fixture's saved `pair_order` where it has one, the
+   *  order its `name` joins them in. */
   members: { person_id: string; full_name: string }[];
 }
 
