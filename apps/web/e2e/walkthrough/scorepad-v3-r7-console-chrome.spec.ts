@@ -197,6 +197,7 @@ test("R7 pad: Take back twice in a row — the second one used to throw", async 
   const rowVoid = activity(page).locator('[data-role="v3-activity-void"]');
   await expect(rowVoid.first(), "the ledger still offers Void on a live row").toBeVisible();
   await rowVoid.first().click();
+  await activity(page).locator('[data-role="v3-activity-void-confirm"]').first().click();
 
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "core.void").length, {

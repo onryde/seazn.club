@@ -44,7 +44,7 @@
 //        server-side once anything has been recorded since. Fixed by
 //        `isVoidableEventType` below, replacing the old bare
 //        `!== "core.void"` check.
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ClientTime } from "@/components/client-time";
 import { describeEvent, type EventDescription } from "@/lib/event-copy";
 import { buildRibbon, type MsgFn } from "./ribbon";
@@ -577,6 +577,9 @@ export function latestRowDetail(
   return resolveDetail(newest.type, (newest.payload ?? {}) as Record<string, unknown>, priorActivityEvents(rows, 0));
 }
 
+/** How long an armed Void waits for its confirming tap before lapsing. */
+const VOID_ARM_MS = 4000;
+
 export function ActivityPanel({
   events,
   ownEventIds,
@@ -598,6 +601,15 @@ export function ActivityPanel({
   const rows = orderedActivity(events);
   const nameOf = (id: string) => personNames[id] ?? id;
   const [expanded, setExpanded] = useState(false);
+  // Void is destructive and its button sits in a scroll area, so a scroll-tap
+  // must not fire it: the first tap ARMS the row, the second confirms. The
+  // arm lapses on its own so a stray first tap never leaves a live trap.
+  const [armedId, setArmedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (armedId === null) return;
+    const timer = setTimeout(() => setArmedId(null), VOID_ARM_MS);
+    return () => clearTimeout(timer);
+  }, [armedId]);
   // `rows` is `orderedActivity`'s NEWEST-FIRST output (this file's own doc,
   // above `latestRowDetail`) — a bare reverse of the chronological `events`
   // list, not a seq sort — so the newest row is simply `rows[0]`. No reduce
@@ -663,6 +675,8 @@ export function ActivityPanel({
               <li
                 key={event.id}
                 className={`flex items-start gap-3 border-l-[3px] px-4 py-2 ${stripe}${
+                  armedId === event.id ? " flex-wrap" : ""
+                }${
                   collapsed && event.id !== latestId ? " max-md:hidden" : ""
                 }`}
                 data-role="v3-activity-row"
@@ -801,15 +815,40 @@ export function ActivityPanel({
                   )}
                 </span>
                 {canVoid ? (
-                  <button
-                    type="button"
-                    onClick={() => onVoid?.(event.id)}
-                    disabled={voidDisabled || voidingId === event.id}
-                    data-role="v3-activity-void"
-                    className="min-h-11 min-w-11 shrink-0 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
-                  >
-                    {voidingId === event.id ? t("pad.activity.voiding") : t("pad.activity.void")}
-                  </button>
+                  armedId === event.id && voidingId !== event.id ? (
+                    <span className="flex shrink-0 gap-2 max-md:w-full max-md:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setArmedId(null)}
+                        data-role="v3-activity-void-cancel"
+                        className="min-h-11 min-w-11 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+                      >
+                        {t("pad.activity.voidCancel")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setArmedId(null);
+                          onVoid?.(event.id);
+                        }}
+                        disabled={voidDisabled}
+                        data-role="v3-activity-void-confirm"
+                        className="min-h-11 min-w-11 rounded-lg border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+                      >
+                        {t("pad.activity.voidConfirm")}
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setArmedId(event.id)}
+                      disabled={voidDisabled || voidingId === event.id}
+                      data-role="v3-activity-void"
+                      className="min-h-11 min-w-11 shrink-0 rounded-lg border border-slate-200 px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+                    >
+                      {voidingId === event.id ? t("pad.activity.voiding") : t("pad.activity.void")}
+                    </button>
+                  )
                 ) : voided ? (
                   <span className="shrink-0 text-xs font-medium uppercase tracking-wide text-slate-400">
                     {t("pad.activity.voided")}
