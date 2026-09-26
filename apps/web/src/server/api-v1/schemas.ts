@@ -1590,12 +1590,14 @@ export const ScorerSheetsRequest = z
     dateTo: z.iso.date().optional(),
     /** Narrow the sheet to one division of the competition. Omitted = every division. */
     divisionId: z.uuid().optional(),
+    /** Page runs: by court (default), or by division with the court printed on each card. */
+    groupBy: z.enum(["court", "division"]).optional(),
   })
   .refine((v) => v.date === undefined || (v.dateFrom === undefined && v.dateTo === undefined), {
     message: "date and dateFrom/dateTo are exclusive",
   })
-  .refine((v) => v.divisionId !== undefined || v.date !== undefined, {
-    message: "date is required unless divisionId is given",
+  .refine((v) => v.divisionId !== undefined || v.groupBy === "division" || v.date !== undefined, {
+    message: "date is required unless divisionId is given or groupBy is division",
   });
 
 // ---------------------------------------------------------------------------
