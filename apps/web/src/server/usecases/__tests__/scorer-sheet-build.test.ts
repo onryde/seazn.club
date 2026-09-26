@@ -105,6 +105,25 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
+  it("a date range groups a court's days together and stamps the day on each card", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, division, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const hall = await createVenue(auth, { name: "Hall", sort: 0 });
+    const court = await createCourt(auth, hall.id, { name: "Court 1", sort: 0, tags: [] });
+    const fx = await fixturesOf(stage.id);
+    await sql`update fixtures set court_id = ${court.id} where id = any(${fx.map((f) => f.id)})`;
+    await schedule(fx.slice(0, 3).map((f) => f.id));
+    await schedule(fx.slice(3).map((f) => f.id), "2026-09-24T09:00:00Z");
+    const m = await buildScorerSheet(auth, competition.id, {}, ORIGIN, "en", { printedAt: PRINTED, divisionId: division.id });
+    expect(m.header.title).toBe(division.name);
+    expect(m.pages).toHaveLength(1); // one court, both days, one page
+    expect(cards(m)).toHaveLength(fx.length);
+    expect(cards(m).map((r) => r.time.split(" · ")[0])).toEqual([...fx.slice(0, 3).map(() => "Wed 23"), ...fx.slice(3).map(() => "Thu 24")]);
+    // Bounded range: only the second day.
+    const one = await buildScorerSheet(auth, competition.id, { from: "2026-09-24" }, ORIGIN, "en", { printedAt: PRINTED, divisionId: division.id });
+    expect(cards(one)).toHaveLength(fx.length - 3);
+  });
+
   it("one card per printable fixture, each URL a live link of THAT fixture, named as the board names it, in the organiser's language and clock", async () => {
     const { auth } = await seedOrg("pro");
     const { competition, stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);

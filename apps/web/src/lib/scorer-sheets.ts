@@ -130,6 +130,18 @@ export function selectSheetFixtures(candidates: readonly SheetCandidate[], day: 
   return candidates.filter((f) => printable(f) && localDateOf(f.scheduled_at, f.tz) === day).sort(compare);
 }
 
+/** Every printable row in [from, to] (each bound optional, inclusive), in
+ *  `compare` order: court first, then time — so a court's days stay together. */
+export function selectSheetFixtureRange(
+  candidates: readonly SheetCandidate[],
+  range: { from?: string; to?: string },
+): SheetCandidate[] {
+  const day = (f: SheetCandidate) => localDateOf(f.scheduled_at!, f.tz);
+  return candidates
+    .filter((f) => printable(f) && (range.from === undefined || day(f) >= range.from) && (range.to === undefined || day(f) <= range.to))
+    .sort(compare);
+}
+
 /** The local days that have something to print, ascending. The pure oracle
  *  the `listSheetDays` SQL parity test checks against. */
 export function sheetDays(candidates: readonly SheetDayRow[]): string[] {

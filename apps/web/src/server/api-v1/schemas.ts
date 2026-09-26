@@ -1581,12 +1581,22 @@ export const CreatedDeviceLink = DeviceLink.extend({
 });
 
 /** POST /competitions/{id}/exports/scorer-sheets (scorer sheets §4.4). */
-export const ScorerSheetsRequest = z.object({
-  /** The day to print, `YYYY-MM-DD` on the organisation's clock. */
-  date: z.iso.date(),
-  /** Narrow the sheet to one division of the competition. Omitted = every division. */
-  divisionId: z.uuid().optional(),
-});
+export const ScorerSheetsRequest = z
+  .object({
+    /** One day to print, `YYYY-MM-DD` on the organisation's clock. */
+    date: z.iso.date().optional(),
+    /** Or a range (inclusive, either end optional). With `divisionId`, no date at all = every scheduled day. */
+    dateFrom: z.iso.date().optional(),
+    dateTo: z.iso.date().optional(),
+    /** Narrow the sheet to one division of the competition. Omitted = every division. */
+    divisionId: z.uuid().optional(),
+  })
+  .refine((v) => v.date === undefined || (v.dateFrom === undefined && v.dateTo === undefined), {
+    message: "date and dateFrom/dateTo are exclusive",
+  })
+  .refine((v) => v.divisionId !== undefined || v.date !== undefined, {
+    message: "date is required unless divisionId is given",
+  });
 
 // ---------------------------------------------------------------------------
 // Generate (fixtures) response
