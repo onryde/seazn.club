@@ -66,6 +66,7 @@ async function competitionClock(tx: Tx, competitionId: string): Promise<string> 
 /** One fixture of the competition: the board's naming columns plus what a
  *  sheet row prints. */
 type FixtureRow = MatchNameRow & {
+  division_id: string;
   division_name: string;
   status: string;
   /** postgres hands a timestamptz back as a Date. */
@@ -81,7 +82,7 @@ type FixtureRow = MatchNameRow & {
 async function readFixtures(tx: Tx, competitionId: string): Promise<FixtureRow[]> {
   return tx<FixtureRow[]>`
     select ${tx(MATCH_NAME_COLS.map((c) => `f.${c}`))},
-           d.name as division_name, f.status, f.scheduled_at,
+           f.division_id, d.name as division_name, f.status, f.scheduled_at,
            f.court_id, f.court_label, c.name as court_entity_name, c.sort as court_sort,
            v.name as venue_name, v.sort as venue_sort
     from fixtures f
@@ -159,9 +160,15 @@ export async function loadSheetCandidates(
   competitionId: string,
   lookup: SlotLabelLookup,
   day?: string,
+  divisionId?: string,
 ): Promise<SheetCandidate[]> {
   const read = await withTenant(auth.orgId, async (tx) => {
     const tz = await competitionClock(tx, competitionId);
+    if (divisionId !== undefined) {
+      const [d] = await tx<{ id: string }[]>`
+        select id from divisions where id = ${divisionId} and competition_id = ${competitionId}`;
+      if (!d) throw new HttpError(404, "division not found");
+    }
     const rows = await readFixtures(tx, competitionId);
     const stages = await tx<{ id: string; kind: string }[]>`
       select s.id, s.kind from stages s join divisions d on d.id = s.division_id
@@ -179,6 +186,7 @@ export async function loadSheetCandidates(
   };
   const candidates: SheetCandidate[] = [];
   for (const r of read.rows) {
+    if (divisionId !== undefined && r.division_id !== divisionId) continue;
     const scheduled_at = isoOf(r.scheduled_at);
     const home = side(r.id, r.home_entrant_id);
     const away = side(r.id, r.away_entrant_id);
@@ -305,10 +313,10 @@ export async function buildScorerSheet(
   day: string,
   origin: string,
   locale: Locale,
-  opts: { printedAt: string },
+  opts: { printedAt: string; divisionId?: string },
 ): Promise<ScorerSheet> {
   const t: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
-  const chosen = await loadSheetCandidates(auth, competitionId, t, day);
+  const chosen = await loadSheetCandidates(auth, competitionId, t, day, opts.divisionId);
   const nothing = () => new HttpError(422, "No fixtures to print on that day", "NO_FIXTURES_ON_DAY");
   if (chosen.length === 0) throw nothing();
   const [comp] = await withTenant(auth.orgId, (tx) =>

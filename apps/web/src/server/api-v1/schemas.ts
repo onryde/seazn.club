@@ -1584,6 +1584,8 @@ export const CreatedDeviceLink = DeviceLink.extend({
 export const ScorerSheetsRequest = z.object({
   /** The day to print, `YYYY-MM-DD` on the organisation's clock. */
   date: z.iso.date(),
+  /** Narrow the sheet to one division of the competition. Omitted = every division. */
+  divisionId: z.uuid().optional(),
 });
 
 // ---------------------------------------------------------------------------
