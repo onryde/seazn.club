@@ -12,10 +12,14 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { SheetHeading } from "@/lib/scorer-sheets";
 import type { SlotLabelLookup } from "@/lib/slot-label";
 import { log } from "@/server/logger";
-import { seedOrg } from "./_seed";
+import { GENERIC_CONFIG, seedOrg } from "./_seed";
 import { fixturesOf, seedStage } from "./_sheets-rig";
 import { createCourt, createVenue } from "../venues";
 import { patchFixture } from "../fixtures";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures } from "../stages";
+import { startDivision } from "../schedule";
 
 vi.mock("../device-links", async (orig) => {
   const real = await orig<typeof import("../device-links")>();
@@ -67,6 +71,38 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(vi.mocked(ensureDeviceLinks)).not.toHaveBeenCalled();
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from device_links where org_id = ${auth.orgId}`;
     expect(n).toBe(0);
+  });
+
+  it("divisionId prints only that division; a division of another competition is a 404", async () => {
+    const { auth } = await seedOrg("pro");
+    const a = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const other = await seedStage(auth, "league", ["W", "X", "Y", "Z"]);
+    // A second division in the SAME competition, so the filter has something to exclude.
+    const second = await createDivision(auth, a.competition.id, {
+      name: "Second",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(
+      auth,
+      second.id,
+      ["E", "F", "G", "H"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+    );
+    const [stage2] = await createStages(auth, second.id, { seq: 1, kind: "league", name: "league", config: {} });
+    await generateStageFixtures(auth, stage2!.id);
+    await startDivision(auth, second.id);
+    const first = await fixturesOf(a.stage.id);
+    const both = [...first, ...(await fixturesOf(stage2!.id))];
+    await schedule(both.map((f) => f.id));
+
+    const only = await buildScorerSheet(auth, a.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED, divisionId: a.division.id });
+    expect(cards(only).map((r) => r.fixtureId).sort()).toEqual(first.map((f) => f.id).sort());
+    const all = await buildScorerSheet(auth, a.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
+    expect(cards(all)).toHaveLength(both.length); // premise: without the filter, both divisions print
+    await expect(
+      buildScorerSheet(auth, a.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED, divisionId: other.division.id }),
+    ).rejects.toMatchObject({ status: 404 });
   });
 
   it("one card per printable fixture, each URL a live link of THAT fixture, named as the board names it, in the organiser's language and clock", async () => {
