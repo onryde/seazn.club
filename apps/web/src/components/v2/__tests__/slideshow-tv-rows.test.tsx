@@ -46,6 +46,7 @@ vi.mock("next/navigation", () => ({
 import { Slideshow } from "@/components/v2/slideshow";
 import type { FixtureSlideItem, Slide } from "@/server/slideshow-data";
 import { slideshowLabels } from "@/server/slideshow-labels";
+import { ratioText } from "@seazn/engine/competition";
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { openFace, textWidth, type Face } from "@/components/public-site/__tests__/font-advance";
@@ -486,5 +487,116 @@ describe("the standings slide's Pts ratio column (layout half)", () => {
     const html = board(slide(["1.50", undefined]));
     expect(rowsOf(html).map((cells) => cells.at(-1))).toEqual(["1.50", "—"]);
     expect(headerOf(html).at(-1)).toBe(slideshowLabels("en").pointRatio);
+  });
+
+  // ---- what the extra track can hold, priced from the rendered classes --------
+  //
+  // Same method as the fixtures rows above: the board's OWN classes, Tailwind's
+  // theme, the committed display face, no browser. Nothing about the track is
+  // typed here — its width, the header's size/tracking/case and the cell's size
+  // are all read off the markup, so moving the track moves these with it.
+
+  /** The ratio track's px, from the header row's last track. */
+  const ratioTrackPx = (html: string): number => {
+    const last = tracksOf(gridsOf(html)[0]!).at(-1)!;
+    if (last.kind !== "fixed") throw new Error("the ratio track is no longer fixed: re-derive this model");
+    return last.px;
+  };
+  /** The header row's own classes (the first `grid-cols-[…]` element). */
+  const headerClasses = (html: string) => gridsOf(html)[0]!;
+  /** Painted width of a header label, as the header's own type would set it. */
+  function headerLabelPx(html: string, label: string): number {
+    const header = headerClasses(html);
+    expect(header, "the header is set in capitals").toContain("uppercase");
+    const size = themePx(`text-${one(header, /^text-(\d?xl|lg|base|sm)$/, "header size")[1]}`);
+    const tracking = Number(one(header, /^tracking-\[([0-9.]+)em\]$/, "header tracking")[1]);
+    return textWidth(DISPLAY[weightOf(header)]!, label.toUpperCase(), size, tracking);
+  }
+
+  it("I1 — the header label fits the ratio track on ONE line in every locale (a two-line header was the defect)", async () => {
+    const wider: string[] = [];
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const html = board(withRatio, locale);
+      const label = headerOf(html).at(-1)!;
+      expect(label, `${locale} shows its own label`).toBe(slideshowLabels(locale).pointRatio);
+      const width = headerLabelPx(html, label);
+      if (width > ratioTrackPx(html)) wider.push(`${locale} "${label}" is ${width.toFixed(1)}px in a ${ratioTrackPx(html)}px track`);
+    }
+    expect(wider, "a label wider than its track wraps to a second line").toEqual([]);
+  });
+
+  it("I1 — the probe can see a wrap: the long es/fr forms (the public table's own words) do NOT fit the same track", async () => {
+    const html = board(withRatio);
+    for (const locale of ["es", "fr"] as const) {
+      const pub = await getDictionary(locale, "public");
+      const long = t(pub, "table.abbr.pointRatio");
+      expect(long.startsWith("table."), `${locale} resolves the key`).toBe(false);
+      expect(long, "the slideshow label is the shorter one").not.toBe(slideshowLabels(locale).pointRatio);
+      expect(headerLabelPx(html, long), `${locale} "${long}" needs more than the track`).toBeGreaterThan(ratioTrackPx(html));
+    }
+  });
+
+  it("M2 — the ratio track holds the widest realistic cell with air to spare (a 2rem or 4rem track cannot)", () => {
+    const html = board(withRatio);
+    const cell = classesAround(html, "1.50");
+    const size = themePx(`text-${one(cell, /^text-(\d?xl|lg|base|sm)$/, "ratio cell size")[1]}`);
+    // The cell sets no weight, so it paints in the regular face; SemiBold is
+    // wider, which makes this the safe direction. "1000.00" is a thousand points
+    // won to one lost, formatted by the engine's own ratio text.
+    const widest = textWidth(DISPLAY[600]!, ratioText(1000, 1, 2), size);
+    // A value filling its track edge to edge reads as running into the Pts
+    // beside it: two spacing steps of air (8px), on top of the column gap.
+    const air = spacingPx("2");
+    expect(ratioTrackPx(html), `track for a ${widest.toFixed(1)}px cell + ${air}px`).toBeGreaterThanOrEqual(widest + air);
+    // Positive pair: the model can say no. The P/W/D/L count tracks (read off
+    // the same template) are narrower than that cell plus its air, which is why
+    // the ratio could not reuse one of them.
+    const countTrack = tracksOf(gridsOf(html)[0]!)[2]!;
+    if (countTrack.kind !== "fixed") throw new Error("the played track is no longer fixed: re-derive this model");
+    expect(countTrack.px, "a P/W/D/L track").toBeLessThan(widest + air);
+  });
+
+  // ---- what the extra track costs the name -------------------------------------
+
+  /** The entrant's track at a viewport: the slide, less the row's padding, the
+   *  fixed tracks and the gaps. The name is the only growing track (asserted). */
+  function nameTrackPx(html: string, vw: number): number {
+    const row = classesWhere(html, (tk) => tk.includes("relative") && tk.some((c) => c.startsWith("grid-cols-[")), "standings row grid");
+    const tracks = tracksOf(row);
+    expect(tracks.flatMap((tr, i) => (grows(tr) ? [i] : [])), "the entrant is the only growing track").toEqual([1]);
+    const pad = spacingPx(one(row, /^px-(\d+(?:\.\d+)?)$/, "row px")[1]!);
+    const gap = spacingPx(one(row, /^gap-x-(\d+)$/, "row gap-x")[1]!);
+    const fixed = tracks.reduce((sum, tr) => sum + (tr.kind === "fixed" ? tr.px : 0), 0);
+    return slideWidth(html, vw) - 2 * pad - fixed - (tracks.length - 1) * gap;
+  }
+  const oneName = (name: string, pointRatio?: string): Slide => ({
+    kind: "standings",
+    division: "Cup",
+    caption: "Table",
+    rows: [{ rank: 1, name, ...played, ...(pointRatio !== undefined ? { pointRatio } : {}) }],
+  });
+  /** What the name needs on one line (`truncate`), from the rendered name cell. */
+  function namePx(html: string, name: string): number {
+    const cell = classesAround(html, name);
+    expect(cell, "the entrant is cut, not wrapped").toContain("truncate");
+    return textWidth(DISPLAY[weightOf(cell)]!, name, themePx(`text-${one(cell, /^text-(\d?xl|lg|base|sm)$/, "name size")[1]}`));
+  }
+
+  // The owner accepted that a long name is cut EARLIER on a ratio slide at
+  // lg/1280 (the column takes width from the entrant; ratio-only, on a TV), so
+  // those widths are deliberately not pinned. From 2xl the slide widens
+  // (`slideshow-tv-rows` above), and a ratio slide must still hold the
+  // realistic worst case there.
+  it("M1 — at 1920 a ratio slide holds the 43-character name on one line", () => {
+    const html = board(oneName(LONG43, "1.50"));
+    const track = nameTrackPx(html, 1920);
+    expect(track, `${LONG43} needs ${namePx(html, LONG43).toFixed(0)}px`).toBeGreaterThanOrEqual(namePx(html, LONG43));
+
+    // The probe can see a cut: two of them do not fit the same track...
+    const twice = `${LONG43} ${LONG43}`;
+    expect(namePx(board(oneName(twice, "1.50")), twice)).toBeGreaterThan(track);
+    // ...and the number is the ratio slide's own, not the old slide's: the
+    // extra track really does come out of the entrant's.
+    expect(track).toBeLessThan(nameTrackPx(board(oneName(LONG43)), 1920));
   });
 });

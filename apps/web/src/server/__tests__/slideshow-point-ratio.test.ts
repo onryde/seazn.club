@@ -24,7 +24,7 @@
 // which self-skips without one, like every DB-backed suite here.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import type { StandingsRow } from "@seazn/engine/competition";
+import { ratioText, type StandingsRow } from "@seazn/engine/competition";
 import { sql } from "@/lib/db";
 import { buildPublicDivisionSlides, buildDivisionSlides, type Slide, type StandingsSlideRow } from "../slideshow-data";
 import { buildTableView, type TableViewInput } from "../public-site/standings-view";
@@ -192,12 +192,37 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
     expect(structural(withCol.rows)).toEqual(structural(without.rows));
     expect(structural(withCol.rows)).toHaveLength(LEDGER.length);
   });
+
+  it("a snapshot row with NO metrics object at all prints the table's dash under the ratio and does not throw", async () => {
+    const m = builtinModules.find((x) => x.defaultTiebreakers.includes("point_ratio"))!;
+    // A row as a hand-built input or a pre-ledger snapshot carries it: no `metrics` key.
+    const bare = { entrantId: "e1", played: 0, won: 0, drawn: 0, lost: 0, points: 0, rank: 1 };
+    const withLedger = { ...bare, entrantId: "e2", rank: 2, metrics: { points_won: 63, points_lost: 42 } };
+    const input = publicInput({ sport_key: m.key, module_version: m.version, tiebreakers: null });
+    const slides = await buildPublicDivisionSlides({
+      ...input,
+      standings: [{ stage_id: "sl", pool_id: null, rows: [bare, withLedger] }],
+    });
+    const slide = slides.find((s): s is StandingsSlide => s.kind === "standings")!;
+    // The dash is the engine's own for "no ledger yet"; the neighbour with a
+    // ledger prints its number, so the bare row's dash is the row's, not the slide's.
+    expect(slide.rows.map((r) => r.pointRatio)).toEqual([ratioText(0, 0, 2), ratioText(63, 42, 2)]);
+    expect(slide.rows[0]!.pointRatio).toBe("—");
+    expect(slide.rows[1]!.pointRatio).not.toBe("—");
+  });
 });
 
 // ---- the organiser twin, through its real producer ---------------------------
 
 describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (organiser board, DB)", () => {
-  async function seededDivision(sportKey: string, variantKey: string, config: unknown) {
+  async function seededDivision(
+    sportKey: string,
+    variantKey: string,
+    config: unknown,
+    /** The division's own cascade override, set by direct SQL (it is what the
+     *  organiser select must READ; the settings write path is not under test). */
+    tiebreakers: string[] | null = null,
+  ) {
     const { auth } = await seedOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Ratio Cup", visibility: "public", branding: {} });
     const division = await createDivision(auth, comp.id, {
@@ -207,6 +232,9 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
       variant_key: variantKey,
       config: config as never,
     });
+    if (tiebreakers !== null) {
+      await sql`update divisions set tiebreakers = ${sql.json(tiebreakers as never)} where id = ${division.id}`;
+    }
     await createEntrants(
       auth,
       division.id,
@@ -239,6 +267,32 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();
+    expect(slideShowsRatio(slide!)).toBe(false);
+  });
+
+  // The division's own cascade is read by the organiser builder's SELECT. Both
+  // directions, on the same snapshot rows, so a select that stopped reading
+  // `tiebreakers` (falling back to the module default) fails one of the pair.
+  it("a division whose OWN cascade adds point_ratio to a sport that never ranks on it gets the column, with its values", async () => {
+    const generic = builtinModules.find((m) => m.key === "generic")!;
+    expect(generic.defaultTiebreakers, "generic's default cascade").not.toContain("point_ratio");
+    const added = [...generic.defaultTiebreakers, "point_ratio"];
+    const { auth, division } = await seededDivision("generic", "score", GENERIC_CONFIG, added);
+    const slides = await buildDivisionSlides(auth, division.id, "Open");
+    const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
+    expect(slide, "a standings slide").toBeDefined();
+    expect(slide!.rows.map((r) => r.pointRatio)).toEqual(LEDGER.map((l) => l.want));
+  });
+
+  it("a division whose OWN cascade drops point_ratio from badminton loses the column (same rows as the badminton case above)", async () => {
+    const badminton = builtinModules.find((m) => m.key === "badminton")!;
+    expect(badminton.defaultTiebreakers, "badminton's default cascade").toContain("point_ratio");
+    const dropped = badminton.defaultTiebreakers.filter((k) => k !== "point_ratio");
+    const { auth, division } = await seededDivision("badminton", "bwf", {}, dropped);
+    const slides = await buildDivisionSlides(auth, division.id, "Open");
+    const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
+    expect(slide, "a standings slide").toBeDefined();
+    expect(slide!.rows).toHaveLength(LEDGER.length);
     expect(slideShowsRatio(slide!)).toBe(false);
   });
 });

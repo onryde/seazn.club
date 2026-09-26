@@ -41,6 +41,8 @@ import { slideshowLabels, type SlideshowLabels } from "@/server/slideshow-labels
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { LOCALES } from "@/lib/i18n-constants";
+import { ratioText } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
 
 /** Every plain `ui` key the board renders. */
 const PLAIN_KEYS = [
@@ -209,6 +211,108 @@ describe("public /present kiosk: chrome in the org's locale (R10e u1)", () => {
     expect(markups.some((h) => shows(h, t(es, "slideshow.status.scheduled")))).toBe(true);
     expect(markups.some((h) => shows(h, t(es, "slideshow.back")))).toBe(true);
     expect(leaks(markups, englishProbes)).toEqual([]);
+  });
+});
+
+// --- the Pts ratio column, through the REAL page -> builder -> board ------------
+//
+// The seam witness for the slideshow's "Pts ratio" column. `slideshow-point-
+// ratio.test.ts` drives the builders and `slideshow-tv-rows.test.tsx` the board
+// from hand-built slides; what neither shows is the two meeting through the
+// page a screen actually loads: `getPublicDivision`'s division (module version,
+// cascade) and snapshot rows (with their `metrics`) spread into
+// `buildPublicDivisionSlides`, whose slides reach `<Slideshow>`. A page that
+// stopped passing the division through, or a builder type that dropped a field
+// the page still sends, would leave every one of those suites green.
+//
+// Expected values are DERIVED: the label from each locale's own catalog, the
+// cell from the engine's `ratioText`, and the sport that must NOT get the column
+// is the first shipped module whose default cascade lacks `point_ratio` (the
+// very same rows, ledger included — only the division's module differs).
+const RATIO_SPORT = builtinModules.find((m) => m.key === "badminton")!;
+const NO_RATIO_SPORT = builtinModules.find((m) => !m.defaultTiebreakers.includes("point_ratio"))!;
+const LEDGER_WON = 63;
+const LEDGER_LOST = 42;
+
+/** The public division with real sport pins and snapshot rows that carry a points ledger. */
+const sportData = (
+  default_locale: string,
+  sport: { key: string; version: string },
+  tiebreakers: string[] | null = null,
+) => ({
+  ...orgData(default_locale),
+  division: { id: "d1", name: "Open", sport_key: sport.key, module_version: sport.version, tiebreakers },
+  standings: [
+    {
+      stage_id: "sg",
+      pool_id: "pA",
+      rows: [
+        { entrantId: "e1", played: 3, won: 3, drawn: 0, lost: 0, points: 9, rank: 1, metrics: { points_won: LEDGER_WON, points_lost: LEDGER_LOST } },
+        { entrantId: "e2", played: 3, won: 0, drawn: 0, lost: 3, points: 0, rank: 2, metrics: { points_won: LEDGER_LOST, points_lost: LEDGER_WON } },
+      ],
+    },
+  ],
+});
+
+async function divisionKioskMarkups(data: object): Promise<string[]> {
+  getPublicDivision.mockResolvedValue(data);
+  const board = (await PresentDivisionPage(
+    params({ orgSlug: "o", competitionSlug: "c", divisionSlug: "d" }),
+  )) as ReactElement<{ slides: Slide[] }>;
+  return renderEachSlide(board);
+}
+
+describe("public /present kiosk: the Pts ratio column, through the real page and builder", () => {
+  it("the sports this test names really do split on point_ratio (else the pair below proves nothing)", () => {
+    expect(RATIO_SPORT.defaultTiebreakers).toContain("point_ratio");
+    expect(NO_RATIO_SPORT.defaultTiebreakers).not.toContain("point_ratio");
+  });
+
+  it.each([...LOCALES])("division kiosk, badminton, %s org: the standings slide carries the ratio header in the org's language and both rows' ratios", async (locale) => {
+    const dict = await getDictionary(locale, "ui");
+    const label = t(dict, "slideshow.col.pointRatio");
+    expect(label.startsWith("slideshow."), `${locale} resolves the key`).toBe(false);
+    const markups = await divisionKioskMarkups(sportData(locale, RATIO_SPORT));
+
+    expect(markups.some((h) => shows(h, label)), `header "${label}"`).toBe(true);
+    // Each row's ratio is over ITS OWN pair: the second row's ledger is the first's reversed.
+    expect(markups.some((h) => shows(h, ratioText(LEDGER_WON, LEDGER_LOST, 2))), "row 1").toBe(true);
+    expect(markups.some((h) => shows(h, ratioText(LEDGER_LOST, LEDGER_WON, 2))), "row 2").toBe(true);
+  });
+
+  it("division kiosk, the SAME rows for a sport that does not rank on point_ratio: no header, no ratio cell (the negative pair)", async () => {
+    const en = await getDictionary("en", "ui");
+    const markups = await divisionKioskMarkups(sportData("en", NO_RATIO_SPORT));
+
+    expect(markups.some((h) => shows(h, t(en, "slideshow.col.pointRatio")))).toBe(false);
+    expect(markups.some((h) => shows(h, ratioText(LEDGER_WON, LEDGER_LOST, 2)))).toBe(false);
+    // ...while the board itself rendered its table, so the absence is the cascade's, not an empty board.
+    expect(markups.some((h) => shows(h, t(en, "slideshow.col.points")))).toBe(true);
+  });
+
+  it("division kiosk: the division's own cascade override is honoured (drop it from badminton: no column)", async () => {
+    const en = await getDictionary("en", "ui");
+    const dropped = RATIO_SPORT.defaultTiebreakers.filter((k) => k !== "point_ratio");
+    const markups = await divisionKioskMarkups(sportData("en", RATIO_SPORT, dropped));
+    expect(markups.some((h) => shows(h, t(en, "slideshow.col.pointRatio")))).toBe(false);
+    expect(markups.some((h) => shows(h, t(en, "slideshow.col.points")))).toBe(true);
+  });
+
+  it("competition kiosk, badminton, es org: the competition board's own spread reaches the builder too", async () => {
+    const es = await getDictionary("es", "ui");
+    getPublicCompetition.mockResolvedValue({
+      org: { default_locale: "es" },
+      competition: { name: "Copa", branding: null },
+      divisions: [{ slug: "open" }],
+    });
+    getPublicDivision.mockResolvedValue(sportData("es", RATIO_SPORT));
+    const board = (await PresentCompetitionPage(
+      params({ orgSlug: "o", competitionSlug: "c" }),
+    )) as ReactElement<{ slides: Slide[] }>;
+    const markups = renderEachSlide(board);
+
+    expect(markups.some((h) => shows(h, t(es, "slideshow.col.pointRatio")))).toBe(true);
+    expect(markups.some((h) => shows(h, ratioText(LEDGER_WON, LEDGER_LOST, 2)))).toBe(true);
   });
 });
 
