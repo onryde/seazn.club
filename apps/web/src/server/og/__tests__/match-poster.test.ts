@@ -459,7 +459,7 @@ describe("matchPosterModel — which side is DOING something", () => {
 });
 
 describe("posterFonts — the real static TTFs, wired into satori's `fonts:` option", () => {
-  // `fontDir()` IS `doc-theme.ts`'s `brandFontDir` (DOC_FONT_DIR, else
+  // `readBrandFontFile` (shared with the PDFs: DOC_FONT_DIR, else
   // `<cwd>/assets/fonts`, else `<cwd>/apps/web/assets/fonts`). Pointed at the
   // real directory explicitly here; the unset default is pinned in
   // server/__tests__/doc-theme-font-dir.test.ts.

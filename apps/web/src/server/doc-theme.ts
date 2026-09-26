@@ -50,25 +50,50 @@ const FILES: Record<string, string> = {
 export function brandFontDir(): string {
   const override = process.env.DOC_FONT_DIR;
   if (override) return override;
-  const candidates = [
-    path.join(process.cwd(), "assets/fonts"),
-    path.join(process.cwd(), "apps/web/assets/fonts"),
-  ];
-  return candidates.find((dir) => fs.existsSync(dir)) ?? candidates[0]!;
+  // Inline literals (not a shared array var) so Turbopack can scope tracing
+  // to these folders — same rule as readBrandFontFile / scorer-sheet brandIcon.
+  const web = path.join(process.cwd(), "assets/fonts");
+  if (fs.existsSync(web)) return web;
+  const monorepo = path.join(process.cwd(), "apps/web/assets/fonts");
+  if (fs.existsSync(monorepo)) return monorepo;
+  return web;
+}
+
+/** Read one brand font; null when every candidate misses. Shared by PDF
+ *  registration and the match-poster satori loader so the two cannot drift.
+ *
+ *  Each production candidate is an inline `path.join(process.cwd(), literal,
+ *  file)` so Turbopack traces only those folders (same pattern as
+ *  scorer-sheet-pdf's brandIcon). DOC_FONT_DIR is packaging-provided and
+ *  opted out of tracing. */
+export function readBrandFontFile(file: string): Buffer | null {
+  const override = process.env.DOC_FONT_DIR;
+  if (override) {
+    try {
+      return fs.readFileSync(path.join(/*turbopackIgnore: true*/ override, file));
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return fs.readFileSync(path.join(process.cwd(), "assets/fonts", file));
+  } catch {
+    // try monorepo-root layout
+  }
+  try {
+    return fs.readFileSync(path.join(process.cwd(), "apps/web/assets/fonts", file));
+  } catch {
+    return null;
+  }
 }
 
 /** Register brand fonts on a pdfkit doc. Any file that fails to load aliases
  *  its slot to a built-in Helvetica so the render still succeeds. */
 export function registerFonts(doc: PDFKit.PDFDocument): void {
-  const dir = brandFontDir();
   for (const [name, file] of Object.entries(FILES)) {
-    try {
-      const p = path.join(dir, file);
-      const bytes = fs.readFileSync(p);
-      doc.registerFont(name, bytes);
-    } catch {
-      doc.registerFont(name, FALLBACK[name]!);
-    }
+    const bytes = readBrandFontFile(file);
+    if (bytes) doc.registerFont(name, bytes);
+    else doc.registerFont(name, FALLBACK[name]!);
   }
 }
 
