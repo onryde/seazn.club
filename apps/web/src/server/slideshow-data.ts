@@ -18,6 +18,9 @@ import { getDictionary } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
+import { DERIVED_METRICS, derivedMetricText, type StandingsRow } from "@seazn/engine/competition";
+import { standingsColumns, type MetricSpecLike } from "@/lib/public-site";
+import { resolveModule } from "@/server/engine-db/registry";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
@@ -29,6 +32,85 @@ export interface StandingsSlideRow {
   drawn: number;
   lost: number;
   points: number;
+  /** The "Pts ratio" cell, display-ready ("1.50", "∞", "—"): the engine's own
+   *  `derivedMetricText` for `point_ratio`, the very text the normal standings
+   *  table prints. Set on every row of a slide whose division ranks on
+   *  `point_ratio` (the normal table shows the column under the same
+   *  condition), and on none otherwise — the board shows the column exactly
+   *  when a row carries this. */
+  pointRatio?: string;
+}
+
+/** The inputs the division page hands `standingsColumns`: the pinned module's
+ *  metrics, and the cascade (the division's own override, else the module's
+ *  default). */
+interface StandingsShape {
+  metricSpecs: readonly MetricSpecLike[];
+  cascade: readonly string[];
+}
+
+/** What a division says about its own standings. Every field is optional: a
+ *  hand-built public input predates them, and reads as "no module". */
+interface StandingsShapeInput {
+  sport_key?: string;
+  module_version?: string;
+  tiebreakers?: readonly string[] | null;
+}
+
+/** Resolves a division's pinned module the way the division page does
+ *  (`(public)/shared/.../[divisionSlug]/page.tsx`): a module this build no
+ *  longer carries degrades to structural columns only — it never throws. */
+function standingsShape(division: StandingsShapeInput): StandingsShape {
+  const none: StandingsShape = { metricSpecs: [], cascade: [] };
+  if (division.sport_key === undefined || division.module_version === undefined) return none;
+  try {
+    const module_ = resolveModule(division.sport_key, division.module_version);
+    return { metricSpecs: module_.metrics, cascade: division.tiebreakers ?? module_.defaultTiebreakers };
+  } catch {
+    return none;
+  }
+}
+
+/** A snapshot row as `standings_snapshots` persists it. `metrics` is optional
+ *  only because hand-built inputs predate it; a real snapshot always has it. */
+interface StandingsSlideSnapshotRow {
+  entrantId: string;
+  played: number;
+  won: number;
+  drawn: number;
+  lost: number;
+  points: number;
+  rank?: number;
+  metrics?: Record<string, number>;
+}
+
+/**
+ * One standings slide's rows, for BOTH builders. Whether a row carries the
+ * "Pts ratio" is asked of `standingsColumns` itself — the function the normal
+ * table picks its columns with — over the same module metrics, cascade and rows,
+ * so the two tables cannot disagree about which columns a division has; and its
+ * text is `derivedMetricText`, the engine's, which is what the table's cell
+ * prints. This file computes no ratio of its own.
+ */
+function standingsSlideRows(
+  snapRows: readonly StandingsSlideSnapshotRow[],
+  shape: StandingsShape,
+  names: Record<string, string>,
+): StandingsSlideRow[] {
+  const engineRows: StandingsRow[] = snapRows.map((r) => ({ ...r, metrics: r.metrics ?? {} }));
+  const showsPointRatio = standingsColumns(shape.metricSpecs, shape.cascade, engineRows, DERIVED_METRICS).some(
+    (c) => c.kind === "derived" && c.key === "point_ratio",
+  );
+  return engineRows.map((r, i) => ({
+    rank: r.rank ?? i + 1,
+    name: names[r.entrantId] ?? "—",
+    played: r.played,
+    won: r.won,
+    drawn: r.drawn,
+    lost: r.lost,
+    points: r.points,
+    ...(showsPointRatio ? { pointRatio: derivedMetricText(r, "point_ratio") ?? "—" } : {}),
+  }));
 }
 
 export interface FixtureSlideItem {
@@ -131,8 +213,17 @@ export async function buildDivisionSlides(
     listEntrants(auth, divisionId),
     listEntrantLogoUrls(auth, divisionId),
     withTenant(auth.orgId, (tx) =>
-      tx<{ youth: boolean; player_name_display: string | null }[]>`
-        select youth, player_name_display from divisions where id = ${divisionId}`,
+      tx<
+        {
+          youth: boolean;
+          player_name_display: string | null;
+          sport_key: string;
+          module_version: string;
+          tiebreakers: string[] | null;
+        }[]
+      >`
+        select youth, player_name_display, sport_key, module_version, tiebreakers
+        from divisions where id = ${divisionId}`,
     ),
     // P6 fix round 3, Important 4 — mirrors PublicSlideInput.orgLocale: the
     // doc comment this replaced claimed "no locale anywhere in this tree",
@@ -195,6 +286,9 @@ export async function buildDivisionSlides(
     ]),
   );
   const slides: Slide[] = [];
+  // The division's own module and cascade decide its standings columns, the
+  // same way they do on its public page.
+  const shape = standingsShape(priv[0] ?? {});
 
   // ── Standings — one slide per table stage (per pool when pooled) ──
   for (const stage of stages.filter((s) => TABLE_KINDS.has(s.kind))) {
@@ -212,23 +306,7 @@ export async function buildDivisionSlides(
           )
         : [{ caption: stage.name, snap: await getStandings(auth, stage.id) }];
     for (const { caption, snap } of tables) {
-      const rows = (snap.rows as {
-        entrantId: string;
-        played: number;
-        won: number;
-        drawn: number;
-        lost: number;
-        points: number;
-        rank?: number;
-      }[]).map((r, i) => ({
-        rank: r.rank ?? i + 1,
-        name: names[r.entrantId] ?? "—",
-        played: r.played,
-        won: r.won,
-        drawn: r.drawn,
-        lost: r.lost,
-        points: r.points,
-      }));
+      const rows = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], shape, names);
       if (rows.length > 0) {
         slides.push({ kind: "standings", division: divisionName, caption, rows });
       }
@@ -342,6 +420,15 @@ export interface PublicSlideInput {
      *  (public-site/data.ts) and should pass both through. */
     youth?: boolean;
     player_name_display?: string | null;
+    /** The division's pinned module and cascade override (`PublicDivision`),
+     *  which pick its standings columns exactly as its public page's table
+     *  does. Optional: hand-built inputs predate them and read as "no module",
+     *  i.e. no ratio column. Both /present pages spread `getPublicDivision`'s
+     *  result wholesale, so the real values arrive through this type — a type
+     *  that omitted them would ship the column inert. */
+    sport_key?: string;
+    module_version?: string;
+    tiebreakers?: string[] | null;
   };
   stages: { id: string; kind: string; name: string }[];
   pools: { id: string; stage_id: string; name: string }[];
@@ -411,16 +498,6 @@ export interface PublicSlideInput {
   orgLocale?: string;
 }
 
-interface StandingsSlideSnapshotRow {
-  entrantId: string;
-  played: number;
-  won: number;
-  drawn: number;
-  lost: number;
-  points: number;
-  rank?: number;
-}
-
 export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise<Slide[]> {
   const orgLocale = toLocale(data.orgLocale);
   const lookup: SlotLabelLookup = (k, v) => msgFor(orgLocale, k, v);
@@ -460,6 +537,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   const stageById = new Map(data.stages.map((s) => [s.id, s]));
   const poolById = new Map(data.pools.map((p) => [p.id, p]));
   const slides: Slide[] = [];
+  const shape = standingsShape(data.division);
 
   for (const snap of data.standings) {
     const stage = stageById.get(snap.stage_id);
@@ -469,11 +547,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
       kind: "standings",
       division: data.division.name,
       caption: pool !== undefined ? `${stage.name} — ${pool.name}` : stage.name,
-      rows: snap.rows.map((r, i) => ({
-        rank: r.rank ?? i + 1,
-        name: names[r.entrantId] ?? "—",
-        played: r.played, won: r.won, drawn: r.drawn, lost: r.lost, points: r.points,
-      })),
+      rows: standingsSlideRows(snap.rows, shape, names),
     });
   }
 

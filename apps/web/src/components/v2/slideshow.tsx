@@ -55,6 +55,13 @@ export function clockText(now: Date, clockLocale: string, timeZone?: string): st
 const fill = (template: string, name: string, value: number): string =>
   template.replace(`{${name}}`, String(value));
 
+// The standings slide's columns: #, entrant, P W D L, Pts. A division that ranks
+// on `point_ratio` gets its "Pts ratio" as one more FIXED track after Pts (the
+// normal table's order), so the entrant stays the only track that takes free
+// space. Whole class strings, so Tailwind's scanner sees them.
+const STANDINGS_COLS = "grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem]";
+const STANDINGS_COLS_WITH_RATIO = "grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem_6rem]";
+
 export function Slideshow({
   title,
   slides,
@@ -183,6 +190,10 @@ export function Slideshow({
   }, [router, backHref, slides.length]);
 
   const slide = slides[Math.min(index, Math.max(slides.length - 1, 0))];
+  // The builder sets `pointRatio` on every row of a slide whose division ranks
+  // on it, and on none otherwise; the column follows the rows.
+  const ratioColumn = slide?.kind === "standings" && slide.rows.some((r) => r.pointRatio !== undefined);
+  const standingsCols = ratioColumn ? STANDINGS_COLS_WITH_RATIO : STANDINGS_COLS;
   const liveCount = slides.reduce(
     (n, s) =>
       s.kind === "fixtures" ? n + s.items.filter((i) => i.status === "in_play").length : n,
@@ -272,7 +283,7 @@ export function Slideshow({
               <BracketSlide fixtures={slide.fixtures} stageKind={slide.stageKind ?? "knockout"} labels={labels} />
             ) : slide.kind === "standings" ? (
               <div>
-                <div className="grid grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem] gap-x-5 px-6 pb-2 font-display text-base font-semibold uppercase tracking-[0.2em] text-court-muted">
+                <div className={`grid ${standingsCols} gap-x-5 px-6 pb-2 font-display text-base font-semibold uppercase tracking-[0.2em] text-court-muted`}>
                   <span>#</span>
                   <span>{labels.entrant}</span>
                   <span className="text-right">{labels.played}</span>
@@ -280,12 +291,13 @@ export function Slideshow({
                   <span className="text-right">{labels.drawn}</span>
                   <span className="text-right">{labels.lost}</span>
                   <span className="text-right">{labels.points}</span>
+                  {ratioColumn && <span className="text-right">{labels.pointRatio}</span>}
                 </div>
                 <div className="space-y-2">
                   {slide.rows.slice(0, 10).map((r, i) => (
                     <div
                       key={r.rank + r.name}
-                      className="relative grid grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem] items-center gap-x-5 rounded-lg bg-white/[0.05] px-6 py-2.5 ring-1 ring-inset ring-white/10"
+                      className={`relative grid ${standingsCols} items-center gap-x-5 rounded-lg bg-white/[0.05] px-6 py-2.5 ring-1 ring-inset ring-white/10`}
                     >
                       {i === 0 && (
                         <span
@@ -322,6 +334,11 @@ export function Slideshow({
                       <span className="text-right font-display text-4xl font-bold tabular-nums text-accent-line">
                         {r.points}
                       </span>
+                      {ratioColumn && (
+                        <span className="text-right font-display text-2xl tabular-nums text-court-muted">
+                          {r.pointRatio ?? "—"}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

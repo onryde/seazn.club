@@ -35,6 +35,9 @@ export interface SlideshowLabels {
   drawn: string;
   lost: string;
   points: string;
+  /** The standings slide's ratio column, shown only when the division's cascade
+   *  ranks on `point_ratio` (the normal table's "Pts ratio"). */
+  pointRatio: string;
   /** Template: `{round}`. */
   round: string;
   vs: string;
@@ -79,6 +82,7 @@ export function slideshowLabels(locale: string | null | undefined): SlideshowLab
     drawn: m("slideshow.col.drawn"),
     lost: m("slideshow.col.lost"),
     points: m("slideshow.col.points"),
+    pointRatio: m("slideshow.col.pointRatio"),
     round: m("slideshow.round"),
     vs: m("schedule.vs"),
     tbd: m("bracket.tbd"),
