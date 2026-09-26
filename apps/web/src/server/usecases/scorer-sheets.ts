@@ -36,6 +36,7 @@ import {
   courtPageHeading,
   isPrintable,
   localDateOf,
+  compareByDivision,
   paginateSheet,
   selectSheetFixtureRange,
   selectSheetFixtures,
@@ -315,11 +316,13 @@ export async function buildScorerSheet(
   days: string | { from?: string; to?: string },
   origin: string,
   locale: Locale,
-  opts: { printedAt: string; divisionId?: string },
+  opts: { printedAt: string; divisionId?: string; groupBy?: "court" | "division" },
 ): Promise<ScorerSheet> {
   const t: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
   const all = await loadSheetCandidates(auth, competitionId, t, undefined, opts.divisionId);
-  const chosen = typeof days === "string" ? selectSheetFixtures(all, days) : selectSheetFixtureRange(all, days);
+  const byDivision = opts.groupBy === "division";
+  const picked = typeof days === "string" ? selectSheetFixtures(all, days) : selectSheetFixtureRange(all, days);
+  const chosen = byDivision ? picked.sort(compareByDivision) : picked;
   const nothing = () => new HttpError(422, "No fixtures to print on that day", "NO_FIXTURES_ON_DAY");
   if (chosen.length === 0) throw nothing();
   const [comp] = await withTenant(auth.orgId, (tx) =>
@@ -378,7 +381,7 @@ export async function buildScorerSheet(
   // Court first, days inside it: a court's cards stay together across days, so a
   // multi-day sheet stamps the day on each card's time instead of on the page.
   const multiDay = dayKeys.length > 1;
-  const pages = paginateSheet(printed, t("sheets.pdf.noCourt"));
+  const pages = paginateSheet(printed, t("sheets.pdf.noCourt"), byDivision ? (r) => r.division_name : undefined);
   // A pair prints one member per line; its name is already their " / " join.
   const pairOf = (s: SheetSide | null) =>
     s !== null && s.kind === "pair" && s.members.length >= 2 ? s.members.map((m) => m.full_name) : [];
@@ -398,11 +401,11 @@ export async function buildScorerSheet(
       rows: p.rows.map((r) => ({
         fixtureId: r.id,
         url: `${origin}/score/${links.get(r.id)!.secret}`,
-        time: multiDay
-          ? `${fmtDay(dayOf(r), { weekday: "short", day: "numeric" })} · ${time(r.scheduled_at!, r.tz)}`
-          : time(r.scheduled_at!, r.tz),
+        time: multiDay ? `${fmtDay(dayOf(r), { weekday: "short", day: "numeric" })} · ${time(r.scheduled_at!, r.tz)}` : time(r.scheduled_at!, r.tz),
         matchRef: r.match_ref,
-        division: r.division_name,
+        // The division sheet's page heading already names the division, so the
+        // card's grey line names the court instead (no court page run to say it).
+        division: byDivision ? (r.court_name ?? t("sheets.pdf.noCourt")) : r.division_name,
         home: r.home?.name ?? r.home_tbd,
         away: r.away?.name ?? r.away_tbd,
         homeTbd: r.home === null,

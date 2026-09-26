@@ -27,10 +27,11 @@ export async function POST(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "competition", id, "write");
     await rateLimit(`sheets:${auth.userId}`, SHEETS_LIMIT);
-    const { date, dateFrom, dateTo, divisionId } = await parseBody(req, ScorerSheetsRequest);
+    const { date, dateFrom, dateTo, divisionId, groupBy } = await parseBody(req, ScorerSheetsRequest);
     const model = await buildScorerSheet(auth, id, date ?? { from: dateFrom, to: dateTo }, new URL(baseUrl(req)).origin, await resolveLocale(), {
       printedAt: new Date().toISOString(),
       divisionId,
+      groupBy,
     });
     const bytes = await renderScorerSheetPdf(model);
     // Counted only once the PDF exists: every refusal above (403, 429, 400,
@@ -53,7 +54,7 @@ export async function POST(req: Request, { params }: Ctx) {
     return new NextResponse(new Uint8Array(bytes), {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="scorer-sheets-${divisionId ? `${divisionId}-` : ""}${date ?? "all-days"}.pdf"`,
+        "Content-Disposition": `attachment; filename="scorer-sheets-${divisionId ? `${divisionId}-` : groupBy === "division" ? "by-division-" : ""}${date ?? "all-days"}.pdf"`,
         "Cache-Control": "private, no-store",
       },
     });

@@ -125,6 +125,18 @@ function compare(a: SheetCandidate, b: SheetCandidate): number {
   );
 }
 
+/** Division order: division, then time, then the match ref's order. No court
+ *  key — this is the "group by division" sheet, where court is a card detail. */
+export function compareByDivision(a: SheetCandidate, b: SheetCandidate): number {
+  return (
+    a.division_name.localeCompare(b.division_name) ||
+    Date.parse(a.scheduled_at!) - Date.parse(b.scheduled_at!) ||
+    a.round_no - b.round_no ||
+    a.seq_in_round - b.seq_in_round ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
+}
+
 /** The day's sheet rows, filtered AND ordered. */
 export function selectSheetFixtures(candidates: readonly SheetCandidate[], day: string): SheetCandidate[] {
   return candidates.filter((f) => printable(f) && localDateOf(f.scheduled_at, f.tz) === day).sort(compare);
@@ -180,11 +192,16 @@ export function courtPageHeading(t: SlotLabelLookup, court: string, n: number, o
 /** Pages of at most ROWS_PER_PAGE rows. Each court starts a page; a court
  *  longer than a page continues with its heading repeated. `rows` must come
  *  from `selectSheetFixtures` (grouped by court). */
-export function paginateSheet(rows: readonly SheetCandidate[], noCourt: string): SheetPage[] {
+export function paginateSheet(
+  rows: readonly SheetCandidate[],
+  noCourt: string,
+  /** What starts a page run: the court by default, the division for the division sheet. */
+  headingOf: (row: SheetCandidate) => string = (row) => row.court_name ?? noCourt,
+): SheetPage[] {
   const pages: SheetPage[] = [];
   let current: SheetPage | null = null;
   for (const row of rows) {
-    const heading = row.court_name ?? noCourt;
+    const heading = headingOf(row);
     if (!current || current.courtHeading !== heading || current.rows.length === ROWS_PER_PAGE) {
       const continued: boolean = current !== null && current.courtHeading === heading;
       current = { courtHeading: heading, continued, pageInCourt: 0, pagesInCourt: 0, rows: [] };

@@ -110,6 +110,15 @@ describe("POST /competitions/{id}/exports/scorer-sheets", () => {
     expect(h.build).not.toHaveBeenCalled();
   });
 
+  it("groupBy division needs no date and reaches the builder; an unknown groupBy is 400", async () => {
+    const ok = await POST(req({ groupBy: "division" }), ctx);
+    expect(ok.status).toBe(200);
+    expect((h.build.mock.calls[0]![5] as { groupBy?: string }).groupBy).toBe("division");
+    h.build.mockClear();
+    expect((await POST(req({ groupBy: "venue", date: "2026-09-23" }), ctx)).status).toBe(400);
+    expect(h.build).not.toHaveBeenCalled();
+  });
+
   it("auth runs before the body is read: a 403 wins over a body that is not even JSON", async () => {
     h.auth.mockRejectedValueOnce(new HttpError(403, "Insufficient permissions"));
     const res = await POST(req("not json"), ctx);

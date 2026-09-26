@@ -124,6 +124,44 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(cards(one)).toHaveLength(fx.length - 3);
   });
 
+  it("groupBy division: one page run per division whatever the court, the court on each card's grey line", async () => {
+    const { auth } = await seedOrg("pro");
+    const a = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const second = await createDivision(auth, a.competition.id, {
+      name: "Second",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(
+      auth,
+      second.id,
+      ["E", "F", "G", "H"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+    );
+    const [stage2] = await createStages(auth, second.id, { seq: 1, kind: "league", name: "league", config: {} });
+    await generateStageFixtures(auth, stage2!.id);
+    await startDivision(auth, second.id);
+    const hall = await createVenue(auth, { name: "Hall", sort: 0 });
+    const c1 = await createCourt(auth, hall.id, { name: "Court 1", sort: 0, tags: [] });
+    const c2 = await createCourt(auth, hall.id, { name: "Court 2", sort: 1, tags: [] });
+    const first = await fixturesOf(a.stage.id);
+    const other = await fixturesOf(stage2!.id);
+    // Both divisions use BOTH courts: a court-grouped sheet would need 2 court runs, not 2 division runs.
+    for (const fx of [first, other]) {
+      for (const [i, f] of fx.entries()) await sql`update fixtures set court_id = ${i % 2 === 0 ? c1.id : c2.id} where id = ${f.id}`;
+    }
+    await schedule([...first, ...other].map((f) => f.id));
+    const m = await buildScorerSheet(auth, a.competition.id, {}, ORIGIN, "en", { printedAt: PRINTED, groupBy: "division" });
+    expect(m.header.title).toBe(a.competition.name);
+    expect(m.pages.map((p) => p.heading.court)).toEqual(["Open", "Second"]);
+    expect(m.pages.map((p) => p.rows.length)).toEqual([first.length, other.length]);
+    expect(cards(m).every((r) => /^Court [12]$/.test(r.division))).toBe(true);
+    // The default is unchanged: two courts, two runs, no court on the card.
+    const byCourt = await buildScorerSheet(auth, a.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
+    expect(byCourt.pages.map((p) => p.heading.court)).toEqual(["Court 1", "Court 2"]);
+    expect(cards(byCourt).every((r) => !r.division.includes("Court"))).toBe(true);
+  });
+
   it("one card per printable fixture, each URL a live link of THAT fixture, named as the board names it, in the organiser's language and clock", async () => {
     const { auth } = await seedOrg("pro");
     const { competition, stage } = await seedStage(auth, "knockout", ["A", "B", "C", "D"]);
