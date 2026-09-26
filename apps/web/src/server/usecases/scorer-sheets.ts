@@ -35,7 +35,9 @@ import {
   PRINTABLE_STATUSES,
   courtPageHeading,
   isPrintable,
+  localDateOf,
   paginateSheet,
+  selectSheetFixtureRange,
   selectSheetFixtures,
   type SheetCandidate,
   type SheetSide,
@@ -66,6 +68,7 @@ async function competitionClock(tx: Tx, competitionId: string): Promise<string> 
 /** One fixture of the competition: the board's naming columns plus what a
  *  sheet row prints. */
 type FixtureRow = MatchNameRow & {
+  division_id: string;
   division_name: string;
   status: string;
   /** postgres hands a timestamptz back as a Date. */
@@ -81,7 +84,7 @@ type FixtureRow = MatchNameRow & {
 async function readFixtures(tx: Tx, competitionId: string): Promise<FixtureRow[]> {
   return tx<FixtureRow[]>`
     select ${tx(MATCH_NAME_COLS.map((c) => `f.${c}`))},
-           d.name as division_name, f.status, f.scheduled_at,
+           f.division_id, d.name as division_name, f.status, f.scheduled_at,
            f.court_id, f.court_label, c.name as court_entity_name, c.sort as court_sort,
            v.name as venue_name, v.sort as venue_sort
     from fixtures f
@@ -159,9 +162,15 @@ export async function loadSheetCandidates(
   competitionId: string,
   lookup: SlotLabelLookup,
   day?: string,
+  divisionId?: string,
 ): Promise<SheetCandidate[]> {
   const read = await withTenant(auth.orgId, async (tx) => {
     const tz = await competitionClock(tx, competitionId);
+    if (divisionId !== undefined) {
+      const [d] = await tx<{ id: string }[]>`
+        select id from divisions where id = ${divisionId} and competition_id = ${competitionId}`;
+      if (!d) throw new HttpError(404, "division not found");
+    }
     const rows = await readFixtures(tx, competitionId);
     const stages = await tx<{ id: string; kind: string }[]>`
       select s.id, s.kind from stages s join divisions d on d.id = s.division_id
@@ -179,6 +188,7 @@ export async function loadSheetCandidates(
   };
   const candidates: SheetCandidate[] = [];
   for (const r of read.rows) {
+    if (divisionId !== undefined && r.division_id !== divisionId) continue;
     const scheduled_at = isoOf(r.scheduled_at);
     const home = side(r.id, r.home_entrant_id);
     const away = side(r.id, r.away_entrant_id);
@@ -302,13 +312,14 @@ export type ScorerSheet = SheetModel & { summary: SheetSummary };
 export async function buildScorerSheet(
   auth: AuthCtx,
   competitionId: string,
-  day: string,
+  days: string | { from?: string; to?: string },
   origin: string,
   locale: Locale,
-  opts: { printedAt: string },
+  opts: { printedAt: string; divisionId?: string },
 ): Promise<ScorerSheet> {
   const t: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
-  const chosen = await loadSheetCandidates(auth, competitionId, t, day);
+  const all = await loadSheetCandidates(auth, competitionId, t, undefined, opts.divisionId);
+  const chosen = typeof days === "string" ? selectSheetFixtures(all, days) : selectSheetFixtureRange(all, days);
   const nothing = () => new HttpError(422, "No fixtures to print on that day", "NO_FIXTURES_ON_DAY");
   if (chosen.length === 0) throw nothing();
   const [comp] = await withTenant(auth.orgId, (tx) =>
@@ -324,7 +335,7 @@ export async function buildScorerSheet(
   const links = await ensureDeviceLinks(auth, competitionId, ids);
   const unproven = await unprovenLinks(auth, ids, links);
   if (unproven.length > 0) {
-    log.error({ competitionId, day, fixtureIds: unproven }, "scorer sheet: links not proven, sheet refused");
+    log.error({ competitionId, days, fixtureIds: unproven }, "scorer sheet: links not proven, sheet refused");
     throw new HttpError(500, t("sheets.error.linksIncomplete"), "SHEET_LINKS_INCOMPLETE");
   }
   // Finished since the rows were chosen: left off, the rest still print.
@@ -351,33 +362,45 @@ export async function buildScorerSheet(
   );
   const printedAt = `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}`;
   // A calendar day, formatted at UTC noon so no zone shifts it (poster.pdf's rule).
-  const dayLabel = new Intl.DateTimeFormat(intl, {
-    timeZone: "UTC",
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(new Date(`${day}T12:00:00Z`));
+  const fmtDay = (d: string, o: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat(intl, { timeZone: "UTC", ...o }).format(new Date(`${d}T12:00:00Z`));
+  const dayOf = (r: SheetCandidate) => localDateOf(r.scheduled_at!, r.tz);
+  const dayKeys = [...new Set(printed.map(dayOf))];
+  const long = { weekday: "long", day: "numeric", month: "long", year: "numeric" } as const;
+  const dayLabel =
+    dayKeys.length === 1
+      ? fmtDay(dayKeys[0]!, long)
+      : `${fmtDay(dayKeys[0]!, { day: "numeric", month: "short" })} – ${fmtDay(dayKeys.at(-1)!, { day: "numeric", month: "short", year: "numeric" })}`;
+  // One division: it is the title, the competition rides in the description.
+  const oneDivision = opts.divisionId !== undefined;
+  const title = oneDivision ? printed[0]!.division_name : comp.name;
+  const description = oneDivision ? `${comp.name} · ${dayLabel}` : dayLabel;
+  // Court first, days inside it: a court's cards stay together across days, so a
+  // multi-day sheet stamps the day on each card's time instead of on the page.
+  const multiDay = dayKeys.length > 1;
+  const pages = paginateSheet(printed, t("sheets.pdf.noCourt"));
   // A pair prints one member per line; its name is already their " / " join.
   const pairOf = (s: SheetSide | null) =>
     s !== null && s.kind === "pair" && s.members.length >= 2 ? s.members.map((m) => m.full_name) : [];
   return {
     header: {
       kind: "scoresheet",
-      title: comp.name,
-      description: dayLabel,
+      title,
+      description,
       meta: { printedAt },
       ...(branding !== undefined ? { branding } : {}),
       sections: [],
       pageBreaks: "auto",
     },
     labels: { eyebrow: t("sheets.pdf.eyebrow"), checkNames: t("sheets.pdf.checkNames") },
-    pages: paginateSheet(printed, t("sheets.pdf.noCourt")).map((p) => ({
+    pages: pages.map((p) => ({
       heading: courtPageHeading(t, p.courtHeading ?? "", p.pageInCourt, p.pagesInCourt),
       rows: p.rows.map((r) => ({
         fixtureId: r.id,
         url: `${origin}/score/${links.get(r.id)!.secret}`,
-        time: time(r.scheduled_at!, r.tz),
+        time: multiDay
+          ? `${fmtDay(dayOf(r), { weekday: "short", day: "numeric" })} · ${time(r.scheduled_at!, r.tz)}`
+          : time(r.scheduled_at!, r.tz),
         matchRef: r.match_ref,
         division: r.division_name,
         home: r.home?.name ?? r.home_tbd,

@@ -99,6 +99,17 @@ describe("POST /competitions/{id}/exports/scorer-sheets", () => {
     expect(Buffer.from(await res.arrayBuffer()).equals(PDF)).toBe(true);
   });
 
+  it("passes divisionId to the builder and rejects a non-uuid one", async () => {
+    const division = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+    const ok = await POST(req({ date: "2026-09-23", divisionId: division }), ctx);
+    expect(ok.status).toBe(200);
+    expect((h.build.mock.calls[0]![5] as { divisionId?: string }).divisionId).toBe(division);
+    h.build.mockClear();
+    const bad = await POST(req({ date: "2026-09-23", divisionId: "nope" }), ctx);
+    expect(bad.status).toBe(400);
+    expect(h.build).not.toHaveBeenCalled();
+  });
+
   it("auth runs before the body is read: a 403 wins over a body that is not even JSON", async () => {
     h.auth.mockRejectedValueOnce(new HttpError(403, "Insufficient permissions"));
     const res = await POST(req("not json"), ctx);

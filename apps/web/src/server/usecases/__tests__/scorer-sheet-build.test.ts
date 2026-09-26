@@ -12,10 +12,14 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { SheetHeading } from "@/lib/scorer-sheets";
 import type { SlotLabelLookup } from "@/lib/slot-label";
 import { log } from "@/server/logger";
-import { seedOrg } from "./_seed";
+import { GENERIC_CONFIG, seedOrg } from "./_seed";
 import { fixturesOf, seedStage } from "./_sheets-rig";
 import { createCourt, createVenue } from "../venues";
 import { patchFixture } from "../fixtures";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures } from "../stages";
+import { startDivision } from "../schedule";
 
 vi.mock("../device-links", async (orig) => {
   const real = await orig<typeof import("../device-links")>();
@@ -67,6 +71,57 @@ describe.skipIf(!HAS_DB)("buildScorerSheet (scorer sheets §4.4)", () => {
     expect(vi.mocked(ensureDeviceLinks)).not.toHaveBeenCalled();
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from device_links where org_id = ${auth.orgId}`;
     expect(n).toBe(0);
+  });
+
+  it("divisionId prints only that division; a division of another competition is a 404", async () => {
+    const { auth } = await seedOrg("pro");
+    const a = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const other = await seedStage(auth, "league", ["W", "X", "Y", "Z"]);
+    // A second division in the SAME competition, so the filter has something to exclude.
+    const second = await createDivision(auth, a.competition.id, {
+      name: "Second",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(
+      auth,
+      second.id,
+      ["E", "F", "G", "H"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+    );
+    const [stage2] = await createStages(auth, second.id, { seq: 1, kind: "league", name: "league", config: {} });
+    await generateStageFixtures(auth, stage2!.id);
+    await startDivision(auth, second.id);
+    const first = await fixturesOf(a.stage.id);
+    const both = [...first, ...(await fixturesOf(stage2!.id))];
+    await schedule(both.map((f) => f.id));
+
+    const only = await buildScorerSheet(auth, a.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED, divisionId: a.division.id });
+    expect(cards(only).map((r) => r.fixtureId).sort()).toEqual(first.map((f) => f.id).sort());
+    const all = await buildScorerSheet(auth, a.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED });
+    expect(cards(all)).toHaveLength(both.length); // premise: without the filter, both divisions print
+    await expect(
+      buildScorerSheet(auth, a.competition.id, DAY, ORIGIN, "en", { printedAt: PRINTED, divisionId: other.division.id }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("a date range groups a court's days together and stamps the day on each card", async () => {
+    const { auth } = await seedOrg("pro");
+    const { competition, division, stage } = await seedStage(auth, "league", ["A", "B", "C", "D"]);
+    const hall = await createVenue(auth, { name: "Hall", sort: 0 });
+    const court = await createCourt(auth, hall.id, { name: "Court 1", sort: 0, tags: [] });
+    const fx = await fixturesOf(stage.id);
+    await sql`update fixtures set court_id = ${court.id} where id = any(${fx.map((f) => f.id)})`;
+    await schedule(fx.slice(0, 3).map((f) => f.id));
+    await schedule(fx.slice(3).map((f) => f.id), "2026-09-24T09:00:00Z");
+    const m = await buildScorerSheet(auth, competition.id, {}, ORIGIN, "en", { printedAt: PRINTED, divisionId: division.id });
+    expect(m.header.title).toBe(division.name);
+    expect(m.pages).toHaveLength(1); // one court, both days, one page
+    expect(cards(m)).toHaveLength(fx.length);
+    expect(cards(m).map((r) => r.time.split(" · ")[0])).toEqual([...fx.slice(0, 3).map(() => "Wed 23"), ...fx.slice(3).map(() => "Thu 24")]);
+    // Bounded range: only the second day.
+    const one = await buildScorerSheet(auth, competition.id, { from: "2026-09-24" }, ORIGIN, "en", { printedAt: PRINTED, divisionId: division.id });
+    expect(cards(one)).toHaveLength(fx.length - 3);
   });
 
   it("one card per printable fixture, each URL a live link of THAT fixture, named as the board names it, in the organiser's language and clock", async () => {
