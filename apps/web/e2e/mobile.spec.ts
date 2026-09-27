@@ -346,6 +346,13 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     },
   );
   expect(settings.status).toBeLessThan(300);
+  // Published so `/shared/${orgSlug}` below has this card to hold at every
+  // width: a draft is listed nowhere (owner decision 2026-09-27), and an org
+  // home with nothing on it is the vacuous empty state #349 warns about.
+  const published = await apiJson<{ status: string }>(request, `/api/v1/competitions/${compId}`, "PATCH", {
+    status: "published",
+  });
+  expect(published.data?.status, JSON.stringify(published.error)).toBe("published");
   const org = await activeOrg(page);
   orgSlug = org.slug;
 

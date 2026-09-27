@@ -212,6 +212,21 @@ export async function publicCompetition(
   return { id: res.data.id, slug: res.data.slug };
 }
 
+/** Publish a competition the way the settings Status select does. Owner
+ *  decision 2026-09-27: a DRAFT is reachable by link but listed nowhere — not
+ *  on the org home, the sitemap, discovery or another competition's player
+ *  card — so a spec that reads one of those publishes what it expects to see.
+ *  Call it AFTER `leagueFixtures`: starting a division promotes a PUBLISHED
+ *  competition to `live` (schedule.ts), which would change its chip and tier. */
+export async function publishCompetition(request: APIRequestContext, competitionId: string): Promise<void> {
+  const res = await apiJson<{ status: string }>(request, `/api/v1/competitions/${competitionId}`, "PATCH", {
+    status: "published",
+  });
+  if (res.status >= 300 || res.data?.status !== "published") {
+    throw new Error(`publish ${competitionId} -> ${res.status} ${JSON.stringify(res.error)}`);
+  }
+}
+
 export async function division(
   request: APIRequestContext,
   competitionId: string,

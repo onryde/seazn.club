@@ -2084,6 +2084,28 @@ async function hubKnockoutSuite(): Promise<void> {
     const row = v1data<OrgLiveOut | undefined>(res)?.competitions?.find((c) => c.id === compRow.id);
     return { status: res.status, inPlay: row?.in_play };
   };
+  // Owner decision 2026-09-27: a DRAFT is reachable by link but listed
+  // nowhere. This competition is still a draft here (a division start never
+  // promotes one), so the org's live read leaves it out while its hub serves
+  // by link, noindexed. Publishing lists it, and — the org tag expired and the
+  // poll document deleted on the write — on the very next request.
+  const hubPage = `/shared/${orgSlug}/${compRow.slug}`;
+  const NOINDEX = `name="robots" content="noindex`;
+  const draftLive = await inPlay();
+  const draftHub = await html(newSession(), hubPage);
+  check(
+    "draft unlisted: a started DRAFT is left out of the org's live read, and its hub serves by link with noindex",
+    draftLive.status === 200 && draftLive.inPlay === undefined && draftHub.status === 200 && draftHub.body.includes(NOINDEX),
+  );
+  const published = await v1(owner, `/api/v1/competitions/${compRow.id}`, "PATCH", { status: "published" });
+  const publishedHub = await html(newSession(), hubPage);
+  check(
+    "draft unlisted: publishing is accepted and the hub drops its noindex on the very next request",
+    published.status === 200 &&
+      v1data<{ status: string }>(published).status === "published" &&
+      publishedHub.status === 200 &&
+      !publishedHub.body.includes(NOINDEX),
+  );
   const livePrimed = await inPlay();
   check(
     "org live: the competition is listed with nothing in play before the final starts",
@@ -17888,7 +17910,11 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     visibility: "public",
   });
   check("gap competition made public", pub.status === 200);
+  // Published as well: a draft is listed nowhere, Discover included (owner
+  // decision 2026-09-27, V419). After the division start above, which would
+  // otherwise promote a published competition to `live`.
   const disc = await v1(admin, `/api/v1/competitions/${compId}`, "PATCH", {
+    status: "published",
     discoverable: true,
     discovery: { country: "GB" },
   });

@@ -35,6 +35,7 @@ import {
   PAINT_SETTLE_MS,
   person,
   publicCompetition,
+  publishCompetition,
   scheduleFixture,
   spectator,
   STEP_MS,
@@ -62,9 +63,9 @@ const ACCENT = /(^|\s)text-accent-strong(\s|$)/;
  * SQL, two overrides, activate ≈ 4), 11 persons, 3 competitions, 3 divisions
  * (create + read each), 3 entrant batches, 3 league stand-ups (stage,
  * generate, start, list each), 1 fixture listing, 3 event-stream calls (state
- * + 2 events), 7 schedules, 1 venue + 1 court, 1 court PATCH.
+ * + 2 events), 7 schedules, 1 venue + 1 court, 1 court PATCH, 2 publishes.
  */
-const SETUP_API_CALLS = 4 + 11 + 3 + 3 * 2 + 3 + 3 * 4 + 1 + 3 + 7 + 2 + 1;
+const SETUP_API_CALLS = 4 + 11 + 3 + 3 * 2 + 3 + 3 * 4 + 1 + 3 + 7 + 2 + 1 + 2;
 
 let org: MintedOrg;
 let cur = { id: "", slug: "" };
@@ -140,6 +141,10 @@ test("setup: one player, three competitions, seven upcoming fixtures and one pla
     ...opponents.map((id, i) => ({ kind: "individual" as const, name: i === 0 ? `${LONG} ${tag}` : `Opp${i} ${tag}`, members: [id] })),
   ]);
   const generated = adaRows(await leagueFixtures(request, curDiv.id), curEntrants[0]!);
+  // Published AFTER the start (which would promote it to `live`): another
+  // competition's rows reach this card only when it is LISTED — public and
+  // past draft (owner decision 2026-09-27) — so both public ones publish.
+  await publishCompetition(request, cur.id);
   expect(generated, "Ada meets seven opponents once each").toHaveLength(7);
   // The long-named opponent's fixture becomes the FIRST dated row — the one on
   // a court at a venue too — so the longest line on the card is on screen
@@ -180,6 +185,7 @@ test("setup: one player, three competitions, seven upcoming fixtures and one pla
     { kind: "individual", name: `Sib Opp ${tag}`, members: [sibOpp] },
   ]);
   sibFixture = adaRows(await leagueFixtures(request, sibDiv.id), sibEntrants[0]!)[0]!.id;
+  await publishCompetition(request, sib.id);
   await scheduleFixture(request, sibFixture, "2030-07-02T10:00:00Z");
 
   // ---- UNL: one fixture, the EARLIEST of all --------------------------------------

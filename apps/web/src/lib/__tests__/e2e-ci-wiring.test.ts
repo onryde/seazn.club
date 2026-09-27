@@ -295,6 +295,11 @@ const WALKTHROUGH_SPECS: string[] = [
   "spectator-hub.spec.ts",
   "spectator-org-home.spec.ts",
   "spectator-player.spec.ts",
+  // A draft is unlisted until published (owner decision 2026-09-27): a new
+  // public draft is off the org home but open by link and noindexed, and the
+  // settings Status select publishing it puts it on the org home within the
+  // page's revalidate window — the only test that crosses that seam.
+  "draft-unlisted-org-home.spec.ts",
 
   // Per-stage match rules — one organiser's path through the three things that
   // branch shipped, in the order they happen to them: a stage given its own

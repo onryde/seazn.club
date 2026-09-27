@@ -28,7 +28,11 @@ test("a discoverable public competition appears on /discover", async ({ page, re
   await createStageAndGenerate(request, div.data!.id);
   await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
 
+  // Published as well as flagged: a draft is listed nowhere, Discover included
+  // (owner decision 2026-09-27, V419). After the start, which would otherwise
+  // promote a published competition to `live`.
   const flagged = await apiJson(request, `/api/v1/competitions/${comp.data!.id}`, "PATCH", {
+    status: "published",
     discoverable: true,
     discovery: { country: "GB", tagline: "E2E open" },
   });

@@ -40,6 +40,7 @@ import {
   noReloadGuard,
   person,
   publicCompetition,
+  publishCompetition,
   SCREEN_WIDTHS,
   SHOT_STATE_MS,
   shootInPlace,
@@ -69,7 +70,8 @@ let esLiveFixtures: string[] = [];
 /** A consenting person rostered in one of the ES matches in play. */
 let esPlayer = { id: "", name: "", opponent: "" };
 
-const SEED_CALLS = 3 * 4 /* two orgs: create, plan, caps, activate */ + 3 + 2 + 3 + 3 + 4 + 1 + 4 + 5 + 2 + 2;
+const SEED_CALLS =
+  3 * 4 /* two orgs: create, plan, caps, activate */ + 3 + 2 + 3 + 3 + 4 + 1 + 4 + 5 + 2 + 2 + 3 /* three publishes */;
 
 test("setup: an EN community org with three competitions in three tiers, and an ES Pro org with two matches in play", async ({
   request,
@@ -99,6 +101,11 @@ test("setup: an EN community org with three competitions in three tiers, and an 
   ]);
   const [only] = await leagueFixtures(request, playDiv.id);
   playFixture = only!.id;
+  // A draft is listed nowhere (owner decision 2026-09-27), so the org home
+  // only shows what is published. After the division start, which promotes a
+  // published competition to `live` and would make C_play's chip "On now".
+  await publishCompetition(request, cPlay.id);
+  await publishCompetition(request, cNew.id);
 
   const onNow = await request.fetch(`/api/v1/competitions/${cOn.id}`, {
     method: "PATCH",
@@ -134,6 +141,7 @@ test("setup: an EN community org with three competitions in three tiers, and an 
     names.map((n, i) => ({ kind: "individual" as const, name: n, members: [ids[i]!] })),
   );
   const fixtures = await leagueFixtures(request, esDiv.id);
+  await publishCompetition(request, esComp.id);
   // Two matches with four different players, so both can be in play at once.
   const first = fixtures[0]!;
   const second = fixtures.find(
