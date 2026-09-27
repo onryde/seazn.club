@@ -6327,6 +6327,17 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 
 ### Task 7: The credits ledger usecases (lane B)
 
+**Lane B path note (2026-09-27).** Every step command in Tasks 7 / 7A / 8 below is written against `.claude/worktrees/relay/`. **Lane B runs in `.claude/worktrees/relay-b`** (branch `feat/stream-relay-b`, cut from lane A's merge, PR #812). **Every such path reads as `relay-b` for Tasks 7 / 7A / 8** — including the `.testResults[].name` confirmations, which must resolve under `…/worktrees/relay-b/`, or the run executed on another tree and its count belongs to somebody else. The 42 literal `relay/` paths are NOT rewritten one by one; this line is the one authority for the substitution. Tasks 0-6 and 9-17 keep their own paths.
+
+**Revision 4 (the 2026-09-27 re-pin on `782628af5`, lane B open).** Authority: `.superpowers/sdd/2026-09-13-streaming-r1/authorities/repin-2026-09-27-laneB.md` — 56 rows, each backed by a direct read, scoped to this plan's Tasks 7 / 7A / 8 (SAME 37, MOVED 11, ALREADY-DONE 4, WRONG 4). What it changes here:
+- **V410 is MERGED** (`origin/main`, lane A PR #812, merge `e707ec45d`; `git diff origin/main -- db/migration/deltas/V410__stream_sessions.sql` is empty, so this worktree's copy is byte-identical to main's). Steps 0a / 0b / 0c are therefore **DONE, not owed** — see the DONE block that replaces them. **A merged migration is NOT amendable: every further schema change in this wave is a FORWARD migration**, and lane B's next free number is **V419** (tree tail `V417__device_link_sealed_secret.sql`; `V415` is absent and the gap is NOT filled — higher wins; and `rtk ls` prints a wrong migration tail, so use `/bin/ls`).
+- **`HttpError`'s arity is 4, not 3**: `(status, message, code?, extra?)` (`lib/errors.ts:9-18`), and **`handler` DROPS `extra`** on the generic `HttpError` branch (`lib/http.ts:113-132`; only the 402 `PaymentRequiredError` branch forwards it, `:94-112`, whose own comment warns at `:98-101` not to read it as a file-wide convention). `code` is forwarded when set and omitted entirely when undefined (`:129-130`). So **anything a client must act on goes in `code`**, never in `extra`.
+- **`ADJUSTMENT_ACTIONS`'s spread precedents are `...SUSPENSION_ACTIONS` (`admin-adjustments-log.ts:64`) and `...DISCOVERY_AUDIT_ACTIONS` (`:67`).** `PASS_CREDIT_RESOLVE_ACTION` (`:71`) is a **bare value, not a spread**. The literal is in **wave order, not alphabetical**: APPEND at the end, never insert mid-list and never sort (AGENTS.md standing rule 18 — a unilateral reorder of a shared literal makes a concurrent conflict worse, and three shared literals in this repo were assumed alphabetical and were not).
+- **The success envelope is SINGLE-wrapped**, unlike the donor's. Stated once, in Task 7A's response table, and the panel is written to match.
+- **Moved citations, corrected in place below:** `scripts/smoke.ts` `raw` 62 → **76** (its json type `:81-88`, carrying no `code`), `check` 110 → **124**, `setStaff` 6879 → **7408**, `platformRevenueSuite` → **7429** with its closing brace at **7464**, and its call site 1043 → **1105**; `e2e/helpers.ts` `expectNoHorizontalScroll` 49 → **56**, `overflowingIn` 157 → **176**; `enc-boundary.test.ts` claim 2 (cited at two different ranges, `:43-50` and `:40-47` — one authority per fact) → **`:56-63`**, claim 3 `:49-54` → **`:65-71`**; `billing-events.ts`'s `credit_pack` branch 151 → **`:210-274`**, so Task 8 Step 10 inserts after the closing `}` at **`:274`**; `config/stripe-plans.json` → **`apps/web/src/config/stripe-plans.json`** (there is no repo-root `config/`).
+- **`migration-shape.test.ts` is at 19 `it`s**, not 13, and already carries all six amend cases.
+- **Not re-checked by that pass, and worth knowing:** it ran no test, no `tsc`, no lint and no build, and it did not scan Tasks 9-17 for citations into these same files — so a line called MOVED here may still be cited at its old number by a later task this pass did not touch.
+
 **Revision for Task 7A (the orchestrator's rulings, 2026-09-16, recorded in `progress.md`). This task has not run yet, so its files produce what 7A consumes.**
 - **Idempotency and audit: parity with the donor, both REQUIRED.** Staff writes require an `idempotencyKey`. A replay returns `applied: false` and writes no second ledger row and no second audit row. The audit row goes into `staff_audit_log` inside the ledger transaction.
 - **Reversal: a new REVOKE action.** It writes a negative row. A revoke larger than the balance is a **422** `insufficient_credits` and writes no row.
@@ -6340,17 +6351,12 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 - **G2 carry.** `consumeForSession` accepts `fixtureId: string | null` (Task 2A made `Session.fixtureId` nullable; Task 10 passes `before.fixtureId`). A fixture-less session has no reuse window: it consumes every time.
 
 **Files:**
-- Modify: `db/migration/deltas/V410__stream_sessions.sql`. This is an AMEND: the migration is committed on `feat/stream-relay` but is merged nowhere (the branch is unpushed, so no shared database holds V410), and a forward delta would be a second migration for one unshipped table. It makes two changes to `org_stream_credits`, two to `fixture_stream_sessions` and one to the header, all in ONE amend (Step 0c), so every environment is recreated once:
-  - `fixture_stream_sessions.max_duration_minutes` gains `check (max_duration_minutes > 0)` (Revision 2 addendum; Task 2B review M4: `domain/expiry.ts` `deadlineOf` reads a stored 0 as 300 through `s.maxDurationMinutes || MAX_DURATION_MINUTES`, so a 0 silently becomes a five-hour booking)
-  - `fixture_stream_sessions` gains `beat_window_at timestamptz null`, directly after `heartbeat_at` (post-2C plan sync; Task 2C review I4, orchestrator ruling A; re-review 1 G1, IMPORTANT). The committed domain carries `Session.beatWindowAt` — the stale-beat WINDOW anchor, written by `decide`'s stale-beat arm and its retry arm, read by `evaluate` as the later of it and `heartbeatAt` — and `heartbeat_at` stays "the last beat RECEIVED" (the organiser panel's `lastBeatAt`). Without the column Task 10 cannot persist the anchor, the once-per-`STALE_HEARTBEAT_SECONDS` bound on a stale-beat decision collapses to every lazy read (a `force_destroy` / `retry_runner` re-issued on every 5 s poll), and the plan's own retry-then-crash DB tests would green only BECAUSE the anchor is inert (class 1). Task 10 loads, persists and witnesses it.
-  - the `reason` CHECK gains `'revoke'`
-  - a new `idempotency_key text null` column, with `create unique index org_stream_credits_idempotency_key on org_stream_credits (idempotency_key) where idempotency_key is not null`. It is TABLE-wide, the donor's scope (`V320__ai_credit_ledger.sql:37`), so a key can be compared against its stored org.
-  - the header's FS10 paragraph (`V410:67-72`), which says consume rows are written under `select … for update`, is rewritten for the org advisory lock (review I4)
-- Modify (Test): `apps/web/src/server/relay/__tests__/migration-shape.test.ts`. It gains four `it`s, each with its accepted and refused twins (or, for `beat_window_at`, its shape and its independence from `heartbeat_at`), taking it from **13 to 17** (13 was read at `56159fc41`, and re-read as 13 at `e32a3a5c2` by the post-2C plan sync; Step 0a re-counts it).
-- Create: `apps/web/src/server/relay/__tests__/_session-rig.ts`. This is a NON-test module (the `_stream-migration.ts` precedent, C20). It gives DB tests OUTSIDE `server/relay/**` a real org, a real users row and real sessions: this task's `stream-credits.test.ts`, then Task 7A's tests. It lives inside the boundary because a session needs a target, `org_stream_targets.rtmp_enc` is NOT NULL, and `enc-boundary.test.ts` claim 2 refuses that column NAME in any file outside `server/relay/**`, tests included (`enc-boundary.test.ts:43-50`). That closes carry G2 (`progress.md`: "Task 7's test names `rtmp_enc` before Task 9's `__tests__` exemption"). It also closes this task's `auth.userId!` rows, since `seedOrg`'s `userId` is null (`_rig.ts:37`) and `staff_audit_log.actor_id` is `not null references users(id)` (`V103__admin.sql:16`). It also fills the NOT NULL session snapshot columns the old inline rig omitted.
+- **Verify — do NOT modify — `db/migration/deltas/V410__stream_sessions.sql`.** The amend this task used to own **landed in lane A and MERGED** (PR #812, merge `e707ec45d`); V410 is on `origin/main` byte-identical to this worktree. All five items and the header rewrite are already present: `max_duration_minutes > 0` **and** a `<= 300` ceiling the plan never asked for (`:150`), `beat_window_at timestamptz null` (`:131`), `'revoke'` in the `reason` CHECK (`:254`), `idempotency_key text null` (`:276`) with its TABLE-wide partial unique index `org_stream_credits_idempotency_key` (`:284-285`), and the header's FS10 paragraph (`:74-80`) already written for the org advisory lock. **A merged migration is not amendable** — Flyway checksums it, an amend breaks every database that already applied it, and `flyway repair` only rewrites the stored checksum without adding the column. Nothing in this wave edits V410; any further schema change is a FORWARD migration at V419. (The old text here — "committed on `feat/stream-relay` but merged nowhere (the branch is unpushed, so no shared database holds V410)" — was true when written and is now false; that is re-pin FP-1, the biggest of the eight.)
+- **Verify (Test) — do NOT extend — `apps/web/src/server/relay/__tests__/migration-shape.test.ts`.** It is at **19** literal `it(`s and already carries every case the amend owed: `'revoke'` `:289`, `idempotency_key` table-wide `:298`, the `max_duration_minutes` floor `:327` AND its ceiling `:351`, the three runner exit columns `:389`, `beat_window_at` `:425`. The plan's "13 to 17" was stale twice over; it is deleted, along with the lane's "+4 if Task 7 has landed" arithmetic. Add no `it` here. An `it(` census is a FLOOR (loop-generated tests are not counted), so judge the file from the JSON's `numTotalTests`, never from the grep.
+- Create: `apps/web/src/server/relay/__tests__/_session-rig.ts`. This is a NON-test module (the `_stream-migration.ts` precedent, C20). It gives DB tests OUTSIDE `server/relay/**` a real org, a real users row and real sessions: this task's `stream-credits.test.ts`, then Task 7A's tests. It lives inside the boundary because a session needs a target, `org_stream_targets.rtmp_enc` is NOT NULL, and `enc-boundary.test.ts` claim 2 refuses that column NAME in any file outside `server/relay/**`, tests included (**`enc-boundary.test.ts:56-63`**, re-pinned 2026-09-27 from `:43-50`; it filters on `startsWith("server/relay/")`, which INCLUDES `__tests__`). That closes carry G2 (`progress.md`: "Task 7's test names `rtmp_enc` before Task 9's `__tests__` exemption"). It also closes this task's `auth.userId!` rows, since `seedOrg`'s `userId` is null (`_rig.ts:37`) and `staff_audit_log.actor_id` is `not null references users(id)` (`V103__admin.sql:16`). It also fills the NOT NULL session snapshot columns the old inline rig omitted. The directory currently holds no `_session-rig.ts` and no `stream-credits.ts` exists under `server/usecases/` — both are this task's to create.
 - Create: `apps/web/src/server/usecases/stream-credits.ts`
 - Create (Test): `apps/web/src/server/usecases/__tests__/stream-credits.test.ts`
-- Modify: `apps/web/src/server/usecases/admin-adjustments-log.ts`. `ADJUSTMENT_ACTIONS` gains `...STREAM_CREDIT_AUDIT_ACTIONS`, spread the way `PASS_CREDIT_RESOLVE_ACTION` is. `ADJUSTMENT_CATEGORY` gains `"credits"` ×3. `ADJUSTMENT_REVERSIBLE` gains grant `true`, refund `true` (a revoke compensates both) and revoke `false` (the compensating action, like `addon_revoke`). Why it is needed: `adminAdjust` types its audit action as `AdjustmentAction` because "an action outside the /admin allowlist produces an adjustment that is audited and unreadable" (`lib/credits.ts:1466-1474`).
+- Modify: `apps/web/src/server/usecases/admin-adjustments-log.ts`. `ADJUSTMENT_ACTIONS` gains `...STREAM_CREDIT_AUDIT_ACTIONS`, spread the way **`...SUSPENSION_ACTIONS` (`:64`) and `...DISCOVERY_AUDIT_ACTIONS` (`:67`)** are — **not** the way `PASS_CREDIT_RESOLVE_ACTION` (`:71`) is, which is a **bare value, not a spread** (re-pin 2026-09-27, FP-3). It is **APPENDED at the end** of the literal, which is in **wave order, not alphabetical** (rule 18: append, never sort). `ADJUSTMENT_CATEGORY` gains `"credits"` ×3 (the type already includes `"credits"`). `ADJUSTMENT_REVERSIBLE` gains grant `true`, refund `true` (a revoke compensates both) and revoke `false` (the compensating action, like `addon_revoke` at `:122`). Why it is needed: `adminAdjust` types its audit action as `AdjustmentAction` because "an action outside the /admin allowlist produces an adjustment that is audited and unreadable" (`lib/credits.ts:1466-1474`). Two OTHER files are compile-forced with it, because all three maps are `Record<AdjustmentAction, …>`: `ADJUSTMENT_CATEGORY` and `ADJUSTMENT_REVERSIBLE` here, and `ADJUSTMENT_LABELS` in `app/admin/orgs/[id]/adjustment-labels.ts:18`. `page.tsx` needs NO edit — it renders generically from `adjustmentsForOrg` + `ADJUSTMENT_LABELS`.
 - Modify: `apps/web/src/app/admin/orgs/[id]/adjustment-labels.ts`: three labels, "Match credits granted" / "Match credits refunded" / "Match credits revoked" (English-only, per that file's own header).
 
 **Interfaces:**
@@ -6362,7 +6368,7 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
   - Donors are READ and never edited: `lib/credits.ts` `balance` (= `sum(delta)`), and `adminAdjust` (`lib/credits.ts:1457-1544`). From `adminAdjust` this task copies four things: its advisory transaction lock taken first (`:1482`, `pg_advisory_xact_lock(hashtext('ai-credit-wallet:' || walletId))`, here in a `stream-credits-org:` namespace), its idempotency key checked under the lock before anything else (`:1484-1489`, table-wide), its in-transaction audit statement (the closure `auditApplied`, `:1490-1497`), and its "audit only on an applied write" rule. It departs from `adminAdjust` in one respect: a reused key with different values is a 409 (Revision 2).
   - **There is no reusable audit helper.** `auditApplied` is a closure local to `adminAdjust`, and `adminAdjust` itself is bound to `ai_credit_ledger` and a wallet advisory lock, which Global Constraints forbids editing. `logStaffAction` (`lib/admin.ts:95-107`) runs on its own `sql` connection, OUTSIDE any transaction. So this file writes `auditApplied`'s exact statement inside its own `sql.begin`.
 - Produces:
-  - `export class NoCreditsError extends HttpError` — `status 402`, `code "no_credits"`, `extra { featureKey: "streaming.relay" }`
+  - `export class NoCreditsError extends HttpError` — `status 402`, `code "no_credits"`, `extra { featureKey: "streaming.relay", orgId }`. **`HttpError`'s arity is 4** (`(status, message, code?, extra?)`, `lib/errors.ts:9-18`), which is what makes that fourth argument legal — but note that `handler` **DROPS `extra`** on the generic `HttpError` branch (`lib/http.ts:119-132`); only the 402 `PaymentRequiredError` branch forwards it (`:94-112`). `NoCreditsError` extends `HttpError`, not `PaymentRequiredError`, so its `featureKey` and `orgId` reach no HTTP client: over the wire it is `{ ok: false, error, code: "no_credits" }` at status 402. **Anything a client must act on therefore goes in `code`**, and the `extra` here is for server-side logging and for callers that hold the error object directly (Task 10). Do not build a paywall on the `featureKey` arriving.
   - `export async function creditBalance(exec: Tx | typeof sql, orgId: string): Promise<number>`
   - `export function orgMoneyLockKey(orgId: string): string` → `"stream-credits-org:" + orgId.toLowerCase()` (Revision 3, N1: one lock per org whatever the case of the id; `z.uuid()` accepts upper case), and `export async function lockOrg(tx: Tx, orgId: string): Promise<void>` → `select pg_advisory_xact_lock(hashtext(${orgMoneyLockKey(orgId)}))`. Every writer below calls `lockOrg` before any read. Both are exported so the concurrency tests can HOLD the lock and make writers queue. `hashtext` is 32-bit, so two keys can collide; a collision only serialises two unrelated writers, which is safe (N4).
     - **Lock order (Revision 3, N2).** Two locks are taken AFTER the org lock:
@@ -6399,153 +6405,28 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 - "Every guard needs a case that DEFEATS it": the lock (per call site: m2, m14, m15), the lock key's case-folding (m21), the key check, each member of the reused-key tuple, the cross-org key race's 23505 → 409 (m22), the floor, the cap and the audit, one mutant each.
 - "New write path — diff it against the nearest existing analogous path": `adminAdjust`'s lock-first, key-before-guard order and audit-only-on-applied are copied, and its table-wide (globally unique, `V320:37`) key scope is kept. It deviates in one respect: a reused key with different values is refused.
 
-- [ ] **Step 0a: Write the four failing shape cases.** Re-count first with `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -c "^  it(" apps/web/src/server/relay/__tests__/migration-shape.test.ts`, which should print 13. If it prints a different number, every "17" below is that number + 4. Then append inside the `describe`, after the existing `org_stream_credits purchase link` case, using that file's own `rig()`:
+- [x] **Steps 0a / 0b / 0c: DONE in lane A — VERIFY, never re-run.** The schema work these three steps described **landed in lane A and merged as PR #812** (V410's merge commit `e707ec45d`). `db/migration/deltas/V410__stream_sessions.sql` on this worktree is **byte-identical to `origin/main`**: `git diff origin/main -- db/migration/deltas/V410__stream_sessions.sql` prints nothing. **Re-running these steps is itself a defect.** An amend to a merged migration breaks every database that already applied it; Flyway checksums the file and refuses the edited one rather than adding the column; `flyway repair` only rewrites the stored checksum and adds nothing; and the old Step 0c's `dropdb --force` would take down a database this lane does not own.
 
-```ts
-  it("org_stream_credits reason: 'revoke' (a negative staff row) lands; an unknown reason is still refused (the Task 7A amend)", async () => {
-    const r = await rig();
-    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, 3, 'grant', 3)`;
-    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, -1, 'revoke', 2)`;
-    await expect(
-      sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, -1, 'reverse', 1)`,
-    ).rejects.toMatchObject({ code: "23514" });
-  });
+  **Every amend item is already present, read at `782628af5`:**
 
-  it("org_stream_credits idempotency_key: unique across the TABLE (the donor's V320 scope) — a second row with one key is refused in the same org AND in another org; a different key, and any number of NULL keys, land (the Task 7A amend)", async () => {
-    const a = await rig();
-    const b = await rig();
-    const key = `idem-shape-${a.orgId}`;
-    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${a.orgId}, 1, 'grant', 1, ${key})`;
-    await expect(
-      sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${a.orgId}, 1, 'grant', 2, ${key})`,
-    ).rejects.toMatchObject({ code: "23505" });
-    await expect(
-      sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${b.orgId}, 1, 'grant', 1, ${key})`,
-    ).rejects.toMatchObject({ code: "23505" });
-    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${b.orgId}, 1, 'grant', 1, ${key + "-b"})`;
-    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${a.orgId}, 1, 'grant', 2)`;
-    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${a.orgId}, 1, 'grant', 3)`;
-  });
+  | Amend item (the old Step 0c) | V410 line | What it reads |
+  |---|---|---|
+  | `max_duration_minutes > 0` | `:150` | `integer not null default 300 check (max_duration_minutes > 0 and max_duration_minutes <= 300)` — the floor AND a `<= 300` ceiling the plan never asked for |
+  | `beat_window_at` | `:131` | `beat_window_at timestamptz null` — nullable, no default, beside `heartbeat_at` |
+  | `reason` CHECK gains `'revoke'` | `:254` | `check (reason in ('purchase','consume','refund','grant','revoke','expire'))` — note `'expire'` is there too |
+  | `idempotency_key` | `:276` | `idempotency_key text null` |
+  | its TABLE-wide partial unique index | `:284-285` | `create unique index org_stream_credits_idempotency_key on org_stream_credits (idempotency_key) where idempotency_key is not null` |
+  | the header's FS10 paragraph | `:74-80` | already the org advisory lock (`pg_advisory_xact_lock(hashtext('stream-credits-org:' || org_id))`, "stream-credits.ts lockOrg"), NOT `select … for update` |
 
-  it("max_duration_minutes: 0 is refused by check (max_duration_minutes > 0) — domain/expiry.ts deadlineOf would read a stored 0 as 300; 1 lands, and the default is still 300 (the Task 7 amend, Task 2B review M4)", async () => {
-    const r = await rig();
-    const sid = await insertSession(r, "requested");
-    const minutes = async () =>
-      (await sql<{ max_duration_minutes: number }[]>`
-        select max_duration_minutes from fixture_stream_sessions where id = ${sid}`)[0]!.max_duration_minutes;
-    expect(await minutes()).toBe(300);
-    await expect(
-      sql`update fixture_stream_sessions set max_duration_minutes = 0 where id = ${sid}`,
-    ).rejects.toMatchObject({ code: "23514" });
-    expect(await minutes()).toBe(300);
-    await sql`update fixture_stream_sessions set max_duration_minutes = 1 where id = ${sid}`;
-    expect(await minutes()).toBe(1);
-  });
+  **`org_stream_credits_idempotency_key` is the NAME a 23505 carries** in the driver's `constraint_name` and in its `duplicate key value violates unique constraint "…"` message — the name Step 3's `.catch` maps to 409 `idempotency_key_reused` (mutant m22). It is TABLE-wide (no `org_id` in the key), which is what lets a stored row's org be compared with the request's, and it is partial on `idempotency_key is not null`. Postgres unique indexes are NULLS DISTINCT, so the NULL rows — every purchase and consume row — prove nothing about uniqueness.
 
-  it("beat_window_at: a NULLABLE timestamptz with NO default, separate from heartbeat_at — a new session reads null in both, and writing the window anchor leaves the last beat received untouched (Task 2C review I4, ruling A; the Task 7 amend)", async () => {
-    const r = await rig();
-    const sid = await insertSession(r, "requested");
-    const beats = async () =>
-      (await sql<{ heartbeat_at: Date | null; beat_window_at: Date | null }[]>`
-        select heartbeat_at, beat_window_at from fixture_stream_sessions where id = ${sid}`)[0]!;
-    expect(await beats()).toEqual({ heartbeat_at: null, beat_window_at: null });
-    // The shape itself, pinned: a DEFAULT (now(), say) would read as an anchor on every new row and silently
-    // restart every session's first beat window at insert time.
-    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
-      select data_type, is_nullable, column_default from information_schema.columns
-       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'beat_window_at'`;
-    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
-    await sql`update fixture_stream_sessions set beat_window_at = '2026-09-16T10:02:00Z' where id = ${sid}`;
-    const after = await beats();
-    expect(after.beat_window_at?.toISOString()).toBe("2026-09-16T10:02:00.000Z");
-    expect(after.heartbeat_at).toBeNull();   // two facts, two columns: the anchor never writes the panel's last beat
-  });
-```
+  **`migration-shape.test.ts` is already at 19 `it`s**, and already carries every case this step owed: `'revoke'` `:289`, `idempotency_key` table-wide `:298`, the `max_duration_minutes` floor `:327` AND its ceiling `:351`, the three runner exit columns `:389`, `beat_window_at` `:425`. The "13 → 17" count, the four-new-`it` instruction and the lane's "+4 if Task 7 has landed" arithmetic are all **deleted**: add no `it` here, and Step 4's neighbour run expects **19**, not 17.
 
-- [ ] **Step 0b: Run — expect red for the right reasons (on the UN-amended `rly` schema).**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay/__tests__/migration-shape.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-shape-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-shape-red.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status==='failed')console.log(a.title.slice(0,60),'|',(a.failureMessages[0]||'').split('\n')[0].slice(0,140))"`
-  Expect `17 4 0`:
-  - the `reason` case fails on the `'revoke'` insert with `23514` (`org_stream_credits_reason_check`)
-  - the `idempotency_key` case fails with `column "idempotency_key" … does not exist` (`42703`)
-  - the `max_duration_minutes` case fails at its `rejects.toMatchObject`: the update to 0 RESOLVES, because there is no CHECK yet
-  - the `beat_window_at` case fails at its first read with `column "beat_window_at" does not exist` (`42703`)
-  
-  Any other message, or a total other than 17, means the red is for the wrong reason: stop and read it.
+  **What is still owed here is a VERIFY, and nothing else.** Confirm the merged schema is on the database this lane tests against. A missing column means the env was built before #812 — an ENVIRONMENT fault (AGENTS.md class 14: environment before defect), not a task and not a licence to amend:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay/__tests__/migration-shape.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-shape.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-shape.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\//,''),t.status)"`
+  Expect **`19 0 0`**, with the path resolving under `relay-b/`. **Read `numPendingTests`, not just `numFailedTests`**: a `DATABASE_URL` that never reached the runner skips the whole file and still reports 0 failed, which reads as green. Then Task 1 Step 5's header guard (`migration-header-truth.test.ts` → `numFailedTests 0`) and `check-rls.ts` (no stream table named as unguarded) — both read-only. **No `dropdb`, no `flyway repair`, no recreate, and no STOP gate**, because nothing is being dropped and no other agent's database is at risk.
 
-- [ ] **Step 0c: Amend V410, then RECREATE `rly`'s database.** First, in `db/migration/deltas/V410__stream_sessions.sql`'s `create table fixture_stream_sessions`, replace the line `  max_duration_minutes integer not null default 300,` with the lines below. **Why:** `domain/expiry.ts`'s `deadlineOf` computes `s.maxDurationMinutes || MAX_DURATION_MINUTES`, so a stored 0 silently falls back to 300 (a five-hour booking); the column refuses 0 instead (Task 2B review M4, orchestrator ruling 2026-09-16), and it rides this amend so `rly` is recreated once.
-
-```sql
-  -- > 0: domain/expiry.ts deadlineOf reads `maxDurationMinutes || MAX_DURATION_MINUTES`,
-  -- so a stored 0 would silently become the 300-minute default. Refused here instead.
-  max_duration_minutes integer not null default 300 check (max_duration_minutes > 0),
-```
-
-  In the same `create table fixture_stream_sessions`, directly AFTER the line `  heartbeat_at         timestamptz null,`, add the lines below. **Why:** the committed domain (`domain/session.ts` `Session.beatWindowAt`, `domain/expiry.ts` `evaluate`) keeps the stale-beat window's anchor apart from the last beat received (Task 2C review I4, orchestrator ruling A), and Task 10 cannot persist a field with no column — the once-per-window bound would collapse to every lazy read (re-review 1 G1). No default: a default would anchor every new row's first window at insert time.
-
-```sql
-  -- Task 2C review I4 (orchestrator ruling A — one authority per fact): heartbeat_at is the last
-  -- beat RECEIVED (only the beat route writes it; the organiser panel serves it as lastBeatAt).
-  -- beat_window_at is the stale-beat WINDOW anchor, written when a decision acts on a missing beat
-  -- (domain/session.ts's stale-beat arm) and when a retry boots a replacement (its retry arm).
-  -- domain/expiry.ts times the beat from the LATER of the two, so a stale-beat decision is bounded
-  -- to once per STALE_HEARTBEAT_SECONDS and never freshens the panel. Null until the first one.
-  beat_window_at       timestamptz null,
-```
-
-  Then, in the same file's `create table org_stream_credits`:
-  - change `check (reason in ('purchase','consume','refund','grant','expire'))` to `check (reason in ('purchase','consume','refund','grant','revoke','expire'))`
-  - add, after `created_by      uuid null,`:
-
-```sql
-  -- Staff adjustments (Task 7A, orchestrator rulings 2026-09-16 — donor parity with
-  -- ai_credit_ledger.idempotency_key): the /admin panel mints one key per submission
-  -- and keeps it across retries; stream-credits.ts looks it up under the org's money
-  -- lock. An EXACT replay writes nothing; the same key with a different org, reason,
-  -- delta or session is refused (409 idempotency_key_reused). Null on purchase
-  -- (stripe_event_id is that row's key) and consume rows.
-  idempotency_key text null,
-```
-
-  and, directly after `create index on org_stream_credits (stripe_checkout_session_id) where stripe_checkout_session_id is not null;`:
-
-```sql
--- One key per TABLE, the donor's scope (V320: ai_credit_ledger.idempotency_key text
--- unique): the writer compares a stored row's org with the request's, which needs the
--- key to name at most one row anywhere. A NULL key (every non-staff row) is outside the index.
-create unique index org_stream_credits_idempotency_key
-  on org_stream_credits (idempotency_key) where idempotency_key is not null;
-```
-
-  and, in the same amend, replace the header's FS10 paragraph (review I4; it names the `for update` lock this revision removes, and a second amend later would force a second recreate everywhere). Replace these six lines:
-
-```sql
--- FS10 — RULED 2026-09-14 ("all good"): balance_after with its `>= 0` CHECK is
--- §5.2's own DDL, built verbatim and KEPT. Consume rows are written under
--- `select … for update` (stream-credits.ts) after the pure `debit` in
--- server/relay/domain/credits.ts refused a negative in memory, so the CHECK is
--- the third floor under the same lock — the one a bug in the other two cannot
--- talk past.
-```
-
-  with:
-
-```sql
--- FS10 — RULED 2026-09-14 ("all good"): balance_after with its `>= 0` CHECK is
--- §5.2's own DDL, built verbatim and KEPT. Every org_stream_credits write
--- (purchase, consume, grant, refund, revoke) first takes the org's MONEY lock,
--- pg_advisory_xact_lock(hashtext('stream-credits-org:' || org_id))
--- (stream-credits.ts lockOrg), which also serialises an EMPTY ledger's first
--- writes, where `select … for update` over the org's rows would lock nothing.
--- A debit (consume, revoke) runs the pure `debit` in
--- server/relay/domain/credits.ts, which refuses a negative in memory, so the
--- CHECK is the third floor under the same lock — the one a bug in the other two
--- cannot talk past.
-```
-
-  **Why recreate:** Flyway checksums every applied migration, so `db:apply` on a database that already ran the old V410 refuses the edited file. A `flyway repair` would only rewrite the stored checksum and would NOT add the column, so it is not a fix. **STOP gate, before any command:** lane A runs in parallel against `rly`, and dropping its database under a running suite turns that suite red for an environmental reason. Ask the orchestrator to confirm that NO other agent is running a DB-backed command against `rly`, and wait for that confirmation. Then:
-  `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label rly` (read the Postgres port out of its `DATABASE_URL`), then `dropdb --force -h 127.0.0.1 -p <rly pg port> -U postgres seazn_rly; echo "EXIT=$?"` → `EXIT=0` (`--force` ends the rly server's pooled connections, which reconnect on next use), then `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label rly --server > <scratchpad>/r1/t7-recreate.log 2>&1; echo "EXIT=$?"; grep -a -E "schema ready|sync:sports|already up" <scratchpad>/r1/t7-recreate.log`
-  Expect `EXIT=0`, `schema ready: now at version v408`, the `sync:sports` line, and "postgres already up" (same port, same `DATABASE_URL`). Confirm `show data_directory` still names `rly`. The recreated database holds no rows from earlier tasks, and every DB-backed test here seeds its own.
-  Then re-run Step 0b's command to `t7-shape.json` → `17 0 0`. Then run Task 1 Step 5's header guard (`migration-header-truth.test.ts` → `numFailedTests 0`) and `check-rls.ts` (no stream table named as unguarded).
+  **Forward-migration rule for the rest of this wave.** Any schema change Tasks 7 / 7A / 8 turn out to need is a NEW delta at **V419** — do not fill the absent `V415`. Re-read `/bin/ls db/migration/deltas | grep ^V4 | sort -V | tail` before choosing (the tree tail is `V417__device_link_sealed_secret.sql`, `V417` is taken TWICE across refs, and `rtk ls` prints a wrong migration tail). None is expected: the items above cover everything Task 7 and Task 7A read.
 
 - [ ] **Step 1: Write the rig and the failing test.** Create `apps/web/src/server/relay/__tests__/_session-rig.ts`:
 
@@ -7147,9 +7028,11 @@ export async function recordPurchase(args: {
 }
 
 /** The staff_audit_log actions of the three staff writers. Spread into admin-adjustments-log.ts's
- *  ADJUSTMENT_ACTIONS (the PASS_CREDIT_RESOLVE_ACTION precedent): an org-targeted action outside
- *  that allowlist is audited and unreadable. Underscored, never dotted — admin-audit-actor-truth
- *  .test.ts reads a dotted literal beside a direct insert as a CUSTOMER self-service action. */
+ *  ADJUSTMENT_ACTIONS the way `...SUSPENSION_ACTIONS` (:64) and `...DISCOVERY_AUDIT_ACTIONS` (:67)
+ *  are — NOT the way PASS_CREDIT_RESOLVE_ACTION (:71) is, which is a bare value, not a spread
+ *  (re-pin 2026-09-27, FP-3). An org-targeted action outside that allowlist is audited and
+ *  unreadable. Underscored, never dotted — admin-audit-actor-truth.test.ts reads a dotted literal
+ *  beside a direct insert as a CUSTOMER self-service action. */
 export const STREAM_CREDIT_AUDIT_ACTIONS = ["stream_credit_grant", "stream_credit_refund", "stream_credit_revoke"] as const;
 
 type StaffKind = "grant" | "refund" | "revoke";
@@ -7272,8 +7155,8 @@ export async function revokeCredits(args: StaffCreditArgs): Promise<StaffCreditR
 ```
 
   Then the allowlist, in `apps/web/src/server/usecases/admin-adjustments-log.ts`:
-  - Add `import { STREAM_CREDIT_AUDIT_ACTIONS } from "@/server/usecases/stream-credits";` beside the `PASS_CREDIT_RESOLVE_ACTION` import.
-  - In `ADJUSTMENT_ACTIONS`, after `PASS_CREDIT_RESOLVE_ACTION,` add:
+  - Add `import { STREAM_CREDIT_AUDIT_ACTIONS } from "@/server/usecases/stream-credits";` beside the `PASS_CREDIT_RESOLVE_ACTION` import (that name IS imported there — it is only the "spread" characterisation that was wrong).
+  - In `ADJUSTMENT_ACTIONS`, **APPEND at the very end of the literal**, after `PASS_CREDIT_RESOLVE_ACTION,` (`:71`) and directly before `] as const;` (`:72`). The literal is in **WAVE order, not alphabetical** — never insert mid-list and never sort it (AGENTS.md standing rule 18: if one wave sorts a list another is inserting into, the merge is the ugliest shape there is). Add:
 
 ```ts
   // Streaming R1 (Task 7 / 7A): the staff match-credit grant, refund and revoke. They move
@@ -7344,8 +7227,8 @@ export async function revokeCredits(args: StaffCreditArgs): Promise<StaffCreditR
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/stream-credits.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/usecases/__tests__/admin-adjustments-log.test.ts src/lib/__tests__/admin-audit-actor-truth.test.ts src/lib/__tests__/credits-admin-adjust.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-neighbours.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-neighbours.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,t.assertionResults.length)"`
   Expect:
   - six files, all under `…/worktrees/relay/`, with 0 failed and 0 pending
-  - `stream-credits` 15 and `migration-shape` 17
-  - `enc-boundary` green: `_session-rig.ts` names `rtmp_enc` from inside `server/relay/`, so claim 2 (`enc-boundary.test.ts:40-47`, "no file outside server/relay/**") passes, and it sits in `__tests__`, which claim 3 (`:49-54`, "only secret-columns.ts issues SQL over them") filters out. It is not the only such file: `migration-shape.test.ts`, `secret-columns.test.ts` and `telemetry.test.ts` name the column too.
+  - `stream-credits` 15 and `migration-shape` **19** (not 17 — the file already carries all six amend cases; see the DONE block at Steps 0a/0b/0c). Read `numTotalTests` from the JSON, never an `it(` grep, which undercounts loop-generated tests.
+  - `enc-boundary` green: `_session-rig.ts` names `rtmp_enc` from inside `server/relay/`, so claim 2 (**`enc-boundary.test.ts:56-63`**, "no file outside server/relay/** names a stream column (r3)", filtering on `startsWith("server/relay/")`, which INCLUDES `__tests__`) passes, and it sits in `__tests__`, which claim 3 (**`:65-71`**, "inside the boundary, only secret-columns.ts issues SQL over the stream columns") exempts by its `!f.includes("__tests__")` filter at `:67`. Both were re-pinned 2026-09-27 from `:43-50` / `:40-47` and `:49-54`; the plan cited claim 2 at two different ranges, which is the "one authority per fact" rule breaking down — there is now one.
   - `admin-adjustments-log`, `admin-audit-actor-truth` and `credits-admin-adjust` at their Task 0 baseline counts (`baseline-web.json`) with 0 failed. The per-action loop in `admin-adjustments-log` now also covers the three new actions.
   
   Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npx tsc --noEmit -p apps/web/tsconfig.json > <scratchpad>/r1/t7-tsc.log 2>&1; echo "EXIT=$?"; tail -3 <scratchpad>/r1/t7-tsc.log` → `EXIT=0`, then `rtk proxy npm run lint` → `✖ 0 problems`.
@@ -7379,6 +7262,25 @@ Items 1–3 are implemented in Task 7 (the V410 amend, `revokeCredits`, the cap,
 - **Every ledger write takes the org's advisory money lock first** (Task 7). The empty-ledger gap is closed, not recorded.
 - **Sequencing:** 7A runs AFTER Task 7 and BEFORE Task 8, not in parallel with it. The lane-B review moves to the end of Task 8 and names every lane-B killer (review I1).
 
+**Revision 4 — OWNER RULING 2026-09-27: the panel is OPTION B.** Owner's word: **"B"**, asked before any implementer ran, per the 2026-09-20 ruling "bring ≥2 UI options for the staff credits panel at the START of lane B". Recorded in `_STATE.md`'s `LANE B — OPEN 2026-09-27` block. Three options were put:
+- **A** = three inline action cards (what this task said until now).
+- **B** = donor parity with `components/admin-credits-panel.tsx`: balance + ONE "Adjust credits" button opening a `Modal` that carries the kind, the amount, the note and (refund only) the session — with the ledger rail kept below. **Recommended and RULED.**
+- **C** = B with no ledger rail, reusing the page's existing Adjustments log. Rejected.
+
+**Why, kept here because the reasons decide later arguments:** the three money verbs sit behind one deliberate open, so `revoke` is never a button adjacent to `grant` on a staff page; it matches the ONLY money precedent on that page, so staff learn one pattern for both wallets; and the rail stays because the Adjustments log shows actor / action / category / reason / when / reversible but **NOT** the delta, the running balance or the session link — which is exactly what a linked refund's cap is judged against (why C was rejected).
+
+**What B moves and what it does not.** The route, the usecase, the zod body, the 401/400/404/409/422 codes and **every DB test are IDENTICAL under all three options**. Only `admin-stream-credits-panel.tsx`, its testids, its component test and the walkthrough spec's steps change. Nothing about the server moves; an implementer who finds themselves editing the route or a usecase because of this ruling has gone outside it and should STOP.
+
+**The modal's opening values STAY in the component test.** The earlier worry that `environment: "node"` cannot see inside a modal was checked against the tree on 2026-09-27 and is **FALSE**. `apps/web/src/components/__tests__/_hook-harness.tsx` supplies React's hook dispatcher itself and returns the element TREE, exporting `propsOf` (`:105`), `walk` (`:108`), `textOf` (`:121`), `renderIsland` (`:178`) and `expandWithHooks` (`:525`); `renderIsland(Component, props, expand?)` hands back `{ tree, text, rerender, unmount }` (`:467-492`) and re-renders on every `useState` set, so a handler called on the tree behaves as a click would. Two live precedents drive a CLOSED modal open under `environment: "node"`:
+- `components/v2/__tests__/stages-panel-court-tags-modal.test.tsx:45-48` finds the trigger and calls `(propsOf(button!).onClick as () => void)()`, then asserts modal-BODY copy that does not exist in the closed state (`:115-116`).
+- `components/__tests__/registration-hub-config-panel.test.tsx` imports `Modal` (`:9`), finds it by identity (`out.find((e) => e.type === Modal)`, `:205`), and its `expandPanel` (`:203-212`) pushes the modal's `children` AND `walk(propsOf(modal).footer)` into the element list before asserting `propsOf(modal).title` (`:247`).
+
+**Two traps that come with the precedent**, both carried into Step 10:
+- `walk` recurses into `props.children` ONLY (`_hook-harness.tsx:115`) and `textOf` the same way (`:134`). The modal BODY is therefore reached for free, but **`footer` is a separate prop and is NOT** — and `footer` is exactly where the donor puts Cancel and the submit (`admin-credits-panel.tsx:133-152`). Without the footer walk every assertion on those two buttons passes VACUOUSLY; mutant C4 exists to prove the line does work.
+- **An input's opening VALUE is a PROP, never text.** It is read with `propsOf(el).value`; `textOf` will never see `value="…"`. That is the difference between "the field is reachable" and "the field opens at the right number", which AGENTS.md class 19 exists for.
+
+So the class-19 case is asserted in the UNIT test, as it would have been under option A: amount OPENS AT 1, `min` 1, `max` = the **`maxDelta` prop (7 in the test, not the route's 50)**, note and session empty, the kind at `grant`, and the submit DISABLED until a note is typed. The only things that genuinely move to the walkthrough are what a PERSON does with it — open, pick, type, submit, see the row — and the phone bar with the modal open. Note that the tree's existing `admin-credits-panel.test.tsx` deliberately does NOT do this (39 lines, 2 `it`s, `renderToStaticMarkup` only, closed state alone); it is the donor's own file, is not edited here, and its header's "the modal is interaction-only" reasoning is **not** the precedent to follow.
+
 **Files:**
 - Create: `apps/web/src/server/usecases/admin-stream-credits.ts`, which holds the panel's READ and the two constants
 - Create (Test): `apps/web/src/server/usecases/__tests__/admin-stream-credits.test.ts`
@@ -7406,13 +7308,13 @@ Items 1–3 are implemented in Task 7 (the V410 amend, `revokeCredits`, the cap,
 - Consumes, from the repo as read at `27c0681b8` (re-read unchanged at `56159fc41`):
   - `requireStaff(): Promise<StaffUser>` (`lib/admin.ts:16-23`): runs `requireUser`, then checks `users.is_staff`, and throws `AuthError` otherwise.
   - `handler` (`lib/http.ts:69`): maps `ZodError` to 400 and `AuthError` to 401; an `HttpError` keeps its status and forwards its `code` (`:82-131`). Task 7's two 422s and its 409 therefore reach the client as `{ ok: false, error, code }` without any mapping in this route.
-  - `HttpError(status, message, code?)` (`lib/errors.ts:9-18`) and `sql` (`@/lib/db`).
+  - **`HttpError(status, message, code?, extra?)`** — FOUR parameters, not three (`lib/errors.ts:9-18`; the plan's own `NoCreditsError` already passes all four) — and `sql` (`@/lib/db`). `handler` forwards `code` and **drops `extra`** (`lib/http.ts:119-132`), so this route's refusals carry everything a client acts on in `code`.
   - `org_stream_credits` as amended by Task 7 Step 0c: `idempotency_key` with its TABLE-wide unique index, and `'revoke'` in the reason CHECK. Also `fixture_stream_sessions.org_id`.
   - `adjustmentsForOrg` (`server/usecases/admin-adjustments-log.ts`), which already feeds the page's "Adjustments log" region (`page.tsx:284-289`). Task 7 allowlists the three actions, so the audit rows surface there with no page edit.
 - Consumes, in tests:
   - `streamRig({ createdBy? })` and `rigUser()` (`@/server/relay/__tests__/_session-rig`, Task 7). `seedOrg` returns `userId: null` (`_rig.ts:37`), which is Task 1's false premise A, so `created_by` and the audit actor are always a real users row.
-  - e2e: `signInAs` (`e2e/overlay-kit.ts:124`), `TAG`, `expectNoHorizontalScroll` (`e2e/helpers.ts:49`) and `overflowingIn` (`e2e/helpers.ts:157`).
-  - smoke: `raw` (`scripts/smoke.ts:62`), `check` (`:110`), `setStaff` (`:6879`), `cookieHeader`, `BASE`.
+  - e2e: `signInAs` (`e2e/overlay-kit.ts:124`), `TAG`, `expectNoHorizontalScroll` (**`e2e/helpers.ts:56`**) and `overflowingIn` (**`:176`**) — both re-pinned 2026-09-27 from `:49` / `:157`.
+  - smoke: `raw` (**`scripts/smoke.ts:76`**, its json type `:81-88`, which carries `ok`, `data?`, `error?` and `issues?` but **no `code`** — read `code` off `json` with a cast), `check` (**`:124`**), `setStaff` (**`:7408`**), `cookieHeader` (`:71`), `BASE` (`:48`). All re-pinned 2026-09-27 from `:62` / `:110` / `:6879`.
 - Produces:
   - `server/usecases/admin-stream-credits.ts` (`server-only`):
     - `export const STREAM_CREDIT_ADJUST_MAX = 50`
@@ -7424,7 +7326,7 @@ Items 1–3 are implemented in Task 7 (the V410 amend, `revokeCredits`, the cap,
     - `{ kind: "refund"; delta; note; idempotency_key; session_id?: uuid | null }`
     - `{ kind: "revoke"; delta; note; idempotency_key }`
     
-    Responses:
+    Responses. **The success envelope is SINGLE-wrapped** — this is the one place the plan says so, and the panel is written to match. The route returns Task 7's `StaffCreditResult` (`{ id, balance, applied }`) and `handler` wraps it exactly once, so the client reads `d.data.balance` / `d.data.applied` with ONE `.data`. **This is a deliberate difference from the donor**, whose route returns its own `{ ok: true, … }` INSIDE the same wrapper and so answers a DOUBLE-wrapped `{ ok:true, data:{ ok:true, balance_after, applied } }` (`api/admin/orgs/[id]/credits/route.ts:76`) — which is why `admin-credits-panel.tsx:92-94` reads `d.data?.balance_after` under a comment recording that a top-level read left its confirmation dead. Do not copy the inner `ok`.
     - 200 `{ ok: true, data: { id, balance, applied } }`, where `applied: false` is an EXACT replay of a key
     - **401** for a non-staff or anonymous caller, returned BEFORE the body is parsed
     - 400 on a schema failure
@@ -7432,20 +7334,20 @@ Items 1–3 are implemented in Task 7 (the V410 amend, `revokeCredits`, the cap,
     - 404 `session_not_found` when a refund's `session_id` is not a session of THIS org
     - 409 `idempotency_key_reused` when the key was used for a different adjustment (Task 7, forwarded by `handler`)
     - 422 `refund_exceeds_consumed` or `insufficient_credits` (Task 7's refusals, forwarded by `handler`)
-  - `components/admin-stream-credits-panel.tsx` (client): `export function AdminStreamCreditsPanel(props: { orgId: string; balance: number; rows: StreamCreditLedgerRow[]; maxDelta: number; ledgerLimit: number })`. The `StreamCreditLedgerRow` import is type-only and is erased. Testids:
-    - panel: `stream-credits-panel`, `stream-credits-balance`
-    - grant: `stream-credits-grant-amount`, `stream-credits-grant-note`, `stream-credits-grant-submit`
-    - refund: `stream-credits-refund-amount`, `stream-credits-refund-session`, `stream-credits-refund-note`, `stream-credits-refund-submit`
-    - revoke: `stream-credits-revoke-amount`, `stream-credits-revoke-note`, `stream-credits-revoke-submit`
-    - status and ledger: `stream-credits-error`, `stream-credits-replayed` (shown when the route answers `applied: false`), `stream-credits-empty`, `stream-credits-ledger` (the scroll rail), and `stream-credits-row`, which carries `data-reason` and `data-delta`; each row shows the author's email, or the author's user id when the email is null
-    - every POST body carries `idempotency_key`: one per submission per card, minted on the first attempt, kept across a failed attempt, dropped on success AND on a 409 `idempotency_key_reused` (which also resets the card and refreshes the page)
+    - every refusal a client must ACT on arrives in `code`, never in `extra`: `handler` forwards `code` (`lib/http.ts:129-130`) but DROPS `extra` on the generic `HttpError` branch — only the 402 `PaymentRequiredError` branch forwards it (`:94-112`, and its own comment says not to read that as a file-wide convention)
+  - `components/admin-stream-credits-panel.tsx` (client): `export function AdminStreamCreditsPanel(props: { orgId: string; balance: number; rows: StreamCreditLedgerRow[]; maxDelta: number; ledgerLimit: number })`. The `StreamCreditLedgerRow` import is type-only and is erased. **OPTION B (owner ruling 2026-09-27): balance + ONE button + a `Modal`, with the rail below.** Testids:
+    - always on the page: `stream-credits-panel` (the `<section>`), `stream-credits-balance`, and the opener `stream-credits-adjust`, labelled **"Adjust credits"**. The section heading stays **"Match credits"**.
+    - inside the modal, and ONLY while it is open: `stream-credits-kind` (a `select`, options **grant / refund / revoke in that order** — the donor uses a `select` for its reason at `admin-credits-panel.tsx:191-202`, so this is convention, not invention), `stream-credits-amount`, `stream-credits-note`, `stream-credits-session` (rendered **only when kind is `refund`** — the route's body is a strict discriminated union and only its refund member accepts `session_id`), and in the Modal's `footer`, `stream-credits-submit` and `stream-credits-cancel`.
+    - status and ledger: `stream-credits-error` (inside the modal, because a failure keeps it open so the staff member can fix and retry), `stream-credits-replayed` (in the panel, shown after the modal closes on `applied: false`), `stream-credits-empty`, `stream-credits-ledger` (the scroll rail, which keeps `tabIndex={0}` + `role="region"` + an accessible name or axe reds `scrollable-region-focusable` at SERIOUS impact), and `stream-credits-row`, which carries `data-reason` and `data-delta`; each row shows the author's email, or the author's user id when the email is null
+    - **the closed panel ships the section, the balance, the opener and the rail — and nothing else.** A server-HTML assertion for any modal control is therefore a FALSE red (Step 18's smoke says so in as many words).
+    - every POST body carries `idempotency_key`: **one per SUBMISSION** — minted when the modal opens, KEPT across a failed attempt (a failure that wrote nothing leaves the key unused, so a retry with edited fields is legal, and an attempt that DID land replays instead of applying twice), re-minted on success, and DROPPED on a 409 `idempotency_key_reused`, which also resets the modal to its opening state and calls `router.refresh()` so the attempt that landed is on screen
 
 **Pattern (§9a):**
 - **Parse → authorize → delegate.** The donor is `app/api/admin/orgs/[id]/credits/route.ts`, which AUTHORIZES before it parses (`:33-34`). This route follows that order and hands every write to Task 7.
 - **Money is ledger rows in the same transaction.** Task 7's writers own the advisory money lock, the key check, the floor, the cap, the single row and its audit row; this task adds no money SQL.
-- **One authority per fact.** `creditBalance` supplies the panel's balance. `STREAM_CREDIT_ADJUST_MAX` feeds both the zod ceiling and, through a prop, the input's `max`.
+- **One authority per fact.** `creditBalance` supplies the panel's balance, and `stream-credits-balance` is the only place a balance is rendered — the route's own `data.balance` is typed on the envelope and deliberately not painted. `STREAM_CREDIT_ADJUST_MAX` feeds both the zod ceiling and, through a prop, the input's `max`.
 - **Deny by default.** `requireStaff` guards the route, and `app/admin/layout.tsx:8-9` redirects anyone who is not staff.
-- **Exemplars.** For the panel, `components/admin-plan-panel.tsx`: inline action cards, a required-reason gate, `call()` followed by `router.refresh()` (`:80-98`, `:398-419`). For the DB-backed admin route test, `app/api/admin/competitions/[id]/discovery/__tests__/route.test.ts`, which doubles only `requireUser`, so the REAL `requireStaff` runs against a REAL users row. The ledger rail copies the Adjustments log's rail (`page.tsx:284-289`).
+- **Exemplars.** For the panel, **`components/admin-credits-panel.tsx`** — the page's only other money panel and the shape option B was ruled to: balance + one trigger button (`:120-125`), `{open && <Modal …>}` (`:129`) with `title` (`:131`), `onClose` (`:132`) and `footer` (`:133-152`) carrying Cancel and the submit, a `select` for its reason (`:191-202`), `input w-full` on every field (`:175`, `:195`, `:216`), the label class (`:165`), the key mint with its `crypto.randomUUID` fallback (`:61-65`), and `fetch` → `if (!res.ok) throw` → `router.refresh()` (`:80-95`). `Modal`'s own contract is `{ title: string; children?; onClose: () => void; footer?; size?: "md" | "lg" }` (`components/modal.tsx:37-49`); it renders `role="dialog"` with `aria-modal` and its own focus trap, so this panel adds neither. `components/admin-plan-panel.tsx` is NOT the exemplar any more — it imports no `Modal` at all (zero `@/components/modal` imports), confirms through `useConfirm` (`:8`), and its input idiom is a module-const `inputCls` (`:44-45`), a DIFFERENT idiom from the one followed here; only its `call()` → `router.refresh()` shape (`:80-98`) remains worth reading. For the DB-backed admin route test, `app/api/admin/competitions/[id]/discovery/__tests__/route.test.ts`, which doubles only `requireUser`, so the REAL `requireStaff` runs against a REAL users row. The ledger rail copies the Adjustments log's rail (`page.tsx:284-289`).
 
 **Deviations, recorded:**
 - **(a) Copy is English-only, against Global Constraints' "all four dictionaries".** This is the ORCHESTRATOR's reading (Revision 1, item 5), not an owner ruling. It follows how the TREE already treats `/admin`:
@@ -7463,6 +7365,8 @@ Items 1–3 are implemented in Task 7 (the V410 amend, `revokeCredits`, the cap,
   - Task 7 also spreads the three actions into `ADJUSTMENT_ACTIONS`, so the rows surface in the page's existing "Adjustments log" and "Staff history" sections with no edit to either section.
   - This route writes NO second audit row. A post-write `logStaffAction`, the `entitlement-override/route.ts:45` shape, would duplicate Task 7's row and could 500 after the money had moved.
 - **(d) No GET route.** The page is a server component and already reads `walletBalance` and `adjustmentsForOrg` directly (`page.tsx:73-78`). It reads `streamCreditsForOrg` the same way, and `router.refresh()` re-reads it. A GET route would have no caller and would itself be inert.
+- **(e) The panel is OPTION B, not the three inline cards this task was drafted around** (Revision 4; OWNER RULING 2026-09-27, owner's word "B"). Balance + one "Adjust credits" button + a `Modal` + the ledger rail, following `components/admin-credits-panel.tsx` — the page's only other money panel — rather than `admin-plan-panel.tsx`'s inline action cards. This is an OWNER ruling, so it is not an open question and not a deviation the owner needs to weigh again; it is recorded here only so a reader who finds the old three-card shape in an earlier revision knows which one won. Nothing on the server moves with it: the route, the usecase, the zod body, every status code and every DB test are identical under all three options that were put.
+- **(f) After a 409 `idempotency_key_reused` the modal resets to its OPENING state, which returns the action to `grant`.** A staff member who was mid-refund therefore re-chooses the action deliberately before resubmitting. This falls out of having ONE form rather than three per-kind cards: option A's reset kept the kind because each kind owned its own card. It is defensible — a 409 means an earlier attempt of this submission already landed with different values, so re-choosing is the point — but it is a real change in what a person does, and it is the one thing in this ruling worth putting in front of the owner (Step 20's report). The alternative, preserving `kind` across the reset, is a one-line change if the owner prefers it; do not make it unilaterally.
 
 **Write-path diff against the donor** (TEST-CASE DESIGN, "New write path — diff it against the nearest existing analogous path"):
 
@@ -7482,29 +7386,29 @@ Items 1–3 are implemented in Task 7 (the V410 amend, `revokeCredits`, the cap,
 
 **Checklist rows satisfied:**
 - **VERIFY-AS-CUSTOMER:**
-  - "Use actual UI/API, not code inspection alone" and "Follow the golden path start to finish once": Step 17 drives the real panel → route → Task 7 row + audit row → server re-read → the balance, the ledger AND the page's Adjustments log in the DOM.
+  - "Use actual UI/API, not code inspection alone" and "Follow the golden path start to finish once": Step 17 drives the real opener → the real modal → the route → Task 7's ledger row + audit row → server re-read → the balance, the ledger AND the page's Adjustments log in the DOM.
   - "Then break it: empty inputs, wrong perms, network fail, double-submit":
-    - a blank note → 400
+    - a blank note → the submit never enables (client), and a whitespace note over HTTP → 400 (smoke)
     - a non-staff user → 401 plus a redirect
     - a request the server APPLIED but the browser lost, retried → the SAME key, `applied: false`, the replay notice, and one row
-    - a request the server APPLIED but the browser lost, then EDITED and resubmitted → 409 `idempotency_key_reused`, the explanation on screen, the landed attempt re-read into the ledger, the card reset, and the next submission under a NEW key
+    - a request the server APPLIED but the browser lost, then EDITED and resubmitted → 409 `idempotency_key_reused`, the explanation inside the still-open modal, the landed attempt re-read into the ledger, the form reset to its opening state, and the next submission under a NEW key
     - a double-click → ONE request (the in-flight guard; the key is the backstop, so the ledger alone cannot witness this guard)
-    - a revoke above the balance → the 422 message on screen, the balance unchanged, and no row
+    - a revoke above the balance → the 422 message in the modal, the balance unchanged, and no row
     - a session-linked refund naming a session that is not this org's → 404 (route test and smoke; the cap's 422 is proven in the route and usecase tests)
-  - "No horizontal scroll at 320/768/1280 — split on overflow-x": `expectNoHorizontalScroll` plus `overflowingIn`, with the exemption held to the one `tabindex=0` rail.
+  - "No horizontal scroll at 320/768/1280 — split on overflow-x": `expectNoHorizontalScroll` plus `overflowingIn`, run TWICE per width — closed AND with the modal open — with the closed-state exemption held to the one `tabindex=0` rail. The modal-open pass is the only thing that can see option B's controls at a phone width at all.
   - "Scrolling rail needs tabindex="0" + role + accessible name".
-  - "Verify visually, always": four PNGs, three of which differ, and all three width PNGs OPENED, with the `/admin` header's own row read at 320, 768 and 1280 (Step 17).
+  - "Verify visually, always": SIX PNGs — closed and modal-open at each of 320, 768 and 1280, plus the 1280 flow shot — all six hashes distinct (a closed/open pair that matches means the modal never opened), all three width pairs OPENED and described, with the `/admin` header's own row read at each width (Step 17).
 - **PRODUCT-OWNER LENS:**
   - "Does this solve the stated problem, or a proxy for it?": grant, refund and revoke gain a production caller and a browser proof.
-  - "Does it match existing product conventions": the page's inline cards, English-only `/admin`, authorize before parse, and the donor's idempotency key and in-transaction audit.
+  - "Does it match existing product conventions": the page's OTHER money panel is exactly this shape (`admin-credits-panel.tsx`: balance, one button, one `Modal` with a `select` for its reason), English-only `/admin`, authorize before parse, and the donor's idempotency key and in-transaction audit.
   - "Is this reversible?": a mistaken grant is reversed by a revoke, itself audited.
-  - "Flag anything a decision-maker needs to weigh in on": the English-only reading (orchestrator, not owner) goes to the report. The reused-key 409 is an orchestrator ruling recorded as a deviation from the donor (write-path diff).
+  - "Flag anything a decision-maker needs to weigh in on": the English-only reading (orchestrator, not owner) goes to the report. The reused-key 409 is an orchestrator ruling recorded as a deviation from the donor (write-path diff). The OPTION-B shape is the owner's own 2026-09-27 ruling and is settled; what is NOT settled and goes to the report is deviation (f) — a 409 resets the action back to `grant`.
 - **TEST-CASE DESIGN:**
-  - "Empty-set case must be checked explicitly": the read and the panel both test it first.
-  - "Negative assertion needs its positive pair": non-staff 401 ↔ staff 200; foreign session 404 ↔ own session 200; exact replay `applied: false` ↔ a new key applied ↔ a reused key with a different amount → 409; revoke 1 of 0 → 422 ↔ 1 of 1 applied; a second linked refund → 422 ↔ the first applied; submit disabled ↔ enabled once a note is typed.
-  - "Every guard needs a case that DEFEATS it", "Mutate the MONEY path specifically" and "Report mutant KILLER LIST": R1–R4, R6, S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2, C1, C1′, C1″, C2, R5, G1, K2, K3, K4, B1, V1, W1, each with a named killer. Task 7 owns the usecase-side killers (m2, m3, m5–m22).
-  - "Include ≥ 1 case where right answer differs from the wrong answer's constant": balance 3 against a snapshot of 99; `maxDelta` 7, not 50; the author is the staff id, not the org id.
-  - "Pin the VALUE a control opens/seeds at": amount 1, `max`, an empty note.
+  - "Empty-set case must be checked explicitly": the read and the panel both test it first, and the panel's empty case additionally asserts that NONE of the modal's controls exists while it is closed — without which every "opens at" claim below would be vacuous.
+  - "Negative assertion needs its positive pair": non-staff 401 ↔ staff 200; foreign session 404 ↔ own session 200; exact replay `applied: false` ↔ a new key applied ↔ a reused key with a different amount → 409; revoke 1 of 0 → 422 ↔ 1 of 1 applied; a second linked refund → 422 ↔ the first applied; submit disabled (empty AND whitespace) ↔ enabled once a note is typed; the session field present at refund ↔ absent at grant AND at revoke (both directions of one predicate, C1' and C1").
+  - "Every guard needs a case that DEFEATS it", "Mutate the MONEY path specifically" and "Report mutant KILLER LIST": R1–R4, R6, S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2, C0, C1, C1', C1", C2, C3, C4, R5, W1, M1, G1, K2, K3, K4, B1, V1 — **33 in all**, each with a named killer. Task 7 owns the usecase-side killers (m2, m3, m5–m22).
+  - "Include ≥ 1 case where right answer differs from the wrong answer's constant": balance 3 against a snapshot of 99; `maxDelta` **7**, not the route's 50, so C3 cannot hide behind a shared constant; the author is the staff id, not the org id.
+  - "Pin the VALUE a control opens/seeds at": the modal opens at action `grant`, amount 1 with `min` 1 and `max` = the prop, an empty note, NO session field, and a DISABLED submit — asserted at EVERY open, not only the first (mutant M1), because a reachability test is satisfied by any value.
   - "Cover: happy path, boundary (0, 1, max), empty/null, malformed input": the delta and body tables.
   - "New write path — diff it against the nearest existing analogous path": the table above.
 
@@ -7522,14 +7426,14 @@ Items 1–3 are implemented in Task 7 (the V410 amend, `revokeCredits`, the cap,
 - `openapi.ts` and `key-scopes.ts`.
 - Any admin TELEMETRY view (future scope, ruling 15).
 
-- [ ] **Step 1: Re-pin on the tree and take the regression baseline (no code).**
-  (a) Task 7 has landed with the signatures this task consumes: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -n "^export async function creditBalance\|^export async function grantCredits\|^export async function refundCredits\|^export async function revokeCredits\|^export interface StaffCreditArgs\|^export interface StaffCreditResult\|^export const STREAM_CREDIT_AUDIT_ACTIONS" apps/web/src/server/usecases/stream-credits.ts` → exactly 7 lines, matching **Interfaces**. Then `grep -a -n "idempotency_key\|'revoke'" db/migration/deltas/V410__stream_sessions.sql` must show the column, the unique index and the CHECK value; `grep -a -n "STREAM_CREDIT_AUDIT_ACTIONS" apps/web/src/server/usecases/admin-adjustments-log.ts` must show the import and the spread; and `grep -a -n "export async function streamRig\|export async function rigUser" apps/web/src/server/relay/__tests__/_session-rig.ts` must print 2 lines. If anything differs (for example, a refund that now DEBITS, or no key check), STOP and report: this is money, and nothing gets guessed.
-  (b) Anchors: `grep -a -n "AdminCreditsPanel\|adjustmentsForOrg(id\|limit 20\|Adjustments log" "apps/web/src/app/admin/orgs/[id]/page.tsx"`; `grep -a -n "^async function setStaff\|^async function platformRevenueSuite\|await platformRevenueSuite" scripts/smoke.ts`; `grep -a -n "^export async function overflowingIn\|^export async function expectNoHorizontalScroll" apps/web/e2e/helpers.ts`; `grep -a -n "^const WALKTHROUGH_SPECS\|^\];\|\"spectator-public.spec.ts\"" apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` (read at `b4091834d`: the literal opens at `:159`, its LAST entry is `"spectator-public.spec.ts",` at `:282`, and `];` closes it at `:283`; the list is in WAVE order, not alphabetical). Re-pin every line number this task cites if it has moved.
-  (c) Confirm `rly`'s schema carries the amend: `DATABASE_URL=<rly url> DATABASE_SSL=disable` and a one-line `node -e` postgres query, `select column_name from information_schema.columns where table_schema = 'seazn_club' and table_name = 'org_stream_credits' and column_name = 'idempotency_key'` → 1 row. No row means Task 7 Step 0c's recreate did not happen on this database: STOP.
+- [ ] **Step 1: Re-pin on the tree and take the regression baseline (no code).** Every path below is `relay-b`, per the lane B path note at the head of Task 7.
+  (a) Task 7 has landed with the signatures this task consumes: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b && grep -a -n "^export async function creditBalance\|^export async function grantCredits\|^export async function refundCredits\|^export async function revokeCredits\|^export interface StaffCreditArgs\|^export interface StaffCreditResult\|^export const STREAM_CREDIT_AUDIT_ACTIONS" apps/web/src/server/usecases/stream-credits.ts` → exactly 7 lines, matching **Interfaces**. Then `grep -a -n "idempotency_key\|'revoke'" db/migration/deltas/V410__stream_sessions.sql` must show the column (`:276`), the unique index (`:284-285`) and the CHECK value (`:254`) — a READ, not an amend: V410 is merged (Task 7's DONE block); `grep -a -n "STREAM_CREDIT_AUDIT_ACTIONS" apps/web/src/server/usecases/admin-adjustments-log.ts` must show the import and the spread, APPENDED at the end of the literal (wave order); and `grep -a -n "export async function streamRig\|export async function rigUser" apps/web/src/server/relay/__tests__/_session-rig.ts` must print 2 lines. If anything differs (for example, a refund that now DEBITS, or no key check), STOP and report: this is money, and nothing gets guessed.
+  (b) Anchors, all re-pinned on 2026-09-27 — re-pin them again if they have moved, and read the file rather than trusting the number: `grep -a -n "AdminCreditsPanel\|adjustmentsForOrg(id\|limit 20\|Adjustments log" "apps/web/src/app/admin/orgs/[id]/page.tsx"` (`<AdminCreditsPanel />` mounts at `:129-135`, after the entry-fee `<p>` `:116-126` and before the Usage/Actions grid `:137`; the Adjustments-log rail is `:284-289` with `tabIndex={0}` `:286`, `role="region"` `:287`, `aria-label="Adjustments log"` `:288`); `grep -a -n "^async function setStaff\|^async function platformRevenueSuite\|await platformRevenueSuite" scripts/smoke.ts` (**`setStaff` `:7408`**, **`platformRevenueSuite` `:7429`** closing at **`:7464`**, its call at **`:1105`**); `grep -a -n "^export async function overflowingIn\|^export async function expectNoHorizontalScroll" apps/web/e2e/helpers.ts` (**`expectNoHorizontalScroll` `:56`**, **`overflowingIn` `:176`**); `grep -a -n "^const WALKTHROUGH_SPECS\|^\];" apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` — the literal opens at **`:159`** and `];` closes it at **`:441`**, its last two entries being `"scorer-sheets-print-control.spec.ts"` (`:430`) and `"scorer-sheets-print-scan.spec.ts"` (`:440`). **There is no `// Streaming R1` block yet** (zero `stream-relay` / `Streaming R1` hits anywhere in that file), and the list is in WAVE order, not alphabetical.
+  (c) Confirm `rly`'s schema carries the MERGED V410: `DATABASE_URL=<rly url> DATABASE_SSL=disable` and a one-line `node -e` postgres query, `select column_name from information_schema.columns where table_schema = 'seazn_club' and table_name = 'org_stream_credits' and column_name = 'idempotency_key'` → 1 row. No row means this database was built before PR #812 landed V410 — an ENVIRONMENT fault (AGENTS.md class 14), not a defect and not a licence to amend anything: rebuild the env and re-check.
   (d) Regression baseline. Record the per-file counts; no figure typed here is the gate:
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run 'src/app/api/admin/orgs/[id]/credits/__tests__/route.test.ts' src/components/__tests__/admin-credits-panel.test.tsx src/components/__tests__/admin-plan-panel.test.tsx src/server/usecases/__tests__/admin-adjustments-log.test.ts src/lib/__tests__/admin-audit-actor-truth.test.ts src/lib/__tests__/e2e-ci-wiring.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/usecases/__tests__/stream-credits.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-regress-before.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-regress-before.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests,r.numTotalTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,t.assertionResults.length)"`
-  Expect EIGHT files listed, every path under `…/worktrees/relay/`, 0 failed and 0 pending, with `stream-credits.test.ts` at Task 7's 15. A red here predates this task: attribute it on a clean detached `main` before starting. Then run the one e2e spec that drives this page today, as a whole file:
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable PLAYWRIGHT_BASE=<rly base, localhost> E2E_PROD_TARGET=1 npx playwright test e2e/billing-states.spec.ts --reporter=json > <scratchpad>/r1/t7a-billing-before.json 2><scratchpad>/r1/t7a-billing-before.log; echo "EXIT=$?"; node -e "console.log(require('<scratchpad>/r1/t7a-billing-before.json').stats)"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run 'src/app/api/admin/orgs/[id]/credits/__tests__/route.test.ts' src/components/__tests__/admin-credits-panel.test.tsx src/components/__tests__/admin-plan-panel.test.tsx src/server/usecases/__tests__/admin-adjustments-log.test.ts src/lib/__tests__/admin-audit-actor-truth.test.ts src/lib/__tests__/e2e-ci-wiring.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/usecases/__tests__/stream-credits.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-regress-before.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-regress-before.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests,r.numTotalTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\//,''),t.status,t.assertionResults.length)"`
+  Expect EIGHT files listed, every path under `…/worktrees/relay-b/`, 0 failed and 0 pending, with `stream-credits.test.ts` at Task 7's 15. **`admin-credits-panel.test.tsx` is the donor's own 2 `it`s and must stay at 2** — this task creates a SEPARATE `admin-stream-credits-panel.test.tsx` and never edits the donor's. A red here predates this task: attribute it on a clean detached `main` before starting. Then run the one e2e spec that drives this page today, as a whole file:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable PLAYWRIGHT_BASE=<rly base, localhost> E2E_PROD_TARGET=1 npx playwright test e2e/billing-states.spec.ts --reporter=json > <scratchpad>/r1/t7a-billing-before.json 2><scratchpad>/r1/t7a-billing-before.log; echo "EXIT=$?"; node -e "console.log(require('<scratchpad>/r1/t7a-billing-before.json').stats)"`
   Record the stats.
 
 - [ ] **Step 2: Write the failing READ test.** The session rig is Task 7's `_session-rig.ts` (Revision 1). Create `apps/web/src/server/usecases/__tests__/admin-stream-credits.test.ts`:
@@ -8079,21 +7983,44 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   
   Record the twelve killers, then re-run → `13 0 0`. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npx tsc --noEmit -p apps/web/tsconfig.json > <scratchpad>/r1/t7a-tsc.log 2>&1; echo "EXIT=$?"; tail -3 <scratchpad>/r1/t7a-tsc.log` → `EXIT=0`. Read the OUTPUT too: `rtk` can print a clean verdict while tsc exits 1.
 
-- [ ] **Step 10: Write the failing panel test.** Create `apps/web/src/components/__tests__/admin-stream-credits-panel.test.tsx`:
+- [ ] **Step 10: Write the failing panel test.** Create `apps/web/src/components/__tests__/admin-stream-credits-panel.test.tsx`. **The modal's opening values stay HERE, not in the walkthrough** — the "node cannot see inside a modal" worry was checked against the tree on 2026-09-27 and is FALSE (Revision 4):
 
 ```tsx
-// The staff "Match credits" panel (Task 7A), static markup. vitest is `environment: "node"` — no
-// DOM, no clicks — so the in-flight guard, the note gate's OPEN direction and router.refresh()
-// are the walkthrough's (Step 17), and so is the idempotency key (minted on the first CLICK, so the
-// static markup carries none) with its reused-key reset (K3, K4). Here: what the panel shows for a
-// given read, and what its controls OPEN AT (AGENTS.md class 19). Killers (Step 13):
-//   C1  grant note gate   `disabled={!forms.grant.note.trim() || busy !== null}` → `disabled={busy !== null}` → "the controls OPEN AT" (grant)
-//   C1' refund note gate  the same on the refund button                                                     → "the controls OPEN AT" (refund)
-//   C1" revoke note gate  the same on the revoke button                                                     → "the controls OPEN AT" (revoke)
-//   C2  author fallback   `r.createdByEmail ?? r.createdBy ?? "—"` → `r.createdByEmail ?? "—"`              → "rows render" (`>user-1<`)
-//   R5  the rail          delete `tabIndex={0}`                                                            → "a keyboard-reachable scroll rail"
+// The staff "Match credits" panel (Task 7A, Revision 4 — the OPTION-B modal). vitest is
+// `environment: "node"`, but that does NOT put the modal out of reach:
+// components/__tests__/_hook-harness.tsx supplies React's hook dispatcher itself and hands back
+// the element TREE, so a trigger's own onClick prop can be CALLED and the modal asserted.
+// Precedents: v2/__tests__/stages-panel-court-tags-modal.test.tsx:45-48 calls
+// `(propsOf(button!).onClick as () => void)()` and then asserts modal-BODY copy that does not
+// exist closed; registration-hub-config-panel.test.tsx:203-212 finds the modal by
+// `e.type === Modal` and expands BOTH `children` and `footer`.
+//
+// Two traps the precedents came with, both live here:
+//  * `walk` recurses into `props.children` ONLY (_hook-harness.tsx:115), and `textOf` the same way
+//    (:134). Modal takes its buttons through the SEPARATE `footer` prop (modal.tsx:41, rendered at
+//    :145-147), so without `expandPanel` below every assertion about Cancel or the submit passes
+//    VACUOUSLY. Mutant C4 exists to prove that line is doing work.
+//  * An input's opening VALUE is a PROP, never text: it is read with `propsOf(el).value`. That is
+//    the difference between "the field is reachable" and "the field opens at the right number",
+//    which AGENTS.md class 19 exists for.
+//
+// What is still the walkthrough's (Step 17), because it needs a browser: the network, the
+// idempotency key's lifetime across a lost response, router.refresh(), the double-submit guard,
+// and the widths.
+// Killers (Step 13):
+//   C0  opener wired      `onClick={openModal}` → `onClick={() => {}}`                        → "the modal OPENS AT"
+//   C1  submit gate       `disabled={!form.note.trim() || busy}` → `disabled={busy}`           → "the modal OPENS AT" / "the submit gate"
+//   C1' session field     drop the `form.kind === "refund" &&` condition                       → "the kind switch"
+//   C1" session field     `=== "refund"` → `=== "grant"`                                       → "the kind switch", the other way
+//   C2  author fallback   `r.createdByEmail ?? r.createdBy ?? "—"` → `r.createdByEmail ?? "—"`  → "rows render" (`>user-1<`)
+//   C3  amount ceiling    `max={maxDelta}` → `max={50}`                                        → "the modal OPENS AT" (`max`)
+//   C4  footer walked     delete the Cancel button from `footer`                               → "the modal OPENS AT" (cancel)
+//   R5  the rail          delete `tabIndex={0}`                                                → "a keyboard-reachable scroll rail"
+import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
+import { Modal } from "@/components/modal";
 import type { StreamCreditLedgerRow } from "@/server/usecases/admin-stream-credits";
 import { AdminStreamCreditsPanel } from "../admin-stream-credits-panel";
 
@@ -8104,10 +8031,10 @@ const row = (over: Partial<StreamCreditLedgerRow>): StreamCreditLedgerRow => ({
   createdByEmail: "staff@example.test", sessionId: null, createdAt: "2026-09-16T10:20:30.000Z", ...over,
 });
 
-function render(props: Partial<Parameters<typeof AdminStreamCreditsPanel>[0]> = {}): string {
-  return renderToStaticMarkup(
-    <AdminStreamCreditsPanel orgId="org-1" balance={0} rows={[]} maxDelta={7} ledgerLimit={20} {...props} />,
-  );
+const PROPS = { orgId: "org-1", balance: 0, rows: [] as StreamCreditLedgerRow[], maxDelta: 7, ledgerLimit: 20 };
+
+function render(props: Partial<typeof PROPS> = {}): string {
+  return renderToStaticMarkup(<AdminStreamCreditsPanel {...PROPS} {...props} />);
 }
 
 /** The whole opening tag of the element carrying `testid` — asserting inside it, never across the page. */
@@ -8117,16 +8044,50 @@ function tag(html: string, el: string, testid: string): string {
   return m![0];
 }
 
-describe("AdminStreamCreditsPanel", () => {
-  it("an EMPTY ledger: balance 0, the empty line, no row, no ledger rail, and neither the error nor the replay notice (the empty set, explicitly)", () => {
+/** `walk` already reaches the Modal's BODY, because the body is `props.children`
+ *  (_hook-harness.tsx:115). `footer` is a separate prop and is NOT walked, so Cancel and the
+ *  submit are invisible without this — registration-hub-config-panel.test.tsx:209's idiom. */
+function expandPanel(node: ReactNode): ReactElement[] {
+  const out = walk(node);
+  const modal = out.find((e) => e.type === Modal);
+  const footer = modal ? propsOf(modal).footer : undefined;
+  if (footer) out.push(...walk(footer as ReactNode));
+  return out;
+}
+
+type Island = { tree: () => ReactElement[]; text: () => string };
+const island = () => renderIsland(AdminStreamCreditsPanel, PROPS, expandPanel) as Island;
+const at = (is: Island, testid: string): ReactElement | undefined =>
+  is.tree().find((e) => propsOf(e)["data-testid"] === testid);
+const must = (is: Island, testid: string): ReactElement => {
+  const el = at(is, testid);
+  expect(el, `${testid} is not in the expanded tree`).toBeTruthy();
+  return el!;
+};
+/** Drive a control's own handler, the way the browser would (court-tags-modal.test.tsx:45-48). */
+const click = (is: Island, testid: string) => (propsOf(must(is, testid)).onClick as () => void)();
+const change = (is: Island, testid: string, value: string) =>
+  (propsOf(must(is, testid)).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+
+describe("AdminStreamCreditsPanel — the closed panel", () => {
+  it("an EMPTY ledger: balance 0, the empty line, the Adjust-credits opener, and NO modal — no row, no ledger rail, no field, no error and no replay notice (the empty set, explicitly)", () => {
     const html = render();
     expect(html).toMatch(/data-testid="stream-credits-balance"[^>]*>0</);
     expect(html).toContain('data-testid="stream-credits-empty"');
+    expect(tag(html, "button", "stream-credits-adjust")).toContain('type="button"');
+    expect(html).toContain("Adjust credits");
+    // Closed means closed: the modal renders only behind `open`, so none of its controls — nor
+    // the dialog itself — is in the markup. Every "opens at" claim below rests on this.
+    for (const id of ["stream-credits-kind", "stream-credits-amount", "stream-credits-note",
+                      "stream-credits-session", "stream-credits-submit", "stream-credits-cancel"]) {
+      expect(html, id).not.toContain(`data-testid="${id}"`);
+    }
+    expect(html).not.toContain('role="dialog"');
     expect(html).not.toContain('data-testid="stream-credits-row"');
     expect(html).not.toContain('data-testid="stream-credits-ledger"');
     expect(html).not.toContain('data-testid="stream-credits-error"');
     expect(html).not.toContain('data-testid="stream-credits-replayed"');
-    expect(html).not.toContain("idempotency");   // no key in the markup: it is minted on the first click
+    expect(html).not.toContain("idempotency");   // no key in the markup: it is minted on the open
   });
 
   it("rows render in the order given, with reason, SIGNED delta, balance after, note, author (the email, else the user id), session and a UTC stamp; a missing author/note/session reads — (C2)", () => {
@@ -8149,25 +8110,69 @@ describe("AdminStreamCreditsPanel", () => {
     }
   });
 
-  it("the controls OPEN AT amount 1, min 1, max = the maxDelta PROP (7 here, not the route's 50), an empty note and session, and all three submits DISABLED until a note is typed (C1, C1', C1\")", () => {
-    const html = render({ maxDelta: 7 });
-    for (const kind of ["grant", "refund", "revoke"]) {
-      const amount = tag(html, "input", `stream-credits-${kind}-amount`);
-      expect(amount).toContain('value="1"');
-      expect(amount).toContain('min="1"');
-      expect(amount).toContain('max="7"');
-      expect(tag(html, "input", `stream-credits-${kind}-note`)).toContain('value=""');
-      expect(tag(html, "button", `stream-credits-${kind}-submit`), `${kind} submit`).toContain('disabled=""');
-    }
-    expect(tag(html, "input", "stream-credits-refund-session")).toContain('value=""');
-  });
-
   it("the ledger is a keyboard-reachable scroll rail: overflow-x-auto with tabindex 0, role region and an accessible name (R5; axe scrollable-region-focusable; page.tsx:284-289's idiom)", () => {
     const rail = tag(render({ rows: [row({})] }), "div", "stream-credits-ledger");
     expect(rail).toContain('tabindex="0"');
     expect(rail).toContain('role="region"');
     expect(rail).toContain('aria-label="Match credits ledger"');
     expect(rail).toMatch(/class="[^"]*\boverflow-x-auto\b/);
+  });
+});
+
+describe("AdminStreamCreditsPanel — the Adjust-credits modal, opened by its own trigger", () => {
+  it("the modal OPENS AT action grant with the three actions in order, amount 1 with min 1 and max = the maxDelta PROP (7 here, not the route's 50), an empty note, NO session field, the submit DISABLED, and Cancel in the FOOTER (C0, C1, C3, C4)", () => {
+    const is = island();
+    expect(is.tree().find((e) => e.type === Modal), "the modal is open before any click").toBeFalsy();
+    click(is, "stream-credits-adjust");
+    const modal = is.tree().find((e) => e.type === Modal);
+    expect(modal, "the trigger's onClick did not open the modal").toBeTruthy();
+    expect(propsOf(modal!).title).toBe("Adjust match credits");
+
+    // Every one of these is a PROP, not text — textOf would never see a single one of them.
+    const kind = must(is, "stream-credits-kind");
+    expect(propsOf(kind).value).toBe("grant");
+    expect(walk(propsOf(kind).children as ReactNode).map((o) => propsOf(o).value))
+      .toEqual(["grant", "refund", "revoke"]);
+    const amount = must(is, "stream-credits-amount");
+    expect(propsOf(amount).value).toBe("1");
+    expect(propsOf(amount).min).toBe(1);
+    expect(propsOf(amount).max).toBe(7);
+    expect(propsOf(must(is, "stream-credits-note")).value).toBe("");
+    // A session caps a refund, so a modal that opens at `grant` has no session field at all.
+    expect(at(is, "stream-credits-session"), "the session field is present at grant").toBeUndefined();
+    expect(propsOf(must(is, "stream-credits-submit")).disabled).toBe(true);
+    // Reached only through expandPanel's footer walk (C4): `walk` alone cannot see either button.
+    expect(propsOf(must(is, "stream-credits-cancel")).className).toContain("btn-ghost");
+    // No error and no replay notice on a freshly opened modal.
+    expect(at(is, "stream-credits-error")).toBeUndefined();
+    expect(at(is, "stream-credits-replayed")).toBeUndefined();
+  });
+
+  it("the submit gate: DISABLED with an empty note and with whitespace only, ENABLED once a real note is typed — the negative assertion with its positive pair (C1)", () => {
+    const is = island();
+    click(is, "stream-credits-adjust");
+    expect(propsOf(must(is, "stream-credits-submit")).disabled).toBe(true);
+    change(is, "stream-credits-note", "   ");
+    expect(propsOf(must(is, "stream-credits-submit")).disabled, "whitespace is not a note").toBe(true);
+    change(is, "stream-credits-note", "pilot league");
+    expect(propsOf(must(is, "stream-credits-note")).value).toBe("pilot league");
+    expect(propsOf(must(is, "stream-credits-submit")).disabled).toBe(false);
+  });
+
+  it("the kind switch: choosing refund adds the session field EMPTY, choosing grant or revoke takes it away again, and the amount and note survive the switch (C1', C1\")", () => {
+    const is = island();
+    click(is, "stream-credits-adjust");
+    change(is, "stream-credits-note", "failed stream");
+    change(is, "stream-credits-kind", "refund");
+    expect(propsOf(must(is, "stream-credits-kind")).value).toBe("refund");
+    expect(propsOf(must(is, "stream-credits-session")).value).toBe("");
+    change(is, "stream-credits-kind", "revoke");
+    expect(at(is, "stream-credits-session"), "the session field survived a switch to revoke").toBeUndefined();
+    change(is, "stream-credits-kind", "grant");
+    expect(at(is, "stream-credits-session"), "the session field survived a switch to grant").toBeUndefined();
+    // The fields the switch must NOT reset — only the 409 path and a fresh open reset the form.
+    expect(propsOf(must(is, "stream-credits-amount")).value).toBe("1");
+    expect(propsOf(must(is, "stream-credits-note")).value).toBe("failed stream");
   });
 });
 ```
@@ -8181,27 +8186,49 @@ describe("AdminStreamCreditsPanel", () => {
 ```tsx
 "use client";
 
-// Staff "Match credits" panel (Task 7A, owner ruling 15; Revision 1) on /admin/orgs/[id]: the org's
-// streaming match-credit balance, its latest ledger rows, and the three money actions — grant,
-// refund (ADDS credits) and revoke (takes them away, never below zero) — posting to
+// Staff "Match credits" panel (Task 7A, owner ruling 15; Revision 4 — OWNER RULING 2026-09-27,
+// owner's word "B") on /admin/orgs/[id]: the org's streaming match-credit balance, ONE "Adjust
+// credits" button that opens a Modal carrying the action, the amount, the note and — for a refund
+// only — the session id, and the latest ledger rows on a rail below. Posts to
 // POST /api/admin/orgs/[id]/stream-credits.
+//
+// WHY one modal and not three inline cards: the three money verbs sit behind one deliberate open,
+// so `revoke` is never a button adjacent to `grant` on a staff page; and it is the shape of the
+// ONLY other money panel on this page (components/admin-credits-panel.tsx), so staff learn one
+// pattern for both wallets. The rail stays because the page's own Adjustments log shows actor /
+// action / category / reason / when / reversible but NOT the delta, the running balance or the
+// session link — which is exactly what a linked refund's cap is judged against.
 //
 // English only: /admin is staff-only and the tree owes it no dictionary keys
 // (admin-credits-panel.tsx:8-9, slot-waiver-button.tsx:12, adjustment-labels.ts:16).
-// Idiom: AdminPlanPanel's inline action cards — a required note gates the button; a success is
-// followed by router.refresh(), which re-reads the balance and the rows ON THE SERVER
-// (creditBalance) instead of trusting a number computed here. The idempotency key follows
-// admin-credits-panel.tsx's (the donor), minted per SUBMISSION rather than per modal open. Unlike
-// the donor, the route answers 409 idempotency_key_reused when a kept key comes back with DIFFERENT
-// values (Task 7, Revision 2); the card then drops its key and resets (see post()).
+//
+// Donor idioms, every one from components/admin-credits-panel.tsx: `import { Modal } from
+// "@/components/modal"` (:12) with its `title` / `onClose` / `footer` props (:131, :132, :133-152 —
+// Modal's own contract is `{ title: string; children?; onClose: () => void; footer?; size?:
+// "md"|"lg" }`, modal.tsx:37-49); Cancel and the submit IN the footer (:140, :143-149); the
+// section trigger's raw Tailwind (:122); `input w-full` on every field (:175, :195, :216) and
+// `mb-1 block text-xs font-medium text-slate-600` on every label (:165); `btn btn-ghost` /
+// `btn btn-primary disabled:opacity-40` on the footer buttons (:140, :146); the key mint with its
+// fallback (:61-65); fetch → `if (!res.ok) throw new Error(d.error ?? …)` → `router.refresh()`
+// (:80-95). A `select` for the action is that panel's idiom for its reason (:191-202), so the
+// dropdown here is convention, not invention.
+//
+// THREE departures from the donor, all deliberate, all money:
+//  1. The idempotency key is per SUBMISSION, not per modal open. It is minted on open, KEPT across
+//     a failed attempt (a failure that wrote nothing leaves the key unused, so a retry with edited
+//     fields is legal and an attempt that DID land replays instead of applying twice), re-minted
+//     on success, and DROPPED on a 409 idempotency_key_reused.
+//  2. The route answers 409 idempotency_key_reused when a kept key comes back with DIFFERENT
+//     values (Task 7, Revision 2), where the donor answers a silent applied:false.
+//  3. No in-modal "Applied. New balance is N" confirmation. The donor needs one because its page's
+//     balance sits behind the overlay; here the resolved submission closes the modal and
+//     router.refresh() re-reads the balance and the rail ON THE SERVER, so `stream-credits-balance`
+//     (creditBalance) stays the ONE authority for this org's balance. `d.data.balance` is read off
+//     the envelope's type below and deliberately not rendered for that reason.
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Modal } from "@/components/modal";
 import type { StreamCreditLedgerRow } from "@/server/usecases/admin-stream-credits";
-
-const inputCls =
-  "rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder:text-slate-500";
-const buttonCls =
-  "rounded bg-purple-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-600 disabled:opacity-50";
 
 /** Deterministic on server and client (no locale, no zone), so hydration can never disagree. */
 const utc = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
@@ -8214,8 +8241,19 @@ const mintKey = () =>
     : `adj-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 type Kind = "grant" | "refund" | "revoke";
-type Form = { amount: string; note: string; sessionId: string };
-const EMPTY: Form = { amount: "1", note: "", sessionId: "" };
+
+/** The dropdown's order IS this array's order, and it names the same three literals as the route's
+ *  zod discriminator. A refund ADDS credits back; a revoke takes them away. */
+const KINDS: { kind: Kind; label: string }[] = [
+  { kind: "grant", label: "Grant — add credits" },
+  { kind: "refund", label: "Refund — add credits back" },
+  { kind: "revoke", label: "Revoke — take credits away" },
+];
+
+type Form = { kind: Kind; amount: string; note: string; sessionId: string };
+/** What the modal OPENS AT (AGENTS.md class 19): grant, ONE credit, no note, no session. A
+ *  reachability test is satisfied by any value, so the component test pins these. */
+const EMPTY: Form = { kind: "grant", amount: "1", note: "", sessionId: "" };
 
 /** Shown on a 409 idempotency_key_reused. The walkthrough asserts on "already landed". */
 const REUSED_KEY_MESSAGE =
@@ -8237,194 +8275,126 @@ export function AdminStreamCreditsPanel({
   ledgerLimit: number;
 }) {
   const router = useRouter();
+  const [open, setOpen] = useState(false);
   // The ref closes the window between a second click and React committing `busy`, so a
   // double-click sends ONE request. The server's idempotency key is the backstop, not the guard.
   const inFlight = useRef(false);
-  // One key per SUBMISSION, per card: minted on the first attempt, KEPT when that attempt fails
-  // (a retry is the same submission, so a request that reached the server before the connection
-  // dropped replays as applied:false instead of applying twice), dropped on success AND on a 409
-  // idempotency_key_reused (an edited retry of a landed attempt can never succeed under that key).
-  const keys = useRef<Record<Kind, string | null>>({ grant: null, refund: null, revoke: null });
-  const [busy, setBusy] = useState<Kind | null>(null);
+  // ONE key per SUBMISSION (see the header): minted in openModal, kept across a failed attempt,
+  // re-minted on success, dropped on a 409 idempotency_key_reused.
+  const idemKey = useRef<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [replayed, setReplayed] = useState(false);
-  const [forms, setForms] = useState<Record<Kind, Form>>({ grant: EMPTY, refund: EMPTY, revoke: EMPTY });
-  const edit = (kind: Kind, patch: Partial<Form>) => setForms((f) => ({ ...f, [kind]: { ...f[kind], ...patch } }));
+  const [form, setForm] = useState<Form>(EMPTY);
+  const edit = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
 
-  async function post(kind: Kind, body: Record<string, unknown>) {
-    if (inFlight.current) return;
+  /** The donor's openModal (:60-73): rotate the key FIRST, then reset every field. Every open is a
+   *  new submission, so a modal reopened after a success or a 409 can never inherit either. */
+  function openModal() {
+    idemKey.current = mintKey();
+    setForm(EMPTY);
+    setError("");
+    setReplayed(false);
+    setBusy(false);
+    setOpen(true);
+  }
+
+  async function submit() {
+    if (inFlight.current || !form.note.trim()) return;
     inFlight.current = true;
-    const key = (keys.current[kind] ??= mintKey());
-    setBusy(kind);
+    const key = (idemKey.current ??= mintKey());
+    setBusy(true);
     setError("");
     setReplayed(false);
     try {
       const res = await fetch(`/api/admin/orgs/${orgId}/stream-credits`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, ...body, idempotency_key: key }),
+        body: JSON.stringify({
+          kind: form.kind,
+          delta: Number(form.amount),
+          note: form.note,
+          // Only a refund carries a session, and only the route's refund member accepts one: the
+          // body is a STRICT discriminated union, so a grant carrying session_id is a 400.
+          ...(form.kind === "refund" ? { session_id: form.sessionId.trim() || null } : {}),
+          idempotency_key: key,
+        }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string; data?: { applied?: boolean } };
-      if (!res.ok && data.code === "idempotency_key_reused") {
-        // An earlier attempt of THIS submission landed and the card was edited before the retry.
-        // Keeping the key would 409 on every retry until a reload: drop it (K3), reset the card,
+      // SINGLE-wrapped. The route returns Task 7's `{ id, balance, applied }` and `handler` wraps
+      // it ONCE, so the fields are under `d.data` — never `d.data.data`. (The DONOR route returns
+      // its own `{ ok:true, … }` INSIDE the same wrapper, which is why admin-credits-panel.tsx:92-94
+      // reads `d.data?.balance_after` and carries a comment recording that a top-level read left
+      // its confirmation dead. Lane B's route does not double-wrap, so one `.data` is right here.)
+      // `balance` is typed and deliberately NOT rendered: stream-credits-balance is creditBalance()
+      // after router.refresh(), and one authority per fact means no second, client-held balance.
+      const d = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+        data?: { id?: string; balance?: number; applied?: boolean };
+      };
+      if (!res.ok && d.code === "idempotency_key_reused") {
+        // An earlier attempt of THIS submission landed and the form was edited before the retry.
+        // Keeping the key would 409 on every retry until a reload: drop it (K3), reset the form,
         // re-read the page so the attempt that DID land is on screen (K4), and say what happened.
-        keys.current[kind] = null;
-        edit(kind, EMPTY);
+        // The modal STAYS OPEN with the message inside it, at its opening state — which means the
+        // action is back at `grant` and has to be re-chosen deliberately (deviation f).
+        idemKey.current = null;
+        setForm(EMPTY);
         router.refresh();
         throw new Error(REUSED_KEY_MESSAGE);
       }
-      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
-      keys.current[kind] = null;
-      // applied:false is an EXACT replay (the server compares org, kind, amount and session): an
-      // earlier attempt of this submission already landed with these values, so nothing was added.
-      setReplayed(data.data?.applied === false);
-      // Clear the card on success: the button disables again, so a stray click cannot resend it.
-      edit(kind, EMPTY);
+      if (!res.ok) throw new Error(d.error ?? `Failed (${res.status})`);
+      // Resolved. Anything from here is a NEW submission, so rotate rather than clear.
+      idemKey.current = mintKey();
+      // applied:false is an EXACT replay (the server compares org, kind, signed amount and
+      // session): an earlier attempt of this submission already landed, so nothing was added.
+      setReplayed(d.data?.applied === false);
+      // Close on a resolved answer: the balance and the rail below are the confirmation, re-read
+      // from the server. A failure does NOT close, so the staff member can fix and retry with the
+      // same submission's key still in hand.
+      setOpen(false);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed");
     } finally {
       inFlight.current = false;
-      setBusy(null);
+      setBusy(false);
     }
   }
+
+  const label = "mb-1 block text-xs font-medium text-slate-600";
 
   return (
     <section data-testid="stream-credits-panel">
       <h2 className="mb-2 text-sm font-semibold text-slate-300">Match credits (streaming)</h2>
-      <div className="space-y-4 rounded-lg bg-slate-800 p-4">
-        <p className="text-2xl font-bold text-white">
-          <span data-testid="stream-credits-balance">{balance}</span>{" "}
-          <span className="text-sm font-normal text-slate-300">match credits</span>
-        </p>
-
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="min-w-0 space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Grant</h3>
-            <input
-              data-testid="stream-credits-grant-amount"
-              aria-label="Credits to grant"
-              type="number"
-              min={1}
-              max={maxDelta}
-              step={1}
-              value={forms.grant.amount}
-              onChange={(e) => edit("grant", { amount: e.target.value })}
-              className={`${inputCls} w-24`}
-            />
-            <input
-              data-testid="stream-credits-grant-note"
-              aria-label="Grant note"
-              maxLength={500}
-              placeholder="Note (required)"
-              value={forms.grant.note}
-              onChange={(e) => edit("grant", { note: e.target.value })}
-              className={`${inputCls} w-full`}
-            />
-            <button
-              data-testid="stream-credits-grant-submit"
-              type="button"
-              disabled={!forms.grant.note.trim() || busy !== null}
-              onClick={() => post("grant", { delta: Number(forms.grant.amount), note: forms.grant.note })}
-              className={buttonCls}
-            >
-              {busy === "grant" ? "…" : "Grant match credits"}
-            </button>
+      <div className="space-y-3 rounded-lg bg-slate-800 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <p className="text-2xl font-bold text-white">
+              <span data-testid="stream-credits-balance">{balance}</span>{" "}
+              <span className="text-sm font-normal text-slate-300">match credits</span>
+            </p>
+            <p className="text-xs text-slate-400">
+              Up to {maxDelta} credits per adjustment. A refund adds credits back; to tie it to a failed
+              stream, paste the session id from that stream&apos;s consume row. A revoke takes credits away
+              and cannot go below zero. Latest {ledgerLimit} ledger entries, newest first.
+            </p>
           </div>
-
-          <div className="min-w-0 space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Refund</h3>
-            <input
-              data-testid="stream-credits-refund-amount"
-              aria-label="Credits to refund"
-              type="number"
-              min={1}
-              max={maxDelta}
-              step={1}
-              value={forms.refund.amount}
-              onChange={(e) => edit("refund", { amount: e.target.value })}
-              className={`${inputCls} w-24`}
-            />
-            <input
-              data-testid="stream-credits-refund-session"
-              aria-label="Refunded session id"
-              placeholder="Session id (optional)"
-              value={forms.refund.sessionId}
-              onChange={(e) => edit("refund", { sessionId: e.target.value })}
-              className={`${inputCls} w-full font-mono`}
-            />
-            <input
-              data-testid="stream-credits-refund-note"
-              aria-label="Refund note"
-              maxLength={500}
-              placeholder="Note (required)"
-              value={forms.refund.note}
-              onChange={(e) => edit("refund", { note: e.target.value })}
-              className={`${inputCls} w-full`}
-            />
-            <button
-              data-testid="stream-credits-refund-submit"
-              type="button"
-              disabled={!forms.refund.note.trim() || busy !== null}
-              onClick={() =>
-                post("refund", {
-                  delta: Number(forms.refund.amount),
-                  session_id: forms.refund.sessionId.trim() || null,
-                  note: forms.refund.note,
-                })
-              }
-              className={buttonCls}
-            >
-              {busy === "refund" ? "…" : "Refund match credits"}
-            </button>
-          </div>
-
-          <div className="min-w-0 space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Revoke</h3>
-            <input
-              data-testid="stream-credits-revoke-amount"
-              aria-label="Credits to revoke"
-              type="number"
-              min={1}
-              max={maxDelta}
-              step={1}
-              value={forms.revoke.amount}
-              onChange={(e) => edit("revoke", { amount: e.target.value })}
-              className={`${inputCls} w-24`}
-            />
-            <input
-              data-testid="stream-credits-revoke-note"
-              aria-label="Revoke note"
-              maxLength={500}
-              placeholder="Note (required)"
-              value={forms.revoke.note}
-              onChange={(e) => edit("revoke", { note: e.target.value })}
-              className={`${inputCls} w-full`}
-            />
-            <button
-              data-testid="stream-credits-revoke-submit"
-              type="button"
-              disabled={!forms.revoke.note.trim() || busy !== null}
-              onClick={() => post("revoke", { delta: Number(forms.revoke.amount), note: forms.revoke.note })}
-              className={buttonCls}
-            >
-              {busy === "revoke" ? "…" : "Revoke match credits"}
-            </button>
-          </div>
+          <button
+            data-testid="stream-credits-adjust"
+            type="button"
+            onClick={openModal}
+            className="shrink-0 rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600"
+          >
+            Adjust credits
+          </button>
         </div>
 
-        {error && <p data-testid="stream-credits-error" className="text-xs text-red-400">{error}</p>}
         {replayed && (
           <p data-testid="stream-credits-replayed" className="text-xs text-amber-300">
             Already recorded: an earlier attempt of this submission reached the ledger, so nothing was added twice.
           </p>
         )}
-        <p className="text-xs text-slate-400">
-          Up to {maxDelta} credits per adjustment. A refund adds credits back; to tie it to a failed stream, paste
-          the session id from that stream&apos;s consume row. A revoke takes credits away and cannot go below zero.
-          Latest {ledgerLimit} ledger entries, newest first.
-        </p>
 
         {rows.length === 0 ? (
           <p data-testid="stream-credits-empty" className="text-xs text-slate-400">
@@ -8463,30 +8433,129 @@ export function AdminStreamCreditsPanel({
           </div>
         )}
       </div>
+
+      {open && (
+        <Modal
+          title="Adjust match credits"
+          onClose={() => setOpen(false)}
+          footer={
+            <>
+              <button data-testid="stream-credits-cancel" type="button" onClick={() => setOpen(false)} className="btn btn-ghost">
+                Cancel
+              </button>
+              <button
+                data-testid="stream-credits-submit"
+                type="button"
+                onClick={submit}
+                disabled={!form.note.trim() || busy}
+                className="btn btn-primary disabled:opacity-40"
+              >
+                {busy ? "Applying…" : "Apply"}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="sc-kind" className={label}>Action</label>
+              <select
+                id="sc-kind"
+                data-testid="stream-credits-kind"
+                value={form.kind}
+                onChange={(e) => edit({ kind: e.target.value as Kind })}
+                className="input w-full"
+              >
+                {KINDS.map((k) => (
+                  <option key={k.kind} value={k.kind}>{k.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="sc-amount" className={label}>Credits (1–{maxDelta})</label>
+              <input
+                id="sc-amount"
+                data-testid="stream-credits-amount"
+                type="number"
+                min={1}
+                max={maxDelta}
+                step={1}
+                value={form.amount}
+                onChange={(e) => edit({ amount: e.target.value })}
+                className="input w-full"
+              />
+            </div>
+
+            {/* A session caps a REFUND, so the field exists only for a refund — the route's body is
+                a strict discriminated union and only its refund member accepts session_id. */}
+            {form.kind === "refund" && (
+              <div>
+                <label htmlFor="sc-session" className={label}>Refunded session id (optional)</label>
+                <input
+                  id="sc-session"
+                  data-testid="stream-credits-session"
+                  value={form.sessionId}
+                  onChange={(e) => edit({ sessionId: e.target.value })}
+                  placeholder="The session id from that stream's consume row"
+                  className="input w-full font-mono"
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Linked refunds may not exceed what that session consumed. Leave blank for a goodwill refund.
+                </p>
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="sc-note" className={label}>Note (required)</label>
+              <input
+                id="sc-note"
+                data-testid="stream-credits-note"
+                type="text"
+                maxLength={500}
+                value={form.note}
+                onChange={(e) => edit({ note: e.target.value })}
+                placeholder="Context for the audit log"
+                className="input w-full"
+              />
+            </div>
+
+            {error && <p data-testid="stream-credits-error" className="text-xs text-red-600">{error}</p>}
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }
 ```
 
-- [ ] **Step 13: Run — expect `4 0 0`, then the panel mutants, then all three files together.** Use Step 11's command, writing to `t7a-panel.json` → `4 0 0`. Mutants, under Step 5's protocol and one SURFACE at a time:
-  - C1 on the GRANT button only → "the controls OPEN AT" goes red with the message `grant submit`.
-  - C1′ on the REFUND button only → the same test goes red with `refund submit`.
-  - C1″ on the REVOKE button only → the same test goes red with `revoke submit`. The loop reports the FIRST failing kind, so each of the three runs must name its own kind; a run naming `grant` under C1″ means the anchor hit the wrong button.
+- [ ] **Step 13: Run — expect `6 0 0`, then the panel mutants, then all three files together.** Use Step 11's command, writing to `t7a-panel.json` → `6 0 0`. Mutants, under Step 5's protocol and one SURFACE at a time:
+  - C0 `onClick={openModal}` on the opener → `onClick={() => {}}` → "the modal OPENS AT" goes red: `expandPanel` finds no `Modal`, so the kind select is missing. This is the mutant that proves the opener is wired, not merely present.
+  - C1 `disabled={!form.note.trim() || busy}` → `disabled={busy}` → "the modal OPENS AT" goes red with `submit`, and "the submit gate" goes red on its whitespace-only row.
+  - C1' `{form.kind === "refund" && (` → drop the condition (render the session field always) → "the kind switch" goes red on its grant and revoke directions.
+  - C1" `form.kind === "refund"` → `form.kind === "grant"` → the same test goes red the OTHER way (the field is missing at refund and present at grant). Two mutants on one predicate because a single direction leaves half of it untested.
   - C2 `{r.createdByEmail ?? r.createdBy ?? "—"}` → `{r.createdByEmail ?? "—"}` → "rows render" goes red with the message `>user-1<`.
+  - C3 `max={maxDelta}` → `max={50}` → "the modal OPENS AT" goes red on `max` (the test passes `maxDelta` 7, so the right answer differs from the wrong one's constant).
+  - C4 delete the Cancel button from the Modal's `footer` → "the modal OPENS AT" goes red on `stream-credits-cancel`. This is the mutant that proves `expandPanel` really walks `footer`: `walk` recurses into `children` only (`_hook-harness.tsx:115`), so WITHOUT that line every footer assertion passes vacuously and C4 survives.
   - R5 delete `tabIndex={0}` → "a keyboard-reachable scroll rail" goes red.
-  
-  Record the killers. Then run the three 7A vitest files in ONE run:
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/admin-stream-credits.test.ts 'src/app/api/admin/orgs/[id]/stream-credits/__tests__/route.test.ts' src/components/__tests__/admin-stream-credits-panel.test.tsx src/server/relay/__tests__/enc-boundary.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-unit.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-unit.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests,r.numTotalTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,t.assertionResults.length)"`
-  Expect 0 failed and 0 pending; four suites listed, all under `…/worktrees/relay/`, with per-file counts of 5, 13, 4 and `enc-boundary`'s Step 1 count. That is **22 new tests**; record the number for Task 17 Step 1(b)(ii). Then tsc as in Step 9 → `EXIT=0`, and lint: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && rtk proxy npm run lint 2>&1 | grep -a -E "✖|problems" | tail -3` → no `✖` line with a non-zero count.
 
-- [ ] **Step 14: Write the walkthrough spec, then rebuild `rly`.** Create `apps/web/e2e/walkthrough/stream-credits-admin.spec.ts`. The staff and non-staff users are minted fresh, so staff privilege is NEVER borrowed from the shared Pro user.
+  Record the eight killers. Then run the three 7A vitest files in ONE run:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/admin-stream-credits.test.ts 'src/app/api/admin/orgs/[id]/stream-credits/__tests__/route.test.ts' src/components/__tests__/admin-stream-credits-panel.test.tsx src/server/relay/__tests__/enc-boundary.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-unit.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-unit.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests,r.numTotalTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\//,''),t.status,t.assertionResults.length)"`
+  Expect 0 failed and 0 pending; four suites listed, all under `…/worktrees/relay-b/`, with per-file counts of 5, 13, 6 and `enc-boundary`'s Step 1 count. That is **24 new tests**; record the number for Task 17 Step 1(b)(ii). Then tsc as in Step 9 → `EXIT=0`, and lint — from `apps/web`, never the worktree root, where `apps/web/src/...` paths lint NOTHING and exit 0: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b/apps/web && npx eslint src/components/admin-stream-credits-panel.tsx src/components/__tests__/admin-stream-credits-panel.test.tsx` and say how many files were actually linted. `rtk` hides `npm run lint` output entirely, so if the whole-repo run is wanted use `rtk proxy npm run lint` and read `✖ N problems`.
+
+- [ ] **Step 14: Write the walkthrough spec, then rebuild `rly`.** Create `apps/web/e2e/walkthrough/stream-credits-admin.spec.ts`. The staff and non-staff users are minted fresh, so staff privilege is NEVER borrowed from the shared Pro user. FIVE cases, as before; each money case now OPENS the modal and PICKS its kind first, and each width case additionally proves the phone bar with the modal OPEN.
 
 ```ts
-// Streaming R1, Task 7A (owner ruling 15; Revision 1) — the staff "Match credits" panel on
-// /admin/orgs/[id], driven through the REAL page and the REAL route. Without this panel Task 7's
-// grantCredits / refundCredits / revokeCredits have no production caller (AGENTS.md class 1); this
-// spec is the seam's producer→consumer proof: a click → the route → Task 7's ledger row and audit
-// row → the server re-read → the DOM, including the page's own Adjustments log.
+// Streaming R1, Task 7A (owner ruling 15; Revision 4 — the OPTION-B panel, owner's word "B",
+// 2026-09-27) — the staff "Match credits" panel on /admin/orgs/[id], driven through the REAL page
+// and the REAL route. Without this panel Task 7's grantCredits / refundCredits / revokeCredits have
+// no production caller (AGENTS.md class 1); this spec is the seam's producer→consumer proof: a
+// click → the modal → the route → Task 7's ledger row and audit row → the server re-read → the
+// DOM, including the page's own Adjustments log.
+//
+// OPTION B's shape, which every step below depends on: the closed panel is a balance, ONE "Adjust
+// credits" button and the ledger rail. The kind, amount, note and (refund only) session live in a
+// Modal that opens on that button. A resolved submission CLOSES the modal; a FAILED one keeps it
+// open with its message inside, which is what makes the lost-response retry drivable at all.
 //
 // Every user and org is minted fresh by SQL. The staff bit is never borrowed from the shared Pro
 // user (billing-states.spec.ts must restore that one in afterEach), so nothing here can leak into
@@ -8550,17 +8619,32 @@ const auditSql = (orgId: string) =>
     ...(await sql<{ actor_id: string; action: string }[]>`
       select actor_id, action from staff_audit_log where target_id = ${orgId} order by created_at`),
   ]);
-const key = () => `e2e-${randomBytes(8).toString("hex")}`;
 
 const shot = (page: Page, name: string) =>
   page.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputDir, name), fullPage: true });
+
+/** Open the modal and assert what it OPENS AT — every time, not just the first (AGENTS.md class
+ *  19, and mutant M1: a panel that reopened a dirty form would pass an assertion made once). */
+async function openAdjust(page: Page): Promise<void> {
+  const panel = page.getByTestId("stream-credits-panel");
+  await panel.getByTestId("stream-credits-adjust").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("stream-credits-kind")).toHaveValue("grant");
+  await expect(page.getByTestId("stream-credits-amount")).toHaveValue("1");
+  await expect(page.getByTestId("stream-credits-note")).toHaveValue("");
+  // The session field is a REFUND's, so a freshly opened modal does not carry it at all.
+  await expect(page.getByTestId("stream-credits-session")).toHaveCount(0);
+  await expect(page.getByTestId("stream-credits-submit")).toBeDisabled();
+  await expect(page.getByTestId("stream-credits-cancel")).toBeVisible();
+}
 
 // afterAll runs on a timeout; an in-test finally does not.
 test.afterAll(async () => {
   if (minted.length) await withDb((sql) => sql`update users set is_staff = false, staff_role = null where email = any(${minted})`);
 });
 
-test("staff grant, refund and revoke through the real panel — a grant the server applied but the browser lost, retried with a double-click, replays its key (ONE row); a refund the server applied but the browser lost, EDITED and resubmitted, is a 409 that resets the card and shows what landed, and the next refund gets a NEW key; a revoke above the balance is refused on screen; the bodies are what the route expects; every row and audit row is the staff user's", async ({ page }) => {
+test("staff grant, refund and revoke through the real Adjust-credits modal — a grant the server applied but the browser lost, retried with a double-click, replays its key (ONE row); a refund the server applied but the browser lost, EDITED and resubmitted, is a 409 that resets the modal and shows what landed, and the next refund gets a NEW key; a revoke above the balance is refused in the modal; the bodies are what the route expects; every row and audit row is the staff user's", async ({ page }) => {
   test.setTimeout(180_000);
   const rig = await seedRig("support");   // support suffices: the route's guard is requireStaff
   const path = `/api/admin/orgs/${rig.orgId}/stream-credits`;
@@ -8591,81 +8675,106 @@ test("staff grant, refund and revoke through the real panel — a grant the serv
   const panel = page.getByTestId("stream-credits-panel");
   const balance = panel.getByTestId("stream-credits-balance");
   const rows = panel.getByTestId("stream-credits-row");
-  const error = panel.getByTestId("stream-credits-error");
-  const replayed = panel.getByTestId("stream-credits-replayed");
+  const error = page.getByTestId("stream-credits-error");        // inside the dialog
+  const replayed = panel.getByTestId("stream-credits-replayed"); // in the panel, after the close
   await expect(balance).toHaveText("0", { timeout: 30_000 });
   await expect(panel.getByTestId("stream-credits-empty")).toBeVisible();
-  // What the controls OPEN AT, in the browser (class 19).
-  for (const kind of ["grant", "refund", "revoke"]) {
-    await expect(panel.getByTestId(`stream-credits-${kind}-amount`)).toHaveValue("1");
-    await expect(panel.getByTestId(`stream-credits-${kind}-submit`)).toBeDisabled();
+  // CLOSED means closed: none of the modal's controls exist until the opener is clicked. This is
+  // the assertion that makes every "opens at" claim below non-vacuous.
+  for (const id of ["stream-credits-kind", "stream-credits-amount", "stream-credits-note", "stream-credits-submit"]) {
+    await expect(page.getByTestId(id), id).toHaveCount(0);
   }
 
-  // 1. Grant 1: the server applies it, the browser loses the answer.
-  await panel.getByTestId("stream-credits-grant-note").fill("e2e: pilot grant");
-  await expect(panel.getByTestId("stream-credits-grant-submit")).toBeEnabled();   // the note gate's OPEN direction
-  await panel.getByTestId("stream-credits-grant-submit").click();
+  // 1. Grant 1: the server applies it, the browser loses the answer. The modal STAYS OPEN with the
+  //    message inside it and the fields untouched — that is what a retry needs.
+  await openAdjust(page);
+  await page.getByTestId("stream-credits-note").fill("e2e: pilot grant");
+  await expect(page.getByTestId("stream-credits-submit")).toBeEnabled();   // the note gate's OPEN direction
+  await page.getByTestId("stream-credits-submit").click();
   await expect(error).toBeVisible({ timeout: 30_000 });
-  await expect(panel.getByTestId("stream-credits-grant-note")).toHaveValue("e2e: pilot grant");   // a failure keeps the card
+  await expect(page.getByRole("dialog")).toBeVisible();                     // a failure does not close it
+  await expect(page.getByTestId("stream-credits-note")).toHaveValue("e2e: pilot grant");
   await expect(balance).toHaveText("0");
   await expect.poll(async () => (await ledgerSql(rig.orgId)).length, { timeout: 15_000 }).toBe(1);   // the server DID apply it
 
-  // 2. Retry with a DOUBLE-click: ONE request carrying the SAME key → applied:false, still one row.
-  await panel.getByTestId("stream-credits-grant-submit").dblclick();
-  await expect(replayed).toBeVisible({ timeout: 30_000 });
+  // 2. Retry with a DOUBLE-click, same open modal: ONE request carrying the SAME key →
+  //    applied:false, still one row, and the modal closes on the resolved answer.
+  await page.getByTestId("stream-credits-submit").dblclick();
+  await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
+  await expect(replayed).toBeVisible();
   await expect(balance).toHaveText("1", { timeout: 30_000 });
   await expect(rows).toHaveCount(1);
   await expect(error).toHaveCount(0);
-  await expect(panel.getByTestId("stream-credits-grant-note")).toHaveValue("");
-  await expect(panel.getByTestId("stream-credits-grant-submit")).toBeDisabled();
 
-  // 3. Refund 1 with no session: the server applies it (a refund ADDS), the browser loses the answer.
-  await panel.getByTestId("stream-credits-refund-note").fill("e2e: failed stream refund");
-  await panel.getByTestId("stream-credits-refund-submit").click();
+  // 3. Refund 1 with no session: a NEW open, so a NEW key. The server applies it (a refund ADDS),
+  //    the browser loses the answer. `openAdjust` re-asserts the opening values (M1).
+  await openAdjust(page);
+  await expect(replayed).toHaveCount(0);                                    // opening clears the notice
+  await page.getByTestId("stream-credits-kind").selectOption("refund");
+  await expect(page.getByTestId("stream-credits-session")).toHaveValue("");  // the refund-only field appeared, empty
+  await page.getByTestId("stream-credits-note").fill("e2e: failed stream refund");
+  await page.getByTestId("stream-credits-submit").click();
   await expect(error).toBeVisible({ timeout: 30_000 });
-  await expect(panel.getByTestId("stream-credits-refund-note")).toHaveValue("e2e: failed stream refund");
+  await expect(page.getByTestId("stream-credits-note")).toHaveValue("e2e: failed stream refund");
   await expect(balance).toHaveText("1");
   await expect.poll(async () => (await ledgerSql(rig.orgId)).length, { timeout: 15_000 }).toBe(2);   // the server DID apply it
 
-  // 4. The staff user EDITS the amount before retrying: the SAME key with a different delta is Task 7's
-  //    409 idempotency_key_reused. The card drops its key and resets, the page re-reads, and the
-  //    ledger shows the refund of 1 that landed, not the 2 that was typed.
-  await panel.getByTestId("stream-credits-refund-amount").fill("2");
-  await panel.getByTestId("stream-credits-refund-submit").click();
+  // 4. The staff user EDITS the amount before retrying: the SAME key with a different delta is
+  //    Task 7's 409 idempotency_key_reused. The modal drops its key and resets to its OPENING
+  //    state — kind back to grant, so the session field goes away and the action is re-chosen
+  //    deliberately (deviation f) — the page re-reads, and the ledger shows the refund of 1 that
+  //    landed, not the 2 that was typed.
+  await page.getByTestId("stream-credits-amount").fill("2");
+  await page.getByTestId("stream-credits-submit").click();
   await expect(error).toContainText("already landed", { timeout: 30_000 });
+  await expect(page.getByRole("dialog")).toBeVisible();
   await expect(balance).toHaveText("2", { timeout: 30_000 });   // router.refresh() on the 409 (K4)
   await expect(rows).toHaveCount(2);
   await expect(rows.first()).toHaveAttribute("data-reason", "refund");   // newest first
   await expect(rows.first()).toHaveAttribute("data-delta", "1");
-  await expect(panel.getByTestId("stream-credits-refund-note")).toHaveValue("");
-  await expect(panel.getByTestId("stream-credits-refund-amount")).toHaveValue("1");
-  await expect(panel.getByTestId("stream-credits-refund-submit")).toBeDisabled();
+  await expect(page.getByTestId("stream-credits-kind")).toHaveValue("grant");
+  await expect(page.getByTestId("stream-credits-amount")).toHaveValue("1");
+  await expect(page.getByTestId("stream-credits-note")).toHaveValue("");
+  await expect(page.getByTestId("stream-credits-session")).toHaveCount(0);
+  await expect(page.getByTestId("stream-credits-submit")).toBeDisabled();
   await expect(replayed).toHaveCount(0);
   expect(await ledgerSql(rig.orgId)).toHaveLength(2);   // the 409 wrote nothing
 
-  // 5. A new, deliberate refund of 1: a NEW key (K3), so it APPLIES — 2 → 3, no notice, no error.
-  await panel.getByTestId("stream-credits-refund-note").fill("e2e: a second, deliberate refund");
-  await panel.getByTestId("stream-credits-refund-submit").click();
+  // 5. A new, deliberate refund of 1 from the reset modal: the key was dropped, so `submit` mints
+  //    a fresh one (K3) and it APPLIES — 2 → 3, no notice, no error.
+  await page.getByTestId("stream-credits-kind").selectOption("refund");
+  await page.getByTestId("stream-credits-note").fill("e2e: a second, deliberate refund");
+  await page.getByTestId("stream-credits-submit").click();
+  await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
   await expect(balance).toHaveText("3", { timeout: 30_000 });
   await expect(rows).toHaveCount(3);
   await expect(replayed).toHaveCount(0);
   await expect(error).toHaveCount(0);
 
   // 6. Revoke 1: 3 → 2, a NEGATIVE row.
-  await panel.getByTestId("stream-credits-revoke-note").fill("e2e: reverse one");
-  await panel.getByTestId("stream-credits-revoke-submit").click();
+  await openAdjust(page);
+  await page.getByTestId("stream-credits-kind").selectOption("revoke");
+  await expect(page.getByTestId("stream-credits-session")).toHaveCount(0);   // revoke has no session either
+  await page.getByTestId("stream-credits-note").fill("e2e: reverse one");
+  await page.getByTestId("stream-credits-submit").click();
+  await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
   await expect(balance).toHaveText("2", { timeout: 30_000 });
   await expect(rows).toHaveCount(4);
   await expect(rows.first()).toHaveAttribute("data-reason", "revoke");
   await expect(rows.first()).toHaveAttribute("data-delta", "-1");
 
-  // 7. Revoke 5 of 2: Task 7's 422 insufficient_credits, shown; nothing moves.
-  await panel.getByTestId("stream-credits-revoke-amount").fill("5");
-  await panel.getByTestId("stream-credits-revoke-note").fill("e2e: too many");
-  await panel.getByTestId("stream-credits-revoke-submit").click();
+  // 7. Revoke 5 of 2: Task 7's 422 insufficient_credits, shown IN the modal; nothing moves.
+  await openAdjust(page);
+  await page.getByTestId("stream-credits-kind").selectOption("revoke");
+  await page.getByTestId("stream-credits-amount").fill("5");
+  await page.getByTestId("stream-credits-note").fill("e2e: too many");
+  await page.getByTestId("stream-credits-submit").click();
   await expect(error).toContainText("below zero", { timeout: 30_000 });
+  await expect(page.getByRole("dialog")).toBeVisible();
   await expect(balance).toHaveText("2");
   await expect(rows).toHaveCount(4);
+  await page.getByTestId("stream-credits-cancel").click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 
   // Persistence through the READ path, not client state, and the page's OWN Adjustments log reading
   // Task 7's audit rows (allowlisted there, so no page edit was needed).
@@ -8692,6 +8801,8 @@ test("staff grant, refund and revoke through the real panel — a grant the serv
   // The request BODIES, pinned: a client that normalised a field would hide the server's guard, and
   // a double-click that sent twice would make eight. Each retry carries its LOST attempt's key (the
   // edited refund included: that is what the 409 compares); every other submission has its own.
+  // Note `session_id` appears on the refund bodies ONLY — the route's body is a strict
+  // discriminated union and a grant carrying one is a 400.
   expect(posts.map((b) => ({ ...b, idempotency_key: undefined }))).toEqual([   // toEqual skips undefined keys
     { kind: "grant", delta: 1, note: "e2e: pilot grant" },                                    // 0 lost
     { kind: "grant", delta: 1, note: "e2e: pilot grant" },                                    // 1 exact replay
@@ -8709,12 +8820,13 @@ test("staff grant, refund and revoke through the real panel — a grant the serv
 });
 
 for (const width of [320, 768, 1280] as const) {
-  test(`at ${width}px with ledger rows present: no horizontal page scroll, nothing clipped inside the panel, and its only scroller is the focusable ledger rail`, async ({ page }) => {
-    test.setTimeout(90_000);
+  test(`at ${width}px with ledger rows present: no horizontal page scroll closed OR with the Adjust-credits modal open, nothing clipped inside the panel, and its only closed-state scroller is the focusable ledger rail`, async ({ page }) => {
+    test.setTimeout(120_000);
     const rig = await seedRig("superadmin");
     await page.setViewportSize({ width, height: 900 });
     await signInAs(page, rig.userEmail);
     // Two real rows through the REAL route (this context's staff cookie), one with a note that must wrap.
+    const key = () => `e2e-${randomBytes(8).toString("hex")}`;
     for (const data of [
       { kind: "grant", delta: 5, note: `e2e: ${"a long pilot-league note that has to wrap ".repeat(6)}`, idempotency_key: key() },
       { kind: "revoke", delta: 1, note: "e2e: revoke", idempotency_key: key() },
@@ -8728,12 +8840,37 @@ for (const width of [320, 768, 1280] as const) {
     await expectNoHorizontalScroll(page);
     await expect(page.getByTestId("stream-credits-row")).toHaveCount(2, { timeout: 30_000 });
     await expectNoHorizontalScroll(page);   // the claim that counts: after the panel painted its rows
-    const o = await overflowingIn(page, '[data-testid="stream-credits-panel"]', "*", "stream-credits-panel is not on the page");
-    expect(o.clipped, `clipped inside the panel at ${width}px`).toEqual([]);
-    expect(o.truncatedByDesign).toEqual([]);
-    // Hold the exemption to something: the only reachable overflow is the tabindex=0 ledger rail.
-    for (const s of o.scrollable) expect(s, `unexpected scroller at ${width}px`).toMatch(/^div \d+px content in \d+px tabindex=0$/);
+    const closed = await overflowingIn(page, '[data-testid="stream-credits-panel"]', "*", "stream-credits-panel is not on the page");
+    expect(closed.clipped, `clipped inside the panel at ${width}px`).toEqual([]);
+    expect(closed.truncatedByDesign).toEqual([]);
+    // Hold the exemption to something: the only reachable overflow in the CLOSED state is the
+    // tabindex=0 ledger rail. An overflow whose extra content is reachable is a feature; one
+    // inside an overflow-hidden box is a defect, and only computed overflow-x tells them apart
+    // (AGENTS.md class 23 — overflowingIn already splits on it).
+    for (const s of closed.scrollable) expect(s, `unexpected closed-state scroller at ${width}px`).toMatch(/^div \d+px content in \d+px tabindex=0$/);
     await shot(page, `stream-credits-${width}.png`);
+
+    // The phone bar with the modal OPEN — the state option B puts every control into, and the one
+    // a closed-panel scan cannot see at all. The dialog is a DOM descendant of the panel section,
+    // so the panel-scoped scan WIDENS here: that is expected, and any new scroller it names must
+    // be the dialog's own body (modal.tsx's overflow-y-auto, a Y scroller, so overflowingIn should
+    // not report it at all) or the ledger rail. Write down what you saw; never widen the regex to
+    // make a new entry pass.
+    await page.getByTestId("stream-credits-adjust").click();
+    await expect(page.getByRole("dialog")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("stream-credits-note")).toHaveValue("");
+    await expectNoHorizontalScroll(page);   // the phone-bar claim, modal OPEN (320 included)
+    const open = await overflowingIn(page, '[data-testid="stream-credits-panel"]', "*", "stream-credits-panel is not on the page");
+    expect(open.clipped, `clipped with the modal open at ${width}px`).toEqual([]);
+    expect(open.truncatedByDesign).toEqual([]);
+    for (const s of open.scrollable) expect(s, `unexpected modal-open scroller at ${width}px`).toMatch(/tabindex=0$/);
+    // Both footer buttons are inside the sheet at this width, not pushed under its edge.
+    for (const id of ["stream-credits-cancel", "stream-credits-submit"]) {
+      const box = await page.getByTestId(id).boundingBox();
+      expect(box, `${id} has no box at ${width}px`).not.toBeNull();
+      expect(box!.x + box!.width, `${id} runs past ${width}px`).toBeLessThanOrEqual(width);
+    }
+    await shot(page, `stream-credits-${width}-modal.png`);
   });
 }
 
@@ -8742,12 +8879,13 @@ test("a signed-in NON-staff user gets neither the route (401, no row) nor the pa
   const rig = await seedRig(null);
   await signInAs(page, rig.userEmail);
   const res = await page.request.post(`/api/admin/orgs/${rig.orgId}/stream-credits`, {
-    data: { kind: "grant", delta: 1, note: "must not land", idempotency_key: key() },
+    data: { kind: "grant", delta: 1, note: "must not land", idempotency_key: `e2e-${randomBytes(8).toString("hex")}` },
   });
   expect(res.status()).toBe(401);
   await page.goto(`/admin/orgs/${rig.orgId}`);
   await page.waitForURL((u) => !u.pathname.startsWith("/admin"), { timeout: 30_000 });   // app/admin/layout.tsx:8-9
   await expect(page.getByTestId("stream-credits-panel")).toHaveCount(0);
+  await expect(page.getByTestId("stream-credits-adjust")).toHaveCount(0);
   expect(await ledgerSql(rig.orgId)).toEqual([]);
   expect(await auditSql(rig.orgId)).toEqual([]);
 });
@@ -8755,22 +8893,25 @@ test("a signed-in NON-staff user gets neither the route (401, no row) nor the pa
 
   Then `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label rly` → EXIT 0. The served bundle must carry the route and the panel module, while the page still has NO mount.
 
+  Then `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label rly` → EXIT 0. The served bundle must carry the route and the panel module, while the page still has NO mount.
+
 - [ ] **Step 15: Run it BEFORE the mount — expect red for the right reasons, and read the width baseline.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable PLAYWRIGHT_BASE=<rly base, localhost> E2E_PROD_TARGET=1 VISUAL_DIR=<scratchpad>/r1/shots-7a npx playwright test e2e/walkthrough/stream-credits-admin.spec.ts --project=walkthrough --reporter=json > <scratchpad>/r1/t7a-e2e-red.json 2><scratchpad>/r1/t7a-e2e-red.log; echo "EXIT=$?"; node -e "const r=require('<scratchpad>/r1/t7a-e2e-red.json');console.log(r.stats);const walk=s=>{for(const sp of s.specs||[])for(const t of sp.tests)for(const x of t.results)console.log(sp.title.slice(0,70),'|',x.status,'|',((x.error&&x.error.message)||'').split('\n')[0].slice(0,160));for(const c of s.suites||[])walk(c)};for(const s of r.suites)walk(s)"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable PLAYWRIGHT_BASE=<rly base, localhost> E2E_PROD_TARGET=1 VISUAL_DIR=<scratchpad>/r1/shots-7a npx playwright test e2e/walkthrough/stream-credits-admin.spec.ts --project=walkthrough --reporter=json > <scratchpad>/r1/t7a-e2e-red.json 2><scratchpad>/r1/t7a-e2e-red.log; echo "EXIT=$?"; node -e "const r=require('<scratchpad>/r1/t7a-e2e-red.json');console.log(r.stats);const walk=s=>{for(const sp of s.specs||[])for(const t of sp.tests)for(const x of t.results)console.log(sp.title.slice(0,70),'|',x.status,'|',((x.error&&x.error.message)||'').split('\n')[0].slice(0,160));for(const c of s.suites||[])walk(c)};for(const s of r.suites)walk(s)"`
   Expect `expected 1, unexpected 4`:
   - The NON-staff test PASSES, because the route and the layout guard both exist before the mount.
   - The flow test fails at `stream-credits-balance` (the panel is not on the page), AFTER its `<h1>` assertion passed. A red on the heading instead means the page itself fails for a bare SQL org: that is a rig finding, so fix the rig (for example, a group/plan seed) and do not weaken the heading assertion. This run also stands in for mutant W1, "delete the mount".
   - Each width test fails EITHER at its FIRST `expectNoHorizontalScroll` OR at the rows wait.
-  
+  - No test may fail at `stream-credits-adjust` while `stream-credits-balance` passed: that combination would mean the section mounted without its opener, which is a real defect and not the pre-mount red.
+
   **The width baseline comes from that first call.** If it failed at a width, the helper's message names the widest offender. That overflow is PRE-EXISTING, because the panel is not mounted:
   1. Record the width and the culprit in `_STATE.md` as a finding routed to the orchestrator. `app/admin/layout.tsx` and the page's other panels are outside this task's files (RULES.md: fix inline unless the blast radius widens).
-  2. In the spec, wrap both page-level calls for THAT width only: `const PAGE_LEVEL_CLEAN_WIDTHS = new Set<number>([/* the widths whose baseline passed */]);` guarding `if (PAGE_LEVEL_CLEAN_WIDTHS.has(width)) await expectNoHorizontalScroll(page);`, with a comment that names the finding.
-  3. The panel-scoped `overflowingIn` claims stay at EVERY width.
-  
-  Then the wiring test: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/lib/__tests__/e2e-ci-wiring.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-wiring-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-wiring-red.json');console.log(r.numTotalTests,r.numFailedTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status==='failed')console.log(a.title,(a.failureMessages[0]||'').slice(0,200))"` → exactly 1 failed, "names every walkthrough spec on disk in the inventory", naming `walkthrough/stream-credits-admin.spec.ts`. The total must equal Step 1's count for that file.
+  2. In the spec, wrap both page-level calls for THAT width only: `const PAGE_LEVEL_CLEAN_WIDTHS = new Set<number>([/* the widths whose baseline passed */]);` guarding `if (PAGE_LEVEL_CLEAN_WIDTHS.has(width)) await expectNoHorizontalScroll(page);`. The same guard covers the modal-OPEN page-level call at that width, for the same reason and with the same comment naming the finding.
+  3. The panel-scoped `overflowingIn` claims stay at EVERY width, closed AND open.
+
+  Then the wiring test: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b/apps/web && npx vitest run src/lib/__tests__/e2e-ci-wiring.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-wiring-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-wiring-red.json');console.log(r.numTotalTests,r.numFailedTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status==='failed')console.log(a.title,(a.failureMessages[0]||'').slice(0,200))"` → exactly 1 failed, "names every walkthrough spec on disk in the inventory", naming `walkthrough/stream-credits-admin.spec.ts`. The total must equal Step 1's count for that file.
 
 - [ ] **Step 16: Register the spec and mount the panel.**
-  (a) In `e2e-ci-wiring.test.ts`'s `WALKTHROUGH_SPECS`, APPEND at the END of the literal: after its last entry (`"spectator-public.spec.ts",` at `:282` when read, re-pinned in Step 1(b)) and directly before the closing `];`. The list is in wave order (AGENTS.md class 18), so the newest wave goes last; never insert mid-list or reorder:
+  (a) In `e2e-ci-wiring.test.ts`'s `WALKTHROUGH_SPECS`, APPEND at the END of the literal: after its last entry — **`"scorer-sheets-print-scan.spec.ts",` at `:440`** — and directly before the closing **`];` at `:441`**. (The plan's old pin, `"spectator-public.spec.ts"` at `:282` / `];` at `:283`, was re-pinned on 2026-09-27: the literal now opens at `:159` and closes at `:441`, and its last two entries are `"scorer-sheets-print-control.spec.ts"` `:430` and `"scorer-sheets-print-scan.spec.ts"` `:440`. Re-pin again in Step 1(b) rather than trusting these numbers.) The list is in wave order (AGENTS.md class 18), so the newest wave goes last; never insert mid-list or reorder. **There is no `// Streaming R1` block yet** — zero `stream-relay` / `Streaming R1` hits anywhere in that file — so this creates it. Three assertions read the list (missing-spec `:522`, not-selected `:532`, not-listed `:540-547`), and it is the third that reds if a spec lands under `e2e/walkthrough/` without an entry here:
 
 ```ts
 
@@ -8802,32 +8943,41 @@ test("a signed-in NON-staff user gets neither the route (401, no row) nor the pa
   Then tsc as in Step 9 → `EXIT=0` (the `import type` in the client component crosses no runtime line), lint as in Step 13, and `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label rly` → EXIT 0.
 
 - [ ] **Step 17: Run it green, then the browser-side mutants.** Use Step 15's command, writing to `t7a-e2e.json` / `.log`. Expect `stats` `expected 5, unexpected 0, flaky 0, skipped 0`. Then:
-  - `ls <scratchpad>/r1/shots-7a` → `stream-credits-flow-1280.png`, `stream-credits-320.png`, `stream-credits-768.png`, `stream-credits-1280.png`.
-  - `shasum` over the three width files → three DIFFERENT hashes (the visual gate's own vacuous mode, class 10).
-  - OPEN ALL THREE width PNGs (320, 768 and 1280) and write one line each on what they show: the balance, the three cards, the rail, AND the `/admin` layout header's own row (`app/admin/layout.tsx`: the seeded display name plus the role badge) — whether it fits the viewport or runs past its right edge. That is a functional bar with no design verdict, but it is looked at. A header that overflows at a width is a PRE-EXISTING finding for the orchestrator (the layout is outside this task's files, and Step 15's page-level baseline names it too): record the width and what you saw, and do NOT guess a CSS fix here (review M9).
+  - `ls <scratchpad>/r1/shots-7a` → SIX files: `stream-credits-flow-1280.png`, and `stream-credits-<w>.png` plus `stream-credits-<w>-modal.png` for each of 320, 768, 1280.
+  - `shasum` over all six → six DIFFERENT hashes. The pairs matter most: **a width's closed and modal-open shots being identical means the modal never opened**, which is exactly the vacuous mode class 10 names (shared states pixel-identical because nothing opened). Six distinct hashes, or the visual gate proved nothing.
+  - OPEN ALL SIX and write one line each on what they show: closed — the balance, the "Adjust credits" opener, the rail, AND the `/admin` layout header's own row (`app/admin/layout.tsx`: the seeded display name plus the role badge), whether it fits the viewport or runs past its right edge; open — the dialog, its four controls at that width, and the footer's Cancel + Apply both inside the sheet. That is a functional bar with no design verdict, but it is looked at. A header that overflows at a width is a PRE-EXISTING finding for the orchestrator (the layout is outside this task's files, and Step 15's page-level baseline names it too): record the width and what you saw, and do NOT guess a CSS fix here (review M9).
   - Wiring: Step 15's vitest command → 0 failed.
-  
-  Mutants, each followed by `rebuild --label rly` (wait for EXIT) and the whole spec file. Restore each with `cp` and rebuild again:
-  - **G1** (the double-submit guard): in the panel, delete `if (inFlight.current) return;` AND change all three `disabled={!forms.<kind>.note.trim() || busy !== null}` to `disabled={!forms.<kind>.note.trim()}`. The flow test goes red on `posts` (eight bodies, not seven). It does NOT go red on `ledgerSql`: both retry requests carry the kept key and replay exactly, which is the key doing its job. So the guard's killer is the body count, and the ledger is the key's.
-  - **K2** (the key kept across a failed attempt, money): `const key = (keys.current[kind] ??= mintKey());` → `const key = mintKey();`. The flow test goes red at `replayed` `toBeVisible` in step 2 (the retry APPLIES, so balance 2 and a second grant row), and, if that line is skipped, on `posts[1]!.idempotency_key` equality.
-  - **K3** (the reused key dropped, money): in the `idempotency_key_reused` branch only, delete `keys.current[kind] = null;`. The flow test goes red at step 5's `toHaveText("3")`: the deliberate refund still carries the lost refund's key with the SAME values (refund, 1, no session), so it replays exactly (`applied: false`), the replay notice shows, and the balance stays 2.
-  - **K4** (the page re-read on a reused key): in the same branch only, delete `router.refresh();`. The flow test goes red at step 4's `toHaveText("2")`: nothing re-reads the page after the lost refund, so the balance still reads 1.
-  - **B1** (client normalisation): `session_id: forms.refund.sessionId.trim() || null` → `session_id: forms.refund.sessionId`. The flow test goes red at step 3's `expect.poll` on `ledgerSql` (1 row, not 2): the route answers 400 on `""`, so the lost refund never landed.
-  - **V1** (the panel-scoped claim is not vacuous): add `overflow-hidden` to the `<section data-testid="stream-credits-panel">` and `whitespace-nowrap` to the explainer `<p>`. The 320 test goes red on `clipped inside the panel at 320px`, the `overflowingIn` line, while page-level stays clean because the section clips.
-  
-  Record the six killers. After the final restore and rebuild, the spec is green again with the same `stats`. The flow test's `route.fetch()` + `route.abort()` is the lost-response case: if Step 15 or 17 shows the FIRST grant or the FIRST refund never reaching the server (an `expect.poll` on `ledgerSql` short by one), the harness is not modelling a lost response. STOP and report it; do not replace it with a plain `route.abort()`, which proves only a retry after a request that never landed.
 
-- [ ] **Step 18: Smoke.** In `scripts/smoke.ts`, directly after `platformRevenueSuite`'s closing brace (`:6935`):
+  Mutants, each followed by `rebuild --label rly` (wait for EXIT) and the WHOLE spec file — never a `-g` slice, which is a filename sweep wearing a costume (AGENTS.md class 21). Restore each with `cp` and rebuild again:
+  - **M1** (every open resets the form and rotates the key): `onClick={openModal}` on the opener → `onClick={() => setOpen(true)}`. The flow test goes red at the SECOND open's "opens at" block: the form still carries the first submission's note, so `stream-credits-note` is not `""` and the submit is not disabled. This is the mutant the "assert the opening values at EVERY open" rule exists for — asserting them only on the first open leaves this alive.
+  - **G1** (the double-submit guard): delete `if (inFlight.current) return;` AND change `disabled={!form.note.trim() || busy}` to `disabled={!form.note.trim()}`. The flow test goes red on `posts` (EIGHT bodies, not seven). It does NOT go red on `ledgerSql`: both requests carry the kept key and replay exactly, which is the key doing its job. So the guard's killer is the body count, and the ledger is the key's.
+  - **K2** (the key kept across a failed attempt, money): `const key = (idemKey.current ??= mintKey());` → `const key = mintKey();`. The flow test goes red at `replayed` `toBeVisible` in step 2 (the retry APPLIES, so balance 2 and a second grant row), and, if that line is skipped, on `posts[1]!.idempotency_key` equality.
+  - **K3** (the reused key dropped, money): in the `idempotency_key_reused` branch only, delete `idemKey.current = null;`. The flow test goes red at step 5's `toHaveText("3")`: the deliberate refund still carries the lost refund's key with the SAME values (refund, 1, no session), so it replays exactly (`applied: false`), the replay notice shows, and the balance stays 2.
+  - **K4** (the page re-read on a reused key): in the same branch only, delete `router.refresh();`. The flow test goes red at step 4's `toHaveText("2")`: nothing re-reads the page after the lost refund, so the balance still reads 1.
+  - **B1** (client normalisation): `session_id: form.sessionId.trim() || null` → `session_id: form.sessionId`. The flow test goes red at step 3's `expect.poll` on `ledgerSql` (1 row, not 2): the route answers 400 on `""`, so the lost refund never landed.
+  - **V1** (the panel-scoped claim is not vacuous): add `overflow-hidden` to the `<section data-testid="stream-credits-panel">` and `whitespace-nowrap` to the explainer `<p>`. The 320 test goes red on `clipped inside the panel at 320px`, the `overflowingIn` line, while page-level stays clean because the section clips.
+
+  Record the seven killers (M1, G1, K2, K3, K4, B1, V1) beside W1 from Step 15. After the final restore and rebuild, the spec is green again with the same `stats`. The flow test's `route.fetch()` + `route.abort()` is the lost-response case: if Step 15 or 17 shows the FIRST grant or the FIRST refund never reaching the server (an `expect.poll` on `ledgerSql` short by one), the harness is not modelling a lost response. STOP and report it; do not replace it with a plain `route.abort()`, which proves only a retry after a request that never landed. And if the spec goes red, treat the count as a FLOOR and re-run after each fix until a full pass completes (class 21: the first red can abort what follows).
+
+- [ ] **Step 18: Smoke.** In `scripts/smoke.ts`, directly after `platformRevenueSuite`'s closing brace — **`:7464`** (`platformRevenueSuite` itself opens at `:7429`; the old `:6935` moved, re-pinned 2026-09-27):
 
 ```ts
 /** Streaming R1, Task 7A — the staff "Match credits" panel's route and mount over real HTTP.
- *  Guard first (non-staff 401), then as staff: the page ships the panel, two grants move the
- *  balance by exactly their deltas, a replayed key moves nothing, a revoke above the balance is a
- *  422, a session-linked refund naming a session this org does not have is a 404, a blank note is
- *  refused. The target is the admin's own fresh org; no other suite reads its org_stream_credits
- *  (Task 16's streamRelaySuite mints its own owner). The linked refund's CAP (422) is not driven
- *  here: a real consumed session needs a sealed rtmp column and the fixture snapshot columns, which
- *  this suite does not seed; the route test and Task 7's usecase test own the cap. */
+ *  Guard first (non-staff 401), then as staff: the page ships the panel's CLOSED state, two grants
+ *  move the balance by exactly their deltas, a replayed key moves nothing, a revoke above the
+ *  balance is a 422, a session-linked refund naming a session this org does not have is a 404, a
+ *  blank note is refused. The target is the admin's own fresh org; no other suite reads its
+ *  org_stream_credits (Task 16's streamRelaySuite mints its own owner). The linked refund's CAP
+ *  (422) is not driven here: a real consumed session needs a sealed rtmp column and the fixture
+ *  snapshot columns, which this suite does not seed; the route test and Task 7's usecase test own
+ *  the cap.
+ *
+ *  OPTION B's consequence for THIS suite (owner ruling 2026-09-27): the adjustment fields live
+ *  inside a Modal that renders only while `open` is true, so the server HTML carries the section,
+ *  the balance and the OPENER and nothing else. A smoke check for stream-credits-amount or
+ *  -submit would be a FALSE red — it would be asserting that a closed modal is open. The fields
+ *  are proven by the component test (their opening values) and the walkthrough (a person using
+ *  them); here the mount is proven by the two testids a closed panel really ships. */
 async function streamCreditsAdminSuite(admin: Session, staffEmail: string, orgId: string): Promise<void> {
   const path = `/api/admin/orgs/${orgId}/stream-credits`;
   const key = () => `smoke-${crypto.randomUUID()}`;
@@ -8839,9 +8989,16 @@ async function streamCreditsAdminSuite(admin: Session, staffEmail: string, orgId
   try {
     const page = await fetch(`${BASE}/admin/orgs/${orgId}`, { headers: { cookie: cookieHeader(admin) } });
     const html = await page.text();
+    // Both testids, and the label, so the check cannot pass on an empty <section>: the panel is
+    // the section AND its opener. A page that shipped the section with no way to open it would
+    // be the inert seam this task exists to close (AGENTS.md class 1).
+    const shipsPanel =
+      html.includes('data-testid="stream-credits-panel"') &&
+      html.includes('data-testid="stream-credits-adjust"') &&
+      html.includes("Adjust credits");
     check(
-      `stream credits admin: /admin/orgs/[id] ships the panel (got ${page.status})`,
-      page.status === 200 && html.includes('data-testid="stream-credits-panel"'),
+      `stream credits admin: /admin/orgs/[id] ships the panel and its opener (got ${page.status})`,
+      page.status === 200 && shipsPanel,
     );
     const replayKey = key();
     const first = await raw(admin, path, "POST", { kind: "grant", delta: 1, note: "smoke grant", idempotency_key: key() });
@@ -8859,7 +9016,9 @@ async function streamCreditsAdminSuite(admin: Session, staffEmail: string, orgId
       replay.status === 200 && replayApplied === false && typeof b2 === "number" && balanceOf(replay) === b2,
     );
     const over = await raw(admin, path, "POST", { kind: "revoke", delta: 50, note: "smoke: more than the balance", idempotency_key: key() });
-    // `raw`'s json type carries no `code` (smoke.ts:62-74); handler forwards it on an HttpError.
+    // `raw`'s json type carries no `code` (smoke.ts:76, type literal :81-88 — {ok,data?,error?,issues?});
+    // `handler` forwards `code` on an HttpError (lib/http.ts:129-130) but DROPS `extra`, so a
+    // refusal a client must act on has to arrive in `code` (re-pin FP-5).
     const overCode = (over.json as { code?: string }).code;
     check(
       `stream credits admin: a revoke above the balance → 422 insufficient_credits (got ${over.status} ${String(overCode)})`,
@@ -8883,17 +9042,18 @@ async function streamCreditsAdminSuite(admin: Session, staffEmail: string, orgId
 }
 ```
 
-  Add the call directly after `await platformRevenueSuite(admin, \`delivered+admin_${tag}@resend.dev\`);` (`:1043`): `await streamCreditsAdminSuite(admin, \`delivered+admin_${tag}@resend.dev\`, org.id);`. Run it:
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && DATABASE_URL=<rly url> DATABASE_SSL=disable SMOKE_BASE=<rly base> AUTH_SECRET=<from apps/web/.env.local> node --experimental-strip-types scripts/smoke.ts > <scratchpad>/r1/t7a-smoke.log 2>&1; echo "EXIT=$?"; grep -a "stream credits admin" <scratchpad>/r1/t7a-smoke.log; grep -a -c "^FAIL" <scratchpad>/r1/t7a-smoke.log`
-  Expect `EXIT=0`, SEVEN `stream credits admin:` lines (401, ships the panel, grants move the balance, replay applies nothing, revoke above the balance 422, linked refund to a session this org does not have 404, blank note 400), every one `PASS`, and `0` FAIL lines anywhere. A red elsewhere in the file is attributed on a clean detached `main`, never absorbed. Then run lint as in Step 13. `smoke.ts` is pinned to two eslint-disable lines; add none.
+  Add the call directly after `await platformRevenueSuite(admin, \`delivered+admin_${tag}@resend.dev\`);` — **`:1105`** (the old `:1043` moved): `await streamCreditsAdminSuite(admin, \`delivered+admin_${tag}@resend.dev\`, org.id);`. The donors this suite leans on are `raw` (**`scripts/smoke.ts:76`**), `check` (**`:124`**), `setStaff` (**`:7408`**), `cookieHeader` (`:71`) and `BASE` (`:48`). Run it:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay-b && DATABASE_URL=<rly url> DATABASE_SSL=disable SMOKE_BASE=<rly base> AUTH_SECRET=<from apps/web/.env.local> node --experimental-strip-types scripts/smoke.ts > <scratchpad>/r1/t7a-smoke.log 2>&1; echo "EXIT=$?"; grep -a "stream credits admin" <scratchpad>/r1/t7a-smoke.log; grep -a -c "^FAIL" <scratchpad>/r1/t7a-smoke.log`
+  Expect `EXIT=0`, SEVEN `stream credits admin:` lines (401, ships the panel and its opener, grants move the balance, replay applies nothing, revoke above the balance 422, linked refund to a session this org does not have 404, blank note 400), every one `PASS`, and `0` FAIL lines anywhere. A red elsewhere in the file is attributed on a clean detached `main`, never absorbed. Then run lint as in Step 13. `smoke.ts` is pinned to two eslint-disable lines; add none.
 
 - [ ] **Step 19: Regression, OpenAPI, P3.** Re-run Step 1(d)'s vitest command to `t7a-regress-after.json`. Every file's count must EQUAL the before-run, with 0 failed; `e2e-ci-wiring.test.ts` keeps its count, because the inventory is data. Re-run `billing-states.spec.ts` to `t7a-billing-after.json` → the same `stats` as Step 1. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npm run openapi:gen && /usr/bin/git diff --exit-code openapi/; echo "OPENAPI=$?"` → `OPENAPI=0`, since no v1 route was added. Then **the P3 probe as Global Constraints defines it**: read its lines, and none may name a file this task adds or edits.
 
-- [ ] **Step 20: Report for commit.** `feat(streaming): staff match-credits panel on /admin/orgs/[id] — balance, ledger, grant, refund and revoke through Task 7's ledger (idempotent, audited)`. The report carries:
-  - the 22 new vitest tests (5 read, 13 route, 4 panel), 5 e2e tests and 7 smoke checks, with their JSON and log paths
-  - the killer list, all 29 (R1–R4, R6, S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2, C1, C1′, C1″, C2, R5, G1, K2, K3, K4, B1, V1, plus W1 from Step 15's pre-mount run)
+- [ ] **Step 20: Report for commit.** `feat(streaming): staff match-credits panel on /admin/orgs/[id] — one Adjust-credits modal over Task 7's ledger (idempotent, audited)`. The report carries:
+  - the **24** new vitest tests (5 read, 13 route, 6 panel), 5 e2e tests and 7 smoke checks, with their JSON and log paths
+  - the killer list, all **33** (R1–R4, R6; S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2; C0, C1, C1', C1", C2, C3, C4, R5; W1 from Step 15's pre-mount run, then M1, G1, K2, K3, K4, B1, V1)
   - the width-baseline finding, or "baseline clean at 320/768/1280", and Step 17's `/admin` header line at each of 320, 768 and 1280
-  - for the orchestrator to route to the owner: the English-only READING (deviation a). The 422 refusals are donor parity, and the reused-key 409 is an orchestrator ruling recorded as a deviation in the write-path diff; neither is an open owner item.
+  - the SIX screenshots and the confirmation that each width's closed and modal-open pair DIFFER (class 10: a shared state that is pixel-identical means nothing opened)
+  - for the orchestrator to route to the owner: the English-only READING (deviation a). The 422 refusals are donor parity; the reused-key 409 is an orchestrator ruling recorded in the write-path diff; the OPTION-B shape is the owner's own ruling of 2026-09-27 and is not an open item. The one thing that IS worth the owner's eye: after a 409 the modal resets to `grant`, so a staff member who was mid-refund re-chooses the action deliberately (deviation f).
   - The lane-B review runs at the END of Task 8 (Task 8's last step), not here.
 
 ---
@@ -8907,7 +9067,7 @@ async function streamCreditsAdminSuite(admin: Session, staffEmail: string, orgId
 - Create: `apps/web/src/app/api/billing/relay-checkout/route.ts`
 - Modify: `apps/web/src/lib/billing-checkout-client.ts` — `fetchRelayCheckoutClientSecret` beside `fetchCreditPackCheckoutClientSecret` (the panel's fetch; client-safe, no React)
 - Create: `scripts/stripe-stream-packs.ts`
-- Modify: `apps/web/src/server/usecases/billing-events.ts` — one branch inside `handleCheckoutCompleted`, directly after the `credit_pack` branch (grep `metadata?.kind === "credit_pack"`)
+- Modify: `apps/web/src/server/usecases/billing-events.ts` — one branch inside `handleCheckoutCompleted` (`:179`), directly after the `credit_pack` branch (**`:210-274`**; grep `metadata?.kind === "credit_pack"`). The branch inherits the enclosing `const orgId = session.metadata?.org_id; if (!orgId) return;` gate at `:202-203`, so a `stream_credits` session MUST carry `metadata.org_id` or the branch is never reached.
 - Create (Test): `apps/web/src/server/usecases/__tests__/stream-credits-webhook.test.ts`
 
 **Interfaces:**
@@ -9222,14 +9382,16 @@ export function fetchRelayCheckoutClientSecret(
 ```ts
 // scripts/stripe-stream-packs.ts — create the SANDBOX product and its three
 // prices for match credits (streaming R1, design §5.2), idempotent by
-// lookup_key exactly as scripts/stripe-sync.ts's ensurePrice is. Run once per
+// lookup_key exactly as scripts/stripe-sync.ts's ensurePrice (:353) is. One
+// drift, deliberate: stripe-sync.ts:465 constructs `new Stripe(key)` with NO
+// apiVersion, so the pin below follows lib/stripe.ts:41 instead. Run once per
 // Stripe sandbox:
 //
 //   STRIPE_SECRET_KEY=sk_test_… node --experimental-strip-types scripts/stripe-stream-packs.ts
 //
 // Refuses a live key: the prices here are PLACEHOLDERS (£6 / £25 / £80) until
 // the owner rules on real prices before the GA flip. Currency options mirror
-// config/stripe-plans.json's pack shape (gbp base; eur/usd/inr rough
+// apps/web/src/config/stripe-plans.json's pack shape (gbp base; eur/usd/inr rough
 // conversions, also placeholders). The lookup keys are the names
 // lib/stream-credit-packs.ts resolves at checkout time — that file is the
 // authority and this script reads it.
@@ -9368,7 +9530,7 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
 
 - [ ] **Step 9: Run — expect `2 1` red.** ONE red, not two: without the branch the first test fails at `balance).toBe(5)` (nothing grants), while the UNPAID test passes for the wrong reason — an absent branch grants nothing either. That test only starts carrying its weight once the branch exists, which is why the count here is 1 and not 2. Read the failure message, not only the count: the red must be the balance assertion, not a collection error naming `../stream-credits`.
 
-- [ ] **Step 10: Add the branch to `billing-events.ts`.** Directly AFTER the closing `return;` of the `credit_pack` branch inside `handleCheckoutCompleted` (grep `metadata?.kind === "credit_pack"` and walk to its `return;`), insert:
+- [ ] **Step 10: Add the branch to `billing-events.ts`.** The `credit_pack` branch is **`:210-274`** (re-pinned 2026-09-27; the old `:151` moved). Directly AFTER the closing `return;` of that branch inside `handleCheckoutCompleted` — grep `metadata?.kind === "credit_pack"` and walk to its `return;`, which resolves after the closing `}` at `:274` and is still unambiguous — insert:
 
 ```ts
   // Match credits (streaming R1, design §5.2): a separate ledger on the AI
@@ -9432,11 +9594,11 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
   - **Task 7, twenty** (Step 4): m2 (the org lock deleted in `consumeForSession` → "two concurrent consumers"), m3, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14 (the lock deleted in `staffRow`) and m15 (the lock deleted in `recordPurchase`), both → "first-ever writes on an EMPTY ledger serialise", m16, m17, m18, m19 (the reused-key comparison and its members) → "a key reused for a DIFFERENT adjustment", m20 → "a session whose fixture is GONE", m21 (the lock key's `.toLowerCase()` dropped) → "first-ever writes on an EMPTY ledger serialise", and m22 (staffRow's 23505 → 409 `.catch` deleted) → "the same key on two DIFFERENT orgs at once". m1 (Task 10) and m4 are not Task 7's.
   - **Task 7A read, five** (Step 5): R1, R2, R3, R4, R6.
   - **Task 7A route, twelve** (Step 9): S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2.
-  - **Task 7A panel, five** (Step 13): C1, C1′, C1″, C2, R5.
-  - **Task 7A browser, seven** (Steps 15 and 17): W1 (the mount; the pre-mount red run), G1, K2, K3, K4, B1, V1.
+  - **Task 7A panel, eight** (Step 13): C0 (the opener does not open), C1 (the note gate), C1' and C1" (the refund-only session field, both directions), C2, C3 (`max` from the prop, not 50), C4 (the footer really is walked), R5.
+  - **Task 7A browser, eight** (Steps 15 and 17): W1 (the mount; the pre-mount red run), M1 (every open resets and rotates the key), G1, K2, K3, K4, B1, V1.
   - **Task 8**: its code carries global m4 (delete the plan-key check in `relay-checkout`), whose killer is Task 15's e2e "a community org … 402 BEFORE Stripe" (Task 17 Step 4's table). That test does not exist yet at this review, so the reviewer records m4 as OWED to Task 15, never as killed. The webhook replay's witnesses are Task 8's two webhook tests ("writes ONE purchase row … a redelivery claims nothing and writes none" and "an unpaid session is claimed and handled, and writes nothing"), plus any killer Task 8's report records.
   
-  That is 49 named killers from Tasks 7 and 7A (20 + 5 + 12 + 5 + 7). The reviewer checks that each one names a test that exists in the landed code and that its mutant was actually run: a count is not a list. It also diffs every new write path against the §TEST-CASE DESIGN table (the Task 7 row and the admin-route row).
+  That is **53** named killers from Tasks 7 and 7A (20 + 5 + 12 + 8 + 8). The reviewer checks that each one names a test that exists in the landed code and that its mutant was actually run: a count is not a list. It also diffs every new write path against the §TEST-CASE DESIGN table (the Task 7 row and the Task 7A write-path diff), reads the OPTION-B panel against the owner ruling in Task 7A Revision 4 (one opener, one modal, the rail below), and confirms that no step in this lane amended a merged migration.
 
 ---
 
