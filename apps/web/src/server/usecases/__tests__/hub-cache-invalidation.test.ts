@@ -127,6 +127,8 @@ vi.mock("@/lib/realtime", async (importOriginal) => ({
 
 import { PUSH_AFTER_DELETE_BOUND_MS } from "@/lib/cache";
 import { invalidatePublicCache } from "../scoring";
+import { __setRedisForTests, __resetRedisStateForTests } from "../../../../cache-handler/redis-client.mjs";
+import { decodeField } from "../../../../cache-handler/tag-state.mjs";
 import { SCHEDULE_FIXTURE_PUSH_CAP, afterScheduleWrite } from "../schedule";
 
 const ORG = "org-1";
@@ -719,5 +721,143 @@ describe("afterScheduleWrite — the fixture pushes wait for the DEL, never long
     await settleHeld("del", { resolve: true });
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
     expect(publishFixtureUpdate, "the late DEL pushed the fixture a second time").toHaveBeenCalledTimes(1);
+  });
+});
+
+// Shared cache dual-run, Task 6b (spec 2026-09-24 §6.6). `fireScoreRevalidate`
+// now resolves only once the division's tag state is in the shared Redis hash
+// every machine's cache handler reads (or its bound passed). The score push
+// waits on that too, so a refresh the push triggers on ANY machine sees the
+// expiry. Here `fireScoreRevalidate` runs for real — its real
+// `broadcastRevalidate`, its real `publishTagState` — against a Redis whose
+// tag writes the test holds or releases. The DEL is the file's usual mock.
+describe("invalidatePublicCache — the pushes also wait for the division's shared tag write (Task 6b)", () => {
+  const SCOPE = { divisionId: DIVISION, competitionId: COMPETITION };
+  const DIVISION_TAG = `division:${DIVISION}`;
+
+  /** HSET_IF_NEWER calls, each pending until released (or at once with `fast`). */
+  function tagRedis(fast = false) {
+    const writes: Array<{ tag: string; field: string; release: () => void }> = [];
+    return {
+      status: "ready",
+      writes,
+      eval: (_script: string, _n: number, _hash: string, tag: string, field: string) =>
+        fast
+          ? Promise.resolve(1)
+          : new Promise((resolve) => {
+              writes.push({ tag, field, release: () => resolve(1) });
+            }),
+    };
+  }
+  const divisionWrite = (r: ReturnType<typeof tagRedis>) => {
+    const w = r.writes.find((x) => x.tag === DIVISION_TAG);
+    if (!w) throw new Error("the division's tag state was never written");
+    return w;
+  };
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("@/server/public-site/revalidate")>(
+      "@/server/public-site/revalidate",
+    );
+    fireScoreRevalidate.mockImplementation(actual.fireScoreRevalidate);
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    vi.stubEnv("PEER_REVALIDATE", "");
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    fireScoreRevalidate.mockReset();
+    __resetRedisStateForTests();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it("the DEL has settled but the division's expiry is still on its way to Redis: no push until it lands, then exactly one", async () => {
+    const tags = tagRedis();
+    __setRedisForTests(tags);
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(cacheDel, "the DEL went out and settled").toHaveBeenCalledTimes(1);
+    expect(decodeField(divisionWrite(tags).field)).toMatchObject({ stale: expect.any(Number) });
+    expect(after, "pushed before the shared tag state was written").not.toHaveBeenCalled();
+
+    divisionWrite(tags).release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(SCOPE);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
+    expect(after, "the bound sent the pushes a second time").toHaveBeenCalledTimes(1);
+  });
+
+  it("the positive pair: a tag write and a DEL that both settle at once push at once, with nothing left armed", async () => {
+    __setRedisForTests(tagRedis(true));
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(after, "waited for a bound instead of the settled writes").toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(SCOPE);
+    expect(vi.getTimerCount(), "a bound's timer outlived the writes").toBe(0);
+  });
+
+  it("a Redis that never answers the tag write: the push goes out at the bound, once — never later", async () => {
+    __setRedisForTests(tagRedis());
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(after).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(after).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 4);
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+
+  it("the tag write lands but the DEL never settles: the push still waits for the DEL, to the bound", async () => {
+    __setRedisForTests(tagRedis(true));
+    redis.hold = true;
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(after, "the settled tag write released the push without the DEL").not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+
+  it("a revalidation promise that REJECTS neither sends early nor drops the push: it still waits for the DEL, once, nothing unhandled", async () => {
+    await watchingUnhandled(async (unhandled) => {
+      fireScoreRevalidate.mockImplementation(() => Promise.reject(new Error("simulated broadcast failure")));
+      redis.hold = true;
+      const after = vi.fn();
+      await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(after, "a rejected revalidation released the push before the DEL").not.toHaveBeenCalled();
+      await settleHeld("del", { resolve: true });
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(after).toHaveBeenCalledWith(SCOPE);
+      await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
+      expect(after).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+      await macrotask();
+      expect(unhandled).toEqual([]);
+    });
+  });
+
+  it("no row: nothing is revalidated or written to the tag hash, and the push waits on the DEL alone", async () => {
+    withTenant.mockResolvedValue(null);
+    const tags = tagRedis();
+    __setRedisForTests(tags);
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fireScoreRevalidate).not.toHaveBeenCalled();
+    expect(tags.writes).toEqual([]);
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(null);
   });
 });
