@@ -10,12 +10,12 @@
 //
 // WHAT CAN GO WRONG, and why each is worth a test rather than a comment:
 //
-//  1. `e2e.yml` runs the `parallel` project as THREE jobs — one "heavy" leg
-//     naming a handful of expensive files, and two "rest" legs sharding
+//  1. `e2e.yml` runs the `parallel` project as FOUR jobs — one "heavy" leg
+//     naming a handful of expensive files, and three "rest" legs sharding
 //     everything else. "rest" is a CATCH-ALL by construction (it ignores
 //     PARALLEL_HEAVY and nothing else), which is the ONLY reason a new spec
-//     file joins CI without anybody editing a list. Turn that into three
-//     explicit per-shard file lists and a new spec silently runs nowhere.
+//     file joins CI without anybody editing a list. Turn that into
+//     explicit per-leg file lists and a new spec silently runs nowhere.
 //  2. A TYPO inside PARALLEL_HEAVY costs nothing visible: the heavy leg simply
 //     selects fewer files and passes, while the mistyped file runs on the
 //     "rest" legs it was carved out of for being slow. The balance the carve-
@@ -588,9 +588,26 @@ describe("e2e CI wiring", () => {
     // spec. The matrix carries the project name per leg for this reason.
     expect(yml, "e2e.yml dispatches no walkthrough leg").toContain("project: walkthrough");
     expect(yml, "the matrix must pass its project through to Playwright").toContain("--project=${{ matrix.project }}");
-    // The two "rest" legs shard between themselves; the heavy leg does not.
-    expect(yml).toContain("--shard=1/2");
-    expect(yml).toContain("--shard=2/2");
+    // The three "rest" legs shard between themselves; the heavy leg does not.
+    // Read per matrix leg rather than as a bare substring: the walkthrough
+    // legs carry `--shard=N/3` too, so `toContain("--shard=1/3")` would stay
+    // green with every rest leg deleted.
+    const legs = yml
+      .split(/\n\s*- group: /)
+      .slice(1)
+      .map((block) => ({
+        slice: /\n\s*slice: *(.*)/.exec(block)?.[1]?.trim(),
+        args: /\n\s*args: *(.*)/.exec(block)?.[1]?.trim() ?? "",
+      }));
+    const restArgs = legs.filter((l) => l.slice === "rest").map((l) => l.args).sort();
+    expect(restArgs, "e2e.yml must shard the rest slice three ways, one leg per shard").toEqual([
+      "--shard=1/3",
+      "--shard=2/3",
+      "--shard=3/3",
+    ]);
+    const heavyArgs = legs.filter((l) => l.slice === "heavy").map((l) => l.args);
+    expect(heavyArgs, "exactly one heavy leg").toHaveLength(1);
+    expect(heavyArgs[0], "the heavy leg must not shard").not.toContain("--shard");
   });
 
   // RS007. The Connect walkthrough is the ONLY place in the suite that
