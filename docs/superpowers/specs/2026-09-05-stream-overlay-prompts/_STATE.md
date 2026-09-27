@@ -224,12 +224,20 @@ the session link — which is exactly what a linked refund's cap is judged again
 
 **What B moves and what it does not.** The route, the usecase, the zod body, the 401/400/404/409/422 codes and
 every DB test are IDENTICAL under all three options; only `admin-stream-credits-panel.tsx`, its testids, its
-component test and the walkthrough spec's steps change. **Consequence that must not be lost:** `apps/web`
-vitest is `environment: "node"`, so a closed modal's fields are NOT in the markup — the component test can only
-assert the closed panel (balance, the adjust button, the rail, the empty state), and every field's OPENING
-VALUE (amount 1, min 1, max = the `maxDelta` prop, empty note, empty session, submit disabled until a note is
-typed — the class-19 "pin what a control OPENS AT" case) moves to the e2e walkthrough. That is a deviation to
-record in the plan, not a test to weaken.
+component test and the walkthrough spec's steps change.
+
+**The modal's opening values STAY in the component test — the "node cannot see inside a modal" worry was
+WRONG, checked against the tree 2026-09-27 and corrected here.** `components/__tests__/_hook-harness.tsx`
+exports `renderIsland`, `expandWithHooks`, `walk`, `textOf` and `propsOf`, and two live precedents drive a
+closed modal open in `environment: "node"`: `v2/__tests__/stages-panel-court-tags-modal.test.tsx:47` calls the
+trigger's own `onClick` prop (`(propsOf(button!).onClick as () => void)()`) and then asserts the modal BODY, and
+`registration-hub-config-panel.test.tsx` finds the modal by `e.type === Modal` and expands both `children` and
+`footer`. So the class-19 case — amount OPENS AT 1, `min` 1, `max` = the `maxDelta` prop (not the route's 50),
+note and session empty, submit disabled until a note is typed — is asserted in the unit test as it would have
+been under option A. Two traps came with the precedent: `island.text()` reaches `children` but is BLIND to
+`footer`, which is exactly where the donor puts Cancel and the submit button; and an input's opening value is a
+PROP, so it is read with `propsOf(el).value`, never from text. The only thing that genuinely moves to the
+walkthrough is what a person does with it — open, type, submit, see the row.
 
 **Lane B path note:** the plan's step commands are written against `.claude/worktrees/relay/` (42 occurrences).
 Lane B runs in `.claude/worktrees/relay-b`; every such path reads as `relay-b` for Tasks 7 / 7A / 8.
