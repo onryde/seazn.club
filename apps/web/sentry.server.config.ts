@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 import { scrubScoreTokens, scrubSentryEvent } from "@/lib/scrub-score-url";
+import { sentryBeforeSendTransaction } from "@/lib/sentry-transactions";
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -18,7 +19,7 @@ Sentry.init({
   // pad call, and both end up in a server event's request data and span
   // attributes. Scrub it from everything sent.
   beforeSend: scrubSentryEvent,
-  beforeSendTransaction: scrubSentryEvent,
+  beforeSendTransaction: sentryBeforeSendTransaction,
 
   beforeSendLog(log) {
     if (
