@@ -1047,6 +1047,10 @@ async function main() {
   // free AND pro public pages, /me player→organiser nudge, /discover /start.
   await plgGrowthSuite(admin, org2.id, renamed.slug);
 
+  // --- sitemap.xml lists a published public competition (fix 2026-09-27:
+  // the route was prerendered at a DB-less build). Own fresh org; keyless.
+  await sitemapSuite();
+
   // --- design/v9 PROMPT-55: dispute-loss recovery surfaces.
   await disputeSurfacesSuite();
 
@@ -5724,6 +5728,61 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   // P3 (D7) — the digest button is gated the same way (news.auto).
   const freeDigest = await v1(commOwner, `/api/v1/orgs/${commOrg.id}/posts/digest`, "POST");
   check("news free (P3): Generate digest gated 402 (Pro news.auto)", freeDigest.status === 402);
+}
+
+/** sitemap.xml lists a public, PUBLISHED competition and its division. The
+ *  route used to be prerendered at `next build`, which has no database, so the
+ *  deployed copy carried no competition at all (fix 2026-09-27). It now renders
+ *  per request and caches its competition read for SITEMAP_REVALIDATE_SECONDS
+ *  (an hour shipped). On a fresh server — CI's — the first read after this
+ *  publish sees it. On a long-lived one the list may have been read earlier in
+ *  the hour; start the server AND this script with a short
+ *  SITEMAP_REVALIDATE_SECONDS and the check waits that window out. Published,
+ *  not draft: a draft is unlisted by owner decision 2026-09-27. */
+async function sitemapSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `delivered+sitemap_${tag}@resend.dev`);
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === who.org_id)?.slug ?? "";
+  const comp = await v1(owner, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Sitemap Cup ${tag}`,
+    visibility: "public",
+  });
+  const compRow = v1data<{ id: string; slug: string; visibility: string }>(comp);
+  const div = await v1(owner, `/api/v1/competitions/${compRow.id}/divisions`, "POST", {
+    name: "Open",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divSlug = v1data<{ slug?: string } | undefined>(div)?.slug ?? "";
+  const published = await v1(owner, `/api/v1/competitions/${compRow.id}`, "PATCH", { status: "published" });
+  check(
+    "sitemap: a PUBLIC competition with a division is created and published",
+    comp.status === 201 &&
+      compRow.visibility === "public" &&
+      div.status === 201 &&
+      published.status === 200 &&
+      v1data<{ status: string }>(published).status === "published" &&
+      orgSlug !== "",
+  );
+
+  // Paths closed by `</loc>`: the XML carries the server's configured origin,
+  // and the hub's entry must not be satisfied by its division's.
+  const hub = `/shared/${orgSlug}/${compRow.slug}`;
+  const listed = (xml: string) => xml.includes(`${hub}</loc>`) && xml.includes(`${hub}/${divSlug}</loc>`);
+  const windowS = Number(process.env.SITEMAP_REVALIDATE_SECONDS);
+  const deadline = Date.now() + (Number.isInteger(windowS) && windowS > 0 ? (2 * windowS + 10) * 1000 : 0);
+  let sm = await html(newSession(), "/sitemap.xml");
+  while (!listed(sm.body) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+    sm = await html(newSession(), "/sitemap.xml");
+  }
+  check(
+    `sitemap: an anonymous GET /sitemap.xml lists the published competition and its division (status ${sm.status})`,
+    sm.status === 200 && divSlug !== "" && listed(sm.body),
+  );
 }
 
 /** PLG growth loops (design/plg): the "Powered by Seazn Club" footer is an
