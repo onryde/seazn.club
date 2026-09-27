@@ -34,22 +34,33 @@ export function __resetMachineStateForTests() {
   tagsManifest.clear();
 }
 
-/** @param {string | undefined} serverDistDir */
+/**
+ * The id that scopes Redis data keys (spec §7 version skew). Only an id
+ * actually read from BUILD_ID is remembered: Turbopack's proxy constructs the
+ * handler without `serverDistDir` on every request (adapter.js), and a
+ * remembered fallback would pin every later instance to it.
+ * @param {string | undefined} serverDistDir
+ * @returns {string | undefined} undefined: unknown, so this instance is memory-only
+ */
 function buildId(serverDistDir) {
   const L = local();
   if (L.buildId) return L.buildId;
-  try {
-    L.buildId = serverDistDir ? readFileSync(path.join(serverDistDir, "..", "BUILD_ID"), "utf8").trim() : "dev";
-  } catch {
-    L.buildId = "dev";
-    // A production server without its BUILD_ID would share data keys across
-    // deploys (spec §7 version skew). Say so once; keep serving. (Only a
-    // given serverDistDir reaches this catch: without one there is no read.)
-    if (process.env.NODE_ENV === "production") {
-      warnOnce("build-id", "BUILD_ID unreadable; Redis data keys fall back to nc:dev: and are not build-scoped");
+  if (serverDistDir) {
+    try {
+      const id = readFileSync(path.join(serverDistDir, "..", "BUILD_ID"), "utf8").trim();
+      if (id) return (L.buildId = id);
+    } catch {
+      // unreadable: unknown below
     }
   }
-  return L.buildId;
+  if (process.env.NODE_ENV !== "production") return "dev";
+  // Production never shares an unscoped nc:dev: namespace across deploys.
+  // `next build` has no BUILD_ID yet by design; a running server given a
+  // serverDistDir without one is misdeployed, so say so once.
+  if (serverDistDir && process.env.NEXT_PHASE !== "phase-production-build") {
+    warnOnce("build-id", "BUILD_ID unreadable; this machine's next cache is memory-only (no Redis)");
+  }
+  return undefined;
 }
 
 /** @param {any} v */
@@ -120,12 +131,13 @@ function tagsOf(entry, ctx) {
   return typeof header === "string" ? header.split(",") : [];
 }
 
-function maybeSweep() {
+/** @param {typeof withRedis} redis */
+function maybeSweep(redis) {
   const L = local();
   const now = Date.now();
   if (now - L.sweptAt < DAY_MS) return;
   L.sweptAt = now;
-  void withRedis(async (r) => {
+  void redis(async (r) => {
     if ((await r.set("nc:sweep", "1", "EX", 86_400, "NX")) !== "OK") return;
     const cutoff = now - 365 * DAY_MS;
     let cursor = "0";
@@ -160,6 +172,19 @@ export default class SharedCacheHandler {
     this.memo = new Map();
   }
 
+  /**
+   * Every Redis call goes through here: an instance with no known build id
+   * is memory-only (no read, no write), so a build never serves or seeds
+   * another build's entries.
+   * @template T
+   * @param {(r: any) => Promise<T>} fn
+   * @param {T} fallback
+   * @returns {Promise<T>}
+   */
+  redis(fn, fallback) {
+    return this.buildId === undefined ? Promise.resolve(fallback) : withRedis(fn, fallback);
+  }
+
   /** @param {string} key */
   dataKey(key) {
     return `nc:${this.buildId}:${key}`;
@@ -171,7 +196,7 @@ export default class SharedCacheHandler {
     const missing = unique.filter((t) => !this.memo.has(t));
     if (missing.length > 0) {
       // One HMGET per request for these tags; stored before it resolves.
-      const sync = withRedis((r) => r.hmget(TAGS_HASH, ...missing), null).then((raw) => {
+      const sync = this.redis((r) => r.hmget(TAGS_HASH, ...missing), null).then((raw) => {
         if (!raw) return;
         missing.forEach((tag, i) => {
           const s = decodeField(raw[i]);
@@ -190,11 +215,11 @@ export default class SharedCacheHandler {
     if (entry) {
       remember(key, entry); // bump recency
     } else if (ctx?.kind === "FETCH") {
-      const raw = await withRedis((r) => r.get(this.dataKey(key)), null);
+      const raw = await this.redis((r) => r.get(this.dataKey(key)), null);
       if (raw) {
         entry = decodeData(raw);
         if (entry) remember(key, entry);
-        else void withRedis((r) => r.del(this.dataKey(key)), null);
+        else void this.redis((r) => r.del(this.dataKey(key)), null);
       }
     }
     if (!entry) return null;
@@ -232,7 +257,7 @@ export default class SharedCacheHandler {
   async set(key, data, _ctx) {
     if (data === null) {
       forget(key);
-      await withRedis((r) => r.del(this.dataKey(key)), null);
+      await this.redis((r) => r.del(this.dataKey(key)), null);
       return;
     }
     const entry = { lastModified: Date.now(), value: data };
@@ -250,7 +275,7 @@ export default class SharedCacheHandler {
     const ex = typeof data.revalidate === "number" && data.revalidate > 0
       ? Math.min(data.revalidate + 3600, NO_TTL_EX)
       : NO_TTL_EX;
-    await withRedis((r) => r.set(this.dataKey(key), raw, "EX", ex), null);
+    await this.redis((r) => r.set(this.dataKey(key), raw, "EX", ex), null);
   }
 
   /** @param {string | string[]} tags @param {{expire?: number}} [durations] */
@@ -266,8 +291,8 @@ export default class SharedCacheHandler {
       this.memo.set(tag, SYNCED);
       argv.push(tag, encodeField(s));
     }
-    await withRedis((r) => r.eval(HSET_IF_NEWER, 1, TAGS_HASH, ...argv), null);
-    maybeSweep();
+    await this.redis((r) => r.eval(HSET_IF_NEWER, 1, TAGS_HASH, ...argv), null);
+    maybeSweep((fn, fallback) => this.redis(fn, fallback));
   }
 
   resetRequestCache() {

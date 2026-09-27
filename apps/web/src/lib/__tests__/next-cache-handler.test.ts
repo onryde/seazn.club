@@ -455,11 +455,14 @@ type NextCache = {
   revalidateTag(tags: string | string[], durations?: { expire?: number }): Promise<void>;
 };
 const prerenderManifest = () => ({ version: 4, routes: {}, dynamicRoutes: {}, notFoundRoutes: [], preview: { previewModeId: "p" } });
-/** Next's IncrementalCache over this handler; route-module.js builds one per request. */
-const incrementalCache = () =>
+/**
+ * Next's IncrementalCache over this handler; route-module.js builds one per
+ * request. Without `serverDistDir` it is the proxy's shape (adapter.js).
+ */
+const incrementalCache = (serverDistDir?: string) =>
   new IncrementalCache({
     fs: { readFile: async () => { throw new Error("no fs"); }, stat: async () => { throw new Error("no fs"); } },
-    dev: false, flushToDisk: false, minimalMode: false, serverDistDir: undefined, requestHeaders: {},
+    dev: false, flushToDisk: false, minimalMode: false, serverDistDir, requestHeaders: {},
     maxMemoryCacheSize: 0, getPrerenderManifest: prerenderManifest, fetchCacheKeyPrefix: "", CurCacheHandler: Handler,
   } as unknown as ConstructorParameters<typeof IncrementalCache>[0]) as unknown as NextCache;
 
@@ -606,27 +609,98 @@ describe("machine memory (L1): page kinds", () => {
   });
 });
 
-describe("build id", () => {
-  it("an unreadable BUILD_ID is logged once in production; not in test, not when readable, not without serverDistDir", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const missing = path.join(tmpdir(), `nc-no-build-id-${process.pid}`, "server");
-    expect(new Handler({ serverDistDir: missing }).buildId).toBe("dev"); // NODE_ENV=test
+describe("build id: unknown means memory-only, never nc:dev: in production", () => {
+  const missing = path.join(tmpdir(), `nc-no-build-id-${process.pid}`, "server");
+  let dist: string;
+  /** A dist dir whose BUILD_ID says `id`; returns its serverDistDir. */
+  const built = (id: string) => {
+    writeFileSync(path.join(dist, "BUILD_ID"), id);
+    return path.join(dist, "server");
+  };
+  const quietWarn = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+  beforeEach(() => {
     vi.stubEnv("NODE_ENV", "production");
-    __resetMachineStateForTests();
-    expect(new Handler({}).buildId).toBe("dev"); // no serverDistDir: dev keys are expected
-    const dist = mkdtempSync(path.join(tmpdir(), "nc-build-"));
-    try {
-      mkdirSync(path.join(dist, "server"));
-      writeFileSync(path.join(dist, "BUILD_ID"), "b-9");
-      __resetMachineStateForTests();
-      expect(new Handler({ serverDistDir: path.join(dist, "server") }).buildId).toBe("b-9");
-    } finally {
-      rmSync(dist, { recursive: true, force: true });
-    }
+    vi.stubEnv("NEXT_PHASE", "phase-production-server");
+    dist = mkdtempSync(path.join(tmpdir(), "nc-build-"));
+    mkdirSync(path.join(dist, "server"));
+  });
+  afterEach(() => { rmSync(dist, { recursive: true, force: true }); });
+
+  it("an unreadable BUILD_ID in production touches Redis for nothing; memory and the local manifest still serve", async () => {
+    quietWarn();
+    const shared = { v: JSON.stringify({ v: 1, lastModified: Date.now(), value: fetchValue() }) };
+    redis.kv.set("nc:dev:shared", shared); // another unscoped writer's entry
+    const h = new Handler({ serverDistDir: missing });
+    expect(h.buildId).toBeUndefined();
+    expect(await h.get("shared", fetchCtx)).toBeNull(); // not read from nc:dev:
+    await h.set("k", fetchValue(), { fetchCache: true });
+    expect(await h.get("k", fetchCtx)).not.toBeNull(); // machine memory serves it
+    await sleep(2);
+    await h.revalidateTag("division:d1");
+    expect(await h.get("k", fetchCtx)).toBeNull(); // judged by the local manifest
+    await h.set("k2", fetchValue(), { fetchCache: true });
+    await h.set("k2", null, {});
+    await new Promise((r) => setImmediate(r)); // the daily sweep is fire-and-forget
+    expect(redis.calls).toEqual([]);
+    expect([...redis.kv.keys()]).toEqual(["nc:dev:shared"]);
+    expect(redis.hash.size).toBe(0);
+  });
+
+  it("no serverDistDir in production is memory-only and silent", async () => {
+    const warn = quietWarn();
+    const h = new Handler({});
+    expect(h.buildId).toBeUndefined();
+    await h.set("k", fetchValue(), { fetchCache: true });
+    expect(redis.calls).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
-    __resetMachineStateForTests();
-    expect(new Handler({ serverDistDir: missing }).buildId).toBe("dev");
+  });
+
+  it("next build (no BUILD_ID yet) is silent; a running server without one warns once", () => {
+    const warn = quietWarn();
+    vi.stubEnv("NEXT_PHASE", "phase-production-build");
+    expect(new Handler({ serverDistDir: missing }).buildId).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+    vi.stubEnv("NEXT_PHASE", "phase-production-server");
+    expect(new Handler({ serverDistDir: missing }).buildId).toBeUndefined();
+    expect(new Handler({ serverDistDir: missing }).buildId).toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0][0])).toContain("BUILD_ID");
+  });
+
+  it("an empty BUILD_ID is unknown too, not a shared nc:: namespace", () => {
+    quietWarn();
+    expect(new Handler({ serverDistDir: built("\n") }).buildId).toBeUndefined();
+  });
+
+  it("only a read BUILD_ID is remembered: an unknown or dev fallback never pins later instances", () => {
+    const warn = quietWarn();
+    expect(new Handler({ serverDistDir: missing }).buildId).toBeUndefined();
+    expect(new Handler({ serverDistDir: built("b-9") }).buildId).toBe("b-9");
+    expect(new Handler({}).buildId).toBe("b-9"); // the real id, once read, serves every instance
+    expect(new Handler({ serverDistDir: missing }).buildId).toBe("b-9");
+    expect(warn).toHaveBeenCalledTimes(1); // the first, unread construction only
+    __resetMachineStateForTests();
+    vi.stubEnv("NODE_ENV", "test");
+    expect(new Handler({ serverDistDir: missing }).buildId).toBe("dev"); // dev/test: one namespace is fine
+    expect(new Handler({}).buildId).toBe("dev");
+    expect(new Handler({ serverDistDir: built("b-10") }).buildId).toBe("b-10");
+  });
+
+  it("through Next's IncrementalCache: the proxy constructs first without serverDistDir, and next-server's real id still wins", async () => {
+    // adapter.js builds the proxy's IncrementalCache with no serverDistDir on
+    // every request; base-server.js builds next-server's with one. Whichever
+    // comes first, the Redis tier must carry the real id and never nc:dev:.
+    const g = globalThis as { __incrementalCache?: unknown };
+    try {
+      g.__incrementalCache = incrementalCache(); // the proxy, before any read
+      await unstable_cache(async () => 1, ["proxy-first"], { revalidate: 30 })();
+      g.__incrementalCache = incrementalCache(built("b-7")); // next-server
+      await unstable_cache(async () => 1, ["server"], { revalidate: 30 })();
+      g.__incrementalCache = incrementalCache(); // the proxy again
+      await unstable_cache(async () => 1, ["proxy-after"], { revalidate: 30 })();
+    } finally {
+      delete g.__incrementalCache;
+    }
+    expect([...redis.kv.keys()].map((k) => k.split(":").slice(0, 2).join(":"))).toEqual(["nc:b-7", "nc:b-7"]);
   });
 });
