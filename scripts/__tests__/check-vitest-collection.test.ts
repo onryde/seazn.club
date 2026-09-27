@@ -149,6 +149,9 @@ const REST = [
   "src/server/public-site/__tests__/public-division-loaders-identity.test.ts",
   "src/server/public-site/__tests__/public-entrants-entitlement-once.test.ts",
   "src/server/public-site/__tests__/public-fixture-loaders-identity.test.ts",
+  // A draft is unlisted until published (owner decision 2026-09-27): every
+  // listing surface, both directions. Begins with "d", so it belongs here.
+  "src/server/public-site/__tests__/draft-unlisted-db.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

@@ -715,8 +715,11 @@ export async function patchCompetition(
   // the old list for their TTL — bounded, but it reads as "publish did not
   // work". `{ expire: 0 }` on the org tag (`fireOrgRevalidate`), the poll
   // document dropped. Expiring the whole org tag is affordable here because
-  // this is a rare, deliberate write — never a scoring path. The sitemap needs
-  // nothing: it is 30s ISR on its own. Discovery is covered above
+  // this is a rare, deliberate write — never a scoring path. The sitemap is NOT
+  // refreshed here: `app/sitemap.ts` declares no `revalidate`, so Next renders
+  // it statically at build and it changes only at the next deploy — its draft
+  // filter decides what a BUILD lists, not when a publish shows up (out of
+  // scope for this change; review 2026-09-27 M1). Discovery is covered above
   // (`discoveryTouched` includes a status change of a discoverable
   // competition). Outside the tx — invalidation never rolls back a write — and
   // best-effort like the grants below: the write has committed, so a failed

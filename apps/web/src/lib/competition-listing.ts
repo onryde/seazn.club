@@ -42,3 +42,14 @@ export function linkOnlyRobots(c: { visibility: string; status: string }): {
 } {
   return competitionIsListed(c) ? {} : { robots: { index: false, follow: false } };
 }
+
+/**
+ * True when PUBLISHING would list this competition: it is a public draft. The
+ * organiser-facing notes — the hint under Status in competition settings and
+ * the note in the Start-tournament confirmation — say "not listed … until you
+ * publish", which is true here and nowhere else: a private or unlisted draft is
+ * no more listed once published, and anything past draft is listed already.
+ */
+export function publishWouldList(c: { visibility: string; status: string }): boolean {
+  return c.visibility === "public" && c.status === UNLISTED_STATUS;
+}

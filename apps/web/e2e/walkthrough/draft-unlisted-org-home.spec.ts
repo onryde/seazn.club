@@ -117,6 +117,10 @@ test("a new public draft is off the org home but open by link; publishing it fro
   const hint = page.getByTestId("compset-draft-unlisted");
   await expect(hint).toHaveText(ui("compset.draftUnlisted"), { timeout: NAV_MS });
   const status = page.locator("label").filter({ hasText: new RegExp(`^${ui("compset.status")}`) }).locator("select");
+  // The hint DESCRIBES the select (aria-describedby), it is not read as its name.
+  await expect(status, "the hint is the select's description").toHaveAccessibleDescription(
+    ui("compset.draftUnlisted"),
+  );
   await status.selectOption("published");
   await expect(hint, "the hint follows the form, before any save").toHaveCount(0);
   const patched = page.waitForResponse(

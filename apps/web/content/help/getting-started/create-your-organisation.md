@@ -24,6 +24,6 @@ The welcome tour walks you through this next, right after naming your organisati
 
 **Can I run more than one organisation?** On a paid plan, yes — switch between them from the organisation menu. Each keeps its own competitions, team and Stripe payouts, but they don't need separate subscriptions: one plan covers up to 5 organisations on Pro, with each one after the first at no more than half the base rate. Community covers one organisation, and Enterprise is unlimited. See [one subscription, several organisations](/help/billing/groups).
 
-**Who can see my organisation?** Your public page at `/shared/your-org` lists only competitions that are **Public** and **published**. A new competition starts as a draft with Public visibility: anyone you give its link to can open it and register, but it is not listed on your page or in search until you publish it. See [Create a competition](/help/getting-started/create-a-competition#visibility).
+**Who can see my organisation?** Your public page at `/shared/your-org` lists your **Public** competitions once they are no longer drafts — published, live or finished. A new competition starts as a draft with Public visibility: anyone you give its link to can open it and register, but it is not listed on your page or in search until you publish it. See [Create a competition](/help/getting-started/create-a-competition#visibility).
 
 Next: [Create a competition](/help/getting-started/create-a-competition).

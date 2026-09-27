@@ -13,7 +13,7 @@
 // through the shared hook harness (see _hook-harness.tsx).
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { CompetitionSettings } from "../competition-settings";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -84,5 +84,40 @@ describe("CompetitionSettings — the draft's listing hint", () => {
       target: { value: "published" },
     });
     expect(island.text()).not.toContain(HINT);
+  });
+});
+
+// Review 2026-09-27 (m2): the hint sat INSIDE the Status <label>, so a screen
+// reader announced it as part of the select's NAME. It is a description, so it
+// lives outside the label and the select points at it with aria-describedby —
+// and points at nothing when the hint is not rendered (a dangling id reference
+// is its own a11y defect).
+describe("CompetitionSettings — the hint DESCRIBES the Status select, it is not part of its name", () => {
+  const hintEl = (tree: ReactElement[]) =>
+    tree.find((el) => propsOf(el)["data-testid"] === "compset-draft-unlisted");
+  const statusLabel = (tree: ReactElement[]) =>
+    tree.find((el) => el.type === "label" && walk(el).some((c) => c === statusSelect(tree)))!;
+
+  it("a public draft: the select's aria-describedby names the hint's id", () => {
+    const tree = mount({ visibility: "public", status: "draft" }).tree();
+    const hint = hintEl(tree)!;
+    const id = propsOf(hint).id as string;
+    expect(id, "the hint carries an id").toBeTruthy();
+    expect(propsOf(statusSelect(tree))["aria-describedby"]).toBe(id);
+  });
+
+  it("the hint is NOT inside the select's <label>, which still reads 'Status' first", () => {
+    const tree = mount({ visibility: "public", status: "draft" }).tree();
+    const label = statusLabel(tree);
+    expect(label, "the select still has its own label").toBeDefined();
+    expect(textOf(label)).toMatch(new RegExp(`^${t(uiEn as unknown as Dict, "compset.status")}`));
+    expect(textOf(label)).not.toContain(HINT);
+    expect(walk(label).some((el) => propsOf(el)["data-testid"] === "compset-draft-unlisted")).toBe(false);
+  });
+
+  it("a published competition: no hint, and no dangling aria-describedby", () => {
+    const tree = mount({ visibility: "public", status: "published" }).tree();
+    expect(hintEl(tree)).toBeUndefined();
+    expect(propsOf(statusSelect(tree))["aria-describedby"]).toBeUndefined();
   });
 });

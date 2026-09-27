@@ -56685,7 +56685,7 @@
     },
     "/api/v1/public/discovery": {
       "get": {
-        "summary": "Discovery directory (doc 15 §4): opted-in public competitions, cursor-paginated",
+        "summary": "Discovery directory (doc 15 §4): opted-in public competitions, listed once published (a draft never is), cursor-paginated",
         "tags": [
           "public"
         ],

@@ -2675,6 +2675,8 @@ export type DictionaryKey =
   | "landing.tabsLabel"
   | "landing.today"
   | "launch.confirm.competition"
+  | "launch.confirm.draft"
+  | "launch.confirm.draftLink"
   | "launch.confirm.entrants"
   | "launch.confirm.format"
   | "launch.confirm.formatLocksNow"

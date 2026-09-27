@@ -4,7 +4,7 @@
 // added later is classified by the rule, not silently by a stale list.
 import { describe, expect, it } from "vitest";
 import { CompetitionStatus, Visibility } from "@/server/api-v1/schemas";
-import { competitionIsListed, linkOnlyRobots, UNLISTED_STATUS } from "../competition-listing";
+import { competitionIsListed, linkOnlyRobots, publishWouldList, UNLISTED_STATUS } from "../competition-listing";
 
 const STATUSES = CompetitionStatus.options;
 const VISIBILITIES = Visibility.options;
@@ -44,5 +44,29 @@ describe("linkOnlyRobots", () => {
   it("a listed competition gets NO robots key at all (the default: indexable), not an explicit index:true", () => {
     expect(linkOnlyRobots({ visibility: "public", status: "published" })).toEqual({});
     expect(linkOnlyRobots({ visibility: "public", status: "archived" })).toEqual({});
+  });
+});
+
+// The organiser-facing nudges — the settings hint under Status and the note in
+// the Start-tournament confirmation — both say "not listed … until you
+// publish". That sentence is true for exactly the competitions publishing
+// would LIST, so the predicate is derived from the listing rule itself rather
+// than from a second hand-written condition.
+describe("publishWouldList", () => {
+  it("is true exactly when the competition is unlisted now and publishing it would list it", () => {
+    for (const visibility of VISIBILITIES) {
+      for (const status of STATUSES) {
+        const c = { visibility, status };
+        const expected = !competitionIsListed(c) && competitionIsListed({ ...c, status: "published" });
+        expect(publishWouldList(c), `${visibility}/${status}`).toBe(expected);
+      }
+    }
+  });
+
+  it("non-vacuity: that is ONE pair — a public draft — and not a private or unlisted one", () => {
+    const hits = VISIBILITIES.flatMap((visibility) =>
+      STATUSES.filter((status) => publishWouldList({ visibility, status })).map((status) => `${visibility}/${status}`),
+    );
+    expect(hits).toEqual(["public/draft"]);
   });
 });

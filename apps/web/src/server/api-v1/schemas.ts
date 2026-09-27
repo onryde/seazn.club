@@ -5101,7 +5101,9 @@ export const PublicFixtureSummary = z.object({
 });
 
 /** Spectator W2, Task 15 — what the org home's chip island polls: the org's
- *  LISTED (`visibility = 'public'`) competitions, each with its status and how
+ *  LISTED competitions — `visibility = 'public'` once published, i.e. past
+ *  draft, and still listed live, completed or archived
+ *  (`lib/competition-listing.ts`) — each with its status and how
  *  many of its public fixtures are in play. A competition with a match in play
  *  is "on now" whatever its status says (`lib/public-site.ts`'s
  *  `competitionChip`). */

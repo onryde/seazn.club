@@ -22,6 +22,7 @@
 // moment fixtures exist — ON THE QUICK-START PATH THAT IS THIS VERY PRESS, so
 // the line has two forms and neither is omitted; and it does NOT lock match
 // rules, which lock per stage as each stage's first match is scored.
+import Link from "@/components/ui/console-link";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -47,6 +48,16 @@ export function StartConfirmDialog({
    *  Saying "already locked — fixtures exist" over a page reading "No fixtures
    *  yet" was a live defect found by driving the product on 2026-09-20. */
   formatLocked,
+  /** Is the parent competition a PUBLIC DRAFT — unlisted now, listed the
+   *  moment it is published (`publishWouldList`)? Owner decision 2026-09-27: a
+   *  draft is unlisted until published, and Start never publishes it (the
+   *  promotion above is published → live only), so an organiser starting a
+   *  tournament is told here that nobody browsing can find it yet. Not a
+   *  consequence of Start, so it sits below the list, not in it. False for a
+   *  private or unlisted draft — "until you publish" would be untrue there. */
+  unlistedDraft,
+  /** Where the competition is published: its settings page. */
+  settingsHref,
   busy = false,
   onConfirm,
   onCancel,
@@ -55,6 +66,8 @@ export function StartConfirmDialog({
   entrantsLock: boolean;
   competitionPromotes: boolean;
   formatLocked: boolean;
+  unlistedDraft: boolean;
+  settingsHref: string;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -84,8 +97,9 @@ export function StartConfirmDialog({
         {/* Grouped with the entrants line because both are things that CHANGE;
             the two below are clarifications about what does not lock. The
             sentence states the status move and stops there — published and
-            live are both in PUBLIC_DASHBOARD_STATUSES and
-            `public_competitions_v` does not read status at all, so "now
+            live are both in PUBLIC_DASHBOARD_STATUSES, and every listing
+            surface (org home, sitemap, `public_competitions_v`) excludes only
+            DRAFTS (V419), treating published and live alike — so "now
             visible to players" would be false. */}
         {competitionPromotes && (
           <li data-testid="start-confirm-competition">{msg("launch.confirm.competition")}</li>
@@ -95,6 +109,17 @@ export function StartConfirmDialog({
         </li>
         <li>{msg("launch.confirm.rules")}</li>
       </ul>
+      {unlistedDraft && (
+        <p
+          data-testid="start-confirm-draft"
+          className="rounded-md bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-amber-900"
+        >
+          {msg("launch.confirm.draft")}{" "}
+          <Link href={settingsHref} className="font-medium underline underline-offset-2">
+            {msg("launch.confirm.draftLink")}
+          </Link>
+        </p>
+      )}
     </ConfirmDialog>
   );
 }

@@ -1,5 +1,7 @@
-// Org landing (doc 09 §1): the org's `public` competitions. Unlisted ones are
-// reachable by direct link only — never listed here.
+// Org landing (doc 09 §1): the org's `public` competitions once published —
+// live and finished ones included. Unlisted ones, and drafts of any visibility,
+// are reachable by direct link only — never listed here
+// (`lib/competition-listing.ts`).
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";

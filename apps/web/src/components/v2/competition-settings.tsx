@@ -13,6 +13,7 @@ import { publicBrandColor, publicThemeStyleChain } from "@/lib/public-theme";
 import { ProseEditor } from "@/components/prose-editor";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { publishWouldList } from "@/lib/competition-listing";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -32,6 +33,8 @@ interface CompetitionLite {
 }
 
 const STATUSES = ["draft", "published", "live", "completed", "archived"];
+/** One settings form per page, so a fixed id is unique. */
+const DRAFT_UNLISTED_HINT_ID = "compset-draft-unlisted-hint";
 
 type SettingsTab = "general" | "branding" | "archived";
 
@@ -111,6 +114,7 @@ export function CompetitionSettings({
 
   const readOnly = !canEdit || competition.frozen;
   const showSuggestion = !readOnly && suggestedStatus && suggestedStatus !== form.status;
+  const draftUnlisted = publishWouldList(form);
 
   async function applyStatus(next: string) {
     setError(null);
@@ -318,13 +322,22 @@ export function CompetitionSettings({
                 <Tip id="division.visibility" className="mt-0.5" />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* Owner decision 2026-09-27: a draft is unlisted until
+                  published. Said only for a PUBLIC draft — for a private one
+                  "with the link" is false, and for an unlisted one "until you
+                  publish" is. Follows the form, so choosing "published" takes
+                  it away before the save. It DESCRIBES the select (outside its
+                  <label>, joined by aria-describedby) rather than being read
+                  as part of its name; both notes span the row so a phone does
+                  not wrap them into a half-width column. */}
+              <div className="grid grid-cols-2 gap-x-3">
                 <label className="block">
                   <span className="label">{msg("compset.status")}</span>
                   <select
                     disabled={!canEdit}
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value })}
+                    aria-describedby={draftUnlisted ? DRAFT_UNLISTED_HINT_ID : undefined}
                     className="select"
                   >
                     {STATUSES.map((s) => (
@@ -333,33 +346,29 @@ export function CompetitionSettings({
                       </option>
                     ))}
                   </select>
-                  {/* Owner decision 2026-09-27: a draft is unlisted until
-                      published. Said only for a PUBLIC draft — for a private
-                      one "with the link" is false, and for an unlisted one
-                      "until you publish" is. Follows the form, so choosing
-                      "published" takes it away before the save. */}
-                  {form.status === "draft" && form.visibility === "public" && (
-                    <span
-                      data-testid="compset-draft-unlisted"
-                      className="mt-1.5 block text-xs leading-relaxed text-slate-500"
-                    >
-                      {msg("compset.draftUnlisted")}
-                    </span>
-                  )}
-                  {showSuggestion && (
-                    <span className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md bg-purple-50 px-2.5 py-1.5 text-xs text-purple-800">
-                      {statusHint(msg, suggestedStatus!)}
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void applyStatus(suggestedStatus!)}
-                        className="btn btn-primary px-2 py-0.5 text-xs"
-                      >
-                        {msg("compset.setTo", { status: statusLabel(msg, suggestedStatus!) })}
-                      </button>
-                    </span>
-                  )}
                 </label>
+                {draftUnlisted && (
+                  <p
+                    id={DRAFT_UNLISTED_HINT_ID}
+                    data-testid="compset-draft-unlisted"
+                    className="col-span-2 mt-1.5 text-xs leading-relaxed text-slate-500"
+                  >
+                    {msg("compset.draftUnlisted")}
+                  </p>
+                )}
+                {showSuggestion && (
+                  <div className="col-span-2 mt-1.5 flex flex-wrap items-center gap-2 rounded-md bg-purple-50 px-2.5 py-1.5 text-xs text-purple-800">
+                    {statusHint(msg, suggestedStatus!)}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void applyStatus(suggestedStatus!)}
+                      className="btn btn-primary px-2 py-0.5 text-xs"
+                    >
+                      {msg("compset.setTo", { status: statusLabel(msg, suggestedStatus!) })}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Showcase on seazn.club (doc 15 §1): explicit opt-in, public

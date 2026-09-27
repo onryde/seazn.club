@@ -17,7 +17,7 @@ The end date is the one field you cannot leave blank, because it is what tells u
 
 ## Visibility
 
-A new competition starts as a **draft**, with **Public** visibility unless you pick another when you create it. While it is a draft, anyone you give the link to can open its page and register, but it is not listed on your organisation page or in search results. Set its **Status** to **Published** in the competition's settings when you are ready, and it appears on your organisation page and becomes findable by search engines.
+A new competition starts as a **draft**, with **Public** visibility unless you pick another when you create it. While it is a draft, anyone you give the link to can open its page and register, but it is not listed on your organisation page or in search results. Set its **Status** to **Published** in the competition's settings when you are ready, and it appears on your organisation page and becomes findable by search engines. Starting a division does not publish it for you: while the competition is still a public draft, the Start tournament confirmation says so and links to its settings.
 
 Visibility is separate from status, and you can change it at any time in the same settings:
 
@@ -27,7 +27,7 @@ Visibility is separate from status, and you can change it at any time in the sam
 
 To also appear on the seazn.club Discover page, a public competition needs **Showcase on seazn.club** switched on. It is shown there once it is published and has a published schedule or a result.
 
-If your plan's limit on public pages is already reached, a new competition is created **Private** instead, and you are told so.
+If your plan's limit on public pages is already reached, a new competition is created **Private** instead, and you are told so. Publishing takes one of those public pages too: when they are all in use, publishing a public competition is refused until you free one or upgrade.
 
 A finished competition stays listed when you mark it completed or archived: it shows as **Finished**, and nothing is lost. Setting a published competition back to draft takes it off your organisation page again.
 

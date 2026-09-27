@@ -645,6 +645,9 @@ export default async function DivisionPage({
               // the line is true. `competition` is already loaded above and
               // `status` is in its COLS — no extra query.
               competitionStatus={competition.status}
+              // With the status, whether it is a PUBLIC draft — unlisted until
+              // published — so the confirmation can say so. Same row, no query.
+              competitionVisibility={competition.visibility}
               viewerPlan={viewerPlan}
             />
           </div>
