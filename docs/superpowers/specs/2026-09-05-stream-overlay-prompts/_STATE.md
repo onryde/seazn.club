@@ -196,6 +196,44 @@ the account held zero videos, so TRUNCATION ITSELF remains unobserved and this c
 - Earlier: "keep the fly app" — `seazn-relay` (org seazn-club, `p7vx1jevmyrw9k3z`) STAYS; "yes, you can create and
   delete" — live create+delete authorised against Fly and Cloudflare, under confirm-the-destroy conditions.
 
+## LANE B — OPEN 2026-09-27 (session `r1-laneb`). Read this with the CURRENT block above it.
+
+**Lane A MERGED as PR #812**, `main` = `b392be909`. Lane B worktree `.claude/worktrees/relay-b`, branch
+`feat/stream-relay-b`, cut from that merge; `.env.local` symlinked both levels, `pnpm install --frozen-lockfile`
+exit 0 with `node_modules/@seazn/engine` resolving INSIDE the worktree. The lane-A ledger was copied across, and
+what lane A owes this lane is written up as
+`.superpowers/sdd/2026-09-13-streaming-r1/lane-b-carries.md` — the four INERT Task 10 call sites
+(`runnerDeadlineOf` → `RunnerSpec.deadlineAt`; `createFailedFrom(e)` from the create catch;
+`readTargetSecret(tx, orgId, targetId)`; the three V410 exit columns read by `failReasonFromExit`, never
+`last_heartbeat -> 'lastExit'`) plus the unknown-outcome create (an unmarked create routes the runner to `lost`
+and emits `force_destroy`, signals the SESSION nothing, and on the LAST attempt now reports `machine_crash`
+where it used to report `machine_create_failed`).
+
+**OWNER RULING 2026-09-27 — the Task 7A panel is OPTION B: one button, one modal, ledger rail below**
+(owner's word: "B", asked before any implementer ran, per the 2026-09-20 ruling "bring ≥2 UI options for the
+staff credits panel at the START of lane B"). Three options were put: A = three inline action cards (what the
+plan said), B = donor parity with `admin-credits-panel.tsx` — balance + one "Adjust credits" button opening a
+`Modal` that carries the kind, amount, note and (refund only) session, C = B with no ledger rail, reusing the
+page's existing Adjustments log. B was recommended and ruled.
+
+Why it was recommended, kept here because the reasons decide later arguments: the three money verbs sit behind
+one deliberate open, so `revoke` is never a button adjacent to `grant` on a staff page; it matches the ONLY
+money precedent on that page, so staff learn one pattern for both wallets; and the rail stays because the
+Adjustments log shows actor/action/category/reason/when/reversible but NOT the delta, the running balance or
+the session link — which is exactly what a linked refund's cap is judged against (why C was rejected).
+
+**What B moves and what it does not.** The route, the usecase, the zod body, the 401/400/404/409/422 codes and
+every DB test are IDENTICAL under all three options; only `admin-stream-credits-panel.tsx`, its testids, its
+component test and the walkthrough spec's steps change. **Consequence that must not be lost:** `apps/web`
+vitest is `environment: "node"`, so a closed modal's fields are NOT in the markup — the component test can only
+assert the closed panel (balance, the adjust button, the rail, the empty state), and every field's OPENING
+VALUE (amount 1, min 1, max = the `maxDelta` prop, empty note, empty session, submit disabled until a note is
+typed — the class-19 "pin what a control OPENS AT" case) moves to the e2e walkthrough. That is a deviation to
+record in the plan, not a test to weaken.
+
+**Lane B path note:** the plan's step commands are written against `.claude/worktrees/relay/` (42 occurrences).
+Lane B runs in `.claude/worktrees/relay-b`; every such path reads as `relay-b` for Tasks 7 / 7A / 8.
+
 **Owner decisions this session (owner's words):**
 - "No fine" (2026-09-16) — keep lane order: lane A (3→4→5A→5→6) before lane B.
 - "Can we create the PR for each Lane, after each lane finish, we can start a new session and start a new lane?" —
