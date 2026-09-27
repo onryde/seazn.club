@@ -630,9 +630,9 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   page,
   request,
 }) => {
-  // Derived from the waits this test actually spends (AGENTS.md 20): ~22
-  // page/state waits and 4 record polls.
-  test.setTimeout(Math.max(120_000, 22 * STEP_MS + 4 * POLL_MS));
+  // Derived from the waits this test actually spends (AGENTS.md 20): ~30
+  // page/state waits and 5 record polls.
+  test.setTimeout(Math.max(120_000, 30 * STEP_MS + 5 * POLL_MS));
 
   // Why this test exists. The set-based kernel plays the LAST possible game to
   // `finalSetTo`, and on best of 1 the only game is the last, so `setTo` is
@@ -779,11 +779,41 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
     .toEqual({ setTo: BO1_INHERITED_POINTS, finalSetTo: BO1_INHERITED_POINTS });
 
   // --- 3. The division settings editor ----------------------------------------
-  // No fixtures in this division, so its format is still editable.
-  await page.goto(await divisionPath(request, bo1DivId, "?tab=settings"));
-  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-  await page.getByRole("button", { name: /Format/ }).click();
+  // No fixtures in this division, so its format is still editable. The
+  // division's OWN pair is seeded disagreeing first (the old editor's shape),
+  // for 3a below.
+  const divSeed = await apiJson(request, `/api/v1/divisions/${bo1DivId}`, "PATCH", {
+    config: { bestOf: 1, setTo: dead, finalSetTo: played },
+  });
+  expect(divSeed.status, `seeding the division's mismatched pair → ${JSON.stringify(divSeed.error)}`).toBe(200);
+  const openSettingsFormat = async () => {
+    await page.goto(await divisionPath(request, bo1DivId, "?tab=settings"));
+    await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
+    await page.getByRole("button", { name: /Format/ }).click();
+  };
+  await openSettingsFormat();
   const settingsSingle = page.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
+  await expect(settingsSingle).toHaveValue(String(played), { timeout: STEP_MS });
+
+  // 3a. "Default" on the best-of picker with the points left UNTOUCHED: the
+  // save must still align the stored pair to the number played. Typing first
+  // (3b) would copy the value to both keys on its own and hide whether the
+  // save path is told what a blank best-of falls back to (review, 2026-09-25).
+  await page.getByLabel(BEST_OF_LABEL).selectOption("");
+  await expect(settingsSingle).toHaveValue(String(played));
+  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
+  await expect
+    .poll(
+      async () =>
+        (await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${bo1DivId}`))
+          .data?.config,
+      { timeout: POLL_MS },
+    )
+    .toMatchObject({ bestOf: 1, setTo: played, finalSetTo: played });
+
+  // 3b. Typing a new number writes both keys.
+  await openSettingsFormat();
   await expect(settingsSingle).toHaveValue(String(played), { timeout: STEP_MS });
   await expect(page.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
   await settingsSingle.fill(String(BO1_SETTINGS_POINTS));
