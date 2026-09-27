@@ -31,13 +31,13 @@ W4 merged (design §8 order, R1) — FX-G1 extends W4's reconcile.
 Rows: league, triple_rr, group, league_ko, groups_ko, group_stepladder,
 group_playoffs. Routed gaps, copied from design §8:
 
-#879 (all parts), #840 (Rebuild wipes the schedule — owned here; W3 consumes),
-#850, FX-G1 (round-robin side of the reconcile), FX-G5, FX-G13,
+#879 (all parts; part 3's hidden wipe is fixed by W3's #840),
+#850, FX-G1 (round-robin side of the reconcile), FX-G5,
 ST-G3/G4/G5/G6/G13/G14/G15/G20/G23/G24, the repeated `completeStage`
 seed-proposal finding (bench), triple_rr possibly created as a single round robin
 from the builder (hypothesis, `format-templates.ts:341`).
 
-W3 tagged its SW-M12 (#840) reds ⏳ W5 — close them here and re-run the Swiss rows.
+#840 and FX-G13 (Rebuild) are fixed in W3 — verify them on the round-robin rows; do not re-fix.
 
 ## Lifecycle (design §10)
 
@@ -71,9 +71,9 @@ second call is a tested case (R27).
 1. **FX-G1 extends W4's reconcile — do not re-fix it.** A round-robin-only
    patch beside W4's bracket fix is the "patch per format" the test strategy
    warns against. If W4's seam does not fit, record why before changing it.
-2. **#840 is two defects in one button**: Rebuild deletes and regenerates in
-   two transactions (a throw leaves the stage empty, FX-G13) and NULLs every
-   time and court while the confirm hides it (#879 part 3). Fix and test both.
+2. **Rebuild was fixed in W3 (#840 + FX-G13).** Re-run P4 (Rebuild after
+   results) on every round-robin row; a red there is a W3 regression, not new
+   W5 work — record it against W3.
 3. **ST-G5 pool membership = entrants with a result**: an unplayed pool member
    is missing from the table. The empty-pool case is the first case (R13).
 4. **Residual ties fall to seed then UUID** (ST-G13): the shuffled-entry

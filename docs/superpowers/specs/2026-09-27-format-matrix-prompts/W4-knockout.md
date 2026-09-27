@@ -30,7 +30,9 @@ page_playoff. Routed gaps, copied from design §8:
 FX-G2 (bracket growth on Generate — **owns the shared position-keyed reconcile
 fix**, which W5 extends to round-robin), FX-G7, FX-G14, FX-G16 (a confirmed
 proposal keeps a stale qualifier), third-place UI, ST-G7 + ST-G26 (finished
-knockout as all-zero tables on embed/slideshow/OG).
+knockout as all-zero tables on embed/slideshow/OG). Also owned here: **D4**
+same-club/country separation in draw placement (W5 groups consume it) and the
+🚫 **Q4** (final not played → joint winners or decided by table) build-or-refuse.
 
 Unlisted gaps on these formats go to you under the §8 preamble — enumerate them
 from the audits at start and record each assignment in the decision log.

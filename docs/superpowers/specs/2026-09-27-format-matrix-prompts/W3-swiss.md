@@ -37,8 +37,11 @@ SW-H1…H4, M1…M13, L1…L12 from `SW-swiss.md` at start**; #846; ST-G21
 (slideshow Buchholz column); #838 recorded as answered by ruling 12 (round count
 per stage) — confirm in the rulebook.
 
-**SW-M12 is #840**, which §8 assigns to W5 ("owned here; W3 consumes"). W5 runs
-after W3, so tag SW-M12 reds ⏳ W5; do not fix #840 here.
+**SW-M12 is #840, and W3 owns it** (design §8, amended 2026-09-27): W3 is the
+first wave that needs Rebuild, so it fixes **#840 + FX-G13** here — Rebuild
+keeps times and courts, and delete + regenerate run in ONE transaction (a throw
+must not leave the stage empty). Build it format-agnostic; W5 consumes it for
+league rows and #879 part 3.
 
 ## Lifecycle (design §10)
 
@@ -62,7 +65,7 @@ after W3, so tag SW-M12 reds ⏳ W5; do not fix #840 here.
 
 ## Done when
 
-Ruling 19 on the Swiss rows: zero ❌ from the gaps above, SW-M12 tagged ⏳ W5,
+Ruling 19 on the Swiss rows: zero ❌ from the gaps above (including #840/FX-G13),
 nothing previously ✅/⛔ red anywhere; §10.5 gates; Grand Swiss run or recorded
 deferred. The "no rematch" and "fully paired" invariants report non-zero counts
 on every round (R25).

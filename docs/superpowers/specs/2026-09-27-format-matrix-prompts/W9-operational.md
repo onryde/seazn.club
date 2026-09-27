@@ -24,10 +24,14 @@ competitions. An organiser can run the day without phoning support.
 A parallel lane (R2). **Before starting, list this lane's file set and prove it
 disjoint from the wave in flight**, and record the proof in `_INDEX.md`.
 Known collision risk: `apps/web/src/server/usecases/schedule.ts` is touched by
-W3 (SW-M13 bye shell on a court) and by W5 (#840 Rebuild NULLs the schedule);
+W3 (SW-M13 bye shell on a court; #840 Rebuild NULLs the schedule);
 `stages.ts` by every format wave. Overlap → stop and sequence.
 
 ## Scope
+
+**Division-level 🚫 scenarios owned here** (design §4, §8): D1 merge two
+divisions, D2 split a division, R13 move an entrant to another division after
+the draw — each gets a build-or-refuse recommendation for the owner.
 
 Routed gaps, copied from design §8:
 
