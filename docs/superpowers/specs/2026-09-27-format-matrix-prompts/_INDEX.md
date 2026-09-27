@@ -158,5 +158,18 @@ a peer session as the other.
 
 ## False premises found
 
-(none yet — record each audit gap that fails to reproduce here, with the wave
-that tried)
+Record each audit gap that fails to hold, with who found it.
+
+- **SW-H1 (partial)** — "rounds ≥ field size always dead-ends" holds only for
+  even fields; an odd field of n can play n rounds. The core defect (an empty
+  pairing reported as success) stands. Found by the W3 rulebook draft
+  (`8a74c538e`), code read.
+- **SW-M1 / SW-L1 (expected value)** — cite the pre-2023 FIDE "virtual
+  opponent" rule as current; C.07 (2026) art. 16 replaced it, so SW-M1's
+  expected 2.5 is wrong. The defect (bye valued wrongly in Buchholz) stands.
+  Same source; the rulebook's FIDE edition claims need a primary-text check at
+  sign-off.
+- **SW-M8 / SC-O7 (severity)** — the unused `byeScore` leaves the FIDE-correct
+  full-point bye in place; only a house-rule half-point bye is missing. Lower
+  severity than filed.
+- **ST-G21** — found by grep only; still needs a read (R5).
