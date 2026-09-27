@@ -1,7 +1,7 @@
 # Format × sport matrix — design of record
 
-- **Date:** 2026-09-27
-- **Status:** APPROVED by the owner 2026-09-27 (rulings 14–16 in `_INDEX.md`)
+- **Date:** 2026-09-27 (amended the same day after an independent spec review)
+- **Status:** APPROVED by the owner (rulings 14–20 in `_INDEX.md`)
 - **Programme index:** `2026-09-27-format-matrix-prompts/_INDEX.md` (owner rulings, decision log, status)
 - **Standing rules:** `2026-09-27-format-matrix-prompts/_RULES.md`
 - **Inputs:** `2026-09-27-format-matrix-prompts/audit-2026-09-27/` (five read-only audits, the offered-cell map, the bench reuse assessment)
@@ -25,8 +25,8 @@ Gap IDs collide across files (`G1` exists in three), so **every gap is cited
 with its file prefix**: `FX-G1`, `ST-G1`, `SH-G1`.
 
 The audits read code and ran the engine in places; they did **not** drive the
-product. Every gap is a hypothesis until a wave's truth run reproduces it
-(`_RULES.md` R5).
+product. Every behavioural gap is a hypothesis until a truth run reproduces it
+(`_RULES.md` R5, which also carves out non-behavioural gaps).
 
 Two structural facts drive the design:
 
@@ -50,10 +50,24 @@ config variant, either works end to end or refuses with plain guidance by an
 owner ruling.** Nothing stalls silently, nothing reports success on a failure,
 no table lies.
 
-- **A wave is done** when its rows in `MATRIX.md` are all ✅ (works) or ⛔
-  (refused by ruling) — **zero ❌, zero ⬜** — and its gates (§10) pass.
-- **The programme is done** when the whole matrix meets that bar and every
-  issue routed into W8–W10 is closed.
+**Case states** (the legend of `MATRIX.md`):
+
+| State | Meaning |
+|---|---|
+| ✅ | works as the rulebook says |
+| ⛔ | a refusal **mandated by a ruling and observed** (e.g. M11 mid-match rule change) |
+| ❌ | red, caused by a gap routed to the current or an earlier wave |
+| ⏳ Wn | red, caused by a gap routed to a later wave `Wn` |
+| ⬜ | needs ruling — the rulebook is silent |
+| 🚫 | no product path — the action has no route or screen yet; needs a ruling to build it or refuse it |
+| ░ | not yet run |
+
+- **A wave is done** (ruling 19) when (a) zero ❌ are attributable to its own
+  routed gaps, every other red on its rows is tagged ⏳ with its owning wave;
+  (b) **no case anywhere that was ✅ or ⛔ before the wave is now red**; (c) its
+  gates (§10) pass.
+- **The programme is done** when the whole matrix is ✅ or ⛔ — no ❌, ⏳, ⬜, 🚫
+  or ░ — and every issue routed into W8–W10 is closed.
 
 ## 3. The matrix
 
@@ -64,7 +78,15 @@ league, triple_rr, league_ko, groups_ko, group_stepladder, group_playoffs,
 swiss, swiss_playoff, swiss_knockout, knockout, ko_plate, qualifying_main,
 double_elim, americano, mexicano, ladder. Rows are templates plus API-only
 shapes (page_playoff alone, knockout + `thirdPlace`, …) — the authoritative
-row list is `offered-matrix.md`; W1 freezes it into the harness.
+row list is `offered-matrix.md`; W1a freezes it into the harness.
+
+The server has **no create-from-template-key endpoint**. The harness builds
+stages with the builder's own `buildTemplateStages`
+(`format-templates.ts:333`) and posts them to `/divisions/:id/stages`, so the
+real producer is exercised. **API-only rows** (5 rows, 48 cells, plus 2
+template-only cells) are created through `HttpDriver` in L1 and everything
+after creation is driven in the browser; the missing organiser UI is itself a
+❌ routed to a named wave (W4 owns the third-place control).
 
 **Sports (11).** football, cricket, boardgame (variants are time controls, not
 chess/draughts/go), carrom, generic, volleyball, badminton, tabletennis,
@@ -73,16 +95,39 @@ no futsal preset.
 
 **A cell** = (format row, sport, that sport's default config).
 
+**Entitlements.** `page_playoff` and `double_elim` need `formats.double_elim`;
+americano, mexicano and ladder need `formats.advanced`. Harness organisations
+run on the top plan; each gated format also gets **one denied-state case** on a
+plan without the key (the owner's 2026-09-14 checklist requires both states).
+
 ## 4. The scenario axis
 
-Each scenario is a script of organiser actions (§6.1) plus an
-**applicability predicate** over (format, sport). Inapplicable pairs are
-dropped mechanically. Catalogue (69):
+Each scenario is a script of organiser actions (§6.1) plus an **applicability
+predicate over (format, sport, variant)** — E3 needs best-of-1, M5/M6 need a
+decider switched on, generic `win_loss` behaves differently in americano.
+
+**Applicability is committed, not implicit.** The generated list of dropped
+(cell, scenario) pairs is a committed file with **a reason per drop**, reviewed
+like the pair file (R11). Each row has an **applicable-case floor**, and each
+predicate is mutated once (`return false`) to prove a red — an over-broad
+predicate must not reach "zero ❌" by testing nothing (R13).
+
+**Compound scenarios split into atomic cases** in W1b ("A vs B" items such as
+R4, M7, M8, X1, X4, C3, F5, Q1, Q4 become `R4a`/`R4b`…), and W1b decides
+whether **E (entry path)** multiplies the M and C scenarios or stays a
+scenario of its own.
+
+**Outcomes the product chooses are expected values, not inputs.** Withdrawal
+expunge-vs-keep is decided by the engine (a 50% threshold; Swiss never
+expunges) — the scenario asserts which one the rulebook requires, it does not
+pick it.
+
+Catalogue (69 scenario IDs, more atomic cases):
 
 **R — roster**
 - R1 late entry before Start · R2 late entry after Start
 - R3 withdrawal before Start · R4 withdrawal mid-event after some results (expunge vs keep, incl. already-finalized fixtures) · R5 withdrawal after the entrant has played all their matches · R6 withdrawal of an entrant already drawn into a later bracket/playoff slot
-- R7 disqualification · R8 entrant deleted · R9 pair/team rename or lineup change mid-event
+- R7 disqualification (today: status only, no fixture cascade) · R8 entrant deleted · R9 pair/team rename or lineup change mid-event
 - R10 waitlist promotion after the draw · R11 duplicate entrant (same person twice, or in two partnerships in one division) · R12 doubles partner withdraws → substitute or pair dissolved · R13 entrant moved to another division after the draw
 - R14 retires from one match, continues in the next · R15 entrant leaves after their last match and is still paired next round · R16 substitute / different lineup in a team match (stats attribution)
 
@@ -118,10 +163,19 @@ dropped mechanically. Catalogue (69):
 - C6 late correction after the stage or event is complete (reopen, recompute ranks) · C7 result annulled weeks later
 
 **E — entry path** (how results reach the ledger)
-- E1 phone pad · E2 quick result · E3 Bo1 points editor · E4 device link / printed scorer-sheet scan
+- E1 phone pad · E2 single-event result over the API (there is no separate quick-result endpoint) · E3 Bo1 points editor · E4 device link / printed scorer-sheet scan
 
-**Surfaces asserted after every scenario:** desk, public table, embed,
-slideshow, export, printed sheet.
+**Known 🚫 at design time** (no route or screen today): D1, D2, D4, R13, Q4,
+C5 (`carry_deltas` exists only through stage PUT, `FORMAT_LOCKED` once fixtures
+exist). X3 is built in W2. Each 🚫 gets a build-or-refuse ruling in the wave
+that owns its format.
+
+**Cases that need times** (E4, the printed-sheet surface, X1, D5) are excluded
+from L3 by predicate — L3 skips scheduling — and covered in L1/L2.
+
+**Surfaces asserted after every scenario:** desk, public table, embed (HTML —
+there is no JSON embed; the public standings route is read), slideshow,
+export, printed sheet.
 
 **Operational [O] items are NOT on this axis** (ruling 5) — they are W9:
 unpaid-entry removal and refunds, age eligibility disputes, court count drops,
@@ -133,106 +187,144 @@ edits propagating to embeds/exports/OG images, certificates from final ranks.
 
 ## 5. Config variants and customisation levels
 
-**Third axis: config variants.** Every setting a sport module declares gets
-each of its values run at least once per format, pair-covered like L2.
+**Third axis: config variants.** Every setting a sport module declares is
+covered **pair-wise across (format, sport)** — not cartesian. Numeric settings
+(overs, points-to-win, legs, rounds) are replaced by **boundary classes**
+(minimum, default, maximum, one interior value), so the axis is finite.
 
 **Customisation levels (ruling 12):**
 
 | Level | What may be set | When |
 |---|---|---|
-| Division | everything (today's behaviour) | any time; frozen per fixture at its first event |
-| **Stage** | **every setting**: match format for every sport (today only the set sports, #804), **deciders with a screen** (today engine-read at `stage-cfg.ts:18` but nothing writes them — SC-X2), table points, tiebreak order | before the stage's first fixture starts |
+| Division | everything (today's behaviour) | any time — but **table points and tiebreakers lock per stage once that stage's first fixture starts** (recommendation; confirmed in W2's rulebook, O8) |
+| **Stage** | **every setting**: match format for **every** sport (today only the set sports, #804 — owner D2a scope is superseded by ruling 12), **deciders** (`shootout`, `extraTime`, and the missing `superOver`/overtime/tie-board keys) **with a screen**, table points, tiebreak order | before the stage's first fixture starts |
 | **Fixture** | **match format only** — game points, sets, best-of, overs, halves | **only while the fixture has not started** |
 | Fixture | table points, tiebreakers | **never** — every result in a table counts the same |
 | Mid-match | nothing | **refused** (scenario M11) |
 
-The fixture override lands in the same resolver
-(`fixture-cfg.ts` → `stageScopedCfg`) and is frozen by the existing V347
-snapshot at the first event, so the "editing config never re-scores a finished
-fixture" guarantee is untouched. That guarantee becomes an **invariant** (§7.3).
+Today the stage deciders are engine-read (`stage-cfg.ts:18`) and API v1
+`CreateStage` writes `shootout`/`extraTime`, but **no organiser screen writes
+them** (SC-X2).
+
+The fixture override is **not** a one-line change: `resolveFixtureCfg` takes no
+fixture input today and has ~11 production callers (`append-event.ts:270`,
+`fold.ts:155`, `competition.ts:325/347`, `event-import.ts:281`,
+`fixtures.ts:115`, `match-centre-load.ts:304`, `org-posts.ts:761`,
+`player-stats.ts:439`, …). W2 must route the override through **every** caller
+or it ships as an inert seam (`AGENTS.md` class 1). It is then frozen by the
+existing V347 snapshot at the first event, so the "editing config never
+re-scores a finished fixture" guarantee is untouched — and becomes an
+invariant (§7.3).
 
 ## 6. The harness
 
 ### 6.1 One scenario catalogue, two drivers
 
 Scenarios are written once against an `OrganiserDriver` interface
-(`withdraw(entrant: seed(3), after: round(2), mode: "expunge")`,
+(`withdraw(entrant: seed(3), after: round(2))`,
 `walkover(fixture: round(1).match(2), absent: "away")`, …). Two adapters:
 
-- **HttpDriver** (L3) — the real prod server over HTTP, reusing the bench's
-  client, seeding, simulation and advancement code (§9).
-- **BrowserDriver** (L1/L2) — taps the same action in the real UI (page
-  objects).
+- **HttpDriver** (L3) — the real prod server over HTTP. It is a **lean runner of
+  its own** (ruling 17) that reuses the bench's small helpers only — HTTP client,
+  magic-link auth, plan provisioning — and **does not touch `run-suite.ts`**.
+- **BrowserDriver** (L1/L2) — organiser page objects plus **one pad adapter per
+  sport** (11; the bench ships only a generic tap adapter).
 
 The same script runs through both, so the layers cannot drift.
 
-### 6.2 The three layers (ruling 7)
+**Scoring events are generated, not replayed.** The bench replays recorded
+pack streams and has no run-time simulation. W1a writes a **stream generator
+per sport** producing the minimal legal sequence for a chosen outcome (win,
+draw where allowed, walkover/retirement via `core.forfeit {by, reason}`,
+abandon), plus richer sequences where a scenario needs them. Filler fixtures use
+the minimal sequence to keep per-case cost down.
 
-| Layer | What | Scale |
+**Organisations** are auto-provisioned at sign-up and there is no create route,
+so the harness seeds organisations and plans directly in the harness DB,
+following the bench's `setPlan` SQL precedent, and signs in once per worker.
+The harness never touches production data.
+
+**Known API traps the driver handles:** scoring before Start is `422
+WRONG_PHASE`; Start needs `{acknowledge_warnings: true}`; a later stage needs its
+own `POST /stages/{id}/generate`; `/complete` on an unfinished stage is `200
+{completed:false}`, not an error; final ranks are read from stage standings
+after `/complete`; americano/mexicano next round and Swiss "pair next" are the
+same `POST /stages/:id/generate`.
+
+### 6.2 The three layers (ruling 7, mixed-driver per ruling 15)
+
+| Layer | What | Size (derived in W1b from the committed files) |
 |---|---|---|
-| **L1** | every cell × full lifecycle **in the browser**: generate → score with that sport's real pad → standings → progression → final ranks → public table | 231 runs |
-| **L2** | scenarios in the browser: every (format, scenario) pair and every (sport, scenario) pair at least once | ~600–900 runs |
-| **L3** | the full cartesian cell × scenario × variant **through the real server, no browser** | ~7k+ cases |
+| **L1** | every cell × full lifecycle **in the browser**, at 1280 and 320 | 231 × 2 = **462** runs |
+| **L2** | scenarios in the browser: every applicable (format, scenario) and (sport, scenario) pair at least once, widths rotating across the seven | ≥ number of applicable (format, scenario) pairs — up to 21 × 69 = 1,449 before drops |
+| **L3** | **every applicable (cell × scenario) at default config** (full cartesian, ruling 7) **+ config variants pair-covered across (format, sport)**, through the real server, no browser | ≤ 231 × 69 = 15,939 before drops, plus the variant set |
 
-**Mixed-driver lifecycle (owner ruling 15).** An
-L1/L2 run drives **every distinct action type** through the browser at least
-once — generate, one match on the sport's real pad, one quick result, the
-scenario's own steps, the standings/progression/final-ranks pages — and scores
-the remaining filler fixtures through `HttpDriver`. Tapping all 28 matches of
-an 8-player league in the browser proves nothing the first one did not and
-makes L1 unrunnable.
+**Mixed-driver lifecycle (ruling 15).** An L1/L2 run drives **every distinct
+action type** through the browser at least once — generate, one match on the
+sport's real pad, the scenario's own steps, the standings/progression/final-ranks
+pages — and scores the remaining filler fixtures through `HttpDriver`.
 
-**Deterministic pair covering.** L2's run list and the variant axis are a
-committed, reviewed file generated once — never random — so every run
-executes the same set.
+**Deterministic files.** The L2 run list, the variant set and the applicability
+drop list are committed, reviewed files — never random draws (R11).
 
 **`MATRIX.md` is generated** from the harness's JSON results and never
-hand-edited (one authority per fact). Cells: ✅ works · ❌ red · ⛔ refused by
-ruling · ⬜ needs ruling / not yet run.
+hand-edited (R10).
 
-### 6.3 Expected outcome per (cell, scenario)
+### 6.3 Expected outcome per case
 
-One of: **works** · **refused-with-guidance** (an owner ruling, per ruling 6)
-· **unruled** → ⬜ *needs ruling*, never ❌. A missing decision must not look
-like a bug, and a bug must not hide as a missing decision: a case moves to ⬜
-only when its rulebook (§7.1) is silent.
+One of: **works** · **refused-with-guidance** (a ruling, per ruling 6) ·
+**needs ruling** (⬜, rulebook silent) · **no product path** (🚫). A missing
+decision must not look like a bug, and a bug must not hide as a missing
+decision: ⬜ only when the rulebook is silent, 🚫 only when no route or screen
+exists.
 
 ### 6.4 Isolation and speed
 
-- One organisation per case.
+- One organisation per case, seeded in the harness DB.
 - L3 skips scheduling (fast path); L1/L2 schedule for real where the lifecycle
-  needs times (sheets, board).
-- Every full run starts on a fresh DB — a long-lived test DB (~28k orgs) times
-  out unrelated suites.
-- The harness never repeats `POST /stages/{id}/complete`: today a repeat mints
-  a new draft seed proposal each call (bench finding, `stages.ts:4140`; fixed
-  in W5). Driver calls are idempotent by construction.
+  needs times (sheets, board, X1, D5).
+- Every full run starts on a fresh DB with `sync:sports` — a long-lived test DB
+  (~28k orgs) times out unrelated suites.
+- The harness never repeats `POST /stages/{id}/complete`: today a repeat mints a
+  new draft seed proposal each call (bench finding, `stages.ts:4140`; fixed in
+  W5). Driver calls are idempotent by construction.
+- **The repo is public**, so every CI log and uploaded artifact is public. The
+  harness uses synthetic organisations and people only and never prints a secret
+  or a token.
 
-### 6.5 CI and cost (decision owed in W1's spec)
+### 6.5 CI cadence and cost (ruling 20)
 
-Honest arithmetic, estimates to be measured in W1:
-
-- **L3 full:** ~7k cases × ~10 s ≈ 19 CPU-hours → ~1 h wall over 20 shards.
-- **L1 + L2:** ~830–1,130 browser runs × 3–4 min ≈ 45–75 runner-hours → ~1.5 h
-  wall over 40 shards. At GitHub's Linux 2-core rate that is roughly
-  **$20–35 per full run** (Actions metering is on).
-- **Per PR:** L3 for the rows the wave touches plus a fixed sample (~10 min).
-  The existing e2e trigger (push to `main` + `workflow_dispatch`) is unchanged.
-- **Full L1+L2+L3:** manual dispatch + a schedule the owner picks in W1
-  (weekly ≈ $100/month, nightly ≈ $700/month at the estimate above).
-
-L1 runs at 1280 and 320 per cell (recommendation); L2 rotates the seven
-widths across its runs so the whole width matrix is covered.
+- **While the repo is public: $0.** Standard GitHub-hosted runners are free for
+  public repositories. The limit is wall clock (concurrent jobs), not money.
+- **Weekly scheduled full run of L1 + L2 + L3, plus manual dispatch** (ruling 20).
+  Scheduled overnight at the weekend.
+- **Per PR:** L3 for the rows the wave touches plus a fixed sample.
+- **Visibility guard.** The owner plans to make the repo private later. The
+  weekly job reads the repo visibility first and fails loudly if it is private
+  and still on GitHub-hosted runners, so the meter can never run silently.
+- **Plan for going private (recommendation, not yet a ruling): move the weekly
+  matrix to a self-hosted runner** (a VPS or the owner's machine; only `runs-on`
+  changes). GitHub postponed its announced self-hosted platform charge
+  (changelog 2025-12-16, update), so self-hosted private usage is free today.
+  PR CI stays on GitHub-hosted runners. For comparison, GitHub-hosted private
+  cost would be ≈ $370/month weekly or ≈ $200/month with L1+L2 every 4 weeks.
+  **Rejected:** a separate public "shim" repo pulling a private image — GitHub's
+  Actions terms exclude hosted-runner "activity unrelated to the ... testing ...
+  of the software project associated with the repository", and every log,
+  artifact and red would be public.
+- Following the bench's own precedent (`bench.yml`, R84), the schedule is
+  enabled only after three consecutive green manual dispatches.
 
 ## 7. Expected values (ruling 10: full reference model)
 
 ### 7.1 Rulebooks (ruling 11)
 
-Each format wave's first deliverable, **signed off by the owner**: the format
-family's rules per sport — federation default, settings organisers may change
-and at which level (§5), deviations recorded as owner rulings, and the wave's
-case-by-case rulings on unfit cells and unsupported scenarios (ruling 6), each
-stated as a recommendation with its owner value.
+Each wave's first deliverable, **signed off by the owner**: the rules for its
+format family (or, for W2, its sport families) per sport — federation default,
+settings organisers may change and at which level (§5), deviations recorded as
+owner rulings, and the wave's case-by-case rulings on unfit cells, unsupported
+scenarios and 🚫 actions (ruling 6), each stated as a recommendation with its
+owner value.
 
 Authorities: FIDE (Swiss pairing, Buchholz and byes), BWF, ITTF, FIVB, ITF,
 ICC (NRR, DLS), FIFA/UEFA (head-to-head first in groups), FIH, IIHF. Product
@@ -240,124 +332,163 @@ rules where no federation governs: americano, mexicano, ladder, generic,
 carrom. Where the product deliberately differs (a simpler Swiss than full
 FIDE Dutch), the difference is an owner ruling in the rulebook.
 
+**Source of truth order:** the rulebook, then the sport's declared config. Where
+a declared default contradicts the federation rule the rulebook adopts (e.g.
+SC-P4 hockey shoot-out 3/0 vs FIH 2/1), **the rulebook wins** and the case is ❌.
+
 ### 7.2 The reference model
 
-- New package **`packages/reference/`**: pure TypeScript, no DB.
-- A **lint/dependency boundary** forbids importing `packages/engine` or
-  `apps/web`; it shares only wire and pack types.
+- New package **`packages/reference/`**: pure TypeScript, no DB, modelled on
+  `packages/engine`'s package layout.
+- **Import boundary**, enforced by a gate in the style of
+  `scripts/engine-boundary.ts` (run by `ci.yml`): no import of `apps/web`, and of
+  `@seazn/engine` **at most `import type`** from its core types — or a leaf
+  types package, if W1b finds type-only imports insufficient. W1b decides and
+  records which; the pack types (`pack-schema.ts:144-145`) import engine runtime
+  values and are not shared.
+- A new package also needs its manifest `COPY`'d in the `Dockerfile` before
+  `pnpm install --frozen-lockfile`, or the container job breaks.
 - Written **from the rulebook, never from engine code**, by a different agent
   than the one fixing the engine in that wave.
 - **Exact oracle** where the rules admit one answer: standings, tiebreaks,
   progression, final ranks, NRR, walkover credit.
-- **Legality checker plus declared preference order** where the rules admit
-  several: Swiss pairing among equal scores, draw placement, bye placement.
-- Built **wave by wave**: W1 ships the package skeleton and the boundary; each
-  format wave adds its family before fixing anything.
+- **Swiss (and draw placement):** **hard legality plus existence** — no rematch,
+  one bye per player, colour limits where the rulebook sets them, and "a legal
+  pairing exists" by exhaustive or blossom matching for n ≤ a bound W3 sets. A
+  preference order is asserted only where the rulebook fixes it; the reference is
+  not a second pairing engine.
+- Built **wave by wave**: W1b ships the package skeleton and the boundary; each
+  wave adds its families before fixing anything.
 
-### 7.3 Invariants and metamorphic checks (every case, from W1)
+### 7.3 Invariants and metamorphic checks (every case, from W1a)
 
-- every round-robin pair meets exactly once per leg
-- every completed bracket has exactly one champion; final ranks are a
-  permutation of the entrants
-- table points = Σ results × the sport's *declared* points (rule 19: derive
-  from declarations, never from output)
-- a walkover credits what the sport declares
+Each invariant carries its **preconditions**, so the scenarios that legitimately
+break the plain form (shared 3rd, joint winners, expunge, void, cut short, late
+entry) do not read as reds:
+
+- every round-robin pair meets exactly once per leg — *unless* the case withdraws,
+  expunges, voids, cuts short or adds a late entry; then the rulebook's rule applies
+- every completed bracket has exactly one champion and final ranks are a
+  permutation of the entrants — *unless* Q3/Q4 or a rulebook-declared shared place
+- table points = Σ results × the rulebook's points
+- a walkover credits what the rulebook declares
 - Swiss: no rematch; Buchholz = Σ opponents' scores under the rulebook's bye rule
 - **nothing ends stuck**: every stage completes or refuses with a named reason;
   an empty generate/pair is a failure, not "up to date" (SW-H1)
 - editing config never changes a finished fixture's result (V347 freeze)
-- metamorphic: shuffled entry order and renamed entrants give the same table
+- metamorphic: renamed entrants give the same table; shuffled entry order gives
+  the same table **only with explicit seeds and no `lots`** (unseeded order is
+  `created_at`, FX-G17; residual ties fall to seed then UUID, ST-G13)
+
+**W1's truth run is a floor.** It has invariants only — the reference families
+arrive wave by wave, and the Swiss bye rule comes from W3's rulebook — so its ❌
+list is where each wave's backlog starts, not its full extent.
 
 ### 7.4 Disagreement triage
 
-Reference ≠ product → **the rulebook decides**. Either side can be wrong. If
-the rulebook is silent, the case is ⬜ *needs ruling* and goes to the owner as
-a recommendation.
+Reference ≠ product → **the rulebook decides**. Either side can be wrong. If the
+rulebook is silent, the case is ⬜ and goes to the owner as a recommendation.
 
 ## 8. Waves
 
-Waves are grouped by format family — the organiser's journey — and each closes
-its rows across all 11 sports. Audit gaps are routed below; a gap not listed
-goes to the wave owning its format/sport, and **every audit ID must be closed
-or ruled by programme end**.
+Each gap has **exactly one owning wave**; a later wave that depends on it tags
+its reds ⏳ until the owner lands. Gaps not listed go to the wave owning their
+format/sport; **every audit ID must be closed or ruled by programme end**.
 
 | Wave | Scope | Carries |
 |---|---|---|
-| **W1 — harness + truth run** | Drivers, L1/L2/L3 frameworks, scenario and variant catalogues, pair-covering file, `MATRIX.md` generator, `packages/reference/` skeleton and boundary, invariants and metamorphic checks, split of the bench's `run-suite.ts` into callable phases, round-by-round generation for swiss/mexicano/ladder in the runner. **One truth run over every cell. No product code changes.** | CI cadence and budget ruling (§6.5); the observed ❌ list becomes every later wave's backlog |
-| **W2 — sport scoring fidelity** | The input layer every format consumes | SC-X1–X4 (knockout tie/no-result stall; per-stage deciders with a screen; level knockout without a decider), SC-S* (walkover/retirement set and point credit; tennis impossible sets; tennis Bo1 match tie-break), SC-C* (DLS NRR), SC-P* (hockey shoot-out points), SC-O* (chess knockout draw), ST-G1 (abandoned → table), ST-G2 (chess Pts doubled), ST-G16 (ice hockey OT columns); fixture-level format override (§5) |
-| **W3 — Swiss** (9 live) | swiss, swiss_playoff, swiss_knockout | SW-* (H1 failed pairing reported as success; H2 round guidance; H3 chess colours; H4 per-sport Swiss tiebreaks; M1 Buchholz bye; M2 undo Pair next; bye points, snapshot and court booking; double walkover); #846 |
-| **W4 — knockout family** (10 live) | knockout, ko_plate, qualifying_main, third place, stepladder, page_playoff | FX-G2 (bracket growth on Generate), FX-G7 (page playoff withdrawal), FX-G14 (plate seeding), third-place UI, ST-G7 (finished knockout as all-zero tables on embed/slideshow/OG), boardgame/generic bracket cells |
-| **W5 — round-robin family** | league, triple_rr, group, league_ko, groups_ko, group_stepladder, group_playoffs | #879 (all three parts), #850, FX-G1, FX-G5 (3-group crossover), FX-G13 (non-atomic Rebuild), ST-G3/G4 (best runner-up across pools), ST-G5 (group tables miss unplayed members), ST-G10/G13/G14/G15/G20/G23/G24, the repeated `completeStage` seed-proposal finding (bench) |
-| **W6 — double elimination** | double_elim | FX-G3 (reset game never cancelled; champion ranked last), FX-G4 (no crossing → immediate rematches) |
-| **W7 — americano, mexicano, ladder** | the 20 unfit americano/mexicano cells, ladder | case-by-case rulings; FX-G6 (ladder late joiners), FX-G8–G11; the broken `americano-night` tennis template |
-| **W8 — scorer sheets** | printable sheets | SH-* (H1 unreachable print options = #870; plan re-check when scoring; revoke a day; untimed matches; non-Latin fonts; per-format and per-sport card tests) |
-| **W9 — operational [O]** | schedule, devices, registration | the [O] list (§4), #880, bench findings: cross-competition court double-booking (`schedule.ts:939`), `solver_unavailable`, `start_window` never blocks, inert `crossPersonClash`, no engine request, `lang` until hydration |
-| **W10 — sweep** | unrelated issues | #878 browser Sentry, #858 admin URL, #853 player card, #843 roster i18n |
+| **W1a — L3 core** | Lean HTTP runner reusing the bench's helpers; `HttpDriver`; org/plan seeding; **stream generators for all 11 sports**; per-round generation for swiss/mexicano/ladder; invariants; JSON results; `MATRIX.md` generator | Proven on a vertical slice: league, knockout, swiss × generic, badminton |
+| **W1b — catalogues + reference skeleton** | 69 scenarios split into atomic cases; applicability over (format, sport, variant) with the committed drop list and floors; variant set with boundary classes; L2 pair file; `packages/reference/` skeleton, boundary gate, Dockerfile line | Formulas and real counts for §6.2; E-axis decision; reference import mode |
+| **W1c — browser layers** | `BrowserDriver`: organiser page objects + **11 pad adapters**; L1/L2 frameworks; width rotation | API-only rows created over HTTP, then driven in the browser |
+| **W1d — CI + truth run** | Shards, fresh DB per shard, weekly + dispatch workflow with the visibility guard, per-PR sample, three green dispatches before the schedule, per-case timing, **the first full truth run** and triage of its reds into waves | The ❌ list (a floor) becomes each wave's starting backlog |
+| **W2 — sport scoring fidelity** (a sport-family wave: one rulebook per sport family, reference families for its exact-oracle items) | The input layer every format consumes | SC-X1 (knockout tie/no-result stall), SC-X2 (stage deciders with a screen), SC-X3 (no event to settle an abandoned knockout by lot), SC-X4 (auto-advance blocked by `abandoned`), SC-P1, SC-P2 (level knockout without a decider), SC-P4 (hockey shoot-out points), SC-P11 (futsal preset), SC-S* (walkover/retirement set and point credit, tennis impossible sets, tennis Bo1 match tie-break, double walkover SC-S6), SC-C3 (DLS NRR), **SC-O1/SC-O2 (boardgame/generic draws in brackets — the `supportsDraws` root cause, owned here)**, ST-G1, ST-G2, ST-G16, ST-G10 (tiebreak validation against the sport + stage tiebreak UI); **stage-level match format for every sport** (ruling 12, FX-G23, SC-O8); fixture-level format override through every `resolveFixtureCfg` caller (§5); division-level lock of points/tiebreakers per started stage (O8) |
+| **W3 — Swiss** (9 live) | swiss, swiss_playoff, swiss_knockout | SW-* (H1 failed pairing reported as success; H2 round guidance; H3 chess colours; H4 Swiss tiebreak families; M1 Buchholz bye; M2 undo Pair next; bye points, snapshot and court booking; byeScore SC-O7/SW-M8 owned here; Swiss handling of double walkover SW-M9, engine outcome from W2); #846; ST-G21 (slideshow Buchholz column); #838 recorded as answered by ruling 12 (round count per stage) — confirm in the rulebook |
+| **W4 — knockout family** (10 live) | knockout, ko_plate, qualifying_main, third place, stepladder, page_playoff | FX-G2 (bracket growth on Generate — **owns the shared position-keyed reconcile fix**, which W5 extends to round-robin), FX-G7, FX-G14, FX-G16 (a confirmed proposal keeps a stale qualifier), third-place UI, ST-G7 + ST-G26 (finished knockout as all-zero tables on embed/slideshow/OG) |
+| **W5 — round-robin family** | league, triple_rr, group, league_ko, groups_ko, group_stepladder, group_playoffs | #879 (all parts), #840 (Rebuild wipes the schedule — owned here; W3 consumes), #850, FX-G1 (round-robin side of the reconcile), FX-G5, FX-G13, ST-G3/G4/G5/G6/G13/G14/G15/G20/G23/G24, the repeated `completeStage` seed-proposal finding (bench), triple_rr possibly created as a single round robin from the builder (hypothesis, `format-templates.ts:341`) |
+| **W6 — double elimination** | double_elim | FX-G3, FX-G4 |
+| **W7 — americano, mexicano, ladder** | the 20 unfit americano/mexicano cells, ladder | case-by-case rulings; FX-G6, FX-G8–G11; the broken `americano-night` tennis template |
+| **W8 — scorer sheets** (lane) | printable sheets | SH-* (SH-G1 unreachable print options = #870; plan re-check when scoring; revoke a day; untimed matches; non-Latin fonts; per-format and per-sport card tests, SH-G7) |
+| **W9 — operational [O]** (lane) | schedule, devices, registration | the [O] list (§4), #880, bench findings: cross-competition court double-booking (`schedule.ts:939`), `solver_unavailable`, `start_window` never blocks, inert `crossPersonClash`, no engine request, `lang` until hydration |
+| **W10 — sweep** (lane) | unrelated issues + one privacy defect | **ST-G22 first** (recap/digest bypasses youth-name masking — a privacy defect), #878 browser Sentry, #858 admin URL, #853 player card, #843 roster i18n |
 
-**Order.** W1 → W2 → W3 → W4 → W5 → W6 → W7 strictly in sequence — they share
-the engine and `stages.ts`. W8, W9, W10 run in **parallel lanes** in their own
-worktrees whenever capacity allows; each lane must prove its file set disjoint
-from the wave in flight before it starts.
+**Order.** W1a → W1b → W1c → W1d → W2 → W3 → W4 → W5 → W6 → W7 in sequence —
+they share the engine and `stages.ts` (5,794 lines). W8, W9, W10 run in
+**parallel lanes** in their own worktrees; each lane proves its file set
+disjoint from the wave in flight before it starts.
 
-## 9. Bench integration (ruling 8)
+## 9. Bench integration (rulings 8 and 17)
 
-- The bench is reused as a **library**, not as the harness: HTTP client,
-  seeding, simulation, advancement, oracle and offline validator code.
-- **B17 (disruption suite) is folded into this programme** — the scenario axis
-  supersedes it. The bench's "no synthetic volume suite" non-goal is amended
-  for this programme only.
-- **PackSchema stays frozen.** Synthetic per-cell packs are generated; scenarios
-  live in a separate step file.
-- W1 splits `run-suite.ts` into phases; **no bench runner work runs in parallel
-  with W1**.
-- Bench real-history suites become **closing gates** of the matching wave:
+- The bench is reused as a **library of small helpers** only — HTTP client,
+  magic-link auth, plan provisioning. **`run-suite.ts` is not split and not
+  imported** (ruling 17), so bench runner work is no longer blocked by W1.
+- **B17 (disruption suite) is folded into this programme.** The bench's "no
+  synthetic volume suite" non-goal is amended for this programme only.
+- **PackSchema stays frozen** (`pack-schema.ts:8-12`, `schemaVersion` at
+  `:1566`). This programme does not read or write packs.
+- Bench real-history suites become **closing gates** of the matching wave. A
+  gate whose suite has no pack yet is **deferred, not blocking** — recorded ⏳ in
+  `_INDEX.md` and run when the suite lands.
 
 | After | Bench suite(s) |
 |---|---|
-| W3 | Candidates / Grand Swiss (chess Swiss) |
-| W4 | All England (badminton knockout), Wimbledon (tennis) |
-| W5 | Euro 2024 / Women's Euro 2025, T20 World Cup, Paris volleyball and hockey, IIHF 2025, WTTC |
-| W6/W7 | carrom (B07b), remaining suites |
-| any time | pack authoring (offline research; pack files only) |
+| W3 | Grand Swiss (chess Swiss) |
+| W4 | All England (badminton knockout), Wimbledon (tennis), WTTC |
+| W5 | Candidates (double round robin), Euro 2024 / Women's Euro 2025, T20 World Cup, Paris volleyball and hockey, IIHF 2025, carrom (4 pools → knockout, B07b) |
+| any time | pack authoring and bench runner work (no shared files with this programme) |
 
 ## 10. Per-wave lifecycle and gates
 
 1. **Rulebook** (§7.1) → owner sign-off.
-2. **Reference model** for the family (§7.2), separate agent.
-3. **Truth run** on the wave's rows; each red re-verified before it enters the
-   backlog.
+2. **Reference model** for the wave's families (§7.2), separate agent.
+3. **Truth run** on the wave's rows. A behavioural gap enters the backlog only
+   when reproduced; a **non-behavioural gap** (test gap, doc/dead code, print or
+   credential gap) is verified by reading the code or by a failing test.
 4. **Plan** (`writing-plans`) → implement through the implementer → reviewer
-   loop. TDD: every fix ships a test that fails without it. Every guard is
-   mutated one at a time.
-5. **Gates:** L3 rows green · L1 cells green · L2 pair file green · whole spec
-   files, never `-g` slices; serial files re-run until a full pass · flaky-shaped
-   gates re-run three times · per-screen visual verdicts at 1280/768/320 for
-   changed UI · all 4 locale dictionaries + `gen-keys` · OpenAPI drift.
+   loop. TDD: every fix ships a test that fails without it; **the four test
+   types per task** (unit, E2E, smoke, regression — `docs/superpowers/RULES.md`);
+   every guard mutated one at a time.
+5. **Gates:**
+   - the wave's rows: zero ❌ from its own gaps (§2)
+   - **no regression**: nothing that was ✅/⛔ before the wave is red anywhere
+   - L1 cells on the wave's rows green; **the wave's slice** of the L2 pair file green
+   - whole spec files, never `-g` slices; serial files re-run until a full pass
+   - flaky-shaped gates re-run three times
+   - per-screen visual verdicts at 1280/768/320 for changed UI
+   - all 4 locale dictionaries + `gen-keys`; OpenAPI drift
 6. **Bench gate** where one lines up (§9).
 7. **Drive the product** before claiming; PR (smoke CI); e2e on the push to
    `main`, or `workflow_dispatch --ref <branch>` before merge.
 
-## 11. Decisions still owed
+## 11. Decisions
 
-| # | Decision | Where it is decided | Recommendation |
-|---|---|---|---|
-| O1 | CI cadence and monthly budget for full runs | **RULED 16: weekly scheduled + manual dispatch** | — |
-| O2 | Mixed-driver lifecycle for L1/L2 (§6.2) | **RULED 15: accepted** | — |
-| O3 | L1 widths per cell | W1 spec | 1280 + 320; L2 rotates all seven |
-| O4 | Fixture-override UI (§5) | W2 spec, ≥2 options shown first | — |
-| O5 | Stage-level deciders/points/tiebreak UI | W2 spec, ≥2 options shown first | — |
-| O6 | Per-cell rulings (unfit cells, unsupported scenarios) | each wave's rulebook | stated per case |
+| # | Decision | Status |
+|---|---|---|
+| O1 | CI cadence | **RULED 20**: weekly L1+L2+L3 + dispatch while public; going private → self-hosted runner is a recommendation (§6.5), ruled when the switch happens |
+| O2 | Mixed-driver lifecycle | **RULED 15** |
+| O3 | L1 widths per cell | recommended 1280 + 320, L2 rotates all seven — confirm in W1c |
+| O4 | Fixture-override UI (§5) | W2, ≥2 options shown first |
+| O5 | Stage-level deciders / match format / points / tiebreak UI | W2, ≥2 options shown first |
+| O6 | Per-case rulings (unfit cells, unsupported scenarios, 🚫 actions) | each wave's rulebook |
+| O7 | #838 Swiss round count per stage or division-wide | recommended answered by ruling 12 (per stage); confirm in W3's rulebook |
+| O8 | Division-level points/tiebreak edits after a stage started | recommended: lock per started stage; confirm in W2's rulebook |
+| O9 | Entry path E: its own scenarios or a multiplying axis | W1b |
+| O10 | Reference import mode (type-only from engine vs leaf types package) | W1b |
 
 ## 12. Risks
 
-- **Scale.** 231 cells × 69 scenarios × variants is large; the applicability
-  predicates and pair covering are what keep it runnable. W1 measures the real
-  counts before promising a cadence.
-- **The reference model is a second engine.** Wave-by-wave construction and
-  the import boundary keep it independent; the risk is it lags the fixes.
-  Mitigation: a wave cannot fix before its family's model exists (§10 step 2).
-- **Shared files.** `stages.ts` (~5.7k lines) and `run-suite.ts` (~5.9k lines)
-  are touched by most waves; strict sequencing is the only protection.
+- **Scale.** Up to ~16k L3 cases and ~1.9k browser runs. The committed
+  applicability, pair and variant files are what keep it runnable; W1b publishes
+  the real counts and W1d the real times.
+- **The reference model is a second engine.** Wave-by-wave construction, the
+  import gate and the Swiss legality-only scope keep it bounded; a wave cannot fix
+  before its families' model exists (§10 step 2).
+- **Inert fixture override.** ~11 `resolveFixtureCfg` callers (§5); W2 proves the
+  override through the real pad and the real standings read, not a fixture.
+- **Shared files.** `stages.ts` (5,794 lines) is touched by most waves; strict
+  sequencing is the only protection.
 - **Audit IDs are hypotheses.** Some will not reproduce; record them as false
   premises, not as work done.
-- **Actions cost.** §6.5; the owner sets the budget in W1.
+- **Public logs.** Everything a CI run prints is public while the repo is
+  public (§6.4).
+- **Going private.** Costs return (§6.5); the visibility guard makes the switch
+  explicit instead of a surprise bill.

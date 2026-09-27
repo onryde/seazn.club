@@ -10,7 +10,10 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1 | Harness (L1/L2/L3), catalogues, reference skeleton, invariants, truth run | plan being written |
+| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | plan being written |
+| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | not started |
+| W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | not started |
+| W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
 | W2 | Sport scoring fidelity | not started |
 | W3 | Swiss | not started |
 | W4 | Knockout family | not started |
@@ -62,13 +65,29 @@ a peer session as the other.
     distinct action type in the browser at least once; filler fixtures scored
     over HTTP.
 16. **CI cadence: weekly scheduled full run + manual dispatch** (design §6.5,
-    O1).
+    O1). Refined by ruling 20.
+17. **Do not split `run-suite.ts`** — the L3 runner is a lean runner of its own
+    reusing only the bench's small helpers; bench runner work is no longer
+    blocked by W1 (amends the sequencing half of ruling 8; B17 stays folded in).
+18. **W1 is split into W1a–W1d** (L3 core · catalogues + reference skeleton ·
+    browser layers · CI + truth run).
+19. **Wave done = zero ❌ attributable to the wave's own routed gaps**; other
+    reds on its rows are tagged ⏳ with their owning wave; the programme end
+    still requires the whole matrix green.
+20. **Weekly L1 + L2 + L3 while the repo is public ($0 on standard runners).**
+    The owner will make the repo private later; the private-repo plan
+    (self-hosted runner) is a recommendation to be ruled at the switch.
 
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
 - #878 (browser Sentry) ships early from the W10 lane; it is a one-file ops fix.
-- CI weekly + dispatch (O1) — **accepted**, now ruling 16.
+- CI weekly + dispatch (O1) — **accepted**, now rulings 16/20.
+- When the repo goes private: move the weekly matrix to a self-hosted runner
+  (free today — GitHub postponed its self-hosted charge). The owner proposed a
+  public shim repo pulling a private image; I recommended against it (Actions
+  terms exclude hosted-runner work unrelated to the repo's own project; public
+  logs). Not ruled.
 - Mixed-driver lifecycle (O2) — **accepted**, now ruling 15.
 - L1 at 1280 + 320 per cell; L2 rotates the seven widths (design §11 O3).
 - The bench's repeated-`completeStage` finding is fixed in W5; the harness
@@ -88,6 +107,19 @@ a peer session as the other.
   (`print-scorer-sheets.tsx:95` sends only `{date}`), americano console writes
   `generic.result` (`americano-panel.tsx:162`) and `americano-night.json` is
   tennis.
+- **2026-09-27** — independent spec review (reviewer agent): Approve with
+  fixes, 34 findings (5 High), none contradicting a ruling; all applied in the
+  amended design (states ⏳/🚫/░, committed applicability, invariant
+  preconditions, Swiss reference scope, single owner per gap, entitlement
+  dimension, cost recount). Review kept at `audit-2026-09-27/spec-review.md`.
+- **2026-09-27** — plan-facts scouts: the bench has **no run-time event
+  simulation** (packs replay recorded streams; stream generators for all sports
+  are new work); `run-suite.ts` is one ~4,100-line function (split dropped,
+  ruling 17); no create-from-template-key endpoint; no quick-result endpoint;
+  disqualify does not cascade; triple_rr from the builder may come out as one
+  leg (hypothesis). Facts kept under `audit-2026-09-27/plan-facts-*.md`.
+- **2026-09-27** — the repo is PUBLIC again (`gh repo view`), so standard
+  runners are free; the earlier $85/run estimate assumed private.
 - **2026-09-27** — stale memory corrected: per-stage match rules #804 merged
   2026-09-20 (D7 went option A, `7d5433faf`); bench B07a merged (#792).
 

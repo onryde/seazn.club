@@ -6,30 +6,34 @@ to it.
 
 ## Sequencing
 
-- **R1.** W1 → W7 run strictly in sequence, each in its own worktree. They
-  share `packages/engine`, `apps/web/src/server/usecases/stages.ts` and the
-  bench's `run-suite.ts`.
+- **R1.** W1a → W1b → W1c → W1d → W2 … W7 run strictly in sequence, each in
+  its own worktree. They share `packages/engine` and
+  `apps/web/src/server/usecases/stages.ts`.
 - **R2.** W8, W9, W10 are parallel lanes. A lane starts only after listing its
   file set and proving it disjoint from the wave in flight. A production change
   that forces an edit in the other lane's files → stop and sequence.
-- **R3.** No bench runner work runs in parallel with W1 (the `run-suite.ts`
-  split). Bench pack authoring (pack files only) may run any time.
+- **R3.** This programme never edits `scripts/bench/lib/suites/run-suite.ts`
+  or the PackSchema (ruling 17). It may import the bench's small helpers; a
+  change to one of those helpers is coordinated with the bench's index first.
 
 ## Authority
 
 - **R4.** Owner rulings and my recommendations live in separate sections of
   `_INDEX.md`. Never send either to a peer session labelled as the other.
-- **R5.** Audit gaps are hypotheses. A gap enters a wave's backlog only after
-  that wave's truth run reproduces it. One that does not reproduce goes to
-  "False premises found" in `_INDEX.md`.
+- **R5.** Audit gaps are hypotheses. A behavioural gap enters a wave's backlog
+  only after a truth run reproduces it; a non-behavioural gap (test gap, doc or
+  dead code, print or credential gap) is verified by reading the code or by a
+  failing test. One that does not hold goes to "False premises found".
 - **R6.** The rulebook decides disagreements between the reference model and
   the product. A silent rulebook → ⬜ *needs ruling*, put to the owner as a
   recommendation with its owner value — never guessed.
 
 ## The reference model
 
-- **R7.** `packages/reference/` never imports `packages/engine` or `apps/web`.
-  The lint boundary is a gate, not a convention.
+- **R7.** `packages/reference/` never imports `apps/web`, and imports
+  `@seazn/engine` at most as `import type` from its core types (or nothing, if
+  W1b chooses a leaf types package). The boundary is a CI gate in the style of
+  `scripts/engine-boundary.ts`, not a convention.
 - **R8.** A wave's reference model is written from its signed-off rulebook by a
   different agent than the one fixing the engine in that wave.
 - **R9.** Expected values are derived from the rulebook and the sport's
@@ -41,11 +45,15 @@ to it.
 - **R10.** `MATRIX.md` is generated from harness JSON. Never hand-edit it.
 - **R11.** L2's pair-covering list and the variant list are committed files.
   Regenerating them is a reviewed change, never a runtime random draw.
-- **R12.** ⬜ means a missing decision. A case moves to ⬜ only when its
-  rulebook is silent — never to park a red.
+- **R12.** ⬜ means a missing decision and 🚫 a missing product path. A case
+  moves to ⬜ only when its rulebook is silent, to 🚫 only when no route or
+  screen exists, and to ⏳ only when its cause is routed to a later wave —
+  never to park a red.
 - **R13.** An empty result is a failure: an empty pairing, an empty generate,
   an empty table, an empty sweep. Every rule set states its empty case first
   (competition-desk lesson; `AGENTS.md` classes 6 and 15).
+- **R14a.** The repo is public: harness output uses synthetic organisations and
+  people only, and never prints a secret, token or production value.
 - **R14.** Every full run starts on a fresh DB with `sync:sports`; confirm
   `show data_directory` is yours (`seazn-local-env` skill).
 
