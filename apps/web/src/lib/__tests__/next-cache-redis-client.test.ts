@@ -107,6 +107,28 @@ describe("withRedis", () => {
     await trip();
     expect(levels()).toEqual([40, 30, 40]);
   });
+
+  it("a success after fewer than BREAKER_FAILURES failures is not a recovery: nothing is logged", async () => {
+    __setRedisForTests(fake());
+    for (let i = 0; i < BREAKER_FAILURES - 1; i++) await withRedis(redisDown, "fb");
+    expect(await withRedis(async () => "x", "fb")).toBe("x");
+    expect(levels()).toEqual([]);
+  });
+
+  it("a command in flight that succeeds after the breaker trips closes it: the next call reaches Redis", async () => {
+    __setRedisForTests(fake());
+    let release: (v: string) => void = () => {};
+    const late = withRedis(() => new Promise<string>((resolve) => { release = resolve; }), "fb");
+    await trip();
+    expect(cacheStatus()).toBe("degraded");
+    release("late");
+    expect(await late).toBe("late");
+    expect(cacheStatus()).toBe("redis");
+    const ok = vi.fn(async () => "x");
+    expect(await withRedis(ok, "fb")).toBe("x");
+    expect(ok).toHaveBeenCalledTimes(1);
+    expect(levels()).toEqual([40, 30]);
+  });
 });
 
 describe("cacheStatus", () => {
@@ -121,6 +143,44 @@ describe("nextCacheRedis", () => {
     vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "");
     expect(nextCacheRedis()).toBeNull();
     expect(cacheStatus()).toBe("memory");
+  });
+
+  it.each(["0", "false", "true"])("NEXT_CACHE_REDIS=%s → no client: only \"1\" turns the tier on", (flag) => {
+    vi.stubEnv("NEXT_CACHE_REDIS", flag); vi.stubEnv("REDIS_URL", "redis://127.0.0.1:1");
+    expect(nextCacheRedis()).toBeNull();
+    expect(cacheStatus()).toBe("memory");
+  });
+
+  it("flag on with an unparseable REDIS_URL → no client, memory, and one warning that omits the URL", async () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://:s3cret@host:99999");
+    expect(() => nextCacheRedis()).not.toThrow();
+    expect(nextCacheRedis()).toBeNull();
+    expect(cacheStatus()).toBe("memory"); // /api/health calls this outside any try
+    const fn = vi.fn(async () => "x");
+    expect(await withRedis(fn, "fb")).toBe("fb");
+    expect(fn).not.toHaveBeenCalled();
+    expect(levels()).toEqual([40]);
+    const logged = warn.mock.calls.flat().join("\n");
+    expect(logged).not.toContain("s3cret");
+    expect(logged).not.toContain("99999");
+  });
+
+  it("connection errors warn once per outage and the next ready logs recovery once (hard outages bypass the breaker)", () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://:s3cret@127.0.0.1:1");
+    const r = nextCacheRedis();
+    expect(r).not.toBeNull();
+    // Synchronous on purpose: no real ECONNREFUSED can interleave with these emits.
+    r?.emit("ready"); // the first ready at boot is not a recovery
+    expect(levels()).toEqual([]);
+    r?.emit("error", new Error("connect ECONNREFUSED 127.0.0.1:1"));
+    r?.emit("error", new Error("connect ECONNREFUSED 127.0.0.1:1"));
+    expect(levels()).toEqual([40]);
+    r?.emit("ready");
+    r?.emit("ready");
+    expect(levels()).toEqual([40, 30]);
+    r?.emit("error", new Error("connect ECONNREFUSED 127.0.0.1:1"));
+    expect(levels()).toEqual([40, 30, 40]);
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("s3cret");
   });
 
   it("flag on → builds one fail-fast ioredis client and reuses it; boot calls fall back", async () => {

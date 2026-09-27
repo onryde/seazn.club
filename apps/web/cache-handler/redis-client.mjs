@@ -38,10 +38,25 @@ export function nextCacheRedis() {
       maxRetriesPerRequest: 0,
       enableOfflineQueue: false,
     });
-    client.on("error", () => {});
+    // A hard outage never reaches `ready`, so withRedis skips it without
+    // counting a failure and the breaker never logs it. These two listeners
+    // give it one line down and one line up. Never log the URL: it carries
+    // the password.
+    client.on("error", (err) => {
+      warnOnce("conn", "redis connection error; serving from machine memory", { err: String(err) });
+    });
+    client.on("ready", () => {
+      const st = state();
+      if (!st.warned.has("conn")) return; // first ready at boot is not a recovery
+      st.warned.delete("conn");
+      console.warn(JSON.stringify({ level: 30, name: "next-cache", msg: "redis connection restored; shared cache resumed" }));
+    });
     s.client = client;
   } catch {
-    s.client = null; // an unparseable REDIS_URL throws synchronously
+    // An unparseable REDIS_URL throws synchronously. /api/health calls
+    // cacheStatus() outside any try, so this must not throw.
+    s.client = null;
+    warnOnce("redis-url", "REDIS_URL unparseable; Redis tier off");
   }
   return s.client;
 }
