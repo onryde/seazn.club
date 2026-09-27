@@ -163,6 +163,9 @@ test.describe.serial("pro lifecycle", () => {
     await expect(confirm.getByTestId("start-confirm-competition")).toHaveText(
       "The competition moves from published to live.",
     );
+    // Published, so it is listed already: no still-a-draft note (the community
+    // journey starts a public DRAFT and sees it — the other half of the pair).
+    await expect(confirm.getByTestId("start-confirm-draft")).toHaveCount(0);
     await page.getByTestId("start-confirm-confirm").click();
     // Fixtures were pre-generated, so quick-start generates 0 and only
     // refreshes (no redirect). The button label flips to "Starting…" while the
