@@ -183,6 +183,7 @@ export default class SharedCacheHandler {
   }
 
   /** @param {string} key @param {any} data @param {any} _ctx */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Next passes ctx; routing keys off data.kind
   async set(key, data, _ctx) {
     if (data === null) {
       forget(key);

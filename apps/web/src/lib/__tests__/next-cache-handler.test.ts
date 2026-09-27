@@ -413,3 +413,17 @@ describe("machine memory (L1)", () => {
     expect((await new copy.default({}).get("k1", fetchCtx))?.value).toEqual(fetchValue());
   });
 });
+
+describe("per-request tag memo", () => {
+  it("a tag this request just revalidated is not read back from Redis in the same request", async () => {
+    const h = new Handler({});
+    await h.set("k1", fetchValue(), { fetchCache: true });
+    await h.revalidateTag("division:d1", { expire: 0 });
+    redis.calls.length = 0;
+    await h.get("k1", fetchCtx);
+    expect(redis.calls).not.toContain("hmget");
+    h.resetRequestCache(); // positive pair: the next request does read it
+    await h.get("k1", fetchCtx);
+    expect(redis.calls).toContain("hmget");
+  });
+});
