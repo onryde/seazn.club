@@ -64,7 +64,7 @@ export function MatchRuleFields({
               disabled={disabled}
               value={values[field.key] ?? ""}
               onChange={(e) => edit(field.key, e.target.value)}
-              placeholder={msg("rules.default")}
+              placeholder={inheritedPlaceholder(msg("rules.default"), inherited?.[field.key])}
               className="input"
             />
           ) : (
@@ -127,4 +127,19 @@ export function MatchRuleFields({
       })}
     </div>
   );
+}
+
+/**
+ * What a BLANK number field says it falls back to. "Default" alone hid the
+ * number: on a best-of-1 volleyball stage the single "Points to win" field
+ * read "Default" while the match plays to the division's deciding set, 15 —
+ * not the 25 an organiser would guess. Where the editor is told what a blank
+ * inherits (`inherited`: the stage editor's division config, the settings
+ * editor's variant), the placeholder names it; where it is not (the builder),
+ * it stays "Default" rather than invent one.
+ */
+export function inheritedPlaceholder(defaultWord: string, inheritedValue: unknown): string {
+  return typeof inheritedValue === "number" && Number.isFinite(inheritedValue)
+    ? `${defaultWord} (${inheritedValue})`
+    : defaultWord;
 }

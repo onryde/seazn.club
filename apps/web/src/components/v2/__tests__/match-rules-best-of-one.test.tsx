@@ -74,3 +74,27 @@ describe("MatchRuleFields at best of 1", () => {
     expect(html).toContain(`>${label("tennis", "setType")}<`);
   });
 });
+
+describe("a blank number field names what it inherits", () => {
+  /** Every number input's placeholder, keyed by its label. */
+  function placeholders(html: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const m of html.matchAll(/<span class="label">([^<]*)<\/span><input type="number"([^>]*)>/g)) {
+      out[m[1]!] = /\splaceholder="([^"]*)"/.exec(m[2]!)?.[1] ?? "";
+    }
+    return out;
+  }
+
+  it.each(SPORTS)("%s: best of 1 inherited — 'Points to win' shows the deciding number, not the per-set one", (sport) => {
+    // setTo ≠ finalSetTo on purpose: the placeholder must name the number the
+    // engine PLAYS on best of 1 (`finalSetTo`), so a placeholder read from
+    // `setTo` reds here.
+    const html = render(sport, {}, { bestOf: 1, setTo: 25, finalSetTo: 15 });
+    expect(placeholders(html)[SINGLE_SET_POINTS_LABEL]).toBe("Default (15)");
+  });
+
+  it("with nothing inherited (the builder) it stays 'Default' — never an invented number", () => {
+    const html = render("volleyball", { bestOf: "1" });
+    expect(placeholders(html)[SINGLE_SET_POINTS_LABEL]).toBe("Default");
+  });
+});
