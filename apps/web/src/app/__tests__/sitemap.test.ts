@@ -50,14 +50,16 @@ vi.mock("@/server/public-site/discovery", async (importOriginal) => {
   return { ...real, listDiscoverySports: vi.fn(real.listDiscoverySports) };
 });
 
+import { resolveRouteData } from "next/dist/build/webpack/loaders/metadata/resolve-route-data";
 import sitemap, * as route from "../sitemap";
 import { listPublicSitemapEntries } from "@/server/public-site/data";
 import { listDiscoverySports } from "@/server/public-site/discovery";
+import { SITEMAP_ENTRIES_CACHE_KEY } from "@/server/public-site/sitemap-cache";
 import {
-  SITEMAP_ENTRIES_CACHE_KEY,
   SITEMAP_REVALIDATE_SECONDS,
   sitemapRevalidateSeconds,
-} from "@/server/public-site/sitemap-cache";
+  sitemapWindowOverride,
+} from "@/lib/sitemap-window";
 import { siteOrigin } from "@/lib/site-origin";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -99,6 +101,9 @@ describe("sitemap.xml: route config", () => {
     ["soon", 3600],
   ] as const)("SITEMAP_REVALIDATE_SECONDS=%j resolves to %i seconds (only a positive integer overrides)", (raw, want) => {
     expect(sitemapRevalidateSeconds(raw)).toBe(want === 3600 ? SITEMAP_REVALIDATE_SECONDS : want);
+    // The e2e spec and smoke read the SAME parse: an override exactly when the
+    // resolved window is not the shipped default's fallback.
+    expect(sitemapWindowOverride(raw)).toBe(want === 3600 ? undefined : want);
   });
 });
 
@@ -112,6 +117,35 @@ describe("sitemap.xml: reads and fallback", () => {
     expect(cache.invoked).toContain(SITEMAP_ENTRIES_CACHE_KEY.join("|"));
     expect(out).toContain(`${BASE}/shared/acme-club/summer-cup`);
     expect(out).toContain(`${BASE}/shared/acme-club/summer-cup/open`);
+  });
+
+  it("lastmod: none on static pages; a competition's hub and divisions carry ITS timestamp, as the cache serves it", async () => {
+    // What sitemap.ts receives is the cached, JSON round-tripped shape (the
+    // double above round-trips exactly as the real cache does): `updated` is
+    // a string there, on a hit as on a miss.
+    vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([
+      { orgSlug: "acme-club", compSlug: "summer-cup", divisionSlugs: ["open"], updated: "2026-09-01T10:00:00.000Z" },
+      { orgSlug: "acme-club", compSlug: "winter-cup", divisionSlugs: [], updated: "2026-02-03T04:05:06.000Z" },
+    ]);
+    vi.mocked(listDiscoverySports).mockResolvedValueOnce([{ key: "badminton", name: "Badminton" }]);
+    const entries = await sitemap();
+    const at = (url: string) => entries.find((e) => e.url === url);
+
+    expect(at(`${BASE}/shared/acme-club/summer-cup`)?.lastModified).toBe("2026-09-01T10:00:00.000Z");
+    expect(at(`${BASE}/shared/acme-club/summer-cup/open`)?.lastModified).toBe("2026-09-01T10:00:00.000Z");
+    expect(at(`${BASE}/shared/acme-club/winter-cup`)?.lastModified).toBe("2026-02-03T04:05:06.000Z");
+    const undated = entries.filter((e) => !e.url.includes("/shared/"));
+    expect(undated.length, "premise: static and sport entries exist").toBeGreaterThan(10);
+    expect(undated.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);
+
+    // Through the serialiser the route itself uses: one <lastmod> per
+    // competition URL, each the competition's own, and nothing else dated.
+    const xml = resolveRouteData(entries, "sitemap");
+    expect(xml.match(/<lastmod>[^<]*<\/lastmod>/g)).toEqual([
+      "<lastmod>2026-09-01T10:00:00.000Z</lastmod>",
+      "<lastmod>2026-09-01T10:00:00.000Z</lastmod>",
+      "<lastmod>2026-02-03T04:05:06.000Z</lastmod>",
+    ]);
   });
 
   it("a database error at request time serves the static routes, not a 500", async () => {
@@ -216,5 +250,24 @@ describe.skipIf(!HAS_DB)("sitemap.xml: a seeded database", () => {
     expect(out).toContain(`${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}`);
     expect(out).toContain(`${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}/${scene.listed.divisionSlug}`);
     expect(out.filter((u) => u.includes(`/shared/${scene.orgSlug}/${scene.unlisted.slug}`))).toEqual([]);
+  });
+
+  it("the source returns `updated` as an ISO string — the same shape the cache hands back on a hit — and it reaches lastmod", async () => {
+    const [{ created_at: createdAt }] = await sql<{ created_at: Date }[]>`
+      select c.created_at from competitions c join organizations o on o.id = c.org_id
+       where o.slug = ${scene.orgSlug} and c.slug = ${scene.listed.slug}`;
+    // The mock above wraps the REAL function, so this is the query's own value.
+    const miss = (await listPublicSitemapEntries()).find(
+      (e) => e.orgSlug === scene.orgSlug && e.compSlug === scene.listed.slug,
+    );
+    expect(miss, "premise: the listed competition is in the source").toBeDefined();
+    expect(typeof miss!.updated).toBe("string");
+    expect(miss!.updated).toBe(new Date(createdAt).toISOString());
+    // A hit is the miss after a JSON round trip; with `updated` a string the
+    // two are the same value, so the sitemap cannot differ between them.
+    expect(JSON.parse(JSON.stringify(miss))).toEqual(miss);
+
+    const hub = (await sitemap()).find((e) => e.url === `${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}`);
+    expect(hub?.lastModified).toBe(miss!.updated);
   });
 });
