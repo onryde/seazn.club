@@ -26,6 +26,17 @@ export function warnOnce(key, msg, extra = {}) {
   console.warn(JSON.stringify({ level: 40, name: "next-cache", msg, ...extra }));
 }
 
+/**
+ * The errno-style code of a connection error. Node's happy-eyeballs connect
+ * fails with an AggregateError whose String() is only "AggregateError"; the
+ * code is on it, or else on its first coded child.
+ * @param {any} err
+ * @returns {string | undefined}
+ */
+function errCode(err) {
+  return err?.code ?? err?.errors?.find((/** @type {any} */ e) => e?.code)?.code;
+}
+
 export function nextCacheRedis() {
   const s = state();
   if (s.client !== undefined) return s.client;
@@ -43,7 +54,7 @@ export function nextCacheRedis() {
     // give it one line down and one line up. Never log the URL: it carries
     // the password.
     client.on("error", (err) => {
-      warnOnce("conn", "redis connection error; serving from machine memory", { err: String(err) });
+      warnOnce("conn", "redis connection error; serving from machine memory", { err: String(err), code: errCode(err) });
     });
     client.on("ready", () => {
       const st = state();

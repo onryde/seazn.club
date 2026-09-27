@@ -183,6 +183,30 @@ describe("nextCacheRedis", () => {
     expect(warn.mock.calls.flat().join("\n")).not.toContain("s3cret");
   });
 
+  it("a real connection failure logs its errno code: Node's AggregateError alone prints only \"AggregateError\"", async () => {
+    // localhost resolves to ::1 and 127.0.0.1, so Node's happy-eyeballs
+    // connect fails with an AggregateError (or a plain Error where localhost
+    // has one address); either way the line must carry the code, not the URL.
+    vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://:s3cret@localhost:1");
+    nextCacheRedis();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled(), { timeout: 5000 });
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({ level: 40, name: "next-cache", code: "ECONNREFUSED" });
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("s3cret");
+  });
+
+  it("an AggregateError with no code of its own logs its first coded child's code", () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://:s3cret@127.0.0.1:1");
+    const r = nextCacheRedis();
+    const coded = (code: string) => Object.assign(new Error("connect failed"), { code });
+    r?.emit("error", new AggregateError([new Error("no code"), coded("ETIMEDOUT"), coded("ECONNREFUSED")]));
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({ code: "ETIMEDOUT" });
+    __resetRedisStateForTests(); // a fresh outage: the aggregate's own code wins over its children
+    const r2 = nextCacheRedis();
+    r2?.emit("error", Object.assign(new AggregateError([coded("ETIMEDOUT")]), { code: "ECONNREFUSED" }));
+    expect(JSON.parse(String(warn.mock.calls[1][0]))).toMatchObject({ code: "ECONNREFUSED" });
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("s3cret");
+  });
+
   it("flag on → builds one fail-fast ioredis client and reuses it; boot calls fall back", async () => {
     vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://127.0.0.1:1");
     const r = nextCacheRedis();
