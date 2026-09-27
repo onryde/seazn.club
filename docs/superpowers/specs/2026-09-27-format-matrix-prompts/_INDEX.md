@@ -182,3 +182,10 @@ Record each audit gap that fails to hold, with who found it.
   16.3.1.1 plays them on group ties too. The gap (flag division-wide only)
   stands.
 - **SC-S5 (source)** — the rule is ATP Rulebook 4.02, not an ITF convention.
+- **SC-P4 (framing)** — "FIH 2/1 shoot-out split" is the FIH Pro League rule
+  only; FIH tournament regulations use 3/1/0 with draws standing and no pool
+  shoot-outs, which the product already does by default. The gap narrows to
+  "no points fields when shoot-outs are switched on". Found by the W2
+  goals/boards rulebook draft (`4da1804e1`).
+- **ST-G1 (scope)** — wider than filed: football/hockey abandonments and
+  carrom/generic abandonment points are also dropped from the table.
