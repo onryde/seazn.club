@@ -55,6 +55,17 @@ const transactionEvent = () => ({
   transaction: `GET /score/${TOKEN}`,
   spans: [{ span_id: "s1", trace_id: "t1", start_timestamp: 1, data: { "url.full": PAGE } }],
 });
+// Fly's check, as prod records it: the proxy's transaction with /api/health in request.url.
+const healthCheckTransaction = () => ({
+  type: "transaction",
+  transaction: "GET middleware GET",
+  request: { method: "GET", url: "http://172.19.29.122:3000/api/health" },
+});
+const healthCheckError = () => ({
+  event_id: "e2",
+  exception: { values: [{ type: "Error", value: "db down" }] },
+  request: { method: "GET", url: "http://172.19.29.122:3000/api/health" },
+});
 const logRecord = () => ({ level: "error", message: `Failed to fetch RSC payload for ${PAGE}`, attributes: {} });
 
 beforeEach(() => {
@@ -125,6 +136,12 @@ describe("Sentry server (sentry.server.config.ts, loaded by instrumentation.ts o
     const Sentry = await import("@sentry/nextjs");
     expect(vi.mocked(Sentry.pinoIntegration)).toHaveBeenCalledTimes(1);
   });
+
+  it("drops Fly's health-check transactions but still sends an error from that route", async () => {
+    const options = await sentryInitOptions("../../../sentry.server.config");
+    expect(run(options.beforeSendTransaction, healthCheckTransaction(), {})).toBeNull();
+    expect(run(options.beforeSend, healthCheckError(), {})).not.toBeNull();
+  });
 });
 
 describe("Sentry edge (sentry.edge.config.ts, loaded by instrumentation.ts on edge)", () => {
@@ -133,6 +150,12 @@ describe("Sentry edge (sentry.edge.config.ts, loaded by instrumentation.ts on ed
     expectScrubbed(run(options.beforeSend, errorEvent(), {}));
     expectScrubbed(run(options.beforeSendTransaction, transactionEvent(), {}));
     expectScrubbed(run(options.beforeSendLog, logRecord()));
+  });
+
+  it("drops Fly's health-check transactions but still sends an error from that route", async () => {
+    const options = await sentryInitOptions("../../../sentry.edge.config");
+    expect(run(options.beforeSendTransaction, healthCheckTransaction(), {})).toBeNull();
+    expect(run(options.beforeSend, healthCheckError(), {})).not.toBeNull();
   });
 });
 
