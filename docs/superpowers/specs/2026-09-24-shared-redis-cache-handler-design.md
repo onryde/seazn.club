@@ -127,8 +127,11 @@ All state is **module-level on `globalThis`** (see §4), exported for tests:
   `SET … EX ttl` where `ttl = revalidate + 3600` s, or 30 days when
   `revalidate` is `false`/absent (`pub-player-gate-tag`, figures outside live
   play). `buildId` read once from `.next/BUILD_ID` via `serverDistDir`.
-- Tags: one hash `nc:tags`, field = tag, value = JSON `{ stale?, expired? }`
-  (epoch ms). No TTL. Not build-scoped.
+- Tags: one hash `nc:tags`, field = tag, value = `"{at}|{json}"` where json is
+  `{ stale?, expired? }` (epoch ms) and `at` is the write time. Writes go
+  through a Lua script that sets a field only if its `at` is ≥ the stored
+  one, so concurrent writers from different machines cannot regress a tag.
+  No TTL. Not build-scoped.
 
 **`apps/web/src/lib/peer-revalidate.ts`** — same exported seam
 `broadcastRevalidate(tags, mode)`. PR 1: additionally computes the same tag
@@ -151,8 +154,13 @@ cannot drift.
 2. Collect the entry's tags (FETCH: `ctx.tags` + `ctx.softTags`; page kinds:
    `x-next-cache-tags` header). Fetch any not already in `requestTagMemo` with
    one `HMGET nc:tags …`.
-3. Merge into `tagsManifest`: per field take `max(local, remote)` — a tag's
-   times never move backwards on a machine.
+3. Merge into `tagsManifest`: **newest write wins**, by the write timestamp
+   `at` stored with each tag (see §6.1 Redis keys). A remote state replaces
+   the local one only if its `at` is later than the last `at` this machine
+   applied for that tag. (Corrected 2026-09-27: a per-field `max` merge would
+   keep a `"max"` write's year-ahead `expired` over a later `{expire:0}`'s
+   `expired = now`, silently turning a score expiry into stale-while-
+   revalidate. Next's own `FileSystemCache` is last-write-wins.)
 4. Return the entry; `IncrementalCache` applies Next's rules.
 
 Redis unavailable at step 1 or 2 → continue with L1 and the local manifest.
@@ -169,7 +177,7 @@ Called by Next at the end of the request that invoked `revalidateTag`. Apply
 the §4 arithmetic to the local `tagsManifest` **and** `HSET nc:tags`. The
 realtime push does not wait on this path (Next flushes after the response);
 it waits on `broadcastRevalidate` (§6.1), which writes the same state
-eagerly. Writing the same state twice is idempotent under the max-merge.
+eagerly. Writing the same state twice is idempotent: equal `at`, same value.
 
 ### 6.5 Cold start
 
@@ -192,13 +200,13 @@ peer POST could not deliver.
 | Case | Behaviour |
 |---|---|
 | Redis down / slow | 150 ms command timeout, breaker opens after 5 failures; L1 + local manifest only. Cross-machine staleness ≤ entry TTL (30 s / 300 s). **Accepted (D2):** a slideshow whose refresh lands on a machine that missed the tag shows the old score until the next push or its 5-min subscribed poll — the same exposure a missed peer POST has today. |
-| Tag hash evicted or lost | Machines keep their local max-merged manifest. A machine that never saw a tag may serve stale ≤ entry TTL. Entries with no time TTL (`pub-player-gate-tag`) get the 30-day Redis TTL as an upper bound. |
+| Tag hash evicted or lost | Machines keep their local manifest (newest write wins). A machine that never saw a tag may serve stale ≤ entry TTL. Entries with no time TTL (`pub-player-gate-tag`) get the 30-day Redis TTL as an upper bound. |
 | Poisoned / old-shape value | Parse failure or `v` mismatch → miss + `DEL` (pattern of `hub-cache-poisoned-entry.test.ts`). |
 | Deploy / version skew | Data keys are build-scoped; the tag hash is shared, so a rolling deploy's invalidations reach both builds. |
 | Clock skew between machines | Timestamps are `Date.now()`, as in Next's own cache. Fly clocks are NTP-synced (ms); a test pins that a few-ms skew does not change a verdict. |
 | Oversize value | Memory only, logged. |
 | No `REDIS_URL` / flag off (local, CI default) | Memory-only handler — today's single-machine behaviour. |
-| Tag hash growth | Daily sweep on the existing cron route removes fields whose `expired` is more than 1 year old. |
+| Tag hash growth | At most once a day (a `SET nc:sweep NX EX 86400` lock), the handler `HSCAN`s `nc:tags` in the background and deletes fields whose `at`, `stale` and `expired` are all more than 1 year old. (Corrected 2026-09-27: the cron schedulers live outside this repo, so a new cron route would be an inert seam.) |
 
 ## 8. Testing (all four types; each fails without the change; mutation-checked)
 
@@ -224,8 +232,11 @@ peer POST could not deliver.
    B's division page and slideshow show it right after the push, not after
    30 s. Dedicated job with a Redis service (`e2e.yml` runs on push to `main`
    and `workflow_dispatch` only — dispatch it against the branch).
-6. **Smoke.** `/api/health` gains `cache: "redis" | "memory" | "degraded"`;
-   the stg smoke asserts `redis`.
+6. **Smoke.** `/api/health` gains `cache: "redis" | "memory" | "degraded"`
+   (always HTTP 200 — Fly's health check must not fail on a Redis outage).
+   CI's `smoke-e2e` runs without Redis and asserts `memory`; there is no stg
+   smoke job in this repo, so the stg rollout step asserts `redis` by hand.
+   (Corrected 2026-09-27.)
 
 Existing suites that must stay green: the real-incremental-cache tests under
 `server/usecases/__tests__/` (`score-revalidate-in-request`,
