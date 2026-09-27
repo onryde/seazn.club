@@ -851,8 +851,14 @@ jobs:
       #     entry warm and sees its revalidateTag. Also runs the tag-state Lua
       #     scripts for real. Never FLUSHes: its keys are run-unique and it
       #     deletes only those, so it can share this Redis with the three above.
+      #
+      # NO stray `run` positional here either (see the src/server+src/lib step):
+      # the workspace script is already `vitest run`, so `-- run <files>` made
+      # "run" a filename filter that pulled 30 unrelated *run* suites into this
+      # step with REDIS_URL set (34 files collected instead of these 4;
+      # measured 2026-09-27).
       - name: Redis-gated integration tests (rate limiter, entitlement cache, platform fee cache, next cache handler)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts src/lib/__tests__/next-cache-two-machines.redis.test.ts
+        run: npm test --workspace apps/web -- src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts src/lib/__tests__/next-cache-two-machines.redis.test.ts
         env:
           REDIS_URL: redis://localhost:6379
 
