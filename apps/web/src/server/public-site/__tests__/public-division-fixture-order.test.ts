@@ -26,6 +26,24 @@
 // one start time, which 12 made the cut was the plan's choice. It ends on the
 // fixture id now; the last block below pins that.
 //
+// Its scene cannot rely on write order alone. With 20 tied rows the sort keeps
+// its input order, so the cut is the first 12 rows the plan reads, and that
+// order is controlled only for some plans. An index walk on
+// (division_id, round_no, seq_in_round) or on (division_id, fixture_no)
+// follows keys the scene chooses. But a used database plans on
+// (division_id, scheduled_at), where every row ties, so the plan reads heap
+// order, as does a sequential scan. Heap order on a used table is a rotation:
+// the first rows written fill the backend's current page at a HIGH block, and
+// the rest go to free-space-map pages at LOWER blocks. With the ids written
+// highest first, a first run of 8 or more rows put exactly the 12 lowest ids
+// first. That happened in CI (PR #888, the "Smoke — DB + Redis suites" job).
+// So the ids are written LOW, LOW, HIGH, LOW, HIGH, four times over: no run of
+// more than two low ids exists, even read round the end, so no rotation, no
+// reversal and no key-ordered walk can start with twelve of them. Shuffling
+// whole pages can still do it only if the 20 rows sit on 15 or more pages,
+// and in that case the premise test goes red instead of passing without
+// proving anything.
+//
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -221,11 +239,17 @@ describe.skipIf(!HAS_DB)("Live now: which 12 in-play matches show when more shar
       values (${div.id}, ${auth.orgId}, 1, 'league', 'League')
       returning id`;
     live = Array.from({ length: LIVE }, (_, i) => idWithPrefix((i + 1).toString(16).padStart(2, "0")));
+    const low = live.slice(0, SHOWN);
+    const high = live.slice(SHOWN);
+    // LOW, LOW, HIGH, LOW, HIGH, four times: 12 low and 8 high, and never
+    // more than two low ids in a row, even round the end. The match number and
+    // fixture number follow this write order, so the key-ordered index walks
+    // interleave the ids too. All the rows share one start time.
+    const written = [0, 1, 2, 3].flatMap((g) => [low[3 * g]!, low[3 * g + 1]!, high[2 * g]!, low[3 * g + 2]!, high[2 * g + 1]!]);
     const startsAt = new Date(Date.UTC(2030, 5, 1, 10));
-    // Highest id first, all at one start time.
     await sql`
       insert into fixtures ${sql(
-        [...live].reverse().map((id, i) => ({
+        written.map((id, i) => ({
           id,
           stage_id: stage!.id,
           division_id: div.id,
@@ -251,9 +275,17 @@ describe.skipIf(!HAS_DB)("Live now: which 12 in-play matches show when more shar
     for (const [name, off] of Object.entries(plans)) {
       const ids = await sql.begin(async (tx) => {
         for (const s of off) await tx.unsafe(`set local ${s} = off`);
+        // readPublicCompetitionShell's liveNow query without its last sort
+        // key. It keeps the same select list, because summary and last_seq keep
+        // the view's match_states join in the plan.
         return (
           await tx<{ id: string }[]>`
-            select f.id
+            select f.id, f.division_id, f.stage_id, f.pool_id, f.round_no,
+                   f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
+                   f.home_slot_label, f.away_slot_label,
+                   f.scheduled_at, f.status, f.outcome,
+                   f.summary, f.last_seq,
+                   f.lane, f.is_final, f.third_place, f.conditional
             from public_fixtures_v f
             join public_divisions_v d on d.id = f.division_id
             where d.competition_id = ${liveCompetitionId} and f.status = 'in_play'
