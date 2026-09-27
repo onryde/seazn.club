@@ -90,3 +90,31 @@ for i = 1, #ARGV, 2 do
   if newAt and newAt >= curAt then redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
 end
 return 1`;
+
+/**
+ * The daily sweep's delete. KEYS[1] = hash, ARGV[1] = cutoff (epoch ms),
+ * ARGV[2..] = fields the HSCAN judged dead. Each field is re-read HERE and
+ * deleted only if it is unparseable or max(at, stale, expired) < cutoff, so a
+ * field another machine rewrote between the HSCAN and this call survives.
+ * Returns the number of fields deleted.
+ */
+export const HDEL_IF_OLDER = `
+local cutoff = tonumber(ARGV[1])
+local deleted = 0
+for i = 2, #ARGV do
+  local cur = redis.call('HGET', KEYS[1], ARGV[i])
+  if cur then
+    local at, body = string.match(cur, '^(%d+)|(.*)$')
+    local ok, s = false, nil
+    if at then ok, s = pcall(cjson.decode, body) end
+    local dead = true
+    if ok and type(s) == 'table' then
+      local newest = tonumber(at)
+      if type(s.stale) == 'number' and s.stale > newest then newest = s.stale end
+      if type(s.expired) == 'number' and s.expired > newest then newest = s.expired end
+      dead = newest < cutoff
+    end
+    if dead then deleted = deleted + redis.call('HDEL', KEYS[1], ARGV[i]) end
+  end
+end
+return deleted`;
