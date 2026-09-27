@@ -1,5 +1,9 @@
 import "server-only";
 import { log } from "@/server/logger";
+import { defaultConfig } from "next/dist/server/config-shared";
+import { PUSH_AFTER_DELETE_BOUND_MS } from "@/lib/cache";
+import { withRedis } from "../../cache-handler/redis-client.mjs";
+import { TAGS_HASH, HSET_IF_NEWER, encodeField, writeState } from "../../cache-handler/tag-state.mjs";
 
 // Fan revalidateTag out to sibling Fly machines (spec 2026-07-12 §3 A-step 5).
 // Fly's 6PN DNS: `global.<app>.internal` AAAA-resolves to every machine's
@@ -25,16 +29,48 @@ async function flyPeerIps(appName: string): Promise<string[]> {
   return resolve6(`global.${appName}.internal`);
 }
 
-/** POST `tags` to every sibling machine, in batches of at most
- *  `PEER_REVALIDATE_MAX_TAGS` (the peer route refuses a longer body whole).
- *  Every batch to every peer is its own request, all in parallel: one failing
- *  — a network error, or a peer refusing it — never stops the others, and a
- *  peer's failures are logged once per broadcast. */
+/** Writes each tag's state to the shared Redis hash the cache handler reads
+ *  (spec 2026-09-24 §6.1). Resolves when the write lands or at the push
+ *  bound, whichever is first, and never rejects: the realtime push waits on
+ *  this so a refresh landing on any machine sees the invalidation. */
+export async function publishTagState(
+  tags: string[],
+  mode: "swr" | "expire",
+  now: number = Date.now(),
+): Promise<void> {
+  if (tags.length === 0) return;
+  const durations = mode === "expire" ? { expire: 0 } : { expire: defaultConfig.cacheLife.max.expire };
+  const argv = tags.flatMap((tag) => [tag, encodeField(writeState({}, durations, now))]);
+  const write = withRedis((r) => r.eval(HSET_IF_NEWER, 1, TAGS_HASH, ...argv), null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, PUSH_AFTER_DELETE_BOUND_MS);
+  });
+  await Promise.race([write.then(() => undefined), bound]);
+  clearTimeout(timer);
+}
+
+/** Dual-run (spec 2026-09-24 §9, PR 1): writes the shared tag state AND POSTs
+ *  the peers, each on its own flag (NEXT_CACHE_REDIS, PEER_REVALIDATE), side
+ *  by side. Resolves once both have settled, so a caller gating its realtime
+ *  push on this sends after the shared state is written (or the bound passed).
+ *  Never rejects. */
 export async function broadcastRevalidate(
   tags: string[],
   mode: "swr" | "expire",
   deps: BroadcastDeps = {},
 ): Promise<void> {
+  const published = publishTagState(tags, mode);
+  await Promise.all([published, fanOutToPeers(tags, mode, deps)]);
+}
+
+/** Dual-run transport, deleted in PR 2 once the shared tag hash has soaked.
+ *  POST `tags` to every sibling machine, in batches of at most
+ *  `PEER_REVALIDATE_MAX_TAGS` (the peer route refuses a longer body whole).
+ *  Every batch to every peer is its own request, all in parallel: one failing
+ *  — a network error, or a peer refusing it — never stops the others, and a
+ *  peer's failures are logged once per broadcast. */
+async function fanOutToPeers(tags: string[], mode: "swr" | "expire", deps: BroadcastDeps): Promise<void> {
   const appName = process.env.FLY_APP_NAME;
   const secret = process.env.CRON_SECRET;
   if (process.env.PEER_REVALIDATE !== "1" || !appName || !secret || tags.length === 0) return;

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The receiving side of a peer POST is the REAL route handler; only Next's
 // `revalidateTag` is recorded, so "applied on the peer" is observable.
@@ -18,10 +18,45 @@ const logMock = vi.hoisted(() => ({
   trace: vi.fn(),
 }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
+// ioredis is swapped for a recorder so the REAL flag gate (`nextCacheRedis`
+// reads NEXT_CACHE_REDIS and REDIS_URL) decides whether a client exists. A
+// client planted with `__setRedisForTests` skips that gate, so the flag table
+// below cannot use one.
+const redisBuilt = vi.hoisted(() => [] as Array<{ evals: Array<{ script: string; args: unknown[] }> }>);
+vi.mock("ioredis", async () => {
+  const { EventEmitter } = await import("node:events");
+  class RecordingRedis extends EventEmitter {
+    status = "ready";
+    evals: Array<{ script: string; args: unknown[] }> = [];
+    constructor() {
+      super();
+      redisBuilt.push(this);
+    }
+    async eval(script: string, _numKeys: number, ...args: unknown[]) {
+      this.evals.push({ script, args });
+      return 1;
+    }
+    disconnect() {
+      this.status = "end";
+    }
+  }
+  return { default: RecordingRedis };
+});
 
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/internal/revalidate/route";
-import { broadcastRevalidate, PEER_REVALIDATE_MAX_TAGS as LIMIT } from "@/lib/peer-revalidate";
+import { broadcastRevalidate, publishTagState, PEER_REVALIDATE_MAX_TAGS as LIMIT } from "@/lib/peer-revalidate";
+import {
+  __setRedisForTests,
+  __resetRedisStateForTests,
+  BREAKER_FAILURES,
+  FIRST_READY_WAIT_MS,
+} from "../../../cache-handler/redis-client.mjs";
+import { decodeField, HSET_IF_NEWER, TAGS_HASH } from "../../../cache-handler/tag-state.mjs";
+import Handler, { __resetMachineStateForTests } from "../../../cache-handler/handler.mjs";
+import { tagsManifest } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
+import { PUSH_AFTER_DELETE_BOUND_MS } from "../cache";
+import { defaultConfig } from "next/dist/server/config-shared";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -162,5 +197,261 @@ describe("broadcastRevalidate — more tags than one peer POST may carry", () =>
       { peer: "fdaa::4", mode: "expire", failedBatches: 1, batches: 2, status: 503, tags: [sent[LIMIT]] },
       expect.any(String),
     );
+  });
+});
+
+describe("publishTagState", () => {
+  afterEach(() => { __resetRedisStateForTests(); vi.useRealTimers(); vi.unstubAllEnvs(); });
+
+  function evalRecorder() {
+    const hash = new Map<string, string>();
+    return { status: "ready", hash,
+      eval: vi.fn(async (_s: string, _n: number, _h: string, ...argv: string[]) => {
+        for (let i = 0; i < argv.length; i += 2) hash.set(argv[i], argv[i + 1]); return 1; }) };
+  }
+
+  it("expire → stale = expired = now; swr → expired = now + max profile", async () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    const r = evalRecorder(); __setRedisForTests(r);
+    await publishTagState(["division:a"], "expire", 1_000);
+    await publishTagState(["competition:c"], "swr", 1_000);
+    expect(decodeField(r.hash.get("division:a"))).toEqual({ at: 1_000, stale: 1_000, expired: 1_000 });
+    expect(decodeField(r.hash.get("competition:c"))!.expired).toBe(1_000 + defaultConfig.cacheLife.max.expire * 1000);
+  });
+
+  it("a hung Redis resolves at the push bound, not later", async () => {
+    vi.useFakeTimers(); vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    __setRedisForTests({ status: "ready", eval: () => new Promise(() => {}) });
+    let done = false;
+    void publishTagState(["division:a"], "expire").then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(done).toBe(true);
+  });
+
+  it("broadcastRevalidate publishes even when peer fan-out is disabled", async () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("PEER_REVALIDATE", "");
+    const r = evalRecorder(); __setRedisForTests(r);
+    await broadcastRevalidate(["division:a"], "expire");
+    expect(r.eval).toHaveBeenCalledOnce();
+  });
+});
+
+/** A client that records the hash as HSET_IF_NEWER would leave it, and
+ *  answers the handler's once-a-day sweep claim with "already claimed". */
+function hashRecorder() {
+  const hash = new Map<string, string>();
+  return {
+    status: "ready",
+    hash,
+    scripts: [] as string[],
+    async eval(script: string, _n: number, _h: string, ...argv: string[]) {
+      this.scripts.push(script);
+      for (let i = 0; i < argv.length; i += 2) {
+        const cur = decodeField(hash.get(argv[i]))?.at ?? -1;
+        if (decodeField(argv[i + 1])!.at >= cur) hash.set(argv[i], argv[i + 1]);
+      }
+      return 1;
+    },
+    async set() {
+      return null;
+    },
+  };
+}
+
+describe("publishTagState writes what the cache handler's own revalidateTag writes", () => {
+  afterEach(() => {
+    __resetRedisStateForTests();
+    __resetMachineStateForTests();
+    vi.useRealTimers();
+  });
+
+  // The durations Next hands the handler for each profile the app fires
+  // (next/dist/server/revalidation-utils.js: `{ expire: cacheLife.expire }`):
+  // "max" is the "swr" broadcast, `{ expire: 0 }` the "expire" one.
+  it.each([
+    ["swr", { expire: defaultConfig.cacheLife.max.expire }],
+    ["expire", { expire: 0 }],
+  ] as const)(
+    "%s: the same field, byte for byte, as handler.revalidateTag(tags, %o) at the same instant — whatever the tag held before",
+    async (mode, durations) => {
+      const now = 1_790_000_000_000;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+      const tags = ["division:a", "competition:c"];
+      // The handler folds the tag's previous local state into its write; the
+      // broadcast has none. A prior entry with both fields set shows the
+      // difference cannot reach the stored value.
+      tagsManifest.set("division:a", { stale: now - 5_000, expired: now + 9_000_000 });
+
+      const viaHandler = hashRecorder();
+      __setRedisForTests(viaHandler);
+      await new Handler({}).revalidateTag(tags, durations);
+      __resetRedisStateForTests();
+
+      const viaBroadcast = hashRecorder();
+      __setRedisForTests(viaBroadcast);
+      await publishTagState(tags, mode, now);
+
+      expect(viaHandler.scripts).toContain(HSET_IF_NEWER);
+      expect(viaBroadcast.scripts).toEqual([HSET_IF_NEWER]);
+      for (const tag of tags) {
+        expect(viaHandler.hash.get(tag), tag).toBeDefined();
+        expect(viaBroadcast.hash.get(tag), tag).toBe(viaHandler.hash.get(tag));
+        expect(decodeField(viaBroadcast.hash.get(tag)), tag).toEqual(decodeField(viaHandler.hash.get(tag)));
+      }
+    },
+  );
+
+  it("the two modes write different states (the table above cannot pass with them swapped)", async () => {
+    const swr = hashRecorder();
+    __setRedisForTests(swr);
+    await publishTagState(["t"], "swr", 1_000);
+    const expire = hashRecorder();
+    __setRedisForTests(expire);
+    await publishTagState(["t"], "expire", 1_000);
+    expect(decodeField(swr.hash.get("t"))).toEqual({
+      at: 1_000,
+      stale: 1_000,
+      expired: 1_000 + defaultConfig.cacheLife.max.expire * 1000,
+    });
+    expect(decodeField(expire.hash.get("t"))).toEqual({ at: 1_000, stale: 1_000, expired: 1_000 });
+  });
+
+  it("an empty tag list writes nothing and resolves at once", async () => {
+    const r = hashRecorder();
+    __setRedisForTests(r);
+    await publishTagState([], "expire", 1_000);
+    expect(r.scripts).toEqual([]);
+  });
+});
+
+describe("broadcastRevalidate — PEER_REVALIDATE and NEXT_CACHE_REDIS are independent", () => {
+  beforeEach(() => {
+    // Importing handler.mjs ran connectAtBoot with the flag off, which settled
+    // the client as null; start each case from an unbuilt one.
+    __resetRedisStateForTests();
+    redisBuilt.length = 0;
+  });
+  afterEach(() => {
+    __resetRedisStateForTests();
+  });
+
+  it.each([
+    ["on", "on"],
+    ["off", "on"],
+    ["on", "off"],
+    ["off", "off"],
+  ] as const)("PEER_REVALIDATE %s, NEXT_CACHE_REDIS %s: each transport runs on its own flag", async (peers, redis) => {
+    arm();
+    if (peers === "off") vi.stubEnv("PEER_REVALIDATE", "");
+    vi.stubEnv("REDIS_URL", "redis://cache.internal:6379");
+    vi.stubEnv("NEXT_CACHE_REDIS", redis === "on" ? "1" : "");
+    const fetchFn = vi.fn(async () => new Response("{}"));
+
+    await broadcastRevalidate(["division:a"], "expire", { resolveIps: async () => ["fdaa::3", "fdaa::4"], fetchFn });
+
+    expect(fetchFn).toHaveBeenCalledTimes(peers === "on" ? 1 : 0);
+    const evals = redisBuilt.flatMap((c) => c.evals);
+    expect(redisBuilt).toHaveLength(redis === "on" ? 1 : 0);
+    expect(evals).toHaveLength(redis === "on" ? 1 : 0);
+    if (redis === "on") {
+      expect(evals[0]!.script).toBe(HSET_IF_NEWER);
+      expect(evals[0]!.args.slice(0, 2)).toEqual([TAGS_HASH, "division:a"]);
+      expect(decodeField(evals[0]!.args[2] as string)).toMatchObject({ stale: expect.any(Number) });
+    }
+  });
+});
+
+describe("broadcastRevalidate — a degraded Redis never holds the peers or the caller", () => {
+  const peerIps = async () => ["fdaa::3", "fdaa::4"];
+  afterEach(() => {
+    __resetRedisStateForTests();
+    vi.useRealTimers();
+  });
+
+  /** Starts a broadcast under fake timers and reports when it settled. */
+  function start(fetchFn: typeof fetch) {
+    const state = { done: false, err: undefined as unknown };
+    void broadcastRevalidate(["division:a"], "expire", { resolveIps: peerIps, fetchFn }).then(
+      () => {
+        state.done = true;
+      },
+      (err: unknown) => {
+        state.err = err;
+      },
+    );
+    return state;
+  }
+
+  it("a Redis that never answers: the peers are POSTed at once, and the broadcast resolves at the bound", async () => {
+    arm();
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    vi.useFakeTimers();
+    __setRedisForTests({ status: "ready", eval: () => new Promise(() => {}) });
+    const fetchFn = vi.fn(async () => new Response("{}"));
+
+    const s = start(fetchFn as unknown as typeof fetch);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchFn, "the peer POST does not wait on Redis").toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(s.done, "still waiting on the Redis write inside the bound").toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(s).toEqual({ done: true, err: undefined });
+  });
+
+  it("the breaker is open: nothing is sent to Redis, the peers are POSTed, and the broadcast resolves at once", async () => {
+    arm();
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    const failing = { status: "ready", eval: vi.fn(async () => Promise.reject(new Error("timeout"))) };
+    __setRedisForTests(failing);
+    for (let i = 0; i < BREAKER_FAILURES; i++) await publishTagState(["division:a"], "expire");
+    expect(failing.eval).toHaveBeenCalledTimes(BREAKER_FAILURES);
+    vi.useFakeTimers();
+    const fetchFn = vi.fn(async () => new Response("{}"));
+
+    const s = start(fetchFn as unknown as typeof fetch);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s).toEqual({ done: true, err: undefined });
+    expect(failing.eval, "the open breaker skipped Redis").toHaveBeenCalledTimes(BREAKER_FAILURES);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("Redis unreachable since boot: one shared first-ready wait, inside the bound; the next broadcast skips at once", async () => {
+    arm();
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    vi.useFakeTimers();
+    const { EventEmitter } = await import("node:events");
+    const down = Object.assign(new EventEmitter(), { status: "reconnecting", eval: vi.fn() });
+    __setRedisForTests(down);
+    const fetchFn = vi.fn(async () => new Response("{}"));
+
+    const first = start(fetchFn as unknown as typeof fetch);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(FIRST_READY_WAIT_MS).toBeLessThan(PUSH_AFTER_DELETE_BOUND_MS);
+    await vi.advanceTimersByTimeAsync(FIRST_READY_WAIT_MS);
+    expect(first).toEqual({ done: true, err: undefined });
+
+    const second = start(fetchFn as unknown as typeof fetch);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second).toEqual({ done: true, err: undefined });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(down.eval).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishTagState — the bound's timer", () => {
+  afterEach(() => {
+    __resetRedisStateForTests();
+    vi.useRealTimers();
+  });
+
+  it("a write that lands inside the bound leaves no timer armed behind it", async () => {
+    vi.useFakeTimers();
+    __setRedisForTests(hashRecorder());
+    await publishTagState(["division:a"], "expire");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

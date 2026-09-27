@@ -4,19 +4,30 @@
 // immediately views their public page, so the org tag must expire NOW.
 // Under "max" the very next request serves the stale page and the org color
 // never shows up ("pro org landing carries the org color" smoke failure).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const revalidateTag = vi.hoisted(() => vi.fn());
 const revalidatePath = vi.hoisted(() => vi.fn());
 vi.mock("next/cache", () => ({ revalidateTag, revalidatePath }));
-vi.mock("@/lib/cache", () => ({ cacheDelPattern: vi.fn() }));
+// The real `sendAfterDeleteOrBound` and PUSH_AFTER_DELETE_BOUND_MS: the push
+// ordering below runs through them. `cacheDel` is recorded so the second DEL
+// of `dropNamedPublicDocuments` is observable.
+const cacheDel = vi.hoisted(() => vi.fn(async (..._keys: string[]) => {}));
+vi.mock("@/lib/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cache")>()),
+  cacheDelPattern: vi.fn(),
+  cacheDel,
+}));
 vi.mock("@/server/public-site/data", () => ({
   divisionTag: (id: string) => `division:${id}`,
   competitionTag: (id: string) => `competition:${id}`,
   orgTag: (slug: string) => `org-public:${slug}`,
   DISCOVERY_TAG: "discovery",
 }));
-const broadcastRevalidate = vi.hoisted(() => vi.fn(async () => {}));
+// Recorded, not run, except where a test hands it the real implementation.
+const broadcastRevalidate = vi.hoisted(() =>
+  vi.fn<(tags: string[], mode: "swr" | "expire") => Promise<void>>(async () => {}),
+);
 vi.mock("@/lib/peer-revalidate", () => ({ broadcastRevalidate }));
 // Task 7: CDN purge fires alongside the peer broadcast at the same seam —
 // mocked here purely to assert the wiring, not purgeCdn's own behavior
@@ -25,18 +36,23 @@ const purgeCdn = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("@/lib/cdn-purge", () => ({ purgeCdn }));
 
 import {
+  dropNamedPublicDocuments,
   fireDivisionRevalidate,
   fireOrgRevalidate,
   fireDiscoveryRevalidate,
   firePostRevalidate,
   fireScoreRevalidate,
 } from "../revalidate";
+import { PUSH_AFTER_DELETE_BOUND_MS, sendAfterDeleteOrBound } from "@/lib/cache";
+import { __setRedisForTests, __resetRedisStateForTests } from "../../../../cache-handler/redis-client.mjs";
+import { decodeField } from "../../../../cache-handler/tag-state.mjs";
 
 beforeEach(() => {
   revalidateTag.mockClear();
   revalidatePath.mockClear();
   broadcastRevalidate.mockClear();
   purgeCdn.mockClear();
+  cacheDel.mockClear();
 });
 
 describe("public-site revalidation profiles", () => {
@@ -158,5 +174,99 @@ describe("firePostRevalidate (news post status flips)", () => {
     });
     expect(() => firePostRevalidate("riverside", "old-notice")).not.toThrow();
     expect(purgeCdn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Shared cache dual-run (spec 2026-09-24 §6.1, §6.6): `broadcastRevalidate`
+// also writes each tag's state to the Redis hash every machine's cache handler
+// reads, and resolves only once that write lands or the push bound passes. Here
+// it runs for real, with peer fan-out off, against a Redis whose writes the
+// test releases by hand.
+//
+// What these prove is the promise `fireScoreRevalidate` returns. Its one
+// production consumer today is `dropNamedPublicDocuments` (entrants.ts,
+// divisions.ts), pinned last. `invalidatePublicCache` (scoring.ts) discards the
+// promise and gates its push on its own DEL only.
+describe("fireScoreRevalidate's promise waits for the shared tag state (dual-run)", () => {
+  /** Each HSET_IF_NEWER call stays pending until the test releases it. */
+  function heldRedis() {
+    const writes: Array<{ tag: string; field: string; release: () => void }> = [];
+    return {
+      status: "ready",
+      writes,
+      eval: (_script: string, _n: number, _hash: string, tag: string, field: string) =>
+        new Promise((resolve) => {
+          writes.push({ tag, field, release: () => resolve(1) });
+        }),
+    };
+  }
+  const write = (r: ReturnType<typeof heldRedis>, tag: string) => {
+    const w = r.writes.find((x) => x.tag === tag);
+    if (!w) throw new Error(`no Redis write for ${tag}`);
+    return w;
+  };
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("@/lib/peer-revalidate")>("@/lib/peer-revalidate");
+    broadcastRevalidate.mockImplementation(actual.broadcastRevalidate);
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    vi.stubEnv("PEER_REVALIDATE", "");
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    broadcastRevalidate.mockImplementation(async () => {});
+    __resetRedisStateForTests();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it("a push gated on it goes out only once the division's expiry has landed in Redis", async () => {
+    const redis = heldRedis();
+    __setRedisForTests(redis);
+    const send = vi.fn();
+
+    sendAfterDeleteOrBound(fireScoreRevalidate("d", "c"), send);
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 100);
+    expect(redis.writes.map((w) => w.tag).sort()).toEqual(["competition:c", "division:d"]);
+    expect(decodeField(write(redis, "division:d").field)).toMatchObject({ stale: expect.any(Number) });
+    expect(send, "Redis has not answered").not.toHaveBeenCalled();
+
+    write(redis, "competition:c").release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send, "the competition's write is not the one the push waits on").not.toHaveBeenCalled();
+
+    write(redis, "division:d").release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("a Redis that never answers holds the push to the bound, and no longer", async () => {
+    const redis = heldRedis();
+    __setRedisForTests(redis);
+    const send = vi.fn();
+
+    sendAfterDeleteOrBound(fireScoreRevalidate("d", "c"), send);
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(send).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("dropNamedPublicDocuments drops once now, and again only after the division's expiry has landed in Redis", async () => {
+    const redis = heldRedis();
+    __setRedisForTests(redis);
+
+    dropNamedPublicDocuments(
+      { competitionIds: ["c"], divisionIds: ["d"], fixtureIds: [] },
+      {},
+      fireScoreRevalidate("d", "c"),
+    );
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 100);
+    expect(cacheDel, "the first DEL does not wait").toHaveBeenCalledTimes(1);
+
+    write(redis, "division:d").release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cacheDel).toHaveBeenCalledTimes(2);
+    expect(cacheDel.mock.calls[1]).toEqual(cacheDel.mock.calls[0]);
   });
 });
