@@ -1,8 +1,17 @@
 import type { MetadataRoute } from "next";
-import { listPublicSitemapEntries } from "@/server/public-site/data";
+import { cachedPublicSitemapEntries } from "@/server/public-site/sitemap-cache";
 import { listDiscoverySports } from "@/server/public-site/discovery";
 import { liveGames } from "@/games/registry";
 import { siteOrigin } from "@/lib/site-origin";
+
+// Request-time, never prerendered. A sitemap.ts is "cached by default unless
+// it uses a Request-time API or dynamic config option" (node_modules/next/dist/
+// docs/01-app/03-api-reference/03-file-conventions/01-metadata/sitemap.md), so
+// it used to be rendered at `next build` — which has no database — and
+// production served that competition-less copy after every deploy. The DB
+// reads are cached instead (sitemap-cache.ts, listDiscoverySports), so a
+// crawler request inside the window runs no query.
+export const dynamic = "force-dynamic";
 
 const BASE = siteOrigin();
 
@@ -31,11 +40,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   ];
 
   // Public competitions + their divisions (doc 09 §3 — `public` only;
-  // unlisted stays out of the sitemap AND carries noindex). DB may be
-  // unreachable at build time: fall back to the static set.
+  // unlisted stays out of the sitemap AND carries noindex). The DB may be
+  // unreachable: fall back to the static set rather than a 500. A failed read
+  // is not cached, so the next request tries again.
   let publicEntries: MetadataRoute.Sitemap = [];
   try {
-    const competitions = await listPublicSitemapEntries();
+    const competitions = await cachedPublicSitemapEntries();
     publicEntries = competitions.flatMap((c) => [
       {
         url: `${BASE}/shared/${c.orgSlug}/${c.compSlug}`,
@@ -51,7 +61,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       })),
     ]);
   } catch {
-    // no DB (build sandbox) — static entries only
+    // DB unreachable — static entries only, this request
   }
 
   // Per-sport discovery landings (doc 15 §2): only sports that currently have
@@ -66,7 +76,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       priority: 0.8,
     }));
   } catch {
-    // no DB (build sandbox)
+    // DB unreachable — no sport landings, this request
   }
 
   return [...staticEntries, ...sportEntries, ...publicEntries];
