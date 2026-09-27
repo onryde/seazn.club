@@ -50,7 +50,8 @@ import {
  * at all.
  *
  * Each test drives exactly one interaction — tap the home half of the
- * scoreboard (ScoringPad v3, tapModel S: the half IS the button) and measure
+ * scoreboard (ScoringPad v3, tapModel S: the half IS the button; repeated
+ * once, just before the Tab walk, see the race below) and measure
  * with the detail dock open, BEFORE any chip is chosen. R7/A1 moved `generic`
  * onto the v3 lane, so the "Add points" form this file used to expand no
  * longer exists; the dock is its direct successor as the one state that is
@@ -61,9 +62,12 @@ import {
  * countdown and a flush control the old form never had.
  *
  * ONE RACE THIS FILE MUST RESPECT: the dock closes itself after queue.ts's
- * HOLD_MS (6s). Every measurement below therefore runs against a dock the
- * caller has just opened, and `openAmendDock` asserts it is visible rather
- * than assuming it.
+ * HOLD_MS — 10s shipped, but CI bakes NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000 into
+ * the build it tests. Every measurement below therefore runs against a dock
+ * the caller has just opened, and `openAmendDock` asserts it is visible rather
+ * than assuming it. The Tab walk comes last and CHANGES ANSWER when the dock
+ * has closed, so `recordEvidence` re-opens the dock for it — a second tap on
+ * the same half — and checks it stayed open on both sides of the walk.
  *
  * The horizontal-scroll number is measured with the SAME clip-lifting
  * technique `expectNoHorizontalScroll` (helpers.ts) uses, not a naive
@@ -353,8 +357,46 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
   const axeViolations = scan.violations;
   expect.soft(scan.serious, JSON.stringify(scan.serious, null, 2)).toEqual([]);
 
+  // RE-ARM THE DOCK, THEN WALK. Everything above takes four to six seconds on
+  // a 2-vCPU CI runner, against a dock CI holds for three, so by this line the
+  // dock the caller opened has usually flushed and closed — and the walk's
+  // answer CHANGES rather than merely ages: with the dock open, Tab from the
+  // tapped half lands on the dock's own controls (Send now, then the amount
+  // chips); once it has closed, Tab from that same point lands on the
+  // Activity list's first Void button, BELOW the pad, and the walk records
+  // zero pad controls — `no interactive control in the pad was reachable by
+  // Tab` on every console width (PR #888's dispatched e2e run 36337877584;
+  // main reproduces it locally). So the walk gets a dock of its own: tap the
+  // same half again, which is also exactly the start point the walk has
+  // always had.
+  //
+  // Not "walk first": that pushes the hit-target sweep into the dock's
+  // closing, where `measureHitTargets`' `nth(i)` outlives the element it
+  // counted and `boundingBox()` waits out the whole test timeout (seen
+  // locally, device @1280, 90s). Re-arming here leaves every measurement
+  // above exactly where it was, against the caller's tap.
+  //
+  // The dock is checked on BOTH sides of the walk. Open before is what makes
+  // the start point the dock-open state; open after is what makes the
+  // recorded ORDER that state's order, rather than one the dock closed
+  // halfway through. A runner slow enough to lose even this race fails here,
+  // by name, instead of as an empty walk.
+  const dock = scope.locator('[data-role="v3-dock"]');
+  try {
+    await openAmendDock(scope);
+  } catch (err) {
+    expect.soft(false, `re-arming the dock for the Tab walk: ${err instanceof Error ? err.message : String(err)}`).toBe(true);
+  }
+  const dockOpenBeforeWalk = await dock.isVisible();
   const focus = await tabThroughPad(page, scopeSelector);
+  const dockOpenAfterWalk = await dock.isVisible();
   const jumps = backwardJumps(focus.order);
+  expect
+    .soft(
+      { dockOpenBeforeWalk, dockOpenAfterWalk },
+      `the amend dock must be open for the whole Tab walk, or the order below is not the dock-open state's: ${JSON.stringify(focus.order)}`,
+    )
+    .toEqual({ dockOpenBeforeWalk: true, dockOpenAfterWalk: true });
   expect.soft(focus.order.length, "no interactive control in the pad was reachable by Tab").toBeGreaterThan(0);
   expect
     .soft(focus.trapped, `focus got stuck cycling inside the pad without ever leaving it: ${JSON.stringify(focus.order)}`)
@@ -411,7 +453,14 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
         scroll,
         hitTargets: { all: hitTargets, operableCount: operable.length, smallest },
         axeViolations,
-        focus: { order: focus.order, trapped: focus.trapped, exitedCleanly: focus.exitedCleanly, backwardJumps: jumps },
+        focus: {
+          order: focus.order,
+          trapped: focus.trapped,
+          exitedCleanly: focus.exitedCleanly,
+          backwardJumps: jumps,
+          dockOpenBeforeWalk,
+          dockOpenAfterWalk,
+        },
       },
       null,
       2,
