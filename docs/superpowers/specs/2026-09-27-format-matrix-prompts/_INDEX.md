@@ -22,7 +22,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W7 | Americano, mexicano, ladder | not started |
 | W8 | Scorer sheets (lane) | not started |
 | W9 | Operational [O] (lane) | not started |
-| W10 | Sweep: #878 #858 #853 #843 (lane) | not started |
+| W10 | Sweep lane: ST-G22 youth-name privacy FIRST, #878 browser Sentry, shadow invariants, #858 #853 #843 | not started |
 
 ## Session prompts
 
@@ -146,6 +146,13 @@ a peer session as the other.
   leg (hypothesis). Facts kept under `audit-2026-09-27/plan-facts-*.md`.
 - **2026-09-27** — the repo is PUBLIC again (`gh repo view`), so standard
   runners are free; the earlier $85/run estimate assumed private.
+- **2026-09-27** — design fixes from the session-prompt pass: #840 + FX-G13
+  move to W3 (first wave needing Rebuild; W5 consumes); anti-vacuity counts
+  move into W1a; division-level 🚫 (D1, D2, R13) owned by W9, D4 and Q4 by W4,
+  C5 by W5; SC-P11 futsal is not a matrix row unless W2 builds it; "harness-
+  green" defined for the three dispatches before the weekly schedule
+  (recommendation). Collision to watch: ST-G22 (W10) and ST-G6 (W5) both edit
+  `org-posts.ts` — W10 should ship ST-G22 before W5 starts.
 - **2026-09-27** — stale memory corrected: per-stage match rules #804 merged
   2026-09-20 (D7 went option A, `7d5433faf`); bench B07a merged (#792).
 
