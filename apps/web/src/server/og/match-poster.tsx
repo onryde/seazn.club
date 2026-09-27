@@ -1,6 +1,4 @@
 import "server-only";
-import fs from "node:fs/promises";
-import path from "node:path";
 // The match poster (Spectator Surface Boards §poster, "Option A — owner pick"):
 // crest tiles in TEAM COLOURS on the competition's court colour, real badges
 // dropping into the tiles when uploaded. One satori layout feeds both the
@@ -26,7 +24,7 @@ import { ogTheme, type OgTheme } from "./model";
 import { OG_SIZE } from "./card";
 // Bytes only, never a URL — the one rule shared by every satori frame here.
 import { drawableImage } from "./drawable";
-import { brandFontDir } from "@/server/doc-theme";
+import { readBrandFontFile } from "@/server/doc-theme";
 import { monogramInk, autoColour } from "@/components/ui/entity-logo";
 import type { MatchCentreDocT, SideT } from "@/server/public-site/match-centre-schema";
 
@@ -79,12 +77,10 @@ const FONT_FILES: ReadonlyArray<{ name: string; file: string; weight: 400 | 600 
   { name: POSTER_FONT_BODY, file: "Geist-Regular.ttf", weight: 400 },
 ];
 
-// The same directory, `DOC_FONT_DIR` override and cwd rule as the PDFs: ONE
-// resolver (`brandFontDir`), so the two readers cannot drift apart again (both
-// once defaulted to `<cwd>/apps/web/assets/fonts`, which production's cwd —
-// /app/apps/web — never has).
-const fontDir = brandFontDir;
-
+// Same reader as the PDFs (`readBrandFontFile` / `DOC_FONT_DIR` / cwd rule),
+// so the two cannot drift apart again (both once defaulted to
+// `<cwd>/apps/web/assets/fonts`, which production's cwd — /app/apps/web —
+// never has). Sync read is fine: fonts are small and cached once per process.
 let cached: Promise<PosterFont[]> | null = null;
 
 /** The `fonts:` array for an `ImageResponse`'s options (its `fonts` key). Read once per
@@ -97,15 +93,14 @@ let cached: Promise<PosterFont[]> | null = null;
  *  never turn a public image route into a 500. */
 export function posterFonts(): Promise<PosterFont[]> {
   if (cached === null) {
-    const dir = fontDir();
-    cached = Promise.all(
-      FONT_FILES.map((f) =>
-        fs.readFile(path.join(dir, f.file)).then(
-          (data): PosterFont | null => ({ name: f.name, data, weight: f.weight, style: "normal" }),
-          () => null,
-        ),
-      ),
-    ).then((list) => list.filter((f): f is PosterFont => f !== null));
+    cached = Promise.resolve(
+      FONT_FILES.map((f) => {
+        const data = readBrandFontFile(f.file);
+        return data
+          ? ({ name: f.name, data, weight: f.weight, style: "normal" } satisfies PosterFont)
+          : null;
+      }).filter((f): f is PosterFont => f !== null),
+    );
   }
   return cached;
 }
