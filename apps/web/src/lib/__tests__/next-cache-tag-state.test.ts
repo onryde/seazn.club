@@ -28,6 +28,10 @@ describe("nextTagEntry mirrors Next's FileSystemCache.revalidateTag", () => {
         const now = (durations ? fromNext.stale : fromNext.expired)!;
         expect(now).toBeGreaterThanOrEqual(before);
         expect(nextTagEntry(existing, durations, now)).toEqual(fromNext);
+        // writeState is what reaches Redis: minus its `at`, it must be Next's entry too.
+        const { at, ...wire } = writeState(existing, durations, now);
+        expect(at).toBe(now);
+        expect(wire).toEqual(fromNext);
       });
     }
   }
