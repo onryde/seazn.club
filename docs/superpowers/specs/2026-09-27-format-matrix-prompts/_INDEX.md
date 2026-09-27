@@ -10,7 +10,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | plan being written |
+| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **plan written** (`docs/superpowers/plans/2026-09-27-format-matrix-w1a.md`, 11 tasks, `54626389e`); awaiting owner review + execution choice |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | not started |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | not started |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
@@ -153,6 +153,20 @@ a peer session as the other.
   green" defined for the three dispatches before the weekly schedule
   (recommendation). Collision to watch: ST-G22 (W10) and ST-G6 (W5) both edit
   `org-posts.ts` — W10 should ship ST-G22 before W5 starts.
+- **2026-09-27** — W1a plan written (`54626389e`). Planning found 8 false
+  premises (listed in the plan): an org-create route exists but is quota-capped
+  (24/run) so SQL seeding stays; `double_elim` is free on community since V393
+  (no public plan yields a denied state); the bench preflight only checks the
+  data directory when `BENCH_EXPECTED_DATA_DIR` is set (made mandatory);
+  `plan.ts` loads `pack-schema.ts` at runtime; ladder has no per-round
+  generation (challenges only); `format-templates.ts` is importable from
+  scripts; division config locks once any fixture exists; **triple_rr at
+  builder defaults gets 1 leg, not 3** (product defect — routed to W5).
+  Open questions put to the owner as recommendations: accept the read-only
+  transitive PackSchema load (yes); W1b's double_elim denied state via an
+  explicit entitlement-override deny; "default config" = the builder's default
+  (which makes volleyball default to beach and chess to blitz — flagged for a
+  product look).
 - **2026-09-27** — stale memory corrected: per-stage match rules #804 merged
   2026-09-20 (D7 went option A, `7d5433faf`); bench B07a merged (#792).
 
