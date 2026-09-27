@@ -67,7 +67,7 @@ describe("db client singleton", () => {
 
   // postgres.js 3.4.9 registers EVERY array parser (text[]/uuid[] included)
   // through fetch_types. It must be passed EXPLICITLY true: left at the
-  // default, a `?fetch_types=false` URL param (or PGFETCH_TYPES) turns it off.
+  // default, a `?fetch_types=false` URL param turns it off.
   it("passes fetch_types: true explicitly, so the connection string cannot turn it off", async () => {
     const opts = await clientOptions();
     expect(opts.fetch_types).toBe(true);

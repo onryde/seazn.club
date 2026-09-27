@@ -37,30 +37,34 @@ export interface DbConnectionOptions {
  * 2026-09-24 (owner-confirmed with the facts below).
  *
  * WHY. fly.toml and fly.stg.toml both run an HTTP check on `/api/health`
- * every 30 s, and that route runs `select 1` on THIS pool. At 20 s every
- * check found the pool drained and re-dialled — ~2,880 reconnects per running
- * machine per day, which (not user traffic) was the ~24.7k reconnects in 6
- * days that prod pg_stat_statements showed. Each reconnect pays a TLS
+ * every 30 s, and that route runs `select 1` on THIS pool. At 20 s, on an
+ * otherwise idle machine, each check found the pool drained and re-dialled —
+ * ~2,880 reconnects per machine per day, about 17.3k of the ~24.7k reconnects
+ * in 6 days that prod pg_stat_statements showed. Each reconnect pays a TLS
  * handshake, postgres.js's array-type fetch (the `select b.oid, b.typarray
  * from pg_catalog.pg_type …` query) and the loss of that connection's prepared
  * statements. The value must stay ABOVE the health-check interval or the churn
- * returns; db-options/db-singleton tests read both fly tomls to enforce that.
+ * returns; db-options/db-singleton tests read every root fly*.toml to enforce
+ * that.
  *
  * THE ACCEPTED TRADE. Because the health check touches the pool every 30 s,
  * the pool never drains on a running machine, so every Fly suspend freezes at
  * least one open socket (at 20 s about 2/3 of suspends already did). A socket
- * frozen across a suspend longer than ~39 min — when the server reaps the idle
- * backend — may fail the first query after resume: postgres.js does not retry
- * an in-flight query. Sentry over 90 days shows zero ECONNRESET /
- * CONNECTION_CLOSED / ETIMEDOUT issues. Staging (`min_machines_running = 0`)
- * suspends constantly and will surface it first.
+ * frozen across a suspend longer than ~39 min — the DB server's TCP keepalive
+ * declaring the frozen peer dead (≈1800 s + 9×60 s probes, per the Supabase
+ * settings observed 2026-09-24; not configured in this repo) — may fail the
+ * first query after resume: postgres.js does not retry an in-flight query.
+ * Staging (`min_machines_running = 0`) suspends constantly and will surface it
+ * first. The owner accepted this trade; the evidence behind it lives in the
+ * public-hub query perf plan's Decisions block, not here.
  *
  * fetch_types must stay on — postgres.js 3.4.9 registers ALL array parsers
  * (text[]/uuid[] included) via it; off ⇒ arrays come back as '{a,b}' strings
  * and any(${ids}) throws. See __tests__/db-array-types.test.ts. getClient()
  * passes it EXPLICITLY: an explicit option beats the URL, and a
- * `?fetch_types=false` query param (or PGFETCH_TYPES) would otherwise turn it
- * off from a connection string nobody reviews.
+ * `?fetch_types=false` query param would otherwise turn it off from a
+ * connection string nobody reviews. (PGFETCH_TYPES cannot: postgres.js keeps
+ * env values as uncoerced strings, so "false" is truthy.)
  */
 const IDLE_TIMEOUT_S = 60;
 
