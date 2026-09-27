@@ -88,3 +88,18 @@ export const MUTATION_LIMIT: RateLimitConfig = { max: 60, windowSeconds: 60 };
 
 /** Device-link mint AND reissue (a reissue IS a mint): one bucket, one number. */
 export const DEVICE_LINK_MINT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
+
+/**
+ * Cookie-consent recording (POST /api/consent), per IP. A person clicks the
+ * banner once; 20 a minute leaves room for a household or venue behind one
+ * NAT while capping a bot writing rows into `cookie_consents`. Fail-open —
+ * the banner calls it best-effort and a Redis blip must not refuse consent.
+ */
+export const CONSENT_LIMIT: RateLimitConfig = { max: 20, windowSeconds: 60 };
+
+/**
+ * Public registration checkout (re)open, per IP. Every call mints a Stripe
+ * Checkout Session, so it gets a tighter bucket than the 60/min public read
+ * budget. Fail-open — a Redis blip must not stop a registrant paying.
+ */
+export const CHECKOUT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
