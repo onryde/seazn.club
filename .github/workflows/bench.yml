@@ -197,6 +197,9 @@ jobs:
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          # public/ too, as the Dockerfile does — tracing does not carry it (#887).
+          rm -rf apps/web/.next/standalone/apps/web/public
+          cp -R apps/web/public apps/web/.next/standalone/apps/web/public
           node apps/web/.next/standalone/apps/web/server.js > bench-server.log 2>&1 &
           for i in $(seq 1 90); do
             if curl -sf http://localhost:3200/api/health >/dev/null; then

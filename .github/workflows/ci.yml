@@ -1384,6 +1384,15 @@ jobs:
       # The `rm -rf` is load-bearing: `cp -R src dst` with dst present copies
       # INTO it, so a re-run yields .next/static/static/….
       #
+      # `public/` is NOT copied either — the Dockerfile stages it explicitly
+      # (`COPY … apps/web/public`), and this job must serve what production
+      # serves. It used to arrive by accident: a dynamic `fs` read in the
+      # brand-font loader made Turbopack trace the WHOLE project into the
+      # standalone tree. Scoping that read (#887) dropped every untraced
+      # public file, `/logo-wide-night.png` 404'd, the gantry rendered the
+      # broken image's alt text instead, and the gallery gate below failed
+      # on a 5px overflow at 320 — a layout red caused by staging.
+      #
       # Path note: outputFileTracingRoot is the monorepo root, so the server is
       # at .next/standalone/apps/web/server.js — not the .next/standalone/
       # server.js that Next's own warning names.
@@ -1415,6 +1424,8 @@ jobs:
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          rm -rf apps/web/.next/standalone/apps/web/public
+          cp -R apps/web/public apps/web/.next/standalone/apps/web/public
           node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
           echo "waiting for server…"
           up=""
@@ -1440,6 +1451,14 @@ jobs:
             cat dev-server.log; exit 1
           fi
           echo "static assets serve ($asset)"
+          # Same proof for public/: the gantry wordmark is on every signed-in
+          # page, and nothing in the code reads it via fs, so tracing never
+          # carries it — only the copy above does.
+          if ! curl -sf "http://localhost:3000/logo-wide-night.png" >/dev/null; then
+            echo "public asset /logo-wide-night.png 404s — standalone public/ not staged"
+            cat dev-server.log; exit 1
+          fi
+          echo "public assets serve (/logo-wide-night.png)"
 
       # #19: the check above only proves ONE chunk (whichever sorts first on
       # disk) serves — it does not prove every chunk a route's HTML actually
