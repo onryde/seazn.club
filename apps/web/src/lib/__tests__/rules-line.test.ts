@@ -10,14 +10,14 @@ import { RULES_LINE_JOINER, type RulesClause, rulesLineText } from "@/lib/rules-
 
 describe("rulesLineText", () => {
   const fast4: RulesClause[] = [
-    { key: "format.sets.bestOf", params: { n: 3 } },
+    { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
     { key: "format.rules.tennis.setsTo", params: { games: 4 } },
     { key: "format.rules.tennis.noAd" },
   ];
 
   it("resolves EACH clause with its own params and joins them with a comma — never the header's ' · '", () => {
     expect(RULES_LINE_JOINER).toBe(", ");
-    expect(rulesLineText(enPublic, fast4)).toBe("Best of 3, sets to 4, no-ad");
+    expect(rulesLineText(enPublic, fast4)).toBe("Best of 3 sets, first to 4 games, no-ad scoring");
     expect(rulesLineText(enPublic, fast4)).not.toContain("·");
   });
 

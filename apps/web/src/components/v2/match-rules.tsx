@@ -11,7 +11,7 @@
 // like sport + format names; only the picker chrome (Default / On / Off)
 // localizes, and that chrome is what lives here.
 import { useMsg } from "@/components/i18n/dict-provider";
-import { SPORT_RULES, ruleOptionLabel } from "@/lib/match-rules";
+import { ruleOptionLabel, setRuleValue, visibleRuleFields } from "@/lib/match-rules";
 
 export type { RuleField } from "@/lib/match-rules";
 export {
@@ -28,15 +28,24 @@ export function MatchRuleFields({
   values,
   onChange,
   disabled = false,
+  inherited,
 }: {
   sportKey: string;
   values: Record<string, string>;
   onChange: (next: Record<string, string>) => void;
   disabled?: boolean;
+  /** The config `values` fall back to where a field is blank — the division's
+   *  for a stage's rules fragment, the saved config for division settings.
+   *  Read for one thing only: whether the EFFECTIVE best-of is 1, in which case
+   *  the grid shows one "Points to win" field that writes both points keys
+   *  (owner ruling 2026-09-25 — see `visibleRuleFields`). */
+  inherited?: Record<string, unknown>;
 }) {
   const msg = useMsg();
-  const fields = SPORT_RULES[sportKey] ?? [];
+  const fields = visibleRuleFields(sportKey, values, inherited);
   if (fields.length === 0) return null;
+  const edit = (key: string, raw: string) =>
+    onChange(setRuleValue(sportKey, values, key, raw, inherited));
   return (
     <div className="grid gap-4 sm:grid-cols-3">
       {fields.map((field) => {
@@ -54,15 +63,15 @@ export function MatchRuleFields({
               max={field.max}
               disabled={disabled}
               value={values[field.key] ?? ""}
-              onChange={(e) => onChange({ ...values, [field.key]: e.target.value })}
-              placeholder={msg("rules.default")}
+              onChange={(e) => edit(field.key, e.target.value)}
+              placeholder={inheritedPlaceholder(msg("rules.default"), inherited?.[field.key])}
               className="input"
             />
           ) : (
             <select
               disabled={disabled}
               value={values[field.key] ?? ""}
-              onChange={(e) => onChange({ ...values, [field.key]: e.target.value })}
+              onChange={(e) => edit(field.key, e.target.value)}
               className="select"
             >
               <option value="">{msg("rules.default")}</option>
@@ -118,4 +127,19 @@ export function MatchRuleFields({
       })}
     </div>
   );
+}
+
+/**
+ * What a BLANK number field says it falls back to. "Default" alone hid the
+ * number: on a best-of-1 volleyball stage the single "Points to win" field
+ * read "Default" while the match plays to the division's deciding set, 15 —
+ * not the 25 an organiser would guess. Where the editor is told what a blank
+ * inherits (`inherited`: the stage editor's division config, the settings
+ * editor's variant), the placeholder names it; where it is not (the builder),
+ * it stays "Default" rather than invent one.
+ */
+export function inheritedPlaceholder(defaultWord: string, inheritedValue: unknown): string {
+  return typeof inheritedValue === "number" && Number.isFinite(inheritedValue)
+    ? `${defaultWord} (${inheritedValue})`
+    : defaultWord;
 }

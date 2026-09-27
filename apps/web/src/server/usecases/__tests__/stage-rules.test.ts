@@ -14,7 +14,7 @@ import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
-import { buildRuleOverride } from "@/lib/match-rules";
+import { buildRuleOverride, setRuleValue } from "@/lib/match-rules";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
@@ -697,5 +697,95 @@ describe.skipIf(!HAS_DB)("D10 — a bestOf override must not outrun the pointsMa
     expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE" });
     for (const scoreKey of ["2-0", "2-1"]) expect((err as Error).message).toContain(scoreKey);
     expect((await stageConfig(stageId)).rules).toBeUndefined();
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// Best of 1 — ONE "Points to win" field (owner ruling 2026-09-25, Option A).
+//
+// The editor half is pinned in `lib/__tests__/match-rules-best-of-one.test.ts`
+// and the browser. This is the seam the editor's output must survive: the real
+// endpoint, then the real scorer's ledger, whose frozen config decides which
+// game score ends the match. A fixture on both ends would prove the fixture.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("best of 1 — the single points field through the endpoint and the ledger", () => {
+  /** A best-of-1 badminton division on the `short` preset: games to 11, cap 15.
+   *  Its config comes back from the ROW, parsed as every stored config is — the
+   *  same object the stage editor receives as `divisionConfig`. */
+  async function bo1Division(auth: AuthCtx) {
+    const { divisionId } = await seedDivision(auth, "badminton", "short", 2, { bestOf: 1 });
+    const [div] = await sql<{ config: Record<string, unknown> }[]>`
+      select config from divisions where id = ${divisionId}`;
+    expect(div!.config).toMatchObject({ bestOf: 1, setTo: 11, finalSetTo: 11, cap: 15 });
+    return { divisionId, inherited: div!.config };
+  }
+
+  /** The organiser types `points` into the one field of an INHERITING stage —
+   *  through the same functions the rendered grid calls. */
+  function singleFieldSave(points: string, inherited: Record<string, unknown>) {
+    return buildRuleOverride(
+      "badminton",
+      setRuleValue("badminton", {}, "finalSetTo", points, inherited),
+      inherited,
+    );
+  }
+
+  async function firstFixture(auth: AuthCtx, stageId: string): Promise<string> {
+    await generateStageFixtures(auth, stageId);
+    const [fixture] = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${stageId} limit 1`;
+    await appendEvent(auth.orgId, fixture!.id, 0, { type: "core.start", payload: {} });
+    return fixture!.id;
+  }
+
+  const game = (home: number, away: number) => ({
+    type: "badminton.game.summary",
+    payload: { home, away },
+  });
+
+  it("lands BOTH keys, and the stage's only game is played to the number typed", async () => {
+    const auth = await seedOrg();
+    const { divisionId, inherited } = await bo1Division(auth);
+    const stageId = await seedStage(auth, divisionId, 1);
+    // The sibling carries the fragment the OLD editor saved for the same edit —
+    // `setTo` alone — so both halves are read in one division, one ledger path.
+    const oldShapeId = await seedStage(auth, divisionId, 2);
+
+    const fragment = singleFieldSave("13", inherited);
+    expect(fragment).toEqual({ setTo: 13, finalSetTo: 13 });
+    await putStageRules(auth, stageId, { rules: fragment });
+    expect((await stageConfig(stageId)).rules).toEqual(fragment);
+    await putStageRules(auth, oldShapeId, { rules: { setTo: 13 } });
+
+    // 13-9 is a finished game at 13 and an unreachable one at 11 (the set ends
+    // at 11-9) — the score that tells the two targets apart.
+    const fixed = await firstFixture(auth, stageId);
+    const decided = await appendEvent(auth.orgId, fixed, 1, game(13, 9));
+    expect(decided.outcome, "played to 13, 13-9 decides the match").not.toBeNull();
+
+    // The old shape: `setTo: 13` was dead — the ledger still plays to the
+    // division's 11, refusing 13-9 and deciding at 11-9.
+    const old = await firstFixture(auth, oldShapeId);
+    await expect(appendEvent(auth.orgId, old, 1, game(13, 9))).rejects.toMatchObject({
+      code: "INVALID_EVENT",
+    });
+    expect((await appendEvent(auth.orgId, old, 1, game(11, 9))).outcome).not.toBeNull();
+  }, 60_000);
+
+  it("is still refused over the division's cap, and lands nothing", async () => {
+    // Cap validation reads the MERGE (`cap >= max(setTo, finalSetTo)`): 16 over
+    // a cap of 15 must 422 with the pair written together, exactly as either
+    // key alone would — and 15, at the cap, must still save.
+    const auth = await seedOrg();
+    const { divisionId, inherited } = await bo1Division(auth);
+    const stageId = await seedStage(auth, divisionId, 1);
+    await expect(
+      putStageRules(auth, stageId, { rules: singleFieldSave("16", inherited) }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect((await stageConfig(stageId)).rules).toBeUndefined();
+    await expect(
+      putStageRules(auth, stageId, { rules: singleFieldSave("15", inherited) }),
+    ).resolves.toBeTruthy();
+    expect((await stageConfig(stageId)).rules).toEqual({ setTo: 15, finalSetTo: 15 });
   }, 30_000);
 });

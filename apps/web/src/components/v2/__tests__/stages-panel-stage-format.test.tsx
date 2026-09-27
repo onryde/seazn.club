@@ -15,7 +15,16 @@ import {
   stageFormatHeadline,
   stageFormatSaveFragment,
 } from "@/components/v2/stages-panel";
-import { SPORT_RULES, buildRuleOverride, ruleOptionLabel } from "@/lib/match-rules";
+import { MatchRuleFields } from "@/components/v2/match-rules";
+import {
+  SPORT_RULES,
+  buildRuleOverride,
+  ruleOptionLabel,
+  setRuleValue,
+  visibleRuleFields,
+} from "@/lib/match-rules";
+import { pointsTheOnlyGameIsPlayedTo } from "@/lib/__tests__/_single-game-target";
+import { badminton } from "@seazn/engine/sports/setbased";
 
 // Same two mocks every `stages-panel-*.test.tsx` uses — this panel is rendered
 // bare, with no provider tree.
@@ -289,6 +298,94 @@ describe("what a Save actually PUTs", () => {
     const opened = stageFormatEditorValues("badminton", { rules: stored });
     const cleared = { ...opened, setTo: "" };
     expect(stageFormatSaveFragment("badminton", stored, opened, cleared)).toEqual({ bestOf: 1 });
+  });
+});
+
+describe("REGRESSION (2026-09-25) — best of 1: the points field an organiser edits is the one the engine plays", () => {
+  // Found in review of PR #872. The kernel plays a best-of-1 match's only game
+  // to `finalSetTo`; the editor offered "Points to win a set" (`setTo`) first,
+  // the organiser set it, and the stage went on being played to the division's
+  // deciding-game number. Owner ruling: ONE "Points to win" field that writes
+  // both keys. "Which key is played" is asked of the engine by playing a match
+  // (`_single-game-target.ts`), never read off `kernel.ts`.
+
+  /** A division whose deciding game (15) differs from the number the organiser
+   *  types (21), so the stage's right answer and the value it would silently
+   *  inherit are different numbers — the test can tell them apart. Parsed, as
+   *  every stored division config is. */
+  const division: Record<string, unknown> = {
+    ...badminton.configSchema.parse({ setTo: 21, finalSetTo: 15 }),
+  };
+
+  /** The points inputs the organiser SEES, read off the rendered grid. */
+  function visiblePointsLabels(values: Record<string, string>): string[] {
+    const html = renderToStaticMarkup(
+      <MatchRuleFields sportKey="badminton" values={values} onChange={() => {}} inherited={division} />,
+    );
+    return [...html.matchAll(/<span class="label">(Points[^<]*)<\/span><input type="number"/g)].map(
+      (m) => m[1]!,
+    );
+  }
+
+  it("a Bo1 badminton stage: the visible points field set to 21 persists finalSetTo 21 and plays to 21", () => {
+    // PREMISE — the trap, through the engine: the fragment the old editor
+    // saved for this exact edit (`setTo` only) is played to 15, not 21.
+    expect(pointsTheOnlyGameIsPlayedTo("badminton", { ...division, bestOf: 1, setTo: 21 })).toBe(15);
+
+    const stored = { bestOf: 1 };
+    const opened = stageFormatEditorValues("badminton", { rules: stored });
+    // ONE points input on screen — there is no second one to get wrong.
+    const labels = visiblePointsLabels(opened);
+    expect(labels).toHaveLength(1);
+
+    const visible = visibleRuleFields("badminton", opened, division).find((f) => f.label === labels[0])!;
+    const edited = setRuleValue("badminton", opened, visible.key, "21", division);
+    const fragment = stageFormatSaveFragment("badminton", stored, opened, edited, division);
+    expect(fragment).toEqual({ bestOf: 1, setTo: 21, finalSetTo: 21 });
+    expect(pointsTheOnlyGameIsPlayedTo("badminton", { ...division, ...fragment })).toBe(21);
+  });
+
+  it("a stage INHERITING best of 1 gets the single field too, and pins nothing it did not edit", () => {
+    const bo1Division = { ...division, bestOf: 1 };
+    const opened = stageFormatEditorValues("badminton", {});
+    const html = renderToStaticMarkup(
+      <MatchRuleFields sportKey="badminton" values={opened} onChange={() => {}} inherited={bo1Division} />,
+    );
+    expect([...html.matchAll(/<span class="label">(Points[^<]*)<\/span><input type="number"/g)]).toHaveLength(1);
+    // An edit to another field only: no points key rides along.
+    const capOnly = setRuleValue("badminton", opened, "cap", "30", bo1Division);
+    expect(stageFormatSaveFragment("badminton", {}, opened, capOnly, bo1Division)).toEqual({ cap: 30 });
+    // The points edited: both keys, played at that number.
+    const pts = setRuleValue("badminton", opened, "finalSetTo", "21", bo1Division);
+    const fragment = stageFormatSaveFragment("badminton", {}, opened, pts, bo1Division);
+    expect(fragment).toEqual({ setTo: 21, finalSetTo: 21 });
+    expect(pointsTheOnlyGameIsPlayedTo("badminton", { ...bo1Division, ...fragment })).toBe(21);
+  });
+
+  it("an untouched save of a mismatched Bo1 fragment writes the played number to both keys", () => {
+    // Reopen shows finalSetTo (the number played); pressing Save with nothing
+    // touched is still a save, and it repairs the pair to that number.
+    const stored = { bestOf: 1, setTo: 11, finalSetTo: 21 };
+    const opened = stageFormatEditorValues("badminton", { rules: stored });
+    expect(stageFormatSaveFragment("badminton", stored, opened, opened, division)).toEqual({
+      bestOf: 1,
+      setTo: 21,
+      finalSetTo: 21,
+    });
+  });
+
+  it("a Bo3 stage keeps both fields and saves them independently", () => {
+    // The positive pair: nothing collapses away from best of 1.
+    const stored = { bestOf: 3 };
+    const opened = stageFormatEditorValues("badminton", { rules: stored });
+    expect(visiblePointsLabels(opened)).toEqual(
+      ["setTo", "finalSetTo"].map((k) => SPORT_RULES.badminton!.find((f) => f.key === k)!.label),
+    );
+    const edited = setRuleValue("badminton", opened, "setTo", "21", division);
+    expect(stageFormatSaveFragment("badminton", stored, opened, edited, division)).toEqual({
+      bestOf: 3,
+      setTo: 21,
+    });
   });
 });
 

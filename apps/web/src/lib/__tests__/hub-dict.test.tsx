@@ -57,11 +57,11 @@ const doc = hubDoc({
       stageFormatLines: [
         { stageName: "Swiss", line: [{ key: "format.rules.oneGamePointsCap", params: { points: 15, cap: 21 } }] },
         // A multi-clause (tennis) line, so the slice is proved for the
-        // `format.sets.`/`format.rules.tennis.` keys too (review round 2).
+        // `format.rules.tennis.` keys too (review round 2).
         {
           stageName: "Finals",
           line: [
-            { key: "format.sets.bestOf", params: { n: 3 } },
+            { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
             { key: "format.rules.tennis.setsTo", params: { games: 4 } },
             { key: "format.rules.tennis.noAd" },
           ],

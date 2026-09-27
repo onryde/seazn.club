@@ -14,7 +14,8 @@
 // in the org's locale — one describer, so the two surfaces can never word one
 // format two ways. Every surface joins the resolved clauses with `rulesLineText`
 // (`lib/rules-line.ts`). The keys live in `public.json`, beside
-// `format.sets.bestOf`, which this file reuses for the "Best of N" head.
+// `format.sets.bestOf`, which the set kernel reuses for its "Best of N" head
+// (tennis heads with its own `format.rules.tennis.bestOfSets`, "Best of N sets").
 //
 // THE MODULE IS PASSED IN, for `describe-format.ts`'s reason: a division pins
 // its module version, and every read path honours that pin.
@@ -105,12 +106,17 @@ function describeSetKernel(sportKey: string, c: Record<string, unknown>, bestOf:
  * The nested kernel (tennis) as clauses, every number read off the config —
  * the same fields the per-stage editor writes (`SPORT_RULES.tennis`: set type,
  * deciding set, no-ad, tie-break margin):
- * `Best of 3, sets to 6` (tour), `Best of 3, sets to 4, no-ad` (Fast4),
- * `Best of 3, sets to 6, deciding match tie-break to 10, no-ad` (doubles),
- * `Best of 5, sets to 6, final-set tie-break to 10` (grand slam).
+ * `Best of 3 sets, first to 6 games` (tour),
+ * `Best of 3 sets, first to 4 games, no-ad scoring` (Fast4),
+ * `Best of 3 sets, first to 6 games, deciding match tie-break to 10, no-ad
+ * scoring` (doubles), `Best of 5 sets, first to 6 games, final-set tie-break to
+ * 10` (grand slam). The head is tennis's OWN key (owner copy 2026-09-25): the
+ * shared `format.sets.bestOf` also heads the set kernel and the hub division's
+ * `formatLine`, where "sets" would be wrong.
  *
  *  - the set shape: games per set, and ADVANTAGE sets when `tiebreakAt` is null
- *    (no tie-break at all). A best-of-1 folds it into its head ("1 set to 6");
+ *    (no tie-break at all). A best-of-1 folds it into its head ("1 set, first
+ *    to 6 games");
  *  - the deciding set, when it is not "same": a match tie-break REPLACES the
  *    set (so a best-of-1 with one is "1 match tie-break to 10"), a final-set
  *    tie-break extends it — only over tie-break sets, since advantage sets
@@ -123,6 +129,18 @@ function describeNested(c: Record<string, unknown>, bestOf: number): RulesLineT 
   const set = record(c.set);
   const games = positive(set?.gamesTo);
   const advantage = set !== undefined && set.tiebreakAt === null;
+  const tiebreakAt = typeof set?.tiebreakAt === "number" ? set.tiebreakAt : undefined;
+  // "First to N games" only where every set really ends on N (engine
+  // `setWinner`: reach `gamesTo` with a `winBy` lead, or win the tie-break at
+  // `tiebreakAt`-all). Fast4 (4 games, tie-break at 3-3) always ends 4-x; a
+  // Tour set (6 games, tie-break at 6-6) can end 7-5 or 7-6, so it is named by
+  // its shape instead — "first to 6" would be false.
+  const winBy = positive(set?.winBy) ?? 2;
+  const exact =
+    games !== undefined &&
+    (winBy === 1
+      ? tiebreakAt === undefined || tiebreakAt >= games - 1
+      : tiebreakAt === games - 1);
   const finalSet = record(c.finalSet);
   const matchTiebreak = positive(finalSet?.matchTiebreakTo);
   const finalTiebreak = positive(finalSet?.tiebreakTo);
@@ -133,19 +151,18 @@ function describeNested(c: Record<string, unknown>, bestOf: number): RulesLineT 
   const out: RulesLineT = [];
   if (bestOf === 1) {
     if (games === undefined) out.push({ key: "format.rules.oneSet" });
-    else
-      out.push({
-        key: advantage ? "format.rules.tennis.oneAdvantageSetTo" : "format.rules.tennis.oneSetTo",
-        params: { games },
-      });
+    else if (exact) out.push({ key: "format.rules.tennis.oneSetTo", params: { games } });
+    else if (tiebreakAt === undefined)
+      out.push({ key: "format.rules.tennis.oneGameSetAdvantage", params: { games } });
+    else out.push({ key: "format.rules.tennis.oneGameSetTiebreak", params: { games, at: tiebreakAt } });
   } else {
-    out.push({ key: "format.sets.bestOf", params: { n: bestOf } });
-    if (games !== undefined) {
-      out.push({
-        key: advantage ? "format.rules.tennis.advantageSetsTo" : "format.rules.tennis.setsTo",
-        params: { games },
-      });
-    }
+    out.push({ key: "format.rules.tennis.bestOfSets", params: { n: bestOf } });
+    if (games === undefined) {
+      // nothing more to say about the sets
+    } else if (exact) out.push({ key: "format.rules.tennis.setsTo", params: { games } });
+    else if (tiebreakAt === undefined)
+      out.push({ key: "format.rules.tennis.gameSetsAdvantage", params: { games } });
+    else out.push({ key: "format.rules.tennis.gameSetsTiebreak", params: { games, at: tiebreakAt } });
   }
   if (matchTiebreak !== undefined) {
     out.push({ key: "format.rules.tennis.matchTiebreak", params: { n: matchTiebreak } });
