@@ -2965,3 +2965,13 @@ level collides with itself and tournament level buys nothing. OAuth direction, w
 broadcasts and a STORABLE per-match watch url, which the pasted-key path cannot give), the two gates (Google
 verification is sensitive-scope and is CALENDAR time; Data API quota is per Cloud project and shared by every
 org) and the open visibility question: `_OAUTH-youtube-connect.md` beside this file. R1 keeps the pasted key.
+
+## 2026-09-27 — an outside prompt for "Court Camera Devices & Match Livestreaming", aligned
+
+Owner brought a prompt written in another chat with no sight of this repo. Verdict and item-by-item mapping:
+`_ALIGNMENT-2026-09-27-court-camera-prompt.md`. Short form: its Phase 1 is a usable skeleton for the
+court-bound device we had already scoped; its Phase 2 is largely BUILT (R1 merged) and would reopen the
+bench-measured ingest decision and add a minutes+holds money model beside the merged per-match credit ledger;
+its Phase 3 belongs to `seazn-capture`. Six false premises recorded, the load-bearing ones being that RLS is
+not the read boundary for the streaming tables (forced, zero policies, superuser-only) and that this repo has
+no down-migration convention at all.
