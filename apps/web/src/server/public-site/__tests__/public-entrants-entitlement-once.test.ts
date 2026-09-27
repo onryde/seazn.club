@@ -349,8 +349,6 @@ describe.skipIf(!HAS_DB)("public_entrants_v — the player-profiles entitlement,
     expect(
       await featureCalls(`select id, display_name, seed from public_entrants_v where division_id = $1`),
     ).toBe(0);
-    // Reported for the task log (visible with --reporter=verbose).
-    console.info(`org_has_feature calls: V416=${before} now=${after} entrants=${ROSTERS.length}`);
   });
 
   it("CALLS per entrant: exactly one call for every entrant row — including the empty and no-consent rosters V416 answered for free (the stated trade)", async () => {
@@ -377,6 +375,5 @@ describe.skipIf(!HAS_DB)("public_entrants_v — the player-profiles entitlement,
     expect(perEntrant["Cavity"]).toEqual({ v416: 0, v418: 1 });
     expect(perEntrant["Decliners"]).toEqual({ v416: 0, v418: 1 });
     expect(perEntrant["Anchors"]!.v416).toBeGreaterThan(1);
-    console.info(`org_has_feature calls per entrant: ${JSON.stringify(perEntrant)}`);
   });
 });

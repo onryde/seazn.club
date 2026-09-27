@@ -114,6 +114,7 @@ import "server-only";
 import { connectionOptions, sql, withTenant } from "@/lib/db";
 import { cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
+import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
 import { deferred } from "@/lib/deferred";
 import { publishDivisionUpdate } from "@/lib/realtime";
 import { log } from "@/server/logger";
@@ -560,7 +561,7 @@ async function invalidateAfterRefresh(orgId: string, divisionId: string): Promis
     }
     // The hub, and the division's schedule, standings and entrants documents by
     // name in the same DEL (final review r2-m4: no keyspace SCAN).
-    const keys = [`pub:v1:hub:${row.competition_id}`, ...publicDivisionCacheKeys(divisionId)];
+    const keys = [publicHubCacheKey(row.competition_id), ...publicDivisionCacheKeys(divisionId)];
     const deleted = cacheDel(...keys).catch((err: unknown) => {
       log.warn({ err, divisionId, keys }, "player-stats: a public Redis delete failed after the refresh");
     });

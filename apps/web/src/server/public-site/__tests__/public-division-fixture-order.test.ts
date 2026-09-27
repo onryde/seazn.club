@@ -21,6 +21,11 @@
 //     first test checks the scene did witness it, so that chance shows as a
 //     red premise, never as a green that could not fail.
 //
+// The competition's "Live now" strip is the same question with a LIMIT: it
+// shows 12 in-play matches ordered by start time, and when more than 12 share
+// one start time, which 12 made the cut was the plan's choice. It ends on the
+// fixture id now; the last block below pins that.
+//
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -35,9 +40,16 @@ import { sql } from "@/lib/db";
 import { embedDivisionData } from "@/server/embed-data";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
+import { publicSchedule } from "@/server/usecases/public";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { loadCompetitionHub } from "../competition-hub";
-import { getPublicCompetition, getPublicDivision, readPublicDivisionDetail, type PublicDivision } from "../data";
+import {
+  getPublicCompetition,
+  getPublicDivision,
+  readPublicCompetitionShell,
+  readPublicDivisionDetail,
+  type PublicDivision,
+} from "../data";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -162,6 +174,11 @@ describe.skipIf(!HAS_DB)("a division's fixtures: round, match, stage seq, id", (
     expect(embed.data.fixtures.map((f) => f.id)).toEqual(expected);
   });
 
+  it("the API v1 public schedule", async () => {
+    const doc = (await publicSchedule(orgSlug, compSlug, "order")) as { fixtures: { id: string }[] };
+    expect(doc.fixtures.map((f) => f.id)).toEqual(expected);
+  });
+
   it("the competition hub's match list, on the rebuild and the page path: undated ties keep that order through sortHubMatches", async () => {
     for (const uncached of [true, false]) {
       const doc = await loadCompetitionHub(orgSlug, compSlug, new Date(), { uncached });
@@ -170,5 +187,86 @@ describe.skipIf(!HAS_DB)("a division's fixtures: round, match, stage seq, id", (
       expect(new Set(matches.map((m) => `${m.bucket}:${m.scheduledAt}`)).size).toBe(1);
       expect(matches.map((m) => m.fixtureId), `uncached=${uncached}`).toEqual(expected);
     }
+  });
+});
+
+describe.skipIf(!HAS_DB)("Live now: which 12 in-play matches show when more share a start time", () => {
+  const LIVE = 20;
+  const SHOWN = 12;
+  let liveOrgSlug: string;
+  let liveCompSlug: string;
+  let liveCompetitionId: string;
+  /** Every in-play fixture, ascending id. */
+  let live: string[];
+
+  beforeAll(async () => {
+    if (!HAS_DB) return;
+    const { auth } = await seedOrg("pro");
+    const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Live Cup " + randomUUID().slice(0, 6),
+      visibility: "public",
+      branding: {},
+    });
+    const div = await createDivision(auth, competition.id, {
+      name: "Live",
+      slug: "live",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    const [stage] = await sql<{ id: string }[]>`
+      insert into stages (division_id, org_id, seq, kind, name)
+      values (${div.id}, ${auth.orgId}, 1, 'league', 'League')
+      returning id`;
+    live = Array.from({ length: LIVE }, (_, i) => idWithPrefix((i + 1).toString(16).padStart(2, "0")));
+    const startsAt = new Date(Date.UTC(2030, 5, 1, 10));
+    // Highest id first, all at one start time.
+    await sql`
+      insert into fixtures ${sql(
+        [...live].reverse().map((id, i) => ({
+          id,
+          stage_id: stage!.id,
+          division_id: div.id,
+          org_id: auth.orgId,
+          round_no: 1,
+          seq_in_round: i + 1,
+          fixture_no: i + 1,
+          status: "in_play",
+          scheduled_at: startsAt,
+        })),
+      )}`;
+    liveOrgSlug = org!.slug;
+    liveCompSlug = competition.slug;
+    liveCompetitionId = competition.id;
+  }, 60_000);
+
+  it("without the id tiebreak, the cut is not the lowest ids (so the check below can fail)", async () => {
+    const lowest = new Set(live.slice(0, SHOWN));
+    const plans: Record<string, string[]> = {
+      default: [],
+      "scan and sort": ["enable_indexscan", "enable_bitmapscan", "enable_indexonlyscan"],
+    };
+    for (const [name, off] of Object.entries(plans)) {
+      const ids = await sql.begin(async (tx) => {
+        for (const s of off) await tx.unsafe(`set local ${s} = off`);
+        return (
+          await tx<{ id: string }[]>`
+            select f.id
+            from public_fixtures_v f
+            join public_divisions_v d on d.id = f.division_id
+            where d.competition_id = ${liveCompetitionId} and f.status = 'in_play'
+            order by f.scheduled_at nulls last limit 12`
+        ).map((r) => r.id);
+      });
+      expect(ids, name).toHaveLength(SHOWN);
+      expect(ids.every((id) => lowest.has(id)), name).toBe(false);
+    }
+  });
+
+  it("the shell's liveNow is the lowest 12 ids, in id order", async () => {
+    const shell = await readPublicCompetitionShell(liveOrgSlug, liveCompSlug);
+    expect(shell!.liveNow.map((f) => f.id)).toEqual(live.slice(0, SHOWN));
   });
 });

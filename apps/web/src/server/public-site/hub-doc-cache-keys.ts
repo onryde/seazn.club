@@ -2,8 +2,9 @@
 // `publicCompetitionHub`).
 //
 // `pub:v1:hub:{competitionId}` is the document itself, 15 s. Every writer that
-// makes it stale DELs it by that literal name (`invalidatePublicCache`,
-// `afterScheduleWrite`, `dropNamedPublicDocuments`, the stats refresh) — and
+// makes it stale DELs it by name, through `publicHubCacheKey`
+// (`invalidatePublicCache`, `afterScheduleWrite`, `dropNamedPublicDocuments`,
+// the stats refresh) — and
 // that DEL is also what refuses a rebuild already in flight (the lease lives
 // under the same key: lib/cache.ts).
 //

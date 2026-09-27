@@ -518,6 +518,10 @@ export async function publicSchedule(
     // public_fixtures_v since V362 but never selected here, so an API v1
     // consumer saw nothing where the HTML schedule page (public-site/data.ts)
     // already shows a label.
+    //
+    // Ordered exactly as the HTML pages and the embed order it (round, match,
+    // stage seq, id; see readPublicDivisionDetail), so rows that tie on
+    // (round_no, seq_in_round) come back in the same order here as there.
     const rawFixtures = await sql<
       Pick<
         PublicFixture,
@@ -538,11 +542,13 @@ export async function publicSchedule(
         | "summary"
       >[]
     >`
-      select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
-             away_entrant_id, home_slot_label, away_slot_label,
-             scheduled_at, venue, court_label, status, outcome, summary
-      from public_fixtures_v where division_id = ${division.id}
-      order by round_no, seq_in_round`;
+      select v.id, v.stage_id, v.pool_id, v.round_no, v.seq_in_round, v.home_entrant_id,
+             v.away_entrant_id, v.home_slot_label, v.away_slot_label,
+             v.scheduled_at, v.venue, v.court_label, v.status, v.outcome, v.summary
+      from public_fixtures_v v
+      left join stages st on st.id = v.stage_id
+      where v.division_id = ${division.id}
+      order by v.round_no, v.seq_in_round, st.seq, v.id`;
     // P9 cutover (finding #2): venue/court_label are frozen since the
     // venues/courts entities cutover — every consumer of this endpoint saw
     // null for both. venue_name/court_name (derived, disambiguated via

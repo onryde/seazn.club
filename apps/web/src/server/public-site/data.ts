@@ -704,7 +704,7 @@ export async function readPublicCompetitionShell(
     from public_fixtures_v f
     join public_divisions_v d on d.id = f.division_id
     where d.competition_id = ${competition.id} and f.status = 'in_play'
-    order by f.scheduled_at nulls last limit 12`;
+    order by f.scheduled_at nulls last, f.id limit 12`;
   return { org, competition, divisions, liveNow: liveNow.map(normalizeFixture) };
 }
 
