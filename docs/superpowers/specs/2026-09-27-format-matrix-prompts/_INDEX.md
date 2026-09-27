@@ -10,7 +10,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1 | Harness (L1/L2/L3), catalogues, reference skeleton, invariants, truth run | not started — spec owed |
+| W1 | Harness (L1/L2/L3), catalogues, reference skeleton, invariants, truth run | plan being written |
 | W2 | Sport scoring fidelity | not started |
 | W3 | Swiss | not started |
 | W4 | Knockout family | not started |
@@ -57,14 +57,19 @@ a peer session as the other.
     tiebreakers (Q11 A); **no mid-match rule change**. Worst case named by the
     owner: a final with no time left gets shorter games before it starts.
 13. **Sections 2 (harness) and 3 (rules and done) approved.**
+14. **Written spec approved** (2026-09-27, commit `b56a19ad4`).
+15. **Mixed-driver lifecycle accepted** for L1/L2 (design §6.2, O2): every
+    distinct action type in the browser at least once; filler fixtures scored
+    over HTTP.
+16. **CI cadence: weekly scheduled full run + manual dispatch** (design §6.5,
+    O1).
 
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
 - #878 (browser Sentry) ships early from the W10 lane; it is a one-file ops fix.
-- CI: weekly scheduled full run + manual dispatch (design §11 O1).
-- Mixed-driver lifecycle for L1/L2 (design §6.2) — **owner has not ruled**;
-  raised for review of the written spec.
+- CI weekly + dispatch (O1) — **accepted**, now ruling 16.
+- Mixed-driver lifecycle (O2) — **accepted**, now ruling 15.
 - L1 at 1280 + 320 per cell; L2 rotates the seven widths (design §11 O3).
 - The bench's repeated-`completeStage` finding is fixed in W5; the harness
   avoids repeat calls until then.

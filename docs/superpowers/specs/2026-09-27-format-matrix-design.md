@@ -1,7 +1,7 @@
 # Format × sport matrix — design of record
 
 - **Date:** 2026-09-27
-- **Status:** design approved in conversation (Sections 1–3); written spec awaiting owner review
+- **Status:** APPROVED by the owner 2026-09-27 (rulings 14–16 in `_INDEX.md`)
 - **Programme index:** `2026-09-27-format-matrix-prompts/_INDEX.md` (owner rulings, decision log, status)
 - **Standing rules:** `2026-09-27-format-matrix-prompts/_RULES.md`
 - **Inputs:** `2026-09-27-format-matrix-prompts/audit-2026-09-27/` (five read-only audits, the offered-cell map, the bench reuse assessment)
@@ -174,7 +174,7 @@ The same script runs through both, so the layers cannot drift.
 | **L2** | scenarios in the browser: every (format, scenario) pair and every (sport, scenario) pair at least once | ~600–900 runs |
 | **L3** | the full cartesian cell × scenario × variant **through the real server, no browser** | ~7k+ cases |
 
-**Mixed-driver lifecycle (design decision, flagged for owner review).** An
+**Mixed-driver lifecycle (owner ruling 15).** An
 L1/L2 run drives **every distinct action type** through the browser at least
 once — generate, one match on the sport's real pad, one quick result, the
 scenario's own steps, the standings/progression/final-ranks pages — and scores
@@ -341,8 +341,8 @@ from the wave in flight before it starts.
 
 | # | Decision | Where it is decided | Recommendation |
 |---|---|---|---|
-| O1 | CI cadence and monthly budget for full runs | W1 spec | weekly scheduled + manual dispatch |
-| O2 | Mixed-driver lifecycle for L1/L2 (§6.2) | review of this spec | accept |
+| O1 | CI cadence and monthly budget for full runs | **RULED 16: weekly scheduled + manual dispatch** | — |
+| O2 | Mixed-driver lifecycle for L1/L2 (§6.2) | **RULED 15: accepted** | — |
 | O3 | L1 widths per cell | W1 spec | 1280 + 320; L2 rotates all seven |
 | O4 | Fixture-override UI (§5) | W2 spec, ≥2 options shown first | — |
 | O5 | Stage-level deciders/points/tiebreak UI | W2 spec, ≥2 options shown first | — |
