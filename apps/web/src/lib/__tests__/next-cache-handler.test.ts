@@ -5,6 +5,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { tagsManifest } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
 import { defaultConfig } from "next/dist/server/config-shared";
+import { IncrementalCache } from "next/dist/server/lib/incremental-cache";
+import ResponseCache from "next/dist/server/response-cache";
+import RenderResult from "next/dist/server/render-result";
+import { HTML_CONTENT_TYPE_HEADER } from "next/dist/lib/constants";
+import { unstable_cache } from "next/dist/server/web/spec-extension/unstable-cache";
+
+vi.hoisted(() => {
+  // Next's node environment installs this global before any server module
+  // loads; without it Next's storages are a fake (see score-revalidate-in-request.test.ts).
+  const g = globalThis as { AsyncLocalStorage?: unknown };
+  g.AsyncLocalStorage ??= process.getBuiltinModule("node:async_hooks").AsyncLocalStorage;
+});
 import Handler, { __resetMachineStateForTests, MAX_REDIS_BYTES, NO_TTL_EX } from "../../../cache-handler/handler.mjs";
 import { __setRedisForTests, __resetRedisStateForTests } from "../../../cache-handler/redis-client.mjs";
 import {
@@ -191,10 +203,13 @@ describe("daily tag-hash sweep", () => {
     redis.hash.set("division:junk", "nope");
     redis.hash.set("division:recent", stateFrom(300));
     redis.hash.set("division:expires-ahead", encodeField({ at: t, stale: t, expired: Date.now() + DAY_MS }));
+    redis.hash.set("division:stale-recently", encodeField({ at: t, stale: Date.now() - 10 * DAY_MS, expired: t }));
     await new Handler({}).revalidateTag("division:d1", { expire: 0 }); // kicks the sweep off
     await flush();
     expect(redis.calls).toContain("hscan");
-    expect([...redis.hash.keys()].sort()).toEqual(["division:d1", "division:expires-ahead", "division:recent"]);
+    expect([...redis.hash.keys()].sort()).toEqual([
+      "division:d1", "division:expires-ahead", "division:recent", "division:stale-recently",
+    ]);
   });
 
   it("a field another machine rewrites between the HSCAN and the delete survives", async () => {
@@ -378,12 +393,12 @@ describe("Redis data tier", () => {
     const h = new Handler({});
     await h.set("big", big, { fetchCache: true });
     await h.set("big", big, { fetchCache: true });
+    await h.set("big2", big, { fetchCache: true });
     expect(redis.kv.size).toBe(0);
     expect((await h.get("big", fetchCtx))?.value).toEqual(big);
-    expect(warn).toHaveBeenCalledTimes(1);
-    const line = JSON.parse(String(warn.mock.calls[0][0])) as { key: string; bytes: number };
-    expect(line.key).toBe("big");
-    expect(line.bytes).toBeGreaterThan(MAX_REDIS_BYTES);
+    const lines = warn.mock.calls.map(([l]) => JSON.parse(String(l)) as { key: string; bytes: number });
+    expect(lines.map((l) => l.key)).toEqual(["big", "big2"]); // once per key: twice for "big" logs once
+    expect(lines[0].bytes).toBeGreaterThan(MAX_REDIS_BYTES);
   });
 });
 
@@ -425,5 +440,189 @@ describe("per-request tag memo", () => {
     h.resetRequestCache(); // positive pair: the next request does read it
     await h.get("k1", fetchCtx);
     expect(redis.calls).toContain("hmget");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1: driven through Next's REAL IncrementalCache / ResponseCache /
+// unstable_cache, the producer and consumer this handler plugs into.
+// ---------------------------------------------------------------------------
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type NextCache = {
+  get(key: string, ctx: object): Promise<{ isStale?: unknown; value?: unknown } | null>;
+  set(key: string, data: object | null, ctx: object): Promise<void>;
+  revalidateTag(tags: string | string[], durations?: { expire?: number }): Promise<void>;
+};
+const prerenderManifest = () => ({ version: 4, routes: {}, dynamicRoutes: {}, notFoundRoutes: [], preview: { previewModeId: "p" } });
+/** Next's IncrementalCache over this handler; route-module.js builds one per request. */
+const incrementalCache = () =>
+  new IncrementalCache({
+    fs: { readFile: async () => { throw new Error("no fs"); }, stat: async () => { throw new Error("no fs"); } },
+    dev: false, flushToDisk: false, minimalMode: false, serverDistDir: undefined, requestHeaders: {},
+    maxMemoryCacheSize: 0, getPrerenderManifest: prerenderManifest, fetchCacheKeyPrefix: "", CurCacheHandler: Handler,
+  } as unknown as ConstructorParameters<typeof IncrementalCache>[0]) as unknown as NextCache;
+
+describe("tag expiry on read mirrors FileSystemCache.get (file-system-cache.js:214-248)", () => {
+  const key = "/shared/o/c/d";
+  const page = (html: string) => ({ kind: "APP_PAGE", html, rscData: Buffer.from(html), headers: { "x-next-cache-tags": "division:d1" }, status: 200 });
+  const cacheControl = { revalidate: 30, expire: 31_536_000 };
+  async function servedAfter(durations: { expire?: number }) {
+    await incrementalCache().set(key, page("<p>old</p>"), { cacheControl, isRoutePPREnabled: false, isFallback: false });
+    await sleep(3);
+    await incrementalCache().revalidateTag("division:d1", durations);
+    await sleep(2);
+    const direct = await incrementalCache().get(key, { kind: "APP_PAGE", isRoutePPREnabled: false, isFallback: false });
+    const generate = async () => ({
+      value: { ...page("<p>new</p>"), html: RenderResult.fromStatic("<p>new</p>", HTML_CONTENT_TYPE_HEADER) }, cacheControl,
+    });
+    const served = await new ResponseCache(false).get(key, generate as never, {
+      incrementalCache: incrementalCache(), routeKind: "APP_PAGE", isFallback: false, isRoutePPREnabled: false, isOnDemandRevalidate: false,
+    } as never);
+    await sleep(10); // let a background revalidation settle inside this test
+    const html = (served?.value as { html?: { toUnchunkedString(): string } } | null)?.html?.toUnchunkedString();
+    return { direct, html };
+  }
+
+  it("a page whose tag was expired ({expire:0}) is a miss, so the request renders fresh", async () => {
+    const r = await servedAfter({ expire: 0 });
+    expect(r.direct).toBeNull();
+    expect(r.html).toBe("<p>new</p>");
+  });
+
+  it("positive pair: after a 'max' revalidation the old page is served stale while it re-renders", async () => {
+    const r = await servedAfter(MAX);
+    expect(r.direct?.isStale).toBe(true);
+    expect(r.html).toBe("<p>old</p>");
+  });
+
+  it("covers every kind FileSystemCache checks by header: APP_PAGE, APP_ROUTE and PAGES", async () => {
+    const kinds = ["APP_PAGE", "APP_ROUTE", "PAGES"];
+    // Positive pair: a tag expired BEFORE the page was rendered does not expire it.
+    redis.hash.set("division:d1", encodeField(writeState({}, { expire: 0 }, Date.now() - 60_000)));
+    const h = new Handler({});
+    for (const kind of kinds) {
+      await h.set(`/${kind}`, { kind, html: "", body: Buffer.from(""), headers: { "x-next-cache-tags": "division:d1" }, status: 200 }, {});
+      expect(await new Handler({}).get(`/${kind}`, { kind }), kind).not.toBeNull();
+    }
+    await sleep(2);
+    redis.hash.set("division:d1", encodeField(writeState({}, { expire: 0 }, Date.now()))); // another machine
+    for (const kind of kinds) expect(await new Handler({}).get(`/${kind}`, { kind }), kind).toBeNull();
+  });
+
+  it("a FETCH read is a miss when a ctx tag expired, or was revalidated earlier in this request", async () => {
+    await new Handler({}).set("k1", fetchValue(), { fetchCache: true });
+    expect((await new Handler({}).get("k1", fetchCtx))?.value).toEqual(fetchValue()); // positive pair
+    expect(await new Handler({ revalidatedTags: ["division:d1"] }).get("k1", fetchCtx)).toBeNull();
+    await sleep(2);
+    redis.hash.set("division:d1", encodeField(writeState({}, { expire: 0 }, Date.now()))); // another machine
+    expect(await new Handler({}).get("k1", fetchCtx)).toBeNull();
+  });
+});
+
+describe("TTL through the real unstable_cache producer", () => {
+  afterEach(() => { delete (globalThis as { __incrementalCache?: unknown }).__incrementalCache; });
+
+  it("revalidate:false and absent reach the handler as a year, and still get the 30-day cap", async () => {
+    (globalThis as { __incrementalCache?: unknown }).__incrementalCache = incrementalCache();
+    await unstable_cache(async () => 1, ["ttl-false"], { revalidate: false })();
+    await unstable_cache(async () => 1, ["ttl-absent"], { tags: ["t"] })();
+    await unstable_cache(async () => 1, ["ttl-30"], { revalidate: 30 })();
+    const rows = [...redis.kv.values()]
+      .map((e) => ({ stored: (JSON.parse(e.v) as { value: { revalidate: number } }).value.revalidate, ex: e.ex }))
+      .sort((a, b) => a.stored - b.stored);
+    expect(rows).toEqual([
+      { stored: 30, ex: 30 + 3600 },
+      { stored: 31_536_000, ex: NO_TTL_EX }, // Next's CACHE_ONE_YEAR_SECONDS, not `false`
+      { stored: 31_536_000, ex: NO_TTL_EX },
+    ]);
+  });
+
+  it("the cap is a min: revalidate + 1 h up to 30 days, never past it", async () => {
+    const h = new Handler({});
+    for (const [k, revalidate] of [["under", NO_TTL_EX - 3601], ["at", NO_TTL_EX - 3600], ["over", NO_TTL_EX]] as const) {
+      await h.set(k, fetchValue(revalidate), { fetchCache: true });
+    }
+    expect(redis.kv.get("nc:dev:under")?.ex).toBe(NO_TTL_EX - 1);
+    expect(redis.kv.get("nc:dev:at")?.ex).toBe(NO_TTL_EX);
+    expect(redis.kv.get("nc:dev:over")?.ex).toBe(NO_TTL_EX);
+  });
+});
+
+describe("concurrent reads in one request", () => {
+  const val = (body: string) => ({ kind: "FETCH", data: { headers: {}, body, status: 200, url: "" }, revalidate: 300 });
+  const setCtx = { fetchCache: true, tags: ["division:d1"], revalidate: 300 };
+  const readCtx = { kind: "FETCH", tags: ["division:d1"], softTags: [], revalidate: 300 };
+  /** Machine B warmed kA and kB in an earlier request; `sharedAt` is when another machine expired their tag. */
+  async function concurrentReads(sharedAt: () => number) {
+    const warm = incrementalCache();
+    await warm.set("kA", val('"A-old"'), setCtx);
+    await warm.set("kB", val('"B-old"'), setCtx);
+    await sleep(3);
+    redis.hash.set("division:d1", encodeField(writeState({}, { expire: 0 }, sharedAt())));
+    await sleep(2);
+    const hmget = redis.hmget;
+    redis.hmget = async (h: string, ...f: string[]) => { await sleep(1); return hmget(h, ...f); }; // a real round trip
+    redis.calls.length = 0;
+    const req = incrementalCache(); // B's next request: two loaders at once (sibling RSCs / Promise.all)
+    return Promise.all([req.get("kA", readCtx), req.get("kB", readCtx)]);
+  }
+
+  it("share one in-flight HMGET, and both are judged against the state it brings back", async () => {
+    expect(await concurrentReads(() => Date.now())).toEqual([null, null]);
+    expect(redis.calls.filter((c) => c === "hmget")).toHaveLength(1);
+  });
+
+  it("positive pair: when the shared expiry predates both entries, both are served", async () => {
+    const [a, b] = await concurrentReads(() => Date.now() - 60_000);
+    expect([a, b].map((e) => (e?.value as { data?: { body?: string } } | undefined)?.data?.body)).toEqual(['"A-old"', '"B-old"']);
+    expect(redis.calls.filter((c) => c === "hmget")).toHaveLength(1);
+  });
+});
+
+describe("machine memory (L1): page kinds", () => {
+  it("counts a page's html, rscData and segmentData bytes toward NEXT_CACHE_L1_MB", async () => {
+    vi.stubEnv("NEXT_CACHE_L1_MB", "1"); // read once at module load, so take a fresh copy
+    vi.resetModules();
+    const { default: SmallL1 } = await import("../../../cache-handler/handler.mjs");
+    __setRedisForTests(null); // memory only
+    const big = "x".repeat(400_000); // three 400 KB pages exceed 1 MiB, two do not
+    const pages: Record<string, () => object> = {
+      html: () => ({ kind: "APP_PAGE", html: big, headers: {} }),
+      rscData: () => ({ kind: "APP_PAGE", html: "", rscData: Buffer.from(big), headers: {} }),
+      segmentData: () => ({ kind: "APP_PAGE", html: "", segmentData: new Map([["/s", Buffer.from(big)]]), headers: {} }),
+    };
+    for (const [field, page] of Object.entries(pages)) {
+      __resetMachineStateForTests();
+      const h = new SmallL1({});
+      for (const k of ["a", "b", "c"]) await h.set(`/${k}`, page(), {});
+      expect(await h.get("/a", { kind: "APP_PAGE" }), field).toBeNull();
+      expect(await h.get("/c", { kind: "APP_PAGE" }), field).not.toBeNull();
+    }
+  });
+});
+
+describe("build id", () => {
+  it("an unreadable BUILD_ID is logged once in production; not in test, not when readable, not without serverDistDir", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const missing = path.join(tmpdir(), `nc-no-build-id-${process.pid}`, "server");
+    expect(new Handler({ serverDistDir: missing }).buildId).toBe("dev"); // NODE_ENV=test
+    vi.stubEnv("NODE_ENV", "production");
+    __resetMachineStateForTests();
+    expect(new Handler({}).buildId).toBe("dev"); // no serverDistDir: dev keys are expected
+    const dist = mkdtempSync(path.join(tmpdir(), "nc-build-"));
+    try {
+      mkdirSync(path.join(dist, "server"));
+      writeFileSync(path.join(dist, "BUILD_ID"), "b-9");
+      __resetMachineStateForTests();
+      expect(new Handler({ serverDistDir: path.join(dist, "server") }).buildId).toBe("b-9");
+    } finally {
+      rmSync(dist, { recursive: true, force: true });
+    }
+    expect(warn).not.toHaveBeenCalled();
+    __resetMachineStateForTests();
+    expect(new Handler({ serverDistDir: missing }).buildId).toBe("dev");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("BUILD_ID");
   });
 });

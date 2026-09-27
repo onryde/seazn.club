@@ -8,7 +8,7 @@
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { tagsManifest } from "next/dist/server/lib/incremental-cache/tags-manifest.external.js";
+import { tagsManifest, areTagsExpired } from "next/dist/server/lib/incremental-cache/tags-manifest.external.js";
 import { withRedis, warnOnce } from "./redis-client.mjs";
 import { TAGS_HASH, HSET_IF_NEWER, HDEL_IF_OLDER, writeState, encodeField, decodeField } from "./tag-state.mjs";
 
@@ -17,6 +17,8 @@ export const NO_TTL_EX = 2_592_000;
 const DAY_MS = 86_400_000;
 const L1_BYTES = (Number(process.env.NEXT_CACHE_L1_MB) || 64) * 1024 * 1024;
 const LOCAL = Symbol.for("seazn.nextCache.local");
+/** A tag this request already holds the newest local state for. */
+const SYNCED = Promise.resolve();
 
 /**
  * @returns {{l1: Map<string, {entry: any, bytes: number}>, bytes: number,
@@ -40,6 +42,12 @@ function buildId(serverDistDir) {
     L.buildId = serverDistDir ? readFileSync(path.join(serverDistDir, "..", "BUILD_ID"), "utf8").trim() : "dev";
   } catch {
     L.buildId = "dev";
+    // A production server without its BUILD_ID would share data keys across
+    // deploys (spec §7 version skew). Say so once; keep serving. (Only a
+    // given serverDistDir reaches this catch: without one there is no read.)
+    if (process.env.NODE_ENV === "production") {
+      warnOnce("build-id", "BUILD_ID unreadable; Redis data keys fall back to nc:dev: and are not build-scoped");
+    }
   }
   return L.buildId;
 }
@@ -138,11 +146,18 @@ function maybeSweep() {
 }
 
 export default class SharedCacheHandler {
-  /** @param {{serverDistDir?: string}} ctx */
+  /** @param {{serverDistDir?: string, revalidatedTags?: string[]}} ctx */
   constructor(ctx) {
     this.buildId = buildId(ctx?.serverDistDir);
-    /** @type {Set<string>} tags already synced from Redis in this request */
-    this.memo = new Set();
+    /** Tags Next already knows were revalidated this request (FileSystemCache's `ctx.revalidatedTags`). */
+    this.revalidatedTags = ctx?.revalidatedTags ?? [];
+    /**
+     * Tag -> the sync that covers it in this request. A promise, not a flag:
+     * a concurrent read sharing a tag must wait for the in-flight HMGET
+     * rather than be judged against the manifest it is about to replace.
+     * @type {Map<string, Promise<void>>}
+     */
+    this.memo = new Map();
   }
 
   /** @param {string} key */
@@ -152,15 +167,20 @@ export default class SharedCacheHandler {
 
   /** @param {string[]} tags */
   async syncTags(tags) {
-    const missing = [...new Set(tags)].filter((t) => !this.memo.has(t));
-    if (missing.length === 0) return;
-    missing.forEach((t) => this.memo.add(t));
-    const raw = await withRedis((r) => r.hmget(TAGS_HASH, ...missing), null);
-    if (!raw) return;
-    missing.forEach((tag, i) => {
-      const s = decodeField(raw[i]);
-      if (s) applyLocal(tag, s);
-    });
+    const unique = [...new Set(tags)];
+    const missing = unique.filter((t) => !this.memo.has(t));
+    if (missing.length > 0) {
+      // One HMGET per request for these tags; stored before it resolves.
+      const sync = withRedis((r) => r.hmget(TAGS_HASH, ...missing), null).then((raw) => {
+        if (!raw) return;
+        missing.forEach((tag, i) => {
+          const s = decodeField(raw[i]);
+          if (s) applyLocal(tag, s);
+        });
+      });
+      for (const t of missing) this.memo.set(t, sync);
+    }
+    await Promise.all(unique.map((t) => this.memo.get(t)));
   }
 
   /** @param {string} key @param {any} ctx */
@@ -179,7 +199,31 @@ export default class SharedCacheHandler {
     }
     if (!entry) return null;
     await this.syncTags(tagsOf(entry, ctx));
-    return entry;
+    return this.expired(entry, ctx) ? null : entry;
+  }
+
+  /**
+   * FileSystemCache.get's own tag checks (next@16.2.9 file-system-cache.js
+   * 214-248), which this handler replaces. IncrementalCache re-checks FETCH
+   * entries, but for pages it only does so inside the time window and then
+   * serves the old page as stale: a tag-expired page must be a miss HERE so
+   * the request renders fresh.
+   * @param {any} entry @param {any} ctx
+   */
+  expired(entry, ctx) {
+    const kind = entry.value?.kind;
+    if (kind === "APP_PAGE" || kind === "APP_ROUTE" || kind === "PAGES") {
+      const header = entry.value.headers?.["x-next-cache-tags"];
+      if (typeof header !== "string") return false;
+      const cacheTags = header.split(",");
+      return cacheTags.length > 0 && areTagsExpired(cacheTags, entry.lastModified);
+    }
+    if (kind === "FETCH") {
+      const combined = ctx?.kind === "FETCH" ? [...(ctx.tags ?? []), ...(ctx.softTags ?? [])] : [];
+      if (combined.some((t) => this.revalidatedTags.includes(t))) return true;
+      return areTagsExpired(combined, entry.lastModified);
+    }
+    return false;
   }
 
   /** @param {string} key @param {any} data @param {any} _ctx */
@@ -199,7 +243,11 @@ export default class SharedCacheHandler {
       warnOnce(`oversize:${key}`, "next-cache entry over 1 MB kept in machine memory only", { key, bytes });
       return;
     }
-    const ex = typeof data.revalidate === "number" && data.revalidate > 0 ? data.revalidate + 3600 : NO_TTL_EX;
+    // unstable_cache stores revalidate:false/absent as a year (31_536_000),
+    // so the 30-day cap must be a min, not only the no-limit branch.
+    const ex = typeof data.revalidate === "number" && data.revalidate > 0
+      ? Math.min(data.revalidate + 3600, NO_TTL_EX)
+      : NO_TTL_EX;
     await withRedis((r) => r.set(this.dataKey(key), raw, "EX", ex), null);
   }
 
@@ -213,7 +261,7 @@ export default class SharedCacheHandler {
     for (const tag of list) {
       const s = writeState(tagsManifest.get(tag) ?? {}, durations, now);
       applyLocal(tag, s);
-      this.memo.add(tag);
+      this.memo.set(tag, SYNCED);
       argv.push(tag, encodeField(s));
     }
     await withRedis((r) => r.eval(HSET_IF_NEWER, 1, TAGS_HASH, ...argv), null);
