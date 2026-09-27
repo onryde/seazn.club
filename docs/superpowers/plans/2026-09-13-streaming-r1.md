@@ -9977,6 +9977,7 @@ export async function POST(req: Request, { params }: Ctx) {
 **Files:**
 - Create: `apps/web/src/server/usecases/stream-sessions.ts`
 - Create (Test): `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts`
+- Create: `db/migration/deltas/V419__stream_target_one_active.sql` — the DESTINATION guard's FORWARD delta (Step 0). **Re-read the version before you write the file** (Step 0 says how). V410 is MERGED (PR #812, merge commit `e707ec45d`), so it is NOT amendable — Task 7's Steps 0a/0b/0c already record what an amend to a merged migration costs (Flyway checksums the file and refuses the edited one; `flyway repair` rewrites the stored checksum and adds nothing). `V419` is what the two tails said on **2026-09-27**: tree tail `V417__device_link_sealed_secret.sql` (`/bin/ls db/migration/deltas | tail`), all-refs tail `V418__public_entrants_entitlement_once.sql` (`git log --all --diff-filter=A --name-only --pretty=format: -- 'db/migration/deltas/*'`). The all-refs scan on that day ALSO showed a live **V417 collision** — `V417__division_results_skip_rest_byes.sql` on another ref beside the tree's `V417__device_link_sealed_secret.sql` — which is precisely the shape a clean rebase carries through in silence, so take the HIGHER of the two tails and add one, on the day, rather than trusting this line.
 
 **Interfaces:**
 - Consumes: the domain (Tasks 2A/2B: `admit`, `decide`, `evaluate`, `deadlineOf`, `headroomAfterReservations`, `Session`, `Command`, `Effect`, `InvalidTransition`); Tasks 3–9. `hasFeature` (`@/lib/entitlements`); `setFixtureStreamUrl` (`./fixtures` — called AFTER every transaction closes: it opens `withTenant`, and the nesting guard forbids that inside `sql.begin`); `consumeForSession`, `creditBalance`, `NoCreditsError` (Task 7); `readFirstInput`, `readTargetSecret`, `storeInputCredentials` (Tasks 2/9); `mintRelayToken`, `relayTokenExpiry`, `verifyRelayToken` (Task 6); `relayDrivers` (Task 5); `log` (`@/server/logger`).
@@ -9997,9 +9998,69 @@ export async function POST(req: Request, { params }: Ctx) {
   - `export async function fillReplayUrl(sessionId): Promise<void>`
 
 **Pattern (§9a):** State machines over booleans (every edge is `decide`; this file never assigns `state` except from `next`); Money is ledger rows in the same transaction (the `consume_credit` effect runs INSIDE `apply`'s transaction); Ports and adapters (every external call through `deps.drivers`, AFTER the transaction); The client never decides (the flip to `live` is the server's poll, never a client claim).
-**Checklist rows satisfied:** "Empty-set case explicitly" (no session → `null`; missing input row → `qr: null`); "Include ≥ 1 differential case" (C3 reservations incl. the expired-but-unread row 9 min vs 11 min; the non-zero slot); "Negative assertion needs its positive pair" (balance 0 → `failed(no_credits)` beside balance 1 → `live`); "Pin the VALUE" (`slot` 0 then 3); "A guard nothing kills is not tested" (the lazy `applyExpiry` calls are each mutated — delete one → a named test red).
+**Checklist rows satisfied:** "Empty-set case explicitly" (no session → `null`; missing input row → `qr: null`); "Include ≥ 1 differential case" (C3 reservations incl. the expired-but-unread row 9 min vs 11 min; the non-zero slot); "Negative assertion needs its positive pair" (balance 0 → `failed(no_credits)` beside balance 1 → `live`); "Pin the VALUE" (`slot` 0 then 3); "A guard nothing kills is not tested" (the lazy `applyExpiry` calls are each mutated — delete one → a named test red); **"Check BOTH directions"** (AGENTS.md failure class 13 — an idempotency guard that also swallowed a legitimate arrival: the destination guard must REFUSE a second concurrent session on a held target (G-T1) and ADMIT one whose predecessor is `completed` (G-T2) and, asserted separately because the index predicate names two terminal members and one row cannot witness the other, one whose predecessor is `failed` (G-T3) — three rows, never one).
 
-**Design gaps this task closes, recorded for `_INDEX.md`:** (1) a provider failure at `createLiveInput` has no §6.4 reason — the `requested` row is deleted (cascade removes its input) and the caller gets 503 `ingest_unavailable`, so no dead row appears in the panel (E5's own logic); (2) the sweep has no `AuthCtx` for the replay fill — `fillReplayUrl` builds a session-actor context from the row (`{ orgId, via: "session", userId: created_by, role: "owner", keyId: null }`) because `setFixtureStreamUrl` needs one and the organiser who started the stream is the right actor; (3) a composed session's Machine is requested through the lifecycle table BEFORE `provisioned` (`runner: create_started` → `create_machine` → `create_ok`), so `warming` always begins with the runner in `booting` or already failed — the session never waits in `provisioning` for a Machine that will not come.
+**Design gaps this task closes, recorded for `_INDEX.md`:** (1) a provider failure at `createLiveInput` has no §6.4 reason — the `requested` row is deleted (cascade removes its input) and the caller gets 503 `ingest_unavailable`, so no dead row appears in the panel (E5's own logic); (2) the sweep has no `AuthCtx` for the replay fill — `fillReplayUrl` builds a session-actor context from the row (`{ orgId, via: "session", userId: created_by, role: "owner", keyId: null }`) because `setFixtureStreamUrl` needs one and the organiser who started the stream is the right actor; (3) a composed session's Machine is requested through the lifecycle table BEFORE `provisioned` (`runner: create_started` → `create_machine` → `create_ok`), so `warming` always begins with the runner in `booting` or already failed — the session never waits in `provisioning` for a Machine that will not come; **(4) a DESTINATION could be double-booked and nothing stopped it** — `org_stream_targets` is per ORG with no court or fixture binding, `fixture_stream_sessions.target_id` is NOT NULL (`V410:122`, exactly one target per session) and `fixture_stream_sessions_one_active` is on `fixture_id` alone, so two concurrent sessions on two DIFFERENT fixtures may name the SAME target and push one RTMPS key. YouTube accepts one broadcast per key, so the second is refused or fights the first and the organiser reads "the stream did not start" with nothing in our data explaining why. Closed by Step 0's `fixture_stream_sessions_one_active_target` plus `targetHolderFor`'s 409 `target_in_use` refusal on top of it (Steps 0, 3, 3c). Source: `_SCENARIO-2026-09-27-court-bound-device.md`'s closing gap section, item 2; item 1 of that gap (a target BOUND to a court, so the desk cannot mis-pick) is **not built here** and stays unruled.
+
+- [ ] **Step 0: The forward migration — one live session per DESTINATION (`V419__stream_target_one_active.sql`).**
+
+  **What is broken today.** A destination can be double-booked and nothing stops it. `org_stream_targets` is per ORG with no court or fixture binding; `fixture_stream_sessions.target_id` is NOT NULL, so a session names exactly one target; and `fixture_stream_sessions_one_active` is partial-unique on `fixture_id` only. Two concurrent sessions on two DIFFERENT fixtures may therefore name the SAME target, and Cloudflare pushes both to one RTMPS key. YouTube accepts one broadcast per key, so the second is refused or fights the first, and the organiser sees "the stream did not start" with nothing in our own data explaining it. A human can already do this today with one match at a time; it becomes routine under the court-bound-device workflow. Owner-directed into this task with its test, 2026-09-27. Source of record: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_SCENARIO-2026-09-27-court-bound-device.md`, the "GAP found while answering this — two courts, one key" section, **item 2**. Item 1 of that gap ("a target belongs to a court") is a separate, unruled change and is NOT in this task.
+
+  **Why a DATABASE constraint and not only the usecase check.** A constraint is the only guard that survives a second writer, and Task 10 is not the only future writer of a session row (Task 12's sweep writes, and Task 11's routes reach `apply`). This plan has already measured the point twice: `fixture_stream_sessions_one_active` is the RACE backstop behind `createSession`'s own gates (23505 → 409), and Task 7's **m22** showed the shape from the other side — one idempotency key racing on two DIFFERENT orgs holds two different money locks, both writers miss the in-code lookup, and the *index* is what refuses the loser. The usecase refusal is ALSO built (Step 3), so the organiser gets a sentence rather than a raw 23505; the index is what makes it true.
+
+  **Re-read the version, do not trust the number written here.** V410 merged (PR #812, `e707ec45d`), so an amend is a defect — see Task 7's Steps 0a/0b/0c, which record it in full. Read BOTH tails on the day and use the higher + 1:
+  - tree: `/bin/ls db/migration/deltas | tail`
+  - all refs: `git log --all --diff-filter=A --name-only --pretty=format: -- 'db/migration/deltas/*' | sed 's#.*/##' | sort -u | tail -20`
+
+  On 2026-09-27 that read tree tail `V417__device_link_sealed_secret.sql`, all-refs tail `V418__public_entrants_entitlement_once.sql` → **V419 free**. The same scan showed a LIVE V417 collision (`V417__division_results_skip_rest_byes.sql` on another ref), which is exactly how a duplicate Flyway version survives a clean rebase — so the scan is the authority, not this paragraph.
+
+  **The delta.** One statement, mirroring `fixture_stream_sessions_one_active` exactly so the two read as one idea:
+
+```sql
+-- V419 — Streaming R1: one live session per DESTINATION.
+-- The gap: org_stream_targets is per ORG with no court or fixture binding and
+-- fixture_stream_sessions.target_id is NOT NULL (V410), so two concurrent
+-- sessions on two DIFFERENT fixtures could name the SAME target and push one
+-- RTMPS key. YouTube accepts one broadcast per key: the second push is refused
+-- or fights the first, and the organiser reads "the stream did not start" with
+-- nothing in our data explaining why. Found while answering the court-bound
+-- device scenario (specs/2026-09-05-stream-overlay-prompts/
+-- _SCENARIO-2026-09-27-court-bound-device.md, gap item 2) and directed into
+-- Task 10 by the owner on 2026-09-27.
+--
+-- A FORWARD delta, not an amend: V410 is merged (PR #812, e707ec45d) and
+-- Flyway refuses an edited applied migration.
+--
+-- The predicate is the SAME five states as
+-- fixture_stream_sessions_one_active and as the domain's ACTIVE_STATES
+-- (server/relay/domain/session.ts) — one authority; a state added there owes an
+-- edit here, which stream-sessions.test.ts's G-T5 pins by deriving its
+-- expectation from ACTIVE_STATES / TERMINAL_STATES rather than a typed list.
+--
+-- NULLS DISTINCT carries no weight here: target_id is NOT NULL, unlike
+-- one_active's nullable fixture_id (V410 `on delete set null`), where nulls
+-- never collide by design. Do not "tidy" a nulls clause onto this index.
+--
+-- Creating this index FAILS with 23505 if any database already holds two
+-- non-terminal sessions on one target. Task 10 is the first writer of these
+-- rows, so no environment holds one — and if a real database ever refuses it,
+-- that is a live double-booking to resolve by hand. This migration MUST NOT
+-- delete or repair rows to get itself applied: fixture_stream_sessions rows are
+-- joined by money (org_stream_credits consume rows) and by retained paid
+-- Cloudflare inputs.
+create unique index fixture_stream_sessions_one_active_target
+  on fixture_stream_sessions (target_id)
+  where state in ('requested','provisioning','warming','live','ending');
+```
+
+  **THE SAFETY CONDITION — read this before believing the guard is safe.** A guard nothing releases is a guard that bricks a court. If a session sticks in a non-terminal state — a crash between `requested` and `provisioning`, a lost runner, a process killed mid-provision — this index holds that destination FOREVER, and the organiser cannot stream to it again on ANY court, with no way to clear it from the UI. The index is therefore only as safe as the two things that drive a stuck session to a terminal state:
+  - **Task 2B's expiry policy** (`server/relay/domain/expiry.ts` `evaluate`): `requested_timeout` (`REQUESTED_TIMEOUT_SECONDS`) and `provision_timeout` (`PROVISION_TIMEOUT_SECONDS`) are the two kinds that cover exactly the crash windows above; `warming_timeout`, `stale_beat`, `wall_clock`, `grace_expired` and `ending_timeout` cover the rest. `expiry.test.ts` already walks `ACTIVE_STATES` to prove every non-terminal state owns a timed exit (F16/F18/F19) — that sweep is now load-bearing for this index too, not only for the session's own lifecycle.
+  - **Task 12's daily sweep** (`sweepStreamSessions` in `server/usecases/relay-sweep.ts`, its `backstop` counters): the backstop is what runs `reconcileSession` on a row nobody reads, which is the only path for a destination whose fixture is never opened again.
+  - and, lazily, **this task's own `targetHolderFor`** (Step 3), which runs `applyExpiry` over every holder before it refuses anything — recommendation B: the organiser's start attempt IS the tick. Without the expiry policy and the sweep behind it, this index converts a transient crash into a permanent outage of a paid destination. Record that dependency in `_INDEX.md` beside gap (4).
+
+  **Two carries this step CANNOT write** (the plan preamble is outside Task 10's confinement and a later revision owes them):
+  - the "Files touched" manifest owes a `db/migration/deltas/V419__stream_target_one_active.sql` | Create (Task 10 Step 0) row beside the existing V410 row;
+  - the test-file manifest's `stream-sessions.test.ts` row owes its count change (see Step 4).
 
 - [ ] **Step 1: Write the failing test.** Create `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts`:
 
@@ -11202,6 +11263,54 @@ async function activeSessionIdFor(fixtureId: string): Promise<string | null> {
   return row?.id ?? null;
 }
 
+/** The DESTINATION guard (gap 4; owner-directed 2026-09-27 from `_SCENARIO-2026-09-27-court-bound-device.md`, gap item 2).
+ *  `target_id` is org-scoped with no court or fixture binding, so two DIFFERENT fixtures may name one `org_stream_targets`
+ *  row and push the same RTMPS key: YouTube accepts one broadcast per key, so the second is refused or fights the first and
+ *  the organiser reads "the stream did not start" with nothing in our data explaining it.
+ *
+ *  V419's `fixture_stream_sessions_one_active_target` is the REAL guard — the only one that survives a second writer, the
+ *  same reason `fixture_stream_sessions_one_active` and `org_stream_credits_idempotency_key` are indexes and not code (Task
+ *  7's m22 measured it: one key racing on two orgs holds two different money locks, both writers miss the lookup, and the
+ *  INDEX refuses the loser). This read is the refusal ON TOP of it, so the organiser gets a sentence instead of a 23505 and
+ *  a refused start makes no provider call at all.
+ *
+ *  It is deliberately NOT a new `admit` refusal: `admit` is Task 2A's committed pure function, and knowing WHO holds a
+ *  destination is a database read, which `admit` by contract cannot do. So the refusal is thrown here and `refuse`'s switch
+ *  over `admit`'s verdicts is untouched.
+ *
+ *  LAZY FIRST, then refuse (recommendation B; AGENTS.md failure class 13 — an idempotency guard that also swallowed a
+ *  legitimate arrival). Every non-terminal holder is run through `applyExpiry` BEFORE anything is refused, because a holder
+ *  the expiry policy already expires is not holding the destination — it is a crashed session nobody has read yet, and
+ *  refusing on it would brick a paid destination until Task 12's daily sweep. On a holder `evaluate` answers `none` for,
+ *  `applyExpiry` is the T5-a null command: nothing is written and no effect runs, which is why G-T1 still sees zero
+ *  provider calls.
+ *
+ *  This fixture's OWN active session is excluded — `is distinct from`, so a holder whose fixture was DELETED
+ *  (`fixture_id` is `on delete set null`, G2) still counts and simply cannot name a court. A second session on THIS
+ *  fixture is `active_session`, which `admit` already answers and whose refusal the API, the Phone tab and the four
+ *  dictionaries already carry; answering `target_in_use` there would send the organiser to the wrong screen.
+ *
+ *  The `org_stream_targets` join is also the tenancy floor: a target belonging to another org yields no holder, and the
+ *  later `admit` answers 404 `target_not_found` from `targetBelongsToOrg`. This function never leaks another org's state. */
+async function targetHolderFor(
+  targetId: string, orgId: string, fixtureId: string, deps: SessionDeps,
+): Promise<{ sessionId: string; courtName: string | null; holderFixtureId: string | null; label: string } | null> {
+  const holders = () => sql<{ id: string; court_name: string | null; fixture_id: string | null; label: string }[]>`
+    select s.id, c.name as court_name, s.fixture_id, t.label
+      from fixture_stream_sessions s
+      join org_stream_targets t on t.id = s.target_id
+      left join fixtures f on f.id = s.fixture_id
+      left join courts c on c.id = f.court_id
+     where s.target_id = ${targetId} and t.org_id = ${orgId}
+       and s.fixture_id is distinct from ${fixtureId}
+       and s.state in ${sql([...ACTIVE_STATES])}`;
+  const first = await holders();
+  if (first.length === 0) return null;
+  for (const h of first) await applyExpiry(h.id, deps);      // B: this start attempt IS the tick for the holder too
+  const [still] = await holders();
+  return still ? { sessionId: still.id, courtName: still.court_name, holderFixtureId: still.fixture_id, label: still.label } : null;
+}
+
 /** 2C-post m5 (Task 2C-post review m5; post-2C-post plan sync). The fixture's one-active index releases the moment a session
  *  goes terminal — since F-A a stop whose Machine never auto-destroyed completes at grace + slack — whether or not that
  *  Machine's destroy was ever CONFIRMED: a force_destroy whose DELETE threw leaves the row completed + destroyed, and nothing
@@ -11254,6 +11363,25 @@ export async function createSession(
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
   if (existing) await applyExpiry(existing, deps);
+  // The DESTINATION guard (gap 4), placed BEFORE the storage read and before `tearDownPriorMachines` — i.e. before any
+  // provider call this create would make FOR THE NEW SESSION, so a refused start leaves no Cloudflare live input, no Fly
+  // Machine and nothing to clean up. That early placement is the whole point of refusing in code at all (the index alone
+  // would refuse only at the insert, after `ingest.storageUsage()` had already been called), and it is what G-T1's
+  // zero-provider-call assertions witness. It sits AFTER this fixture's own lazy expiry on purpose: that expiry can
+  // RELEASE this very target. The one provider call that can precede it belongs to that OLD session's teardown.
+  const holder = await targetHolderFor(body.targetId, orgId, fixtureId, deps);
+  if (holder) {
+    // `code` is what the client acts on (Task 13's `CreateErrorCode`, Task 14's dictionary key). The MESSAGE names the
+    // holder — the court when the fixture has one, else the fixture id — because "in use" alone sends an organiser
+    // hunting; it is the operator's line in the log and in Sentry. The client renders the DICTIONARY string keyed by
+    // `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal; see Step 3c note 2).
+    log.warn({ fixtureId, targetId: body.targetId, holder: holder.sessionId, court: holder.courtName }, "stream session: the destination is already held by another fixture — start refused");
+    throw new HttpError(
+      409,
+      `the destination "${holder.label}" is already streaming for ${holder.courtName ? `court ${holder.courtName}` : `fixture ${holder.holderFixtureId ?? "(deleted)"}`}`,
+      "target_in_use",
+    );
+  }
   // 2C-post m5: a PREVIOUS session's Machine the provider still lists is destroyed before this one may start; while that
   // destroy fails, admission answers `active_session` naming its session (outside the transaction: it calls the provider).
   const priorMachineSessionId = await tearDownPriorMachines(fixtureId, deps);
@@ -11310,8 +11438,12 @@ export async function createSession(
         returning id`;
       sid = s!.id;
     } catch (err) {
-      if ((err as { code?: string }).code === "23505") {
-        // The race backstop: admit saw no active row, the index saw one land first.
+      const pg = err as { code?: string; constraint_name?: string };
+      if (pg.code === "23505" && pg.constraint_name === "fixture_stream_sessions_one_active") {
+        // The race backstop: admit saw no active row, the index saw one land first. NARROWED to this index by name
+        // (gap 4): an unnamed `code === "23505"` here also swallowed V419's DESTINATION collision and reported it as
+        // `active_session` — "a session is already running for this fixture" — which is false and sends the organiser
+        // to the wrong screen. Anything else falls through to the `.catch` on the transaction boundary below.
         refuse({ ok: false, refusal: "active_session", activeSessionId: (await activeSessionIdFor(fixtureId)) ?? undefined }, headroom);
       }
       throw err;
@@ -11321,7 +11453,20 @@ export async function createSession(
     await recordEvent(tx, { sessionId: sid, orgId, source: "client", kind: "action", type: "create", actorUserId: auth.userId ?? null, occurredAt: deps.now(),
       payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance } });
     return sid;
-  }) as Promise<string>);
+  }) as Promise<string>).catch((err: unknown) => {
+    // V419's race backstop, mapped OUTSIDE `sql.begin` — Task 7's `staffRow` idiom and its measured reason: postgres.js
+    // rethrows a query error at the transaction boundary even when the callback caught it, so a 23505 mapping that must
+    // hold belongs here. Written to be correct under BOTH behaviours, since the inner catch above now rethrows this
+    // index's error instead of swallowing it.
+    const pg = err as { code?: string; constraint_name?: string };
+    if (pg.code === "23505" && pg.constraint_name === "fixture_stream_sessions_one_active_target") {
+      // Never `active_session` — a different fact with a different dictionary string. The message cannot name the holder
+      // here (the transaction rolled back and the read is gone), which is exactly why `targetHolderFor` refuses first:
+      // this branch is the loser of a real race (G-T6), not the path an organiser normally meets.
+      throw new HttpError(409, "that destination is already streaming for another fixture", "target_in_use");
+    }
+    throw err;
+  });
 
   await provisionSession(sessionId, deps);
   return { sessionId };
@@ -11973,9 +12118,161 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
 });
 ```
 
-- [ ] **Step 4: Run — expect `56 0 0`** (22 in the first describe, 9 in the lazy-expiry one, 6 in the data-captured one, 19 in the snapshot/exits one — read the JSON's count, never this sentence: one revision of this line said `30` when the text held 29, the next said `45` when it held 47, which is exactly how a missing test hides. The post-2C plan sync moved it from 48: +3 first describe — T10-b, M1, T5-a; +2 lazy expiry — G1, T10-c; +1 data captured — M2. The post-2C-post plan sync moved it to 56: +2 first describe — F-B, 2C-post m5; the FORCED test and the C27 test gained assertions in place).
+  **Step 3c: The DESTINATION guard's rows** (a FIFTH `describe`, DB) — gap 4, owner-directed 2026-09-27. Extend Step 1's import from `../stream-sessions` with `ACTIVE_STATES, TERMINAL_STATES` (the re-export is the one authority — never a second list typed into the test), then append:
+
+```ts
+// ---------------------------------------------------------------------------
+// The DESTINATION guard: one live session per org_stream_targets row (gap 4).
+// Every row here needs TWO fixtures on ONE target. With a single fixture
+// `fixture_stream_sessions_one_active` refuses first and every assertion below
+// would pass for the wrong reason — the thing this describe exists to prove
+// would never be reached. `rig({ fixtures: 2 })` puts the two fixtures in
+// DIFFERENT stages (_rig.ts's own loud invariant), which is exactly what the
+// fixture index cannot separate.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live session per target)", () => {
+  async function twoFixturesOneTarget() {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const [a, b] = r.fixtureIds;
+    return { r, a: a!, b: b! };
+  }
+
+  it("G-T1 REFUSES: fixture B's start against a target fixture A is already streaming to answers 409 target_in_use BEFORE any provider call — no live input, no Machine, no row — and the message NAMES the court that is holding it", async () => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    // A gets a court so the refusal can be asserted on a name an organiser can act on rather than a uuid
+    // (the venue/court idiom the snapshot test above already uses).
+    const [v] = await sql<{ id: string }[]>`insert into venues (org_id, name, address) values (${r.auth.orgId}, 'Main Arena', '12 Court Road') returning id`;
+    const [c] = await sql<{ id: string }[]>`insert into courts (venue_id, org_id, name) values (${v!.id}, ${r.auth.orgId}, 'Court 3') returning id`;
+    await sql`update fixtures set court_id = ${c!.id} where id = ${a}`;
+    const held = await createSession(r.auth, a, body(r.target.id), r.deps);
+    expect((await r.row(held.sessionId)).state).not.toBe("failed");   // the holder really is non-terminal
+
+    // Spies go on AFTER the holder was created, so they count only B's refused attempt.
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    const storageSpy = vi.spyOn(r.ingest, "storageUsage");
+    try {
+      const err = await createSession(r.auth, b, body(r.target.id), r.deps).catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 409, code: "target_in_use" });
+      expect((err as Error).message).toContain("Court 3");           // NAMES what is holding it
+      expect((err as Error).message).toContain("Club");              // …and the destination's own label
+      // The whole point of refusing EARLY: zero provider calls, so there is nothing to clean up. `storageUsage`
+      // is the one the index alone could not have saved — it runs in createSession's Promise.all, before the
+      // insert the index would refuse. This is the assertion that kills the (G-T pre-check) mutant.
+      expect(storageSpy).not.toHaveBeenCalled();
+      expect(ingestSpy).not.toHaveBeenCalled();
+      expect(r.runner.created).toEqual([]);
+    } finally {
+      storageSpy.mockRestore();
+      ingestSpy.mockRestore();
+    }
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${b}`;
+    expect(n).toBe(0);                                               // refused BEFORE the insert
+  });
+
+  it("G-T2 ADMITS after `completed`: a holder in the index's `completed` terminal state no longer holds the destination, so fixture B starts on the SAME target (failure class 13's other direction — a guard nothing releases bricks a paid destination)", async () => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const held = await createSession(r.auth, a, body(r.target.id), r.deps);
+    await sql`update fixture_stream_sessions set state = 'completed', ended_at = now(), end_reason = 'stopped' where id = ${held.sessionId}`;
+    const made = await createSession(r.auth, b, body(r.target.id), r.deps);
+    expect(made.sessionId).toBeDefined();
+    expect((await r.row(made.sessionId)).state).not.toBe("failed");
+  });
+
+  it("G-T3 ADMITS after `failed`: asserted SEPARATELY from `completed` — the index predicate leaves two terminal states out and one row cannot witness the other; a create that failed must not strand the destination", async () => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const held = await createSession(r.auth, a, body(r.target.id), r.deps);
+    await sql`update fixture_stream_sessions set state = 'failed', ended_at = now() where id = ${held.sessionId}`;
+    const made = await createSession(r.auth, b, body(r.target.id), r.deps);
+    expect(made.sessionId).toBeDefined();
+  });
+
+  it("G-T4 the RELEASE path is production's, not a raw update's: the holder driven to a terminal state through the REAL `stopSession` frees the destination, proven by a second session then succeeding on it", async () => {
+    // G-T2/G-T3 pin the index's predicate; this row pins the SEAM — a fixture on both ends would prove the
+    // fixture (AGENTS.md class 1), so the release is driven by its real producer. Passthrough has no Machine,
+    // so `stopSession` completes at once and the assertion is deterministic.
+    const { r, a, b } = await twoFixturesOneTarget();
+    const held = await createSession(r.auth, a, body(r.target.id), r.deps);
+    expect((await stopSession(r.auth, a, held.sessionId, r.deps)).state).toBe("completed");
+    const made = await createSession(r.auth, b, body(r.target.id), r.deps);
+    expect(made.sessionId).toBeDefined();
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
+    expect(n).toBe(1);                                               // one live session per destination, still true
+  });
+
+  it("G-T5 the index is what survives a second writer: two non-terminal rows on ONE target_id (two fixtures, so the FIXTURE index cannot be what refuses) → 23505 NAMING fixture_stream_sessions_one_active_target; terminal rows never collide; and the name and predicate are pinned as text, derived from ACTIVE_STATES / TERMINAL_STATES", async () => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    // Db/Dc: sport_key, competition_id, division_id and entitlement_via_override are NOT NULL with no default,
+    // so a raw insert derives them from the fixture's own division — a `values (...)` form fails 23502 and the
+    // test never reaches its assertions.
+    const insertOn = (fixtureId: string, state: string) => sql`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
+                                           sport_key, competition_id, division_id, entitlement_via_override)
+      select ${fixtureId}, ${r.auth.orgId}, 'passthrough', ${state}, ${r.target.id}, ${r.auth.userId!}, now(),
+             d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}`;
+    await insertOn(a, "live");
+    await expect(insertOn(b, "requested")).rejects.toMatchObject({
+      code: "23505", constraint_name: "fixture_stream_sessions_one_active_target",
+    });
+    // PARTIAL: both terminal members land beside the live holder.
+    await insertOn(b, "completed");
+    await insertOn(b, "failed");
+    // Neither the NAME nor the PREDICATE is reachable from behaviour — a plain unique index on target_id passes
+    // every insert above except the two terminal ones — so both are pinned as text. This is the
+    // org_stream_credits_idempotency_key precedent (migration-shape.test.ts:318-324), where exactly that
+    // predicate mutant was MEASURED surviving the whole suite. The NAME is also what createSession matches a
+    // 23505 on, so a rename silently turns the race backstop into a 500. The state list is DERIVED, so a state
+    // added to the domain moves this assertion instead of leaving it asserting yesterday's set.
+    const [idx] = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+       where schemaname = current_schema() and tablename = 'fixture_stream_sessions'
+         and indexname = 'fixture_stream_sessions_one_active_target'`;
+    expect(idx?.indexdef, "fixture_stream_sessions_one_active_target is missing or renamed").toMatch(
+      /^CREATE UNIQUE INDEX fixture_stream_sessions_one_active_target ON \w+\.fixture_stream_sessions USING btree \(target_id\) WHERE /,
+    );
+    for (const s of ACTIVE_STATES) expect(idx!.indexdef, s).toContain(`'${s}'`);
+    for (const s of TERMINAL_STATES) expect(idx!.indexdef, s).not.toContain(`'${s}'`);
+  });
+
+  it("G-T6 the RACE: two creates on one destination at once — exactly ONE wins and the loser answers 409 target_in_use, never a raw 23505 (a 500), whichever guard refused it", async () => {
+    // Task 7's m22 shape. WHICH guard refuses the loser is NOT determined: the pre-check may see the winner's
+    // row, or both may miss it and the index refuses the insert. The assertion is written so both answers are
+    // the same 409 — that equivalence IS the contract, and it is the only row that can reach the transaction
+    // boundary's `.catch` at all. Flaky-shaped by construction: re-run it three times before believing it
+    // (AGENTS.md class 8).
+    const { r, a, b } = await twoFixturesOneTarget();
+    const settled = await Promise.allSettled([
+      createSession(r.auth, a, body(r.target.id), r.deps),
+      createSession(r.auth, b, body(r.target.id), r.deps),
+    ]);
+    const won = settled.filter((s) => s.status === "fulfilled");
+    const lost = settled.filter((s) => s.status === "rejected") as PromiseRejectedResult[];
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect(lost[0]!.reason).toMatchObject({ status: 409, code: "target_in_use" });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
+    expect(n).toBe(1);
+  });
+});
+```
+
+  **Note 1 — the refusal travels as `code`, and the brief's reason for that is only half true (a FALSE PREMISE, recorded).** The instruction that arrived with this work said `handler` drops `extra` on the generic `HttpError` branch, so everything the client acts on must travel in `code`. **That is true of `lib/http.ts`** (`http.ts:94-127`: the 402 `PaymentRequiredError` branch is the ONLY one that spreads `err.extra`, and its own comment says so) **and FALSE of the envelope these routes actually use.** Task 11's session routes are **v1**, and `server/api-v1/http.ts:231-242` passes `err.extra` straight into `errorResponse` for every `HttpError` — which is precisely why `createSession`'s existing `active_session` refusal can carry `{ sessionId }` and why Task 13's view model can read it. So `extra` WOULD reach the client here. `code` is still the right carrier, for two reasons that survive the correction: (a) a route-specific `extra` field is undocumented in the served OpenAPI schema (`api-v1/openapi.ts:467-494` records that smell and CI has a drift check), so a new field is a Task 9/11 documentation obligation this task must not create in silence; and (b) the organiser's copy is a dictionary string, and a dictionary string cannot interpolate a court name the generated key set declares no placeholder for. The holder's identity therefore travels in `message` — which the v1 envelope DOES return, and which is the operator's line in the log and in Sentry — and the client renders the dictionary string keyed by `code`.
+
+  **Note 2 — the i18n carry, owed by Tasks 13 and 14, and a hard rule for Task 11.** `target_in_use` is a NEW user-facing refusal, so it owes:
+  - Task 13: a `"target_in_use"` member of `CreateErrorCode` and its `CREATE_ERROR_KEYS` row → `stream.error.target_in_use`; its own test already asserts the exact key set with `Object.keys(CREATE_ERROR_KEYS).sort()`, so that assertion moves with it.
+  - Task 14: `stream.error.target_in_use` in **all four** dictionaries (`{en,es,fr,nl}/ui.json`, `stream.` prefix), then `pnpm i18n:gen-keys` and the generated `lib/i18n-keys.ts` committed. The English must be actionable without interpolation, because the identity cannot cross — e.g. "Another court is already streaming to this destination. Stop that stream, or add a second destination for this court."
+  - **Task 11's route must never render `err.message`** — the same carry Task 4 left for the Cloudflare refusal. The message names a court and a destination label for the OPERATOR; the organiser sees the dictionary string.
+  These three are carries, not this task's edits: Task 10 must not touch Tasks 13/14, and a `code` the client cannot map yet degrades to `unknown`, which is why the carry has to be written down here rather than assumed.
+
+  **Note 3 — the safety condition, restated where the tests are.** This guard is only as safe as Task 2B's expiry policy (`requested_timeout`, `provision_timeout` and the rest) and Task 12's `sweepStreamSessions` backstop actually driving stuck sessions terminal — see Step 0's SAFETY CONDITION block. G-T2/G-T3/G-T4 are the admit direction of failure class 13; `targetHolderFor`'s own `applyExpiry` loop is the lazy third leg. None of the three is optional.
+
+  **Note 4 — a pre-existing hazard this step did NOT change, to raise at Step 4.** `createSession`'s original 23505 catch sits INSIDE `sql.begin`, and Task 7's `staffRow` records the measured reason its own mapping is outside: *postgres.js rethrows a query error at the transaction boundary even when the transaction callback caught it.* If that holds here, the EXISTING `active_session` race backstop never answers 409 either — it answers a raw 23505, which the envelope makes a 500. This task's new mapping is written on the boundary for exactly that reason and is correct under both behaviours; the neighbouring `active_session` branch was left as it is, because changing it is a decision about an already-reviewed path. **At Step 4, race two creates on ONE fixture and assert 409 `active_session`.** If it is a raw 23505, that is a finding for the orchestrator, not a quiet fix here.
+
+- [ ] **Step 4: Run — expect `62 0 0`** (22 in the first describe, 9 in the lazy-expiry one, 6 in the data-captured one, 19 in the snapshot/exits one, 6 in the destination-guard one — read the JSON's count, never this sentence: one revision of this line said `30` when the text held 29, the next said `45` when it held 47, which is exactly how a missing test hides. The post-2C plan sync moved it from 48: +3 first describe — T10-b, M1, T5-a; +2 lazy expiry — G1, T10-c; +1 data captured — M2. The post-2C-post plan sync moved it to 56: +2 first describe — F-B, 2C-post m5; the FORCED test and the C27 test gained assertions in place. The destination guard (gap 4, 2026-09-27) moved it to 62: +6 in a new fifth describe — G-T1…G-T6, Step 3c).
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable RELAY_KEK=<64 hex> AUTH_SECRET=<from .env.local> npx vitest run src/server/usecases/__tests__/stream-sessions.test.ts --reporter=json --outputFile=<scratchpad>/r1/t10.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t10.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status!=='passed')console.log(a.fullName,(a.failureMessages[0]||'').slice(0,300))"`
-  (`RELAY_KEK` is PRESENT in both `.env.local` files — ruling 14; Task 0 confirmed it. Never echo it.) Then the mutants by hand, each reverted with the Write tool: (r5) — killed in the DOMAIN (Task 2A); here the WIRING mutant: map `overlay_required` to a 402 in `refuse` → test 2 red; (r7) build `qr.cred` from constants instead of `input` → the qr test red on the URL equality; (r8) write `slot: 0` → the qr test red at `toBe(3)`; (m1 wiring) drop the `consume_credit` branch in `apply` → "consuming exactly ONE credit" red at `balance 0`; (C3) drop the `evaluate` filter in `storageHeadroomMinutes` → "expired-but-unread" red; (C9) — killed in the domain; wiring: skip `add_output` in `runEffects` → the M3 test red at `outputsFor … 1`; **(B — the load-bearing lazy calls, one at a time)** delete `reconcileSession` in `currentSession` → the 11-min test, the stale-beat test and the lifecycle "observed destroyed → completed" step red; delete `applyExpiry` in `heartbeat` → the 301-min heartbeat test red; delete it in `createSession` → the "OWN stale warming session" test red (409); delete `reconcileSession` in `jobSession` → the 410 test red; **(lifecycle)** skip `stop_machine` and destroy directly in `runRunnerEffect` → "the stop sequence" red (`stops` empty, `destroyed` non-empty during grace); drop the `creating` lookup in `reconcileSession` → "reconciled by name" red (a second Machine); run `create_machine` BEFORE `apply` persisted `creating` (move the create into the transaction) → "runner_state/runner_name persisted" red. **(post-2C plan sync)** (G1-persist) drop `beat_window_at` from `persist` → "G1: beat_window_at round-trips" red at the second read (`destroyed` gains the replacement, the session fails); (G1-load) drop it from `COLS`, then separately from `toSession` → the same red — tsc is silent on both (a missing column reads undefined → null); (G1-column) write `heartbeat_at = ${s.beatWindowAt}` → the G1 test red at `lastBeatAt`; (M1a) drop `retryRunner`'s try/catch → "M1" red at (1) with InvalidRunnerTransition; (M1b) catch `InvalidRunnerTransition` only → "M1" red at (2) with InvalidTransition; (T10-b) drop the `booting || playing` guard in `heartbeat` → "T10-b" red; (T10-c) drop the `last_heartbeat - 'lastExit'` statement → "T10-c" red at `last_exit` (and at `machine_oom`); (M2) anchor `machine_seconds` on the last `booting` row alone → "M2" red at 480; (T5-a gate) feed `create_ok` without `stillOurs` → "T5-a" red at (1); (T5-a list) find by `sessionId` alone in `reconcileSession` → "T5-a" red at (2); (T5-a destroy) the same in `force_destroy` → "T5-a" red at (3). **(post-2C-post plan sync)** (F-B gate) feed `destroy_ok` without `stillOurs` in `force_destroy` → "F-B" red at its first read, on BOTH moved states (InvalidRunnerTransition out of `currentSession`: `creating × destroy_ok`, `booting × destroy_ok`); (m5-gate) delete the `tearDownPriorMachines` call in `createSession` → "2C-post m5" red at (2) (201 beside the listed Machine); (m5-swallow) replace `return s.id` in `tearDownPriorMachines`' catch with `continue` → the same red at (2); (m5-refuse-only) return the listed Machine's session id without calling `destroy` → "2C-post m5" red at (3) (409 forever); (expire-none) restore `applyExpiry`'s bare `{ type: "expire", expiry: evaluate(…) }` → "the late create: `provisioned` is SKIPPED …" red at its first `.resolves` (`expire is not legal from completed` — the domain's C27 negative pair refuses `none` on a terminal row), and Task 12's "2C-post m1" red (the backstop throws before the re-issue). Record the thirty killers (thirteen before the post-2C sync, twelve added by it, five by the post-2C-post sync). **Record as EQUIVALENT, not a killer (G2):** putting `heartbeat_at = ${s.heartbeatAt}` back into `persist` — `lockRow` holds FOR UPDATE from the load to that write and `decide` never changes `heartbeatAt`, so it can only echo; nothing can red it, and the single-writer comment is the guard.
+  (`RELAY_KEK` is PRESENT in both `.env.local` files — ruling 14; Task 0 confirmed it. Never echo it.) **`rly` must carry Step 0's delta** — a run against a database that predates V419 collects and passes everything except G-T5 and G-T6, which is the failure mode that reads as "two flaky tests" rather than "the migration never applied". Then the mutants by hand, each reverted with the Write tool: (r5) — killed in the DOMAIN (Task 2A); here the WIRING mutant: map `overlay_required` to a 402 in `refuse` → test 2 red; (r7) build `qr.cred` from constants instead of `input` → the qr test red on the URL equality; (r8) write `slot: 0` → the qr test red at `toBe(3)`; (m1 wiring) drop the `consume_credit` branch in `apply` → "consuming exactly ONE credit" red at `balance 0`; (C3) drop the `evaluate` filter in `storageHeadroomMinutes` → "expired-but-unread" red; (C9) — killed in the domain; wiring: skip `add_output` in `runEffects` → the M3 test red at `outputsFor … 1`; **(B — the load-bearing lazy calls, one at a time)** delete `reconcileSession` in `currentSession` → the 11-min test, the stale-beat test and the lifecycle "observed destroyed → completed" step red; delete `applyExpiry` in `heartbeat` → the 301-min heartbeat test red; delete it in `createSession` → the "OWN stale warming session" test red (409); delete `reconcileSession` in `jobSession` → the 410 test red; **(lifecycle)** skip `stop_machine` and destroy directly in `runRunnerEffect` → "the stop sequence" red (`stops` empty, `destroyed` non-empty during grace); drop the `creating` lookup in `reconcileSession` → "reconciled by name" red (a second Machine); run `create_machine` BEFORE `apply` persisted `creating` (move the create into the transaction) → "runner_state/runner_name persisted" red. **(post-2C plan sync)** (G1-persist) drop `beat_window_at` from `persist` → "G1: beat_window_at round-trips" red at the second read (`destroyed` gains the replacement, the session fails); (G1-load) drop it from `COLS`, then separately from `toSession` → the same red — tsc is silent on both (a missing column reads undefined → null); (G1-column) write `heartbeat_at = ${s.beatWindowAt}` → the G1 test red at `lastBeatAt`; (M1a) drop `retryRunner`'s try/catch → "M1" red at (1) with InvalidRunnerTransition; (M1b) catch `InvalidRunnerTransition` only → "M1" red at (2) with InvalidTransition; (T10-b) drop the `booting || playing` guard in `heartbeat` → "T10-b" red; (T10-c) drop the `last_heartbeat - 'lastExit'` statement → "T10-c" red at `last_exit` (and at `machine_oom`); (M2) anchor `machine_seconds` on the last `booting` row alone → "M2" red at 480; (T5-a gate) feed `create_ok` without `stillOurs` → "T5-a" red at (1); (T5-a list) find by `sessionId` alone in `reconcileSession` → "T5-a" red at (2); (T5-a destroy) the same in `force_destroy` → "T5-a" red at (3). **(post-2C-post plan sync)** (F-B gate) feed `destroy_ok` without `stillOurs` in `force_destroy` → "F-B" red at its first read, on BOTH moved states (InvalidRunnerTransition out of `currentSession`: `creating × destroy_ok`, `booting × destroy_ok`); (m5-gate) delete the `tearDownPriorMachines` call in `createSession` → "2C-post m5" red at (2) (201 beside the listed Machine); (m5-swallow) replace `return s.id` in `tearDownPriorMachines`' catch with `continue` → the same red at (2); (m5-refuse-only) return the listed Machine's session id without calling `destroy` → "2C-post m5" red at (3) (409 forever); (expire-none) restore `applyExpiry`'s bare `{ type: "expire", expiry: evaluate(…) }` → "the late create: `provisioned` is SKIPPED …" red at its first `.resolves` (`expire is not legal from completed` — the domain's C27 negative pair refuses `none` on a terminal row), and Task 12's "2C-post m1" red (the backstop throws before the re-issue). **(the destination guard, gap 4 — one per SURFACE, never one combined mutant)** (G-T index) delete the `where state in (…)` predicate from V419, leaving a plain `create unique index … (target_id)` → **"G-T2 ADMITS after `completed`"** and **"G-T3 ADMITS after `failed`"** red (the terminal holder still collides, so B is refused where a session was expected) and **"G-T5"** red at `insertOn(b, "completed")` and at its `TERMINAL_STATES` loop. *Budget for this one:* Flyway checksums an applied migration, so the mutated delta needs `rly` DROPPED and recreated both ways — the same cost Task 7's Step 0c STOP gate carried; (G-T pre-check) `return null` from `targetHolderFor` → **"G-T1 REFUSES"** red at `expect(storageSpy).not.toHaveBeenCalled()` and at `toContain("Court 3")`. Note WHAT survives: the index still refuses the insert and the boundary `.catch` still answers 409 `target_in_use`, so the STATUS assertion passes — the zero-provider-call and names-the-court assertions are the only witnesses that the refusal is EARLY, which is the whole reason the pre-check exists; (G-T catch) delete the `fixture_stream_sessions_one_active_target` branch from the `.catch` on the transaction boundary → **"G-T1 REFUSES"** red at `status: 409` (a raw 23505, which the envelope makes a 500), and "G-T6" red the same way. **This mutant is only reachable with the pre-check ALSO returning null**, because `targetHolderFor` shadows it completely on the non-racing path; the two guards cover for each other, so state the pairing rather than recording a survivor — every other mutant here is single-surface. Record the thirty-three killers (thirteen before the post-2C sync, twelve added by it, five by the post-2C-post sync, three by the destination guard). **Record as EQUIVALENT, not a killer (G2):** putting `heartbeat_at = ${s.heartbeatAt}` back into `persist` — `lockRow` holds FOR UPDATE from the load to that write and `decide` never changes `heartbeatAt`, so it can only echo; nothing can red it, and the single-writer comment is the guard. **Also record as EQUIVALENT (gap 4):** narrowing `targetHolderFor`'s `is distinct from` to `<>` — with a non-null `fixtureId` on both sides the two agree, and the case they differ on (a holder whose `fixture_id` is null) has no row in this suite. It is not a survivor to chase; it is a case Task 12's own fixture-less rows should cover, and it is written down so the next reader does not chase it either. **Then the Note 4 check:** race two creates on ONE fixture and assert 409 `active_session`, not a raw 23505.
 
 - [ ] **Step 5: Report for commit.** `feat(streaming): relay application layer — apply/decide, lazy expiry with inline retry, create gates through admit, replay fill`.
 
