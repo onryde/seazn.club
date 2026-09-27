@@ -337,9 +337,30 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
            c.name as competition_name, c.slug as competition_slug,
            d.name as division_name, d.slug as division_slug,
            ps.sport_key, d.module_version, ps.stats, d.youth, d.player_name_display,
-           exists (select 1 from public_entrants_v en
+           -- Asked of the person's OWN entrants in the division only (T4). The
+           -- view costs one entitlement call per entrant row it builds (V418),
+           -- and asked by division it built far more than those: every entrant
+           -- of the division on one plan, and on another — the planner hashing
+           -- the EXISTS — every public entrant of every division (measured 68
+           -- calls for six stat rows on a 70-division test database). Same
+           -- answer: the view's person_id arm is p.id off entrant_members, so
+           -- only an entrant the person is on can carry it; the publish rule
+           -- itself stays in the view.
+           -- The view is read one entrant at a time, by id, in a fenced
+           -- LATERAL: whatever order the planner picks, it builds at most the
+           -- person's own memberships. The outer offset 0 stops the EXISTS
+           -- becoming a hashed subplan over the whole view.
+           exists (select 1
+                   from entrant_members em
+                   join entrants mine on mine.id = em.entrant_id
+                   cross join lateral (
+                     select en.members from public_entrants_v en where en.id = em.entrant_id
+                     offset 0
+                   ) en
                    cross join lateral jsonb_array_elements(en.members) m
-                   where en.division_id = d.id and m->>'person_id' = ps.person_id::text) as published
+                   where em.person_id = ps.person_id and mine.division_id = d.id
+                     and m->>'person_id' = ps.person_id::text
+                   offset 0) as published
     from player_stat_snapshots ps
     join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
     join divisions d on d.id = ps.division_id and d.archived_at is null

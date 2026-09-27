@@ -115,7 +115,7 @@ function recordingSql() {
 
 /** The stage-rows read the feeder names come from — nothing else in the loader
  *  reads `public_fixtures_v` by stage (the positive case below proves it runs). */
-const isStageRead = (text: string) => /from public_fixtures_v where stage_id = \$/.test(text);
+const isStageRead = (text: string) => /from public_fixtures_v v\b.*\bwhere v\.stage_id = \$/.test(text);
 
 const names = (doc: { header: { sides: { name: string }[] } }) => doc.header.sides.map((s) => s.name);
 

@@ -919,71 +919,113 @@ export async function readEntrantMemberRefs(entrantIds: string[]): Promise<Recor
  * A division's detail straight from Postgres — the body `getPublicDivision`
  * caches. Same rule as {@link readPublicCompetitionShell}: only the Redis hub
  * rebuild reads it uncached.
+ *
+ * Four independent lanes (stages → pools, fixtures → court names, standings →
+ * zone, entrants → masking) run at once, so a cold read costs three round
+ * trips instead of up to ten, and never holds more than four pooled
+ * connections (prod runs 12 a machine). `sequential` runs the lanes one after
+ * another instead: a caller that already reads EVERY division at once (the
+ * competition hub, the competition poster and slideshow) passes it, so its
+ * demand stays one connection per division rather than four.
  */
-export async function readPublicDivisionDetail(division: PublicDivision) {
-  const stages = await sql<PublicStage[]>`
-    select id, division_id, seq, kind, name, status,
-           qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-           has_rank_overrides,
-           -- Per-stage match rules (design 2026-09-17 T7): the rules
-           -- FRAGMENT only, read off stages by the VIEW row's own id so the
-           -- view still decides which rows exist and the rest of config
-           -- (progression, cross-feeds) stays private.
-           (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
-    from public_stages_v where division_id = ${division.id} order by seq`;
-  const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
-    select p.id, p.stage_id, p.key, p.name
-    from public_pools_v p
-    join public_stages_v s on s.id = p.stage_id
-    where s.division_id = ${division.id} order by p.key`;
+export async function readPublicDivisionDetail(
+  division: PublicDivision,
+  { sequential = false }: { sequential?: boolean } = {},
+) {
+  const readStagesAndPools = async () => {
+    const stages = await sql<PublicStage[]>`
+      select id, division_id, seq, kind, name, status,
+             qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
+             has_rank_overrides,
+             -- Per-stage match rules (design 2026-09-17 T7): the rules
+             -- FRAGMENT only, read off stages by the VIEW row's own id so the
+             -- view still decides which rows exist and the rest of config
+             -- (progression, cross-feeds) stays private.
+             (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
+      from public_stages_v where division_id = ${division.id} order by seq`;
+    const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
+      select p.id, p.stage_id, p.key, p.name
+      from public_pools_v p
+      join public_stages_v s on s.id = p.stage_id
+      where s.division_id = ${division.id} order by p.key`;
+    return { stages, pools };
+  };
   // `ext_key` is the generator's stable id, which `roundRole` needs to tell a
   // page playoff's Qualifier 1 from its Eliminator (fix round 1, M3). The
   // view does not expose it, so it is read off `fixtures` by the VIEW row's
   // own id: the view still decides which rows exist.
-  const rawFixtures = await sql<PublicFixture[]>`
-    select id, division_id, stage_id, pool_id, round_no, seq_in_round,
-           home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-           scheduled_at, venue, court_label,
-           status, outcome, summary, last_seq,
-           lane, is_final, third_place, conditional,
-           (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
-           -- The feed edges, by the same rule as ext_key above: not
-           -- columns of the view, read off fixtures by the VIEW row's own
-           -- id, so the view still decides which rows exist. They are what
-           -- lets a sibling-fed seat with no stored label read "Winner of
-           -- Semi-finals, match 1" instead of "TBD" (see PublicFixture).
-           -- (No backticks in here: this is inside a tagged template.)
-           (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
-           (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
-           (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
-           (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
-    from public_fixtures_v where division_id = ${division.id}
-    order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
-  const fixtures = await withCourtVenueNames(rawFixtures);
-  const standings = (
-    await sql<PublicStandings[]>`
-    select stage_id, pool_id, rows, updated_at
-    from public_standings_v where division_id = ${division.id}`
-  ).map(normalizeStandings);
-  const rawEntrants = await sql<PublicEntrant[]>`
-    select id, division_id, kind, display_name, seed, status, members,
-           team_display, badge_url
-    from public_entrants_v where division_id = ${division.id}
-    order by seed nulls last, display_name`;
+  //
+  // The feed edges, by the same rule: not columns of the view. They are what
+  // lets a sibling-fed seat with no stored label read "Winner of Semi-finals,
+  // match 1" instead of "TBD" (see PublicFixture).
+  //
+  // One probe of `fixtures` per row, in a LATERAL, where there were five
+  // correlated subselects (T4). The `offset 0` fences it, so the planner
+  // cannot flatten it into a plain join of the fixtures table.
+  //
+  // The ORDER BY is the pre-T4 one, and so is what it leaves open: rows that
+  // tie on (round_no, seq_in_round) — round 1 of a league and round 1 of its
+  // knockout — come back in whatever order the plan produces (heap order when
+  // the planner walks the (division_id, round_no, seq_in_round) index, a
+  // sort's order when it scans and sorts). That was already so: measured
+  // 2026-09-27, the pre-T4 statement returns those rows in two different
+  // orders under its own custom and generic plans, and postgres.js prepares
+  // it, so a connection could switch between them after five executions.
+  // (No backticks in here: this is inside a tagged template.)
+  const readFixtures = async () =>
+    withCourtVenueNames(
+      (
+        await sql<PublicFixture[]>`
+          select v.id, v.division_id, v.stage_id, v.pool_id, v.round_no, v.seq_in_round,
+                 v.home_entrant_id, v.away_entrant_id, v.home_slot_label, v.away_slot_label,
+                 v.scheduled_at, v.venue, v.court_label,
+                 v.status, v.outcome, v.summary, v.last_seq,
+                 v.lane, v.is_final, v.third_place, v.conditional,
+                 e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot
+          from public_fixtures_v v
+          left join lateral (
+            select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot
+            from fixtures x where x.id = v.id
+            offset 0
+          ) e on true
+          where v.division_id = ${division.id}
+          order by v.round_no, v.seq_in_round`
+      ).map(normalizeFixture),
+    );
+  const readStandingsAndTz = async () => {
+    const standings = (
+      await sql<PublicStandings[]>`
+      select stage_id, pool_id, rows, updated_at
+      from public_standings_v where division_id = ${division.id}`
+    ).map(normalizeStandings);
+    // Venue lane (V305): the division's override, else the org's timezone.
+    const [ss] = await sql<{ tz: string }[]>`
+      select coalesce(ss.tz, o.timezone, 'UTC') as tz
+      from divisions d
+      left join schedule_settings ss on ss.division_id = d.id
+      left join organizations o on o.id = d.org_id
+      where d.id = ${division.id}`;
+    return { standings, tz: ss?.tz ?? "UTC" };
+  };
   // RS008 review fix #5 — masks a non-team entrant's own display_name by
   // consent (and, unlike before this fix, by youth too). Feeds THIS
   // page's own render, the calendar.ics/poster.pdf exports, and (via the
   // `{...data}` spread in the two /present page.tsx files) the
   // slideshow kiosk's own independent masking pass (fix #2).
-  const entrants = await maskPublicEntrantNames(rawEntrants, division);
-  // Venue lane (V305): the division's override, else the org's timezone.
-  const [ss] = await sql<{ tz: string }[]>`
-    select coalesce(ss.tz, o.timezone, 'UTC') as tz
-    from divisions d
-    left join schedule_settings ss on ss.division_id = d.id
-    left join organizations o on o.id = d.org_id
-    where d.id = ${division.id}`;
-  return { stages, pools, fixtures, standings, entrants, tz: ss?.tz ?? "UTC" };
+  const readEntrants = async () =>
+    maskPublicEntrantNames(
+      await sql<PublicEntrant[]>`
+        select id, division_id, kind, display_name, seed, status, members,
+               team_display, badge_url
+        from public_entrants_v where division_id = ${division.id}
+        order by seed nulls last, display_name`,
+      division,
+    );
+
+  const [{ stages, pools }, fixtures, { standings, tz }, entrants] = sequential
+    ? ([await readStagesAndPools(), await readFixtures(), await readStandingsAndTz(), await readEntrants()] as const)
+    : await Promise.all([readStagesAndPools(), readFixtures(), readStandingsAndTz(), readEntrants()]);
+  return { stages, pools, fixtures, standings, entrants, tz };
 }
 
 /** Division home: schedule + standings + entrants + stage skeleton. */
@@ -991,6 +1033,9 @@ export async function getPublicDivision(
   orgSlug: string,
   compSlug: string,
   divSlug: string,
+  /** How a cache MISS reads — see {@link readPublicDivisionDetail}. The cache
+   *  entry is the same either way. */
+  read: { sequential?: boolean } = {},
 ): Promise<{
   org: PublicOrg;
   competition: PublicCompetition;
@@ -1009,7 +1054,7 @@ export async function getPublicDivision(
   if (!division) return null;
 
   const detail = await unstable_cache(
-    () => readPublicDivisionDetail(division),
+    () => readPublicDivisionDetail(division, read),
     // v2 (privacy hotfix, 2026-09-16): a member the division's name policy
     // masks now carries no `person_id` and no `photo` (maskPublicEntrantNames).
     // v3 (V414): every stage carries the qualification columns; a v2 entry
@@ -1071,77 +1116,96 @@ export async function getPublicFixture(
   const detail = await unstable_cache(
     async () => {
       const [fixtureRow] = await sql<PublicFixture[]>`
-        select id, division_id, stage_id, pool_id, round_no, seq_in_round,
-               home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-               scheduled_at, venue, court_label,
-               status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional, stream_url,
+        select v.id, v.division_id, v.stage_id, v.pool_id, v.round_no, v.seq_in_round,
+               v.home_entrant_id, v.away_entrant_id, v.home_slot_label, v.away_slot_label,
+               v.scheduled_at, v.venue, v.court_label,
+               v.status, v.outcome, v.summary, v.last_seq,
+               v.lane, v.is_final, v.third_place, v.conditional, v.stream_url,
                -- The feed edges, listed for the same reason as the three other
                -- reads above: PublicFixture declares them OPTIONAL, so a
                -- select that omits them compiles clean and reads undefined at
                -- runtime. Nothing off this row names a seat today, but the
                -- next caller that tries would get a silent TBD rather than a
-               -- type error. (No backticks in here: inside a tagged template.)
-               (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
-               (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
-               (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
-               (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
-        from public_fixtures_v
-        where id = ${fixtureId} and division_id = ${division.id} limit 1`;
+               -- type error. One fenced LATERAL probe, as in
+               -- readPublicDivisionDetail. (No backticks in here: inside a
+               -- tagged template.)
+               e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot
+        from public_fixtures_v v
+        left join lateral (
+          select x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot
+          from fixtures x where x.id = v.id
+          offset 0
+        ) e on true
+        where v.id = ${fixtureId} and v.division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
-      const fixture = await withCourtVenueName(normalizeFixture(fixtureRow));
-      const rawNames = await sql<{ id: string; kind: string; display_name: string }[]>`
-        select id, kind, display_name from public_entrants_v
-        where division_id = ${division.id}`;
-      // RS008 review fix #5 — entrantNames fed the fixture page's own
-      // home/away display with ZERO masking, not even by youth.
-      const names = await maskPublicEntrantNames(rawNames, division);
-      // Competition-scoped: an Event Pass grants realtime for the competition it
-      // was bought for, so the org-wide 2-arg overload denies a paid-for fixture.
-      // This is the SPECTATOR side of the grant — the organiser's own noticeboard
-      // was already comp-scoped, so an org-wide read here meant a buyer saw live
-      // scoring work for themselves and for none of their audience, which is the
-      // whole point of the feature.
-      const [rt] = await sql<{ realtime: boolean }[]>`
-        select org_has_feature(${shell.org.id}, 'realtime', ${shell.competition.id})
-               as realtime`;
-      // Task 9 — the division's own tz override (V305 venue lane; org
-      // timezone is `shell.org`'s own row, read separately since `PublicOrg`
-      // does not carry it — see `resolveVenueTz`'s doc comment for why venue
-      // tz is never inherited from a personal/browser lane).
-      //
-      // Review 2026-09-09 (I3): the join itself now lives in `server/venue-tz.ts`,
-      // the single authority for WHICH columns the venue lane reads. The raw
-      // pair is still needed here (not just the resolved zone) because
-      // `loadMatchCentre` takes `orgTz` and `division.tz` separately.
-      const tzRow = await venueTzRow(division.id);
-      const [stageRow] = await sql<{ name: string }[]>`
-        select name from stages where id = ${fixture.stage_id}`;
-      // The FORMAT's name, not its key. `formatLabel` fed the header's
-      // `metaLine` straight from `division.variant_key`, so the match centre
-      // — and, once the share images started carrying that line, a poster a
-      // spectator posts to Instagram — read "t20" and "grand-slam" where the
-      // catalog has "T20" and "Grand Slam" sitting in `sport_variants.name`.
-      //
-      // Scoped to system rows and this org's own: variants are org-scoped, and
-      // a bare match on (sport_key, key) would happily return ANOTHER org's
-      // renamed variant. Between those two rows the org's own is read first.
-      //
-      // PRECEDENCE on public pages (`variantLabel`, variant-label.ts): the
-      // dictionary word wins for every engine-declared variant key, in the
-      // org's locale; this row is the fallback only for a key the map does not
-      // name (an org's own custom variant), and the raw key after that. So an
-      // org RENAME of an engine-declared key (e.g. its own row for `t20`) does
-      // NOT show publicly — deliberate (T16b fix round 3: a variant is copy in
-      // four locales, a rename is one English string), and pinned by
-      // public-fixture-format-label.test.ts. Nothing in the product writes org
-      // rows today; an org-variant editor must settle this before it ships.
-      const [variantRow] = await sql<{ name: string }[]>`
-        select name from sport_variants
-        where sport_key = ${division.sport_key} and key = ${division.variant_key}
-          and (org_id is null or org_id = ${shell.org.id})
-        order by org_id nulls last
-        limit 1`;
+      // T4 — everything below needs only the fixture row and none of it needs
+      // another, so it reads in four lanes at once; the match centre, which
+      // needs all four, follows. Four pooled connections at most, never a tx.
+      const [fixture, names, { rt, variantRow }, { tzRow, stageRow }] = await Promise.all([
+        withCourtVenueName(normalizeFixture(fixtureRow)),
+        (async () => {
+          const rawNames = await sql<{ id: string; kind: string; display_name: string }[]>`
+            select id, kind, display_name from public_entrants_v
+            where division_id = ${division.id}`;
+          // RS008 review fix #5 — entrantNames fed the fixture page's own
+          // home/away display with ZERO masking, not even by youth.
+          return maskPublicEntrantNames(rawNames, division);
+        })(),
+        (async () => {
+          // Competition-scoped: an Event Pass grants realtime for the competition it
+          // was bought for, so the org-wide 2-arg overload denies a paid-for fixture.
+          // This is the SPECTATOR side of the grant — the organiser's own noticeboard
+          // was already comp-scoped, so an org-wide read here meant a buyer saw live
+          // scoring work for themselves and for none of their audience, which is the
+          // whole point of the feature.
+          const [rt] = await sql<{ realtime: boolean }[]>`
+            select org_has_feature(${shell.org.id}, 'realtime', ${shell.competition.id})
+                   as realtime`;
+          // The FORMAT's name, not its key. `formatLabel` fed the header's
+          // `metaLine` straight from `division.variant_key`, so the match centre
+          // — and, once the share images started carrying that line, a poster a
+          // spectator posts to Instagram — read "t20" and "grand-slam" where the
+          // catalog has "T20" and "Grand Slam" sitting in `sport_variants.name`.
+          //
+          // Scoped to system rows and this org's own: variants are org-scoped, and
+          // a bare match on (sport_key, key) would happily return ANOTHER org's
+          // renamed variant. Between those two rows the org's own is read first.
+          //
+          // PRECEDENCE on public pages (`variantLabel`, variant-label.ts): the
+          // dictionary word wins for every engine-declared variant key, in the
+          // org's locale; this row is the fallback only for a key the map does not
+          // name (an org's own custom variant), and the raw key after that. So an
+          // org RENAME of an engine-declared key (e.g. its own row for `t20`) does
+          // NOT show publicly — deliberate (T16b fix round 3: a variant is copy in
+          // four locales, a rename is one English string), and pinned by
+          // public-fixture-format-label.test.ts. Nothing in the product writes org
+          // rows today; an org-variant editor must settle this before it ships.
+          const [variantRow] = await sql<{ name: string }[]>`
+            select name from sport_variants
+            where sport_key = ${division.sport_key} and key = ${division.variant_key}
+              and (org_id is null or org_id = ${shell.org.id})
+            order by org_id nulls last
+            limit 1`;
+          return { rt, variantRow };
+        })(),
+        (async () => {
+          // Task 9 — the division's own tz override (V305 venue lane; org
+          // timezone is `shell.org`'s own row, read separately since `PublicOrg`
+          // does not carry it — see `resolveVenueTz`'s doc comment for why venue
+          // tz is never inherited from a personal/browser lane).
+          //
+          // Review 2026-09-09 (I3): the join itself now lives in `server/venue-tz.ts`,
+          // the single authority for WHICH columns the venue lane reads. The raw
+          // pair is still needed here (not just the resolved zone) because
+          // `loadMatchCentre` takes `orgTz` and `division.tz` separately.
+          const tzRow = await venueTzRow(division.id);
+          // The view row's own stage_id: the court-name lane adds names to the
+          // row, it never moves it to another stage.
+          const [stageRow] = await sql<{ name: string }[]>`
+            select name from stages where id = ${fixtureRow.stage_id}`;
+          return { tzRow, stageRow };
+        })(),
+      ]);
       const locale = toLocale(shell.org.default_locale);
       const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
       const matchCentre = await loadMatchCentre(sql, fixture, {

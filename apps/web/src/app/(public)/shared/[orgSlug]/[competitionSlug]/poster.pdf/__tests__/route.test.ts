@@ -582,14 +582,17 @@ describe("GET .../poster.pdf — ?division= scopes the draw the same way it alre
 
     const scoped = await get("?division=reserves");
     expect(decodePdfPageCount(scoped.buf)).toBe(1); // reserves has no fixtures
-    expect(getPublicDivision).toHaveBeenCalledWith("test-org", "test-comp", "reserves");
-    expect(getPublicDivision).not.toHaveBeenCalledWith("test-org", "test-comp", "open");
+    // The slugs read, whatever the read options — then the options on their
+    // own: a poster reads every division at once, so each read is sequential.
+    const slugsRead = () => getPublicDivision.mock.calls.map((call: unknown[]) => call[2]);
+    expect(slugsRead()).toEqual(["reserves"]);
+    expect(getPublicDivision).toHaveBeenCalledWith("test-org", "test-comp", "reserves", { sequential: true });
 
     getPublicDivision.mockClear();
     const scopedOpen = await get("?division=open");
     expect(decodePdfPageCount(scopedOpen.buf)).toBeGreaterThan(1); // open's final is day-one
-    expect(getPublicDivision).toHaveBeenCalledWith("test-org", "test-comp", "open");
-    expect(getPublicDivision).not.toHaveBeenCalledWith("test-org", "test-comp", "reserves");
+    expect(slugsRead()).toEqual(["open"]);
+    expect(getPublicDivision).toHaveBeenCalledWith("test-org", "test-comp", "open", { sequential: true });
   });
 
   it("no ?division= renders every division's draw — the reserves' own section heading appears", async () => {

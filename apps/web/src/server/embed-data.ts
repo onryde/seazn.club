@@ -104,28 +104,32 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
       join public_stages_v s on s.id = p.stage_id
       where s.division_id = ${divisionId} order by p.key`,
     sql<PublicFixture[]>`
-      select id, division_id, stage_id, pool_id, round_no, seq_in_round,
-             home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-             scheduled_at, venue, court_label,
-             status, outcome, summary, last_seq,
-             lane, is_final, third_place, conditional,
+      select v.id, v.division_id, v.stage_id, v.pool_id, v.round_no, v.seq_in_round,
+             v.home_entrant_id, v.away_entrant_id, v.home_slot_label, v.away_slot_label,
+             v.scheduled_at, v.venue, v.court_label,
+             v.status, v.outcome, v.summary, v.last_seq,
+             v.lane, v.is_final, v.third_place, v.conditional,
              -- N1 fix round 1, M8: the generator's stable id, which alone tells a
              -- page playoff's rounds apart for the widget's round namer. The view
              -- has no such column; read it off the view row's own fixture, as
              -- getPublicDivision does.
-             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
-             -- The bracket feed edges, read by the same rule as ext_key above.
+             -- The bracket feed edges, read by the same rule as ext_key.
              -- PublicFixture declares them optional, so OMITTING them here
              -- compiles clean and reads undefined at runtime: the widget's
              -- namer would build an empty feed map and print "TBD" on a seat
              -- every other public surface names.
+             -- One fenced LATERAL probe per row, not five subselects: see
+             -- readPublicDivisionDetail (public-site/data.ts) on the offset 0.
              -- (No backticks in here: this is inside a tagged template.)
-             (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
-             (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
-             (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
-             (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
-      from public_fixtures_v where division_id = ${divisionId}
-      order by round_no, seq_in_round`
+             e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot
+      from public_fixtures_v v
+      left join lateral (
+        select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot
+        from fixtures x where x.id = v.id
+        offset 0
+      ) e on true
+      where v.division_id = ${divisionId}
+      order by v.round_no, v.seq_in_round`
       .then((rows) => rows.map(iso))
       // P9 cutover (finding #1): venue_name/court_name — public_fixtures_v
       // has not been extended with venue_id/court_id, so these are derived

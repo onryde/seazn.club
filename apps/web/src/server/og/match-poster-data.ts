@@ -12,7 +12,6 @@ import "server-only";
 // division's poster is already safe here without this module deciding masking
 // a second time. (The old fixture OG card ran its own `select youth from
 // divisions` and applied its own rule; one authority is better than two.)
-import { sql } from "@/lib/db";
 import { getPublicFixture } from "@/server/public-site/data";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
@@ -54,7 +53,11 @@ export async function loadMatchPosterModel(
 ): Promise<MatchPosterModel | null> {
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) return null;
-  const { org, competition, division, fixture, matchCentre } = data;
+  // `stageName` is the board's hero line on an upcoming poster ("League
+  // match", "Quarter-final") — the page's own read of `stages.name`, not a
+  // second one here (T4). It follows the page's cache, as every other line on
+  // the poster does.
+  const { org, competition, division, fixture, matchCentre, stageName } = data;
   const header = matchCentre.header;
 
   // Which side is DOING something. Cricket's answer is on the header; a racket
@@ -65,13 +68,6 @@ export async function loadMatchPosterModel(
   const serving = servingSide(fixture.summary);
   const activeIndex: 0 | 1 | null =
     header.battingIndex ?? (serving === "home" ? 0 : serving === "away" ? 1 : null);
-
-  // The board's hero line on an upcoming poster is the STAGE ("League match",
-  // "Quarter-final"), which `getPublicFixture` reads but does not return.
-  // One indexed lookup inside an already-revalidated image route.
-  const [stageRow] = fixture.stage_id
-    ? await sql<{ name: string }[]>`select name from stages where id = ${fixture.stage_id}`
-    : [];
 
   const locale = toLocale(org.default_locale);
   // `public` carries the match-centre copy the header's own Msgs name; `ui`
@@ -100,7 +96,7 @@ export async function loadMatchPosterModel(
     badges: [homeBadge, awayBadge],
     competitionName: competition.name,
     divisionName: division.name,
-    stageName: stageRow?.name ?? null,
+    stageName: stageName ?? null,
     header,
     activeIndex,
     setLine: setLineOf(matchCentre.sets),

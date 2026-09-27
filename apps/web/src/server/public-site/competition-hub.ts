@@ -625,11 +625,18 @@ export async function loadCompetitionHub(
   // single-flight, and `refreshDiscipline` serves bans on the write path. A
   // failure is an empty list, never a hub-down: bans are a line on a squad,
   // not the page.
+  //
+  // Every division at once, but each one read one query at a time
+  // (`sequential`): this already holds a pooled connection per division, and
+  // a division read's own four-lane fan-out on top would multiply that by four
+  // (T4 — 12 connections a machine in prod).
   const [details, allBans] = await Promise.all([
     Promise.all(
       divisions.map(async (d) => ({
         d,
-        detail: uncached ? await readPublicDivisionDetail(d) : await getPublicDivision(orgSlug, compSlug, d.slug),
+        detail: uncached
+          ? await readPublicDivisionDetail(d, { sequential: true })
+          : await getPublicDivision(orgSlug, compSlug, d.slug, { sequential: true }),
       })),
     ),
     activePublicSuspensionEntries(divisions.map((d) => d.id)).catch((err: unknown): HubBan[] => {
@@ -972,8 +979,9 @@ type HubBan = Awaited<ReturnType<typeof activePublicSuspensionEntries>>[number];
 /**
  * One division's squads (per entrant) and its list of active bans.
  *
- * Members are the MASKED lines `getPublicDivision` already produced — never
- * re-read, never re-masked. A line links to the player page only where the
+ * Members are the MASKED lines the division read already produced
+ * (`getPublicDivision` on the page path, `readPublicDivisionDetail` on the
+ * Redis rebuild) — never re-read, never re-masked. A line links to the player page only where the
  * view published an id (consent + player-profile entitlement) AND the
  * division shows full names: a masked name with a link is the full name one
  * click away (`playerLinkId`, which the division page's Entrants tab links
@@ -981,10 +989,11 @@ type HubBan = Awaited<ReturnType<typeof activePublicSuspensionEntries>>[number];
  *
  * A ban is matched to a line by PERSON, never by name (two players can share
  * one), by zipping `readEntrantMemberRefs`'s internal rows onto the view's
- * lines by position. The lines come from `getPublicDivision`'s cache while the
- * rows are read fresh, and a roster write does not revalidate that cache, so
- * a renumber or a swap between the two reads shifts who sits at index i
- * without changing the count. The zip is therefore trusted for a team only
+ * lines by position. On the page path the lines come from `getPublicDivision`'s
+ * cache while the rows are read fresh, and a roster write does not revalidate
+ * that cache, so a renumber or a swap between the two reads shifts who sits at
+ * index i without changing the count. (The Redis rebuild reads both fresh, but
+ * a write can still land between its two reads.) The zip is therefore trusted for a team only
  * when EVERY row agrees with its line (`squadRowsMatchLines`): same count,
  * same squad number, same position, the same name once the row's full name
  * is masked by the division's own policy, the same person wherever the view

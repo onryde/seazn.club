@@ -19,12 +19,14 @@
 // the DB-gated proof of the same fact, unreachable in this environment
 // (no DATABASE_URL).
 //
-// Every `sql` call `getPublicDivision` makes on this path is answered in the
-// exact sequential order the function issues them (verified by reading
-// `data.ts` top to bottom): org, competition, divisions, liveNow, stages,
-// pools, rawFixtures, standings, rawEntrants, tz. Fixtures and entrants are
-// seeded empty so `withCourtVenueNames`/`maskPublicEntrantNames` short-circuit
-// before issuing their own (unmocked-here) `sql(array)` IN-clause calls.
+// Every `sql` call `getPublicDivision` makes on this path is answered by the
+// relation it reads (org, competition, divisions, liveNow, stages, pools,
+// rawFixtures, standings, rawEntrants, tz — read off `data.ts`), not by the
+// order it is issued in: since T4 the division read runs four lanes at once,
+// so the issue order is an interleaving, not a sequence. Fixtures and
+// entrants are seeded empty so `withCourtVenueNames`/`maskPublicEntrantNames`
+// short-circuit before issuing their own (unmocked-here) `sql(array)`
+// IN-clause calls.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({
@@ -84,23 +86,31 @@ const DIVISION_ROW = {
   config: {},
 };
 
-/** Seeds all ten `sql` calls `getPublicDivision` makes on this path, in the
- *  order it issues them. `updated_at` is a real JS `Date` — exactly what
- *  postgres.js hands back for a `timestamptz` column absent the OID 1082-only
- *  override, and exactly what the review measured. */
+/** Answers all ten `sql` calls `getPublicDivision` makes on this path, each by
+ *  the relation its statement reads. `updated_at` is a real JS `Date` — exactly
+ *  what postgres.js hands back for a `timestamptz` column absent the OID
+ *  1082-only override, and exactly what the review measured. An unrecognised
+ *  statement throws, so a new read cannot be answered by accident. */
 function seedSqlCalls(updatedAt: unknown) {
+  const answers: [RegExp, unknown[]][] = [
+    [/from organizations o\b/, [ORG_ROW]], // loadOrg
+    [/from public_competitions_v\b/, [COMPETITION_ROW]], // getPublicCompetition: competition
+    [/from public_divisions_v d\s+left join sports/, [DIVISION_ROW]], // getPublicCompetition: divisions
+    [/from public_fixtures_v f\s+join public_divisions_v/, []], // getPublicCompetition: liveNow
+    [/from public_stages_v where/, []], // stages
+    [/from public_pools_v/, []], // pools
+    [/from public_fixtures_v v\b/, []], // rawFixtures (empty ⇒ withCourtVenueNames short-circuits)
+    [/from public_standings_v/, [{ stage_id: "st1", pool_id: null, rows: [], updated_at: updatedAt }]], // standings
+    [/from public_entrants_v where/, []], // rawEntrants (empty ⇒ maskPublicEntrantNames short-circuits)
+    [/coalesce\(ss\.tz, o\.timezone, 'UTC'\) as tz/, [{ tz: "UTC" }]], // tz
+  ];
   sql.mockReset();
-  sql
-    .mockResolvedValueOnce([ORG_ROW]) // loadOrg
-    .mockResolvedValueOnce([COMPETITION_ROW]) // getPublicCompetition: competition
-    .mockResolvedValueOnce([DIVISION_ROW]) // getPublicCompetition: divisions
-    .mockResolvedValueOnce([]) // getPublicCompetition: liveNow
-    .mockResolvedValueOnce([]) // stages
-    .mockResolvedValueOnce([]) // pools
-    .mockResolvedValueOnce([]) // rawFixtures (empty ⇒ withCourtVenueNames short-circuits)
-    .mockResolvedValueOnce([{ stage_id: "st1", pool_id: null, rows: [], updated_at: updatedAt }]) // standings
-    .mockResolvedValueOnce([]) // rawEntrants (empty ⇒ maskPublicEntrantNames short-circuits)
-    .mockResolvedValueOnce([{ tz: "UTC" }]); // tz
+  sql.mockImplementation(async (strings: TemplateStringsArray) => {
+    const text = strings.join("$").replace(/\s+/g, " ");
+    const hits = answers.filter(([re]) => re.test(text));
+    if (hits.length !== 1) throw new Error(`${hits.length} answers for: ${text.slice(0, 160)}`);
+    return hits[0]![1];
+  });
 }
 
 beforeEach(() => {

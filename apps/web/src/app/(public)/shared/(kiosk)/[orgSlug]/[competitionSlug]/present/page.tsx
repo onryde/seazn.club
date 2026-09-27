@@ -63,7 +63,9 @@ export default async function PresentCompetitionPage({
   }
   const decks = await Promise.all(
     shell.divisions.map(async (d) => {
-      const data = await getPublicDivision(orgSlug, competitionSlug, d.slug);
+      // One query at a time per division: this reads every division at once
+      // (see `readPublicDivisionDetail` on `sequential`).
+      const data = await getPublicDivision(orgSlug, competitionSlug, d.slug, { sequential: true });
       // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, not
       // English by construction: the builder has no request scope, and since
       // N1c c3 it loads the org-locale dictionaries itself (async, no database).

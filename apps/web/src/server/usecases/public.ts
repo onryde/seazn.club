@@ -699,6 +699,10 @@ export async function discoveryList(
  * confirmed the fixture's own division/competition are public/unlisted (the
  * row came from `public_fixtures_v`, which filters on that), so no
  * additional visibility check is needed here.
+ *
+ * T4 — the stage row rides the division read (it was a second statement), and
+ * both rows' configs go to the loader as `configRows`, which then reads only
+ * the fixture's own snapshot instead of reading the two rows again.
  */
 async function loadFixtureMatchCentreCtx(
   divisionId: string,
@@ -718,6 +722,11 @@ async function loadFixtureMatchCentreCtx(
       org_default_locale: string;
       competition_slug: string;
       division_slug: string;
+      division_config: unknown;
+      stage_row_id: string | null;
+      stage_name: string | null;
+      stage_config: Record<string, unknown> | null;
+      stage_kind: string | null;
     }[]
   >`
     select d.sport_key, d.module_version, d.variant_key,
@@ -732,14 +741,20 @@ async function loadFixtureMatchCentreCtx(
            d.youth, d.player_name_display,
            ss.tz as division_tz,
            o.slug as org_slug, o.timezone as org_tz, o.default_locale as org_default_locale,
-           c.slug as competition_slug, d.slug as division_slug
+           c.slug as competition_slug, d.slug as division_slug,
+           d.config as division_config,
+           s.id as stage_row_id, s.name as stage_name, s.config as stage_config, s.kind as stage_kind
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = d.org_id
     left join schedule_settings ss on ss.division_id = d.id
+    left join stages s on s.id = ${stageId}
     where d.id = ${divisionId}`;
   if (!row) throw new HttpError(404, "fixture not found");
-  const [stageRow] = await sql<{ name: string }[]>`select name from stages where id = ${stageId}`;
+  const stageRow =
+    row.stage_row_id === null
+      ? undefined
+      : { name: row.stage_name!, config: row.stage_config, kind: row.stage_kind! };
   const locale = toLocale(row.org_default_locale);
   const basePath = `/shared/${row.org_slug}/${row.competition_slug}/${row.division_slug}`;
   return {
@@ -761,6 +776,10 @@ async function loadFixtureMatchCentreCtx(
     hrefs: { division: basePath, competition: `/shared/${row.org_slug}/${row.competition_slug}`, calendar: `${basePath}/calendar.ics` },
     stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
     slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
+    configRows: {
+      division: { config: row.division_config },
+      stage: stageRow ? { config: stageRow.config, kind: stageRow.kind } : undefined,
+    },
   };
 }
 
@@ -805,13 +824,16 @@ export async function publicFixture(fixtureId: string): Promise<unknown> {
       from public_fixtures_v where id = ${fixtureId} limit 1`;
     if (!row) throw new HttpError(404, "fixture not found");
     // P9 cutover (finding #2): same treatment as publicSchedule above —
-    // venue_name/court_name replace the frozen venue/court_label.
-    const fixture = await withCourtVenueName(row);
+    // venue_name/court_name replace the frozen venue/court_label. The context
+    // needs only the row's own ids, so it reads alongside (T4).
+    const [fixture, ctx] = await Promise.all([
+      withCourtVenueName(row),
+      loadFixtureMatchCentreCtx(row.division_id, row.stage_id),
+    ]);
     // Task 9 — the match-centre view model, built by the SAME loader
     // `getPublicFixture` (public-site/data.ts) uses. venue_name/court_name
     // must already be resolved on `fixture` before this call: the Info
     // tab's venue row reads them straight off the fixture object.
-    const ctx = await loadFixtureMatchCentreCtx(fixture.division_id, fixture.stage_id);
     const match_centre = await loadMatchCentre(sql, fixture, ctx);
     return { ...fixture, match_centre };
   });

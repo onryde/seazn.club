@@ -99,8 +99,10 @@ export async function GET(req: Request, { params }: Ctx) {
   // so it narrows the printed draw the same way, rather than printing every
   // other division's fixtures onto someone's single-division handout.
   const drawDivisions = division ? [division] : divisions;
+  // Every division at once, each read one query at a time: see
+  // `readPublicDivisionDetail` on why a fan-out over divisions passes `sequential`.
   const details = await Promise.all(
-    drawDivisions.map((d) => getPublicDivision(orgSlug, competitionSlug, d.slug)),
+    drawDivisions.map((d) => getPublicDivision(orgSlug, competitionSlug, d.slug, { sequential: true })),
   );
   const draw: DrawDivision[] = [];
   const dict = await getDictionary(locale, "public");
