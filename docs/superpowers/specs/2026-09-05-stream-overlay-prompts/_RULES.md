@@ -322,3 +322,97 @@ a grep is not a read; a comment is a hypothesis. Product-owner lens on every
 finding: customer gain or loss, cost and blast radius, a recommendation with
 its strongest counter-argument — and never label your own recommendation as the
 owner's ruling, in either direction.
+
+## Test strategy — OWNER RULING 2026-09-27, binds EVERY R1 lane and wave
+
+Owner's words: *"update and store this similar rules for all R1 waves/lanes"*, adopting the practices the owner
+approved for the format-matrix programme as its ruling 21. The source is
+`docs/superpowers/specs/2026-09-27-format-matrix-prompts/test-strategy-recommendation.md` on the local branch
+`docs/format-matrix-programme` (read there, not from a paste; it is unpushed). **For R1 these are rules, not a
+recommendation** — this programme's own owner ruled them here. They are ADAPTED below, because that programme's
+axis is format × sport and ours is mode × driver × state; copying its wording would have produced sport sweeps
+over code that has no sport in it.
+
+They apply **from the next dispatch onward**. Task 7 keeps the brief it was dispatched with; its REVIEW applies
+these, as does every brief after it.
+
+**S1 — Model-based sequence testing over the two state machines.** `fast-check` is already a devDependency of
+both `apps/web` and `packages/engine` (v3) and is already used in three suites including a money one
+(`lib/__tests__/credits-wallet-merge.test.ts:15,70`), so this needs no new dependency and has a local idiom to
+follow. Nothing in the repo uses the COMMAND model yet (`fc.commands` / `modelRun`), so R1 is where it starts.
+Generate random sequences of the REAL triggers — `start`, `provisioned`, `went_live`, `stop`, `beat`,
+`stale_beat`, `create_failed`, `destroy_ok`, `grace_expired`, `deadline`, `orphan_listed`, `credit_refused` —
+and check the invariants after **every** step, not at the end. The invariants that are worth the machinery,
+each of which is a defect this programme has already paid for by hand:
+  - never two Machines alive for one session, and a retry only after a **CONFIRMED** destroy;
+  - a terminal session never transitions, and `decide` throws only where it is documented to;
+  - `balance == sum(deltas)`, never below zero, and **at most ONE consume per session**;
+  - the runner deadline is never earlier than the session's wall clock (lane A's I1, as a PROPERTY over drift
+    rather than the single case that closed it);
+  - a create whose outcome is unknown never reports "made nothing";
+  - `ending_at` set exactly when the state is `ending`; `started_at` set exactly once, at `live`.
+A failure **shrinks to the shortest reproducing sequence, and that sequence is committed as a named regression
+case with its seed BEFORE the fix.** The 70-cell and 17-state sweeps lane A wrote by hand are the floor this
+replaces, not something it duplicates.
+
+**S2 — Anti-vacuity, everywhere.** Every property, invariant, sweep and parity table **returns how many items
+it checked, and zero checked is a FAILURE.** Every rule set states its empty case FIRST. This is the same
+defect as three traps already recorded here — a suite that fails to collect reads as `PASS(0) FAIL(0)`, a
+module-scope `throw` collects zero tests and reports green, and an empty grep from the wrong cwd reads as a
+clean absence. A count printed beside a pass is the only thing that separates them.
+
+**S3 — Mutation testing keeps BOTH layers.** The per-change layer does not move: every behaviour change owes a
+hand mutant **per surface** with a killer named by test title, `cp`-backup/mutate/run/restore/`cmp`, and the
+script asserts its match count before writing. On top of that, a **scheduled Stryker run scoped to
+`apps/web/src/server/relay/**` and `usecases/stream-credits.ts`, with a score floor that may only rise** and
+surviving mutants either killed or recorded as equivalent. Stryker is NOT a dependency today and a scheduled
+run costs CI minutes on an account whose billing has already stopped every job once, so the scheduled layer
+waits on the owner's go for the spend; the per-change layer is unconditional and already in force.
+
+**S4 — Sweep the axis by default, and R1's axis is NOT sport.** It is **mode × driver × (state, trigger)**:
+`passthrough`/`composed`, fake/live drivers, and the cells of the two machines. Sport sweeps apply only where a
+sport actually enters — the overlay projection, the themes, the per-sport content table — and there they are all
+eleven, not a lucky one. **A single-cell test carries a one-line reason.** "One sample is not a parity sweep" is
+failure class 7 and it has shipped twice.
+
+**S5 — Production shadow invariants, logged and never blocking.** The server evaluates the same invariants as S1
+against REAL rows after each session write and records a Sentry event on a violation; it never refuses the
+organiser. The two that are money, and that no unit test can see: **a live session with no Machine**, and **a
+Machine with no live session**. Add `balance == sum(ledger)` per org. This needs the Sentry DSN the owner still
+owes, so it is specced now and wired when the DSN lands.
+
+**S6 — Assumptions are guards, not comments.** "Cannot happen" becomes an assertion or a named refusal with a
+test that REACHES it. R1's live instance is already named: a doc comment at `ports.ts:77` is the ONLY thing
+stopping Task 10 from passing `deadlineOf` where `runnerDeadlineOf` belongs, and nothing fails if it does. A
+comment is a hypothesis; brand the type instead.
+
+**S7 — Every PR declares its rows, and runs them.** A PR touching `server/relay/domain/**` declares the
+(state × trigger) cells it changes; one touching the overlay declares the sport × theme rows. The declaration is
+in the PR body and the rows are in the run.
+
+**S8 — The reviewer answers four questions IN THE REVIEW, every time.** What happens **on a second call**
+(idempotency — class 13 is an idempotency guard that swallowed a legitimate arrival); on an **empty input** (an
+empty set answers no to every question and lands on the default, which shipped three vacuous defects in one
+wave); **after a failure, an expiry, a refund or a revoke** (this programme's equivalent of "after a withdrawal
+or void"); and **in the other mode and with the other driver** (its equivalent of "for another sport").
+
+**S9 — Rules before building, and one root cause at one owner.** Nothing is built before its rules are decided;
+a fix lands once, at the single authority for that fact, never as a patch per call site.
+
+### S10 — The reconciliation, which matters because S-rules 1 and 2 above can be read as contradicting class 19
+
+The format-matrix finding says *expected values taken from the code freeze wrong rules into the tests*. Failure
+class 19 says *derive the expected value from the engine's own declarations, never a table typed into the test*.
+Both are true, and a careless reading of either one produces the other's defect. The order to apply:
+
+1. **A DECLARED rule is the oracle** — an owner ruling, this programme's design of record, a federation rule, a
+   provider's documentation, or a MEASURED provider behaviour (the top-level `deleteRecordingAfterDays` echo,
+   the LL-HLS numbers, `limit`'s 1000 ceiling). If one exists, the test asserts against it.
+2. **The engine's own CONSTANT is legitimate only for a value the engine genuinely owns** — a timeout, a cap, a
+   retry ceiling — and then it is IMPORTED, never retyped, so moving the constant moves the test with it.
+3. **Observed output is NEVER an oracle.** A value read back from the code under test, or from a golden file
+   regenerated by that code, proves only that it did what it did. This programme has already frozen a live bug
+   as an expected value and carried it through two sign-offs.
+
+And prefer at least one case where the right answer **differs** from the wrong one's constant, or the test
+cannot witness the regression it exists for.
