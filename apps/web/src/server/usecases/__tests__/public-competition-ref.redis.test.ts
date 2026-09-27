@@ -45,6 +45,14 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/auth")>()),
   requireOrgRole: vi.fn(async () => ({ user: fakeUser, role: "owner" as const })),
 }));
+// The real slug-cache bust, which one test makes throw ONCE: it runs after the
+// org rename's commit, beside the lookup drop.
+const invalidateSlugCache = vi.hoisted(() => vi.fn());
+vi.mock("@/server/slug-resolve", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("@/server/slug-resolve")>();
+  invalidateSlugCache.mockImplementation(orig.invalidateSlugCache);
+  return { ...orig, invalidateSlugCache };
+});
 
 import { sql, statementCount } from "@/lib/db";
 import { incrWindow } from "@/lib/cache";
@@ -210,6 +218,30 @@ describe.skipIf(!HAS_DB || !HAS_REDIS)("the polled readers' cached slug lookups 
     await expect(publicOrgLive(s.orgSlug)).rejects.toMatchObject(refused);
     await expect(hub(data.slug, s.comp.slug)).resolves.toBeDefined();
     await expect(publicOrgLive(data.slug)).resolves.toBeDefined();
+  });
+
+  it("an org rename whose later cache busting THROWS still refuses the old slug — the drop runs straight after the commit", async () => {
+    const s = await seed();
+    await hub(s.orgSlug, s.comp.slug);
+    await publicOrgLive(s.orgSlug);
+    expect(await probe.get(publicOrgRefKey(s.orgSlug)), "premise: the org lookup is cached").not.toBeNull();
+    invalidateSlugCache.mockRejectedValueOnce(new Error("slug cache unreachable"));
+
+    const res = await patchOrg(
+      new Request("http://localhost/api/orgs/x", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: `Renamed Club ${randomUUID().slice(0, 8)}` }),
+      }),
+      { params: Promise.resolve({ id: s.auth.orgId }) },
+    );
+    expect(res.status, "premise: a step after the commit threw").toBe(500);
+    expect(invalidateSlugCache).toHaveBeenCalled();
+    const [{ slug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${s.auth.orgId}`;
+    expect(slug, "premise: the rename committed anyway").not.toBe(s.orgSlug);
+
+    await expect(hub(s.orgSlug, s.comp.slug)).rejects.toMatchObject(refused);
+    await expect(publicOrgLive(s.orgSlug)).rejects.toMatchObject(refused);
   });
 
   it("a patch that changes neither visibility nor slug leaves the competition served", async () => {

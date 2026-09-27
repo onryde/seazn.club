@@ -179,11 +179,16 @@ describe("cachedSingleFlight — a caller that finds a rebuild in flight", () =>
     const builder = cachedSingleFlight(opts({ builtBy: "builder", hold: hold.opened }));
     await sleep(5);
 
+    const readsBefore = redis.count("read");
     const started = Date.now();
     const loser = await cachedSingleFlight(opts({ builtBy: "loser", waitMs: 0, stale: undefined }));
 
     expect(loser.builtBy).toBe("loser");
-    expect(Date.now() - started).toBeLessThan(50);
+    // "At once" is pinned by what it SENT, not by the clock: its one GET found
+    // the lease, and it never polled. The clock bound is only a backstop,
+    // wide enough for a loaded CI runner.
+    expect(redis.count("read") - readsBefore).toBe(1);
+    expect(Date.now() - started).toBeLessThan(250);
     expect(redis.count("fill")).toBe(0);
     hold.open();
     await builder;

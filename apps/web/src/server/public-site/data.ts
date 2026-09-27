@@ -607,10 +607,8 @@ export async function getPublicOrg(orgSlug: string): Promise<{
 /** Competition home: hero + divisions (+ live-now strip). */
 export type LiveNowFixture = Omit<PublicFixture, "venue" | "court_label" | "venue_name" | "court_name">;
 
-export async function getPublicCompetition(
-  orgSlug: string,
-  compSlug: string,
-): Promise<{
+/** The competition shell: its org, its row, its public divisions and what is in play. */
+export interface PublicCompetitionShell {
   org: PublicOrg;
   competition: PublicCompetition;
   divisions: PublicDivision[];
@@ -619,84 +617,103 @@ export async function getPublicCompetition(
    *  future "Live now" card wanting a location wires it like getPublicDivision
    *  does (see the query's own note), rather than widening this back. */
   liveNow: LiveNowFixture[];
-} | null> {
+}
+
+/**
+ * The shell straight from Postgres — the body `getPublicCompetition` caches.
+ * Every public page reads the shell through that cache. The one reader that
+ * must not is the Redis hub rebuild (`loadCompetitionHub(…, { uncached: true })`
+ * from usecases/public.ts): its lease keeps a pre-write document out of
+ * `pub:v1:hub:{id}` only if the build reads the database AFTER the write's
+ * DEL, and this machine's data cache may not have heard of that write yet —
+ * a peer's tags expire only when `broadcastRevalidate` lands.
+ */
+export async function readPublicCompetitionShell(
+  orgSlug: string,
+  compSlug: string,
+): Promise<PublicCompetitionShell | null> {
+  const org = await loadOrg(orgSlug);
+  if (!org) return null;
+  const [competition] = await sql<PublicCompetition[]>`
+    select id, org_id, name, slug, description, starts_on, ends_on, branding,
+           status, visibility
+    from public_competitions_v
+    where org_id = ${org.id} and slug = ${compSlug} limit 1`;
+  if (!competition) return null;
+  const divisions = await sql<PublicDivision[]>`
+    select d.id, d.competition_id, d.name, d.slug, d.description,
+           d.sport_key, d.variant_key,
+           d.status, d.module_version, d.tiebreakers, s.name as sport_name,
+           -- V412 widened public_entrants_v to publish departed entrants
+           -- too (so a withdrawn player keeps her NAME on the board), so
+           -- the "who is competing" half of the question is asked here.
+           -- Without this clause a competition's headline entrant count
+           -- grows every time someone withdraws.
+           (select count(*)::int from public_entrants_v e
+             where e.division_id = d.id
+               and e.status in ('registered','confirmed')) as entrant_count,
+           -- RS008 review fix #5: public_divisions_v does not expose
+           -- these (see PublicDivision's own doc comment) — a cheap
+           -- primary-key join to the base table rather than widening
+           -- that view for every other consumer of it.
+           dv.youth, dv.player_name_display, dv.config,
+           -- T16b fix round 3: the stored format name, the fallback for a
+           -- variant the dictionary map does not name (variant-label.ts).
+           -- System rows and this org's own only, the org's row first —
+           -- the same scoping as getPublicFixture's variant lookup.
+           (select v.name from sport_variants v
+             where v.sport_key = d.sport_key and v.key = d.variant_key
+               and (v.org_id is null or v.org_id = ${org.id})
+             order by v.org_id nulls last
+             limit 1) as variant_name
+    from public_divisions_v d
+    left join sports s on s.key = d.sport_key
+    join divisions dv on dv.id = d.id
+    where d.competition_id = ${competition.id}
+    order by d.created_at, d.id`;
+  // P9 sweep (pass 3c-4): venue/court_label dropped from this SELECT
+  // rather than resolved via withCourtVenueNames like getPublicDivision/
+  // getPublicFixture below — verified first (not assumed): the "Live
+  // now" strip (competition page) renders only division name and
+  // summary.headline, and opengraph-image.tsx's only use of `liveNow` is
+  // its `.length`. No consumer reads venue/court_label/venue_name/
+  // court_name off a liveNow item, so a frozen read here was genuinely
+  // dead, not silently wrong — resolving names nobody renders would just
+  // be N wasted queries. NOTE: PublicFixture still declares all four as
+  // required `string | null`, so a liveNow item reads `undefined` on
+  // them at runtime despite the type — same class of gap the file's own
+  // "lane/is_final" comment above already flags for this exact type;
+  // widening those four fields to optional would ripple through every
+  // other PublicFixture consumer (schedule/bracket views, pass 4), which
+  // is out of this fix's blast radius. If a future "Live now" card ever
+  // wants to show where a match is being played, wire this the same way
+  // getPublicDivision does, not by re-adding venue/court_label.
+  // Review wave 3: this query selects none of the four court/venue fields,
+  // so the previous `PublicFixture[]` cast declared them present while they
+  // read `undefined` at runtime. No consumer touches them today; the cast
+  // is narrowed rather than the columns added, because the comment above
+  // says deliberately that a "Live now" card wanting a location should be
+  // wired like getPublicDivision, not by widening this.
+  const liveNow = await sql<LiveNowFixture[]>`
+    select f.id, f.division_id, f.stage_id, f.pool_id, f.round_no,
+           f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
+           f.home_slot_label, f.away_slot_label,
+           f.scheduled_at, f.status, f.outcome,
+           f.summary, f.last_seq,
+           f.lane, f.is_final, f.third_place, f.conditional
+    from public_fixtures_v f
+    join public_divisions_v d on d.id = f.division_id
+    where d.competition_id = ${competition.id} and f.status = 'in_play'
+    order by f.scheduled_at nulls last limit 12`;
+  return { org, competition, divisions, liveNow: liveNow.map(normalizeFixture) };
+}
+
+export async function getPublicCompetition(
+  orgSlug: string,
+  compSlug: string,
+): Promise<PublicCompetitionShell | null> {
   const shell = await unstable_cache(
-    async () => {
-      const org = await loadOrg(orgSlug);
-      if (!org) return null;
-      const [competition] = await sql<PublicCompetition[]>`
-        select id, org_id, name, slug, description, starts_on, ends_on, branding,
-               status, visibility
-        from public_competitions_v
-        where org_id = ${org.id} and slug = ${compSlug} limit 1`;
-      if (!competition) return null;
-      const divisions = await sql<PublicDivision[]>`
-        select d.id, d.competition_id, d.name, d.slug, d.description,
-               d.sport_key, d.variant_key,
-               d.status, d.module_version, d.tiebreakers, s.name as sport_name,
-               -- V412 widened public_entrants_v to publish departed entrants
-               -- too (so a withdrawn player keeps her NAME on the board), so
-               -- the "who is competing" half of the question is asked here.
-               -- Without this clause a competition's headline entrant count
-               -- grows every time someone withdraws.
-               (select count(*)::int from public_entrants_v e
-                 where e.division_id = d.id
-                   and e.status in ('registered','confirmed')) as entrant_count,
-               -- RS008 review fix #5: public_divisions_v does not expose
-               -- these (see PublicDivision's own doc comment) — a cheap
-               -- primary-key join to the base table rather than widening
-               -- that view for every other consumer of it.
-               dv.youth, dv.player_name_display, dv.config,
-               -- T16b fix round 3: the stored format name, the fallback for a
-               -- variant the dictionary map does not name (variant-label.ts).
-               -- System rows and this org's own only, the org's row first —
-               -- the same scoping as getPublicFixture's variant lookup.
-               (select v.name from sport_variants v
-                 where v.sport_key = d.sport_key and v.key = d.variant_key
-                   and (v.org_id is null or v.org_id = ${org.id})
-                 order by v.org_id nulls last
-                 limit 1) as variant_name
-        from public_divisions_v d
-        left join sports s on s.key = d.sport_key
-        join divisions dv on dv.id = d.id
-        where d.competition_id = ${competition.id}
-        order by d.created_at, d.id`;
-      // P9 sweep (pass 3c-4): venue/court_label dropped from this SELECT
-      // rather than resolved via withCourtVenueNames like getPublicDivision/
-      // getPublicFixture below — verified first (not assumed): the "Live
-      // now" strip (competition page) renders only division name and
-      // summary.headline, and opengraph-image.tsx's only use of `liveNow` is
-      // its `.length`. No consumer reads venue/court_label/venue_name/
-      // court_name off a liveNow item, so a frozen read here was genuinely
-      // dead, not silently wrong — resolving names nobody renders would just
-      // be N wasted queries. NOTE: PublicFixture still declares all four as
-      // required `string | null`, so a liveNow item reads `undefined` on
-      // them at runtime despite the type — same class of gap the file's own
-      // "lane/is_final" comment above already flags for this exact type;
-      // widening those four fields to optional would ripple through every
-      // other PublicFixture consumer (schedule/bracket views, pass 4), which
-      // is out of this fix's blast radius. If a future "Live now" card ever
-      // wants to show where a match is being played, wire this the same way
-      // getPublicDivision does, not by re-adding venue/court_label.
-      // Review wave 3: this query selects none of the four court/venue fields,
-      // so the previous `PublicFixture[]` cast declared them present while they
-      // read `undefined` at runtime. No consumer touches them today; the cast
-      // is narrowed rather than the columns added, because the comment above
-      // says deliberately that a "Live now" card wanting a location should be
-      // wired like getPublicDivision, not by widening this.
-      const liveNow = await sql<LiveNowFixture[]>`
-        select f.id, f.division_id, f.stage_id, f.pool_id, f.round_no,
-               f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
-               f.home_slot_label, f.away_slot_label,
-               f.scheduled_at, f.status, f.outcome,
-               f.summary, f.last_seq,
-               f.lane, f.is_final, f.third_place, f.conditional
-        from public_fixtures_v f
-        join public_divisions_v d on d.id = f.division_id
-        where d.competition_id = ${competition.id} and f.status = 'in_play'
-        order by f.scheduled_at nulls last limit 12`;
-      return { org, competition, divisions, liveNow: liveNow.map(normalizeFixture) };
-    },
+    () => readPublicCompetitionShell(orgSlug, compSlug),
     ["pub-comp", orgSlug, compSlug],
     { tags: [orgTag(orgSlug)], revalidate: REVALIDATE_FAST },
   )();
@@ -898,6 +915,77 @@ export async function readEntrantMemberRefs(entrantIds: string[]): Promise<Recor
   return out;
 }
 
+/**
+ * A division's detail straight from Postgres — the body `getPublicDivision`
+ * caches. Same rule as {@link readPublicCompetitionShell}: only the Redis hub
+ * rebuild reads it uncached.
+ */
+export async function readPublicDivisionDetail(division: PublicDivision) {
+  const stages = await sql<PublicStage[]>`
+    select id, division_id, seq, kind, name, status,
+           qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
+           has_rank_overrides,
+           -- Per-stage match rules (design 2026-09-17 T7): the rules
+           -- FRAGMENT only, read off stages by the VIEW row's own id so the
+           -- view still decides which rows exist and the rest of config
+           -- (progression, cross-feeds) stays private.
+           (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
+    from public_stages_v where division_id = ${division.id} order by seq`;
+  const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
+    select p.id, p.stage_id, p.key, p.name
+    from public_pools_v p
+    join public_stages_v s on s.id = p.stage_id
+    where s.division_id = ${division.id} order by p.key`;
+  // `ext_key` is the generator's stable id, which `roundRole` needs to tell a
+  // page playoff's Qualifier 1 from its Eliminator (fix round 1, M3). The
+  // view does not expose it, so it is read off `fixtures` by the VIEW row's
+  // own id: the view still decides which rows exist.
+  const rawFixtures = await sql<PublicFixture[]>`
+    select id, division_id, stage_id, pool_id, round_no, seq_in_round,
+           home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+           scheduled_at, venue, court_label,
+           status, outcome, summary, last_seq,
+           lane, is_final, third_place, conditional,
+           (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
+           -- The feed edges, by the same rule as ext_key above: not
+           -- columns of the view, read off fixtures by the VIEW row's own
+           -- id, so the view still decides which rows exist. They are what
+           -- lets a sibling-fed seat with no stored label read "Winner of
+           -- Semi-finals, match 1" instead of "TBD" (see PublicFixture).
+           -- (No backticks in here: this is inside a tagged template.)
+           (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
+           (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
+           (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
+           (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
+    from public_fixtures_v where division_id = ${division.id}
+    order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
+  const fixtures = await withCourtVenueNames(rawFixtures);
+  const standings = (
+    await sql<PublicStandings[]>`
+    select stage_id, pool_id, rows, updated_at
+    from public_standings_v where division_id = ${division.id}`
+  ).map(normalizeStandings);
+  const rawEntrants = await sql<PublicEntrant[]>`
+    select id, division_id, kind, display_name, seed, status, members,
+           team_display, badge_url
+    from public_entrants_v where division_id = ${division.id}
+    order by seed nulls last, display_name`;
+  // RS008 review fix #5 — masks a non-team entrant's own display_name by
+  // consent (and, unlike before this fix, by youth too). Feeds THIS
+  // page's own render, the calendar.ics/poster.pdf exports, and (via the
+  // `{...data}` spread in the two /present page.tsx files) the
+  // slideshow kiosk's own independent masking pass (fix #2).
+  const entrants = await maskPublicEntrantNames(rawEntrants, division);
+  // Venue lane (V305): the division's override, else the org's timezone.
+  const [ss] = await sql<{ tz: string }[]>`
+    select coalesce(ss.tz, o.timezone, 'UTC') as tz
+    from divisions d
+    left join schedule_settings ss on ss.division_id = d.id
+    left join organizations o on o.id = d.org_id
+    where d.id = ${division.id}`;
+  return { stages, pools, fixtures, standings, entrants, tz: ss?.tz ?? "UTC" };
+}
+
 /** Division home: schedule + standings + entrants + stage skeleton. */
 export async function getPublicDivision(
   orgSlug: string,
@@ -921,71 +1009,7 @@ export async function getPublicDivision(
   if (!division) return null;
 
   const detail = await unstable_cache(
-    async () => {
-      const stages = await sql<PublicStage[]>`
-        select id, division_id, seq, kind, name, status,
-               qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-               has_rank_overrides,
-               -- Per-stage match rules (design 2026-09-17 T7): the rules
-               -- FRAGMENT only, read off stages by the VIEW row's own id so the
-               -- view still decides which rows exist and the rest of config
-               -- (progression, cross-feeds) stays private.
-               (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
-        from public_stages_v where division_id = ${division.id} order by seq`;
-      const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
-        select p.id, p.stage_id, p.key, p.name
-        from public_pools_v p
-        join public_stages_v s on s.id = p.stage_id
-        where s.division_id = ${division.id} order by p.key`;
-      // `ext_key` is the generator's stable id, which `roundRole` needs to tell a
-      // page playoff's Qualifier 1 from its Eliminator (fix round 1, M3). The
-      // view does not expose it, so it is read off `fixtures` by the VIEW row's
-      // own id: the view still decides which rows exist.
-      const rawFixtures = await sql<PublicFixture[]>`
-        select id, division_id, stage_id, pool_id, round_no, seq_in_round,
-               home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
-               scheduled_at, venue, court_label,
-               status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional,
-               (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
-               -- The feed edges, by the same rule as ext_key above: not
-               -- columns of the view, read off fixtures by the VIEW row's own
-               -- id, so the view still decides which rows exist. They are what
-               -- lets a sibling-fed seat with no stored label read "Winner of
-               -- Semi-finals, match 1" instead of "TBD" (see PublicFixture).
-               -- (No backticks in here: this is inside a tagged template.)
-               (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
-               (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
-               (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
-               (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
-        from public_fixtures_v where division_id = ${division.id}
-        order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
-      const fixtures = await withCourtVenueNames(rawFixtures);
-      const standings = (
-        await sql<PublicStandings[]>`
-        select stage_id, pool_id, rows, updated_at
-        from public_standings_v where division_id = ${division.id}`
-      ).map(normalizeStandings);
-      const rawEntrants = await sql<PublicEntrant[]>`
-        select id, division_id, kind, display_name, seed, status, members,
-               team_display, badge_url
-        from public_entrants_v where division_id = ${division.id}
-        order by seed nulls last, display_name`;
-      // RS008 review fix #5 — masks a non-team entrant's own display_name by
-      // consent (and, unlike before this fix, by youth too). Feeds THIS
-      // page's own render, the calendar.ics/poster.pdf exports, and (via the
-      // `{...data}` spread in the two /present page.tsx files) the
-      // slideshow kiosk's own independent masking pass (fix #2).
-      const entrants = await maskPublicEntrantNames(rawEntrants, division);
-      // Venue lane (V305): the division's override, else the org's timezone.
-      const [ss] = await sql<{ tz: string }[]>`
-        select coalesce(ss.tz, o.timezone, 'UTC') as tz
-        from divisions d
-        left join schedule_settings ss on ss.division_id = d.id
-        left join organizations o on o.id = d.org_id
-        where d.id = ${division.id}`;
-      return { stages, pools, fixtures, standings, entrants, tz: ss?.tz ?? "UTC" };
-    },
+    () => readPublicDivisionDetail(division),
     // v2 (privacy hotfix, 2026-09-16): a member the division's name policy
     // masks now carries no `person_id` and no `photo` (maskPublicEntrantNames).
     // v3 (V414): every stage carries the qualification columns; a v2 entry

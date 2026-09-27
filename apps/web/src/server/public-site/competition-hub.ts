@@ -63,6 +63,8 @@ import {
   getPublicDivision,
   orgTag,
   readEntrantMemberRefs,
+  readPublicCompetitionShell,
+  readPublicDivisionDetail,
   REVALIDATE_FAST,
   type EntrantMemberRef,
   type PublicDivision,
@@ -560,13 +562,28 @@ function resolveModuleOrNull(sportKey: string, moduleVersion: string): AnySportM
  *
  * `now` is injectable so a test can pin a clock; nothing else in here reads
  * one.
+ *
+ * `uncached`: read the shell and every division straight from Postgres
+ * instead of through Next's data cache (`getPublicCompetition` /
+ * `getPublicDivision`). ONLY the Redis rebuild (`publicCompetitionHub`,
+ * usecases/public.ts) passes it. Its lease keeps a pre-write document out of
+ * `pub:v1:hub:{id}` only if the build reads the database after the write's
+ * DEL, and a score expires the data-cache tags on the machine that took it
+ * when its handler resolves, on every other machine when `broadcastRevalidate`
+ * lands — neither of which the DEL and the push wait for. A rebuild on a peer
+ * would otherwise fill the pre-score document, and single-flight hands that
+ * one document to every tab for the TTL. The ISR page keeps the cached reads:
+ * its own tags are what expire it.
  */
 export async function loadCompetitionHub(
   orgSlug: string,
   compSlug: string,
   now: Date = new Date(),
+  { uncached = false }: { uncached?: boolean } = {},
 ): Promise<CompetitionHubDocT | null> {
-  const shell = await getPublicCompetition(orgSlug, compSlug);
+  const shell = uncached
+    ? await readPublicCompetitionShell(orgSlug, compSlug)
+    : await getPublicCompetition(orgSlug, compSlug);
   if (!shell) return null;
   const { org, competition, divisions } = shell;
 
@@ -609,7 +626,12 @@ export async function loadCompetitionHub(
   // failure is an empty list, never a hub-down: bans are a line on a squad,
   // not the page.
   const [details, allBans] = await Promise.all([
-    Promise.all(divisions.map(async (d) => ({ d, detail: await getPublicDivision(orgSlug, compSlug, d.slug) }))),
+    Promise.all(
+      divisions.map(async (d) => ({
+        d,
+        detail: uncached ? await readPublicDivisionDetail(d) : await getPublicDivision(orgSlug, compSlug, d.slug),
+      })),
+    ),
     activePublicSuspensionEntries(divisions.map((d) => d.id)).catch((err: unknown): HubBan[] => {
       log.warn(
         { competitionId: competition.id, err: err instanceof Error ? err.message : String(err) },

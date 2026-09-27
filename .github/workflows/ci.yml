@@ -852,8 +852,14 @@ jobs:
       #     polled readers' cached slug lookups: a visibility flip, slug rename,
       #     delete or org rename refuses the next poll; invisible without a real
       #     Redis for the same reason as the entitlement suite above.
+      #
+      # NO stray `run` positional, for the reason the src/server+src/lib step
+      # above gives: the workspace script is already `vitest run`, so `run` is
+      # a FILENAME FILTER. Here it matched every path containing "run" and
+      # dragged 30 unrelated files into this step (35 files collected against
+      # the 5 named; measured 2026-09-27).
       - name: Redis-gated integration tests (rate limiter, entitlement cache, platform fee cache, hub leases, public lookups)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts src/lib/__tests__/cache-lease.redis.test.ts src/server/usecases/__tests__/public-competition-ref.redis.test.ts
+        run: npm test --workspace apps/web -- src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts src/lib/__tests__/cache-lease.redis.test.ts src/server/usecases/__tests__/public-competition-ref.redis.test.ts
         env:
           REDIS_URL: redis://localhost:6379
 

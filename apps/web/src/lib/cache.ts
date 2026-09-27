@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
+import { log } from "@/server/logger";
 
 /**
  * Redis (Upstash) client + cache-aside helpers (doc 02 §5.3, doc 05 §8).
@@ -160,6 +161,34 @@ export async function cacheDelPattern(pattern: string): Promise<void> {
 
 const LEASE_PREFIX = "lease:";
 
+/** At most one log line per lease operation per this long. */
+export const LEASE_FAILURE_LOG_INTERVAL_MS = 60_000;
+const leaseFailureLoggedAt = new Map<string, number>();
+
+/**
+ * A lease call that THREW, as opposed to one that answered "no". Both fail
+ * open, but a throw that keeps happening — a provider rejecting the EVAL, a
+ * key of the wrong type answering WRONGTYPE to every GET — silently turns
+ * every poll into a bounded wait plus a rebuild, which is worse than having
+ * no lease at all. Logged, throttled per operation, so a dead Redis under a
+ * stampede of polls is one line a minute per operation, not one per poll.
+ */
+function logLeaseFailure(op: "read" | "acquire" | "fill" | "release", key: string, err: unknown): void {
+  const now = Date.now();
+  const last = leaseFailureLoggedAt.get(op);
+  if (last !== undefined && now - last < LEASE_FAILURE_LOG_INTERVAL_MS) return;
+  leaseFailureLoggedAt.set(op, now);
+  log.warn(
+    { op, key, err: err instanceof Error ? err.message : String(err) },
+    "cache lease: a Redis call threw — failing open, so rebuilds are not single-flight until it recovers (logged at most once a minute per operation)",
+  );
+}
+
+/** Test seam: forget when each operation last logged. */
+export function __resetLeaseFailureLogForTests(): void {
+  leaseFailureLoggedAt.clear();
+}
+
 /** What a raw GET found under a lease-guarded key. */
 export type RawRead =
   | { kind: "unavailable" }
@@ -184,7 +213,8 @@ export async function cacheReadRaw(key: string): Promise<RawRead> {
     if (raw === null) return { kind: "absent" };
     if (raw.startsWith(LEASE_PREFIX)) return { kind: "leased" };
     return { kind: "value", raw };
-  } catch {
+  } catch (err) {
+    logLeaseFailure("read", key, err);
     return { kind: "unavailable" };
   }
 }
@@ -214,7 +244,8 @@ export async function cacheLeaseAcquire(
         ? await c.set(key, marker, "PX", leaseMs, "NX")
         : await c.set(key, marker, "PX", leaseMs);
     return ok === "OK" ? { kind: "acquired", token } : { kind: "held" };
-  } catch {
+  } catch (err) {
+    logLeaseFailure("acquire", key, err);
     return { kind: "unavailable" };
   }
 }
@@ -258,7 +289,8 @@ export async function cacheLeaseFill(
       ? await c.eval(LEASE_FILL_LUA, 2, key, stale.key, LEASE_PREFIX + token, raw, String(ttlSeconds), String(stale.ttlSeconds))
       : await c.eval(LEASE_FILL_LUA, 1, key, LEASE_PREFIX + token, raw, String(ttlSeconds));
     return Number(landed) === 1;
-  } catch {
+  } catch (err) {
+    logLeaseFailure("fill", key, err);
     return false;
   }
 }
@@ -269,8 +301,9 @@ export async function cacheLeaseRelease(key: string, token: string): Promise<voi
     const c = client();
     if (!c) return;
     await c.eval(LEASE_RELEASE_LUA, 1, key, LEASE_PREFIX + token);
-  } catch {
-    /* fail open — the lease expires on its own */
+  } catch (err) {
+    // Fail open — the lease expires on its own.
+    logLeaseFailure("release", key, err);
   }
 }
 

@@ -308,7 +308,14 @@ export async function publicCompetitionHub(
  * fill is a compare-and-set on its own lease, which lives under this same key:
  * a write that lands mid-rebuild DELs the key, the lease with it, and the
  * pre-write document is never cached. No writer changes — they all still DEL
- * `pub:v1:hub:{id}` by name.
+ * `pub:v1:hub:{id}` by name, after their commit.
+ *
+ * That argument needs the build to read POSTGRES after the DEL, so the rebuild
+ * passes `uncached`: `loadCompetitionHub` otherwise reads through Next's data
+ * cache, whose tags a write expires on this machine only when its handler
+ * resolves and on a peer only when `broadcastRevalidate` lands — later than
+ * the DEL and the push. Single-flight makes the cost of that affordable: one
+ * full read per write (and per TTL) per competition, not one per tab.
  */
 async function cachedHub(orgSlug: string, slug: string, full: CompetitionRef): Promise<CompetitionHubDocT> {
   return cachedSingleFlight<CompetitionHubDocT>({
@@ -319,7 +326,7 @@ async function cachedHub(orgSlug: string, slug: string, full: CompetitionRef): P
     stale: { key: publicHubStaleCacheKey(full.id), ttlSeconds: HUB_STALE_TTL_SECONDS },
     isValid: (hit) => CompetitionHubDoc.safeParse(hit).success,
     build: async () => {
-      const doc = await loadCompetitionHub(orgSlug, slug);
+      const doc = await loadCompetitionHub(orgSlug, slug, new Date(), { uncached: true });
       if (!doc) throw new HttpError(404, "competition not found");
       // Final-review fix F3 — `isValid` below only checks what comes BACK
       // from Redis on a HIT. Without this, a freshly built document that

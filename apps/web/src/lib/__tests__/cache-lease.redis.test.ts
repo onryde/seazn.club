@@ -72,13 +72,15 @@ describe.skipIf(!HAS_REDIS)("cache leases (real Redis)", () => {
 
     it("a lease EXPIRES after its PX: a holder that died hands the key on by itself", async () => {
       const key = uniq();
-      expect((await cacheLeaseAcquire(key, 100, "absent")).kind).toBe("acquired");
-      expect((await cacheLeaseAcquire(key, 100, "absent")).kind).toBe("held");
+      // A PX long enough that the second acquire's round trip lands well
+      // inside it on a loaded runner, and a sleep past it.
+      expect((await cacheLeaseAcquire(key, 1_000, "absent")).kind).toBe("acquired");
+      expect((await cacheLeaseAcquire(key, 1_000, "absent")).kind).toBe("held");
 
-      await sleep(180);
+      await sleep(1_300);
 
       expect(await cacheReadRaw(key)).toEqual({ kind: "absent" });
-      expect((await cacheLeaseAcquire(key, 100, "absent")).kind).toBe("acquired");
+      expect((await cacheLeaseAcquire(key, 1_000, "absent")).kind).toBe("acquired");
     });
   });
 

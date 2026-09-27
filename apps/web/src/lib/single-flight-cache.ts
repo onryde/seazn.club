@@ -36,6 +36,13 @@ import "server-only";
 // has waited `waitMs` with a rebuild still in flight — and the fill that
 // completes that rebuild overwrites the copy in the same Redis step, so once a
 // fresh build has landed nobody is served the pre-write document again.
+//
+// PRECONDITION: that is a promise about when the build STARTED. It is a
+// promise about the DATA only if `build` reads the source of truth, committed
+// before the writer's DEL — never a cache that lags the write. Next's data
+// cache does lag it (a peer's tags expire only when `broadcastRevalidate`
+// lands), which is why the hub's build reads Postgres uncached
+// (usecases/public.ts, `loadCompetitionHub(…, { uncached: true })`).
 import { cacheLeaseAcquire, cacheLeaseFill, cacheLeaseRelease, cacheReadRaw, type RawRead } from "@/lib/cache";
 
 export interface SingleFlightOptions<T> {
