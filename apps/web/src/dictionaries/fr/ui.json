@@ -2219,6 +2219,7 @@
   "compset.statusHint.live": "Les matchs sont en cours — passer en direct ?",
   "compset.statusHint.completed": "Ses matchs sont terminés, ou sa date de fin est passée — marquer comme terminé ?",
   "compset.statusHint.fallback": "On dirait que cela devrait être « {status} ».",
+  "compset.draftUnlisted": "Seules les personnes disposant du lien peuvent le voir. Il n'apparaît ni sur votre page ni dans la recherche tant que vous ne l'avez pas publié.",
   "compset.tab.general": "Général",
   "compset.tab.branding": "Image de marque",
   "compset.tab.archived": "Archivé ({n})",

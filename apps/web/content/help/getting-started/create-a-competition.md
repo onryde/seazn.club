@@ -17,7 +17,19 @@ The end date is the one field you cannot leave blank, because it is what tells u
 
 ## Visibility
 
-Every competition starts **Private** (only your team sees it). Switch to **Link only** to share with anyone who has the URL, or **Public** to be findable on search engines and our Discover page. You can change this at any time in the competition's settings.
+A new competition starts as a **draft**, with **Public** visibility unless you pick another when you create it. While it is a draft, anyone you give the link to can open its page and register, but it is not listed on your organisation page or in search results. Set its **Status** to **Published** in the competition's settings when you are ready, and it appears on your organisation page and becomes findable by search engines.
+
+Visibility is separate from status, and you can change it at any time in the same settings:
+
+- **Public**: listed on your organisation page and findable in search once published.
+- **Link only**: anyone with the link can view and register, but it is never listed, even after publishing.
+- **Private**: only your team sees it.
+
+To also appear on the seazn.club Discover page, a public competition needs **Showcase on seazn.club** switched on. It is shown there once it is published and has a published schedule or a result.
+
+If your plan's limit on public pages is already reached, a new competition is created **Private** instead, and you are told so.
+
+A finished competition stays listed when you mark it completed or archived: it shows as **Finished**, and nothing is lost. Setting a published competition back to draft takes it off your organisation page again.
 
 ## Common questions
 

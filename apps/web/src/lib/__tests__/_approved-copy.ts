@@ -601,6 +601,11 @@ export const APPROVED_GROUPS_INVENTORY: string[] = [
  * `registration.fee_percent`), the plan org caps (5 / 10, `orgs.max_owned`,
  * V314), the extra-organisation rate (`riderClaimShape`), and that Community
  * can already take card entry fees.
+ *
+ * Surface 11 ("Who can see my organisation?") re-approved 2026-09-27 for the
+ * owner decision that a DRAFT competition is unlisted until published: the
+ * org page lists Public AND published only (`listOrgHomeCompetitions`), and a
+ * new competition is a public draft reachable by link and open to register.
  */
 export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "5a9aee8c75f74828",
@@ -613,6 +618,6 @@ export const APPROVED_CREATE_ORG_INVENTORY: string[] = [
   "7e96998f849cb38b",
   "09c784bdca897d29",
   "98cabe982ddf445c",
-  "d78a55bea4454182",
+  "ad7ae2d3a170de2f",
   "ec33da78b550dcac"
 ];

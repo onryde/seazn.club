@@ -2219,6 +2219,7 @@
   "compset.statusHint.live": "Wedstrijden zijn bezig — als live markeren?",
   "compset.statusHint.completed": "De wedstrijden zijn afgelopen of de einddatum is verstreken — als voltooid markeren?",
   "compset.statusHint.fallback": "Dit zou waarschijnlijk “{status}” moeten zijn.",
+  "compset.draftUnlisted": "Alleen mensen met de link kunnen het zien. Het staat niet op je pagina of in zoekresultaten totdat je het publiceert.",
   "compset.tab.general": "Algemeen",
   "compset.tab.branding": "Branding",
   "compset.tab.archived": "Gearchiveerd ({n})",

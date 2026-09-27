@@ -23,6 +23,7 @@ import { playerMatchesDict } from "@/lib/player-matches-dict";
 import { routes } from "@/lib/routes";
 import { PlayerMatches } from "@/components/public-site/player-matches";
 import { PlayerUpcoming } from "@/components/public-site/player-upcoming";
+import { linkOnlyRobots } from "@/lib/competition-listing";
 
 export const revalidate = 300; // doc 09 §3: entrant/player pages revalidate 300
 
@@ -52,9 +53,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title: `${data.player.name} — ${data.competition.name}`,
     description: playerMetaDescription(data.player.name, data.competition.name, dict),
-    ...(data.competition.visibility === "unlisted"
-      ? { robots: { index: false, follow: false } }
-      : {}),
+    // Doc 09 §1: link-only = crawlers out, page up. Unlisted, and — owner
+    // decision 2026-09-27 — a DRAFT, which is unlisted until published.
+    ...linkOnlyRobots(data.competition),
   };
 }
 

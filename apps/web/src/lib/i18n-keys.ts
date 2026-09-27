@@ -1276,6 +1276,7 @@ export type DictionaryKey =
   | "compset.country"
   | "compset.description"
   | "compset.descriptionPlaceholder"
+  | "compset.draftUnlisted"
   | "compset.ends"
   | "compset.failed"
   | "compset.failedStatus"

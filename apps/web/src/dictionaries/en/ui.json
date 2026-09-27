@@ -2219,6 +2219,7 @@
   "compset.statusHint.live": "Matches are underway — mark it live?",
   "compset.statusHint.completed": "Its matches are done, or its end date has passed — mark it completed?",
   "compset.statusHint.fallback": "Looks like this should be “{status}”.",
+  "compset.draftUnlisted": "Only people with the link can see it. It's not listed on your page or in search until you publish.",
   "compset.tab.general": "General",
   "compset.tab.branding": "Branding",
   "compset.tab.archived": "Archived ({n})",

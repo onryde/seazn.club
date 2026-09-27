@@ -333,6 +333,19 @@ export function CompetitionSettings({
                       </option>
                     ))}
                   </select>
+                  {/* Owner decision 2026-09-27: a draft is unlisted until
+                      published. Said only for a PUBLIC draft — for a private
+                      one "with the link" is false, and for an unlisted one
+                      "until you publish" is. Follows the form, so choosing
+                      "published" takes it away before the save. */}
+                  {form.status === "draft" && form.visibility === "public" && (
+                    <span
+                      data-testid="compset-draft-unlisted"
+                      className="mt-1.5 block text-xs leading-relaxed text-slate-500"
+                    >
+                      {msg("compset.draftUnlisted")}
+                    </span>
+                  )}
                   {showSuggestion && (
                     <span className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md bg-purple-50 px-2.5 py-1.5 text-xs text-purple-800">
                       {statusHint(msg, suggestedStatus!)}

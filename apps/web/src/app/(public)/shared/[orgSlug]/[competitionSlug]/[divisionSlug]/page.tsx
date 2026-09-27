@@ -39,6 +39,7 @@ import { variantLabel } from "@/server/public-site/variant-label";
 import { stageFormatLines } from "@/server/public-site/stage-format-lines";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
+import { linkOnlyRobots } from "@/lib/competition-listing";
 
 export const revalidate = 30;
 
@@ -64,9 +65,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       division: data.division.name,
       competition: data.competition.name,
     }),
-    ...(data.competition.visibility === "unlisted"
-      ? { robots: { index: false, follow: false } }
-      : {}),
+    // Doc 09 §1: link-only = crawlers out, page up. Unlisted, and — owner
+    // decision 2026-09-27 — a DRAFT, which is unlisted until published.
+    ...linkOnlyRobots(data.competition),
   };
 }
 

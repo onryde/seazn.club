@@ -69,6 +69,7 @@ import { CompetitionLanding } from "@/components/public-site/matches-hub/competi
 import { competitionDateLine } from "@/components/public-site/matches-hub/info-tab";
 import { ShareBar } from "@/components/share-bar";
 import { shareLabels } from "@/components/public-site/share-labels";
+import { linkOnlyRobots } from "@/lib/competition-listing";
 
 export const revalidate = 30;
 
@@ -111,10 +112,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         org: data.org.name,
       }),
     ),
-    // Doc 09 §1: unlisted = link-only. Keep crawlers out but the page up.
-    ...(data.competition.visibility === "unlisted"
-      ? { robots: { index: false, follow: false } }
-      : {}),
+    // Doc 09 §1: link-only = crawlers out, page up. Unlisted, and — owner
+    // decision 2026-09-27 — a DRAFT, which is unlisted until published.
+    ...linkOnlyRobots(data.competition),
   };
 }
 

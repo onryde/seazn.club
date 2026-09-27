@@ -36,6 +36,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { getDictionary, t } from "@/lib/i18n";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import { decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { linkOnlyRobots } from "@/lib/competition-listing";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -183,9 +184,9 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
     description:
       withDecidedLine(data.fixture.summary?.headline, decidedLine) ??
       t(ui, "fixture.meta.description", { home, away, competition: data.competition.name }),
-    ...(data.competition.visibility === "unlisted"
-      ? { robots: { index: false, follow: false } }
-      : {}),
+    // Doc 09 §1: link-only = crawlers out, page up. Unlisted, and — owner
+    // decision 2026-09-27 — a DRAFT, which is unlisted until published.
+    ...linkOnlyRobots(data.competition),
   };
 }
 

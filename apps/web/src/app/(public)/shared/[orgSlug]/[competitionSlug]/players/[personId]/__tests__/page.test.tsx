@@ -431,6 +431,24 @@ describe("player page — generateMetadata", () => {
     expect((await meta()).title).toBe("Ada Lovelace — Autumn Cup");
   });
 
+  // Owner decision 2026-09-27: a DRAFT is unlisted until published, so the
+  // card is link-only exactly as an unlisted competition's is.
+  it("keeps a public DRAFT's card out of the index like an unlisted one; a published or archived public one stays in it", async () => {
+    const withComp = (competition: { visibility: string; status: string }) => {
+      const d = data({ locale: "en" });
+      return { ...d, competition: { ...d.competition, ...competition } };
+    };
+    stub.getPublicPlayer.mockResolvedValue(withComp({ visibility: "public", status: "draft" }));
+    expect((await meta()).robots).toEqual({ index: false, follow: false });
+    stub.getPublicPlayer.mockResolvedValue(withComp({ visibility: "unlisted", status: "published" }));
+    expect((await meta()).robots).toEqual({ index: false, follow: false });
+
+    stub.getPublicPlayer.mockResolvedValue(withComp({ visibility: "public", status: "published" }));
+    expect((await meta()).robots).toBeUndefined();
+    stub.getPublicPlayer.mockResolvedValue(withComp({ visibility: "public", status: "archived" }));
+    expect((await meta()).robots).toBeUndefined();
+  });
+
   it("a person getPublicPlayer refuses gets no metadata", async () => {
     stub.getPublicPlayer.mockResolvedValue(null);
     expect(await meta()).toEqual({});
