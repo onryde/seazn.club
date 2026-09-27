@@ -97,3 +97,55 @@ becoming the thing nobody replaces.
 
 Neither question is urgent for lane B. They are urgent before anyone writes an R3 line, and before the
 scorer-sheets programme hardens `device_links` in a shape that assumes one fixture forever.
+
+---
+
+## OWNER RULING 2026-09-27 — Q1 is **1a: per-match sessions, the device re-pointed**
+
+Owner's words: *"Ok 1a, so org owner can feed new match in realtime without touching the phone"*. One credit
+buys one MATCH; the durable new row is a device registration beside the existing session, and the session
+aggregate, the credit ledger and `fill_replay` are all untouched. A court-day session is rejected — it would
+make `fixture_id` a moving pointer and contradict the invariant Task 2A built and reviewed.
+
+## The output side, answered from the schema (owner's follow-up: single YouTube video or per match?)
+
+Read today, not assumed: `org_stream_targets` is `(org_id, kind, label, rtmp_enc, watch_url)` — **per ORG, with
+no court and no fixture binding** — and `fixture_stream_sessions.target_id` is **NOT NULL, exactly one target
+per session** (design §6.1, live in V410).
+
+So there are two separate things, and only one of them rotates:
+
+- **The destination is registered ONCE.** The YouTube RTMPS url+key is a sealed `rtmp_enc` row an organiser
+  enters one time. Nobody re-enters a key between matches, ever.
+- **The video is PER MATCH.** Each match is its own session, so it is its own push to that key. A persistent
+  YouTube key ends its broadcast when the push stops and opens a new video on the next push, which is exactly
+  the per-match shape 1a already pays for and already gives a replay link to.
+
+**Why not one continuous YouTube video per court-day:** something must keep pushing frames through every
+changeover or YouTube ends the broadcast (~60 s of no data). That means a slate held up by the compositor
+between matches — Fly compute and Cloudflare minutes burned for time nobody is playing, which under 1a is
+UNFUNDED, because a credit buys a match and not a day. Viewer discovery is the only thing a single long video
+would have bought, and we solve that on our own surface: the spectator page knows which session is live on which
+court, so "Court 1 — live now" is a link we own rather than a YouTube tab a viewer has to keep.
+
+**UNMEASURED, and it is what the unlisted YouTube key the owner owes is for:** whether a given channel opens a
+NEW video per push or resumes one broadcast depends on that channel's auto-start / auto-stop settings. The
+sentence above is a prediction from how a persistent key behaves, not a measurement — no YouTube key has been
+tested by this programme. Treat it as a premise to verify before R3 ships, not a fact.
+
+### GAP found while answering this — two courts, one key (concrete, cheap now)
+
+`target_id` is org-scoped and **nothing stops two concurrent sessions naming the SAME target.** One match at a
+time hid this; the owner's scenario makes it routine — Court 1 and Court 2 both live, both pointing at the org's
+single "YouTube" row, both pushing the same RTMPS key. YouTube accepts one broadcast per key, so the second
+court's stream is refused or fights the first, and the failure surfaces as "the stream did not start" with
+nothing in our own data explaining why.
+
+Two things follow, neither built and neither ruled:
+
+1. **A target belongs to a court** in this workflow — "Court 1 — YouTube", "Court 2 — YouTube" — so the desk
+   cannot mis-pick. Today it is a free-text `label` and operator discipline.
+2. **Refuse a session whose target is already held by a live session.** A partial unique index on `target_id`
+   over the non-terminal states, or the guard in the usecase, is the difference between a clear refusal at
+   provision time and a broadcast that silently does not happen. This one is worth doing even without the
+   court-bound device, because a human can already double-book a target today.
