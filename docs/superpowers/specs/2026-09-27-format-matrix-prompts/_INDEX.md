@@ -173,3 +173,12 @@ Record each audit gap that fails to hold, with who found it.
   full-point bye in place; only a house-rule half-point bye is missing. Lower
   severity than filed.
 - **ST-G21** — found by grep only; still needs a read (R5).
+- **SC-S3 (premise)** — assumed a walkover should credit 21–0 / 6–0 6–0; BWF
+  GCR 16.2.5 deletes the withdrawn player's group results instead, and ATP
+  counts straight sets with games excluded. The gap (no credit today) stands;
+  the fix differs per sport. Found by the W2 sets/cricket rulebook draft
+  (`843128e27`).
+- **SC-C2 (premise)** — assumed super overs are knockout-only; ICC T20I
+  16.3.1.1 plays them on group ties too. The gap (flag division-wide only)
+  stands.
+- **SC-S5 (source)** — the rule is ATP Rulebook 4.02, not an ITF convention.
