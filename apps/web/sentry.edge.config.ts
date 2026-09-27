@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 import { scrubScoreTokens, scrubSentryEvent } from "@/lib/scrub-score-url";
+import { sentryBeforeSendTransaction } from "@/lib/sentry-transactions";
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -8,7 +9,7 @@ Sentry.init({
   enableLogs: true,
   // Device-link tokens (/score/<token>, Bearer dl_…) out of every event and log.
   beforeSend: scrubSentryEvent,
-  beforeSendTransaction: scrubSentryEvent,
+  beforeSendTransaction: sentryBeforeSendTransaction,
   beforeSendLog: scrubScoreTokens,
   enabled: !!(process.env.SENTRY_DSN ?? process.env.NEXT_PUBLIC_SENTRY_DSN),
 });
