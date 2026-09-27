@@ -60,9 +60,9 @@ import {
   competitionTag,
   divisionTag,
   getPublicCompetition,
-  getPublicDivision,
   orgTag,
   readEntrantMemberRefs,
+  readPublicCompetitionShell,
   REVALIDATE_FAST,
   type EntrantMemberRef,
   type PublicDivision,
@@ -72,6 +72,7 @@ import {
 } from "./data";
 import { statusOf } from "./match-centre";
 import { byPoolOrder } from "@/lib/pool-order";
+import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { divisionQualification } from "./division-qualification";
@@ -560,13 +561,28 @@ function resolveModuleOrNull(sportKey: string, moduleVersion: string): AnySportM
  *
  * `now` is injectable so a test can pin a clock; nothing else in here reads
  * one.
+ *
+ * `uncached`: read the shell and every division straight from Postgres
+ * instead of through Next's data cache (`getPublicCompetition` /
+ * `getPublicDivision`). ONLY the Redis rebuild (`publicCompetitionHub`,
+ * usecases/public.ts) passes it. Its lease keeps a pre-write document out of
+ * `pub:v1:hub:{id}` only if the build reads the database after the write's
+ * DEL, and a score expires the data-cache tags on the machine that took it
+ * when its handler resolves, on every other machine when `broadcastRevalidate`
+ * lands — neither of which the DEL and the push wait for. A rebuild on a peer
+ * would otherwise fill the pre-score document, and single-flight hands that
+ * one document to every tab for the TTL. The ISR page keeps the cached reads:
+ * its own tags are what expire it.
  */
 export async function loadCompetitionHub(
   orgSlug: string,
   compSlug: string,
   now: Date = new Date(),
+  { uncached = false }: { uncached?: boolean } = {},
 ): Promise<CompetitionHubDocT | null> {
-  const shell = await getPublicCompetition(orgSlug, compSlug);
+  const shell = uncached
+    ? await readPublicCompetitionShell(orgSlug, compSlug)
+    : await getPublicCompetition(orgSlug, compSlug);
   if (!shell) return null;
   const { org, competition, divisions } = shell;
 
@@ -608,8 +624,14 @@ export async function loadCompetitionHub(
   // single-flight, and `refreshDiscipline` serves bans on the write path. A
   // failure is an empty list, never a hub-down: bans are a line on a squad,
   // not the page.
+  //
+  // Every division at once, each one query at a time: `readEveryPublicDivision`
+  // holds at most one pooled connection per division (T4 — 12 connections a
+  // machine in prod).
   const [details, allBans] = await Promise.all([
-    Promise.all(divisions.map(async (d) => ({ d, detail: await getPublicDivision(orgSlug, compSlug, d.slug) }))),
+    readEveryPublicDivision(orgSlug, compSlug, divisions, { uncached }).then((read) =>
+      divisions.map((d, i) => ({ d, detail: read[i] ?? null })),
+    ),
     activePublicSuspensionEntries(divisions.map((d) => d.id)).catch((err: unknown): HubBan[] => {
       log.warn(
         { competitionId: competition.id, err: err instanceof Error ? err.message : String(err) },
@@ -950,8 +972,9 @@ type HubBan = Awaited<ReturnType<typeof activePublicSuspensionEntries>>[number];
 /**
  * One division's squads (per entrant) and its list of active bans.
  *
- * Members are the MASKED lines `getPublicDivision` already produced — never
- * re-read, never re-masked. A line links to the player page only where the
+ * Members are the MASKED lines the division read already produced
+ * (`getPublicDivision` on the page path, `readPublicDivisionDetail` on the
+ * Redis rebuild) — never re-read, never re-masked. A line links to the player page only where the
  * view published an id (consent + player-profile entitlement) AND the
  * division shows full names: a masked name with a link is the full name one
  * click away (`playerLinkId`, which the division page's Entrants tab links
@@ -959,10 +982,11 @@ type HubBan = Awaited<ReturnType<typeof activePublicSuspensionEntries>>[number];
  *
  * A ban is matched to a line by PERSON, never by name (two players can share
  * one), by zipping `readEntrantMemberRefs`'s internal rows onto the view's
- * lines by position. The lines come from `getPublicDivision`'s cache while the
- * rows are read fresh, and a roster write does not revalidate that cache, so
- * a renumber or a swap between the two reads shifts who sits at index i
- * without changing the count. The zip is therefore trusted for a team only
+ * lines by position. On the page path the lines come from `getPublicDivision`'s
+ * cache while the rows are read fresh, and a roster write does not revalidate
+ * that cache, so a renumber or a swap between the two reads shifts who sits at
+ * index i without changing the count. (The Redis rebuild reads both fresh, but
+ * a write can still land between its two reads.) The zip is therefore trusted for a team only
  * when EVERY row agrees with its line (`squadRowsMatchLines`): same count,
  * same squad number, same position, the same name once the row's full name
  * is masked by the division's own policy, the same person wherever the view

@@ -16,6 +16,7 @@ import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
+import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED, REASON_CODE } from "@/lib/schedule-board";
 import { resolveVenueTz } from "@/lib/tz";
@@ -136,7 +137,7 @@ export function afterScheduleWrite(
   // no per-fixture push: one write must not fan out hundreds of broadcasts, and
   // those match centres catch up on their poll.
   const keys = [
-    `pub:v1:hub:${competitionId}`,
+    publicHubCacheKey(competitionId),
     ...fixtureIds.map(publicFixtureCacheKey),
     ...publicDivisionCacheKeys(divisionId),
   ];

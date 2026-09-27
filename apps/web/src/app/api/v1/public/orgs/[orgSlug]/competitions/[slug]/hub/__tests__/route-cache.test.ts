@@ -8,39 +8,26 @@
 // `@/server/public-site/competition-hub`), the same convention
 // hub-cache-poisoned-entry.test.ts uses, and calls the real `GET` twice.
 //
-// `cacheGet`/`cacheSet` are backed by a real in-memory Map so the second
-// request actually reads what the first one wrote — a stateless pair of
-// `vi.fn()`s would prove nothing about whether the SECOND call skips the
-// loader, only that each call was made with some arguments.
+// Redis is a real in-memory store (the lease fake, lib/__tests__/
+// _fake-lease-cache.ts — public hub perf T2 moved the hub onto the lease
+// primitives) so the second request actually reads what the first one wrote —
+// a stateless pair of `vi.fn()`s would prove nothing about whether the SECOND
+// call skips the loader, only that each call was made with some arguments.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn(async () => {}) }));
 
-const store = new Map<string, unknown>();
-const cacheGet = vi.hoisted(() =>
-  vi.fn(async (key: string) => {
-    void key;
-    return null as unknown;
-  }),
-);
-const cacheSet = vi.hoisted(() =>
-  vi.fn(async (key: string, value: unknown, ttl: number) => {
-    void key;
-    void value;
-    void ttl;
-  }),
-);
+vi.mock("@/lib/cache", async (importOriginal) => {
+  const { fakeLeaseCache } = await import("@/lib/__tests__/_fake-lease-cache");
+  return { ...(await importOriginal<typeof import("@/lib/cache")>()), ...fakeLeaseCache.module() };
+});
 const loadCompetitionHub = vi.hoisted(() => vi.fn());
-// `findCompetition` (usecases/public.ts) runs before the cache is touched —
-// a bare `vi.fn()` standing in for the tagged-template `sql`, same shape
-// hub-cache-poisoned-entry.test.ts uses one layer down.
-const sql = vi.hoisted(() => vi.fn(async () => [{ id: "c1" }]));
+// The competition gate (`findCompetitionRef`, usecases/public.ts) runs
+// before the hub key is touched — a bare `vi.fn()` standing in for the
+// tagged-template `sql`, same shape hub-cache-poisoned-entry.test.ts uses one
+// layer down.
+const sql = vi.hoisted(() => vi.fn(async () => [{ id: "c1", org_id: "o1" }]));
 
-vi.mock("@/lib/cache", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/cache")>()),
-  cacheGet,
-  cacheSet,
-}));
 vi.mock("@/lib/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/db")>()),
   sql,
@@ -52,19 +39,16 @@ vi.mock("@/server/public-site/competition-hub", async (importOriginal) => ({
 
 import { GET } from "../route";
 import { validHubDoc } from "@/server/public-site/__tests__/_hub-doc";
+import { fakeLeaseCache as redis } from "@/lib/__tests__/_fake-lease-cache";
 
 const ctx = { params: Promise.resolve({ orgSlug: "riverside", slug: "autumn-cup" }) };
 const req = () => new Request("http://x/api/v1/public/orgs/riverside/competitions/autumn-cup/hub");
 
 beforeEach(() => {
   vi.clearAllMocks();
-  store.clear();
-  sql.mockResolvedValue([{ id: "c1" }]);
+  redis.reset();
+  sql.mockResolvedValue([{ id: "c1", org_id: "o1" }]);
   loadCompetitionHub.mockResolvedValue(validHubDoc());
-  cacheGet.mockImplementation(async (key: string) => (store.has(key) ? store.get(key) : null));
-  cacheSet.mockImplementation(async (key: string, value: unknown) => {
-    store.set(key, value);
-  });
 });
 
 describe("GET .../hub — the Redis cache-aside, witnessed through the route", () => {
@@ -72,12 +56,12 @@ describe("GET .../hub — the Redis cache-aside, witnessed through the route", (
     const first = await GET(req(), ctx);
     expect(first.status).toBe(200);
     expect(loadCompetitionHub).toHaveBeenCalledTimes(1);
-    expect(cacheSet).toHaveBeenCalledTimes(1);
+    expect(redis.log.filter((l) => l.op === "fill" && l.key === "pub:v1:hub:c1" && l.ok)).toHaveLength(1);
 
     const second = await GET(req(), ctx);
     expect(second.status).toBe(200);
     // The loader must NOT have run again — the second read was served by
-    // Redis, populated by the first request's cacheSet.
+    // Redis, populated by the first request's fill.
     expect(loadCompetitionHub).toHaveBeenCalledTimes(1);
 
     const firstBody = (await first.json()) as { data: unknown };

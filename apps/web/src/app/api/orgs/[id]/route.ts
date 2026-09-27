@@ -10,6 +10,7 @@ import {
 } from "@/server/usecases/slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { fireOrgRevalidate } from "@/server/public-site/revalidate";
+import { dropPublicOrgRefs } from "@/server/public-site/public-ref-cache";
 import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
 import { mergeBrandColor, mergeSponsors } from "@/lib/org-branding";
@@ -198,6 +199,13 @@ export async function PATCH(
         },
       );
     });
+
+    // The polled public readers' cached slug lookups (public hub perf T2): the
+    // org's own, and every one of its competitions', under the old slug and
+    // the new. This route is the only writer of an org slug. FIRST, straight
+    // after the commit: every bust below can throw, and a throw there must not
+    // leave the old slug resolving for the lookups' TTL. Never throws itself.
+    if (previousSlug) await dropPublicOrgRefs(org.id, previousSlug, org.slug);
 
     // name/logo/payment appear in every member's cached org list — bust each.
     const members = await sql<{ user_id: string }[]>`

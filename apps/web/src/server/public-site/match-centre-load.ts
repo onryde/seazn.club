@@ -69,6 +69,13 @@ export interface MatchCentreLoadDivision {
   playerNameDisplay: string | null;
 }
 
+/** The fixture's division and stage rows as the loader needs them for the
+ *  config merge (`resolveFixtureCfg`). `undefined` = no such row. */
+export interface MatchCentreConfigRows {
+  division: { config: unknown } | undefined;
+  stage: { config: Record<string, unknown> | null; kind: string } | undefined;
+}
+
 export interface MatchCentreLoadCtx {
   orgTz: string | null;
   division: MatchCentreLoadDivision;
@@ -82,6 +89,11 @@ export interface MatchCentreLoadCtx {
    *  itself (mirrors `lib/slot-label.ts`'s own reasoning for taking a
    *  lookup callback rather than importing a resolver). */
   slotLabelLookup: SlotLabelLookup;
+  /** The division and stage rows, when the caller has ALREADY read them
+   *  (`publicFixture`'s context read does) — the loader then reads only the
+   *  fixture's own snapshot instead of reading both rows a second time.
+   *  Absent: the loader reads all three itself, in one statement. */
+  configRows?: MatchCentreConfigRows;
 }
 
 /**
@@ -170,36 +182,46 @@ interface SidePre {
   isPerson: boolean;
 }
 
+interface SideRow {
+  id: string;
+  kind: string;
+  display_name: string;
+  badge_url: string | null;
+  team_display: { logo_path: string | null; colors: unknown } | null;
+}
+
+/** The two sides' entrant rows and their masked names — the database half of
+ *  the sides, read beside the loader's other reads (T4); {@link buildSides}
+ *  is the rest. */
+async function readSides(
+  sql: Sql,
+  fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id">,
+  division: { youth: boolean; playerNameDisplay: string | null },
+): Promise<{ rows: SideRow[]; maskedNames: Map<string, string> }> {
+  const ids = [fixture.home_entrant_id, fixture.away_entrant_id].filter(
+    (id): id is string => id !== null,
+  );
+  const rows =
+    ids.length > 0
+      ? await sql<SideRow[]>`
+          select id, kind, display_name, badge_url, team_display
+          from public_entrants_v where id in ${sql(ids)}`
+      : [];
+  const maskedNames = rows.length > 0 ? await maskSideNames(sql, rows, division) : new Map<string, string>();
+  return { rows, maskedNames };
+}
+
 /** Home/away `Side`s (minus `short`, resolved together below). Handles the
  *  bye/TBD case (an entrant id still null) without throwing: its name is
  *  `slot(label)` — the feeder's round for a side waiting on a match
  *  (`feeder-slot-label.ts`), else the board's `resolveSlotLabel` text. A
  *  bye/TBD slot has no real entrant kind to disambiguate by, so it is treated
  *  as a team for the abbreviation rule, same as before this fix. */
-async function loadSides(
-  sql: Sql,
+function buildSides(
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
-  division: { youth: boolean; playerNameDisplay: string | null },
+  { rows, maskedNames }: { rows: SideRow[]; maskedNames: Map<string, string> },
   slot: (label: SlotLabel | null, seat: "home" | "away") => string,
-): Promise<[SideT, SideT]> {
-  const ids = [fixture.home_entrant_id, fixture.away_entrant_id].filter(
-    (id): id is string => id !== null,
-  );
-  const rows =
-    ids.length > 0
-      ? await sql<
-          {
-            id: string;
-            kind: string;
-            display_name: string;
-            badge_url: string | null;
-            team_display: { logo_path: string | null; colors: unknown } | null;
-          }[]
-        >`
-          select id, kind, display_name, badge_url, team_display
-          from public_entrants_v where id in ${sql(ids)}`
-      : [];
-  const maskedNames = rows.length > 0 ? await maskSideNames(sql, rows, division) : new Map<string, string>();
+): [SideT, SideT] {
   const byId = new Map(rows.map((r) => [r.id, r]));
 
   const sideOf = (
@@ -243,16 +265,79 @@ async function loadSides(
   ];
 }
 
+/** The fixture's config snapshot beside its division and stage rows — what
+ *  `resolveFixtureCfg` merges. Where the caller already read the division and
+ *  stage rows (`configRows`), only the snapshot is read; otherwise all three
+ *  come back from ONE statement (they were three before T4). The left joins
+ *  hang off a one-row seed so a missing row is `undefined` on its own, exactly
+ *  as three separate lookups left it. */
+async function readConfigRows(
+  sql: Sql,
+  fixture: Pick<PublicFixture, "id" | "division_id" | "stage_id">,
+  preread: MatchCentreConfigRows | undefined,
+): Promise<MatchCentreConfigRows & { fixture: { config_snapshot: unknown } | undefined }> {
+  if (preread) {
+    const [fixtureRow] = await sql<{ config_snapshot: unknown }[]>`
+      select config_snapshot from fixtures where id = ${fixture.id}`;
+    return { fixture: fixtureRow, ...preread };
+  }
+  const [row] = await sql<
+    {
+      fixture_row: string | null;
+      config_snapshot: unknown;
+      division_row: string | null;
+      division_config: unknown;
+      stage_row: string | null;
+      stage_config: Record<string, unknown> | null;
+      stage_kind: string | null;
+    }[]
+  >`
+    select f.id as fixture_row, f.config_snapshot,
+           d.id as division_row, d.config as division_config,
+           s.id as stage_row, s.config as stage_config, s.kind as stage_kind
+    from (select 1) as seed
+    left join fixtures f  on f.id = ${fixture.id}
+    left join divisions d on d.id = ${fixture.division_id}
+    left join stages s    on s.id = ${fixture.stage_id}`;
+  return {
+    fixture: row?.fixture_row == null ? undefined : { config_snapshot: row.config_snapshot },
+    division: row?.division_row == null ? undefined : { config: row.division_config },
+    stage: row?.stage_row == null ? undefined : { config: row.stage_config, kind: row.stage_kind! },
+  };
+}
+
+/** A stage's rows, as the feeder namer reads them. */
+interface FeederRow {
+  id: string;
+  stage_id: string;
+  round_no: number;
+  seq_in_round: number;
+  lane: "WB" | "LB" | "GF" | null;
+  is_final: boolean | null;
+  third_place: boolean | null;
+  conditional: boolean | null;
+  ext_key: string | null;
+  winner_to_fixture: string | null;
+  winner_to_slot: number | null;
+  loser_to_fixture: string | null;
+  loser_to_slot: number | null;
+}
+
 /**
- * The one loader both call sites share. Loads (in order): the event ledger
- * (the SAME query `foldFixture` uses, `engine-db/fold.ts:65-68` — `select
- * id, seq, type, payload, recorded_at, recorded_by, voids_event_id from
- * score_events where fixture_id = $1 order by seq`, never a second
- * ordering), the frozen config snapshot (`resolveFixtureCfg`, the same
- * resolver `append-event.ts`/`fold.ts` use — never `configSchema.parse({})`
- * as a fallback, a recorded false premise: it throws), the consent-resolved
- * lineups (`readPublicLineups`, Task 5) and the two `Side`s, then calls the
- * pure `buildMatchCentre`.
+ * The one loader both call sites share. Reads the event ledger (the SAME
+ * query `foldFixture` uses, `engine-db/fold.ts:65-68` — `select id, seq, type,
+ * payload, recorded_at, recorded_by, voids_event_id from score_events where
+ * fixture_id = $1 order by seq`, never a second ordering), the frozen config
+ * snapshot (`resolveFixtureCfg`, the same resolver `append-event.ts`/`fold.ts`
+ * use — never `configSchema.parse({})` as a fallback, a recorded false premise:
+ * it throws), the consent-resolved lineups (`readPublicLineups`, Task 5), the
+ * stage's rows when a seat must be named, and the two `Side`s' entrant rows,
+ * then calls the pure `buildMatchCentre`.
+ *
+ * Those reads do not depend on one another, so they run AT ONCE (T4): one
+ * round trip plus the sides' consent read, where there were up to eight in a
+ * row, and never more than five pooled connections held (prod runs 12 a
+ * machine).
  *
  * `resolveVoids` runs ONCE here, before either sport branch sees the
  * stream. `foldMatch` (the fold `foldFixture` itself uses), `buildTimeline`
@@ -270,19 +355,63 @@ export async function loadMatchCentre(
   fixture: PublicFixture,
   ctx: MatchCentreLoadCtx,
 ): Promise<MatchCentreDocT> {
-  const eventRows = await sql<
-    {
-      id: string;
-      seq: number;
-      type: string;
-      payload: unknown;
-      recorded_at: Date;
-      recorded_by: string | null;
-      voids_event_id: string | null;
-    }[]
-  >`
-    select id, seq, type, payload, recorded_at, recorded_by, voids_event_id
-    from score_events where fixture_id = ${fixture.id} order by seq`;
+  // Fix round N1 — a side waiting on a match names that match's ROUND the way
+  // the hub's Knockout rail does ("Winner of Semi-finals, match 2", or "Winner
+  // of Grand final" when that round holds one match), never the organiser
+  // board's "R1·2" short code. The words come from `publicRoundNamer`, the SAME
+  // namer the hub builds its cards and rail with, over THIS fixture's stage's
+  // rows; anything that is not a feeder label, or names no match of the stage,
+  // keeps today's text. `ext_key` is read the way `getPublicDivision` reads it
+  // (a page playoff's rounds are told apart by it — fix round 1, M3).
+  //
+  // Fix round 1, M7: the sides name only a side whose entrant is still null,
+  // so a fixture with both entrants set (every live and finished match) reads
+  // neither the stage's rows nor the dictionary; its `slot` is today's text,
+  // never asked for.
+  const seatToName = fixture.home_entrant_id === null || fixture.away_entrant_id === null;
+  const readFeeders = async () =>
+    Promise.all([
+      // The feed edges, by the same rule as ext_key: not columns of the view,
+      // read off fixtures by the VIEW row's own id, in one fenced LATERAL
+      // probe per row (see readPublicDivisionDetail, data.ts, on the offset
+      // 0). This read is stage-scoped, which is enough for the shape that
+      // needs it — a setup bracket's final, fed by its own semis.
+      // (No backticks in here: this is inside a tagged template.)
+      sql<FeederRow[]>`
+        select v.id, v.stage_id, v.round_no, v.seq_in_round, v.lane, v.is_final, v.third_place, v.conditional,
+               e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot
+        from public_fixtures_v v
+        left join lateral (
+          select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot
+          from fixtures x where x.id = v.id
+          offset 0
+        ) e on true
+        where v.stage_id = ${fixture.stage_id}`,
+      getDictionary(toLocale(ctx.locale), "public"),
+    ]);
+  const [eventRows, configRows, lineups, feeders, sideRead] = await Promise.all([
+    sql<
+      {
+        id: string;
+        seq: number;
+        type: string;
+        payload: unknown;
+        recorded_at: Date;
+        recorded_by: string | null;
+        voids_event_id: string | null;
+      }[]
+    >`
+      select id, seq, type, payload, recorded_at, recorded_by, voids_event_id
+      from score_events where fixture_id = ${fixture.id} order by seq`,
+    readConfigRows(sql, fixture, ctx.configRows),
+    readPublicLineups(sql, fixture.id, {
+      youth: ctx.division.youth,
+      player_name_display: ctx.division.playerNameDisplay,
+    }),
+    seatToName ? readFeeders() : null,
+    readSides(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay }),
+  ]);
+
   const envelopes: EventEnvelope[] = eventRows.map((r) => ({
     id: r.id,
     fixtureId: fixture.id,
@@ -295,13 +424,11 @@ export async function loadMatchCentre(
   }));
   const events = resolveVoids(envelopes);
 
-  const [fixtureRow] = await sql<{ config_snapshot: unknown }[]>`
-    select config_snapshot from fixtures where id = ${fixture.id}`;
-  const [divisionRow] = await sql<{ config: unknown }[]>`
-    select config from divisions where id = ${fixture.division_id}`;
-  const [stageRow] = await sql<{ config: Record<string, unknown> | null; kind: string }[]>`
-    select config, kind from stages where id = ${fixture.stage_id}`;
-  const rawCfg = resolveFixtureCfg(fixtureRow?.config_snapshot, divisionRow?.config, stageRow?.config);
+  const rawCfg = resolveFixtureCfg(
+    configRows.fixture?.config_snapshot,
+    configRows.division?.config,
+    configRows.stage?.config,
+  );
 
   const sportModule =
     ctx.division.moduleVersion !== null
@@ -341,83 +468,33 @@ export async function loadMatchCentre(
   // (`ctx.locale`), exactly as the preset name it replaces is — through the
   // PUBLIC dictionary, where the describer's keys live so the hub can resolve
   // the same clauses client-side — and joined by the one `rulesLineText`.
-  const rulesLine = effectiveRulesLine(ctx.division.sportKey, sportModule, rawCfg, divisionRow?.config);
+  const rulesLine = effectiveRulesLine(ctx.division.sportKey, sportModule, rawCfg, configRows.division?.config);
   const formatLabel =
     rulesLine === null
       ? ctx.division.formatLabel
       : rulesLineText(await getDictionary(toLocale(ctx.locale), "public"), rulesLine);
 
-  const lineups = await readPublicLineups(sql, fixture.id, {
-    youth: ctx.division.youth,
-    player_name_display: ctx.division.playerNameDisplay,
-  });
-  // Fix round N1 — a side waiting on a match names that match's ROUND the way
-  // the hub's Knockout rail does ("Winner of Semi-finals, match 2", or "Winner
-  // of Grand final" when that round holds one match), never the organiser
-  // board's "R1·2" short code. The words come from `publicRoundNamer`, the SAME
-  // namer the hub builds its cards and rail with, over THIS fixture's stage's
-  // rows; anything that is not a feeder label, or names no match of the stage,
-  // keeps today's text. `ext_key` is read the way `getPublicDivision` reads it
-  // (a page playoff's rounds are told apart by it — fix round 1, M3).
-  //
-  // Fix round 1, M7: `loadSides` names only a side whose entrant is still null,
-  // so a fixture with both entrants set (every live and finished match) reads
-  // neither the stage's rows nor the dictionary; its `slot` is today's text,
-  // never asked for.
   // Annotated rather than inferred so the fallback can simply IGNORE the seat
   // (a narrower function is assignable) instead of naming a parameter it never
   // reads, which lint calls out.
   let slot: (label: SlotLabel | null, seat: "home" | "away") => string = (label) =>
     resolveSlotLabel(label, ctx.slotLabelLookup, "schedule.tbd");
-  if (fixture.home_entrant_id === null || fixture.away_entrant_id === null) {
-    const stageRows = await sql<
-      {
-        id: string;
-        stage_id: string;
-        round_no: number;
-        seq_in_round: number;
-        lane: "WB" | "LB" | "GF" | null;
-        is_final: boolean | null;
-        third_place: boolean | null;
-        conditional: boolean | null;
-        ext_key: string | null;
-        winner_to_fixture: string | null;
-        winner_to_slot: number | null;
-        loser_to_fixture: string | null;
-        loser_to_slot: number | null;
-      }[]
-    >`
-      select id, stage_id, round_no, seq_in_round, lane, is_final, third_place, conditional,
-             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key,
-             -- The feed edges, by the same rule as ext_key: not columns of the
-             -- view, read off fixtures by the VIEW row's own id. This read is
-             -- stage-scoped, which is enough for the shape that needs it — a
-             -- setup bracket's final, fed by its own semis.
-             -- (No backticks in here: this is inside a tagged template.)
-             (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
-             (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
-             (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
-             (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
-      from public_fixtures_v where stage_id = ${fixture.stage_id}`;
+  if (feeders) {
+    const [stageRows, dict] = feeders;
     const namer = publicRoundNamer({
       ui: ctx.slotLabelLookup,
-      dict: await getDictionary(toLocale(ctx.locale), "public"),
+      dict,
       fixtures: stageRows,
-      // `stageRow` exists for every fixture (a foreign key); undefined only in
-      // the type the destructured query result leaves, and then nothing is named.
-      stageKind: () => stageRow?.kind,
+      // The stage row exists for every fixture (a foreign key); undefined only
+      // when the read found none, and then nothing is named.
+      stageKind: () => configRows.stage?.kind,
     });
     // `seat`, not `slot` — see `publicRoundNamer.seat`. The match centre is
     // where a spectator lands from a share link, so a bracket seat reading
     // "TBD" here is the most visible copy of this defect.
     slot = (label, seat) => namer.seat(fixture.id, seat, label);
   }
-  const sides = await loadSides(
-    sql,
-    fixture,
-    { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay },
-    slot,
-  );
+  const sides = buildSides(fixture, sideRead, slot);
   const venueTz = resolveVenueTz(ctx.division.tz, ctx.orgTz);
 
   const input: MatchCentreInput = {

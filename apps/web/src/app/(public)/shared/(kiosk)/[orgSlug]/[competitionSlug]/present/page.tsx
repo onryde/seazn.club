@@ -4,7 +4,8 @@ export const revalidate = 30;
 // no-login kiosk URL. Public read models only; private competitions 404.
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
-import { getPublicCompetition, getPublicDivision } from "@/server/public-site/data";
+import { getPublicCompetition } from "@/server/public-site/data";
+import { readEveryPublicDivision } from "@/server/public-site/read-every-division";
 import { sharedRenameTarget } from "@/server/slug-resolve";
 import { buildPublicDivisionSlides, type Slide } from "@/server/slideshow-data";
 import { slideshowLabels } from "@/server/slideshow-labels";
@@ -61,14 +62,15 @@ export default async function PresentCompetitionPage({
     if (renamed) permanentRedirect(`${renamed}/present`);
     notFound();
   }
+  // Every division at once, each one query at a time (see `readEveryPublicDivision`).
+  const divisions = await readEveryPublicDivision(orgSlug, competitionSlug, shell.divisions);
   const decks = await Promise.all(
-    shell.divisions.map(async (d) => {
-      const data = await getPublicDivision(orgSlug, competitionSlug, d.slug);
+    divisions.map(async (data) =>
       // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, not
       // English by construction: the builder has no request scope, and since
       // N1c c3 it loads the org-locale dictionaries itself (async, no database).
-      return data === null ? [] : await buildPublicDivisionSlides({ ...data, orgLocale: data.org.default_locale });
-    }),
+      data === null ? [] : await buildPublicDivisionSlides({ ...data, orgLocale: data.org.default_locale }),
+    ),
   );
   const slides: Slide[] = decks.flat();
   return (

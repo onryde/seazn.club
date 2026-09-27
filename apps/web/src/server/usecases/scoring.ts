@@ -22,6 +22,7 @@ import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import { playerMatchesGenKey } from "@/server/public-site/player-matches-cache-keys";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
+import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
 import {
   fireScoreRevalidate,
   fireDiscoveryRevalidate,
@@ -940,7 +941,7 @@ export async function invalidatePublicCache(
   const keys = row
     ? [
         fixtureKey,
-        `pub:v1:hub:${row.competition_id}`,
+        publicHubCacheKey(row.competition_id),
         playerMatchesGenKey(row.competition_id),
         `pub:v1:org-live:${row.org_id}`,
         ...publicDivisionCacheKeys(row.division_id),

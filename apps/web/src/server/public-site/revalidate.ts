@@ -13,6 +13,7 @@ import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from ".
 import { deferred } from "@/lib/deferred";
 import { publicFixtureCacheKey } from "./fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "./division-doc-cache-keys";
+import { publicHubCacheKey, publicHubStaleCacheKey } from "./hub-doc-cache-keys";
 
 export { DISCOVERY_TAG };
 
@@ -171,7 +172,11 @@ export function dropNamedPublicDocuments(
   peersExpired: Promise<unknown> = Promise.resolve(),
 ): void {
   const keys = [
-    ...[...new Set(scope.competitionIds)].map((id) => `pub:v1:hub:${id}`),
+    ...[...new Set(scope.competitionIds)].map(publicHubCacheKey),
+    // Public hub perf T2: the hub's last-known-good copy, served to a poll
+    // that waited out a rebuild. A score leaves it (a scoreline a moment old);
+    // a withdrawn NAME must not survive in it (hub-doc-cache-keys.ts).
+    ...[...new Set(scope.competitionIds)].map(publicHubStaleCacheKey),
     ...[...new Set(scope.divisionIds)].flatMap(publicDivisionCacheKeys),
     ...[...new Set(scope.fixtureIds)].map(publicFixtureCacheKey),
   ];

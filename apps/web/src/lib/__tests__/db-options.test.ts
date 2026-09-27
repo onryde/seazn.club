@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { connectionOptions } from "@/lib/db";
+import { FLY_CONFIGS, healthCheckIntervalS } from "./_fly-health-check";
 
 describe("connectionOptions", () => {
   const remote = "postgresql://u:p@aws-0-eu-west-2.pooler.supabase.com";
@@ -33,5 +34,31 @@ describe("connectionOptions", () => {
   it("defaults schema to seazn_club, honors DB_SCHEMA", () => {
     expect(connectionOptions(`${remote}:5432/postgres`, {}).schema).toBe("seazn_club");
     expect(connectionOptions(`${remote}:5432/postgres`, { DB_SCHEMA: "public" }).schema).toBe("public");
+  });
+
+  const urlShapes = [
+    `${remote}:5432/postgres`,
+    `${remote}:6543/postgres`,
+    "postgresql://u:p@localhost:5432/seazn",
+  ];
+
+  // The rule that matters, derived from its source: fly's /api/health check
+  // runs `select 1` on the pool, so an idle timeout at or below its interval
+  // re-dials on every check (~24.7k reconnects in 6 days at 20 s vs a 30 s
+  // check). Lowering the timeout OR slowing the check reddens this.
+  it.each(FLY_CONFIGS)("idle timeout outlasts %s's /api/health check interval, on every URL shape", (file) => {
+    const intervalS = healthCheckIntervalS(file);
+    expect(intervalS).toBeGreaterThan(0);
+    for (const url of urlShapes) {
+      expect(connectionOptions(url, {}).idleTimeout).toBeGreaterThan(intervalS);
+    }
+  });
+
+  // The owner's chosen value (2026-09-24, re-confirmed with the health-check
+  // facts) — a pin on the decision, not a derivation. See lib/db.ts.
+  it("idle timeout is the owner's chosen 60 s", () => {
+    for (const url of urlShapes) {
+      expect(connectionOptions(url, {}).idleTimeout).toBe(60);
+    }
   });
 });

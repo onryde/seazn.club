@@ -23,6 +23,13 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
+import { cachedSingleFlight } from "@/lib/single-flight-cache";
+import { publicHubCacheKey, publicHubStaleCacheKey } from "@/server/public-site/hub-doc-cache-keys";
+import {
+  PUBLIC_REF_TTL_SECONDS,
+  publicCompetitionRefKey,
+  publicOrgRefKey,
+} from "@/server/public-site/public-ref-cache";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
@@ -145,6 +152,57 @@ async function findCompetition(orgSlug: string, slug: string): Promise<PublicCom
   return row;
 }
 
+/** What a POLLED reader needs to know about a competition: that it is
+ *  publicly readable under these slugs, its id and its org. */
+interface CompetitionRef {
+  id: string;
+  org_id: string;
+}
+
+const isCompetitionRef = (v: unknown): boolean =>
+  typeof (v as CompetitionRef | null)?.id === "string" && typeof (v as CompetitionRef | null)?.org_id === "string";
+
+/** How long a lookup may hold the key while it reads Postgres. */
+const REF_LEASE_MS = 5_000;
+
+/**
+ * `findCompetition`'s gate — the same `public_competitions_v` + org slug
+ * question, the same 404 — answered from Redis on every poll after the first
+ * (public hub perf T2). The hub and the player page poll it on every open tab;
+ * it used to be one Postgres round trip per poll before Redis was consulted
+ * at all.
+ *
+ * Safe to cache because every write that can change the answer drops the key
+ * after its commit (`dropPublicCompetitionRefs` / `dropPublicOrgRefs`,
+ * public-site/public-ref-cache.ts, which lists them), a refusal is never
+ * cached (the 404 throws out of the build, and the lease is released), and the
+ * fill is lease-guarded so a lookup racing a visibility write cannot put the
+ * pre-write answer back. `waitMs: 0` — a lookup is one indexed query, so a
+ * caller that finds another's lease just asks Postgres itself.
+ *
+ * Selects the two columns it caches and nothing else: `public_competitions_v`
+ * computes `branding` through `org_has_feature`, and a query that never names
+ * that column never pays for it.
+ */
+async function findCompetitionRef(orgSlug: string, slug: string): Promise<CompetitionRef> {
+  return cachedSingleFlight<CompetitionRef>({
+    key: publicCompetitionRefKey(orgSlug, slug),
+    ttlSeconds: PUBLIC_REF_TTL_SECONDS,
+    leaseMs: REF_LEASE_MS,
+    waitMs: 0,
+    isValid: isCompetitionRef,
+    build: async () => {
+      const [row] = await sql<CompetitionRef[]>`
+        select c.id, c.org_id
+        from public_competitions_v c
+        join organizations o on o.id = c.org_id
+        where o.slug = ${orgSlug} and c.slug = ${slug} limit 1`;
+      if (!row) throw new HttpError(404, "competition not found");
+      return { id: row.id, org_id: row.org_id };
+    },
+  });
+}
+
 async function findDivision(
   orgSlug: string,
   compSlug: string,
@@ -183,23 +241,46 @@ export async function publicCompetition(orgSlug: string, slug: string): Promise<
  *  last push retry above it (R10c m2); the hook cannot import this file. */
 export const HUB_TTL_SECONDS = 15;
 
+/** The hub's last-known-good copy (`publicHubStaleCacheKey`), rewritten by
+ *  every successful rebuild and served ONLY to a poll that waited
+ *  HUB_REBUILD_WAIT_MS for a rebuild still in flight. Under live traffic a
+ *  rebuild lands at least every HUB_TTL_SECONDS, so the copy a waiter gets is
+ *  one rebuild behind; this TTL only bounds how old it can be on a quiet
+ *  competition. A poll it is served to gets a document whose `generatedAt`
+ *  predates the push, so the page's own push retry (`HUB_PUSH_RETRY_MS`,
+ *  1 s first) fetches again. */
+export const HUB_STALE_TTL_SECONDS = 60;
+
+/** How long one rebuild may hold the hub key before its lease expires on its
+ *  own — the bound on a machine that died mid-rebuild. Well past a slow build
+ *  (a rebuild under the lease that outlasts it is merely not cached). */
+export const HUB_REBUILD_LEASE_MS = 8_000;
+
+/** How long a poll that finds a rebuild in flight waits for it before taking
+ *  the last-known-good copy (or, with none, rebuilding on its own). */
+export const HUB_REBUILD_WAIT_MS = 1_500;
+
 /**
  * The competition hub document (spectator W2) — the API half of the same
  * `loadCompetitionHub` the page renders from, so a first paint and every
  * subsequent poll agree.
  *
- * `findCompetition` runs FIRST and throws its own 404 for a competition that
- * is private or does not exist, before the cache is touched: that keeps the
- * refusal identical to every other endpoint in this file. A null document
- * after a positive `findCompetition` is a 404 too — the visibility rules the
- * two readers apply are the same, so it should be unreachable, and if the two
- * ever disagree a 404 is the honest answer rather than a `null` body.
+ * The competition gate (`findCompetitionRef`) runs FIRST and throws its own
+ * 404 for a competition that is private or does not exist, before the hub key
+ * is touched — so neither the document nor its last-known-good copy is ever
+ * served for one. A null document after a positive gate is a 404 too — the
+ * visibility rules the two readers apply are the same, so it should be
+ * unreachable, and if the two ever disagree a 404 is the honest answer rather
+ * than a `null` body.
+ *
+ * Public hub perf T2: on a warm poll this is two Redis GETs and no Postgres at
+ * all; after a write's DEL, the rebuild is single-flight (`cachedHub`).
  */
 export async function publicCompetitionHub(
   orgSlug: string,
   slug: string,
 ): Promise<CompetitionHubDocT> {
-  const full = await findCompetition(orgSlug, slug);
+  const full = await findCompetitionRef(orgSlug, slug);
   const doc = await cachedHub(orgSlug, slug, full);
   // The leader boards serve the snapshot as they stand; after the response,
   // each division is checked and its refresh queued if the snapshot is behind a
@@ -216,12 +297,36 @@ export async function publicCompetitionHub(
   return doc;
 }
 
-async function cachedHub(orgSlug: string, slug: string, full: PublicCompetition): Promise<CompetitionHubDocT> {
-  return cachedFor(
-    `pub:v1:hub:${full.id}`,
-    HUB_TTL_SECONDS,
-    async () => {
-      const doc = await loadCompetitionHub(orgSlug, slug);
+/**
+ * The hub document, rebuilt SINGLE-FLIGHT (lib/single-flight-cache.ts): a
+ * score write DELs the key and pushes to every open tab at once, and every tab
+ * refetches inside the same second. One poll takes the lease and rebuilds;
+ * the rest wait up to HUB_REBUILD_WAIT_MS for it, then take the last-known-good
+ * copy, and only with neither rebuild on their own.
+ *
+ * Freshness is the product promise here (spectator R10), so the rebuild's
+ * fill is a compare-and-set on its own lease, which lives under this same key:
+ * a write that lands mid-rebuild DELs the key, the lease with it, and the
+ * pre-write document is never cached. No writer changes — they all still DEL
+ * `pub:v1:hub:{id}` by name, after their commit.
+ *
+ * That argument needs the build to read POSTGRES after the DEL, so the rebuild
+ * passes `uncached`: `loadCompetitionHub` otherwise reads through Next's data
+ * cache, whose tags a write expires on this machine only when its handler
+ * resolves and on a peer only when `broadcastRevalidate` lands — later than
+ * the DEL and the push. Single-flight makes the cost of that affordable: one
+ * full read per write (and per TTL) per competition, not one per tab.
+ */
+async function cachedHub(orgSlug: string, slug: string, full: CompetitionRef): Promise<CompetitionHubDocT> {
+  return cachedSingleFlight<CompetitionHubDocT>({
+    key: publicHubCacheKey(full.id),
+    ttlSeconds: HUB_TTL_SECONDS,
+    leaseMs: HUB_REBUILD_LEASE_MS,
+    waitMs: HUB_REBUILD_WAIT_MS,
+    stale: { key: publicHubStaleCacheKey(full.id), ttlSeconds: HUB_STALE_TTL_SECONDS },
+    isValid: (hit) => CompetitionHubDoc.safeParse(hit).success,
+    build: async () => {
+      const doc = await loadCompetitionHub(orgSlug, slug, new Date(), { uncached: true });
       if (!doc) throw new HttpError(404, "competition not found");
       // Final-review fix F3 — `isValid` below only checks what comes BACK
       // from Redis on a HIT. Without this, a freshly built document that
@@ -241,8 +346,7 @@ async function cachedHub(orgSlug: string, slug: string, full: PublicCompetition)
       }
       return doc;
     },
-    (hit) => CompetitionHubDoc.safeParse(hit).success,
-  );
+  });
 }
 
 /** How long the player page's match lines may be served stale. The hub's
@@ -306,9 +410,10 @@ async function playerMatchesGeneration(competitionId: string): Promise<string> {
  * entry through its division tags (final review I1), and this document through
  * the generation key.
  *
- * Same refusal order as `publicCompetitionHub`: `findCompetition` 404s a
- * private or unknown competition before the cache is touched. A 404 inside
- * the loader throws before `cacheSet`, so a refusal is never cached.
+ * Same refusal order as `publicCompetitionHub`: the competition gate
+ * (`findCompetitionRef`, Redis-cached since public hub perf T2) 404s a private
+ * or unknown competition before the cache is touched. A 404 inside the loader
+ * throws before `cacheSet`, so a refusal is never cached.
  *
  * The key embeds the competition's generation (`playerMatchesGeneration`), so
  * one DEL of the generation key retires every person's document at once.
@@ -318,7 +423,7 @@ export async function publicPlayerMatches(
   slug: string,
   personId: string,
 ): Promise<PublicPlayerMatchesT> {
-  const full = await findCompetition(orgSlug, slug);
+  const full = await findCompetitionRef(orgSlug, slug);
   const generation = await playerMatchesGeneration(full.id);
   return cachedFor(
     playerMatchesKey(full.id, generation, personId),
@@ -338,6 +443,29 @@ export async function publicPlayerMatches(
     },
     (hit) => PublicPlayerMatches.safeParse(hit).success,
   );
+}
+
+/**
+ * The org home poll's slug lookup, answered from Redis after the first poll —
+ * `findCompetitionRef`'s reasoning, and safe for the same one: the only write
+ * that changes which org a slug names is PATCH /api/orgs/[id] (nothing in the
+ * app deletes an org), and it drops this key after its commit
+ * (`dropPublicOrgRefs`). A 404 is never cached.
+ */
+async function findOrgRef(orgSlug: string): Promise<{ id: string }> {
+  return cachedSingleFlight<{ id: string }>({
+    key: publicOrgRefKey(orgSlug),
+    ttlSeconds: PUBLIC_REF_TTL_SECONDS,
+    leaseMs: REF_LEASE_MS,
+    waitMs: 0,
+    isValid: (v) => typeof (v as { id?: unknown } | null)?.id === "string",
+    build: async () => {
+      const [org] = await sql<{ id: string }[]>`
+        select id from organizations where slug = ${orgSlug} limit 1`;
+      if (!org) throw new HttpError(404, "organization not found");
+      return { id: org.id };
+    },
+  });
 }
 
 /** How long the org home's live poll may be served stale — the hub's window,
@@ -361,9 +489,7 @@ export const ORG_LIVE_TTL_SECONDS = 15;
  * shape, left by an older build, is a miss and is rewritten, never served.
  */
 export async function publicOrgLive(orgSlug: string): Promise<PublicOrgLiveT> {
-  const [org] = await sql<{ id: string }[]>`
-    select id from organizations where slug = ${orgSlug} limit 1`;
-  if (!org) throw new HttpError(404, "organization not found");
+  const org = await findOrgRef(orgSlug);
   return cachedFor(
     `pub:v1:org-live:${org.id}`,
     ORG_LIVE_TTL_SECONDS,
@@ -392,6 +518,10 @@ export async function publicSchedule(
     // public_fixtures_v since V362 but never selected here, so an API v1
     // consumer saw nothing where the HTML schedule page (public-site/data.ts)
     // already shows a label.
+    //
+    // Ordered exactly as the HTML pages and the embed order it (round, match,
+    // stage seq, id; see readPublicDivisionDetail), so rows that tie on
+    // (round_no, seq_in_round) come back in the same order here as there.
     const rawFixtures = await sql<
       Pick<
         PublicFixture,
@@ -412,11 +542,13 @@ export async function publicSchedule(
         | "summary"
       >[]
     >`
-      select id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
-             away_entrant_id, home_slot_label, away_slot_label,
-             scheduled_at, venue, court_label, status, outcome, summary
-      from public_fixtures_v where division_id = ${division.id}
-      order by round_no, seq_in_round`;
+      select v.id, v.stage_id, v.pool_id, v.round_no, v.seq_in_round, v.home_entrant_id,
+             v.away_entrant_id, v.home_slot_label, v.away_slot_label,
+             v.scheduled_at, v.venue, v.court_label, v.status, v.outcome, v.summary
+      from public_fixtures_v v
+      left join stages st on st.id = v.stage_id
+      where v.division_id = ${division.id}
+      order by v.round_no, v.seq_in_round, st.seq, v.id`;
     // P9 cutover (finding #2): venue/court_label are frozen since the
     // venues/courts entities cutover — every consumer of this endpoint saw
     // null for both. venue_name/court_name (derived, disambiguated via
@@ -573,6 +705,10 @@ export async function discoveryList(
  * confirmed the fixture's own division/competition are public/unlisted (the
  * row came from `public_fixtures_v`, which filters on that), so no
  * additional visibility check is needed here.
+ *
+ * T4 — the stage row rides the division read (it was a second statement), and
+ * both rows' configs go to the loader as `configRows`, which then reads only
+ * the fixture's own snapshot instead of reading the two rows again.
  */
 async function loadFixtureMatchCentreCtx(
   divisionId: string,
@@ -592,6 +728,11 @@ async function loadFixtureMatchCentreCtx(
       org_default_locale: string;
       competition_slug: string;
       division_slug: string;
+      division_config: unknown;
+      stage_row_id: string | null;
+      stage_name: string | null;
+      stage_config: Record<string, unknown> | null;
+      stage_kind: string | null;
     }[]
   >`
     select d.sport_key, d.module_version, d.variant_key,
@@ -606,14 +747,20 @@ async function loadFixtureMatchCentreCtx(
            d.youth, d.player_name_display,
            ss.tz as division_tz,
            o.slug as org_slug, o.timezone as org_tz, o.default_locale as org_default_locale,
-           c.slug as competition_slug, d.slug as division_slug
+           c.slug as competition_slug, d.slug as division_slug,
+           d.config as division_config,
+           s.id as stage_row_id, s.name as stage_name, s.config as stage_config, s.kind as stage_kind
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = d.org_id
     left join schedule_settings ss on ss.division_id = d.id
+    left join stages s on s.id = ${stageId}
     where d.id = ${divisionId}`;
   if (!row) throw new HttpError(404, "fixture not found");
-  const [stageRow] = await sql<{ name: string }[]>`select name from stages where id = ${stageId}`;
+  const stageRow =
+    row.stage_row_id === null
+      ? undefined
+      : { name: row.stage_name!, config: row.stage_config, kind: row.stage_kind! };
   const locale = toLocale(row.org_default_locale);
   const basePath = `/shared/${row.org_slug}/${row.competition_slug}/${row.division_slug}`;
   return {
@@ -635,6 +782,10 @@ async function loadFixtureMatchCentreCtx(
     hrefs: { division: basePath, competition: `/shared/${row.org_slug}/${row.competition_slug}`, calendar: `${basePath}/calendar.ics` },
     stage: stageRow ? { name: stageRow.name, roundLabel: null } : null,
     slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars),
+    configRows: {
+      division: { config: row.division_config },
+      stage: stageRow ? { config: stageRow.config, kind: stageRow.kind } : undefined,
+    },
   };
 }
 
@@ -679,13 +830,16 @@ export async function publicFixture(fixtureId: string): Promise<unknown> {
       from public_fixtures_v where id = ${fixtureId} limit 1`;
     if (!row) throw new HttpError(404, "fixture not found");
     // P9 cutover (finding #2): same treatment as publicSchedule above —
-    // venue_name/court_name replace the frozen venue/court_label.
-    const fixture = await withCourtVenueName(row);
+    // venue_name/court_name replace the frozen venue/court_label. The context
+    // needs only the row's own ids, so it reads alongside (T4).
+    const [fixture, ctx] = await Promise.all([
+      withCourtVenueName(row),
+      loadFixtureMatchCentreCtx(row.division_id, row.stage_id),
+    ]);
     // Task 9 — the match-centre view model, built by the SAME loader
     // `getPublicFixture` (public-site/data.ts) uses. venue_name/court_name
     // must already be resolved on `fixture` before this call: the Info
     // tab's venue row reads them straight off the fixture object.
-    const ctx = await loadFixtureMatchCentreCtx(fixture.division_id, fixture.stage_id);
     const match_centre = await loadMatchCentre(sql, fixture, ctx);
     return { ...fixture, match_centre };
   });

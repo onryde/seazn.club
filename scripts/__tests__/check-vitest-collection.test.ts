@@ -141,6 +141,14 @@ const REST = [
   "src/server/public-site/__tests__/describe-rules.test.ts",
   "src/server/public-site/__tests__/public-fixture-stage-rules-label.test.ts",
   "src/server/public-site/__tests__/stage-format-lines-db.test.ts",
+  // Public hub query perf (#888): V418's entitlement-once pins, and the
+  // frozen-copy identity + tie-order suites for the parallelised loaders. None
+  // begin with "c", so all four belong here (`_public-loaders-scene.ts` is a
+  // seed helper, not a suite). Reddened only this repo-root suite, in CI.
+  "src/server/public-site/__tests__/public-division-fixture-order.test.ts",
+  "src/server/public-site/__tests__/public-division-loaders-identity.test.ts",
+  "src/server/public-site/__tests__/public-entrants-entitlement-once.test.ts",
+  "src/server/public-site/__tests__/public-fixture-loaders-identity.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
