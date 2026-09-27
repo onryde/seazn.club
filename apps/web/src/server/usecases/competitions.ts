@@ -709,12 +709,17 @@ export async function patchCompetition(
     await invalidateDiscoveryCache();
     fireDiscoveryRevalidate();
   }
-  // Read-your-own-writes on the org home: an organiser who publishes a draft
-  // looks for it on their public page next. Without this the page's data entry
-  // and ISR render (30s) and the chip poll's Redis document (15s) would keep
-  // the old list for their TTL — bounded, but it reads as "publish did not
-  // work". `{ expire: 0 }` on the org tag (`fireOrgRevalidate`), the poll
-  // document dropped. Expiring the whole org tag is affordable here because
+  // The org home should follow a publish at once: an organiser who publishes
+  // a draft looks for it on their public page next. Without this the page's
+  // data entry and ISR render (30s) and the chip poll's Redis document (15s)
+  // would keep the old list for their TTL — bounded, but it reads as "publish
+  // did not work". `{ expire: 0 }` on the org tag (`fireOrgRevalidate`), the
+  // poll document dropped. MEASURED 2026-09-27 (local prod build): the poll
+  // read is fresh on the very next request, but the org home and hub PAGES
+  // serve their previous render once or twice (`x-nextjs-cache: STALE`) and
+  // are fresh ~2s later — so this is a ~2s bound, not read-your-own-writes;
+  // why the expiry acts as stale here is an open finding (smoke pins the
+  // bound). Expiring the whole org tag is affordable here because
   // this is a rare, deliberate write — never a scoring path. The sitemap is NOT
   // refreshed here: `app/sitemap.ts` declares no `revalidate`, so Next renders
   // it statically at build and it changes only at the next deploy — its draft
