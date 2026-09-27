@@ -27,6 +27,11 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  // Shared cache (spec 2026-09-24-shared-redis-cache-handler-design.md):
+  // memory per machine + Redis for unstable_cache entries + one shared tag
+  // hash. Redis tier is inert unless NEXT_CACHE_REDIS=1 and REDIS_URL is set.
+  cacheHandler: path.join(import.meta.dirname, "cache-handler/handler.mjs"),
+  cacheMaxMemorySize: 0,
   // Don't advertise the framework (removes the `X-Powered-By: Next.js` header).
   poweredByHeader: false,
   // CI/Docker set SKIP_TYPECHECK=1: `tsc --noEmit` in the CI test job is the
