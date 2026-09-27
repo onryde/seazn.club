@@ -50,18 +50,22 @@ export async function publishTagState(
   clearTimeout(timer);
 }
 
+/** A broadcast in flight. Awaiting it waits for BOTH transports. `published`
+ *  settles once the shared tag write alone has landed or its bound passed,
+ *  and at once when NEXT_CACHE_REDIS is off. It is what a realtime push waits
+ *  on (review I2): with the flag on every machine reads that hash, so the peer
+ *  POSTs add nothing a refresh could see. Neither promise rejects. */
+export type Broadcast = Promise<void> & { readonly published: Promise<void> };
+
 /** Dual-run (spec 2026-09-24 §9, PR 1): writes the shared tag state AND POSTs
  *  the peers, each on its own flag (NEXT_CACHE_REDIS, PEER_REVALIDATE), side
- *  by side. Resolves once both have settled, so a caller gating its realtime
- *  push on this sends after the shared state is written (or the bound passed).
- *  Never rejects. */
-export async function broadcastRevalidate(
-  tags: string[],
-  mode: "swr" | "expire",
-  deps: BroadcastDeps = {},
-): Promise<void> {
+ *  by side. Resolves once both have settled; its `published` resolves on the
+ *  Redis write alone. One write per call: never call `publishTagState` again
+ *  for the same broadcast. Never rejects. */
+export function broadcastRevalidate(tags: string[], mode: "swr" | "expire", deps: BroadcastDeps = {}): Broadcast {
   const published = publishTagState(tags, mode);
-  await Promise.all([published, fanOutToPeers(tags, mode, deps)]);
+  const delivered = Promise.all([published, fanOutToPeers(tags, mode, deps)]).then(() => undefined);
+  return Object.assign(delivered, { published });
 }
 
 /** Dual-run transport, deleted in PR 2 once the shared tag hash has soaked.

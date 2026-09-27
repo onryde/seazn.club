@@ -6,7 +6,7 @@ import "server-only";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { sql } from "@/lib/db";
 import { cacheDel, cacheDelPattern } from "@/lib/cache";
-import { broadcastRevalidate } from "@/lib/peer-revalidate";
+import { broadcastRevalidate, type Broadcast } from "@/lib/peer-revalidate";
 import { purgeCdn } from "@/lib/cdn-purge";
 import { log } from "@/server/logger";
 import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from "./data";
@@ -211,7 +211,7 @@ export function dropNamedPublicDocuments(
  *  in the same request (`completeStage`'s voided `fireStageRevalidate`, reached
  *  from scoreEvent's auto-advance) joins the already-open 'max' group and can
  *  no longer overwrite the expiry. */
-export function fireScoreRevalidate(divisionId: string, competitionId: string): Promise<void> {
+export function fireScoreRevalidate(divisionId: string, competitionId: string): Broadcast {
   try {
     revalidateTag(competitionTag(competitionId), "max");
     revalidateTag(divisionTag(divisionId), { expire: 0 });
@@ -221,9 +221,12 @@ export function fireScoreRevalidate(divisionId: string, competitionId: string): 
   const peersExpired = broadcastRevalidate([divisionTag(divisionId)], "expire");
   void broadcastRevalidate([competitionTag(competitionId)], "swr");
   void purgeCdn();
-  // Settles when the division's expiry has been sent to every peer; never
-  // rejects. Nothing need wait on it: `patchDivision` hands it to
-  // `dropNamedPublicDocuments` (review r2-m1).
+  // The division's expiry broadcast; never rejects. Awaited whole, it settles
+  // once the shared tag write AND every peer POST have: `patchDivision`
+  // (divisions.ts) and `refreshEntrantPublicPages` (entrants.ts) hand it to
+  // `dropNamedPublicDocuments` for that (review r2-m1). Its `published`
+  // settles on the shared tag write alone: `invalidatePublicCache`
+  // (scoring.ts) gates the score push on that and on its DEL (Task 6 I2).
   return peersExpired;
 }
 

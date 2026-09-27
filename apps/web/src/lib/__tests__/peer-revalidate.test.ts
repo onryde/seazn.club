@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { fileURLToPath } from "node:url";
 
 // The receiving side of a peer POST is the REAL route handler; only Next's
 // `revalidateTag` is recorded, so "applied on the peer" is observable.
@@ -57,6 +58,8 @@ import Handler, { __resetMachineStateForTests } from "../../../cache-handler/han
 import { tagsManifest } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
 import { PUSH_AFTER_DELETE_BOUND_MS } from "../cache";
 import { defaultConfig } from "next/dist/server/config-shared";
+import { executeRevalidates } from "next/dist/server/revalidation-utils";
+import type { WorkStore } from "next/dist/server/app-render/work-async-storage.external";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -267,15 +270,44 @@ describe("publishTagState writes what the cache handler's own revalidateTag writ
     vi.useRealTimers();
   });
 
-  // The durations Next hands the handler for each profile the app fires
-  // (next/dist/server/revalidation-utils.js: `{ expire: cacheLife.expire }`):
-  // "max" is the "swr" broadcast, `{ expire: 0 }` the "expire" one.
-  it.each([
-    ["swr", { expire: defaultConfig.cacheLife.max.expire }],
-    ["expire", { expire: 0 }],
-  ] as const)(
-    "%s: the same field, byte for byte, as handler.revalidateTag(tags, %o) at the same instant — whatever the tag held before",
-    async (mode, durations) => {
+  /** The durations Next's REAL end-of-request flush (`executeRevalidates`)
+   *  hands a cache handler for each profile the app fires — revalidate.ts:
+   *  "max" alongside a "swr" broadcast, `{ expire: 0 }` alongside "expire" —
+   *  under the app's RESOLVED next.config. Nothing here is typed in: a
+   *  `cacheLife.max` override, or a Next change to how a profile becomes
+   *  durations, moves this and reds the parity below (review m2; C3). */
+  const flushed = {} as Record<"swr" | "expire", { expire?: number } | undefined>;
+  beforeAll(async () => {
+    const { default: loadConfig } = await import("next/dist/server/config");
+    const { PHASE_PRODUCTION_SERVER } = await import("next/constants");
+    const appDir = fileURLToPath(new URL("../../../", import.meta.url));
+    const config = await loadConfig(PHASE_PRODUCTION_SERVER, appDir, { silent: true });
+    const seen = new Map<string, { expire?: number } | undefined>();
+    const workStore = {
+      incrementalCache: {
+        revalidateTag: async (tags: string[], durations?: { expire?: number }) => {
+          for (const tag of tags) seen.set(tag, durations);
+        },
+      },
+      cacheLifeProfiles: config.cacheLife,
+      pendingRevalidatedTags: [
+        { tag: "swr-probe", profile: "max" },
+        { tag: "expire-probe", profile: { expire: 0 } },
+      ],
+      pendingRevalidates: {},
+      pendingRevalidateWrites: [],
+    } as unknown as WorkStore;
+    const flush = executeRevalidates(workStore);
+    if (flush !== false) await flush;
+    flushed.swr = seen.get("swr-probe");
+    flushed.expire = seen.get("expire-probe");
+  }, 60_000);
+
+  it.each(["swr", "expire"] as const)(
+    "%s: the same field, byte for byte, as handler.revalidateTag(tags, <what Next's flush hands it>) at the same instant — whatever the tag held before",
+    async (mode) => {
+      const durations = flushed[mode];
+      expect(durations?.expire, "Next's flush handed the handler no expiry").toBeTypeOf("number");
       const now = 1_790_000_000_000;
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(now);
@@ -336,6 +368,7 @@ describe("broadcastRevalidate — PEER_REVALIDATE and NEXT_CACHE_REDIS are indep
   });
   afterEach(() => {
     __resetRedisStateForTests();
+    vi.useRealTimers();
   });
 
   it.each([
@@ -344,6 +377,9 @@ describe("broadcastRevalidate — PEER_REVALIDATE and NEXT_CACHE_REDIS are indep
     ["on", "off"],
     ["off", "off"],
   ] as const)("PEER_REVALIDATE %s, NEXT_CACHE_REDIS %s: each transport runs on its own flag", async (peers, redis) => {
+    const now = 1_790_000_000_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
     arm();
     if (peers === "off") vi.stubEnv("PEER_REVALIDATE", "");
     vi.stubEnv("REDIS_URL", "redis://cache.internal:6379");
@@ -359,8 +395,104 @@ describe("broadcastRevalidate — PEER_REVALIDATE and NEXT_CACHE_REDIS are indep
     if (redis === "on") {
       expect(evals[0]!.script).toBe(HSET_IF_NEWER);
       expect(evals[0]!.args.slice(0, 2)).toEqual([TAGS_HASH, "division:a"]);
-      expect(decodeField(evals[0]!.args[2] as string)).toMatchObject({ stale: expect.any(Number) });
+      expect(decodeField(evals[0]!.args[2] as string)).toEqual({ at: now, stale: now, expired: now });
     }
+  });
+});
+
+// Review I1: the production path passes no `now` and forwards the caller's
+// `mode`. Pinned here through the real flag gate, at a fixed clock, as the full
+// decoded field — `stale` alone is a Number in both modes and at any clock.
+describe("broadcastRevalidate carries the caller's mode and the clock into Redis", () => {
+  const now = 1_790_000_000_000;
+  beforeEach(() => {
+    __resetRedisStateForTests();
+    redisBuilt.length = 0;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    vi.stubEnv("REDIS_URL", "redis://cache.internal:6379");
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+  });
+  afterEach(() => {
+    __resetRedisStateForTests();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["expire", { at: now, stale: now, expired: now }],
+    ["swr", { at: now, stale: now, expired: now + defaultConfig.cacheLife.max.expire * 1000 }],
+  ] as const)("%s: the field written is %o", async (mode, field) => {
+    await broadcastRevalidate(["division:a"], mode);
+    const evals = redisBuilt.flatMap((c) => c.evals);
+    expect(evals).toHaveLength(1);
+    expect(decodeField(evals[0]!.args[2] as string)).toEqual(field);
+  });
+});
+
+// Review I2 (ruling b): the realtime push waits on the shared tag write, never
+// on the peer POSTs. `published` is that write alone; awaiting the broadcast
+// itself still waits for both transports (dropNamedPublicDocuments needs the
+// peers).
+describe("broadcastRevalidate(...).published — the Redis write alone", () => {
+  const peerIps = async () => ["fdaa::3", "fdaa::4"];
+  /** A peer that never answers. */
+  const hungPeer = () => vi.fn(() => new Promise<Response>(() => {}));
+  afterEach(() => {
+    __resetRedisStateForTests();
+    vi.useRealTimers();
+  });
+
+  function track(p: Promise<void>) {
+    const s = { done: false };
+    void p.then(() => {
+      s.done = true;
+    });
+    return s;
+  }
+
+  it("a peer that never answers: `published` settles once Redis has the field; the broadcast itself does not", async () => {
+    arm();
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    vi.useFakeTimers();
+    const r = hashRecorder();
+    __setRedisForTests(r);
+    const fetchFn = hungPeer();
+
+    const b = broadcastRevalidate(["division:a"], "expire", { resolveIps: peerIps, fetchFn: fetchFn as unknown as typeof fetch });
+    const published = track(b.published);
+    const delivered = track(b);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchFn, "the peer POST is in flight").toHaveBeenCalledTimes(1);
+    expect(r.hash.has("division:a")).toBe(true);
+    expect(published.done).toBe(true);
+    expect(delivered.done, "the broadcast waits for its peers").toBe(false);
+  });
+
+  it("a Redis write held open: `published` waits for it, to the bound", async () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "1");
+    vi.useFakeTimers();
+    __setRedisForTests({ status: "ready", eval: () => new Promise(() => {}) });
+
+    const published = track(broadcastRevalidate(["division:a"], "expire").published);
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(published.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(published.done).toBe(true);
+  });
+
+  it("NEXT_CACHE_REDIS off and a peer that never answers: `published` settles at once", async () => {
+    __resetRedisStateForTests();
+    arm();
+    vi.stubEnv("REDIS_URL", "redis://cache.internal:6379");
+    vi.useFakeTimers();
+    const fetchFn = hungPeer();
+
+    const b = broadcastRevalidate(["division:a"], "expire", { resolveIps: peerIps, fetchFn: fetchFn as unknown as typeof fetch });
+    const published = track(b.published);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(published.done).toBe(true);
+    expect(vi.getTimerCount(), "a bound left armed with no Redis to wait on").toBe(0);
   });
 });
 

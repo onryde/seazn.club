@@ -119,6 +119,14 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => ({
   fireDivisionRevalidate,
   fireScoreRevalidate,
 }));
+// The peer fan-out's 6PN lookup (peer-revalidate.ts `flyPeerIps`), for the
+// Task 6 I2 cases below that run a real broadcast with peers on. Nothing else
+// in this file resolves a name.
+const resolve6 = vi.hoisted(() => vi.fn(async (_host: string) => ["fdaa::3", "fdaa::4"]));
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  resolve6,
+}));
 vi.mock("@/lib/realtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/realtime")>()),
   publishDivisionUpdate,
@@ -129,6 +137,7 @@ import { PUSH_AFTER_DELETE_BOUND_MS } from "@/lib/cache";
 import { invalidatePublicCache } from "../scoring";
 import { __setRedisForTests, __resetRedisStateForTests } from "../../../../cache-handler/redis-client.mjs";
 import { decodeField } from "../../../../cache-handler/tag-state.mjs";
+import { defaultConfig } from "next/dist/server/config-shared";
 import { SCHEDULE_FIXTURE_PUSH_CAP, afterScheduleWrite } from "../schedule";
 
 const ORG = "org-1";
@@ -724,13 +733,15 @@ describe("afterScheduleWrite — the fixture pushes wait for the DEL, never long
   });
 });
 
-// Shared cache dual-run, Task 6b (spec 2026-09-24 §6.6). `fireScoreRevalidate`
-// now resolves only once the division's tag state is in the shared Redis hash
-// every machine's cache handler reads (or its bound passed). The score push
-// waits on that too, so a refresh the push triggers on ANY machine sees the
-// expiry. Here `fireScoreRevalidate` runs for real — its real
-// `broadcastRevalidate`, its real `publishTagState` — against a Redis whose
-// tag writes the test holds or releases. The DEL is the file's usual mock.
+// Shared cache dual-run, Task 6b (spec 2026-09-24 §6.6) and its fix round
+// (review I2, ruling b). The score push waits for the DEL AND for the
+// division's tag state to land in the shared Redis hash every machine's cache
+// handler reads (or its bound to pass), so a refresh the push triggers on ANY
+// machine sees the expiry. It never waits on the peer POSTs: with the flag on
+// every machine reads the hash, and with it off the push times exactly as
+// before Task 6. Here `fireScoreRevalidate` runs for real — its real
+// `broadcastRevalidate`, `publishTagState` and peer fan-out — against a Redis
+// whose tag writes the test holds or releases. The DEL is the file's usual mock.
 describe("invalidatePublicCache — the pushes also wait for the division's shared tag write (Task 6b)", () => {
   const SCOPE = { divisionId: DIVISION, competitionId: COMPETITION };
   const DIVISION_TAG = `division:${DIVISION}`;
@@ -769,9 +780,25 @@ describe("invalidatePublicCache — the pushes also wait for the division's shar
     __resetRedisStateForTests();
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
+  /** Peer fan-out on, and every peer POST left unanswered. */
+  function hungPeers() {
+    vi.stubEnv("PEER_REVALIDATE", "1");
+    vi.stubEnv("FLY_APP_NAME", "seazn-club-prod");
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    vi.stubEnv("FLY_PRIVATE_IP", "fdaa::3");
+    const fetchFn = vi.fn((_url: string | URL | Request, _init?: RequestInit) => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchFn);
+    return fetchFn;
+  }
+  const peerPosts = (fetchFn: ReturnType<typeof hungPeers>) =>
+    fetchFn.mock.calls.map(([url, init]) => ({ url: String(url), tags: JSON.parse(String(init!.body)).tags }));
+
   it("the DEL has settled but the division's expiry is still on its way to Redis: no push until it lands, then exactly one", async () => {
+    const now = 1_790_000_000_000;
+    vi.setSystemTime(now);
     const tags = tagRedis();
     __setRedisForTests(tags);
     const after = vi.fn();
@@ -779,7 +806,14 @@ describe("invalidatePublicCache — the pushes also wait for the division's shar
 
     await vi.advanceTimersByTimeAsync(200);
     expect(cacheDel, "the DEL went out and settled").toHaveBeenCalledTimes(1);
-    expect(decodeField(divisionWrite(tags).field)).toMatchObject({ stale: expect.any(Number) });
+    // Each tag in its own mode, at the clock of the write (review I1).
+    expect(decodeField(divisionWrite(tags).field)).toEqual({ at: now, stale: now, expired: now });
+    const competitionWrite = tags.writes.find((w) => w.tag === `competition:${COMPETITION}`);
+    expect(decodeField(competitionWrite?.field)).toEqual({
+      at: now,
+      stale: now,
+      expired: now + defaultConfig.cacheLife.max.expire * 1000,
+    });
     expect(after, "pushed before the shared tag state was written").not.toHaveBeenCalled();
 
     divisionWrite(tags).release();
@@ -827,9 +861,11 @@ describe("invalidatePublicCache — the pushes also wait for the division's shar
     expect(after).toHaveBeenCalledTimes(1);
   });
 
-  it("a revalidation promise that REJECTS neither sends early nor drops the push: it still waits for the DEL, once, nothing unhandled", async () => {
+  it("a tag-write promise that REJECTS neither sends early nor drops the push: it still waits for the DEL, once, nothing unhandled", async () => {
     await watchingUnhandled(async (unhandled) => {
-      fireScoreRevalidate.mockImplementation(() => Promise.reject(new Error("simulated broadcast failure")));
+      fireScoreRevalidate.mockImplementation(() =>
+        Object.assign(Promise.resolve(), { published: Promise.reject(new Error("simulated shared-write failure")) }),
+      );
       redis.hold = true;
       const after = vi.fn();
       await invalidatePublicCache(ORG, FIXTURE, false, after);
@@ -845,6 +881,54 @@ describe("invalidatePublicCache — the pushes also wait for the division's shar
       await macrotask();
       expect(unhandled).toEqual([]);
     });
+  });
+
+  // Review I2, ruling (b): the push never waits on the peers.
+  it("NEXT_CACHE_REDIS off and a peer that never answers: the push goes out with the DEL, exactly as before Task 6", async () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "");
+    const fetchFn = hungPeers();
+    redis.hold = true;
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(
+      peerPosts(fetchFn).map((p) => p.tags),
+      "the division's expiry is in flight to the peer, and unanswered",
+    ).toContainEqual([`division:${DIVISION}`]);
+    expect(after, "pushed before the DEL settled").not.toHaveBeenCalled();
+
+    await settleHeld("del", { resolve: true });
+    expect(after, "a peer that never answers held the push").toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(SCOPE);
+  });
+
+  it("NEXT_CACHE_REDIS on, the tag write lands at once, a peer never answers: the push goes out at once", async () => {
+    const fetchFn = hungPeers();
+    __setRedisForTests(tagRedis(true));
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(peerPosts(fetchFn).map((p) => p.tags)).toContainEqual([`division:${DIVISION}`]);
+    expect(after, "the push waited on a peer").toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(SCOPE);
+  });
+
+  it("NEXT_CACHE_REDIS on, a peer never answers, the tag write is held: the push waits for the write, not the peer", async () => {
+    const fetchFn = hungPeers();
+    const tags = tagRedis();
+    __setRedisForTests(tags);
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(peerPosts(fetchFn).map((p) => p.tags)).toContainEqual([`division:${DIVISION}`]);
+    expect(after, "pushed before the shared tag state was written").not.toHaveBeenCalled();
+
+    divisionWrite(tags).release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(after).toHaveBeenCalledTimes(1);
   });
 
   it("no row: nothing is revalidated or written to the tag hash, and the push waits on the DEL alone", async () => {

@@ -46,6 +46,7 @@ import {
 import { PUSH_AFTER_DELETE_BOUND_MS, sendAfterDeleteOrBound } from "@/lib/cache";
 import { __setRedisForTests, __resetRedisStateForTests } from "../../../../cache-handler/redis-client.mjs";
 import { decodeField } from "../../../../cache-handler/tag-state.mjs";
+import { defaultConfig } from "next/dist/server/config-shared";
 
 beforeEach(() => {
   revalidateTag.mockClear();
@@ -183,10 +184,12 @@ describe("firePostRevalidate (news post status flips)", () => {
 // it runs for real, with peer fan-out off, against a Redis whose writes the
 // test releases by hand.
 //
-// What these prove is the promise `fireScoreRevalidate` returns. Its one
-// production consumer today is `dropNamedPublicDocuments` (entrants.ts,
-// divisions.ts), pinned last. `invalidatePublicCache` (scoring.ts) discards the
-// promise and gates its push on its own DEL only.
+// What these prove is the promise `fireScoreRevalidate` returns. Three
+// production consumers: `invalidatePublicCache` (scoring.ts) gates its push on
+// the promise's `published` — the Redis write alone, never the peer POSTs —
+// driven for real in usecases/__tests__/hub-cache-invalidation.test.ts; and
+// `dropNamedPublicDocuments`, from divisions.ts and entrants.ts, awaits the
+// whole broadcast, pinned last here.
 describe("fireScoreRevalidate's promise waits for the shared tag state (dual-run)", () => {
   /** Each HSET_IF_NEWER call stays pending until the test releases it. */
   function heldRedis() {
@@ -225,10 +228,18 @@ describe("fireScoreRevalidate's promise waits for the shared tag state (dual-run
     __setRedisForTests(redis);
     const send = vi.fn();
 
+    const now = 1_790_000_000_000;
+    vi.setSystemTime(now);
     sendAfterDeleteOrBound(fireScoreRevalidate("d", "c"), send);
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 100);
     expect(redis.writes.map((w) => w.tag).sort()).toEqual(["competition:c", "division:d"]);
-    expect(decodeField(write(redis, "division:d").field)).toMatchObject({ stale: expect.any(Number) });
+    // Each tag in its own mode, at the clock of the call (review I1).
+    expect(decodeField(write(redis, "division:d").field)).toEqual({ at: now, stale: now, expired: now });
+    expect(decodeField(write(redis, "competition:c").field)).toEqual({
+      at: now,
+      stale: now,
+      expired: now + defaultConfig.cacheLife.max.expire * 1000,
+    });
     expect(send, "Redis has not answered").not.toHaveBeenCalled();
 
     write(redis, "competition:c").release();

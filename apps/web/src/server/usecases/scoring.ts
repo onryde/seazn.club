@@ -899,10 +899,12 @@ export async function invalidatePublicCache(
   // The ISR tag FIRST, straight after the one awaited lookup. `fireScoreRevalidate`
   // expires the division tag outright instead of marking it stale
   // (revalidate.ts); `getPublicCompetitionHub` tags every division it read, so
-  // this also drops the hub page's ISR entry. Its promise settles once the
-  // division's expiry is in the shared tag hash every machine's cache handler
-  // reads (shared-cache dual-run, Task 6b); the pushes below wait on it.
-  const peersExpired = row ? fireScoreRevalidate(row.division_id, row.competition_id) : undefined;
+  // this also drops the hub page's ISR entry. It returns the division's
+  // broadcast, whose `published` settles once the expiry is in the shared tag
+  // hash every machine's cache handler reads, or at its bound, and at once
+  // when NEXT_CACHE_REDIS is off. The pushes below wait on that, and never on
+  // the peer POSTs the same broadcast sends (Task 6 I2).
+  const revalidated = row ? fireScoreRevalidate(row.division_id, row.competition_id) : undefined;
   // The Redis deletes AFTER the tag, and not awaited. A delete that finished
   // before the tag would let a hub read in between rebuild from the
   // still-cached division and put the stale document back.
@@ -964,12 +966,13 @@ export async function invalidatePublicCache(
   // `sendAfterDeleteOrBound` (cache.ts) owns that, and the schedule path sends
   // through the same helper (R10c m1).
   //
-  // Task 6b: they also wait for the division's shared tag state, so a refresh
-  // the push triggers on any machine sees the expiry. `allSettled`, never
-  // `all`: a rejected revalidation must not release the push before the DEL.
-  // The bound still caps the wait on both.
+  // Task 6b / I2: they also wait for the division's shared tag write, so a
+  // refresh the push triggers on any machine sees the expiry. Only that write,
+  // never the peer POSTs: with NEXT_CACHE_REDIS off the push times exactly as
+  // on the DEL alone. `allSettled`, never `all`: a rejected write must not
+  // release the push before the DEL. The bound still caps the wait on both.
   const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;
-  const settled = peersExpired ? Promise.allSettled([deleted, peersExpired]) : deleted;
+  const settled = revalidated ? Promise.allSettled([deleted, revalidated.published]) : deleted;
   if (afterDeletes) sendAfterDeleteOrBound(settled, () => afterDeletes(scope));
   if (!row) return;
   // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
