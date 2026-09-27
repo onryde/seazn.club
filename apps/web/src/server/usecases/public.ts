@@ -58,6 +58,7 @@ import {
 import { hasFeature } from "@/lib/entitlements";
 import { reconcilePlayerStatsOnRead } from "@/server/usecases/player-stats-refresh";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
+import { orgLiveCacheKey } from "@/server/public-site/org-live-cache-key";
 import {
   publicDivisionEntrantsCacheKey,
   publicDivisionScheduleCacheKey,
@@ -491,7 +492,7 @@ export const ORG_LIVE_TTL_SECONDS = 15;
 export async function publicOrgLive(orgSlug: string): Promise<PublicOrgLiveT> {
   const org = await findOrgRef(orgSlug);
   return cachedFor(
-    `pub:v1:org-live:${org.id}`,
+    orgLiveCacheKey(org.id),
     ORG_LIVE_TTL_SECONDS,
     async () => {
       const competitions = await listOrgHomeCompetitions(org.id);

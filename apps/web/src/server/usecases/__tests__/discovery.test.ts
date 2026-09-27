@@ -60,7 +60,11 @@ const asOwner = (orgId: string, userId: string): AuthCtx => ({
   keyId: null,
 });
 
-/** Public competition with a started division — passes the quality floor. */
+/** Public, PUBLISHED competition with a started division — passes the quality
+ *  floor. Published because a draft is unlisted until published (owner
+ *  decision 2026-09-27, V419): the organiser who showcases a competition has
+ *  published it, so that is what the rig seeds. Set AFTER the start, as SQL:
+ *  starting a division promotes a published competition to `live`. */
 async function publicRig(owner: AuthCtx) {
   const competition = await createCompetition(owner, {
     ends_on: "2030-12-31",
@@ -80,6 +84,7 @@ async function publicRig(owner: AuthCtx) {
   });
   await generateStageFixtures(owner, stage.id);
   await startDivision(owner, division.id);
+  await sql`update competitions set status = 'published' where id = ${competition.id}`;
   return { competition, division, stage };
 }
 
@@ -167,6 +172,34 @@ describe.skipIf(!HAS_DB)("public discovery (doc 15, PROMPT-19)", () => {
     expect(plain.discoverable).toBe(false);
   });
 
+  it("a discoverable DRAFT is not showcased (V419); publishing it puts it in the view, and un-publishing takes it out again", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await publicRig(owner);
+    await patchCompetition(owner, competition.id, { discoverable: true });
+    expect(await inView(competition.id), "premise: published + discoverable + started is in the view").toBe(true);
+
+    await patchCompetition(owner, competition.id, { status: "draft" });
+    const [row] = await sql<{ status: string; visibility: string; discoverable: boolean }[]>`
+      select status, visibility, discoverable from competitions where id = ${competition.id}`;
+    expect(row, "premise: only the status moved").toEqual({ status: "draft", visibility: "public", discoverable: true });
+    expect(await inView(competition.id)).toBe(false);
+    expect((await discoveryList({ q: competition.name })).items.map((i) => i.id)).toEqual([]);
+
+    await patchCompetition(owner, competition.id, { status: "published" });
+    expect(await inView(competition.id)).toBe(true);
+    expect((await discoveryList({ q: competition.name })).items.map((i) => i.id)).toEqual([competition.id]);
+  });
+
+  it("an ARCHIVED discoverable competition stays in the view — only a draft is held back", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await publicRig(owner);
+    await patchCompetition(owner, competition.id, { discoverable: true });
+    await patchCompetition(owner, competition.id, { status: "archived" });
+    expect(await inView(competition.id)).toBe(true);
+  });
+
   it("hard coupling: opt-in on a non-public competition → 422", async () => {
     const { orgId, ownerId } = await seedOrg();
     const owner = asOwner(orgId, ownerId);
@@ -222,6 +255,9 @@ describe.skipIf(!HAS_DB)("public discovery (doc 15, PROMPT-19)", () => {
       name: "Shell " + randomUUID().slice(0, 6), visibility: "public", branding: {},
     });
     await patchCompetition(owner, shell.id, { discoverable: true });
+    // Published, so the floor is the ONLY thing keeping it out (a draft would
+    // be out for its status alone — V419).
+    await sql`update competitions set status = 'published' where id = ${shell.id}`;
     expect(await inView(shell.id)).toBe(false);
 
     // Unverified owner org with a real rig still fails the floor.

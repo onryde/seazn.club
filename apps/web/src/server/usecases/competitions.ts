@@ -13,7 +13,14 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import { CompetitionStatus, ENDS_BEFORE_STARTS, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
-import { fireDiscoveryRevalidate, invalidateDiscoveryCache } from "@/server/public-site/revalidate";
+import {
+  fireDiscoveryRevalidate,
+  fireOrgRevalidate,
+  invalidateDiscoveryCache,
+} from "@/server/public-site/revalidate";
+import { orgLiveCacheKey } from "@/server/public-site/org-live-cache-key";
+import { cacheDel } from "@/lib/cache";
+import { competitionIsListed } from "@/lib/competition-listing";
 import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/credits";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { dropPublicCompetitionRefs } from "@/server/public-site/public-ref-cache";
@@ -529,7 +536,7 @@ export async function patchCompetition(
   // ORG's slug and the competition's. Read in the same statement as `before`.
   let refOrgSlug: string | null = null;
   let refSlugBefore: string | null = null;
-  const { row, discoveryTouched } = await withTenant(auth.orgId, async (tx) => {
+  const { row, discoveryTouched, listingChanged } = await withTenant(auth.orgId, async (tx) => {
     if (patch.slug) {
       if (RESERVED_ENTITY_SLUGS.has(patch.slug)) {
         throw new HttpError(422, `slug '${patch.slug}' is reserved`);
@@ -671,7 +678,12 @@ export async function patchCompetition(
       before.discoverable !== row.discoverable ||
       (row.discoverable &&
         Boolean(patch.discovery ?? patch.name ?? patch.starts_on ?? patch.ends_on ?? patch.status));
-    return { row, discoveryTouched };
+    // Did the competition join or leave the org home's list? Publishing a
+    // draft, un-publishing, or a visibility move across `public` — the listing
+    // rule is `competitionIsListed` (owner decision 2026-09-27: a draft is
+    // unlisted until published).
+    const listingChanged = competitionIsListed(before) !== competitionIsListed(row);
+    return { row, discoveryTouched, listingChanged };
   });
   // v17 #287: ANY competition write can move status/ends_on, which the Event
   // Pass lock (isPassLocked) reads live off this row on every resolve — so
@@ -696,6 +708,28 @@ export async function patchCompetition(
   if (discoveryTouched) {
     await invalidateDiscoveryCache();
     fireDiscoveryRevalidate();
+  }
+  // Read-your-own-writes on the org home: an organiser who publishes a draft
+  // looks for it on their public page next. Without this the page's data entry
+  // and ISR render (30s) and the chip poll's Redis document (15s) would keep
+  // the old list for their TTL — bounded, but it reads as "publish did not
+  // work". `{ expire: 0 }` on the org tag (`fireOrgRevalidate`), the poll
+  // document dropped. Expiring the whole org tag is affordable here because
+  // this is a rare, deliberate write — never a scoring path. The sitemap needs
+  // nothing: it is 30s ISR on its own. Discovery is covered above
+  // (`discoveryTouched` includes a status change of a discoverable
+  // competition). Outside the tx — invalidation never rolls back a write — and
+  // best-effort like the grants below: the write has committed, so a failed
+  // slug read is logged, never a 500 for a publish that succeeded.
+  if (listingChanged) {
+    await cacheDel(orgLiveCacheKey(auth.orgId));
+    try {
+      const [org] = await sql<{ slug: string }[]>`
+        select slug from organizations where id = ${auth.orgId}`;
+      if (org) fireOrgRevalidate(org.slug);
+    } catch (err) {
+      log.error({ err, orgId: auth.orgId }, "competitions: org home revalidation failed");
+    }
   }
   // A rename busts the cached slug resolution (old + new key) — outside the
   // tx, same reasoning as the discovery invalidation above.

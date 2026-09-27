@@ -816,7 +816,11 @@ export async function readPlayerUpcoming(sql: Sql, args: UpcomingArgs): Promise<
     left join organizations o      on o.id = c.org_id
     where (f.home_entrant_id in (select id from mine) or f.away_entrant_id in (select id from mine))
       and c.org_id = ${orgId}
-      and (c.visibility = 'public' or c.id = ${currentCompetitionId})
+      -- Another competition's rows only when it is LISTED: public and past
+      -- draft (owner decision 2026-09-27, lib/competition-listing.ts). The
+      -- card's own competition is the direct link, so it lists its own rows
+      -- whatever its status or visibility.
+      and ((c.visibility = 'public' and c.status <> 'draft') or c.id = ${currentCompetitionId})
       and (not ${ownOnly}::boolean or c.id = ${currentCompetitionId})
       and c.status not in ('completed','archived')
       and d.status <> 'completed'

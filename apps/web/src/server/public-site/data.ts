@@ -551,6 +551,8 @@ export interface PublicOrgCompetition extends PublicCompetition {
  *
  * Listed: `visibility = 'public'` only. `public_competitions_v` admits
  * `unlisted` too; an unlisted competition is readable by link and never listed.
+ * Nor is a DRAFT, whatever its visibility (owner decision 2026-09-27 — see
+ * `lib/competition-listing.ts`): readable by link, listed once published.
  *
  * `in_play` counts `in_play` fixtures through `public_divisions_v`, and the
  * join is what makes it a PUBLIC count: `public_fixtures_v` filters on the
@@ -578,7 +580,7 @@ export async function listOrgHomeCompetitions(orgId: string): Promise<PublicOrgC
               join public_divisions_v d on d.id = f.division_id
              where d.competition_id = c.id and f.status = 'in_play') as in_play
     from public_competitions_v c
-    where c.org_id = ${orgId} and c.visibility = 'public'
+    where c.org_id = ${orgId} and c.visibility = 'public' and c.status <> 'draft'
     order by c.starts_on desc nulls last, c.created_at desc`;
   return sortOrgHomeCompetitions(byDate);
 }
@@ -1822,7 +1824,8 @@ export async function fixtureRealtimeEligible(fixtureId: string): Promise<boolea
   return row?.realtime === true;
 }
 
-/** Sitemap source: every `public` competition with its division slugs. */
+/** Sitemap source: every `public` competition past draft, with its division
+ *  slugs — a draft is unlisted until published (`lib/competition-listing.ts`). */
 export async function listPublicSitemapEntries(): Promise<
   { orgSlug: string; compSlug: string; divisionSlugs: string[]; updated: string }[]
 > {
@@ -1833,7 +1836,7 @@ export async function listPublicSitemapEntries(): Promise<
     from public_competitions_v c
     join organizations o on o.id = c.org_id
     left join public_divisions_v d on d.competition_id = c.id
-    where c.visibility = 'public'
+    where c.visibility = 'public' and c.status <> 'draft'
     order by o.slug, c.slug`;
   const map = new Map<string, { orgSlug: string; compSlug: string; divisionSlugs: string[]; updated: string }>();
   for (const r of rows) {
