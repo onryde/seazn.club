@@ -242,6 +242,20 @@ walkthrough is what a person does with it — open, type, submit, see the row.
 **Lane B path note:** the plan's step commands are written against `.claude/worktrees/relay/` (42 occurrences).
 Lane B runs in `.claude/worktrees/relay-b`; every such path reads as `relay-b` for Tasks 7 / 7A / 8.
 
+**TEST STRATEGY — owner ruling 2026-09-27 ("update and store this similar rules for all R1 waves/lanes"):**
+the format-matrix programme's ruling-21 practices are now RULES for every R1 lane and wave, adapted to this
+programme's axis (mode x driver x state, not format x sport) and stored as `_RULES.md` "Test strategy" — S1
+model-based sequence testing over the two machines (fast-check is ALREADY a devDependency of both packages and
+already used in a money suite, so no new dependency; the command model is new to the repo), S2 anti-vacuity
+(zero checked = failure), S3 both mutation layers (hand mutant per surface unconditional; a scoped Stryker run
+waits on the owner's go for the CI spend), S4 sweep the axis by default, S5 shadow invariants logged never
+blocking (needs the Sentry DSN the owner owes), S6 assumptions are guards, S7 rows declared per PR, S8 the four
+reviewer questions translated to failure/expiry/refund/revoke, S9 rules before building, and S10 the
+reconciliation of "values from code freeze wrong rules" with failure class 19 (a declared rule is the oracle; an
+engine constant only for what the engine owns, imported not retyped; observed output is never an oracle).
+**They apply from the next dispatch** — Task 7 keeps the brief it was dispatched with, and its REVIEW applies
+them. Not yet ruled: whether they carry to R2/R3 as well, which I would recommend.
+
 **Owner decisions this session (owner's words):**
 - "No fine" (2026-09-16) — keep lane order: lane A (3→4→5A→5→6) before lane B.
 - "Can we create the PR for each Lane, after each lane finish, we can start a new session and start a new lane?" —
