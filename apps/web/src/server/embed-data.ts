@@ -119,7 +119,9 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
              -- namer would build an empty feed map and print "TBD" on a seat
              -- every other public surface names.
              -- One fenced LATERAL probe per row, not five subselects: see
-             -- readPublicDivisionDetail (public-site/data.ts) on the offset 0.
+             -- readPublicDivisionDetail (public-site/data.ts) on the offset 0,
+             -- and on the ORDER BY ending on the stage seq and the id, which
+             -- fixes the order of rows tied on (round_no, seq_in_round).
              -- (No backticks in here: this is inside a tagged template.)
              e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot
       from public_fixtures_v v
@@ -128,8 +130,9 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
         from fixtures x where x.id = v.id
         offset 0
       ) e on true
+      left join stages st on st.id = v.stage_id
       where v.division_id = ${divisionId}
-      order by v.round_no, v.seq_in_round`
+      order by v.round_no, v.seq_in_round, st.seq, v.id`
       .then((rows) => rows.map(iso))
       // P9 cutover (finding #1): venue_name/court_name — public_fixtures_v
       // has not been extended with venue_id/court_id, so these are derived

@@ -1,7 +1,9 @@
 // Public hub query perf T4 (2026-09-27): the division read's independent
 // queries run together, and the five correlated `fixtures` subselects per
 // fixture row became one lateral probe. PERF ONLY — the output must not move
-// by a byte, row order included.
+// by a byte. The one exception is deliberate: rows that tie on
+// (round_no, seq_in_round) now come back in ONE order (stage seq, then id),
+// where the pre-T4 statement left it to the plan (T4 review, minor 3).
 //
 // So every loader here is diffed against its own pre-T4 body, frozen below
 // from e5848d2f3 (`readPublicDivisionDetail` in public-site/data.ts,
@@ -15,15 +17,15 @@
 // a withdrawn entrant, a setup division and an empty one — and fixtures that
 // tie on (round_no, seq_in_round) across two stages.
 //
-// Row order is compared exactly on the ORDER BY's key; rows that TIE on it are
-// compared as a set. Their order was never fixed: when the pre-T4 statement
-// walks the index they come back in physical row order (pinned below), and
-// when it scans and sorts, in the sort's permutation — measured 2026-09-27,
-// its own custom and generic plans returned this scene's ties in different
-// orders, and postgres.js prepares it, so one connection could already flip
-// between them. The first run of this file compared ties exactly and went
-// green; a later run, on a fuller database, went red on a plan choice, not on
-// a row T4 changed.
+// Row order is compared EXACTLY: today's read against the pre-T4 rows sorted
+// by the full key (round_no, seq_in_round, stage seq, id). The pre-T4
+// statement ordered by the first two alone, so its tied rows came back in
+// physical row order when it walked the index (pinned below) and in a sort's
+// permutation when it scanned and sorted — measured 2026-09-27, its own custom
+// and generic plans returned this scene's ties in different orders. Sorting
+// the frozen side by the full key compares the same rows while letting the
+// frozen statement keep its own plan-dependent order;
+// `public-division-fixture-order.test.ts` pins the order itself.
 //
 // The fan-out half pins the pool budget (12 connections a machine in prod):
 // one division read may hold at most four reads in flight, and the hub rebuild,
@@ -82,6 +84,7 @@ import {
   type PublicStage,
   type PublicStandings,
 } from "../data";
+import { readEveryPublicDivision } from "../read-every-division";
 import { seedLoadersScene, type LoadersScene } from "./_public-loaders-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -252,21 +255,36 @@ function expectIdentical(after: unknown, before: unknown, label: string) {
   expect(JSON.stringify(after), label).toBe(JSON.stringify(before));
 }
 
-type Keyed = { id: string; round_no: number; seq_in_round: number };
+type Keyed = { id: string; stage_id: string; round_no: number; seq_in_round: number };
 const orderKey = (f: Keyed) => `${f.round_no}.${f.seq_in_round}`;
-/** Ties on the ORDER BY put in one fixed order (by id), everything else untouched. */
-const settleTies = <D extends { fixtures: Keyed[] }>(doc: D): D => ({
-  ...doc,
-  fixtures: [...doc.fixtures].sort(
-    (a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  ),
-});
-/** {@link expectIdentical} for a document carrying a fixture list: the list's
- *  key sequence exactly, and the whole document once ties are settled on both
- *  sides (see the header on why ties are a set). */
-function expectIdenticalUpToTies<D extends { fixtures: Keyed[] }>(after: D, before: D, label: string) {
-  expect(after.fixtures.map(orderKey), `${label}: ORDER BY key sequence`).toEqual(before.fixtures.map(orderKey));
-  expectIdentical(settleTies(after), settleTies(before), label);
+/** The document with its fixtures in the full order the loaders now state:
+ *  round, match, the stage's seq (off the document's own stages), then id. */
+const inFullOrder = <D extends { fixtures: Keyed[]; stages: { id: string; seq: number }[] }>(doc: D): D => {
+  const seqs = new Map(doc.stages.map((s) => [s.id, s.seq]));
+  const stageSeq = (f: Keyed) => {
+    const seq = seqs.get(f.stage_id);
+    if (seq === undefined) throw new Error(`fixture ${f.id}: stage ${f.stage_id} is not in the document`);
+    return seq;
+  };
+  return {
+    ...doc,
+    fixtures: [...doc.fixtures].sort(
+      (a, b) =>
+        a.round_no - b.round_no ||
+        a.seq_in_round - b.seq_in_round ||
+        stageSeq(a) - stageSeq(b) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    ),
+  };
+};
+/** {@link expectIdentical} for a document carrying a fixture list: today's
+ *  document exactly, against the pre-T4 one in the full order (see the header). */
+function expectIdenticalInFullOrder<D extends { fixtures: Keyed[]; stages: { id: string; seq: number }[] }>(
+  after: D,
+  before: D,
+  label: string,
+) {
+  expectIdentical(after, inFullOrder(before), label);
 }
 
 const SLUGS = ["cup", "bracket", "draft", "empty"] as const;
@@ -300,7 +318,7 @@ describe.skipIf(!HAS_DB)("readPublicDivisionDetail — identical to the pre-T4 r
     expect([empty.stages, empty.pools, empty.fixtures, empty.standings, empty.entrants].map((a) => a.length)).toEqual([0, 0, 0, 0, 0]);
   });
 
-  it("the pre-T4 fixtures statement leaves tied rows in PHYSICAL order when it walks the index (why ties are compared as a set)", async () => {
+  it("the pre-T4 fixtures statement leaves tied rows in PHYSICAL order when it walks the index (why the order now ends on stage seq and id)", async () => {
     // The statement verbatim from e5848d2f3, on the plan that walks the
     // (division_id, round_no, seq_in_round) index — forced with planner
     // switches so the proof does not depend on the table's statistics. A
@@ -339,10 +357,10 @@ describe.skipIf(!HAS_DB)("readPublicDivisionDetail — identical to the pre-T4 r
   });
 
   for (const slug of SLUGS) {
-    it(`${slug}: concurrent and sequential reads both equal the pre-T4 read (ties as a set)`, async () => {
+    it(`${slug}: concurrent and sequential reads both equal the pre-T4 read, in the full order`, async () => {
       const before = await readPublicDivisionDetailBefore(divisions[slug]);
-      expectIdenticalUpToTies(await readPublicDivisionDetail(divisions[slug]), before, `${slug} concurrent`);
-      expectIdenticalUpToTies(await readPublicDivisionDetail(divisions[slug], { sequential: true }), before, `${slug} sequential`);
+      expectIdenticalInFullOrder(await readPublicDivisionDetail(divisions[slug]), before, `${slug} concurrent`);
+      expectIdenticalInFullOrder(await readPublicDivisionDetail(divisions[slug], { sequential: true }), before, `${slug} sequential`);
     });
   }
 
@@ -351,7 +369,7 @@ describe.skipIf(!HAS_DB)("readPublicDivisionDetail — identical to the pre-T4 r
     const before = await readPublicDivisionDetailBefore(divisions.cup);
     const after = await getPublicDivision(scene.orgSlug, scene.compSlug, "cup");
     expect(after).not.toBeNull();
-    expectIdenticalUpToTies(
+    expectIdenticalInFullOrder(
       after!,
       { org: shell.org, competition: shell.competition, division: divisions.cup, ...before },
       "getPublicDivision(cup)",
@@ -367,7 +385,7 @@ describe.skipIf(!HAS_DB)("embedDivisionData — identical to the pre-T4 embed re
       expect(before.ok).toBe(true);
       const after = await embedDivisionData(divisions[slug].id);
       if (!after.ok || !before.ok) throw new Error(`${slug}: embed not served`);
-      expectIdenticalUpToTies(after.data, before.data, slug);
+      expectIdenticalInFullOrder(after.data, before.data, slug);
     });
   }
 });
@@ -384,6 +402,29 @@ describe.skipIf(!HAS_DB)("division read fan-out stays inside the pool budget", (
     expect(await peakOf(() => readPublicDivisionDetailBefore(divisions.cup))).toBe(1);
     expect(await peakOf(() => readPublicDivisionDetail(divisions.cup))).toBe(4);
     expect(await peakOf(() => readPublicDivisionDetail(divisions.cup, { sequential: true }))).toBe(1);
+  });
+
+  it("readEveryPublicDivision (hub, poster.pdf, present) reads every division at once, each one query at a time: at most one connection per division, plus one", async () => {
+    const shell = (await getPublicCompetition(scene.orgSlug, scene.compSlug))!;
+    expect(shell.divisions).toHaveLength(4);
+    for (const uncached of [false, true]) {
+      let read: unknown[] = [];
+      const peak = await peakOf(async () => {
+        read = await readEveryPublicDivision(scene.orgSlug, scene.compSlug, shell.divisions, { uncached });
+      });
+      // What it read is each division's own read, in the divisions' order.
+      const oneByOne = await Promise.all(
+        shell.divisions.map((d) =>
+          uncached ? readPublicDivisionDetail(d) : getPublicDivision(scene.orgSlug, scene.compSlug, d.slug),
+        ),
+      );
+      expect(read, `uncached=${uncached}`).toStrictEqual(oneByOne);
+      expect(read.filter((r) => r !== null), `uncached=${uncached}`).toHaveLength(4);
+      // Positive pair: the divisions ARE read at once, not one after another.
+      expect(peak, `uncached=${uncached}`).toBeGreaterThan(1);
+      // Four lanes a division would be 16.
+      expect(peak, `uncached=${uncached}`).toBeLessThanOrEqual(shell.divisions.length + 1);
+    }
   });
 
   it("the Redis hub rebuild reads every division at once, each one query at a time: one connection per division plus the ban read", async () => {

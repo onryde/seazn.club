@@ -21,6 +21,21 @@
 // `public-leaders.ts`). Narrowing which entrant rows the view builds keeps the
 // rule in the view.
 //
+// One mutant survives this file ON PURPOSE (M1, T4 review minor 2): deleting
+// the EXISTS's outer `offset 0` in me.ts. Postgres never simplifies an EXISTS
+// that carries an OFFSET (`simplify_EXISTS_query` gives up), so no hashed
+// alternative subplan exists for it. Without the fence, all three
+// correlations (`em.person_id`, `mine.division_id`, `m->>'person_id'`) are
+// hashable equalities, and the planner may choose the hashed subplan, which
+// builds its inner side once for EVERY membership in the database: the
+// 63-call shape above, back again. The output is identical either way, and
+// with six outer rows the planner keeps the per-row subplan, so neither the
+// diff nor the call count can see the fence go. No planner setting forces the
+// hashed choice; pinning it would take an EXPLAIN over a scene big enough to
+// tip the planner, and that size depends on the whole test database's
+// statistics, not on this file. The fence stays, justified by the measured
+// hashed plan, not by a test.
+//
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";

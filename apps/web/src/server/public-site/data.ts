@@ -924,9 +924,9 @@ export async function readEntrantMemberRefs(entrantIds: string[]): Promise<Recor
  * zone, entrants → masking) run at once, so a cold read costs three round
  * trips instead of up to ten, and never holds more than four pooled
  * connections (prod runs 12 a machine). `sequential` runs the lanes one after
- * another instead: a caller that already reads EVERY division at once (the
- * competition hub, the competition poster and slideshow) passes it, so its
- * demand stays one connection per division rather than four.
+ * another instead: `readEveryPublicDivision` (read-every-division.ts), which
+ * reads EVERY division at once, always passes it, so its demand stays one
+ * connection per division rather than four.
  */
 export async function readPublicDivisionDetail(
   division: PublicDivision,
@@ -963,14 +963,16 @@ export async function readPublicDivisionDetail(
   // correlated subselects (T4). The `offset 0` fences it, so the planner
   // cannot flatten it into a plain join of the fixtures table.
   //
-  // The ORDER BY is the pre-T4 one, and so is what it leaves open: rows that
-  // tie on (round_no, seq_in_round) — round 1 of a league and round 1 of its
-  // knockout — come back in whatever order the plan produces (heap order when
-  // the planner walks the (division_id, round_no, seq_in_round) index, a
-  // sort's order when it scans and sorts). That was already so: measured
-  // 2026-09-27, the pre-T4 statement returns those rows in two different
-  // orders under its own custom and generic plans, and postgres.js prepares
-  // it, so a connection could switch between them after five executions.
+  // The ORDER BY ends on the stage's seq, then the fixture's id. Rows can tie
+  // on (round_no, seq_in_round): round 1 of a league and round 1 of its
+  // knockout, or two pools' round 1 inside one group stage. Ordered on those
+  // two alone, tied rows came back in whatever order the plan produced (heap
+  // order when the planner walks the (division_id, round_no, seq_in_round)
+  // index, a sort's order when it scans and sorts), and the hub's stable
+  // sortHubMatches showed undated and same-time matches in exactly that order.
+  // Measured 2026-09-27, the statement without the last two keys returned one
+  // division's ties in two different orders under its own custom and generic
+  // plans. The embed read (embed-data.ts) orders the same way.
   // (No backticks in here: this is inside a tagged template.)
   const readFixtures = async () =>
     withCourtVenueNames(
@@ -988,8 +990,9 @@ export async function readPublicDivisionDetail(
             from fixtures x where x.id = v.id
             offset 0
           ) e on true
+          left join stages st on st.id = v.stage_id
           where v.division_id = ${division.id}
-          order by v.round_no, v.seq_in_round`
+          order by v.round_no, v.seq_in_round, st.seq, v.id`
       ).map(normalizeFixture),
     );
   const readStandingsAndTz = async () => {

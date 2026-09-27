@@ -60,11 +60,9 @@ import {
   competitionTag,
   divisionTag,
   getPublicCompetition,
-  getPublicDivision,
   orgTag,
   readEntrantMemberRefs,
   readPublicCompetitionShell,
-  readPublicDivisionDetail,
   REVALIDATE_FAST,
   type EntrantMemberRef,
   type PublicDivision,
@@ -74,6 +72,7 @@ import {
 } from "./data";
 import { statusOf } from "./match-centre";
 import { byPoolOrder } from "@/lib/pool-order";
+import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { divisionQualification } from "./division-qualification";
@@ -626,18 +625,12 @@ export async function loadCompetitionHub(
   // failure is an empty list, never a hub-down: bans are a line on a squad,
   // not the page.
   //
-  // Every division at once, but each one read one query at a time
-  // (`sequential`): this already holds a pooled connection per division, and
-  // a division read's own four-lane fan-out on top would multiply that by four
-  // (T4 — 12 connections a machine in prod).
+  // Every division at once, each one query at a time: `readEveryPublicDivision`
+  // holds at most one pooled connection per division (T4 — 12 connections a
+  // machine in prod).
   const [details, allBans] = await Promise.all([
-    Promise.all(
-      divisions.map(async (d) => ({
-        d,
-        detail: uncached
-          ? await readPublicDivisionDetail(d, { sequential: true })
-          : await getPublicDivision(orgSlug, compSlug, d.slug, { sequential: true }),
-      })),
+    readEveryPublicDivision(orgSlug, compSlug, divisions, { uncached }).then((read) =>
+      divisions.map((d, i) => ({ d, detail: read[i] ?? null })),
     ),
     activePublicSuspensionEntries(divisions.map((d) => d.id)).catch((err: unknown): HubBan[] => {
       log.warn(

@@ -16,7 +16,8 @@
 import QRCode from "qrcode";
 import PDFDocument from "pdfkit";
 import { notFound } from "next/navigation";
-import { getPublicCompetition, getPublicDivision } from "@/server/public-site/data";
+import { getPublicCompetition } from "@/server/public-site/data";
+import { readEveryPublicDivision } from "@/server/public-site/read-every-division";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary } from "@/lib/i18n";
 import { intlLocaleFor } from "@/lib/public-date-locale";
@@ -99,11 +100,8 @@ export async function GET(req: Request, { params }: Ctx) {
   // so it narrows the printed draw the same way, rather than printing every
   // other division's fixtures onto someone's single-division handout.
   const drawDivisions = division ? [division] : divisions;
-  // Every division at once, each read one query at a time: see
-  // `readPublicDivisionDetail` on why a fan-out over divisions passes `sequential`.
-  const details = await Promise.all(
-    drawDivisions.map((d) => getPublicDivision(orgSlug, competitionSlug, d.slug, { sequential: true })),
-  );
+  // Every division at once, each one query at a time (see `readEveryPublicDivision`).
+  const details = await readEveryPublicDivision(orgSlug, competitionSlug, drawDivisions);
   const draw: DrawDivision[] = [];
   const dict = await getDictionary(locale, "public");
   for (const detail of details) {
