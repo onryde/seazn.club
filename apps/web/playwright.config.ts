@@ -31,7 +31,7 @@ const AUTH_STATE = "e2e/.auth/pro.json";
 const SERIAL_SPECS =
   /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot|public-dashboards)\.spec\.ts/;
 
-// --- how e2e.yml splits the `parallel` project across three jobs ------------
+// --- how e2e.yml splits the `parallel` project across four jobs -------------
 //
 // Playwright's own `--shard` splits by TEST COUNT over a CONTIGUOUS run of
 // test groups in file order (`filterForShard` in the runner: it sums
@@ -48,9 +48,9 @@ const SERIAL_SPECS =
 // wall-clock floor — the run finished when it finished.
 //
 // E2E_PARALLEL_SLICE moves the expensive files into a leg of their own and
-// lets the other two shard the remainder:
+// lets the other three shard the remainder:
 //   "heavy"  -> only PARALLEL_HEAVY
-//   "rest"   -> everything except PARALLEL_HEAVY, then --shard=N/2
+//   "rest"   -> everything except PARALLEL_HEAVY, then --shard=N/3
 //   unset    -> the whole project, unchanged — every local run, and
 //               `npm run test:e2e`, take this path
 //
@@ -70,6 +70,13 @@ const SERIAL_SPECS =
 // run's floor, so balancing this project any harder — or sharding it any
 // finer — buys nothing at all. Revisit against the new floor, not these
 // numbers.
+//
+// Revisited 2026-09-27. The two paragraphs above are the derivation for TWO
+// "rest" legs and are kept as that, not as current numbers: "rest" has since
+// grown to 688 tests, 344 and 374-774s of Playwright step per shard (runs
+// 36321899180 / 36337877584), so it is now sharded three ways, and the heavy
+// leg (84-117s) no longer balances against it. e2e.yml's e2e-parallel comment
+// carries the measurements.
 //
 // "rest" is a CATCH-ALL by construction: it ignores PARALLEL_HEAVY and nothing
 // else. A new spec file therefore joins the sharded remainder automatically.

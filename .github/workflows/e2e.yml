@@ -64,6 +64,10 @@ name: E2E
 # leg the same way regardless — against the slowest leg of the OTHER jobs,
 # never against a sibling in its own matrix.
 #
+# 2026-09-27: the `parallel` rest slice grew to rival that shard — its 2/2 leg
+# was the floor at 994s on run 36337877584 — and was split three ways. See
+# e2e-parallel's own comment for the measurements and the trade.
+#
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
 # is no live database or server to share across jobs (see ci.yml's
@@ -138,35 +142,77 @@ jobs:
     #
     # The cost is real and worth stating: every shard repeats the whole setup
     # — Flyway migrate, sport sync, production build, placement image, server
-    # start (~3.2 min warm). Three shards spend ~3x those runner-minutes to buy
-    # back wall clock. Expect ~5 min typical and ~8 min on a bad run, against
-    # 8.2 and 15.6 today. If setup ever grows past the test time, revisit: the
-    # trade inverts.
+    # start. Measured from job start to the Playwright step: 130-146s per
+    # `parallel` leg on run 36321899180, 208-235s on run 36337877584. N shards
+    # pay that N times; the test minutes themselves are divided, not added. If
+    # setup ever grows past a shard's test time, revisit: the trade inverts.
     #
     # Each shard is a separate JOB, so each gets its own Postgres service and
     # its own `auth.setup` orgs — no cross-shard state, which is what makes
     # this safe for a project whose tests share an org within a run.
     #
-    # Still three jobs, but no longer `--shard=N/3`. Playwright shards by TEST
-    # COUNT over a contiguous, file-ordered slice, and it has no idea what a
-    # test costs: e2e/scorepad-v3-cricket.spec.ts alone is ~90s of the
-    # project's ~368s and sits in the alphabetical tail, so shard 3/3 measured
+    # Not a plain `--shard=N/M` over the whole project. Playwright shards by
+    # TEST COUNT over a contiguous, file-ordered slice, and it has no idea what
+    # a test costs: e2e/scorepad-v3-cricket.spec.ts alone was ~90s of the
+    # project's ~368s and sat in the alphabetical tail, so shard 3/3 measured
     # 176s against 89s and 87s (run 32272599493), 170s against 87s and 77s
     # (32269332414), and 227s against 147s and 112s (32214432854). That shard,
     # not e2e-mobile, was this workflow's wall-clock floor.
     #
-    # So: one leg for the expensive files, two legs sharding everything else.
-    # Predicted 128 / 126 / 115s against a perfect-split floor of 123s. The
-    # slice is selected in playwright.config.ts via E2E_PARALLEL_SLICE, where
-    # "rest" is a catch-all — a new spec joins the sharded remainder on its
-    # own, and only a file named in PARALLEL_HEAVY can leave it. Read that
-    # file's comment, which carries the derivation, before changing the split.
+    # So: one "heavy" leg for the expensive files, and the remainder ("rest")
+    # sharded by count. The slice is selected in playwright.config.ts via
+    # E2E_PARALLEL_SLICE, where "rest" is a catch-all — a new spec joins the
+    # sharded remainder on its own, and only a file named in PARALLEL_HEAVY can
+    # leave it. Read that file's comment, which carries the derivation, before
+    # changing the split. That derivation was made for TWO rest legs, predicting
+    # 128 / 126 / 115s against a perfect-split floor of 123s.
     #
-    # Why not four legs or more: at ~128s + ~106s setup these land at ~234s,
-    # just under where e2e-mobile's phones-small leg already sits (244s). The
-    # floor moves there, so a finer split buys nothing and pays setup again —
-    # the same arithmetic this file's header applies to e2e-mobile, run in the
-    # other direction.
+    # THREE REST LEGS since 2026-09-27 (owner request), because "rest" grew out
+    # from under that prediction: each of the two shards ran 344 tests, the
+    # heavy leg 38. Measured Playwright step / whole job:
+    #
+    #   run 36321899180 (push, main)  1/2  374s / 529s   2/2  468s / 610s
+    #                                 heavy 84s / 220s
+    #   run 36337877584 (dispatch)    1/2  636s / 861s   2/2  774s / 994s
+    #                                 heavy 117s / 360s
+    #
+    # On the dispatch run 2/2's step took 12.9 min and the job 16.6, the
+    # slowest leg of the run and 3.4 min short of `timeout-minutes: 20` above,
+    # ahead of parallel 1/2 (861s) and walkthrough 1/3 (852s). Read that
+    # number honestly: that leg was RED — 3 failures and 1 flake, each retried
+    # once (`retries: 1` in CI) — and the whole run was slow (1/2 took 10.6 min
+    # green; every leg's setup was 206-239s against 111-148s on the push run).
+    # Retries and a slow runner both land hardest on the biggest shard, which
+    # is the case for making it smaller.
+    #
+    # PREDICTED, not measured: the same step time split three ways is ~281s +
+    # setup, ~7 min a leg, on the push run, and ~470s + setup, ~11.4 min, on
+    # the dispatch run. Playwright still shards by COUNT, so expect unequal
+    # legs — 344 tests against 344 measured 374s against 468s above.
+    #
+    # What that buys in WALL CLOCK depends on the other legs, so it is stated
+    # here rather than assumed. On the push run the floor was already
+    # walkthrough 1/3 (639s), with 2/2 (610s) just behind it: no wall-clock
+    # gain there. On the dispatch run the floor moves from 2/2 (994s) to
+    # walkthrough 1/3 (852s), ~2.4 min. The rest is headroom — under the
+    # timeout, and against the growth of a slice every new spec joins.
+    #
+    # THE COST: the rest slice now pays setup three times instead of twice —
+    # one more runner, Postgres, production build, placement image and server,
+    # ~2-4 runner-minutes a run at the setup times above.
+    #
+    # Why not four rest legs or more: measure against the slowest leg OUTSIDE
+    # this split, never a sibling rest shard. That is now walkthrough 1/3 (the
+    # tennis-mtb shard, 639s / 852s on the runs above) — it shares this job's
+    # matrix but not this split, so it does not shrink when "rest" does, which
+    # is the sense of "sibling" in the header's rule. Three rest legs are
+    # already predicted to sit under it. A fourth buys no wall clock and pays
+    # setup again. Revisit when a rest leg is once more the slowest in a run.
+    #
+    # ALSO EXPIRED, NOT FIXED HERE: the heavy leg was carved out to BALANCE
+    # against the rest legs. It now runs 84-117s against rest steps of
+    # 374-774s, the shortest leg in the workflow rather than a balancing one.
+    # Re-deriving PARALLEL_HEAVY is its own change, not part of this one.
     strategy:
       fail-fast: false # one leg's failure must not hide another's
       matrix:
@@ -174,16 +220,21 @@ jobs:
         # carries one: upload-artifact@v4 rejects "/" and fails the job on a
         # duplicate name.
         include:
-          - group: parallel 1/2
+          - group: parallel 1/3
             slug: parallel-1
             project: parallel
             slice: rest
-            args: --shard=1/2
-          - group: parallel 2/2
+            args: --shard=1/3
+          - group: parallel 2/3
             slug: parallel-2
             project: parallel
             slice: rest
-            args: --shard=2/2
+            args: --shard=2/3
+          - group: parallel 3/3
+            slug: parallel-3
+            project: parallel
+            slice: rest
+            args: --shard=3/3
           - group: parallel heavy
             slug: parallel-heavy
             project: parallel
@@ -240,7 +291,7 @@ jobs:
           # WHEN TO STOP SPLITTING. The rule this file already applies: measure
           # a leg against the slowest leg of the OTHER JOBS, never against
           # itself. Note what that means here — these walkthrough shards are
-          # `e2e-parallel` legs, the same `strategy.matrix` as the three
+          # `e2e-parallel` legs, the same `strategy.matrix` as the four
           # `parallel` ones above, so `e2e-parallel`'s own slowest shard is NOT
           # a valid comparison for them. The jobs to measure against are
           # `e2e-serial` and `e2e-mobile`, whose slowest leg is phones-small at
@@ -258,7 +309,7 @@ jobs:
           # does not parse slugs — so a fourth shard added by hand is unguarded
           # and the next duplicate is found by a failed upload, not by a test.
           # `group` is the human label and may contain the slash, as
-          # `parallel 1/2` above already does.
+          # `parallel 1/3` above already does.
           #
           # THREE THINGS THAT WENT FROM 1x TO 3x with this split, because every
           # shard carries `project: walkthrough` and the conditions below key on
