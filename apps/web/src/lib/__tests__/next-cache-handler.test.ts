@@ -8,7 +8,7 @@ import { defaultConfig } from "next/dist/server/config-shared";
 import { IncrementalCache } from "next/dist/server/lib/incremental-cache";
 import ResponseCache from "next/dist/server/response-cache";
 import RenderResult from "next/dist/server/render-result";
-import { HTML_CONTENT_TYPE_HEADER } from "next/dist/lib/constants";
+import { CACHE_ONE_YEAR_SECONDS, HTML_CONTENT_TYPE_HEADER, INFINITE_CACHE } from "next/dist/lib/constants";
 import { unstable_cache } from "next/dist/server/web/spec-extension/unstable-cache";
 
 vi.hoisted(() => {
@@ -523,18 +523,22 @@ describe("tag expiry on read mirrors FileSystemCache.get (file-system-cache.js:2
 describe("TTL through the real unstable_cache producer", () => {
   afterEach(() => { delete (globalThis as { __incrementalCache?: unknown }).__incrementalCache; });
 
-  it("revalidate:false and absent reach the handler as a year, and still get the 30-day cap", async () => {
+  it("revalidate:false and absent reach the handler as huge numbers, and still get the 30-day cap", async () => {
     (globalThis as { __incrementalCache?: unknown }).__incrementalCache = incrementalCache();
     await unstable_cache(async () => 1, ["ttl-false"], { revalidate: false })();
     await unstable_cache(async () => 1, ["ttl-absent"], { tags: ["t"] })();
     await unstable_cache(async () => 1, ["ttl-30"], { revalidate: 30 })();
+    // One key per call, in call order. The stored shapes are Next's, named by
+    // Next's own constants: next@16.3.6 validateRevalidate maps `false` to
+    // INFINITE_CACHE (16.2.9 stored a year), and an absent revalidate is still
+    // CACHE_ONE_YEAR_SECONDS. If Next changes them again this goes red, and the
+    // "no positive time limit -> 30-day cap" rule gets re-checked.
     const rows = [...redis.kv.values()]
-      .map((e) => ({ stored: (JSON.parse(e.v) as { value: { revalidate: number } }).value.revalidate, ex: e.ex }))
-      .sort((a, b) => a.stored - b.stored);
+      .map((e) => ({ stored: (JSON.parse(e.v) as { value: { revalidate: number } }).value.revalidate, ex: e.ex }));
     expect(rows).toEqual([
+      { stored: INFINITE_CACHE, ex: NO_TTL_EX },
+      { stored: CACHE_ONE_YEAR_SECONDS, ex: NO_TTL_EX },
       { stored: 30, ex: 30 + 3600 },
-      { stored: 31_536_000, ex: NO_TTL_EX }, // Next's CACHE_ONE_YEAR_SECONDS, not `false`
-      { stored: 31_536_000, ex: NO_TTL_EX },
     ]);
   });
 

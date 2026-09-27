@@ -203,11 +203,12 @@ export default class SharedCacheHandler {
   }
 
   /**
-   * FileSystemCache.get's own tag checks (next@16.2.9 file-system-cache.js
-   * 214-248), which this handler replaces. IncrementalCache re-checks FETCH
-   * entries, but for pages it only does so inside the time window and then
-   * serves the old page as stale: a tag-expired page must be a miss HERE so
-   * the request renders fresh.
+   * FileSystemCache.get's own tag checks (next@16.3.6 file-system-cache.js
+   * 214-248, unchanged since 16.2.9), which this handler replaces.
+   * IncrementalCache re-checks FETCH entries, but checks page tags only
+   * inside the revalidate window (APP_PAGE/APP_ROUTE, never PAGES); past it
+   * the page is merely stale and served while it re-renders. A tag-expired
+   * page must be a miss HERE so the request renders fresh.
    * @param {any} entry @param {any} ctx
    */
   expired(entry, ctx) {
@@ -243,8 +244,9 @@ export default class SharedCacheHandler {
       warnOnce(`oversize:${key}`, "next-cache entry over 1 MB kept in machine memory only", { key, bytes });
       return;
     }
-    // unstable_cache stores revalidate:false/absent as a year (31_536_000),
-    // so the 30-day cap must be a min, not only the no-limit branch.
+    // next@16.3.6 unstable_cache stores revalidate:false as INFINITE_CACHE
+    // (4_294_967_294 s) and an absent revalidate as a year (31_536_000), so
+    // the 30-day cap must be a min, not only the no-limit branch.
     const ex = typeof data.revalidate === "number" && data.revalidate > 0
       ? Math.min(data.revalidate + 3600, NO_TTL_EX)
       : NO_TTL_EX;

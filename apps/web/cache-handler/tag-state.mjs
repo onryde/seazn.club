@@ -9,8 +9,9 @@
 export const TAGS_HASH = "nc:tags";
 
 /**
- * Mirror of next@16.2.9 FileSystemCache.revalidateTag
- * (server/lib/incremental-cache/file-system-cache.js:53-75). A parity test
+ * Mirror of next@16.3.6 FileSystemCache.revalidateTag
+ * (server/lib/incremental-cache/file-system-cache.js:43-76; body unchanged
+ * since 16.2.9). A parity test
  * runs Next's own class against this, so an upgrade that changes the rule
  * turns the test red instead of drifting.
  * @param {{stale?: number, expired?: number}} existing
