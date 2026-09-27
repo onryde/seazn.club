@@ -9,13 +9,21 @@ import Redis from "ioredis";
 
 export const BREAKER_FAILURES = 5;
 export const BREAKER_OPEN_MS = 10_000;
+/** The one bounded wait for a new client's FIRST ready (G1). */
+export const FIRST_READY_WAIT_MS = 1000;
 
 const KEY = Symbol.for("seazn.nextCache.redis");
 
-/** @returns {{client: any, failures: number, openUntil: number, warned: Set<string>}} */
+/**
+ * @returns {{client: any, failures: number, openUntil: number, warned: Set<string>,
+ *   everReady: boolean, bootWait: Promise<void> | undefined}}
+ */
 function state() {
   const g = /** @type {any} */ (globalThis);
-  return (g[KEY] ??= { client: undefined, failures: 0, openUntil: 0, warned: new Set() });
+  return (g[KEY] ??= {
+    client: undefined, failures: 0, openUntil: 0, warned: new Set(),
+    everReady: false, bootWait: undefined,
+  });
 }
 
 /** @param {string} key @param {string} msg @param {object} [extra] */
@@ -58,6 +66,7 @@ export function nextCacheRedis() {
     });
     client.on("ready", () => {
       const st = state();
+      st.everReady = true;
       if (!st.warned.has("conn")) return; // first ready at boot is not a recovery
       st.warned.delete("conn");
       console.warn(JSON.stringify({ level: 30, name: "next-cache", msg: "redis connection restored; shared cache resumed" }));
@@ -73,6 +82,39 @@ export function nextCacheRedis() {
 }
 
 /**
+ * Connect at boot (G1): the handler module calls this on load, so a cold
+ * machine's first reads find the client connected or connecting rather than
+ * unbuilt. Not during `next build`, whose workers load the handler too. With
+ * the flag off, nextCacheRedis builds nothing.
+ */
+export function connectAtBoot() {
+  if (process.env.NEXT_PHASE === "phase-production-build") return;
+  nextCacheRedis();
+}
+
+/**
+ * One shared wait, bounded by FIRST_READY_WAIT_MS, for a client's first
+ * ready. Every caller during boot awaits the same promise: one timer, one
+ * listener. The timer is unref'd, and cleared if ready wins. Once settled it
+ * stays settled, so no caller ever waits a second time.
+ * @param {ReturnType<typeof state>} s
+ * @param {any} r
+ * @returns {Promise<void>}
+ */
+function firstReady(s, r) {
+  return (s.bootWait ??= new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      r.removeListener("ready", done);
+      resolve();
+    };
+    const timer = setTimeout(done, FIRST_READY_WAIT_MS);
+    timer.unref();
+    r.on("ready", done);
+  }));
+}
+
+/**
  * @template T
  * @param {(r: any) => Promise<T>} fn
  * @param {T} fallback
@@ -82,7 +124,16 @@ export async function withRedis(fn, fallback) {
   const s = state();
   const r = nextCacheRedis();
   if (!r) return fallback;
-  if (r.status !== "ready") return fallback; // connecting: not a failure
+  if (r.status !== "ready") {
+    // Not ready is never a breaker failure. A client that has never been
+    // ready gets one bounded wait, shared by every caller, so a cold boot's
+    // first reads and writes reach Redis. After its first ready, or once that
+    // wait has run out (the promise is then settled), a client that is not
+    // ready is skipped at once: an outage must not add latency to every request.
+    if (s.everReady) return fallback;
+    await firstReady(s, r);
+    if (r.status !== "ready") return fallback;
+  }
   const now = Date.now();
   if (now < s.openUntil) return fallback;
   try {

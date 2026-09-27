@@ -1,8 +1,9 @@
 // apps/web/src/lib/__tests__/next-cache-redis-client.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { EventEmitter } from "node:events";
 import {
   withRedis, cacheStatus, nextCacheRedis, __setRedisForTests, __resetRedisStateForTests,
-  BREAKER_FAILURES, BREAKER_OPEN_MS,
+  BREAKER_FAILURES, BREAKER_OPEN_MS, FIRST_READY_WAIT_MS,
 } from "../../../cache-handler/redis-client.mjs";
 
 // The module logs one JSON line per breaker transition via console.warn; keep
@@ -28,14 +29,6 @@ describe("withRedis", () => {
     expect(cacheStatus()).toBe("memory");
   });
 
-  it("not-yet-ready client → fallback WITHOUT counting a failure (boot)", async () => {
-    const c = fake({ status: "connecting" });
-    __setRedisForTests(c);
-    for (let i = 0; i < BREAKER_FAILURES + 2; i++) expect(await withRedis(async () => "x", "fb")).toBe("fb");
-    c.status = "ready";
-    expect(await withRedis(async () => "x", "fb")).toBe("x"); // breaker never opened
-  });
-
   it("opens after N consecutive failures, skips for BREAKER_OPEN_MS, then probes", async () => {
     vi.useFakeTimers();
     __setRedisForTests(fake());
@@ -57,16 +50,6 @@ describe("withRedis", () => {
     await withRedis(async () => 1, 0);
     for (let i = 0; i < BREAKER_FAILURES - 1; i++) await withRedis(boom, 0);
     expect(cacheStatus()).toBe("redis");
-  });
-
-  it("boot misses leave the failure count at zero: N-1 real failures after boot still do not trip", async () => {
-    const c = fake({ status: "connecting" });
-    __setRedisForTests(c);
-    for (let i = 0; i < BREAKER_FAILURES + 2; i++) await withRedis(async () => "x", "fb");
-    c.status = "ready";
-    for (let i = 0; i < BREAKER_FAILURES - 1; i++) await withRedis(redisDown, "fb");
-    expect(cacheStatus()).toBe("redis");
-    expect(await withRedis(async () => "x", "fb")).toBe("x");
   });
 
   it("stays open for the whole BREAKER_OPEN_MS window and probes exactly at its end", async () => {
@@ -183,6 +166,17 @@ describe("nextCacheRedis", () => {
     expect(warn.mock.calls.flat().join("\n")).not.toContain("s3cret");
   });
 
+  it("the connection-error line is pinned whole: host:port and code, never the password", async () => {
+    vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://:s3cret@127.0.0.1:1");
+    nextCacheRedis();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled(), { timeout: 5000 });
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toEqual({
+      level: 40, name: "next-cache", msg: "redis connection error; serving from machine memory",
+      err: "Error: connect ECONNREFUSED 127.0.0.1:1", code: "ECONNREFUSED",
+    });
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("s3cret");
+  });
+
   it("a real connection failure logs its errno code: Node's AggregateError alone prints only \"AggregateError\"", async () => {
     // localhost resolves to ::1 and 127.0.0.1, so Node's happy-eyeballs
     // connect fails with an AggregateError (or a plain Error where localhost
@@ -207,7 +201,7 @@ describe("nextCacheRedis", () => {
     expect(warn.mock.calls.flat().join("\n")).not.toContain("s3cret");
   });
 
-  it("flag on → builds one fail-fast ioredis client and reuses it; boot calls fall back", async () => {
+  it("flag on → builds one fail-fast ioredis client and reuses it; against a dead server a boot call waits the bound once, then falls back", async () => {
     vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://127.0.0.1:1");
     const r = nextCacheRedis();
     expect(r).not.toBeNull();
@@ -217,7 +211,12 @@ describe("nextCacheRedis", () => {
     });
     expect(r?.listenerCount("error")).toBeGreaterThan(0); // ECONNREFUSED must not surface as unhandled
     const fn = vi.fn(async () => "x");
+    let t = performance.now();
     expect(await withRedis(fn, "fb")).toBe("fb");
+    expect(performance.now() - t).toBeGreaterThanOrEqual(FIRST_READY_WAIT_MS - 20);
+    t = performance.now();
+    expect(await withRedis(fn, "fb")).toBe("fb"); // never a second wait
+    expect(performance.now() - t).toBeLessThan(100);
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -230,5 +229,145 @@ describe("nextCacheRedis", () => {
     expect(copy.nextCacheRedis()).toBe(c);
     await trip();
     expect(copy.cacheStatus()).toBe("degraded");
+  });
+});
+
+/**
+ * A controllable ioredis: the REAL nextCacheRedis constructs it (vi.doMock) and
+ * attaches its real listeners; the test decides when it becomes ready or drops.
+ */
+class FakeIORedis extends EventEmitter {
+  static made: FakeIORedis[] = [];
+  status = "connecting";
+  constructor(readonly url: string, readonly options: object) {
+    super();
+    FakeIORedis.made.push(this);
+  }
+  disconnect() { this.status = "end"; }
+  up() { this.status = "ready"; this.emit("ready"); }
+  down() { this.status = "reconnecting"; this.emit("close"); }
+}
+
+describe("the first ready at boot (G1): one bounded wait, never again", () => {
+  let rc: typeof import("../../../cache-handler/redis-client.mjs");
+  beforeEach(async () => {
+    FakeIORedis.made = [];
+    vi.doMock("ioredis", () => ({ default: FakeIORedis }));
+    vi.resetModules();
+    vi.stubEnv("NEXT_CACHE_REDIS", "1"); vi.stubEnv("REDIS_URL", "redis://:s3cret@127.0.0.1:1");
+    rc = await import("../../../cache-handler/redis-client.mjs");
+  });
+  afterEach(() => { vi.doUnmock("ioredis"); vi.resetModules(); });
+
+  const booted = () => {
+    const c = rc.nextCacheRedis() as unknown as FakeIORedis;
+    expect(FakeIORedis.made).toEqual([c]); // the real constructor path, not an injected fake
+    return c;
+  };
+  /** True while `p` is unsettled once pending microtasks run (no clock moves). */
+  async function pending(p: Promise<unknown>) {
+    let settled = false;
+    void p.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    return !settled;
+  }
+
+  it("the first op after construction waits for the first ready and reaches Redis when it lands inside the bound", async () => {
+    vi.useFakeTimers();
+    const c = booted();
+    const fn = vi.fn(async () => "x");
+    const p = rc.withRedis(fn, "fb");
+    await vi.advanceTimersByTimeAsync(rc.FIRST_READY_WAIT_MS - 1);
+    expect(await pending(p)).toBe(true);
+    expect(fn).not.toHaveBeenCalled();
+    c.up();
+    expect(await p).toBe("x");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0); // the bound's timer is cleared, not left to fire
+  });
+
+  it("a client that never becomes ready is waited for once, FIRST_READY_WAIT_MS, then later ops skip with no wait", async () => {
+    expect(rc.FIRST_READY_WAIT_MS).toBe(1000); // the ruling's bound
+    vi.useFakeTimers();
+    booted();
+    const fn = vi.fn(async () => "x");
+    const p = rc.withRedis(fn, "fb");
+    await vi.advanceTimersByTimeAsync(rc.FIRST_READY_WAIT_MS - 1);
+    expect(await pending(p)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await p).toBe("fb");
+    const later = rc.withRedis(fn, "fb");
+    expect(await pending(later)).toBe(false);
+    expect(await later).toBe("fb");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("after the first ready, a dropped connection skips at once: an outage adds no wait and no breaker failure", async () => {
+    vi.useFakeTimers();
+    const c = booted();
+    c.up(); // no op saw it ready: only the client's own ready event can say so
+    c.down();
+    const fn = vi.fn(async () => "x");
+    const p = rc.withRedis(fn, "fb");
+    expect(await pending(p)).toBe(false);
+    expect(await p).toBe("fb");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fn).not.toHaveBeenCalled();
+    // …and those skips are not breaker failures: on reconnect, N-1 real
+    // failures still leave the breaker closed.
+    for (let i = 0; i < rc.BREAKER_FAILURES + 2; i++) await rc.withRedis(fn, "fb");
+    c.up();
+    for (let i = 0; i < rc.BREAKER_FAILURES - 1; i++) await rc.withRedis(redisDown, "fb");
+    expect(await rc.withRedis(fn, "fb")).toBe("x");
+  });
+
+  it("boot misses are never breaker failures: the timed-out wait, then instant skips, then N-1 real failures still do not trip", async () => {
+    vi.useFakeTimers();
+    const c = booted();
+    const first = rc.withRedis(async () => "x", "fb");
+    await vi.advanceTimersByTimeAsync(rc.FIRST_READY_WAIT_MS);
+    expect(await first).toBe("fb");
+    for (let i = 0; i < rc.BREAKER_FAILURES + 2; i++) expect(await rc.withRedis(async () => "x", "fb")).toBe("fb");
+    c.up();
+    for (let i = 0; i < rc.BREAKER_FAILURES - 1; i++) await rc.withRedis(redisDown, "fb");
+    expect(rc.cacheStatus()).toBe("redis");
+    const ok = vi.fn(async () => "x");
+    expect(await rc.withRedis(ok, "fb")).toBe("x");
+    expect(ok).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent first ops share one wait: one timer, one extra ready listener, and all reach Redis", async () => {
+    vi.useFakeTimers();
+    const c = booted();
+    const listeners = c.listenerCount("ready");
+    const ps = [1, 2, 3].map((n) => rc.withRedis(async () => n, 0));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(c.listenerCount("ready")).toBe(listeners + 1);
+    c.up();
+    expect(await Promise.all(ps)).toEqual([1, 2, 3]);
+    expect(c.listenerCount("ready")).toBe(listeners); // the wait's listener is removed
+  });
+
+  it("the boot wait never keeps the process alive: its timer is unref'd", async () => {
+    const c = booted();
+    const timeouts = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    const before = timeouts();
+    const p = rc.withRedis(async () => "x", "fb"); // real timers: the wait is armed synchronously
+    expect(timeouts()).toBe(before);
+    c.up();
+    expect(await p).toBe("x");
+  });
+
+  it.each([
+    ["flag on, a running server", "1", "phase-production-server", 1],
+    ["flag on, next build", "1", "phase-production-build", 0],
+    ["flag off", "0", "phase-production-server", 0],
+  ] as const)("loading the handler module connects at boot: %s", async (_name, flag, phase, made) => {
+    vi.stubEnv("NEXT_CACHE_REDIS", flag); vi.stubEnv("NEXT_PHASE", phase);
+    vi.resetModules();
+    await import("../../../cache-handler/handler.mjs");
+    expect(FakeIORedis.made).toHaveLength(made);
   });
 });

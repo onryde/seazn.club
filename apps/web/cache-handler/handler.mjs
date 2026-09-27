@@ -9,8 +9,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { tagsManifest, areTagsExpired } from "next/dist/server/lib/incremental-cache/tags-manifest.external.js";
-import { withRedis, warnOnce } from "./redis-client.mjs";
+import { withRedis, warnOnce, connectAtBoot } from "./redis-client.mjs";
 import { TAGS_HASH, HSET_IF_NEWER, HDEL_IF_OLDER, writeState, encodeField, decodeField } from "./tag-state.mjs";
+
+connectAtBoot();
 
 export const MAX_REDIS_BYTES = 1_048_576;
 export const NO_TTL_EX = 2_592_000;
