@@ -31,6 +31,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { sitemapWindowOverride } from "../sitemap-window";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
 const WEB = resolve(import.meta.dirname, "../../..");
@@ -841,5 +842,53 @@ describe("e2e CI wiring", () => {
       selected,
       "registration-connect.spec.ts is not selected by the walkthrough project",
     ).toContain("walkthrough/registration-connect.spec.ts");
+  });
+});
+
+// sitemap.spec.ts (fix 2026-09-27) is the ONLY proof that the sitemap's
+// competition read is served from the cache inside its window, and it needs
+// SITEMAP_REVALIDATE_SECONDS on BOTH the server and the Playwright runner. In
+// CI it fails when the variable is missing, but a failure only surfaces on a
+// push to main, after the merge that lost the line. So the wiring is pinned
+// here: the value sits in the job-level env of the job whose legs select the
+// spec (a step-level env reaches only one of the two processes; another job's
+// env reaches neither), it is usable by the SAME parse the server applies, and
+// ci-local.sh's e2e_env mirrors it.
+describe("sitemap.spec.ts's cache window", () => {
+  const strip = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+
+  function parallelJobWindow(): string | undefined {
+    const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
+    const start = yml.indexOf("\n  e2e-parallel:\n");
+    const end = yml.indexOf("\n  e2e-serial:\n");
+    expect(start, "no e2e-parallel job").toBeGreaterThan(-1);
+    expect(end, "no e2e-serial job after it").toBeGreaterThan(start);
+    // The JOB-level env: four spaces in, as opposed to a service's or a step's.
+    const env = /\n {4}env:\n((?: {6}.*\n|\s*\n)*)/.exec(yml.slice(start, end))?.[1] ?? "";
+    return /^ {6}SITEMAP_REVALIDATE_SECONDS: *"?([^"\s]*)"?\s*$/m.exec(env)?.[1];
+  }
+
+  it("is set at job level on e2e-parallel, whose rest legs run the spec, to a value the server accepts", async () => {
+    const rest = projectNamed(await configFor("rest"), "parallel");
+    expect(selects(rest, "sitemap.spec.ts"), "premise: e2e-parallel's rest legs select sitemap.spec.ts").toBe(true);
+
+    const raw = parallelJobWindow();
+    expect(raw, "e2e-parallel's job-level env does not set SITEMAP_REVALIDATE_SECONDS").toBeDefined();
+    expect(
+      sitemapWindowOverride(raw),
+      `SITEMAP_REVALIDATE_SECONDS=${raw} is not a usable override — the server would fall back to the shipped hour`,
+    ).toBeDefined();
+  });
+
+  it("is mirrored by ci-local.sh's e2e_env", () => {
+    const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
+    const body = /\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "";
+    expect(body, "no e2e_env() in ci-local.sh").not.toBe("");
+    const local = /^\s*export SITEMAP_REVALIDATE_SECONDS=(\S+)\s*$/m.exec(strip(body))?.[1];
+    expect(local, "ci-local.sh's e2e_env does not export SITEMAP_REVALIDATE_SECONDS").toBe(parallelJobWindow());
   });
 });

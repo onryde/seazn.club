@@ -44,6 +44,9 @@ import { roundOnePairs } from "../apps/web/src/lib/swiss-pairing.ts";
 // reader the e2e journey uses. Its only import is `node:zlib`, so it loads
 // under `--experimental-strip-types` (proven before relying on it).
 import { pdfLinkUris } from "../apps/web/e2e/pdf-uris.ts";
+// The sitemap check waits out the SAME window the server parses; the module is
+// import-free, so it loads under `--experimental-strip-types`.
+import { sitemapWindowOverride } from "../apps/web/src/lib/sitemap-window.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://localhost:3000";
 
@@ -5772,8 +5775,8 @@ async function sitemapSuite(): Promise<void> {
   // and the hub's entry must not be satisfied by its division's.
   const hub = `/shared/${orgSlug}/${compRow.slug}`;
   const listed = (xml: string) => xml.includes(`${hub}</loc>`) && xml.includes(`${hub}/${divSlug}</loc>`);
-  const windowS = Number(process.env.SITEMAP_REVALIDATE_SECONDS);
-  const deadline = Date.now() + (Number.isInteger(windowS) && windowS > 0 ? (2 * windowS + 10) * 1000 : 0);
+  const windowS = sitemapWindowOverride(process.env.SITEMAP_REVALIDATE_SECONDS);
+  const deadline = Date.now() + (windowS === undefined ? 0 : (2 * windowS + 10) * 1000);
   let sm = await html(newSession(), "/sitemap.xml");
   while (!listed(sm.body) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 1000));
@@ -20032,6 +20035,10 @@ async function cleanup(tag: string): Promise<void> {
     `delivered+wd_board_${tag}@resend.dev`,
     // entrantRenameSuite's own free org (same reason as the line above).
     `delivered+rename_${tag}@resend.dev`,
+    // sitemapSuite's own org — and with it a PUBLIC, PUBLISHED competition,
+    // which without this line would stay listed in the sitemap of whatever
+    // database the run was pointed at.
+    `delivered+sitemap_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {

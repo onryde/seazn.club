@@ -434,7 +434,8 @@ jobs:
       # both halves of that — not re-read inside the window, picked up after
       # it — so it needs a window it can wait out. Runtime, not build: set at
       # JOB level so the server started below and the Playwright runner read the
-      # same number; the spec skips when the runner does not see it. 20s leaves
+      # same number; under CI the spec FAILS without it, and e2e-ci-wiring.test.ts
+      # pins this line (and ci-local.sh's e2e_env copy of it). 20s leaves
       # room to create a competition inside the window on a slow runner.
       # Anything unusable falls back to the shipped hour, whose own test is
       # pinned on the default and so untouched by this override.
