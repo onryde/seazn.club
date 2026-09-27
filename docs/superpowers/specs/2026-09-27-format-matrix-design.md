@@ -1,7 +1,7 @@
 # Format × sport matrix — design of record
 
 - **Date:** 2026-09-27 (amended the same day after an independent spec review)
-- **Status:** APPROVED by the owner (rulings 14–20 in `_INDEX.md`)
+- **Status:** APPROVED by the owner (rulings 14–21 in `_INDEX.md`)
 - **Programme index:** `2026-09-27-format-matrix-prompts/_INDEX.md` (owner rulings, decision log, status)
 - **Standing rules:** `2026-09-27-format-matrix-prompts/_RULES.md`
 - **Inputs:** `2026-09-27-format-matrix-prompts/audit-2026-09-27/` (five read-only audits, the offered-cell map, the bench reuse assessment)
@@ -384,10 +384,43 @@ entry) do not read as reds:
 arrive wave by wave, and the Swiss bye rule comes from W3's rulebook — so its ❌
 list is where each wave's backlog starts, not its full extent.
 
+### 7.3a Anti-vacuity (ruling 21)
+
+Every invariant and property **reports how many things it checked** (pairs,
+brackets, rows, opponents). A check that saw zero items is a **failure**, not a
+pass — "no rematch" on an empty round, "covers pairings evenly" over zero
+pairs and "undo cleared the round" over zero seats are this week's examples.
+The count is written into the case's JSON evidence.
+
 ### 7.4 Disagreement triage
 
 Reference ≠ product → **the rulebook decides**. Either side can be wrong. If the
 rulebook is silent, the case is ⬜ and goes to the owner as a recommendation.
+
+### 7.5 Finding the holes nobody listed (ruling 21)
+
+The 69 scenarios are the cases someone thought of. Three mechanisms look for the
+rest:
+
+1. **Model-based sequence testing (W1b).** A `fast-check` command model
+   generates random sequences of organiser actions — add entrant, withdraw,
+   walkover, void, correct, Generate, Pair next, Rebuild, complete stage —
+   against each cell, checking every §7.3 invariant after **every** step. A
+   failure shrinks to the shortest reproducing sequence, which is committed as a
+   new named regression case. This is the mechanism that catches transition bugs
+   like #879 (add → Generate → duplicate pair). It runs in L3 over HttpDriver;
+   seeds are logged so any red replays exactly.
+2. **Automated mutation testing (W1d).** Stryker runs weekly on
+   `packages/engine` scheduling, competition and tiebreaker modules, with a
+   mutation-score floor set from the first measured run and only allowed to
+   rise. Surviving mutants are listed in the run report; each is killed by a
+   test or recorded as equivalent.
+3. **Production shadow invariants (W10 lane, after #878).** The server evaluates
+   the §7.3 invariants on real tables, brackets and pairings after each write,
+   **logging** a Sentry event on violation — never refusing the action. Real
+   events are the final test; a broken table reaches us before an organiser.
+   Invariants run with their preconditions and anti-vacuity counts, off the
+   request's critical path.
 
 ## 8. Waves
 
@@ -398,9 +431,9 @@ format/sport; **every audit ID must be closed or ruled by programme end**.
 | Wave | Scope | Carries |
 |---|---|---|
 | **W1a — L3 core** | Lean HTTP runner reusing the bench's helpers; `HttpDriver`; org/plan seeding; **stream generators for all 11 sports**; per-round generation for swiss/mexicano/ladder; invariants; JSON results; `MATRIX.md` generator | Proven on a vertical slice: league, knockout, swiss × generic, badminton |
-| **W1b — catalogues + reference skeleton** | 69 scenarios split into atomic cases; applicability over (format, sport, variant) with the committed drop list and floors; variant set with boundary classes; L2 pair file; `packages/reference/` skeleton, boundary gate, Dockerfile line | Formulas and real counts for §6.2; E-axis decision; reference import mode |
+| **W1b — catalogues + reference skeleton** | fast-check command model over the organiser actions (§7.5); anti-vacuity counts on every invariant (§7.3a); `forEachSport` test helper (R26); 69 scenarios split into atomic cases; applicability over (format, sport, variant) with the committed drop list and floors; variant set with boundary classes; L2 pair file; `packages/reference/` skeleton, boundary gate, Dockerfile line | Formulas and real counts for §6.2; E-axis decision; reference import mode |
 | **W1c — browser layers** | `BrowserDriver`: organiser page objects + **11 pad adapters**; L1/L2 frameworks; width rotation | API-only rows created over HTTP, then driven in the browser |
-| **W1d — CI + truth run** | Shards, fresh DB per shard, weekly + dispatch workflow with the visibility guard, per-PR sample, three green dispatches before the schedule, per-case timing, **the first full truth run** and triage of its reds into waves | The ❌ list (a floor) becomes each wave's starting backlog |
+| **W1d — CI + truth run** | Shards, fresh DB per shard, weekly + dispatch workflow with the visibility guard, per-PR sample, three green dispatches before the schedule, per-case timing, weekly Stryker mutation run with a score floor (§7.5), **the first full truth run** and triage of its reds into waves | The ❌ list (a floor) becomes each wave's starting backlog |
 | **W2 — sport scoring fidelity** (a sport-family wave: one rulebook per sport family, reference families for its exact-oracle items) | The input layer every format consumes | SC-X1 (knockout tie/no-result stall), SC-X2 (stage deciders with a screen), SC-X3 (no event to settle an abandoned knockout by lot), SC-X4 (auto-advance blocked by `abandoned`), SC-P1, SC-P2 (level knockout without a decider), SC-P4 (hockey shoot-out points), SC-P11 (futsal preset), SC-S* (walkover/retirement set and point credit, tennis impossible sets, tennis Bo1 match tie-break, double walkover SC-S6), SC-C3 (DLS NRR), **SC-O1/SC-O2 (boardgame/generic draws in brackets — the `supportsDraws` root cause, owned here)**, ST-G1, ST-G2, ST-G16, ST-G10 (tiebreak validation against the sport + stage tiebreak UI); **stage-level match format for every sport** (ruling 12, FX-G23, SC-O8); fixture-level format override through every `resolveFixtureCfg` caller (§5); division-level lock of points/tiebreakers per started stage (O8) |
 | **W3 — Swiss** (9 live) | swiss, swiss_playoff, swiss_knockout | SW-* (H1 failed pairing reported as success; H2 round guidance; H3 chess colours; H4 Swiss tiebreak families; M1 Buchholz bye; M2 undo Pair next; bye points, snapshot and court booking; byeScore SC-O7/SW-M8 owned here; Swiss handling of double walkover SW-M9, engine outcome from W2); #846; ST-G21 (slideshow Buchholz column); #838 recorded as answered by ruling 12 (round count per stage) — confirm in the rulebook |
 | **W4 — knockout family** (10 live) | knockout, ko_plate, qualifying_main, third place, stepladder, page_playoff | FX-G2 (bracket growth on Generate — **owns the shared position-keyed reconcile fix**, which W5 extends to round-robin), FX-G7, FX-G14, FX-G16 (a confirmed proposal keeps a stale qualifier), third-place UI, ST-G7 + ST-G26 (finished knockout as all-zero tables on embed/slideshow/OG) |
@@ -409,7 +442,7 @@ format/sport; **every audit ID must be closed or ruled by programme end**.
 | **W7 — americano, mexicano, ladder** | the 20 unfit americano/mexicano cells, ladder | case-by-case rulings; FX-G6, FX-G8–G11; the broken `americano-night` tennis template |
 | **W8 — scorer sheets** (lane) | printable sheets | SH-* (SH-G1 unreachable print options = #870; plan re-check when scoring; revoke a day; untimed matches; non-Latin fonts; per-format and per-sport card tests, SH-G7) |
 | **W9 — operational [O]** (lane) | schedule, devices, registration | the [O] list (§4), #880, bench findings: cross-competition court double-booking (`schedule.ts:939`), `solver_unavailable`, `start_window` never blocks, inert `crossPersonClash`, no engine request, `lang` until hydration |
-| **W10 — sweep** (lane) | unrelated issues + one privacy defect | **ST-G22 first** (recap/digest bypasses youth-name masking — a privacy defect), #878 browser Sentry, #858 admin URL, #853 player card, #843 roster i18n |
+| **W10 — sweep** (lane) | unrelated issues + one privacy defect + shadow invariants | **ST-G22 first** (recap/digest bypasses youth-name masking — a privacy defect), #878 browser Sentry, then **production shadow invariants** (§7.5, reusing the harness's invariant functions), #858 admin URL, #853 player card, #843 roster i18n |
 
 **Order.** W1a → W1b → W1c → W1d → W2 → W3 → W4 → W5 → W6 → W7 in sequence —
 they share the engine and `stages.ts` (5,794 lines). W8, W9, W10 run in

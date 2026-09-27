@@ -85,3 +85,24 @@ to it.
   `pnpm i18n:gen-keys`.
 - **R24.** UI changes: ≥2 options shown to the owner before building; visual
   verdict per screen at 1280, 768, 320; no horizontal page scroll.
+
+## Finding what nobody listed (ruling 21)
+
+- **R25. Anti-vacuity.** Every invariant, property and sweep asserts it saw at
+  least one item and records the count. Zero checked = failure. An empty set is
+  stated as the first case of every rule set (R13).
+- **R26. Sweep sports by default.** Tests under `packages/engine/src/{scheduling,competition}`,
+  standings and progression code iterate the sport registry through the shared
+  `forEachSport` helper. A test pinned to one sport (e.g. `generic`) carries a
+  one-line reason; a CI check lists unreasoned single-sport tests.
+- **R27. Every PR touching `packages/engine` or `stages.ts` declares its matrix
+  rows** in the PR body; CI runs those rows' L3 cases. The reviewer asks four
+  questions of every change and writes the answers in the review: what happens on
+  a **second call**, on an **empty** input, **after a withdrawal or void**, and
+  **for another sport**.
+- **R28. Assumptions are guards, not comments.** "Cannot happen" in a comment
+  becomes an assertion or a named refusal plus a test that reaches it
+  (`competition.ts:148` said draws never reach a bracket; they do).
+- **R29. A shrunk fast-check failure becomes a named regression case** in the
+  scenario catalogue, with its seed, before the fix lands.
+

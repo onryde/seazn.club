@@ -77,6 +77,12 @@ a peer session as the other.
 20. **Weekly L1 + L2 + L3 while the repo is public ($0 on standard runners).**
     The owner will make the repo private later; the private-repo plan
     (self-hosted runner) is a recommendation to be ruled at the switch.
+21. **Hole-finding additions approved** (design §7.3a, §7.5; `_RULES.md`
+    R25–R28): fast-check model-based sequence testing (W1b), anti-vacuity counts
+    on every invariant, automated Stryker mutation testing weekly (W1d),
+    `forEachSport` sweep by default, production shadow invariants logging to
+    Sentry (W10 lane, after #878), and the PR row-declaration + four reviewer
+    questions.
 
 ## Recommendations (mine — not rulings)
 
