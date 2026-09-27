@@ -33,18 +33,34 @@ export interface DbConnectionOptions {
 }
 
 /**
- * Idle seconds before a pooled connection is closed. Was 20; raised to 60 on
- * 2026-09-24. Prod pg_stat_statements showed ~24.7k reconnects in 6 days at
- * 20 s, and every reconnect pays a TLS handshake, postgres.js's array-type
- * fetch (the `select b.oid, b.typarray from pg_catalog.pg_type …` query) and
- * the loss of that connection's prepared statements (re-plan). fly.toml's
- * `min_machines_running = 1` keeps one machine up permanently, so a short
- * timeout only churned it; Fly autostop idles a machine for minutes before
- * suspending, so 60 s still drains the pool well before a suspend.
+ * Idle seconds before a pooled connection is closed. Was 20; 60 since
+ * 2026-09-24 (owner-confirmed with the facts below).
+ *
+ * WHY. fly.toml and fly.stg.toml both run an HTTP check on `/api/health`
+ * every 30 s, and that route runs `select 1` on THIS pool. At 20 s every
+ * check found the pool drained and re-dialled — ~2,880 reconnects per running
+ * machine per day, which (not user traffic) was the ~24.7k reconnects in 6
+ * days that prod pg_stat_statements showed. Each reconnect pays a TLS
+ * handshake, postgres.js's array-type fetch (the `select b.oid, b.typarray
+ * from pg_catalog.pg_type …` query) and the loss of that connection's prepared
+ * statements. The value must stay ABOVE the health-check interval or the churn
+ * returns; db-options/db-singleton tests read both fly tomls to enforce that.
+ *
+ * THE ACCEPTED TRADE. Because the health check touches the pool every 30 s,
+ * the pool never drains on a running machine, so every Fly suspend freezes at
+ * least one open socket (at 20 s about 2/3 of suspends already did). A socket
+ * frozen across a suspend longer than ~39 min — when the server reaps the idle
+ * backend — may fail the first query after resume: postgres.js does not retry
+ * an in-flight query. Sentry over 90 days shows zero ECONNRESET /
+ * CONNECTION_CLOSED / ETIMEDOUT issues. Staging (`min_machines_running = 0`)
+ * suspends constantly and will surface it first.
  *
  * fetch_types must stay on — postgres.js 3.4.9 registers ALL array parsers
  * (text[]/uuid[] included) via it; off ⇒ arrays come back as '{a,b}' strings
- * and any(${ids}) throws. See __tests__/db-array-types.test.ts.
+ * and any(${ids}) throws. See __tests__/db-array-types.test.ts. getClient()
+ * passes it EXPLICITLY: an explicit option beats the URL, and a
+ * `?fetch_types=false` query param (or PGFETCH_TYPES) would otherwise turn it
+ * off from a connection string nobody reviews.
  */
 const IDLE_TIMEOUT_S = 60;
 
@@ -79,12 +95,14 @@ function getClient(): Sql {
   }
   const { ssl, prepare, max, schema, idleTimeout } = connectionOptions(url);
 
-  // fetch_types is deliberately left at its default (on) — see IDLE_TIMEOUT_S.
   const client = postgres(url, {
     ssl,
     prepare,
     max,
     idle_timeout: idleTimeout,
+    // Explicit, so a `?fetch_types=false` URL param cannot switch off the
+    // array parsers — see IDLE_TIMEOUT_S.
+    fetch_types: true,
     connect_timeout: 15,
     connection: { search_path: schema },
     debug: () => {
