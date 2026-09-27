@@ -2956,3 +2956,12 @@ touching the phone, and the device screen split between live video and a scoring
 schema evidence, the seam it lands on, a product-owner recommendation and the two questions that gate it:
 `_SCENARIO-2026-09-27-court-bound-device.md` beside this file. It is R3 plus a control-plane hook, not R1,
 and it changed nothing in lane B.
+
+## 2026-09-27 — owner ruled OAuth for YouTube ("Let's use OAUTH"), and asked how destinations are scoped
+
+Destinations are ORG level today (`org_stream_targets.org_id`, no competition/division/court column). Recommended
+a per-COURT default, which is VENUE-shaped — set up once per venue, inherited by every tournament there; division
+level collides with itself and tournament level buys nothing. OAuth direction, what it buys (titled per-match
+broadcasts and a STORABLE per-match watch url, which the pasted-key path cannot give), the two gates (Google
+verification is sensitive-scope and is CALENDAR time; Data API quota is per Cloud project and shared by every
+org) and the open visibility question: `_OAUTH-youtube-connect.md` beside this file. R1 keeps the pasted key.
