@@ -831,9 +831,9 @@ jobs:
       # mutate entitlements via raw SQL without invalidating the cache — stale
       # reads, false failures.
       #
-      # All three suites below are merged into one step (each already needs
+      # All four suites below are merged into one step (each already needs
       # Redis for its own reasons, so there is no isolation concern BETWEEN
-      # them — only between all three and the src/server+src/lib step, which
+      # them — only between all four and the src/server+src/lib step, which
       # this step still doesn't touch):
       #   * rate-limit.redis.test.ts — the real rate-limiter path, Lua EVAL /
       #     TTL / 429, end to end.
@@ -845,8 +845,14 @@ jobs:
       #   * platform-fee-cache-isolation.redis.test.ts (#336) — the cached fee
       #     is namespaced by DB_SCHEMA; needs a real Redis holding a warm,
       #     cross-schema entry to catch a regression back to a single global key.
-      - name: Redis-gated integration tests (rate limiter, entitlement cache, platform fee cache)
-        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts
+      #   * next-cache-two-machines.redis.test.ts — the shared Next cacheHandler
+      #     seam: two separate Node processes, each loading the real
+      #     cache-handler/handler.mjs, share this Redis; one serves the other's
+      #     entry warm and sees its revalidateTag. Also runs the tag-state Lua
+      #     scripts for real. Never FLUSHes: its keys are run-unique and it
+      #     deletes only those, so it can share this Redis with the three above.
+      - name: Redis-gated integration tests (rate limiter, entitlement cache, platform fee cache, next cache handler)
+        run: npm test --workspace apps/web -- run src/lib/__tests__/rate-limit.redis.test.ts src/lib/__tests__/entitlements-cache-invalidation.redis.test.ts src/lib/__tests__/platform-fee-cache-isolation.redis.test.ts src/lib/__tests__/next-cache-two-machines.redis.test.ts
         env:
           REDIS_URL: redis://localhost:6379
 
