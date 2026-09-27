@@ -10,6 +10,7 @@ import {
 } from "@/server/usecases/slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { fireOrgRevalidate } from "@/server/public-site/revalidate";
+import { dropPublicOrgRefs } from "@/server/public-site/public-ref-cache";
 import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
 import { mergeBrandColor, mergeSponsors } from "@/lib/org-branding";
@@ -208,6 +209,10 @@ export async function PATCH(
     fireOrgRevalidate(org.slug);
     if (previousSlug) fireOrgRevalidate(previousSlug);
     if (previousSlug) await invalidateSlugCache("org", null, previousSlug, org.slug);
+    // …and the polled public readers' cached slug lookups (public hub perf T2):
+    // the org's own, and every one of its competitions', under the old slug
+    // and the new. This route is the only writer of an org slug. Never throws.
+    if (previousSlug) await dropPublicOrgRefs(org.id, previousSlug, org.slug);
 
     return org;
   });

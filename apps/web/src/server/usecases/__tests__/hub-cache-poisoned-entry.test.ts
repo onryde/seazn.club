@@ -21,15 +21,19 @@
 // in the logs. The block below pins the fix: the fresh document is validated
 // too, logged (never thrown — a hard failure is worse on a public page) and
 // still served and cached.
+//
+// Public hub perf T2: the hub is now rebuilt single-flight through the lease
+// primitives (lib/single-flight-cache.ts), not `cacheGet`/`cacheSet`, so Redis
+// here is the in-memory lease fake (`lib/__tests__/_fake-lease-cache.ts`): an
+// entry is SEEDED raw under the key, and "cached" means a fill landed.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const cacheGet = vi.hoisted(() => vi.fn(async (key: string) => {
-  void key;
-  return null as unknown;
-}));
-const cacheSet = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("@/lib/cache", async (importOriginal) => {
+  const { fakeLeaseCache } = await import("@/lib/__tests__/_fake-lease-cache");
+  return { ...(await importOriginal<typeof import("@/lib/cache")>()), ...fakeLeaseCache.module() };
+});
 const loadCompetitionHub = vi.hoisted(() => vi.fn());
-const sql = vi.hoisted(() => vi.fn(async () => [{ id: "comp-1" }]));
+const sql = vi.hoisted(() => vi.fn(async () => [{ id: "comp-1", org_id: "org-1" }]));
 // Whole-module mock, not vi.spyOn: `log` is a module-scope pino singleton, and
 // a spy left on it outlives the test unless the file restores it — the same
 // reason `billing-overview-stripe-failure.test.ts` gives for its own logMock.
@@ -42,11 +46,6 @@ const logMock = vi.hoisted(() => ({
   trace: vi.fn(),
 }));
 
-vi.mock("@/lib/cache", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/cache")>()),
-  cacheGet,
-  cacheSet,
-}));
 vi.mock("@/lib/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/db")>()),
   sql,
@@ -57,14 +56,19 @@ vi.mock("@/server/public-site/competition-hub", async (importOriginal) => ({
 }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
 
-import { publicCompetitionHub } from "../public";
+import { HUB_TTL_SECONDS, publicCompetitionHub } from "../public";
 import { validHubDoc } from "@/server/public-site/__tests__/_hub-doc";
+import { fakeLeaseCache as redis } from "@/lib/__tests__/_fake-lease-cache";
 
 const KEY = "pub:v1:hub:comp-1";
 
+/** A fill that landed under the hub key — what "cached" means now. */
+const fills = () => redis.log.filter((l) => l.op === "fill" && l.key === KEY && l.ok).length;
+
 beforeEach(() => {
   vi.clearAllMocks();
-  sql.mockResolvedValue([{ id: "comp-1" }]);
+  redis.reset();
+  sql.mockResolvedValue([{ id: "comp-1", org_id: "org-1" }]);
   loadCompetitionHub.mockResolvedValue(validHubDoc());
 });
 
@@ -74,13 +78,13 @@ describe("publicCompetitionHub — what comes back from Redis is checked", () =>
     // that rejected EVERY hit would pass them both while making the cache
     // useless.
     const cached = validHubDoc();
-    cacheGet.mockResolvedValue(cached);
+    redis.seed(KEY, cached);
 
     const doc = await publicCompetitionHub("riverside", "autumn-cup");
 
     expect(doc).toEqual(cached);
     expect(loadCompetitionHub).not.toHaveBeenCalled();
-    expect(cacheSet).not.toHaveBeenCalled();
+    expect(redis.count("fill", KEY)).toBe(0);
   });
 
   it("an entry of the WRONG SHAPE is treated as a miss and rebuilt", async () => {
@@ -88,7 +92,7 @@ describe("publicCompetitionHub — what comes back from Redis is checked", () =>
     // document, missing a field this build requires.
     const stale = { ...(validHubDoc() as Record<string, unknown>) };
     delete stale.realtime;
-    cacheGet.mockResolvedValue(stale);
+    redis.seed(KEY, stale);
 
     const doc = await publicCompetitionHub("riverside", "autumn-cup");
 
@@ -110,7 +114,7 @@ describe("publicCompetitionHub — what comes back from Redis is checked", () =>
       delete table.qualification;
       for (const r of table.rows) delete r.qual;
     }
-    cacheGet.mockResolvedValue(stale);
+    redis.seed(KEY, stale);
 
     const doc = (await publicCompetitionHub("riverside", "autumn-cup")) as unknown as typeof stale;
 
@@ -123,37 +127,32 @@ describe("publicCompetitionHub — what comes back from Redis is checked", () =>
     // Rebuilding without writing back would re-poison on every request for the
     // rest of the TTL: every reader would pay a full rebuild and the bad entry
     // would sit there until it expired.
-    cacheGet.mockResolvedValue({ competitionId: "comp-1", tabs: [] });
+    redis.seed(KEY, { competitionId: "comp-1", tabs: [] });
 
     await publicCompetitionHub("riverside", "autumn-cup");
 
-    expect(cacheSet).toHaveBeenCalledTimes(1);
-    const [key, value, ttl] = cacheSet.mock.calls[0] as unknown as [string, unknown, number];
-    expect(key).toBe(KEY);
-    expect(ttl).toBe(15);
-    expect((value as { realtime: unknown }).realtime).toBeDefined();
+    expect(fills()).toBe(1);
+    expect(redis.log.find((l) => l.op === "fill" && l.key === KEY)?.ttl).toBe(HUB_TTL_SECONDS);
+    expect((redis.peek(KEY) as { realtime: unknown }).realtime).toBeDefined();
   });
 
   it("a poisoned entry does not throw — the page renders from a rebuild", async () => {
     // `.parse` here would reject the entry by raising, which is the failure
     // this file exists to prevent: one bad write would 500 the public page for
     // fifteen seconds.
-    cacheGet.mockResolvedValue("not a document at all");
+    redis.seed(KEY, "not a document at all");
 
     await expect(publicCompetitionHub("riverside", "autumn-cup")).resolves.toBeDefined();
   });
 
   it("an empty cache still loads and stores, as it did before the check", async () => {
-    cacheGet.mockResolvedValue(null);
-
     await publicCompetitionHub("riverside", "autumn-cup");
 
     expect(loadCompetitionHub).toHaveBeenCalledTimes(1);
-    expect(cacheSet).toHaveBeenCalledTimes(1);
+    expect(fills()).toBe(1);
   });
 
   it("the common case — a valid fresh build — never logs", async () => {
-    cacheGet.mockResolvedValue(null);
     loadCompetitionHub.mockResolvedValue(validHubDoc());
 
     await publicCompetitionHub("riverside", "autumn-cup");
@@ -165,7 +164,6 @@ describe("publicCompetitionHub — what comes back from Redis is checked", () =>
     // Empty cache: forces a load. The loader itself hands back a document
     // that fails CompetitionHubDoc — the same shape B1 produced before its
     // own fix (a `Date` where the schema wants a `string`).
-    cacheGet.mockResolvedValue(null);
     const invalid = { ...(validHubDoc() as Record<string, unknown>) };
     delete invalid.realtime;
     loadCompetitionHub.mockResolvedValue(invalid);
@@ -183,9 +181,7 @@ describe("publicCompetitionHub — what comes back from Redis is checked", () =>
     // Still cached — a permanent silent miss (never writing it back) is
     // exactly the defect this fix exists to close, not one to trade for a
     // log line.
-    expect(cacheSet).toHaveBeenCalledTimes(1);
-    const [key, cached] = cacheSet.mock.calls[0] as unknown as [string, unknown, number];
-    expect(key).toBe(KEY);
-    expect(cached).toBe(invalid);
+    expect(fills()).toBe(1);
+    expect(redis.peek(KEY)).toEqual(invalid);
   });
 });
