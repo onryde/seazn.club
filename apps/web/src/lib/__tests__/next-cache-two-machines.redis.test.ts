@@ -89,7 +89,10 @@ async function scanKeys(r: Redis, match: string): Promise<string[]> {
 }
 
 describe.skipIf(!HAS_REDIS)("two machines share one Redis", () => {
-  const tag = `division:e2e-${Date.now()}`;
+  // From the run-unique BUILD_ID, not a millisecond: two runs sharing a Redis
+  // must never share an nc:tags field (one's expire:0, or afterAll HDEL, would
+  // hit the other).
+  const tag = `division:e2e-${BUILD_ID}`;
   let r: Redis;
   let sweepExisted = true;
 
@@ -119,10 +122,15 @@ describe.skipIf(!HAS_REDIS)("two machines share one Redis", () => {
     expect(run([{ op: "get", key: "k-share", tag }])).toEqual([{ found: true, isStale: false, body: "v1" }]);
   });
 
-  it("A's {expire:0} makes B return nothing", () => {
+  it("A's {expire:0} makes B return nothing", async () => {
     run([{ op: "set", key: "k-exp", tag: `${tag}-x`, body: "v1" }]);
+    // The positive pair: before the revalidate, another machine HITS A's entry,
+    // so B's miss below cannot be a machine that simply never reaches Redis.
+    expect(run([{ op: "get", key: "k-exp", tag: `${tag}-x` }])[0].found).toBe(true);
     run([{ op: "revalidate", tag: `${tag}-x`, expire: 0 }]);
     expect(run([{ op: "get", key: "k-exp", tag: `${tag}-x` }])[0].found).toBe(false);
+    // ...and the entry is still in Redis: the miss is the tag state's doing.
+    expect(await r.exists(`nc:${BUILD_ID}:k-exp`)).toBe(1);
   });
 
   it("A's 'max' makes B serve stale", () => {
@@ -131,11 +139,14 @@ describe.skipIf(!HAS_REDIS)("two machines share one Redis", () => {
     expect(run([{ op: "get", key: "k-max", tag: `${tag}-m` }])[0]).toMatchObject({ found: true, isStale: true });
   });
 
-  it("'max' then {expire:0} from different machines: expiry wins on a third", () => {
+  it("'max' then {expire:0} from different machines: expiry wins on a third", async () => {
     run([{ op: "set", key: "k-both", tag: `${tag}-b`, body: "v1" }]);
+    // The positive pair, as above: A's entry is reachable cross-machine first.
+    expect(run([{ op: "get", key: "k-both", tag: `${tag}-b` }])[0].found).toBe(true);
     run([{ op: "revalidate", tag: `${tag}-b` }]);
     run([{ op: "revalidate", tag: `${tag}-b`, expire: 0 }]);
     expect(run([{ op: "get", key: "k-both", tag: `${tag}-b` }])[0].found).toBe(false);
+    expect(await r.exists(`nc:${BUILD_ID}:k-both`)).toBe(1);
   });
 
   it("A's write is in Redis under nc:<the BUILD_ID beside serverDistDir>:<key>, with revalidate + 1h as its TTL", async () => {

@@ -210,6 +210,26 @@ describe("Redis-gated suites are wired into CI", () => {
     ).toEqual([]);
   });
 
+  it("passes no bare `run` positional after `--` in any step that runs a Redis-gated suite", () => {
+    // The workspace script is already `vitest run`, so
+    // `npm test --workspace apps/web -- run <files>` ran `vitest run run <files>`:
+    // "run" became a filename FILTER and the Redis step collected 34 files — 30
+    // unrelated *run* suites, with REDIS_URL set — instead of its 4
+    // (2026-09-27). `--run`, vitest's boolean flag, is not a positional.
+    const bareRun = /\s--\s+run(\s|$)/;
+    expect(bareRun.test("npm test --workspace apps/web -- run src/a.redis.test.ts")).toBe(true);
+    expect(bareRun.test("npm test --workspace apps/web -- --run src/a.redis.test.ts")).toBe(false);
+
+    const names = redisSuites().map((p) => basename(p));
+    const commands = stepBlocks(ciExecutableText())
+      .filter((b) => names.some((n) => b.includes(n)))
+      .flatMap((b) => b.split("\n").filter((l) => /\bnpm test\b.*\s--(\s|$)/.test(l)));
+    // Not vacuous: the Redis step's own command is among the lines checked.
+    expect(commands.length).toBeGreaterThan(0);
+    const stray = commands.filter((l) => bareRun.test(l));
+    expect(stray, `a bare "run" after "--" is a vitest filename filter: ${stray.join(" | ")}`).toEqual([]);
+  });
+
   it("catches what a global REDIS_URL count would miss: a suite named in a step with no REDIS_URL of its own", () => {
     // #316's exact false-negative, reproduced on a literal fixture rather than
     // real ci.yml — real ci.yml is expected to stay correctly wired, so this
