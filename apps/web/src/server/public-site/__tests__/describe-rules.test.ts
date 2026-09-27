@@ -147,7 +147,7 @@ describe("describeMatchRules — option A wording, from the parsed config", () =
   it("the ONE-unit noun is the sport's own: game for badminton/table tennis, set for volleyball", () => {
     // Derived from the existing authority (`GAME_UNIT_SPORTS`), so the two
     // public surfaces that name the unit cannot disagree. Tennis says its set
-    // with its games ("1 set, first to 6 games") — below.
+    // with its games ("1 set of 6 games, tie-break at 6-6") — below.
     expect(SET_KERNEL_SPORTS.sort()).toEqual(["badminton", "tabletennis", "volleyball"]);
     for (const sportKey of SET_KERNEL_SPORTS) {
       const m = mod(sportKey);
@@ -216,7 +216,7 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
     const tour = cfg("tour");
     expect(describeMatchRules("tennis", tennis, tour)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: tour.bestOf } },
-      { key: "format.rules.tennis.setsTo", params: { games: tour.set.gamesTo } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: tour.set.gamesTo, at: tour.set.tiebreakAt } },
     ]);
   });
 
@@ -235,7 +235,7 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
     const finalSet = doubles.finalSet as { matchTiebreakTo: number };
     expect(describeMatchRules("tennis", tennis, doubles)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: doubles.bestOf } },
-      { key: "format.rules.tennis.setsTo", params: { games: doubles.set.gamesTo } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: doubles.set.gamesTo, at: doubles.set.tiebreakAt } },
       { key: "format.rules.tennis.matchTiebreak", params: { n: finalSet.matchTiebreakTo } },
       { key: "format.rules.tennis.noAd" },
     ]);
@@ -246,7 +246,7 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
     const finalSet = slam.finalSet as { tiebreakTo: number };
     expect(describeMatchRules("tennis", tennis, slam)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: slam.bestOf } },
-      { key: "format.rules.tennis.setsTo", params: { games: slam.set.gamesTo } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: slam.set.gamesTo, at: slam.set.tiebreakAt } },
       { key: "format.rules.tennis.finalSetTiebreak", params: { n: finalSet.tiebreakTo } },
     ]);
   });
@@ -262,20 +262,42 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
   it("advantage sets are named, and win-by-two goes unsaid", () => {
     expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: advantageSet }))).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
-      { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.gameSetsAdvantage", params: { games: 6 } },
     ]);
+  });
+
+  it('"first to N games" only where every set ends on N — Fast4 yes, a Tour set (7-5, 7-6) never', () => {
+    // Both shapes read from the engine's own variants, so a change to either
+    // moves this test with it (AGENTS.md 19). The wrong answer — "first to 6
+    // games" for a Tour set — differs from the right one's key, so a predicate
+    // that always says "first to" reds here.
+    const fast4 = cfg("fast4");
+    const tour = cfg("tour");
+    expect(fast4.set.tiebreakAt).toBe(fast4.set.gamesTo - 1);
+    expect(tour.set.tiebreakAt).toBe(tour.set.gamesTo);
+    const line = (set: unknown, bestOf: number) =>
+      rulesLineText(enPublic, describeMatchRules("tennis", tennis, tennis.configSchema.parse({ bestOf, set }))!);
+    expect(line(fast4.set, 3)).toBe(`Best of 3 sets, first to ${fast4.set.gamesTo} games`);
+    expect(line(tour.set, 3)).toBe(
+      `Best of 3 sets, ${tour.set.gamesTo}-game sets, tie-break at ${tour.set.tiebreakAt}-${tour.set.tiebreakAt}`,
+    );
+    expect(line(fast4.set, 1)).toBe(`1 set, first to ${fast4.set.gamesTo} games`);
+    expect(line(tour.set, 1)).toBe(
+      `1 set of ${tour.set.gamesTo} games, tie-break at ${tour.set.tiebreakAt}-${tour.set.tiebreakAt}`,
+    );
+    expect(line(advantageSet, 3)).toBe("Best of 3 sets, 6-game advantage sets");
   });
 
   it("a final-set tie-break is stated only when sets HAVE tie-breaks — never over advantage sets, where none is played", () => {
     const finalSet = { tiebreakTo: 10 };
     expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: advantageSet, finalSet }))).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
-      { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.gameSetsAdvantage", params: { games: 6 } },
     ]);
     // The positive pair: the same deciding set over tie-break sets is named.
     expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: tiebreakSet, finalSet }))).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
-      { key: "format.rules.tennis.setsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: 6, at: 6 } },
       { key: "format.rules.tennis.finalSetTiebreak", params: { n: 10 } },
     ]);
   });
@@ -285,13 +307,13 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
     // Tie-break sets — named.
     expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: tiebreakSet, tiebreak }))).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
-      { key: "format.rules.tennis.setsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: 6, at: 6 } },
       { key: "format.rules.tennis.suddenDeathTiebreaks" },
     ]);
     // Advantage sets, no match tie-break — no tie-break exists, so no clause.
     expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ set: advantageSet, tiebreak }))).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
-      { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.gameSetsAdvantage", params: { games: 6 } },
     ]);
     // Advantage sets decided by a MATCH tie-break — that one tie-break is
     // played to the tie-break margin (the kernel's `tiebreak.winBy`), so named.
@@ -303,7 +325,7 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
       ),
     ).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: 3 } },
-      { key: "format.rules.tennis.advantageSetsTo", params: { games: 6 } },
+      { key: "format.rules.tennis.gameSetsAdvantage", params: { games: 6 } },
       { key: "format.rules.tennis.matchTiebreak", params: { n: 10 } },
       { key: "format.rules.tennis.suddenDeathTiebreaks" },
     ]);
@@ -311,11 +333,11 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
 
   it("a best-of-1 folds its set into the head; with a match tie-break as the decider it IS that tie-break", () => {
     expect(describeMatchRules("tennis", tennis, tennis.configSchema.parse({ bestOf: 1 }))).toEqual([
-      { key: "format.rules.tennis.oneSetTo", params: { games: 6 } },
+      { key: "format.rules.tennis.oneGameSetTiebreak", params: { games: 6, at: 6 } },
     ]);
     const adv = tennis.configSchema.parse({ bestOf: 1, set: { gamesTo: 8, winBy: 2, tiebreakAt: null, tiebreakTo: 7 } });
     expect(describeMatchRules("tennis", tennis, adv)).toEqual([
-      { key: "format.rules.tennis.oneAdvantageSetTo", params: { games: 8 } },
+      { key: "format.rules.tennis.oneGameSetAdvantage", params: { games: 8 } },
     ]);
     // The nested kernel's deciding set is the one played at ⌈bestOf/2⌉−1 sets
     // all — for a best-of-1, the first — and a match tie-break REPLACES it.
@@ -522,41 +544,41 @@ describe("effectiveRulesLine — the preset name ONLY when the rule keys are equ
   });
 
   it("the reverse: a Fast4 division with a Tour-shaped stage → sets to 6 and NO no-ad clause (advantage games)", () => {
-    const tour = variantCfg("tennis", "tour") as { bestOf: number; set: { gamesTo: number } };
+    const tour = variantCfg("tennis", "tour") as { bestOf: number; set: { gamesTo: number; tiebreakAt: number } };
     const fast4 = variantCfg("tennis", "fast4");
     expect(line("tennis", tour, fast4)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: tour.bestOf } },
-      { key: "format.rules.tennis.setsTo", params: { games: tour.set.gamesTo } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: tour.set.gamesTo, at: tour.set.tiebreakAt } },
     ]);
   });
 
   it("a no-ad-only change is named; switching no-ad OFF under a no-ad division drops it (not null)", () => {
-    const tour = variantCfg("tennis", "tour") as Record<string, unknown> & { bestOf: number; set: { gamesTo: number } };
+    const tour = variantCfg("tennis", "tour") as Record<string, unknown> & { bestOf: number; set: { gamesTo: number; tiebreakAt: number } };
     const game = tour.game as Record<string, unknown>;
     expect(game.noAd, "premise: tour plays advantage games").toBe(false);
     expect(line("tennis", { ...tour, game: { ...game, noAd: true } }, tour)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: tour.bestOf } },
-      { key: "format.rules.tennis.setsTo", params: { games: tour.set.gamesTo } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: tour.set.gamesTo, at: tour.set.tiebreakAt } },
       { key: "format.rules.tennis.noAd" },
     ]);
     const doubles = variantCfg("tennis", "doubles-noad-mtb10") as Record<string, unknown> & {
       bestOf: number;
-      set: { gamesTo: number };
+      set: { gamesTo: number; tiebreakAt: number };
       finalSet: { matchTiebreakTo: number };
     };
     expect(line("tennis", { ...doubles, game: { ...(doubles.game as object), noAd: false } }, doubles)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: doubles.bestOf } },
-      { key: "format.rules.tennis.setsTo", params: { games: doubles.set.gamesTo } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: doubles.set.gamesTo, at: doubles.set.tiebreakAt } },
       { key: "format.rules.tennis.matchTiebreak", params: { n: doubles.finalSet.matchTiebreakTo } },
     ]);
   });
 
   it("a deciding-set-only change (grand slam's final-set tie-break on a Tour stage) is named", () => {
-    const tour = variantCfg("tennis", "tour") as Record<string, unknown> & { bestOf: number; set: { gamesTo: number } };
+    const tour = variantCfg("tennis", "tour") as Record<string, unknown> & { bestOf: number; set: { gamesTo: number; tiebreakAt: number } };
     const grandSlam = variantCfg("tennis", "grand-slam") as { finalSet: { tiebreakTo: number } };
     expect(line("tennis", { ...tour, finalSet: grandSlam.finalSet }, tour)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: tour.bestOf } },
-      { key: "format.rules.tennis.setsTo", params: { games: tour.set.gamesTo } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: tour.set.gamesTo, at: tour.set.tiebreakAt } },
       { key: "format.rules.tennis.finalSetTiebreak", params: { n: grandSlam.finalSet.tiebreakTo } },
     ]);
   });
@@ -593,7 +615,9 @@ describe("every line the describer can PRODUCE is in all four public dictionarie
   }
   const tennis = mod("tennis");
   for (const bestOf of [1, 3]) {
-    for (const tiebreakAt of [6, null]) {
+    // 5 is a set every winner ends on 6 (tie-break at 5-5): the "first to"
+    // keys. 6 and null are the shape keys, tie-break and advantage.
+    for (const tiebreakAt of [5, 6, null]) {
       for (const finalSet of ["same", { matchTiebreakTo: 10 }, { tiebreakTo: 10 }]) {
         for (const noAd of [false, true]) {
           for (const winBy of [1, 2]) {
@@ -618,15 +642,17 @@ describe("every line the describer can PRODUCE is in all four public dictionarie
   const dicts = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic } as Record<string, Record<string, string>>;
   const placeholders = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!))].sort();
 
-  it("the drive reaches every shape — eleven set-kernel keys, ten tennis clause keys (so the loop below is not vacuous)", () => {
+  it("the drive reaches every shape — eleven set-kernel keys, twelve tennis clause keys (so the loop below is not vacuous)", () => {
     expect([...emitted.keys()].filter((k) => !k.startsWith("format.rules.tennis.")).length).toBe(11);
     expect([...emitted.keys()].filter((k) => k.startsWith("format.rules.tennis.")).sort()).toEqual([
-      "format.rules.tennis.advantageSetsTo",
       "format.rules.tennis.bestOfSets",
       "format.rules.tennis.finalSetTiebreak",
+      "format.rules.tennis.gameSetsAdvantage",
+      "format.rules.tennis.gameSetsTiebreak",
       "format.rules.tennis.matchTiebreak",
       "format.rules.tennis.noAd",
-      "format.rules.tennis.oneAdvantageSetTo",
+      "format.rules.tennis.oneGameSetAdvantage",
+      "format.rules.tennis.oneGameSetTiebreak",
       "format.rules.tennis.oneMatchTiebreak",
       "format.rules.tennis.oneSetTo",
       "format.rules.tennis.setsTo",

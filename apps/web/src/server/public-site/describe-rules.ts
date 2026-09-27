@@ -129,6 +129,18 @@ function describeNested(c: Record<string, unknown>, bestOf: number): RulesLineT 
   const set = record(c.set);
   const games = positive(set?.gamesTo);
   const advantage = set !== undefined && set.tiebreakAt === null;
+  const tiebreakAt = typeof set?.tiebreakAt === "number" ? set.tiebreakAt : undefined;
+  // "First to N games" only where every set really ends on N (engine
+  // `setWinner`: reach `gamesTo` with a `winBy` lead, or win the tie-break at
+  // `tiebreakAt`-all). Fast4 (4 games, tie-break at 3-3) always ends 4-x; a
+  // Tour set (6 games, tie-break at 6-6) can end 7-5 or 7-6, so it is named by
+  // its shape instead — "first to 6" would be false.
+  const winBy = positive(set?.winBy) ?? 2;
+  const exact =
+    games !== undefined &&
+    (winBy === 1
+      ? tiebreakAt === undefined || tiebreakAt >= games - 1
+      : tiebreakAt === games - 1);
   const finalSet = record(c.finalSet);
   const matchTiebreak = positive(finalSet?.matchTiebreakTo);
   const finalTiebreak = positive(finalSet?.tiebreakTo);
@@ -139,19 +151,18 @@ function describeNested(c: Record<string, unknown>, bestOf: number): RulesLineT 
   const out: RulesLineT = [];
   if (bestOf === 1) {
     if (games === undefined) out.push({ key: "format.rules.oneSet" });
-    else
-      out.push({
-        key: advantage ? "format.rules.tennis.oneAdvantageSetTo" : "format.rules.tennis.oneSetTo",
-        params: { games },
-      });
+    else if (exact) out.push({ key: "format.rules.tennis.oneSetTo", params: { games } });
+    else if (tiebreakAt === undefined)
+      out.push({ key: "format.rules.tennis.oneGameSetAdvantage", params: { games } });
+    else out.push({ key: "format.rules.tennis.oneGameSetTiebreak", params: { games, at: tiebreakAt } });
   } else {
     out.push({ key: "format.rules.tennis.bestOfSets", params: { n: bestOf } });
-    if (games !== undefined) {
-      out.push({
-        key: advantage ? "format.rules.tennis.advantageSetsTo" : "format.rules.tennis.setsTo",
-        params: { games },
-      });
-    }
+    if (games === undefined) {
+      // nothing more to say about the sets
+    } else if (exact) out.push({ key: "format.rules.tennis.setsTo", params: { games } });
+    else if (tiebreakAt === undefined)
+      out.push({ key: "format.rules.tennis.gameSetsAdvantage", params: { games } });
+    else out.push({ key: "format.rules.tennis.gameSetsTiebreak", params: { games, at: tiebreakAt } });
   }
   if (matchTiebreak !== undefined) {
     out.push({ key: "format.rules.tennis.matchTiebreak", params: { n: matchTiebreak } });
