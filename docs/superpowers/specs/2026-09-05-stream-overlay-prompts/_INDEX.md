@@ -2947,3 +2947,12 @@ On 2026-09-14 every GitHub Actions job on `main` — E2E, Stg, Build guard — f
 annotated *"recent account payments have failed or your spending limit needs to be increased"*.
 `ci.yml` on a pull request draws on the same account, so PR-R1's checks cannot run until the Actions
 billing is cleared.
+
+## 2026-09-27 — scenario captured: the court-bound device (NOT ruled, NOT scheduled)
+
+Owner brought a scenario from a live event: a phone mounted per court ("Court 1 Mobile A"), a device
+identity registered uniquely and outliving any fixture, the org pushing the next match to it without
+touching the phone, and the device screen split between live video and a scoring QR. Captured with the
+schema evidence, the seam it lands on, a product-owner recommendation and the two questions that gate it:
+`_SCENARIO-2026-09-27-court-bound-device.md` beside this file. It is R3 plus a control-plane hook, not R1,
+and it changed nothing in lane B.
