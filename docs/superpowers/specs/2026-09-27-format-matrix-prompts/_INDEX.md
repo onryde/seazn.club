@@ -24,6 +24,26 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W9 | Operational [O] (lane) | not started |
 | W10 | Sweep: #878 #858 #853 #843 (lane) | not started |
 
+## Session prompts
+
+One per wave, beside this file. Each carries its read-first list, prerequisites,
+routed gaps (copied from design §8), lifecycle, decisions owed, done-when and
+traps.
+
+- [W1a — L3 core](W1a-l3-core.md)
+- [W1b — catalogues + reference skeleton](W1b-catalogues-reference.md)
+- [W1c — browser layers](W1c-browser-layers.md)
+- [W1d — CI + first truth run](W1d-ci-truth-run.md)
+- [W2 — sport scoring fidelity](W2-scoring-fidelity.md)
+- [W3 — Swiss](W3-swiss.md)
+- [W4 — knockout family](W4-knockout.md)
+- [W5 — round-robin family](W5-round-robin.md)
+- [W6 — double elimination](W6-double-elim.md)
+- [W7 — americano, mexicano, ladder](W7-americano-mexicano-ladder.md)
+- [W8 — scorer sheets (lane)](W8-scorer-sheets.md)
+- [W9 — operational (lane)](W9-operational.md)
+- [W10 — sweep (lane)](W10-sweep.md)
+
 ## Owner rulings
 
 Rulings BY THE OWNER, 2026-09-27 brainstorm. Recommendations I made are in the
