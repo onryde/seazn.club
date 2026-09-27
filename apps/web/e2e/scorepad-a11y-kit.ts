@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Locator, type Page } from "@playwright/test";
+import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 
 /** Derived from the installed builder rather than imported from `axe-core`:
  *  pnpm's strict layout gives `apps/web` no direct dependency on `axe-core`
@@ -305,6 +306,16 @@ export async function scanPadContrast(
   };
 }
 
+/** How long `dismissCookieBanner` waits for a banner whose mount effect had
+ *  ALREADY decided to show it before the helper answered the prompt. That
+ *  banner's `setVisible(true)` is already scheduled, so this bounds one React
+ *  commit — not hydration, which the helper no longer races. Measured locally
+ *  from the effect's storage read to the banner's commit: 11–91ms unthrottled,
+ *  1.1–1.6s under 20× CPU throttling, 2.7–3.2s under 40×; so 2s holds to
+ *  roughly a 25× slower runner. Spent in full only when nothing comes: the
+ *  effect ran after the answer, or the route never mounts a banner. */
+const ALREADY_DECIDED_BANNER_GRACE_MS = 2_000;
+
 /** Locates the cookie-consent banner. See `dismissCookieBanner` for why this
  *  shape, and `consentedAnonymousState` for why the preferred defence is to
  *  stop the banner mounting rather than to find it. */
@@ -386,12 +397,16 @@ export async function expectNoCookieBanner(page: Page, where: string): Promise<v
  *  pad both blocks taps and distorts every geometry measurement below it.
  *  Idempotent: a no-op when no banner is on screen.
  *
- *  REACTIVE, AND THEREFORE SECOND-BEST. It cannot dismiss a banner that has
- *  not mounted yet, and under load it runs before the banner arrives — see
- *  `consentedAnonymousState`, which is the defence to reach for when you own
- *  the context. Keep this for callers that only hold a `Page` (the authed
- *  `page` fixture, where consent is already in the storage state and this is a
- *  cheap no-op).
+ *  AFTER THE FACT, AND THEREFORE SECOND-BEST. It used to be purely reactive —
+ *  a `count()` that could not see a banner not yet mounted, and under load ran
+ *  before the banner arrived. It now answers the prompt in storage first, so a
+ *  banner that has not mounted never will (see the body), but it still runs
+ *  after navigation, so a banner already decided costs up to
+ *  `ALREADY_DECIDED_BANNER_GRACE_MS` to catch. `consentedAnonymousState`
+ *  remains the defence to reach for when you own the context: it stops the
+ *  banner before the first byte. Keep this for callers that only hold a
+ *  `Page` (the authed `page` fixture, where consent is already in the storage
+ *  state and this is a cheap no-op).
  *
  *  R8 review, Minor 4 — SCOPED TO THE BANNER, not page-wide. A bare
  *  `page.getByRole("button", {name: "Accept"})` is a page-wide match, so the
@@ -408,6 +423,53 @@ export async function expectNoCookieBanner(page: Page, where: string): Promise<v
  *  layout (`fixed bottom-4 left-4 …`) and would break on any restyle. */
 export async function dismissCookieBanner(page: Page): Promise<void> {
   const banner = cookieBanner(page);
+  // LATE MOUNT — answer the prompt in storage first, then look.
+  //
+  // The banner is decided ONCE, in `cookie-consent.tsx`'s mount effect, from
+  // `needsConsentPrompt()` — two localStorage keys. That effect runs at
+  // hydration, which `goto(…, { waitUntil: "load" })` does not wait for: on
+  // the public match page the banner mounted 60–560ms AFTER `load` in every
+  // one of 144 local navigations, while this helper used to look 90–480ms
+  // after it — a coin flip, lost 47 times in 144. A lost flip meant a
+  // bare `count()` found nothing, returned, and the banner mounted over the
+  // page being measured: the visual gate's public-fixture row at 320 (PR
+  // #888's dispatched run 36337877584, a centre tap on the match-centre tabs
+  // hit the banner's div), on main and on the branch alike.
+  //
+  // Writing the answer closes the race from the other side instead of waiting
+  // it out: an effect that has NOT run yet now reads an answered prompt and
+  // never shows the banner — whenever it runs. The only banner still to come
+  // is one whose effect already ran before this write; its `setVisible(true)`
+  // is then already scheduled, and the grace below is sized for that commit —
+  // not for hydration, which may take any amount of time and no longer
+  // matters.
+  //
+  // "rejected", like `consentedAnonymousState`, `dismissConsent` and
+  // `auth.setup.ts`: analytics stays off. Keys and version come from the app's
+  // own module, so a policy-version bump moves this with it. A context that
+  // already answered (every authed spec — `auth.setup.ts` bakes the answer
+  // into the shared storageState) writes nothing and waits for nothing.
+  const promptWasOwed = await page.evaluate(
+    ([key, versionKey, version]) => {
+      try {
+        const owed = !localStorage.getItem(key) || localStorage.getItem(versionKey) !== version;
+        if (owed) {
+          localStorage.setItem(key, "rejected");
+          localStorage.setItem(versionKey, version);
+        }
+        return owed;
+      } catch {
+        return false; // no storage on this origin → no banner can be decided either
+      }
+    },
+    [CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION] as const,
+  );
+  if (promptWasOwed) {
+    // Not an error when it times out: that is the prevented case — the effect
+    // ran after the write (or this route never mounts a banner: /overlay/,
+    // /present) and there is nothing to dismiss.
+    await banner.waitFor({ state: "attached", timeout: ALREADY_DECIDED_BANNER_GRACE_MS }).catch(() => {});
+  }
   if ((await banner.count()) === 0) return;
   const accept = banner.getByRole("button", { name: "Accept", exact: true });
   if ((await accept.count()) > 0) {
