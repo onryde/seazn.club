@@ -57,8 +57,10 @@ function buildId(serverDistDir) {
   }
   if (process.env.NODE_ENV !== "production") return "dev";
   // Production never shares an unscoped nc:dev: namespace across deploys.
-  // `next build` has no BUILD_ID yet by design; a running server given a
-  // serverDistDir without one is misdeployed, so say so once.
+  // `next build` writes BUILD_ID after collecting page data and before
+  // generating static pages, so only page-data collection lands here by
+  // design; a running server given a serverDistDir without one is
+  // misdeployed, so say so once.
   if (serverDistDir && process.env.NEXT_PHASE !== "phase-production-build") {
     warnOnce("build-id", "BUILD_ID unreadable; this machine's next cache is memory-only (no Redis)");
   }
@@ -138,8 +140,10 @@ function maybeSweep(redis) {
   const L = local();
   const now = Date.now();
   if (now - L.sweptAt < DAY_MS) return;
-  L.sweptAt = now;
   void redis(async (r) => {
+    // Stamped only once Redis runs this: an invalidation that cannot reach
+    // Redis must not use up the machine's sweep for the day.
+    L.sweptAt = now;
     if ((await r.set("nc:sweep", "1", "EX", 86_400, "NX")) !== "OK") return;
     const cutoff = now - 365 * DAY_MS;
     let cursor = "0";

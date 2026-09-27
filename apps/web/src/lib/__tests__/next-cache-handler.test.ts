@@ -245,6 +245,19 @@ describe("daily tag-hash sweep: scheduling", () => {
     await new Handler({}).revalidateTag("division:d1", { expire: 0 }); await flush();
     expect(lockAsks).toHaveLength(2);
     expect(redis.calls.filter((c) => c === "hscan")).toHaveLength(1);
+    await new Handler({}).revalidateTag("division:d1", { expire: 0 }); await flush();
+    expect(lockAsks).toHaveLength(2); // B reached Redis and lost the lock: today's sweep is done, it does not ask again
+  });
+
+  it("an invalidation that cannot reach Redis does not use up the day's sweep: the next one that can still sweeps", async () => {
+    redis.hash.set("division:ancient", stateFrom(400));
+    const h = new Handler({});
+    __setRedisForTests(null); // Redis unavailable at sweep time
+    await h.revalidateTag("division:d1", { expire: 0 }); await flush();
+    __setRedisForTests(redis); // same machine, same day, Redis back
+    await h.revalidateTag("division:d1", { expire: 0 }); await flush();
+    expect(redis.calls.filter((c) => c === "hscan")).toHaveLength(1);
+    expect(redis.hash.has("division:ancient")).toBe(false);
   });
 });
 
@@ -655,7 +668,7 @@ describe("build id: unknown means memory-only, never nc:dev: in production", () 
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("next build (no BUILD_ID yet) is silent; a running server without one warns once", () => {
+  it("next build before BUILD_ID is written (page-data collection) is silent; a running server without one warns once", () => {
     const warn = quietWarn();
     vi.stubEnv("NEXT_PHASE", "phase-production-build");
     expect(new Handler({ serverDistDir: missing }).buildId).toBeUndefined();
