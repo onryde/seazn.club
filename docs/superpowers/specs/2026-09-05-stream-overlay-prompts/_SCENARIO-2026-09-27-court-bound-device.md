@@ -149,3 +149,42 @@ Two things follow, neither built and neither ruled:
    over the non-terminal states, or the guard in the usecase, is the difference between a clear refusal at
    provision time and a broadcast that silently does not happen. This one is worth doing even without the
    court-bound device, because a human can already double-book a target today.
+
+## Owner's follow-up: pushing the next fixture over Supabase realtime — does that create a new YouTube?
+
+Two different objects, and only one of them is new per match.
+
+**The YouTube KEY: not new, ever.** It is one sealed `org_stream_targets.rtmp_enc` row, entered once. Cloudflare
+keeps pushing to that same key for every session.
+
+**The YouTube VIDEO: new per match — but WE do not create it.** We never call a YouTube API. Cloudflare pushes
+RTMPS to the key; YouTube itself opens a broadcast when a push begins and ends it when the push stops. A new
+fixture means a new session, which means a NEW Cloudflare live input with its own ingest credentials, which
+means the device stops and re-publishes — so YouTube opens a new video on its own. (Unmeasured, as recorded
+above: whether a channel opens a new video or resumes one depends on its auto-start / auto-stop settings.)
+
+**The consequence that matters, and it is not obvious:** because YouTube creates the video and not us, **we
+never learn its id and we cannot title it.** The video is called whatever the channel defaults to — not
+"Team A vs Team B" — and `org_stream_targets.watch_url` is ONE static URL per target. That is fine for "live
+now" (a channel live URL redirects to whatever is streaming) and useless for "watch Court 1's third match".
+The per-match artifact we CAN link is our OWN recording, via the session's `fill_replay` — which is another
+reason 1a's per-match sessions are the right shape.
+
+If the owner ever wants per-match titled YouTube videos with their own links, that is the **YouTube Data API**:
+OAuth per channel, quota, broadcast lifecycle management. A new integration, not a config line. Recommend not
+now — our replay link is the per-match artifact and the channel live URL covers "watch now".
+
+### The realtime channel does NOT exist in the shape this needs (checked, not assumed)
+
+`app/api/v1/public/fixtures/[id]/realtime-token/route.ts` mints a subscriber token for channel
+**`fixture:{id}`** — per FIXTURE — gated on the org's `realtime` entitlement, with a bypass for the fixture's
+officials and for a valid device link **for that same fixture** (`isFixtureDeviceLink`). The public
+`state_changed` ping carries NO body; a client refetches.
+
+So a court-bound device cannot use today's channel: **it does not yet know the fixture it is about to be
+given**, and both the channel name and the device link are keyed to a fixture. What the scenario needs is a
+channel keyed to the DEVICE or the COURT — `court:{id}` — plus a token mint that authorises a registered device
+rather than a fixture's officials. Small and the same shape as what exists; it is an addition, not a
+rearrangement, and it is the piece that makes "the org feeds the next match in without touching the phone"
+real. Until it exists, the stand-in is the device POLLING its assignment, which is what was recommended above
+and needs no new channel at all.
