@@ -65,4 +65,13 @@ describe("newest write wins", () => {
     expect(decodeField("12|{bad")).toBeNull();
     expect(decodeField(null)).toBeNull();
   });
+  it("accepts only a digits-only `at`, the same fields Lua's ^(%d+)| reads", () => {
+    // HSET_IF_NEWER reads `at` with ^(%d+)|, so these never order a write in
+    // Redis. The handler must not order by them either.
+    for (const at of ["1e3", " 12", "-3", "1.5", "0x10", "12 "]) {
+      expect(decodeField(`${at}|{}`), at).toBeNull();
+    }
+    expect(decodeField("12|{}")).toEqual({ at: 12 });
+    expect(decodeField("0|{}")).toEqual({ at: 0 });
+  });
 });

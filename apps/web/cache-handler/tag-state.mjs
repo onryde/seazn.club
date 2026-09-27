@@ -55,6 +55,9 @@ export function decodeField(raw) {
   if (typeof raw !== "string") return null;
   const bar = raw.indexOf("|");
   if (bar <= 0) return null;
+  // Digits only, as the Lua scripts read it (^(%d+)|): "1e3", " 12", "-3"
+  // and "1.5" all parse as numbers in JS but never order a write in Redis.
+  if (!/^\d+$/.test(raw.slice(0, bar))) return null;
   const at = Number(raw.slice(0, bar));
   if (!Number.isFinite(at)) return null;
   try {
