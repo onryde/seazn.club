@@ -11,8 +11,13 @@ const COARSE: Readonly<Record<string, string>> = { badminton: "game.summary", ta
 
 interface SetCfg { bestOf: number; setTo: number; finalSetTo: number; winBy: number }
 
-/** A set the winner takes at exactly `target`, the loser far enough behind that
- *  no deuce/cap rule applies. */
+/** A set (or tie-break race) the winner takes at exactly `target`, the loser
+ *  far enough behind that no deuce/cap rule applies. The 0 floor binds when
+ *  target < winBy + 3 and still leaves a lead of target ≥ winBy (21-0 at
+ *  winBy 20). winBy > target is outside this helper's domain, as it is for the
+ *  engine's own generateSetScore (setbased/kernel.ts:1478-1480): the score is
+ *  not terminal and the strict fold refuses it loudly (INVALID_EVENT), never a
+ *  silent wrong outcome. */
 export function winningSetScore(target: number, winBy: number): { w: number; l: number } {
   return { w: target, l: Math.max(0, target - winBy - 3) };
 }

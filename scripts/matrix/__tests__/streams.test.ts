@@ -28,8 +28,11 @@ const CASES = builtinModules.flatMap((m) =>
   ),
 );
 const thrownUnsupported = new Set<string>();
-/** Rows whose stream was generated AND folded AND asserted (R25: a sweep whose
- *  every row abstained is a failure, not a pass). */
+/** Rows whose stream was generated and folded strictly WITHOUT THROWING. Abandon
+ *  rows are in here but are not outcome-asserted (matchesRequest answers
+ *  "unasserted" before reading the outcome; design §8), so the per-sport
+ *  checked count below counts win rows only (R25: a sweep whose every row
+ *  abstained is a failure, not a pass). */
 const folded = new Set<string>();
 
 describe("stream sweep — discovery first (an empty sweep passes vacuously, R13/R25)", () => {
@@ -117,6 +120,32 @@ describe("off-catalogue cfgs — the right answer differs from the catalogue's s
       const cfg = r.cfg as { setTo: number; finalSetTo: number };
       expect(cfg.finalSetTo).not.toBe(cfg.setTo);
       expect(foldsAsRequested(r)).toEqual({ length: 2, match: "match" });
+    }
+  });
+
+  it("set-based winBy: the loser's score follows winBy (6), and floors at nil when winBy nears the target (20)", () => {
+    for (const overrides of [{ winBy: 6 }, { winBy: 20 }]) {
+      for (const outcome of WINS) {
+        const got = foldsAsRequested(offCatalogue("badminton", "bwf", overrides, "league", outcome));
+        expect(got.match, JSON.stringify(overrides)).toBe("match");
+      }
+    }
+  });
+
+  it("tennis: games follow set.winBy and floor at nil; a best-of-1 is the DECIDING set, a match tie-break under matchTiebreakTo", () => {
+    const set = (gamesTo: number, winBy: number) => ({ set: { gamesTo, winBy, tiebreakAt: null, tiebreakTo: 7 } });
+    const cases: [string, Record<string, unknown>][] = [
+      ["tour", set(6, 4)], // 6-1: a winBy-blind loser score (6-3) is not terminal
+      ["tour", set(2, 2)], // 2-0: the nil floor binds
+      ["doubles-noad-mtb10", { bestOf: 1 }], // the only set is an MTB, scored in points to matchTiebreakTo
+      ["doubles-noad-mtb10", { bestOf: 1, tiebreak: { winBy: 6 } }], // MTB loser follows tiebreak.winBy (10-1, not 10-5)
+      ["grand-slam", { bestOf: 1 }], // finalSet {tiebreakTo} is still a GAMES set
+    ];
+    for (const [variant, overrides] of cases) {
+      for (const outcome of WINS) {
+        const got = foldsAsRequested(offCatalogue("tennis", variant, overrides, "knockout", outcome));
+        expect(got.match, `${variant} ${JSON.stringify(overrides)}`).toBe("match");
+      }
     }
   });
 
