@@ -257,9 +257,13 @@ a peer session as the other.
       editing; they have not been re-read since W1b's plan.
     - **Regenerate the catalogue.** The regenerated variant catalogue ships
       in the same PR, as a reviewed diff.
-    - **Cricket is separate.** The 38 unscorable cricket cases at 3–5 a
-      side ("wickets exceed all-out") are not covered by this ruling. They
-      stay with W2 as their own item.
+    - **Cricket is separate, and was never a product item.** The 38 cricket
+      cases at 3–5 a side that failed with "wickets exceed all-out" were a
+      harness generator bug. `streams/cricket.ts` hard-coded its wicket counts
+      and ignored `playersPerSide`. The W1b Task 8 re-review found this (RR-1),
+      and the generator was fixed in W1b. Nothing is routed to W2 for them.
+      The 24 cricket `test`-preset cases (two-innings streams the generator
+      cannot build yet) are a harness gap routed to W1-driving.
 32. **A tied T20 knockout is checked live in W1b Task 15 (Step 3c)**
     (2026-09-28). The owner said "yes" to the controller's recommendation.
     - **The suspicion** (candidate defect CD-T6, from reading the code, not
