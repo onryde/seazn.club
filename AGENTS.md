@@ -349,6 +349,13 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 - Smoke CI runs on **PRs only** — merging locally and pushing to `main`
   skips it. Behavior changes need a PR or a local full-smoke first.
 - Every change ships a test that fails without it.
+- **NEVER run the full gate, the full vitest suite or the full e2e suite
+  locally** (owner, 2026-09-28). Run ONLY the tests, specs and walkthroughs
+  that cover the files you CHANGED — the scoped vitest paths, the specific
+  e2e spec, the specific walkthrough. Everything else is CI's job. A full
+  local run costs an hour, saturates the machine (which itself reds
+  unrelated suites), and answers a question CI answers for free. This binds
+  the orchestrator as much as any subagent.
 - Any new or changed user-facing string → all 4 locale dictionaries,
   never hardcoded English. Two exceptions, both English-only with no
   i18n work owed: `content/help/**` (one English tree) and
