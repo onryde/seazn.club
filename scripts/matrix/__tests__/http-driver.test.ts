@@ -155,6 +155,23 @@ describe("HttpDriver — completeStage is never repeated after completion (desig
     await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
     expect(calls.length).toBe(2);
   });
+  it("parked Task 6 (a): after a 5xx or no answer the outcome is unknown (it may have committed), so a repeat is DriverMisuse with no HTTP", async () => {
+    for (const fail of [() => err(500, "INTERNAL"), () => err(503, "UNAVAILABLE"), () => { throw new Error("socket hang up"); }]) {
+      const { t, calls } = fake([fail]);
+      const d = drv(t);
+      await expect(d.completeStage("s1")).rejects.toThrow();
+      await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+      expect(calls.length).toBe(1);
+    }
+  });
+  it("parked Task 6 (a): a named 4xx refusal committed nothing and stays retryable", async () => {
+    let n = 0;
+    const { t, calls } = fake([() => (n++ === 0 ? err(409, "STAGE_INCOMPLETE") : ok({ completed: true, events: [] }))]);
+    const d = drv(t);
+    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(RefusedCall);
+    expect((await d.completeStage("s1")).completed).toBe(true);
+    expect(calls.length).toBe(2);
+  });
   it("the guard is per stage: completing s1 does not block s2", async () => {
     const { t, calls } = fake([() => ok({ completed: true, events: [] })]);
     const d = drv(t);

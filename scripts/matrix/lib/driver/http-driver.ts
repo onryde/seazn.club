@@ -182,9 +182,24 @@ export class HttpDriver implements OrganiserDriver {
 
   async completeStage(stageId: string): Promise<CompleteOut> {
     if (this.#completed.has(stageId)) {
-      throw new DriverMisuse(`driver: stage ${stageId} already completed — /complete is never repeated (design §6.4)`);
+      throw new DriverMisuse(`driver: stage ${stageId} already completed, or its /complete ended unknown (5xx or no answer) — /complete is never repeated (design §6.4)`);
     }
-    const out = await this.#call<CompleteOut>(`/api/v1/stages/${stageId}/complete`, "POST", {});
+    const path = `/api/v1/stages/${stageId}/complete`;
+    // Parked Task 6 (a): completeStage COMMITS the completion and then runs
+    // progressCompletedStage (usecases/stages.ts:4140-4170), which can throw —
+    // so a 5xx, or a request that never answered, may follow a committed
+    // completion. Its outcome is unknown, and a repeat would re-run the
+    // progression; it is recorded like a completion. A 4xx (a named refusal)
+    // committed nothing and stays retryable.
+    let r: RawResult;
+    try {
+      r = await this.#send(path, "POST", {});
+    } catch (e) {
+      this.#completed.add(stageId);
+      throw e;
+    }
+    if (r.status >= 500) this.#completed.add(stageId);
+    const out = this.#unwrap<CompleteOut>("POST", path, r);
     if (out.completed) this.#completed.add(stageId);
     return out;
   }
