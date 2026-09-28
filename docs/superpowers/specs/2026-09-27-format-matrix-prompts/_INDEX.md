@@ -273,6 +273,31 @@ a peer session as the other.
         bracket.
     - **If confirmed,** route it to W4 (knockout family) and W2 (what a tie is
       worth in a knockout). No check is loosened to pass.
+33. **Board-game time control: fix the editor and show it, no pad clock**
+    (2026-09-28). The owner said "OK 1 and 2" to the controller's
+    recommendation.
+    - **The finding** (CD-T8, found by reading, not a run; W1b Task 8 review
+      plus a trace): the time control is INERT from end to end.
+      - The editor (`match-rules.ts:667-697`) writes
+        `divisions.config.clock`, and the engine carries it as "metadata only"
+        (`boardgame.ts:55-85`).
+      - Nothing reads it: no fold, no pad skin (`skins/boardgame.tsx:208-217`
+        reads only colours), no public page, sheet, overlay or OpenAPI.
+      - The editor also shows increment and delay while the base is blank,
+        and then silently drops them.
+      - A saved clock reopens blank, because the field has no `read`.
+    - **W2 owns two fixes:**
+      1. **Editor.** Rehydrate the saved time control, stop dropping
+         increment and delay, and hide both until a base is entered.
+      2. **Display.** Show the time control (for example "90+30") on the
+         public division page and on the scorer sheet. The sheet is W8's
+         surface, so agree ownership of the shared code first. The new
+         strings go into all four locales.
+    - **No pad countdown clock.** Players at each board run a chess clock, not
+      an organiser. With N boards the event needs N devices, and nothing syncs
+      them centrally. A loss on time is recorded as the result method `time`,
+      which already exists. A per-board clock returns as its own feature only
+      if clubs without clocks ask for it (#421 stays parked).
 
 ## Recommendations (mine — not rulings)
 
