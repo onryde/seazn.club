@@ -53207,7 +53207,7 @@
         ]
       },
       "post": {
-        "summary": "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM). rtmpUrl must be rtmp/rtmps on an allowlisted provider ingest host (YouTube, Facebook, Twitch, Kick, Vimeo, LinkedIn, Restream, Cloudflare Stream) at a documented port, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`",
+        "summary": "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM). rtmpUrl must be rtmp/rtmps on an allowlisted provider ingest host (YouTube, Facebook, Twitch, Kick, Vimeo, Restream, Cloudflare Stream) at the scheme's default port, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`",
         "tags": [
           "fixtures"
         ],

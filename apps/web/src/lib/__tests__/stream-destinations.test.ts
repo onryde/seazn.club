@@ -2,17 +2,26 @@
 // address the relay's ffmpeg dials OUT to, so an unchecked host is an SSRF
 // primitive (localhost, the Fly private network, cloud metadata). The owner's
 // ruling names the providers; the providers' own docs name the hosts. Expected
-// values below come from those two sources — the ruling's eight provider
-// names and the ingest URLs as each provider publishes them — never from the
-// validator. The constant is imported only to ITERATE it, and its length is
-// pinned to a literal so a silently shrunk (or grown) list reds.
+// values below come from those two sources — the ruling's provider names and
+// the ingest URLs as each provider publishes them — never from the validator.
+// The constant is imported only to ITERATE it, and its length is pinned to a
+// literal so a silently shrunk (or grown) list reds.
+//
+// LinkedIn is the one A18 provider NOT admitted in R1 (fix round 2, orchestrator
+// ruling 2026-09-28): its only sourced ingest, Azure Media Services'
+// `*.channel.media.azure.net`, is NXDOMAIN since AMS retired (2024-06). The
+// tests below pin its absence as deliberately as the others' presence.
 import { describe, expect, it } from "vitest";
 import {
   DESTINATION_REFUSALS,
   STREAM_DESTINATION_HOSTS,
+  checkDestination,
   destinationRefusal,
   type DestinationRefusal,
 } from "../stream-destinations";
+
+/** U+212A KELVIN SIGN — the one non-ASCII code point whose toLowerCase() is ASCII ("k"). Built, not typed. */
+const KELVIN = String.fromCharCode(0x212a);
 
 /** A URL on `entry`'s host: an exact entry is used as is; a dot-anchored suffix
  *  gets a leftmost label, the way the provider hands out per-channel hosts. */
@@ -20,12 +29,59 @@ function hostOf(entry: (typeof STREAM_DESTINATION_HOSTS)[number]): string {
   return entry.match === "exact" ? entry.host : `ingest1${entry.host}`;
 }
 
+/** Literals as each provider publishes them (the sources cited on each
+ *  STREAM_DESTINATION_HOSTS entry) — NOT built from the constant. All lower-case,
+ *  exactly as published, so each is already its own canonical form. */
+const PUBLISHED = [
+  "rtmp://a.rtmp.youtube.com/live2",
+  "rtmp://b.rtmp.youtube.com/live2?backup=1",
+  "rtmps://a.rtmps.youtube.com:443/live2",
+  "rtmps://b.rtmps.youtube.com:443/live2?backup=1",
+  "rtmps://live-api-s.facebook.com:443/rtmp/",
+  "rtmps://rtmp-api.facebook.com:443/rtmp/",
+  "rtmps://ingest.global-contribute.live-video.net/app/",
+  "rtmp://euw30.contribute.live-video.net/app/",
+  "rtmp://live-jfk.twitch.tv/app",
+  "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app",
+  "rtmps://rtmp-global.cloud.vimeo.com:443/live",
+  "rtmp://rtmp.cloud.vimeo.com/live",
+  "rtmp://live.restream.io/live",
+  "rtmp://london.restream.io/live",
+  "rtmps://live.cloudflare.com:443/live/",
+] as const;
+
+/** `url` with its authority (host[:port]) upper-cased and every other byte untouched. */
+function upperHost(url: string): string {
+  const m = /^(rtmps?:\/\/)([^/]*)(.*)$/.exec(url);
+  if (!m) throw new Error(`not an rtmp url: ${url}`);
+  return m[1]! + m[2]!.toUpperCase() + m[3]!;
+}
+
 describe("the destination allowlist is the owner's list, pinned", () => {
-  it("names exactly the eight providers A18 rules in — no more, no fewer", () => {
+  it("names exactly A18's providers minus LinkedIn — seven, no more, no fewer", () => {
     const providers = new Set(STREAM_DESTINATION_HOSTS.map((e) => e.provider));
     expect([...providers].sort()).toEqual(
-      ["cloudflare_stream", "facebook", "kick", "linkedin", "restream", "twitch", "vimeo", "youtube"],
+      ["cloudflare_stream", "facebook", "kick", "restream", "twitch", "vimeo", "youtube"],
     );
+    expect(providers.size).toBe(7);
+  });
+
+  it("LinkedIn is deliberately absent: no entry names it, and its last sourced ingest (Azure Media Services) is refused", () => {
+    expect(STREAM_DESTINATION_HOSTS.filter((e) => e.provider === "linkedin")).toEqual([]);
+    expect(STREAM_DESTINATION_HOSTS.filter((e) => e.host.includes("azure"))).toEqual([]);
+    // The four ingest URLs LinkedIn's "Live Events APIs" doc (2023-12-20) handed out — all on a retired namespace.
+    const retired = [
+      "rtmp://12345.channel.media.azure.net:1935/live/12345",
+      "rtmp://12345.channel.media.azure.net:1936/live/12345",
+      "rtmps://12345.channel.media.azure.net:2935/live/12345",
+      "rtmps://12345.channel.media.azure.net:2936/live/12345",
+    ];
+    let checked = 0;
+    for (const url of retired) {
+      expect(destinationRefusal(url), url).toBe("host");
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("every suffix entry is dot-anchored and every exact entry is a bare host", () => {
@@ -34,9 +90,10 @@ describe("the destination allowlist is the owner's list, pinned", () => {
       if (e.match === "suffix") expect(e.host.startsWith("."), e.host).toBe(true);
       else expect(e.host.startsWith("."), e.host).toBe(false);
       expect(e.host, e.host).toBe(e.host.toLowerCase());
+      expect(e.host, e.host).toMatch(/^[a-z0-9.-]+$/);
       checked++;
     }
-    expect(checked).toBe(14);
+    expect(checked).toBe(13);
   });
 });
 
@@ -55,51 +112,82 @@ describe("every allowlisted host is accepted", () => {
       checked++;
     }
     expect(checked).toBe(STREAM_DESTINATION_HOSTS.length);
-    expect(checked).toBe(14);
+    expect(checked).toBe(13);
   });
 
-  it("sweep: each port a provider documents is accepted on that provider's host", () => {
+  it("sweep: no listed provider publishes a non-default port, so each entry refuses the OTHER scheme's default and LinkedIn's old ports", () => {
     let checked = 0;
     for (const entry of STREAM_DESTINATION_HOSTS) {
-      for (const port of entry.ports ?? []) {
-        expect(destinationRefusal(`rtmps://${hostOf(entry)}:${port}/live`), `${entry.host}:${port}`).toBeNull();
-        checked++;
-      }
+      const host = hostOf(entry);
+      expect(destinationRefusal(`rtmps://${host}:1935/live`), `rtmps ${host}:1935`).toBe("port");
+      expect(destinationRefusal(`rtmp://${host}:443/live`), `rtmp ${host}:443`).toBe("port");
+      expect(destinationRefusal(`rtmps://${host}:2935/live`), `rtmps ${host}:2935`).toBe("port");
+      expect(destinationRefusal(`rtmp://${host}:1936/live`), `rtmp ${host}:1936`).toBe("port");
+      checked++;
     }
-    // Azure Media Services (LinkedIn's custom-stream ingest) documents 1936, 2935, 2936.
-    expect(checked).toBe(3);
+    expect(checked).toBe(13);
   });
 
   it("the ingest URLs each provider publishes, as a user pastes them, are accepted", () => {
-    // Literals as each provider publishes them (the sources cited on each
-    // STREAM_DESTINATION_HOSTS entry) — NOT built from the constant.
-    const published = [
-      "rtmp://a.rtmp.youtube.com/live2",
-      "rtmp://b.rtmp.youtube.com/live2?backup=1",
-      "rtmps://a.rtmps.youtube.com:443/live2",
-      "rtmps://b.rtmps.youtube.com:443/live2?backup=1",
-      "rtmps://live-api-s.facebook.com:443/rtmp/",
-      "rtmps://rtmp-api.facebook.com:443/rtmp/",
-      "rtmps://ingest.global-contribute.live-video.net/app/",
-      "rtmp://euw30.contribute.live-video.net/app/",
-      "rtmp://live-jfk.twitch.tv/app",
-      "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app",
-      "rtmps://rtmp-global.cloud.vimeo.com:443/live",
-      "rtmp://rtmp.cloud.vimeo.com/live",
-      "rtmp://12345.channel.media.azure.net:1935/live/12345",
-      "rtmp://12345.channel.media.azure.net:1936/live/12345",
-      "rtmps://12345.channel.media.azure.net:2935/live/12345",
-      "rtmps://12345.channel.media.azure.net:2936/live/12345",
-      "rtmp://live.restream.io/live",
-      "rtmp://london.restream.io/live",
-      "rtmps://live.cloudflare.com:443/live/",
-    ];
     let checked = 0;
-    for (const url of published) {
+    for (const url of PUBLISHED) {
       expect(destinationRefusal(url), url).toBeNull();
       checked++;
     }
-    expect(checked).toBe(19);
+    expect(checked).toBe(15);
+  });
+});
+
+describe("the URL that is sealed and dialled is the URL that was checked", () => {
+  it("checkDestination returns the canonical URL: an upper-case host comes back lower-cased, every other byte as given, and re-checks to itself", () => {
+    let checked = 0;
+    for (const url of PUBLISHED) {
+      // Already canonical (published lower-case): returned byte for byte.
+      expect(checkDestination(url), url).toEqual({ ok: true, url });
+      // Upper-cased host: the canonical form is the published literal — expected value typed above, not computed.
+      const pasted = upperHost(url);
+      expect(pasted).not.toBe(url);
+      expect(checkDestination(pasted), pasted).toEqual({ ok: true, url });
+      checked++;
+    }
+    expect(checked).toBe(15);
+  });
+
+  it("a refused URL yields its rule and no URL at all, in agreement with destinationRefusal", () => {
+    const refused: [string, DestinationRefusal][] = [
+      ["rtmp://localhost/live", "host"],
+      [`rtmps://live-api-s.faceboo${KELVIN}.com:443/rtmp/`, "host"],
+      ["rtmps://a.rtmps.youtube.com:1936/live2", "port"],
+    ];
+    let checked = 0;
+    for (const [url, rule] of refused) {
+      expect(checkDestination(url), url).toEqual({ ok: false, rule });
+      expect(destinationRefusal(url)).toBe(rule);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("sweep: every non-ASCII code point whose toLowerCase() is ASCII is refused inside a listed host, while its ASCII twin is accepted", () => {
+    // The set comes from the JS runtime's case tables, not from the validator. Reviewer
+    // (re-review round 1, m1) enumerated it as exactly U+212A; the sweep re-derives it.
+    const foldsToAscii: number[] = [];
+    for (let cp = 0x80; cp <= 0x10ffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      if (/^[a-z0-9-]+$/.test(String.fromCodePoint(cp).toLowerCase())) foldsToAscii.push(cp);
+    }
+    expect(foldsToAscii).toContain(0x212a);
+    let checked = 0;
+    for (const cp of foldsToAscii) {
+      const raw = String.fromCodePoint(cp);
+      const twin = raw.toLowerCase();
+      // A leftmost label under a listed suffix: the twin is accepted, so only the raw byte can refuse it.
+      expect(destinationRefusal(`rtmps://${twin}.restream.io/live`), `twin of U+${cp.toString(16)}`).toBeNull();
+      expect(destinationRefusal(`rtmps://${raw}.restream.io/live`), `U+${cp.toString(16)}`).toBe("host");
+      checked++;
+    }
+    expect(checked, "fold-to-ASCII code points checked").toBeGreaterThan(0);
+    expect(checked).toBe(foldsToAscii.length);
   });
 });
 
@@ -141,6 +229,14 @@ describe("everything else is refused, with the rule that refused it", () => {
     ["rtmps://a.rtmps.youtube.com%2eevil.io/live2", "host"],
     ["rtmps://evil.io\\a.rtmps.youtube.com/live2", "host"],
     ["rtmps:///live2", "host"],
+    // Non-ASCII hosts: checked on the RAW bytes, before any case-folding (re-review m1).
+    [`rtmps://live-api-s.faceboo${KELVIN}.com:443/rtmp/`, "host"],
+    [`rtmps://${String.fromCharCode(0xff4c)}ive.cloudflare.com/live/`, "host"],
+    ["rtmps://xn--facebok-8ya.com/rtmp/", "host"],
+    // LinkedIn's retired Azure Media Services ingest — deliberately not admitted in R1.
+    ["rtmps://12345.channel.media.azure.net:2935/live/12345", "host"],
+    ["rtmp://12345.channel.media.azure.net:1935/live/12345", "host"],
+    ["rtmps://x.channel.media.azure.net:4280/live/x", "host"],
     // Userinfo, including the parser-confusion shapes that smuggle an @.
     ["rtmps://user:pw@a.rtmps.youtube.com/live2", "userinfo"],
     ["rtmps://a.rtmps.youtube.com@evil.io/live2", "userinfo"],
@@ -154,13 +250,12 @@ describe("everything else is refused, with the rule that refused it", () => {
     ["RTMP://a.rtmp.youtube.com/live2", "scheme"],
     [" rtmps://a.rtmps.youtube.com/live2", "scheme"],
     ["", "scheme"],
-    // Ports nobody documents, and a documented port on the WRONG provider.
+    // Ports no listed provider publishes.
     ["rtmps://a.rtmps.youtube.com:1936/live2", "port"],
     ["rtmps://a.rtmps.youtube.com:2935/live2", "port"],
     ["rtmp://a.rtmp.youtube.com:443/live2", "port"],
     ["rtmps://a.rtmps.youtube.com:1935/live2", "port"],
     ["rtmps://live.cloudflare.com:8080/live/", "port"],
-    ["rtmps://x.channel.media.azure.net:4280/live/x", "port"],
     ["rtmps://a.rtmps.youtube.com:0/live2", "port"],
     ["rtmps://a.rtmps.youtube.com:/live2", "port"],
     ["rtmps://a.rtmps.youtube.com:99999/live2", "port"],
@@ -180,7 +275,7 @@ describe("everything else is refused, with the rule that refused it", () => {
       checked++;
     }
     expect(checked).toBe(cases.length);
-    expect(checked).toBe(58);
+    expect(checked).toBe(63);
   });
 
   it("the table reaches every refusal rule the validator declares", () => {
@@ -204,7 +299,7 @@ describe("everything else is refused, with the rule that refused it", () => {
       }
       checked++;
     }
-    expect(checked).toBe(14);
+    expect(checked).toBe(13);
   });
 
   it("the verdict is a rule name, never an echo of the URL (it can carry a stream key)", () => {

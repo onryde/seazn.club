@@ -130,6 +130,8 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
       ["rtmps://a.rtmps.youtube.com:1936/live2", "port"],
       ["rtmps://a.rtmps.youtube.com", "path"],
       ["", "scheme"],
+      // A Facebook lookalike whose U+212A KELVIN SIGN case-folds to "k" — refused on its raw bytes (re-review m1).
+      [`rtmps://live-api-s.faceboo${String.fromCharCode(0x212a)}.com:443/rtmp/`, "host"],
     ];
     let checked = 0;
     // Second call: the same refusal twice is refused twice — no state makes the second one pass.
@@ -146,12 +148,31 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
         checked++;
       }
     }
-    expect(checked).toBe(22);
+    expect(checked).toBe(24);
     const [row] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId}`;
     expect(row!.n).toBe(0);
     // The positive pair: the same org, key and door accept a listed host.
     const made = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "ok", rtmpUrl: "rtmp://a.rtmp.youtube.com/live2", streamKey });
     expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.id)).toEqual([made.id]);
+  });
+
+  it("the SEALED url is the canonical one the validator accepted — an upper-case pasted host is stored lower-cased, every other byte as given (re-review m1)", async () => {
+    const { auth } = await seedOrg();
+    // Pasted → expected sealed, both typed here: the host folds, the scheme/port/path/query do not.
+    const pairs: [string, string][] = [
+      ["rtmps://A.RTMPS.YOUTUBE.COM:443/live2?backup=1", "rtmps://a.rtmps.youtube.com:443/live2?backup=1"],
+      ["rtmp://Live.Restream.IO/Live", "rtmp://live.restream.io/Live"],
+      ["rtmps://live.cloudflare.com:443/live/", "rtmps://live.cloudflare.com:443/live/"],
+    ];
+    let checked = 0;
+    for (const [pasted, sealed] of pairs) {
+      const streamKey = key();
+      const made = await createStreamTarget(auth, auth.orgId, { kind: "custom_rtmp", label: pasted, rtmpUrl: pasted, streamKey });
+      const secret = await sql.begin((tx) => readTargetSecret(tx, auth.orgId, made.id));
+      expect(secret, pasted).toEqual({ url: sealed, streamKey });
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("tenancy: B's list never shows A's target, and a caller authenticated for B cannot list or create under A's id (404, nothing written anywhere)", async () => {

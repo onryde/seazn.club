@@ -13,7 +13,7 @@ import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
 import { MIGRATION } from "@/server/relay/__tests__/_stream-migration";
-import { DESTINATION_REFUSALS, destinationRefusal } from "@/lib/stream-destinations";
+import { DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, destinationRefusal } from "@/lib/stream-destinations";
 
 /** The quoted members of `<column> text … check (<column> in ('a','b'))` inside ONE table of V410. */
 function checkList(table: string, column: string): string[] {
@@ -220,6 +220,19 @@ describe("the relay's routes are never key-reachable", () => {
     const doc = buildOpenApiDocument() as Doc;
     const op = doc.paths["/api/v1/orgs/{id}/stream-targets"]!.post!;
     expect(op.summary).toContain("DESTINATION_NOT_ALLOWED");
+    // The summary names exactly the admitted providers: each one on the list, and LinkedIn (dropped in R1) nowhere.
+    const displayName: Record<string, string> = {
+      youtube: "YouTube", facebook: "Facebook", twitch: "Twitch", kick: "Kick",
+      vimeo: "Vimeo", restream: "Restream", cloudflare_stream: "Cloudflare Stream",
+    };
+    let named = 0;
+    for (const provider of new Set(STREAM_DESTINATION_HOSTS.map((e) => e.provider))) {
+      expect(displayName[provider], `no display name for ${provider}`).toBeDefined();
+      expect(op.summary).toContain(displayName[provider]);
+      named++;
+    }
+    expect(named).toBe(7);
+    expect(op.summary).not.toMatch(/linkedin/i);
     const err422 = op.responses["422"]!.content["application/json"].schema.properties.error;
     expect(Object.keys(err422.properties ?? {}).sort()).toEqual(["code", "current_seq", "message", "rule"]);
     expect([...(err422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());

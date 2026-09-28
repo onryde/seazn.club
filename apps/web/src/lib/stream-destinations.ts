@@ -4,7 +4,15 @@
 // value reaches localhost, the Fly private network (`*.internal`,
 // `*.flycast`) and cloud metadata (169.254.169.254). The rule: the scheme is
 // rtmp/rtmps, the host is on the list below, and the port is the scheme's
-// default unless the provider documents another.
+// default (no listed provider publishes another).
+//
+// Validate what is used: the host's RAW bytes must be ASCII letters, digits,
+// dots and hyphens BEFORE anything is case-folded — `toLowerCase()` maps U+212A
+// KELVIN SIGN to ASCII "k", so a fold-then-check admitted `faceboo<U+212A>.com`
+// while the raw string was what got sealed and dialled (re-review m1). And the
+// URL the caller stores is `checkDestination`'s canonical output (host
+// lower-cased, every other byte as given), never the raw input — so the bytes
+// sealed and dialled are exactly the bytes this file accepted.
 //
 // Zero imports on purpose: the settings panel (a client component) can call
 // it before it sends, and scripts/openapi-gen.ts imports it under bare
@@ -22,7 +30,7 @@
 /** The stable error code the POST stream-targets route answers 422 with. */
 export const DESTINATION_NOT_ALLOWED = "DESTINATION_NOT_ALLOWED";
 
-/** Which rule refused — the `reason` on the 422. Never the URL itself: an
+/** Which rule refused — the `rule` on the 422. Never the URL itself: an
  *  ingest URL can carry the stream key in its path. */
 export const DESTINATION_REFUSALS = ["scheme", "userinfo", "ip_literal", "host", "port", "path"] as const;
 export type DestinationRefusal = (typeof DESTINATION_REFUSALS)[number];
@@ -34,12 +42,11 @@ export type DestinationHost = {
    *  the bare apex is refused too. */
   readonly match: "exact" | "suffix";
   readonly host: string;
-  /** Ports the provider DOCUMENTS beyond the scheme default (rtmp 1935, rtmps 443). */
-  readonly ports?: readonly number[];
 };
 
 /**
- * THE allowlist — the owner's eight providers (A18). Each entry cites where
+ * THE allowlist — A18's providers, less LinkedIn (see the note at the end of
+ * the list). Each entry cites where
  * the provider publishes the host (read 2026-09-28). "OBS services" is OBS
  * Studio's bundled encoder list, plugins/rtmp-services/data/services.json —
  * the entries each platform maintains for the "Service" dropdown. Adding a
@@ -78,11 +85,6 @@ export const STREAM_DESTINATION_HOSTS: readonly DestinationHost[] = [
   // rtmp://rtmp.cloud.vimeo.com/live.
   { provider: "vimeo", match: "exact", host: "rtmp-global.cloud.vimeo.com" },
   { provider: "vimeo", match: "exact", host: "rtmp.cloud.vimeo.com" },
-  // LinkedIn — "Live Events APIs", learn.microsoft.com/linkedin/consumer/integrations/live-video
-  // (updated 2023-12-20): ingestUrls rtmp://<id>.channel.media.azure.net:1935|1936/live/<id>
-  // and rtmps://<id>.channel.media.azure.net:2935|2936/live/<id> — so 1936, 2935
-  // and 2936 are documented beyond the scheme defaults.
-  { provider: "linkedin", match: "suffix", host: ".channel.media.azure.net", ports: [1936, 2935, 2936] },
   // Restream — Restream's public server list, api.restream.io/v2/server/all
   // (developers.restream.io/public-api/servers): 19 servers, every one
   // rtmp://<name>.restream.io/live (live = autodetect, london, frankfurt, …).
@@ -90,9 +92,22 @@ export const STREAM_DESTINATION_HOSTS: readonly DestinationHost[] = [
   // Cloudflare Stream — "Start a live stream",
   // developers.cloudflare.com/stream/stream-live/start-stream-live: rtmps://live.cloudflare.com:443/live/.
   { provider: "cloudflare_stream", match: "exact", host: "live.cloudflare.com" },
+  // LinkedIn — DELIBERATELY ABSENT in R1 (orchestrator ruling, Task 9 fix
+  // round 2, 2026-09-28). The only ingest we could source is the one "Live
+  // Events APIs" (learn.microsoft.com/linkedin/consumer/integrations/live-video,
+  // updated 2023-12-20) hands out: Azure Media Services'
+  // <id>.channel.media.azure.net on ports 1935/1936 (rtmp) and 2935/2936 (rtmps).
+  // AMS was retired in 2024-06, and `media.azure.net` has been NXDOMAIN since
+  // (checked 2026-09-28), so no real LinkedIn host could match that entry.
+  // Re-add LinkedIn only from a real, current LinkedIn Live custom-stream URL,
+  // with its extra ports bound PER SCHEME (re-review m2).
 ];
 
+/** The only ports admitted: no listed provider publishes a non-default one. */
 const DEFAULT_PORT = { rtmp: 1935, rtmps: 443 } as const;
+
+/** A host's raw bytes: ASCII letters, digits, dots, hyphens — checked BEFORE case-folding. */
+const RAW_HOST = /^[A-Za-z0-9.-]+$/;
 
 // One LDH label: letters/digits/hyphen, no leading/trailing hyphen, 1–63.
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -101,45 +116,63 @@ function hostMatches(entry: DestinationHost, host: string): boolean {
   return entry.match === "exact" ? host === entry.host : host.endsWith(entry.host);
 }
 
+export type DestinationCheck =
+  | { readonly ok: true; /** The CANONICAL URL — what the caller seals and the relay dials. */ readonly url: string }
+  | { readonly ok: false; readonly rule: DestinationRefusal };
+
 /**
- * `null` when `url` is an ingest URL the relay may dial; otherwise the rule
- * that refused it. Pure and total — any string in, one verdict out.
+ * The verdict on `url`: either the canonical URL to store — the scheme and
+ * path exactly as given, the host lower-cased (ASCII-only by then, so the
+ * fold is DNS-neutral), an explicit port kept as given — or the rule that
+ * refused it. Pure and total: any string in, one verdict out.
  */
-export function destinationRefusal(url: string): DestinationRefusal | null {
+export function checkDestination(url: string): DestinationCheck {
+  const refuse = (rule: DestinationRefusal): DestinationCheck => ({ ok: false, rule });
   const scheme = /^(rtmps?):\/\//.exec(url);
-  if (!scheme) return "scheme";
+  if (!scheme) return refuse("scheme");
   const rest = url.slice(scheme[0].length);
   const slash = rest.indexOf("/");
   const authority = slash === -1 ? rest : rest.slice(0, slash);
   const path = slash === -1 ? "" : rest.slice(slash);
 
-  if (authority.includes("@")) return "userinfo";
-  if (authority.startsWith("[")) return "ip_literal";
+  if (authority.includes("@")) return refuse("userinfo");
+  if (authority.startsWith("[")) return refuse("ip_literal");
 
   const colons = authority.split(":").length - 1;
-  if (colons > 1) return "host";
+  if (colons > 1) return refuse("host");
   let port: number = DEFAULT_PORT[scheme[1] as "rtmp" | "rtmps"];
-  let host = authority;
+  let rawHost = authority;
+  let portPart = "";
   if (colons === 1) {
     const at = authority.indexOf(":");
     const digits = authority.slice(at + 1);
-    host = authority.slice(0, at);
-    if (!/^[1-9][0-9]{0,4}$/.test(digits) || Number(digits) > 65535) return "port";
+    rawHost = authority.slice(0, at);
+    if (!/^[1-9][0-9]{0,4}$/.test(digits) || Number(digits) > 65535) return refuse("port");
     port = Number(digits);
+    portPart = `:${digits}`;
   }
 
-  host = host.toLowerCase();
+  // The RAW bytes first: nothing non-ASCII survives to be case-folded into a listed name.
+  if (!RAW_HOST.test(rawHost)) return refuse("host");
+  const host = rawHost.toLowerCase();
   const labels = host.split(".");
-  if (host.length === 0 || host.length > 253 || !labels.every((l) => LABEL.test(l))) return "host";
+  if (host.length > 253 || !labels.every((l) => LABEL.test(l))) return refuse("host");
   // A numeric (or hex) final label is an IPv4 literal in one of getaddrinfo's
   // spellings — no public suffix is all-digit.
   const last = labels[labels.length - 1]!;
-  if (/^[0-9]+$/.test(last) || /^0x[0-9a-f]*$/.test(last)) return "ip_literal";
+  if (/^[0-9]+$/.test(last) || /^0x[0-9a-f]*$/.test(last)) return refuse("ip_literal");
 
-  const entry = STREAM_DESTINATION_HOSTS.find((e) => hostMatches(e, host));
-  if (!entry) return "host";
-  if (port !== DEFAULT_PORT[scheme[1] as "rtmp" | "rtmps"] && !(entry.ports ?? []).includes(port)) return "port";
+  if (!STREAM_DESTINATION_HOSTS.some((e) => hostMatches(e, host))) return refuse("host");
+  if (port !== DEFAULT_PORT[scheme[1] as "rtmp" | "rtmps"]) return refuse("port");
 
-  if (!/^\/[\x21-\x7e]+$/.test(path)) return "path";
-  return null;
+  if (!/^\/[\x21-\x7e]+$/.test(path)) return refuse("path");
+  return { ok: true, url: `${scheme[0]}${host}${portPart}${path}` };
+}
+
+/** `null` when `url` is an ingest URL the relay may dial; otherwise the rule
+ *  that refused it. The panel's inline check; the writer uses checkDestination
+ *  and stores ITS url. */
+export function destinationRefusal(url: string): DestinationRefusal | null {
+  const verdict = checkDestination(url);
+  return verdict.ok ? null : verdict.rule;
 }
