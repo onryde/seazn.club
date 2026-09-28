@@ -41,6 +41,15 @@ const PENDING = new Set(["scheduled", "in_play"]);
 // stages.ts:979 — what the swiss gate counts as a finished board.
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
 
+/** Runs `body` NOW and settles with what it returns, or REJECTS with what it
+ *  throws — exactly what an `async` method with no `await` does, since a
+ *  Promise executor's throw rejects. The fake's methods are synchronous in
+ *  fact; this keeps each refusal (RefusedCall, "fake: league only", a missing
+ *  fixture) arriving as a rejection, as HttpDriver's do, never a sync throw. */
+function settle<T>(body: () => T): Promise<T> {
+  return new Promise<T>((resolve) => { resolve(body()); });
+}
+
 export class FakeLeagueDriver implements OrganiserDriver {
   readonly calls: string[] = [];
   readonly orgId: string;
@@ -58,33 +67,41 @@ export class FakeLeagueDriver implements OrganiserDriver {
   get callCount(): number { return this.calls.length; }
   log(m: string): void { this.calls.push(m); }
 
-  async createCompetition(i: { name: string; slug: string }): Promise<CompetitionRef> { this.log("createCompetition"); return { id: "c1", slug: i.slug, orgId: this.orgId }; }
-  async createDivision(_c: string, i: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
-    this.log("createDivision");
-    this.sport = i.sportKey;
-    this.variant = i.variantKey;
-    this.cfg = resolveSportCfg(i.sportKey, i.variantKey);
-    // divisions.ts createDivision stores the PARSED preset+overrides.
-    this.divisionConfig = { ...(resolveSportCfg(i.sportKey, i.variantKey, i.config ?? {}) as Record<string, unknown>) };
-    return { id: "d1", slug: i.slug, sportKey: i.sportKey, variantKey: i.variantKey, config: { ...this.divisionConfig } };
+  createCompetition(i: { name: string; slug: string }): Promise<CompetitionRef> { return settle(() => { this.log("createCompetition"); return { id: "c1", slug: i.slug, orgId: this.orgId }; }); }
+  createDivision(_c: string, i: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
+    return settle(() => {
+      this.log("createDivision");
+      this.sport = i.sportKey;
+      this.variant = i.variantKey;
+      this.cfg = resolveSportCfg(i.sportKey, i.variantKey);
+      // divisions.ts createDivision stores the PARSED preset+overrides.
+      this.divisionConfig = { ...(resolveSportCfg(i.sportKey, i.variantKey, i.config ?? {}) as Record<string, unknown>) };
+      return { id: "d1", slug: i.slug, sportKey: i.sportKey, variantKey: i.variantKey, config: { ...this.divisionConfig } };
+    });
   }
-  async getDivision(): Promise<DivisionRef> {
-    this.log("getDivision");
-    return { id: "d1", slug: "d", sportKey: this.sport, variantKey: this.variant, config: { ...this.divisionConfig } };
+  getDivision(): Promise<DivisionRef> {
+    return settle(() => {
+      this.log("getDivision");
+      return { id: "d1", slug: "d", sportKey: this.sport, variantKey: this.variant, config: { ...this.divisionConfig } };
+    });
   }
   acceptsStage(kind: string): boolean { return kind === "league"; }
   refuseStages(): never { throw new Error("fake: league only"); }
-  async postStages(_d: string, stages: readonly StagePostBody[]): Promise<StageRef[]> {
-    this.log("postStages");
-    if (stages.length !== 1 || !this.acceptsStage(stages[0]!.kind)) this.refuseStages();
-    this.stage = { id: "s1", seq: 1, kind: stages[0]!.kind, config: { ...stages[0]!.config }, status: "pending" };
-    return [this.stage];
+  postStages(_d: string, stages: readonly StagePostBody[]): Promise<StageRef[]> {
+    return settle(() => {
+      this.log("postStages");
+      if (stages.length !== 1 || !this.acceptsStage(stages[0].kind)) this.refuseStages();
+      this.stage = { id: "s1", seq: 1, kind: stages[0].kind, config: { ...stages[0].config }, status: "pending" };
+      return [this.stage];
+    });
   }
-  async listStages(): Promise<StageRef[]> { this.log("listStages"); return this.stage ? [{ ...this.stage }] : []; }
-  async addEntrants(_d: string, es: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
-    this.log("addEntrants");
-    this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered" }));
-    return this.entrants.map((e) => ({ ...e }));
+  listStages(): Promise<StageRef[]> { return settle(() => { this.log("listStages"); return this.stage ? [{ ...this.stage }] : []; }); }
+  addEntrants(_d: string, es: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+    return settle(() => {
+      this.log("addEntrants");
+      this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered" }));
+      return this.entrants.map((e) => ({ ...e }));
+    });
   }
   /** Circle-method rounds over the entrant ids, "BYE" padding an odd field. */
   circle(): [string, string][][] {
@@ -92,7 +109,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
     const rounds: [string, string][][] = [];
     for (let r = 0; r < ring.length - 1; r++) {
       const pairs: [string, string][] = [];
-      for (let i = 0; i < ring.length / 2; i++) pairs.push([ring[i]!, ring[ring.length - 1 - i]!]);
+      for (let i = 0; i < ring.length / 2; i++) pairs.push([ring[i], ring[ring.length - 1 - i]]);
       rounds.push(pairs);
       ring.splice(1, 0, ring.pop()!);
     }
@@ -106,40 +123,44 @@ export class FakeLeagueDriver implements OrganiserDriver {
     this.fixtures.push(f);
     return f;
   }
-  async start(): Promise<StartOut> {
-    this.log("start");
-    for (const [r, pairs] of this.circle().entries()) {
-      for (const [h, a] of pairs) if (h !== "BYE" && a !== "BYE") this.seat(r + 1, h, a);
-    }
-    this.stage!.status = "active";
-    return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+  start(): Promise<StartOut> {
+    return settle(() => {
+      this.log("start");
+      for (const [r, pairs] of this.circle().entries()) {
+        for (const [h, a] of pairs) if (h !== "BYE" && a !== "BYE") this.seat(r + 1, h, a);
+      }
+      this.stage!.status = "active";
+      return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+    });
   }
   rows(): FixtureRow[] { return this.fixtures.map(({ events: _e, ...f }) => ({ ...f })); }
-  async generate(): Promise<GenerateOut> { this.log("generate"); return { created: 0, existing: this.fixtures.length, fixtures: this.rows() }; }
-  async listFixtures(): Promise<FixtureRow[]> { this.log("listFixtures"); return this.rows(); }
-  async fixtureState(id: string): Promise<FixtureStateOut> { this.log("fixtureState"); const f = this.#f(id); return { status: f.status, last_seq: f.events.length, outcome: f.outcome }; }
+  generate(): Promise<GenerateOut> { return settle(() => { this.log("generate"); return { created: 0, existing: this.fixtures.length, fixtures: this.rows() }; }); }
+  listFixtures(): Promise<FixtureRow[]> { return settle(() => { this.log("listFixtures"); return this.rows(); }); }
+  fixtureState(id: string): Promise<FixtureStateOut> { return settle(() => { this.log("fixtureState"); const f = this.#f(id); return { status: f.status, last_seq: f.events.length, outcome: f.outcome }; }); }
   /** One event at a time, like HttpDriver's POST per event: each answer
    *  carries the fixture's status and outcome AFTER that event, and a refused
    *  event leaves the ones before it appended. */
-  async postStream(id: string, events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
-    this.log("postStream");
-    const f = this.#f(id);
-    const out: PostedEvent[] = [];
-    for (const ev of events) {
-      const next = [...f.events, ev];
-      let folded: ReturnType<typeof foldStream>;
-      try {
-        folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
-      } catch (e) {
-        const code = (e as { code?: unknown }).code;
-        throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, typeof code === "string" ? code : null, (e as Error).message);
+  postStream(id: string, events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
+    return settle(() => {
+      this.log("postStream");
+      const f = this.#f(id);
+      const out: PostedEvent[] = [];
+      for (const ev of events) {
+        const next = [...f.events, ev];
+        let folded: ReturnType<typeof foldStream>;
+        try {
+          folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
+        } catch (e) {
+          const code = (e as { code?: unknown }).code;
+          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, typeof code === "string" ? code : null, (e as Error).message);
+        }
+        f.events = next;
+        f.outcome = folded.outcome;
+        f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
+        out.push({ seq: f.events.length, status: f.status, outcome: f.outcome, event_id: `${id}-${f.events.length}` });
       }
-      f.events = next;
-      f.outcome = folded.outcome;
-      f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
-      out.push({ seq: f.events.length, status: f.status, outcome: f.outcome, event_id: `${id}-${f.events.length}` });
-    }
-    return out;
+      return out;
+    });
   }
   async forfeit(id: string, by: string, reason: "walkover" | "retired hurt", prefix = ""): Promise<PostedEvent[]> {
     this.log("forfeit");
@@ -174,38 +195,42 @@ export class FakeLeagueDriver implements OrganiserDriver {
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
     return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped };
   }
-  async completeStage(): Promise<CompleteOut> {
-    this.log("completeStage");
-    this.completed = this.fixtures.every((f) => f.status !== "scheduled" && f.status !== "in_play");
-    return { completed: this.completed, events: [] };
+  completeStage(): Promise<CompleteOut> {
+    return settle(() => {
+      this.log("completeStage");
+      this.completed = this.fixtures.every((f) => f.status !== "scheduled" && f.status !== "in_play");
+      return { completed: this.completed, events: [] };
+    });
   }
   /** The table the product folds: [home, away] deltas from standingsDelta over
    *  each result, and a one-sided award (bye) scored the way
    *  engine-db/competition.ts awardByeDelta does it. */
-  async standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
-    this.log("standings");
-    const pts = new Map(this.entrants.map((e) => [e.id, 0]));
-    const m = sportModule(this.sport);
-    const kind = this.stage!.kind as StageKind;
-    for (const f of this.fixtures) {
-      if (f.outcome === null) continue;
-      const ctx = { kind, ...(f.round_no ? { roundNo: f.round_no } : {}) };
-      if (f.home_entrant_id === null || f.away_entrant_id === null) {
-        const o = f.outcome as MatchOutcome;
-        if (o.kind !== "award") continue;
-        const home = f.home_entrant_id === o.winner;
-        const state = m.init(this.cfg as never, lineupsFor(home ? o.winner : BYE_PHANTOM, home ? BYE_PHANTOM : o.winner));
-        const pair = m.standingsDelta(o, this.cfg as never, ctx, state as never);
-        const won = pair.find((d) => d.entrantId === o.winner)!;
-        pts.set(o.winner, pts.get(o.winner)! + won.points);
-        continue;
+  standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
+    return settle(() => {
+      this.log("standings");
+      const pts = new Map(this.entrants.map((e) => [e.id, 0]));
+      const m = sportModule(this.sport);
+      const kind = this.stage!.kind as StageKind;
+      for (const f of this.fixtures) {
+        if (f.outcome === null) continue;
+        const ctx = { kind, ...(f.round_no ? { roundNo: f.round_no } : {}) };
+        if (f.home_entrant_id === null || f.away_entrant_id === null) {
+          const o = f.outcome as MatchOutcome;
+          if (o.kind !== "award") continue;
+          const home = f.home_entrant_id === o.winner;
+          const state: unknown = m.init(this.cfg, lineupsFor(home ? o.winner : BYE_PHANTOM, home ? BYE_PHANTOM : o.winner));
+          const pair = m.standingsDelta(o, this.cfg, ctx, state);
+          const won = pair.find((d) => d.entrantId === o.winner)!;
+          pts.set(o.winner, pts.get(o.winner)! + won.points);
+          continue;
+        }
+        const d = declaredPoints(m, this.cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events)!;
+        pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
+        pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
       }
-      const d = declaredPoints(m, this.cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events)!;
-      pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
-      pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
-    }
-    const rows = [...pts].sort((a, b) => b[1] - a[1]).map(([entrantId, points], i) => ({ entrantId, rank: i + 1, points }));
-    return { stage_id: stageId, pool_id: poolId, rows };
+      const rows = [...pts].sort((a, b) => b[1] - a[1]).map(([entrantId, points], i) => ({ entrantId, rank: i + 1, points }));
+      return { stage_id: stageId, pool_id: poolId, rows };
+    });
   }
   async publicStandings(): Promise<PublicStandingsOut> {
     this.log("publicStandings");
@@ -213,19 +238,21 @@ export class FakeLeagueDriver implements OrganiserDriver {
   }
   /** divisions.ts:795-870: once fixtures exist, a config that does not parse or
    *  changes anything but `entrants` is 409 FORMAT_LOCKED; otherwise it saves. */
-  async patchDivisionConfig(_d: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
-    this.log("patchDivisionConfig");
-    const locked = this.fixtures.length > 0;
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = resolveSportCfg(this.sport, this.variant, config) as Record<string, unknown>;
-    } catch {
-      return locked ? { status: 409, code: "FORMAT_LOCKED" } : { status: 422, code: "CONFIG_INVALID" };
-    }
-    if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "FORMAT_LOCKED" };
-    const entrants = config.entrants;
-    this.divisionConfig = entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed;
-    return { status: 200, code: null };
+  patchDivisionConfig(_d: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
+    return settle(() => {
+      this.log("patchDivisionConfig");
+      const locked = this.fixtures.length > 0;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = resolveSportCfg(this.sport, this.variant, config) as Record<string, unknown>;
+      } catch {
+        return locked ? { status: 409, code: "FORMAT_LOCKED" } : { status: 422, code: "CONFIG_INVALID" };
+      }
+      if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "FORMAT_LOCKED" };
+      const entrants = config.entrants;
+      this.divisionConfig = entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed;
+      return { status: 200, code: null };
+    });
   }
   #f(id: string): FakeFixture { const f = this.fixtures.find((x) => x.id === id); if (!f) throw new Error(`fake: no fixture ${id}`); return f; }
 }
@@ -288,26 +315,30 @@ export class FakeSwissDriver extends FakeLeagueDriver {
       byeShell = this.seat(r, null, null);
       this.byeShells.add(byeShell.id);
     }
-    boards.forEach(([h, a], i) => Object.assign(kept[i]!, { home_entrant_id: h, away_entrant_id: a }));
-    if (want.bye) Object.assign(byeShell!, { home_entrant_id: byes[0]!, status: "forfeited", outcome: { kind: "award", winner: byes[0]! } });
+    boards.forEach(([h, a], i) => Object.assign(kept[i], { home_entrant_id: h, away_entrant_id: a }));
+    if (want.bye) Object.assign(byeShell!, { home_entrant_id: byes[0], status: "forfeited", outcome: { kind: "award", winner: byes[0] } });
     this.paired = r;
     return boards.length + byes.length;
   }
-  override async start(): Promise<StartOut> {
-    this.log("start");
-    this.schedule = this.circle();
-    const n = this.entrants.length;
-    for (let r = 1; r <= this.budget; r++) this.mintShells(r, Math.floor(n / 2), n % 2 === 1);
-    this.stage!.status = "active";
-    return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+  override start(): Promise<StartOut> {
+    return settle(() => {
+      this.log("start");
+      this.schedule = this.circle();
+      const n = this.entrants.length;
+      for (let r = 1; r <= this.budget; r++) this.mintShells(r, Math.floor(n / 2), n % 2 === 1);
+      this.stage!.status = "active";
+      return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+    });
   }
-  override async generate(): Promise<GenerateOut> {
-    this.log("generate");
-    const r = this.paired + 1;
-    const undecided = this.fixtures.some((f) => f.round_no === r - 1 && (f.home_entrant_id !== null || f.away_entrant_id !== null) && !DECIDED.has(f.status));
-    if (r > 1 && r <= this.budget && undecided) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "current swiss round has undecided fixtures");
-    this.pairNext();
-    return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
+  override generate(): Promise<GenerateOut> {
+    return settle(() => {
+      this.log("generate");
+      const r = this.paired + 1;
+      const undecided = this.fixtures.some((f) => f.round_no === r - 1 && (f.home_entrant_id !== null || f.away_entrant_id !== null) && !DECIDED.has(f.status));
+      if (r > 1 && r <= this.budget && undecided) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "current swiss round has undecided fixtures");
+      this.pairNext();
+      return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
+    });
   }
 }
 
@@ -329,23 +360,25 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   /** Whether a finished fixture's winner goes on — a test seam for a product
    *  that drops one. */
   carriesForward(_f: FakeFixture): boolean { return true; }
-  override async start(): Promise<StartOut> {
-    this.log("start");
-    const size = 2 ** Math.ceil(Math.log2(Math.max(2, this.entrants.length)));
-    let order = [1, 2];
-    while (order.length < size) order = order.flatMap((s) => [s, order.length * 2 + 1 - s]);
-    const bySeed = (s: number) => this.entrants.find((e) => e.seed === s)?.id ?? null;
-    let round = order.flatMap((_, i) => (i % 2 === 0 ? [[bySeed(order[i]!), bySeed(order[i + 1]!)] as const] : []))
-      .map(([h, a]) => (h !== null && a !== null ? this.seat(1, h, a)
-        : this.seat(1, h ?? a, null, { status: "forfeited", outcome: { kind: "award", winner: (h ?? a)! } })));
-    for (let r = 2; round.length > 1; r++) {
-      const next = Array.from({ length: round.length / 2 }, () => this.seat(r, null, null));
-      round.forEach((f, i) => this.feeds.set(f.id, { to: next[i >> 1]!.id, slot: i % 2 === 0 ? "home_entrant_id" : "away_entrant_id" }));
-      round = next;
-    }
-    for (const f of this.fixtures.filter((x) => x.status === "forfeited")) this.feed(f);
-    this.stage!.status = "active";
-    return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+  override start(): Promise<StartOut> {
+    return settle(() => {
+      this.log("start");
+      const size = 2 ** Math.ceil(Math.log2(Math.max(2, this.entrants.length)));
+      let order = [1, 2];
+      while (order.length < size) order = order.flatMap((s) => [s, order.length * 2 + 1 - s]);
+      const bySeed = (s: number) => this.entrants.find((e) => e.seed === s)?.id ?? null;
+      let round = order.flatMap((_, i) => (i % 2 === 0 ? [[bySeed(order[i]), bySeed(order[i + 1])] as const] : []))
+        .map(([h, a]) => (h !== null && a !== null ? this.seat(1, h, a)
+          : this.seat(1, h ?? a, null, { status: "forfeited", outcome: { kind: "award", winner: (h ?? a)! } })));
+      for (let r = 2; round.length > 1; r++) {
+        const next = Array.from({ length: round.length / 2 }, () => this.seat(r, null, null));
+        round.forEach((f, i) => this.feeds.set(f.id, { to: next[i >> 1].id, slot: i % 2 === 0 ? "home_entrant_id" : "away_entrant_id" }));
+        round = next;
+      }
+      for (const f of this.fixtures.filter((x) => x.status === "forfeited")) this.feed(f);
+      this.stage!.status = "active";
+      return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+    });
   }
   feed(f: FakeFixture): void {
     const w = (f.outcome as { winner?: unknown } | null)?.winner;
@@ -359,19 +392,21 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     if (f.outcome !== null) this.feed(f);
     return out;
   }
-  override async completeStage(): Promise<CompleteOut> {
-    this.log("completeStage");
-    if (this.fixtures.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
-    const seed = (id: string) => this.entrants.find((e) => e.id === id)?.seed ?? Number.MAX_SAFE_INTEGER;
-    const out: { id: string; round: number }[] = [];
-    let champion: string | null = null;
-    for (const f of this.fixtures) {
-      const w = (f.outcome as { winner?: unknown } | null)?.winner;
-      if (typeof w !== "string" || f.home_entrant_id === null || f.away_entrant_id === null) continue;
-      out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
-      if (!this.feeds.has(f.id)) champion = w;
-    }
-    out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
-    return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(champion === null ? [] : [champion]), ...out.map((x) => x.id)] }] };
+  override completeStage(): Promise<CompleteOut> {
+    return settle(() => {
+      this.log("completeStage");
+      if (this.fixtures.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
+      const seed = (id: string) => this.entrants.find((e) => e.id === id)?.seed ?? Number.MAX_SAFE_INTEGER;
+      const out: { id: string; round: number }[] = [];
+      let champion: string | null = null;
+      for (const f of this.fixtures) {
+        const w = (f.outcome as { winner?: unknown } | null)?.winner;
+        if (typeof w !== "string" || f.home_entrant_id === null || f.away_entrant_id === null) continue;
+        out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
+        if (!this.feeds.has(f.id)) champion = w;
+      }
+      out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
+      return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(champion === null ? [] : [champion]), ...out.map((x) => x.id)] }] };
+    });
   }
 }

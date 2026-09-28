@@ -17,7 +17,7 @@ export const f1OddField: Scenario = {
     await playStage(ctx, rec, setup);
     const complete = await finishStage(ctx, rec, setup);
     const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
-    const s = observed.stages[0]!;
+    const s = observed.stages[0];
     const n = s.field.length;
     // floor(n/2) seated pairs per round, one bye; the canary expects ceil.
     const expectedPerRound = ctx.spec.canary ? Math.ceil(n / 2) : Math.floor(n / 2);

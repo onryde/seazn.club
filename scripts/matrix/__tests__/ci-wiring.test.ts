@@ -95,7 +95,7 @@ describe("matrix CI wiring", () => {
     expect(bench).toBeGreaterThan(0);
     expect(matrix).toBeGreaterThan(bench);
     const between = ci.slice(bench, matrix);
-    expect(between).not.toMatch(/\n  [a-z][\w-]*:\n/); // same job: no new job key in between
+    expect(between).not.toMatch(/\n {2}[a-z][\w-]*:\n/); // same job: no new job key in between
     // "right after": the only step that starts between the two is the matrix one
     expect([...between.matchAll(/^ {6}- .*$/gm)].map((m) => m[0])).toEqual([STEP_HEAD]);
   });

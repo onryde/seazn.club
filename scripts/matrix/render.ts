@@ -30,7 +30,7 @@ function parseCli(argv: string[]): { file: string; out: string | undefined } | {
   }
 }
 
-export async function main(argv: string[]): Promise<number> {
+export function main(argv: string[]): number {
   const cli = parseCli(argv);
   if ("usage" in cli) {
     process.stderr.write(`${cli.usage}\n`);
@@ -53,5 +53,5 @@ export async function main(argv: string[]): Promise<number> {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = await main(process.argv.slice(2));
+  process.exitCode = main(process.argv.slice(2));
 }

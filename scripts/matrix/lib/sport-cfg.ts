@@ -79,7 +79,7 @@ export function resolveSportCfg(sportKey: string, variantKey: string, overrides:
 
 /** The ONLY source of "may this fixture end level" (R9): the module's declaration. */
 export function drawsAllowed(sportKey: string, cfg: unknown, stageKind: StageKind): boolean {
-  return sportModule(sportKey).supportsDraws(cfg as never, stageKind);
+  return sportModule(sportKey).supportsDraws(cfg, stageKind);
 }
 
 export function entrantKindFor(sportKey: string, cfg: unknown): "individual" | "pair" | "team" {

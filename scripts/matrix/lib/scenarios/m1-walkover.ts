@@ -34,7 +34,7 @@ export const m1Walkover: Scenario = {
     const complete = await finishStage(ctx, rec, setup);
     const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
     const t = target as Target | null;
-    const fx = t === null ? undefined : observed.stages[0]!.fixtures.find((f) => f.id === t.id);
+    const fx = t === null ? undefined : observed.stages[0].fixtures.find((f) => f.id === t.id);
     // The canary asserts the deliberately WRONG winner (the absent side).
     const expected = ctx.spec.canary && t !== null ? t.absent : seed1;
     return {
@@ -47,7 +47,7 @@ export const m1Walkover: Scenario = {
           { ok: winnerOf(fx.outcome) === expected, note: `winner ${winnerOf(fx.outcome)}, expected ${expected}` },
         ]),
         assertion("m1-winner-progresses",
-          [{ ok: t !== null && observed.stages[0]!.fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
+          [{ ok: t !== null && observed.stages[0].fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),
         stageCompleted(observed),
         loopBounded(rec, observed),

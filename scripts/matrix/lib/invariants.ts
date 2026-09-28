@@ -55,7 +55,7 @@ const I1: InvariantSpec = {
         const m = [...members].sort();
         for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) {
           checked++;
-          const k = pairKey(m[i]!, m[j]!);
+          const k = pairKey(m[i], m[j]);
           owed.add(k);
           const times = met.get(k) ?? 0;
           if (times !== legs) fails.push(`${k} met ${times}, expected ${legs}`);

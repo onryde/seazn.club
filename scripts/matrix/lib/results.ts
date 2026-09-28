@@ -87,7 +87,7 @@ export const RunResultsSchema = z.strictObject({
 });
 
 export function parseResults(json: unknown): RunResults {
-  return RunResultsSchema.parse(json) as RunResults;
+  return RunResultsSchema.parse(json);
 }
 
 export interface DecideInput {

@@ -278,7 +278,11 @@ const REAL_DB: DbFactories = {
 export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
   return {
     env: process.env,
-    harnessCommit: async () => execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim(),
+    // harnessCommit and openDb do no async work. Each body runs inside a
+    // Promise executor, whose throw REJECTS — exactly what the `async` arrow
+    // with no `await` did — so a failing git or handle open still reaches the
+    // caller as a rejection, never a synchronous throw.
+    harnessCommit: () => new Promise<string>((resolve) => { resolve(execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim()); }),
     preflight: async (base) => {
       const { probes, dispose } = createRealPreflightProbes();
       try { return await runPreflight(base, probes); } finally { await dispose(); }
@@ -288,7 +292,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
     // listPlanKeys' data_directory proof, and prepareCaseOrg's provision (the
     // plan.ts WRITES) runs only after insertCaseOrg re-proved the DB inside
     // its own transaction.
-    openDb: async () => {
+    openDb: () => new Promise<RunDb>((resolve) => {
       const m = dbf.matrixSql();
       const p = dbf.planSql();
       const db: RunDb = {
@@ -297,8 +301,8 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
         chooseTopPublicPlan: async () => chooseTopPublicPlan(await p.sql.planCandidateInfo(await m.sql.listPlanKeys())),
         dispose: () => closeHandles(m, p),
       };
-      return db;
-    },
+      resolve(db);
+    }),
     signIn: async (base, email) => { const s = newSession(); await signIn(base, s, email); return s; },
     // Per-case connections, opened and closed here: each case's SQL runs on a
     // fresh max:1 client, and its data_directory proof is its own.

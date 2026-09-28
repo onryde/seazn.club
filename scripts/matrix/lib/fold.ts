@@ -43,8 +43,8 @@ export function foldStream(
   away: string,
   events: readonly StreamEvent[],
 ): FoldedStream {
-  const { state } = foldMatchWithStoppage(module, cfg as never, lineupsFor(home, away), envelopes("matrix", events), FOLD_OPTIONS);
-  return { outcome: module.outcome(state as never), state };
+  const state: unknown = foldMatchWithStoppage(module, cfg as never, lineupsFor(home, away), envelopes("matrix", events), FOLD_OPTIONS).state;
+  return { outcome: module.outcome(state), state };
 }
 
 export interface DeclaredPoints {
@@ -66,6 +66,6 @@ export function declaredPoints(
 ): DeclaredPoints | null {
   const folded = foldStream(module, cfg, home, away, events);
   if (folded.outcome === null) return null;
-  const [h, a] = module.standingsDelta(folded.outcome, cfg as never, ctx, folded.state as never);
+  const [h, a] = module.standingsDelta(folded.outcome, cfg, ctx, folded.state);
   return { home: h.points, away: a.points, forOutcome: folded.outcome };
 }

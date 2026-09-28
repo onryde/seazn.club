@@ -81,10 +81,10 @@ export const r4Withdrawal: Scenario = {
         assertions: [foldParity(rec), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
       };
     }
-    const mine = observed.stages[0]!.fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
+    const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
     // Canary: judge the cascade against the OPPOSITE policy.
     const judged = ctx.spec.canary ? (w.policy === "walkover" ? "expunge" : "walkover") : w.policy;
-    const later = observed.stages[0]!.fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
+    const later = observed.stages[0].fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
     return {
       observed,
       events: rec.events,

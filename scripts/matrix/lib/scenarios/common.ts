@@ -236,9 +236,9 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
   const seatedHome = f.home === winner;
   if (!seatedHome && f.away !== winner) return null;
   const m = sportModule(sport);
-  const state = m.init(cfg as never, lineupsFor(seatedHome ? winner : BYE_PHANTOM, seatedHome ? BYE_PHANTOM : winner));
+  const state: unknown = m.init(cfg, lineupsFor(seatedHome ? winner : BYE_PHANTOM, seatedHome ? BYE_PHANTOM : winner));
   const award = { kind: "award", winner, ...(f.outcome.method !== undefined ? { method: f.outcome.method } : {}) } as MatchOutcome;
-  const pair = m.standingsDelta(award, cfg as never, stageCtx(stageKind, { pool_id: f.poolId, round_no: f.roundNo }), state as never);
+  const pair = m.standingsDelta(award, cfg, stageCtx(stageKind, { pool_id: f.poolId, round_no: f.roundNo }), state);
   const won = pair.find((d) => d.entrantId === winner);
   if (won === undefined) return null;
   return { home: seatedHome ? won.points : 0, away: seatedHome ? 0 : won.points, forOutcome: f.outcome };
