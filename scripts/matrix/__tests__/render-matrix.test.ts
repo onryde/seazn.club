@@ -3,7 +3,10 @@ import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { SEVERITY, renderMatrix, worstState } from "../lib/render-matrix.ts";
 import { CASE_STATES, GLYPH, type CaseResult, type RunResults } from "../lib/results.ts";
 
-const run = (cases: CaseResult[]): RunResults => ({ schemaVersion: 2, runId: "r1", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", cases });
+// The catalogue as a run snapshots it (run.ts): the tests below that expect the
+// full 21 × 11 grid read it from here, the way a real results.json carries it.
+const GRID = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
+const run = (cases: CaseResult[], grid: RunResults["grid"] = GRID): RunResults => ({ schemaVersion: 2, runId: "r1", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", grid, cases });
 const kase = (p: Partial<CaseResult>): CaseResult => ({
   caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
   state: "works", reason: "", checks: [], counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 5, notes: [], ...p,
@@ -112,5 +115,26 @@ describe("renderMatrix — table safety", () => {
   it("a case off the catalogue grid is refused, never silently dropped from the grid", () => {
     expect(() => renderMatrix(run([kase({ caseId: "leauge|generic", row: "leauge" })]))).toThrow(/leauge/);
     expect(() => renderMatrix(run([kase({ caseId: "league|curling", sport: "curling" })]))).toThrow(/curling/);
+  });
+});
+
+describe("renderMatrix — the grid is the run's own (T11 review M4)", () => {
+  const small = { rows: ["knockout", "league"], sports: ["zeta", "generic"] };
+  it("rows and columns follow results.grid in its own order, not the live catalogue", () => {
+    const md = renderMatrix(run([kase({})], small));
+    expect(cells(lineStarting(md, "| row |")!)).toEqual(["row", "zeta", "generic"]);
+    const tableRows = md.split("\n").filter((l) => /^\| (knockout|league) \|/.test(l)).map((l) => cells(l));
+    expect(tableRows).toEqual([["knockout", "░", "░"], ["league", "░", "✅"]]);
+    // Nothing of the live catalogue leaks in: none of its other rows or sports.
+    expect(md).not.toContain("| swiss |");
+    expect(lineStarting(md, "| row |")).not.toContain("badminton");
+  });
+  it("a case on the live catalogue but off the run's grid is refused — the check reads the stored grid", () => {
+    expect(() => renderMatrix(run([kase({ caseId: "league|badminton", sport: "badminton" })], small))).toThrow(/league\|badminton .*not on the catalogue grid/);
+    expect(() => renderMatrix(run([kase({ caseId: "swiss|generic", row: "swiss" })], small))).toThrow(/swiss\|generic/);
+  });
+  it("a sport the live catalogue has never heard of renders when the run's grid has it", () => {
+    const md = renderMatrix(run([kase({ caseId: "league|zeta", sport: "zeta", state: "red", reason: "x" })], small));
+    expect(cells(lineStarting(md, "| league |")!)).toEqual(["league", "❌", "░"]);
   });
 });

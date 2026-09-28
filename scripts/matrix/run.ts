@@ -36,7 +36,7 @@ import { parseArgs } from "node:util";
 import { newSession, raw, signIn, type Session } from "../bench/lib/http.ts";
 import { createRealPlanSql, provisionPlan } from "../bench/lib/plan.ts";
 import { createRealPreflightProbes, runPreflight } from "../bench/lib/env.ts";
-import { RowBuildDeferred, builderDefaultVariant } from "./lib/catalogue.ts";
+import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant } from "./lib/catalogue.ts";
 import { HttpDriver } from "./lib/driver/http-driver.ts";
 import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
@@ -236,12 +236,15 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
     try { await db.dispose(); } catch (e) { warn(`matrix: db dispose failed — ${errText(e)}`); }
   }
 
-  const results: RunResults = { schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), cases };
+  // The grid is snapshotted into the results (T11 review M4), so MATRIX.md
+  // renders from results.json alone however the catalogue moves later.
+  const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
+  const results: RunResults = { schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, cases };
   const resultsPath = writeResults(dir, results);
   say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);
   // The summary is printed before MATRIX.md is rendered, so a render failure
-  // (renderMatrix refuses a case off the catalogue grid) cannot lose it.
+  // (renderMatrix refuses a case off the run's grid) cannot lose it.
   printSummary(summariseRun(cases, refusals));
   try {
     writeFileSync(join(dir, "MATRIX.md"), renderMatrix(results));

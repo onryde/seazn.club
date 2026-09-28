@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const CLI = join(REPO, "scripts/matrix/render.ts");
 const cli = (...args: string[]) => spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", CLI, ...args], { cwd: REPO, encoding: "utf8", timeout: 25_000 });
-const results = (cases: unknown[]) => ({ schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "s", finishedAt: "f", cases });
+const results = (cases: unknown[], grid = { rows: ["league", "knockout"], sports: ["generic", "badminton"] }) => ({ schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "s", finishedAt: "f", grid, cases });
 const works = { caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, state: "works", reason: "1 checks, 2 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 2, reason: "", evidence: [] }], counts: { calls: 3, fixtures: 1, events: 4 }, durationMs: 7, notes: [] };
 
 describe("render CLI", () => {
@@ -41,6 +41,17 @@ describe("render CLI", () => {
     expect(md).toContain("| league |");
     expect(md).toContain("✅");
     expect(md).not.toContain("No cases run");
+  });
+  it("M4: the grid comes from results.json — a row and sport the live catalogue has never heard of render, in the file's order", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    const c = { ...works, caseId: "ladder|curling|score|LIFECYCLE", row: "ladder", sport: "curling" };
+    writeFileSync(join(dir, "results.json"), JSON.stringify(results([c], { rows: ["ladder"], sports: ["curling", "generic"] })));
+    const r = cli(join(dir, "results.json"));
+    expect(r.status, r.stderr).toBe(0);
+    const md = readFileSync(join(dir, "MATRIX.md"), "utf8");
+    expect(md).toContain("| row | curling | generic |");
+    expect(md).toContain("| ladder | ✅ | ░ |");
+    expect(md).not.toContain("| league |");
   });
   it("--out writes where it is told, and nowhere else", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));

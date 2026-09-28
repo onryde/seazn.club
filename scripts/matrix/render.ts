@@ -5,7 +5,7 @@
 //      results (nothing written);
 //   2  usage or input error, with a message on stderr and nothing written: no
 //      file, a second file, an unknown flag, a missing or unreadable file, bad
-//      JSON, results the schema refuses, or a case off the catalogue grid.
+//      JSON, results the schema refuses, or a case off the run's own grid.
 // An uncaught throw would also exit 1, so every input failure is caught here
 // rather than left to read as "zero cases".
 import { readFileSync, writeFileSync } from "node:fs";

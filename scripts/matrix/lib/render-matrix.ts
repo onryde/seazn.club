@@ -2,10 +2,15 @@
 // no durations. A cell shows the worst state among its cases; a cell with no
 // case is ░. An empty run is a banner, never an empty table (R13).
 //
-// A case whose row or sport is not on the catalogue grid is REFUSED rather
-// than left out: it would still count in the totals while its cell read ░
-// "not run" — a suppressed result, not a clean one.
-import { ROW_KEYS, SPORT_KEYS, cellId, type RowKey } from "./catalogue.ts";
+// The rows and columns are the run's own `grid` — the catalogue as it was when
+// the run was made — never the live catalogue (T11 review M4): a catalogue
+// edit in a later wave cannot change how committed evidence renders, so the
+// committed-matrix drift test reds only when the evidence or the renderer
+// changes. This module must not import the catalogue.
+//
+// A case whose row or sport is not on that grid is REFUSED rather than left
+// out: it would still count in the totals while its cell read ░ "not run" —
+// a suppressed result, not a clean one.
 import { CASE_STATES, GLYPH, type CaseState, type RunResults } from "./results.ts";
 
 export const SEVERITY: readonly CaseState[] = ["red", "later", "needs_ruling", "no_path", "not_run", "refused", "works"];
@@ -30,19 +35,21 @@ export function renderMatrix(results: RunResults): string {
   if (results.cases.length === 0) {
     return [...HEAD(results), `> **No cases run.** \`results.json\` for run \`${results.runId}\` holds zero cases. An empty run is a failure (R13), not a clean matrix.`, ""].join("\n");
   }
+  const { rows, sports } = results.grid;
+  const cellOf = (row: string, sport: string) => `${row}|${sport}`;
   const byCell = new Map<string, CaseState[]>();
   for (const c of results.cases) {
-    if (!(ROW_KEYS as readonly string[]).includes(c.row) || !SPORT_KEYS.includes(c.sport)) {
+    if (!rows.includes(c.row) || !sports.includes(c.sport)) {
       throw new Error(`renderMatrix: case ${c.caseId} (row '${c.row}', sport '${c.sport}') is not on the catalogue grid`);
     }
-    const k = cellId(c.row as RowKey, c.sport);
+    const k = cellOf(c.row, c.sport);
     byCell.set(k, [...(byCell.get(k) ?? []), c.state]);
   }
   const legend = CASE_STATES.map((s) => `${GLYPH[s]} ${s}`).join(" · ");
   const table = [
-    `| row | ${SPORT_KEYS.join(" | ")} |`,
-    `|---|${SPORT_KEYS.map(() => "---").join("|")}|`,
-    ...ROW_KEYS.map((row) => `| ${row} | ${SPORT_KEYS.map((s) => GLYPH[worstState(byCell.get(cellId(row, s)) ?? []) ?? "not_run"]).join(" | ")} |`),
+    `| row | ${sports.join(" | ")} |`,
+    `|---|${sports.map(() => "---").join("|")}|`,
+    ...rows.map((row) => `| ${row} | ${sports.map((s) => GLYPH[worstState(byCell.get(cellOf(row, s)) ?? []) ?? "not_run"]).join(" | ")} |`),
   ];
   const totals = CASE_STATES.map((s) => `| ${GLYPH[s]} ${s} | ${results.cases.filter((c) => c.state === s).length} |`);
   const cases = [...results.cases]

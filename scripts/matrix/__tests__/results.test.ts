@@ -74,9 +74,17 @@ describe("glyphs and schema", () => {
     expect(GLYPH.works).toBe("✅");
     expect(GLYPH.not_run).toBe("░");
   });
-  it("parseResults refuses a wrong schemaVersion and an unknown state", () => {
-    const ok: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
+  it("parseResults refuses a wrong schemaVersion, an unknown state, and a missing or malformed grid", () => {
+    const ok: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
     expect(parseResults(ok)).toEqual(ok);
+    // T11 review M4: the grid MATRIX.md renders from is part of the file, and a malformed one is refused.
+    expect(() => parseResults((({ grid: _g, ...rest }) => rest)(ok))).toThrow();
+    expect(() => parseResults({ ...ok, grid: { rows: [], sports: ["generic"] } })).toThrow();
+    expect(() => parseResults({ ...ok, grid: { rows: ["league"], sports: [] } })).toThrow();
+    expect(() => parseResults({ ...ok, grid: { rows: ["league", "league"], sports: ["generic"] } })).toThrow(/grid rows repeat a key/);
+    expect(() => parseResults({ ...ok, grid: { rows: ["league"], sports: ["generic", "generic"] } })).toThrow(/grid sports repeat a key/);
+    expect(() => parseResults({ ...ok, grid: { rows: [""], sports: ["generic"] } })).toThrow();
+    expect(() => parseResults({ ...ok, grid: { rows: ["league"], sports: ["generic"], extra: 1 } })).toThrow();
     // v1 had no case notes (m-5): its files are refused, not read with notes missing.
     expect(() => parseResults({ ...ok, schemaVersion: 1 })).toThrow();
     expect(() => parseResults({ ...ok, schemaVersion: 3 })).toThrow();
@@ -93,7 +101,7 @@ describe("glyphs and schema", () => {
     counts: { calls: 12, fixtures: 6, events: 30 }, durationMs: 1234.5,
     notes: ["stage league status after start: active", "complete refused 409 STAGE_INCOMPLETE"],
   };
-  const withCase = (c: unknown) => ({ schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [c] });
+  const withCase = (c: unknown) => ({ schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [c] });
 
   it("a fully populated case round-trips unchanged (the schema carries every interface field)", () => {
     expect(parseResults(withCase(FULL))).toEqual(withCase(FULL));
@@ -135,7 +143,7 @@ describe("redaction (R14a)", () => {
   });
   it("writeResults refuses to write a secret and writes a clean file", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
-    const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
+    const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
     const bad = { ...base, runId: "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl" };
     expect(() => writeResults(dir, bad)).toThrow(SecretInResults);
     const path = writeResults(dir, base);
@@ -222,7 +230,7 @@ const EVIDENCE: readonly [string, string][] = [
   ["single-quoted authorization word", "authorization: 'none'"],
 ];
 
-const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
+const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
 const withEvidence = (evidence: string[]): RunResults => ({
   ...base,
   cases: [{

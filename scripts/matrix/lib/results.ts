@@ -47,13 +47,23 @@ export interface CaseResult {
   notes: string[];
 }
 
+/** The catalogue grid AS IT WAS when the run was made (T11 review M4, final
+ *  review m-7): MATRIX.md's rows and columns come from here, never from the
+ *  live catalogue, so a later catalogue edit cannot change how committed
+ *  evidence renders. */
+export interface Grid {
+  rows: string[];
+  sports: string[];
+}
+
 export interface RunResults {
-  /** 2: cases carry `notes` (final review m-5). */
+  /** 2: cases carry `notes` (final review m-5) and the run carries its `grid`. */
   schemaVersion: 2;
   runId: string;
   harnessCommit: string;
   startedAt: string;
   finishedAt: string;
+  grid: Grid;
   cases: CaseResult[];
 }
 
@@ -81,12 +91,16 @@ const CaseSchema = z.strictObject({
   notes: z.array(z.string()),
 });
 
+/** Non-empty, and no key twice: a repeated key would render a row or column twice. */
+const gridKeys = (what: string) => z.array(z.string().min(1)).min(1).refine((k) => new Set(k).size === k.length, `grid ${what} repeat a key`);
+
 export const RunResultsSchema = z.strictObject({
   schemaVersion: z.literal(2),
   runId: z.string().min(1),
   harnessCommit: z.string().min(1),
   startedAt: z.string().min(1),
   finishedAt: z.string().min(1),
+  grid: z.strictObject({ rows: gridKeys("rows"), sports: gridKeys("sports") }),
   cases: z.array(CaseSchema),
 });
 
@@ -126,7 +140,7 @@ export class SecretInResults extends Error {
  *  the \b in front of a JWT / `sk_` / `dl_` / `postgres://`, so a secret at the
  *  start of a line passed a body scan and was written (review I1). Keys need no
  *  scan: the strict schema fixes every one of them. */
-function stringsIn(value: unknown, out: string[] = []): string[] {
+export function stringsIn(value: unknown, out: string[] = []): string[] {
   if (typeof value === "string") out.push(value);
   // Arrays included: Object.values of an array is its elements.
   else if (value !== null && typeof value === "object") for (const v of Object.values(value)) stringsIn(v, out);

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RowBuildDeferred } from "../lib/catalogue.ts";
+import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import type { CaseResult, CheckResult } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
@@ -159,6 +159,14 @@ describe("runSlice — a run", () => {
     expect(io.out()).toMatch(/^\[1\/1\] league\|generic\|score\|LIFECYCLE → works \d+ checks, \d+ items$/m);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
+  });
+  it("M4: results.json snapshots the catalogue grid as it is at run time, and MATRIX.md is its render", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t1g", "--report-dir", dir])).toBe(0);
+    const results = JSON.parse(readFileSync(join(dir, "t1g", "results.json"), "utf8"));
+    expect(results.grid).toEqual({ rows: [...ROW_KEYS], sports: [...SPORT_KEYS] });
+    expect(readFileSync(join(dir, "t1g", "MATRIX.md"), "utf8")).toContain(`| row | ${SPORT_KEYS.join(" | ")} |`);
   });
   it.each([
     ["ScenarioUnsupported", () => new ScenarioUnsupported("W1b", "team rosters"), "W1b: team rosters"],
