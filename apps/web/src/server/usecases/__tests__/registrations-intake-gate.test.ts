@@ -96,13 +96,24 @@ const asOwner = (orgId: string, userId: string): AuthCtx => ({
   keyId: null,
 });
 
+/** `YYYY-MM-DD`, `days` from today (UTC). */
+const isoDayFromToday = (days: number): string =>
+  new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
 async function rig(owner: AuthCtx) {
+  // A competition that always lies ahead. This used to be a fixed window,
+  // '2026-09-15'..'2026-09-20', written 2026-07-19 when that date was still
+  // in the future, and it went stale. An Event Pass stops applying
+  // PASS_END_GRACE_DAYS after ends_on (lib/entitlements.ts `passLockReason`,
+  // matched by the SQL resolver's pass arm). So from 2026-09-28 UTC, the pass
+  // that `withPass` buys was locked on arrival, and the "guard the guard"
+  // below read community's fee instead of the pass's.
   const competition = await createCompetition(owner, {
     name: "Intake Cup " + randomUUID().slice(0, 6),
     visibility: "public",
     branding: {},
-    starts_on: "2026-09-15",
-    ends_on: "2026-09-20",
+    starts_on: isoDayFromToday(30),
+    ends_on: isoDayFromToday(35),
   });
   const division = await createDivision(owner, competition.id, {
     name: "Open",
