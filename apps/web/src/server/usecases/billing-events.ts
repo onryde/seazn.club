@@ -202,7 +202,22 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // unique index on stripe_item_id). Handled before the generic org_id gate
   // below because it keys on its own target_org_id metadata, not org_id.
   if (session.metadata?.kind === "size_pack") {
-    if (session.payment_status === "paid") await grantSizePackAddon(session);
+    // SETTLED, not merely "paid". `buildSizePackCheckoutParams` sets
+    // `allow_promotion_codes: true` (lib/size-packs.ts), so a code covering
+    // the whole price is reachable, and Stripe completes that session as
+    // `no_payment_required` — never `paid`. Gating on `paid` alone let the
+    // buyer redeem a valid code and granted nothing: no org_addons row, no
+    // log, no alert. Written as two comparisons, not a shared `isSettled`
+    // helper: the same gate is duplicated in the credit_pack limb below and
+    // in registrations.ts, and a concurrent branch is editing one of these
+    // limbs — folding them onto one predicate would turn that merge into
+    // "one side refactored, the other edited". The duplication is a choice.
+    if (
+      session.payment_status === "paid" ||
+      session.payment_status === "no_payment_required"
+    ) {
+      await grantSizePackAddon(session);
+    }
     return;
   }
 
@@ -215,7 +230,16 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // scoped, so there is nowhere in-app to reconcile from); this webhook is the
   // only writer, made safe to replay by recordPackPurchase's idempotency key.
   if (session.metadata?.kind === "credit_pack") {
-    if (session.payment_status === "paid") {
+    // SETTLED, not merely "paid" — same reason as the size_pack limb above:
+    // `buildCreditPackCheckoutParams` sets `allow_promotion_codes: true`
+    // (lib/credit-packs.ts), and a 100% code completes the session as
+    // `no_payment_required`, which is settled rather than unpaid. Deliberately
+    // duplicated inline rather than lifted into a shared predicate, for the
+    // merge reason spelled out on the size_pack limb.
+    if (
+      session.payment_status === "paid" ||
+      session.payment_status === "no_payment_required"
+    ) {
       const packKey = session.metadata.pack_key;
       // The grant amount is SNAPSHOTTED into metadata.credits at checkout
       // creation (review fix, P3 T1) — the webhook can fire long after this
@@ -419,7 +443,21 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   const passKey = passKeyForSession(session);
   if (passKey) {
     const competitionId = session.metadata?.competition_id;
-    if (competitionId && session.payment_status === "paid") {
+    // SETTLED, not merely "paid" — third instance of the same widening, after
+    // the size_pack and credit_pack limbs above. `buildPassCheckoutParams` sets
+    // `allow_promotion_codes: true` (lib/billing.ts), so a code covering the
+    // whole price is reachable and Stripe settles that session as
+    // `no_payment_required`. Nothing downstream catches it: the rung guard
+    // below compares PRICE IDS, and a discount does not move the price id, so
+    // it returns true and the buyer is left with no pass, no log and no alert.
+    // Two comparisons, inline, deliberately duplicated rather than folded into
+    // a shared predicate with the limbs above or with the twin of this gate in
+    // `reconcilePassCheckout` — see the size_pack limb for why.
+    if (
+      competitionId &&
+      (session.payment_status === "paid" ||
+        session.payment_status === "no_payment_required")
+    ) {
       // Same mint guard as reconcile-on-return (v17 gap #326) — the check lives
       // in ONE place (lib/billing.ts) precisely so the two paths cannot drift on
       // what a session means, exactly like passKeyForSession above it. ACK the

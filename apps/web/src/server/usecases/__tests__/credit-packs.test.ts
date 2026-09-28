@@ -149,6 +149,30 @@ describe.skipIf(!HAS_DB)("webhook → credit pack purchase", () => {
     expect(await balance(walletId)).toBe(0);
   });
 
+  it("a 100%-promotion-code session ('no_payment_required') still grants the pack", async () => {
+    // `buildCreditPackCheckoutParams` sets `allow_promotion_codes: true`
+    // (lib/credit-packs.ts), so a coupon that covers the whole price is
+    // reachable in production. Such a session completes with
+    // `payment_status: "no_payment_required"` — never `"paid"` — and it is
+    // SETTLED, not unpaid. Gating the grant on `"paid"` alone redeemed the
+    // buyer's code and granted nothing: no ledger row, no log, no alert.
+    const orgId = await seedOrg();
+    const walletId = await walletIdFor(orgId);
+    await processStripeEvent(
+      packCheckoutEvent({
+        orgId,
+        packKey: "credits_25",
+        paymentStatus: "no_payment_required",
+        // A fully-discounted Checkout Session still creates a PaymentIntent,
+        // so the idempotency anchor is unchanged from the paid path.
+        paymentIntent: `pi_${uniq()}`,
+      }),
+    );
+    // 105, not 0 and not some other pack's amount: the snapshot is still read.
+    expect(await packBalance(walletId)).toBe(105);
+    expect(await balance(walletId)).toBe(105);
+  });
+
   it("an unknown pack_key with NO credits snapshot grants nothing rather than throwing (ACKs the webhook) — surfaced, not silent", async () => {
     const orgId = await seedOrg();
     const walletId = await walletIdFor(orgId);
