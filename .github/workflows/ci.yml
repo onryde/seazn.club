@@ -211,6 +211,7 @@ jobs:
       - name: Matrix harness unit tests (DB-free)
         run: |
           set -euo pipefail
+          rm -f vitest-results-matrix.json
           ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-matrix.json --testTimeout=30000 scripts/matrix
           node -e '
             const fs = require("fs");

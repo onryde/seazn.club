@@ -299,19 +299,16 @@ a peer session as the other.
     so the matrix makes no foreign write, but the bench on its own is exposed.
   - **The wave that adds the weekly schedule** must delete or invert
     `ci-wiring.test.ts`'s "no scheduled matrix workflow" test.
-  - **From the final review fix batch (harness hygiene, W1b or the first
-    wave allowed to edit `.github/`):**
+  - **From the final review fix batch (harness hygiene, W1b):**
     - The fake's event refusal answers 409 for every engine code
       (`fake-driver.ts` postStream). The product maps them via
       `ENGINE_HTTP` (`api-v1/http.ts`): 422 for INVALID_EVENT, WRONG_PHASE
       and ALREADY_DECIDED. No harness logic keys on that status today; it is
       the class of the STAGE_NOT_READY fix (Task 8 m-7).
     - `run-cli.test.ts`'s zero-cases test still empties the exported
-      `SLICE_ROWS` in place (restored and asserted). A valid filter always
-      plans cases, so a planner seam is the clean fix.
-    - Task 10 review Minor 3 is not done: an `rm -f vitest-results-matrix.json`
-      before vitest in the `ci.yml` matrix step, plus its wiring case. It is
-      under `.github/`, outside the batch's scope.
+      `SLICE_ROWS` in place. It already restores it in a `finally` and asserts
+      the restore; a valid filter always plans cases, so avoiding the in-place
+      edit needs a planner seam.
 
 ## False premises found
 

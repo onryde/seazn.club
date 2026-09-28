@@ -79,7 +79,7 @@ function report(root: string, o: { total: number; passed: number; failedSuites?:
 // given report to whatever `--outputFile=` the step passed it, then exits
 // with the given code. Plain `bash`, not `bash -e`: the block's own `set -e`
 // must carry the fail-fast, not the runner's default flag.
-function runStep(o: { json: ReturnType<typeof report> | ((root: string) => ReturnType<typeof report>) | null; exit: number }) {
+function runStep(o: { json: ReturnType<typeof report> | ((root: string) => ReturnType<typeof report>) | null; exit: number; stale?: (root: string) => ReturnType<typeof report> }) {
   const { script } = matrixStep(ci);
   if (script === null) throw new Error("the matrix step has no `run: |` block");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-ci-")));
@@ -103,6 +103,8 @@ function runStep(o: { json: ReturnType<typeof report> | ((root: string) => Retur
       fakeJson = join(root, "fake-report.json");
       writeFileSync(fakeJson, JSON.stringify(typeof o.json === "function" ? o.json(root) : o.json));
     }
+    // A report left over from an earlier run, sitting where the step writes its own.
+    if (o.stale !== undefined) writeFileSync(join(root, "vitest-results-matrix.json"), JSON.stringify(o.stale(root)));
     writeFileSync(join(root, "step.sh"), script);
     const r = spawnSync("bash", ["step.sh"], {
       cwd: root,
@@ -215,6 +217,21 @@ describe("matrix CI wiring", () => {
       const r = runStep({ json: null, exit: 0 });
       expect(r.status).not.toBe(0);
       expect(r.stderr).toMatch(/vitest-results-matrix\.json/);
+    });
+    it("a STALE green report is never judged: vitest writes nothing and exits 0 ⇒ red (Task 10 review Minor 3)", () => {
+      // The step removes any old report before vitest runs, so a run that
+      // writes none cannot be read as the earlier run's pass.
+      const r = runStep({ json: null, exit: 0, stale: (root) => report(root, { total: 9, passed: 9 }) });
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).not.toContain("9/9");
+      expect(r.stderr).toMatch(/vitest-results-matrix\.json/);
+    });
+    it("the stale-report guard is the step's own `rm -f`, before vitest", () => {
+      const lines = (matrixStep(ci).script ?? "").split("\n");
+      const rm = lines.findIndex((l) => /^rm -f vitest-results-matrix\.json$/.test(l.trim()));
+      const vitest = lines.findIndex((l) => l.includes("node_modules/.bin/vitest run"));
+      expect(rm).toBeGreaterThan(-1);
+      expect(vitest).toBeGreaterThan(rm);
     });
   });
 
