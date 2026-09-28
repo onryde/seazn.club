@@ -659,6 +659,41 @@ describe("email builders compose from the html templates", () => {
     expect(alert("event_pass").text).toContain("the Event Pass has been revoked");
     expect(alert("event_pass").text).not.toContain("Event Pass L");
   });
+
+  // Streaming R1 lane-B tail (OWNER RULING 2026-09-28): a disputed MATCH-CREDIT
+  // pack charge is a third product on this alert. Its outcome is neither a
+  // downgrade nor a pass revoke, and the pass sentence ("the competition
+  // returns to the plan allowance") is false in both halves for it — no
+  // competition is involved, and the claw-back is capped at the balance.
+  it("staff dispute alert names match credits and describes the CAPPED claw-back", () => {
+    const alert = (kind: "subscription" | "stream_credits" | "event_pass", status: string) =>
+      staffDisputeAlertTemplate(
+        {
+          kind,
+          orgName: "Riverside Racquets",
+          phase: "closed",
+          status,
+          amountCents: 2500,
+          currency: "gbp",
+          disputeId: "dp_test_stream",
+        },
+        emailsEn as Dict,
+      );
+
+    // A label of its own, distinct from the other two products' — the whole
+    // reason `kind` is a union and not a boolean.
+    const lost = alert("stream_credits", "lost");
+    expect(lost.subject).toMatch(/match credits/i);
+    expect(new Set([lost.subject, alert("subscription", "lost").subject, alert("event_pass", "lost").subject]).size).toBe(3);
+
+    // The outcome line is the sentence a staffer acts on.
+    expect(lost.text).toMatch(/capped at the balance left/i);
+    expect(lost.text).not.toContain("auto-downgraded");
+    expect(lost.text).not.toMatch(/returns to the plan allowance/);
+    // A WON dispute takes neither arm — the credits stay where they are.
+    expect(alert("stream_credits", "won").text).toMatch(/dispute flag has been cleared/i);
+    expect(alert("stream_credits", "won").text).not.toMatch(/capped at the balance left/i);
+  });
 });
 
 // v17 #294 — the BUYER-facing counterpart of the staff dispute alert above.

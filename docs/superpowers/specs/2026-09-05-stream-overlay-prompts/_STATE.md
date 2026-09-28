@@ -508,6 +508,56 @@ smoke, which has not run since `a87929516`. Playwright was not run by the review
 guard (key lifetime, the 409 reset, double-submit, the seven widths, the linked-refund proof) is on the
 record rather than witnessed by this pass.
 
+**OWNER RULING 2026-09-28 — a refunded card payment DOES claw back match credits, capped at the balance.**
+Asked as the last open lane-B money question ("if we refund then deduct the credit as well?"); the owner took
+the recommendation whole ("Ok, add the new scope then?"). The rule, and the reasoning that is NOT derivable
+from the code:
+
+- On a **full** refund of a pack charge, revoke `min(creditsPurchased, currentBalance)` — never the full pack
+  unconditionally. A SPENT match credit means the stream already broadcast and Cloudflare already billed us
+  for those minutes; we cannot un-deliver it, and driving the balance negative would block the org's NEXT
+  stream, which they may have paid for separately. V410's non-negative CHECK forbids it anyway, so an uncapped
+  revoke would throw inside the webhook rather than record anything.
+- When the claw-back is SHORT of the pack (i.e. they spent some), **alert staff**. "Bought a pack, streamed,
+  then asked for the money back" is the refund-abuse signature. The webhook records and alerts; a human
+  decides whether to chase. The webhook never judges.
+- A **partial** refund claws back NOTHING and alerts only. The fair proportion is a judgement call, and the AI
+  pack path already gates on `charge.refunded` (full refunds only) — same gate here, same reason.
+- A **lost dispute** claws back on the same terms and **shares its idempotency key with the refund path**, so a
+  dispute that follows a refund cannot double-claw. This is the `pass_refund:${intent}` pattern, not a new one.
+- A refunded charge with no `purchase` ledger row logs and alerts, writes nothing — the ungranted-pack branch
+  of `handlePackChargeRefunded`, mirrored.
+- The ledger row's reason is **`revoke`**, never `refund`. In `org_stream_credits`, `refund` means ADD credits
+  BACK (the staff remedy for a stream that failed); a card claw-back moves the other way. V410 is merged and
+  its `reason in (…)` CHECK is not amendable, so `revoke` is both the correct direction and the only available
+  value. The note names the charge.
+- **Stripe does NOT copy `payment_intent_data.metadata` onto the Charge**, so `charge.metadata` is `{}` for a
+  Checkout-created pack charge. The gate MUST match `charge.payment_intent` against the stored purchase row.
+  Reading `charge.metadata` as the gate returns early on every real refund — it bit the AI pack path once and
+  `handlePackChargeRefunded`'s own comment records it.
+
+Scope is lane B's tail, not lane C's: the money half belongs to this lane. Built now rather than parked
+because a refund path written AFTER real money exists is a refund path written under pressure — today nothing
+can buy a pack, so the arm cannot fire and the cost of getting it wrong is zero.
+
+**LANE C OPENED 2026-09-28, session `rl-lanec`** (owner started it; lanes A and B are both on `main`, which is
+`e0f2834b7`). Tasks 9 → 12, sequential. What lane B handed it, by message rather than by file, because
+`.superpowers/` is gitignored: `lane-b-carries.md`'s four inert Task 10 call sites, M7 and M9, this block's
+four owner rulings, and the plan path note at `:6330` (Tasks 9–12's step commands all name
+`.claude/worktrees/relay/`, which no longer exists).
+
+**A false premise found the same day: the plan's `V419__stream_target_one_active.sql` for Task 10 is already
+taken.** `V419__discovery_excludes_drafts.sql` is in the tree; the all-refs scan additionally still shows the
+live **V417 collision** (`V417__division_results_skip_rest_byes.sql` beside the tree's
+`V417__device_link_sealed_secret.sql`). Task 10's forward delta is V420 at the earliest and must be re-derived
+from the HIGHER of the two tails on the day it is written — the plan's own Step 0 warns about exactly this and
+has itself gone stale by one.
+
+Concurrency with this lane: the claw-back PR ADDS an export to `stream-credits.ts` and edits `billing-events.ts`
+and `lib/email.ts`. Task 9's file set and Task 10's creations are disjoint from all three, and Task 10 only
+IMPORTS from `stream-credits.ts` — an added export beside an import does not conflict. An actual EDIT to
+`stream-credits.ts` from lane C has to be sequenced.
+
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`

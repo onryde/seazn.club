@@ -31,7 +31,7 @@ import {
 // table and its own writer. Kept adjacent deliberately so the next reader sees
 // that the two are distinct rather than duplicated.
 import { streamPack } from "@/lib/stream-credit-packs";
-import { recordPurchase } from "@/server/usecases/stream-credits";
+import { findStreamPurchase, recordPurchase, recordStreamPackRefund } from "@/server/usecases/stream-credits";
 import { HttpError } from "@/lib/errors";
 import { isPassKey, type PassKey } from "@/lib/currency";
 import { SEAT_ADDON, isSeatAddonItem } from "@/lib/seat-addons";
@@ -60,6 +60,7 @@ import {
   sendStaffDisputeAlertEmail,
   sendStuckEventsAlertEmail,
   sendCreditPackGrantFailedAlertEmail,
+  sendStreamCreditClawbackAlertEmail,
   sendStreamCreditGrantFailedAlertEmail,
   sendSizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
@@ -2167,6 +2168,128 @@ async function handlePackChargeRefunded(charge: Stripe.Charge): Promise<void> {
   }
 }
 
+/** The three shapes `sendStreamCreditClawbackAlertEmail` is sent for. Named
+ *  constants rather than inline strings so the alert's reason is one authority
+ *  and a test can assert the one it expects without retyping the sentence. */
+const STREAM_CLAWBACK_REASON = {
+  short: "full refund clawed back fewer credits than the pack granted — the rest were already spent on live streams",
+  partial: "partial refund — no automatic claw-back",
+  ungranted: "refunded match-credit charge has no purchase ledger row to claw back",
+} as const;
+
+/** MATCH-credit refund claw-back (streaming R1 lane-B tail, OWNER RULING
+ *  2026-09-28 — the ruling block in the programme `_STATE.md`).
+ *
+ *  Runs LAST on `charge.refunded`, after the AI credit-pack handler, and no-ops
+ *  on every charge that is not a match-credit pack — this arm fires on EVERY
+ *  refunded charge in the system.
+ *
+ *  Three outcomes, all of them the ruling's:
+ *   * FULL refund (`charge.refunded === true`, Stripe's own flag) → claw back
+ *     `min(purchased, balance)`. A claw-back SHORT of the pack means they
+ *     streamed before asking for the money back — the refund-abuse signature —
+ *     so it is written AND alerted; a clean full reversal is silent because
+ *     nothing was spent and no human is owed a look.
+ *   * PARTIAL refund (`refunded === false` with `amount_refunded > 0`) → claw
+ *     back NOTHING and alert. The fair proportion is a judgement call, and the
+ *     AI pack path gates on the same flag for the same reason.
+ *   * A refunded charge with no purchase row → log + alert, write nothing.
+ *
+ *  The gate is the PAYMENT INTENT (`findStreamPurchase`), never
+ *  `charge.metadata` — Stripe does not copy `payment_intent_data.metadata` onto
+ *  the Charge, so it is `{}` here. `recordPurchase` stores the intent, so the
+ *  matched paths need no Stripe round trip; only the ungranted branch does one,
+ *  guarded on STRIPE_SECRET_KEY and outside any tx, exactly as the AI pack
+ *  handler's does. */
+async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<void> {
+  const intent =
+    typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
+  if (!intent) return; // no intent to match a purchase row against
+
+  // PARTIAL: money moved back but Stripe's full-refund flag is still false.
+  // Written as its own limb ahead of the claw-back so the full-vs-partial gate
+  // is one comparison that can be mutated on its own.
+  if (!charge.refunded) {
+    if (charge.amount_refunded <= 0) return; // not a refund at all — a bare charge update.
+    const match = await findStreamPurchase(sql, intent);
+    if (!match) return; // someone else's charge; silent.
+    log.warn(
+      { chargeId: charge.id, intent, orgId: match.orgId, purchased: match.purchased },
+      "billing: match-credit charge partially refunded — no automatic claw-back, staff alerted",
+    );
+    alertStreamClawback({
+      chargeId: charge.id,
+      orgId: match.orgId,
+      purchased: match.purchased,
+      clawedBack: 0,
+      reason: STREAM_CLAWBACK_REASON.partial,
+    });
+    return;
+  }
+
+  const res = await recordStreamPackRefund({ paymentIntentId: intent, via: "refund", reference: charge.id });
+  if (res.matched) {
+    log.info(
+      { chargeId: charge.id, intent, orgId: res.orgId, purchased: res.purchased, clawedBack: res.clawedBack, applied: res.applied },
+      "billing: match-credit pack refunded",
+    );
+    // `clawedBack < purchased`, not `!applied`: a replay reports the EARLIER
+    // claw-back's size, so the verdict is the same on every delivery, and a
+    // fully-spent pack (which writes no row at all, V410's `delta <> 0`) still
+    // alerts — that is precisely the case a human most needs to see.
+    if (res.clawedBack < res.purchased) {
+      alertStreamClawback({
+        chargeId: charge.id,
+        orgId: res.orgId ?? "unknown",
+        purchased: res.purchased,
+        clawedBack: res.clawedBack,
+        reason: STREAM_CLAWBACK_REASON.short,
+      });
+    }
+    return;
+  }
+
+  // matched === false: either a genuine non-stream charge (the common case) or
+  // a match-credit pack that was paid and never granted, then refunded. Only
+  // the PaymentIntent's metadata can tell them apart — `lib/relay-checkout.ts`
+  // stamps `payment_intent_data.metadata.kind = "stream_credits"` — so a
+  // guarded retrieve, keyless envs skip it and a plain refund no-ops silently.
+  if (!process.env.STRIPE_SECRET_KEY) return;
+  let pi: Stripe.PaymentIntent;
+  try {
+    pi = await getStripe().paymentIntents.retrieve(intent);
+  } catch {
+    return; // a retrieve failure must never block the webhook ACK
+  }
+  if (pi.metadata?.kind !== "stream_credits") return; // a genuine non-stream charge.
+
+  log.error(
+    { chargeId: charge.id, intent },
+    "billing: stream_credits charge refunded but no purchase ledger row found — nothing to claw back (was it ever granted?)",
+  );
+  alertStreamClawback({
+    chargeId: charge.id,
+    orgId: pi.metadata?.org_id ?? "unknown",
+    reason: STREAM_CLAWBACK_REASON.ungranted,
+  });
+}
+
+/** STAFF_ALERT_EMAIL guard + fire-and-forget, at the CALL SITE (the builder
+ *  itself reads no env). One helper for the four call sites above so the guard
+ *  cannot be forgotten on one of them; `void … .catch(() => {})` so an alerting
+ *  hiccup can never undo a claw-back or block the ACK. */
+function alertStreamClawback(args: {
+  chargeId: string;
+  orgId: string;
+  purchased?: number;
+  clawedBack?: number;
+  reason: string;
+}): void {
+  const alertTo = process.env.STAFF_ALERT_EMAIL;
+  if (!alertTo) return;
+  void sendStreamCreditClawbackAlertEmail({ to: alertTo, ...args }).catch(() => {});
+}
+
 // ---------------------------------------------------------------------------
 // Platform-charge disputes (Task 7, P1-4, decisions §6.2)
 // ---------------------------------------------------------------------------
@@ -2292,6 +2415,25 @@ async function handlePlatformDispute(
         dispute,
         phase,
       );
+      return true;
+    }
+
+    // Match-credit pack charge? Also matched by payment intent (streaming R1,
+    // OWNER RULING 2026-09-28). This MUST sit ahead of the subscription branch
+    // below: that one matches on the Stripe CUSTOMER and returns false for a
+    // pack charge, so a disputed pack would fall out of the dispatcher entirely
+    // — a `created` would throw and retry forever, a lost `closed` would leave
+    // the credits with a customer who took the money back.
+    const stream = await findStreamPurchase(sql, intent);
+    if (stream) {
+      if (phase === "closed" && dispute.status === "lost") {
+        // The SAME writer, the SAME key (`stream_pack_refund:${intent}`) as the
+        // refund arm — a dispute AFTER a refund cannot double-claw, and the key
+        // is what makes that true: the balance cap cannot, because an org that
+        // has since bought another pack has a non-zero balance again.
+        await recordStreamPackRefund({ paymentIntentId: intent, via: "dispute", reference: dispute.id });
+      }
+      await notifyStaffDispute("stream_credits", stream.orgId, dispute, phase);
       return true;
     }
   }
@@ -2634,6 +2776,10 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
       await handleSponsorChargeRefunded(event.data.object as Stripe.Charge);
       await revokePassForRefundedChargeAndNotify(event.data.object as Stripe.Charge);
       await handlePackChargeRefunded(event.data.object as Stripe.Charge);
+      // Match credits (streaming R1, OWNER RULING 2026-09-28) — a SEPARATE
+      // ledger and a separate currency from the AI credit pack above, so a
+      // separate handler; each no-ops on the other's charges.
+      await handleStreamPackChargeRefunded(event.data.object as Stripe.Charge);
       break;
     case "payment_intent.succeeded":
       // Sponsor order paid (v10) — activates the sponsor row, replay-safe.

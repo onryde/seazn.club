@@ -31,8 +31,12 @@ vi.mock("@/lib/email", async (importActual) => {
 });
 
 // The guarded PaymentIntent retrieve the matched===false branch uses to tell an
-// ungranted pack from a non-pack charge. Only that branch calls it; the common
-// matched path (cases 1/2/4) never does, so `retrieveIntent` stays unused there.
+// ungranted pack from a non-pack charge. THIS handler's matched path never
+// calls it — but since streaming R1 the `charge.refunded` arm also runs
+// `handleStreamPackChargeRefunded`, whose own ungranted branch retrieves for any
+// charge that is not a match-credit pack, i.e. for every fixture in this file.
+// So "was it called" no longer isolates this handler; the two matched tests make
+// the retrieve REJECT instead, which proves independence rather than absence.
 const stripeMock = vi.hoisted(() => ({ retrieveIntent: vi.fn() }));
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ paymentIntents: { retrieve: stripeMock.retrieveIntent } }),
@@ -76,6 +80,13 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
   beforeEach(() => {
     alertMock.mockClear();
     stripeMock.retrieveIntent.mockReset();
+    // A real `paymentIntents.retrieve` always answers with a PaymentIntent
+    // object. A bare reset returns `undefined`, which no caller can be asked to
+    // survive — and since streaming R1 added `handleStreamPackChargeRefunded` to
+    // this same `charge.refunded` arm, a charge that is not a match-credit pack
+    // DOES reach a second guarded retrieve. Default it to somebody else's
+    // product; the two tests that care override it.
+    stripeMock.retrieveIntent.mockResolvedValue({ metadata: { kind: "registration" } });
     // A key must be present for the guarded retrieve branch to be reachable.
     process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
   });
@@ -85,6 +96,15 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
   });
 
   it("fully-unspent pack: refund claws back exactly the grant, packBalance → 0", async () => {
+    // STREAMING R1: this line used to read
+    // `expect(stripeMock.retrieveIntent).not.toHaveBeenCalled()` at the bottom,
+    // to prove the matched pack path needs no Stripe round trip. It no longer
+    // states that about THIS handler — `handleStreamPackChargeRefunded` shares
+    // the `charge.refunded` arm and does its own guarded retrieve for a charge
+    // that is not a match-credit pack, which this one is not. A REJECTING
+    // retrieve proves strictly more than an uncalled one: the pack claw-back
+    // below lands with Stripe unavailable, so it cannot be reading it.
+    stripeMock.retrieveIntent.mockRejectedValue(new Error("the matched pack path must not need Stripe"));
     const orgId = await seedOrg();
     const walletId = await walletIdFor(orgId);
     const intent = `pi_${uniq()}`;
@@ -100,12 +120,15 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
        where wallet_id = ${walletId} and source = 'refund'`;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ delta: -40, source: "refund", bucket: "pack", ref: intent });
-    // Matched off the ledger row — never a Stripe round-trip on the happy path.
-    expect(stripeMock.retrieveIntent).not.toHaveBeenCalled();
+    // (the rejecting retrieve stubbed at the top of this test is the proof)
     expect(alertMock).not.toHaveBeenCalled();
   });
 
   it("partially-spent pack: claws back only what remains, never negative, grant bucket untouched", async () => {
+    // Same as above (streaming R1): the pack path's independence from Stripe is
+    // asserted by making the retrieve REJECT, not by counting calls — the arm
+    // now carries a second handler with its own guarded retrieve.
+    stripeMock.retrieveIntent.mockRejectedValue(new Error("the matched pack path must not need Stripe"));
     const orgId = await seedOrg();
     const walletId = await walletIdFor(orgId);
     const intent = `pi_${uniq()}`;
@@ -127,7 +150,6 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
     // No refund ever touches the grant bucket.
     const grantRefunds = refundRows.filter((r) => r.bucket === "grant");
     expect(grantRefunds).toHaveLength(0);
-    expect(stripeMock.retrieveIntent).not.toHaveBeenCalled();
   });
 
   it("non-pack charge (no pack_purchase row, PI metadata not credit_pack) is a silent no-op — no ledger row, no alert", async () => {
