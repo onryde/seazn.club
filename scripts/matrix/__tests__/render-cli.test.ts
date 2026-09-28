@@ -1,0 +1,60 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const CLI = join(REPO, "scripts/matrix/render.ts");
+const cli = (...args: string[]) => spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", CLI, ...args], { cwd: REPO, encoding: "utf8", timeout: 25_000 });
+const results = (cases: unknown[]) => ({ schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "s", finishedAt: "f", cases });
+const works = { caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, state: "works", reason: "1 checks, 2 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 2, reason: "", evidence: [] }], counts: { calls: 3, fixtures: 1, events: 4 }, durationMs: 7 };
+
+describe("render CLI", () => {
+  it("zero cases: writes the 'No cases run' banner and exits 1", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    writeFileSync(join(dir, "results.json"), JSON.stringify(results([])));
+    const r = cli(join(dir, "results.json"));
+    expect(r.status).toBe(1);
+    expect(readFileSync(join(dir, "MATRIX.md"), "utf8")).toContain("No cases run");
+  });
+  it("canary results are never rendered", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    const c = { caseId: "c", row: "league", sport: "generic", variant: "score", scenario: "M1", canary: true, state: "red", reason: "", checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0 };
+    writeFileSync(join(dir, "results.json"), JSON.stringify(results([c])));
+    const r = cli(join(dir, "results.json"));
+    expect(r.status).toBe(1);
+    expect(existsSync(join(dir, "MATRIX.md"))).toBe(false);
+    // Exit 1 alone is also what a CLI that failed to LOAD returns; the refusal
+    // must be the reason (this test passed at RED with no render.ts at all).
+    expect(r.stderr).toMatch(/refusing to render canary/);
+  });
+  it("no argument: usage, exit 2", () => { expect(cli().status).toBe(2); });
+
+  it("a real case renders beside results.json and exits 0", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    writeFileSync(join(dir, "results.json"), JSON.stringify(results([works])));
+    const r = cli(join(dir, "results.json"));
+    expect(r.status).toBe(0);
+    const md = readFileSync(join(dir, "MATRIX.md"), "utf8");
+    expect(md).toContain("| league |");
+    expect(md).toContain("✅");
+    expect(md).not.toContain("No cases run");
+  });
+  it("--out writes where it is told, and nowhere else", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    writeFileSync(join(dir, "results.json"), JSON.stringify(results([works])));
+    const out = join(dir, "elsewhere.md");
+    expect(cli(join(dir, "results.json"), "--out", out).status).toBe(0);
+    expect(readFileSync(out, "utf8")).toContain("| league |");
+    expect(existsSync(join(dir, "MATRIX.md"))).toBe(false);
+  });
+  it("an unknown flag or a second file is a usage error (exit 2), not 'zero cases' (exit 1)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    writeFileSync(join(dir, "results.json"), JSON.stringify(results([works])));
+    expect(cli(join(dir, "results.json"), "--output", "x.md").status).toBe(2);
+    expect(cli(join(dir, "results.json"), join(dir, "results.json")).status).toBe(2);
+    expect(existsSync(join(dir, "MATRIX.md"))).toBe(false);
+  });
+});
