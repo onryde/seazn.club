@@ -5922,7 +5922,7 @@ That is a reading, not a run.
 **Control.** Run the same division shape with an ordinary win in the first semi. Its final MUST be seated, or the probe cannot tell a stall from a slow seat and proves nothing.
 
 **Verdicts:**
-- **`CONFIRMED`:** the tie posts without refusal, the fixture completes, and the final is never seated (the control is seated). Record this in `_INDEX.md` as a finding with the evidence path, **routed to W5 (brackets) and W2 (what a tie is worth in a knockout)**. Change no product code, and never loosen a verdict to pass.
+- **`CONFIRMED`:** the tie posts without refusal, the fixture completes, and the final is never seated (the control is seated). Record this in `_INDEX.md` as a finding with the evidence path, **routed to W4 (knockout family) and W2 (what a tie is worth in a knockout)**. Change no product code, and never loosen a verdict to pass.
 - **`GUARDED`:** a post is refused with a named code, so the product blocks the tie. Record the code. CD-T6 is refuted as a stall. Route "a tied T20 knockout cannot be completed at the builder default, and the organiser's recovery path is unknown" to W2 as a product question.
 - **`RESOLVED`:** the final is seated with a winner the engine chose (for example, a tiebreak the reading missed). Record it as a refuted hypothesis in "False premises found", and name the rule that resolved it.
 - **`UNRESOLVED`:** anything else. Say exactly what was observed. A team-roster refusal at `addEntrants` is the `W1-driving` deferral showing up live. Record it, and do not build rosters here.

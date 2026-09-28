@@ -271,7 +271,7 @@ a peer session as the other.
       - `competition.ts:147-163` assumes a tie never reaches a bracket.
       - So a tied knockout may complete with no advancer and stall the
         bracket.
-    - **If confirmed,** route it to W5 (brackets) and W2 (what a tie is
+    - **If confirmed,** route it to W4 (knockout family) and W2 (what a tie is
       worth in a knockout). No check is loosened to pass.
 
 ## Recommendations (mine — not rulings)
