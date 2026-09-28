@@ -32,7 +32,7 @@ export const f1OddField: Scenario = {
         foldParity(rec),
         assertion("f1-everyone-drawn", s.field.map((e) => ({ ok: s.fixtures.some((f) => f.home === e || f.away === e), note: `${e} appears in no fixture` }))),
         assertion("f1-round-size", inspected.map((r) => ({ ok: seatedIn(r) === expectedPerRound, note: `round ${r}: ${seatedIn(r)} seated, expected ${expectedPerRound}` }))),
-        loopBounded(rec),
+        loopBounded(rec, observed),
       ],
     };
   },

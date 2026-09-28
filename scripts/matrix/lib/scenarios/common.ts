@@ -34,7 +34,14 @@ export interface ParityObs {
   foreign: number;
 }
 
+/** Why playStage stopped (I-1). Only "drained" — generate answered and no
+ *  seated fixture was left open, or the swiss budget was paired through — is a
+ *  loop that ran to its end; life-loop-bounded reds every other exit, and a
+ *  drained loop that still leaves a fixture open. */
+export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round";
+
 export class Recorder {
+  exit: LoopExit | null = null;
   readonly generates: GenerateObs[] = [];
   readonly pairRounds: PairRoundObs[] = [];
   readonly declared = new Map<string, ObservedDeclared>();
@@ -155,18 +162,26 @@ export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: Divi
       const fixtures = await recordGenerate(ctx, rec, stage.id);
       const batch = (fixtures ?? []).filter((f) => f.round_no === r && seatedOpen(f));
       rec.pairRounds.push({ roundNo: r, seated: batch.length });
-      if (batch.length === 0) return; // I4 fails on the empty pair round
+      if (batch.length === 0) { // I4 fails on the empty pair round
+        rec.exit = fixtures === null ? "refused_generate" : "empty_pair_round";
+        return;
+      }
       await decideBatch(r, batch);
     }
+    rec.exit = "drained";
     return;
   }
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const fixtures = await recordGenerate(ctx, rec, stage.id);
-    const open = (fixtures ?? []).filter(seatedOpen);
-    if (open.length === 0) return;
+    // A named refusal is NOT "nothing left to play" (I-1): it stops the loop
+    // with the stage unfinished, and life-loop-bounded says so.
+    if (fixtures === null) { rec.exit = "refused_generate"; return; }
+    const open = fixtures.filter(seatedOpen);
+    if (open.length === 0) { rec.exit = "drained"; return; }
     const round = Math.min(...open.map((f) => f.round_no ?? 0));
     await decideBatch(round, open.filter((f) => (f.round_no ?? 0) === round));
   }
+  rec.exit = "cap";
   rec.facts.add("cut_short");
   rec.notes.push(`loop cap ${MAX_ITERATIONS} reached`);
 }
@@ -195,13 +210,16 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
   return { attempts, before, after: await read() };
 }
 
-export async function finishStage(ctx: ScenarioContext, _rec: Recorder, setup: DivisionSetup): Promise<CompleteObs> {
+/** A refused complete is recorded for I4 (which accepts a NAMED refusal) and
+ *  noted; whether the stage was left unfinished is life-loop-bounded's call. */
+export async function finishStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup): Promise<CompleteObs> {
   try {
     const c = await ctx.driver.completeStage(setup.stage.id);
     const done = c.events.find((e) => e.type === "stage_completed");
     return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null };
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
+    rec.notes.push(`complete refused ${e.status} ${e.code ?? "(no code)"}`);
     return { status: e.status, code: e.code, completed: false, finalRanks: null };
   }
 }

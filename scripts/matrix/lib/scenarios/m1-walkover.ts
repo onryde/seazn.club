@@ -49,7 +49,7 @@ export const m1Walkover: Scenario = {
         assertion("m1-winner-progresses",
           [{ ok: t !== null && observed.stages[0]!.fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),
-        loopBounded(rec),
+        loopBounded(rec, observed),
       ],
     };
   },

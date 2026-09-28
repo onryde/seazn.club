@@ -16,16 +16,22 @@ const LOCKED = new Set(["finalized", "cancelled"]);
  *  - expunge: every fixture it touched is abandoned, except locked ones;
  *  - walkover: each pending fixture is forfeited to the OPPONENT, or voided
  *    (abandoned) when that seat is still TBD; finished ones stand;
- *  and the reported walkover count equals the forfeits observed. */
-export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before: readonly FixtureSnap[], after: readonly ObservedFixture[], walkoversReported: number): Item[] {
+ *  and the reported walkover count equals the forfeits observed, and the
+ *  reported voided count equals the fixtures the cascade itself abandoned
+ *  (withdrawal.ts applyUpdate counts `voided` once per core.abandon it posts,
+ *  so a fixture already abandoned before the withdrawal is not one of them). */
+export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before: readonly FixtureSnap[], after: readonly ObservedFixture[], walkoversReported: number, voidedReported: number): Item[] {
   const items: Item[] = [];
   let forfeitedByCascade = 0;
+  let voidedByCascade = 0;
+  const voids = (b: FixtureSnap, a: ObservedFixture) => { if (a.status === "abandoned" && b.status !== "abandoned") voidedByCascade++; };
   for (const b of before) {
     const a = after.find((x) => x.id === b.id);
     if (a === undefined) { items.push({ ok: false, note: `${b.id}: vanished` }); continue; }
     if (policy === "walkover" && !isTerminal(b.status)) {
       const opponent = a.home === w ? a.away : a.home;
       if (opponent === null) {
+        voids(b, a);
         items.push({ ok: a.status === "abandoned", note: `${b.id}: ${a.status} after walkover with a TBD opponent, expected abandoned` });
         continue;
       }
@@ -33,12 +39,14 @@ export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before:
       if (ok) forfeitedByCascade++;
       items.push({ ok, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover, expected forfeited/${opponent}` });
     } else if (policy === "expunge" && !LOCKED.has(b.status)) {
+      voids(b, a);
       items.push({ ok: a.status === "abandoned", note: `${b.id}: ${a.status} after expunge` });
     } else {
       items.push({ ok: sameResult(a, b), note: `${b.id}: changed ${b.status}→${a.status}` });
     }
   }
   if (policy === "walkover") items.push({ ok: forfeitedByCascade === walkoversReported, note: `reported ${walkoversReported} walkovers, observed ${forfeitedByCascade}` });
+  items.push({ ok: voidedByCascade === voidedReported, note: `reported ${voidedReported} voided, observed ${voidedByCascade}` });
   return items;
 }
 
@@ -70,7 +78,7 @@ export const r4Withdrawal: Scenario = {
       return {
         observed,
         events: rec.events,
-        assertions: [foldParity(rec), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), loopBounded(rec)],
+        assertions: [foldParity(rec), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), loopBounded(rec, observed)],
       };
     }
     const mine = observed.stages[0]!.fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
@@ -83,11 +91,11 @@ export const r4Withdrawal: Scenario = {
       assertions: [
         foldParity(rec),
         assertion("r4-policy-reported", [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }]),
-        assertion("r4-cascade-consistent", cascadeItems(judged, w.entrantId, w.before, mine, w.walkovers)),
+        assertion("r4-cascade-consistent", cascadeItems(judged, w.entrantId, w.before, mine, w.walkovers, w.voided)),
         assertion("r4-not-paired-later",
           later.map((f) => ({ ok: f.home !== w.entrantId && f.away !== w.entrantId, note: `${f.id} (round ${f.roundNo}) seats the withdrawn entrant` })),
           setup.stage.kind === "swiss" ? null : "not a swiss stage"),
-        loopBounded(rec),
+        loopBounded(rec, observed),
       ],
     };
   },

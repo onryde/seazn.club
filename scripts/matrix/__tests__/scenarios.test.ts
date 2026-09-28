@@ -5,7 +5,7 @@ import { isTerminal, type ObservedFixture, type ObservedRun } from "../lib/obser
 import { decideState } from "../lib/results.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
-  assertion, drawPathExercised, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch,
+  assertion, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch,
 } from "../lib/scenarios/assertions.ts";
 import {
   MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type DivisionSetup,
@@ -14,7 +14,7 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems } from "../lib/scenarios/r4-withdrawal.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
+import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
 
 type Row = CaseSpec["row"];
 interface Opts { canary?: boolean; row?: Row; sport?: string; variant?: string }
@@ -65,15 +65,45 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(foldParity(rec2)).toMatchObject({ verdict: "fail", checked: 1, evidence: [expect.stringMatching(/f3: 1 event\(s\) .*did not post/)] });
   });
 
-  it("publicStandingsMatch: no org table is vacuous; a missing pool, a rank and a points drift each fail", () => {
+  it("publicStandingsMatch: nothing on either side is vacuous; a missing pool, a rank and a points drift each fail", () => {
     const pub = (rows: { entrantId: string; rank: number; points?: number }[], pool: string | null = null) =>
       ({ division_id: "d1", standings: [{ stage_id: "s1", pool_id: pool, rows }] });
     const org = [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "b", rank: 2, points: 0 }] }];
-    expect(publicStandingsMatch(run([]), pub([]))).toMatchObject({ verdict: "fail", checked: 0 });
+    expect(publicStandingsMatch(run([]), { division_id: "d1", standings: [] })).toMatchObject({ verdict: "fail", checked: 0 });
     expect(publicStandingsMatch(run(org), pub([{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "b", rank: 2, points: 0 }]))).toMatchObject({ verdict: "pass", checked: 2 });
-    expect(publicStandingsMatch(run(org), pub([], "p9"))).toMatchObject({ verdict: "fail", checked: 1, evidence: [expect.stringMatching(/missing from public/)] });
+    expect(publicStandingsMatch(run(org), pub([], "p9"))).toMatchObject({
+      verdict: "fail", checked: 2,
+      evidence: [expect.stringMatching(/pool null: missing from public/), "stage 1 pool p9: public table with no org table"],
+    });
     expect(publicStandingsMatch(run(org), pub([{ entrantId: "a", rank: 2, points: 3 }, { entrantId: "b", rank: 1, points: 0 }]))).toMatchObject({ verdict: "fail", checked: 2 });
     expect(publicStandingsMatch(run(org), pub([{ entrantId: "a", rank: 1, points: 1 }, { entrantId: "b", rank: 2, points: 0 }]))).toMatchObject({ verdict: "fail", checked: 2, evidence: ["a: org 1/3 vs public 1/1"] });
+  });
+
+  it("publicStandingsMatch runs BOTH ways (m-4): public ⊆ org as well as org ⊆ public", () => {
+    const org = [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "b", rank: 2, points: 0 }] }];
+    const same = [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "b", rank: 2, points: 0 }];
+    // An entrant only the public table shows.
+    expect(publicStandingsMatch(run(org), { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: [...same, { entrantId: "z", rank: 3, points: 0 }] }] }))
+      .toMatchObject({ verdict: "fail", checked: 3, evidence: ["z: public row (stage 1 pool null) with no org row"] });
+    // A pool only the public table shows, beside a matching one.
+    expect(publicStandingsMatch(run(org), { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: same }, { stage_id: "s1", pool_id: "p2", rows: [] }] }))
+      .toMatchObject({ verdict: "fail", checked: 3, evidence: ["stage 1 pool p2: public table with no org table"] });
+    // A stage the run never observed.
+    expect(publicStandingsMatch(run(org), { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: same }, { stage_id: "s9", pool_id: null, rows: same }] }))
+      .toMatchObject({ verdict: "fail", checked: 3, evidence: ["stage s9: public table for a stage the run never observed"] });
+    // An org table with no rows beside a public one that has them: the public rows are extras.
+    expect(publicStandingsMatch(run([{ poolId: null, rows: [] }]), { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: same }] }))
+      .toMatchObject({ verdict: "fail", checked: 2, evidence: ["a: public row (stage 1 pool null) with no org row", "b: public row (stage 1 pool null) with no org row"] });
+  });
+
+  it("entrantsEditAccepted (I-2): the entrants-only save must be a 2xx; none attempted is vacuous", () => {
+    const edit = (status: number, code: string | null) => ({ attempts: [{ kind: "format" as const, status: 409, code: "FORMAT_LOCKED" }, { kind: "entrants_only" as const, status, code }], before: [], after: [] });
+    expect(entrantsEditAccepted({ attempts: [{ kind: "format", status: 409, code: "FORMAT_LOCKED" }], before: [], after: [] })).toMatchObject({ id: "life-entrants-edit-accepted", verdict: "fail", checked: 0 });
+    expect(entrantsEditAccepted(edit(200, null))).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(entrantsEditAccepted(edit(204, null))).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(entrantsEditAccepted(edit(409, "FORMAT_LOCKED"))).toMatchObject({ verdict: "fail", checked: 1, evidence: ["entrants-only save → 409 FORMAT_LOCKED"] });
+    expect(entrantsEditAccepted(edit(300, null))).toMatchObject({ verdict: "fail" });
+    expect(entrantsEditAccepted(edit(199, null))).toMatchObject({ verdict: "fail" });
   });
 
   it("drawPathExercised: abstains only when the module declares no draws; zero posted or a lost draw fails", () => {
@@ -94,11 +124,20 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(formatEditRefusedNamed(edit(500, "MODULE_DUPLICATE"))).toMatchObject({ verdict: "fail" });
   });
 
-  it("loopBounded: a cut_short run fails; an uncapped one passes with one item", () => {
+  it("loopBounded (I-1): only a loop that ran dry AND left every fixture finished passes", () => {
     const rec = new Recorder();
-    expect(loopBounded(rec)).toMatchObject({ id: "life-loop-bounded", verdict: "pass", checked: 1 });
-    rec.facts.add("cut_short");
-    expect(loopBounded(rec)).toMatchObject({ id: "life-loop-bounded", verdict: "fail", checked: 1 });
+    const done = run([], [fx({}), fx({ id: "f2", status: "abandoned", outcome: null })]);
+    // A loop that never ran is not a finished one.
+    expect(loopBounded(rec, done)).toMatchObject({ id: "life-loop-bounded", verdict: "fail", checked: 2, evidence: ["play loop exited never"] });
+    rec.exit = "drained";
+    expect(loopBounded(rec, done)).toMatchObject({ verdict: "pass", checked: 2 });
+    // Ran dry, but a fixture is still open (a TBD seat nobody filled, a generate that stopped listing it).
+    expect(loopBounded(rec, run([], [fx({}), fx({ id: "f3", status: "scheduled", outcome: null }), fx({ id: "f4", status: "in_play", outcome: null })])))
+      .toMatchObject({ verdict: "fail", checked: 2, evidence: ["2 fixture(s) left unfinished: f3 scheduled, f4 in_play"] });
+    for (const exit of ["cap", "refused_generate", "empty_pair_round"] as const) {
+      rec.exit = exit;
+      expect(loopBounded(rec, done)).toMatchObject({ verdict: "fail", checked: 2, evidence: [`play loop exited ${exit}`] });
+    }
   });
 });
 
@@ -115,7 +154,22 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(state, JSON.stringify(checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
     expect(checks.find((c) => c.id === "life-draw-path-exercised")).toMatchObject({ verdict: "pass" });
     expect(checks.find((c) => c.id === "life-fold-parity")!.checked).toBe(28);
-    expect(checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "pass", checked: 2 });
+    expect(checks.find((c) => c.id === "life-entrants-edit-accepted")).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+
+  it("I-2: a product that 409s the entrants-only save reds life-entrants-edit-accepted, and only that", async () => {
+    class LocksEntrantsToo extends FakeLeagueDriver {
+      override async patchDivisionConfig(d: string, c: Record<string, unknown>) {
+        return this.fixtures.length > 0 ? { status: 409, code: "FORMAT_LOCKED" } : super.patchDivisionConfig(d, c);
+      }
+    }
+    const r = await runOn(new LocksEntrantsToo(), "LIFECYCLE");
+    expect(r.state.state).toBe("red");
+    expect(failed(r.checks)).toEqual(["life-entrants-edit-accepted"]);
+    expect(r.checks.find((c) => c.id === "life-entrants-edit-accepted")!.evidence).toEqual(["entrants-only save → 409 FORMAT_LOCKED"]);
+    // The format refusal beside it is still the expected one.
+    expect(r.checks.find((c) => c.id === "life-format-edit-refused-named")).toMatchObject({ verdict: "pass" });
   });
 
   it("R15: a product outcome that differs from the engine's own fold fails life-fold-parity on every fixture", async () => {
@@ -166,8 +220,9 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
         return d;
       }
     }
-    const { out } = await runOn(new Overridden(), "LIFECYCLE");
+    const { out, checks } = await runOn(new Overridden(), "LIFECYCLE");
     expect(out.observed.configEdit!.attempts.find((a) => a.kind === "entrants_only")).toEqual({ kind: "entrants_only", status: 200, code: null });
+    expect(checks.find((c) => c.id === "life-entrants-edit-accepted")).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
   it.each(["LIFECYCLE", "M1", "R4", "F1"] as const)("PF8: %s counts every event the harness posted, derived from what the product holds", async (k) => {
@@ -187,7 +242,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
-    ["LIFECYCLE", ["life-fold-parity", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-loop-bounded"]],
+    ["LIFECYCLE", ["life-fold-parity", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-loop-bounded"]],
     ["M1", ["life-fold-parity", "m1-walkover-recorded", "m1-winner-progresses", "life-loop-bounded"]],
     ["R4", ["life-fold-parity", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-loop-bounded"]],
     ["F1", ["life-fold-parity", "f1-everyone-drawn", "f1-round-size", "life-loop-bounded"]],
@@ -246,6 +301,16 @@ describe("pilots on the fake league", () => {
     expect(w).toMatchObject({ afterRound: 1, policy: played / w.before.length < 0.5 ? "expunge" : "walkover" });
     expect(r.out.observed.facts).toEqual(expect.arrayContaining(["withdrawn", "expunged"]));
   });
+  it("R4 (m-3): a voided count that disagrees with the cascade observed fails r4-cascade-consistent, naming both", async () => {
+    class MiscountsVoided extends FakeLeagueDriver {
+      override async withdraw(id: string) { const o = await super.withdraw(id); return { ...o, voided: o.voided + 1 }; }
+    }
+    const r = await runOn(new MiscountsVoided(), "R4");
+    const w = r.out.observed.withdrawal!;
+    expect(w.policy).toBe("expunge");
+    expect(failed(r.checks)).toEqual(["r4-cascade-consistent"]);
+    expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.voided} voided, observed ${w.voided - 1}`]);
+  });
   it("R4: a withdrawal the product reports as policy 'none' fails r4-policy-reported", async () => {
     class NoPolicy extends FakeLeagueDriver {
       override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "none" as const }; }
@@ -299,6 +364,7 @@ describe("PF5: a cut_short run is red in EVERY scenario, through life-loop-bound
     expect(r.out.observed.facts).toContain("cut_short");
     expect(r.state.state).toBe("red");
     expect(failed(r.checks)).toEqual(["life-loop-bounded"]);
+    expect(r.checks.find((c) => c.id === "life-loop-bounded")!.evidence[0]).toBe("play loop exited cap");
     // The cap is what stopped it: exactly MAX_ITERATIONS generates.
     expect(driver.calls.filter((c) => c === "generate")).toHaveLength(MAX_ITERATIONS);
   });
@@ -309,6 +375,43 @@ describe("PF5: a cut_short run is red in EVERY scenario, through life-loop-bound
     expect(before.length).toBe(driver.fixtures.filter((f) => isTerminal(f.status)).length);
     expect(before.length).toBeLessThan(driver.fixtures.length);
     expect(before.every((b) => isTerminal(b.status))).toBe(true);
+  });
+});
+
+describe("I-1: a stage the loop left unfinished is red in EVERY scenario, even when every refusal is named", () => {
+  // The review's probe: generate answers three times, then is refused BY NAME;
+  // complete is refused by name too. I4 accepts both (named refusals), so
+  // before I-1 the loop's silent return read ✅ with most fixtures unplayed.
+  class StopsEarly extends FakeLeagueDriver {
+    answered = 0;
+    override async generate() {
+      if (this.answered++ >= 3) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "not ready");
+      return super.generate();
+    }
+    override async completeStage(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "open fixtures"); }
+  }
+  it.each(["LIFECYCLE", "M1", "R4", "F1"] as const)("%s", async (k) => {
+    const driver = new StopsEarly();
+    const r = await runOn(driver, k);
+    const open = driver.fixtures.filter((f) => !isTerminal(f.status));
+    expect(open.length).toBeGreaterThan(0);
+    expect(r.state.state).toBe("red");
+    expect(failed(r.checks)).toEqual(["life-loop-bounded"]);
+    expect(r.checks.find((c) => c.id === "life-loop-bounded")!.evidence)
+      .toEqual(["play loop exited refused_generate", expect.stringMatching(new RegExp(`^${open.length} fixture\\(s\\) left unfinished: ${open[0]!.id} scheduled`))]);
+    // I4 is satisfied by the named refusals — life-loop-bounded is what reds it.
+    expect(r.checks.find((c) => c.id === "I4-nothing-ends-stuck")).toMatchObject({ verdict: "pass" });
+    expect(r.out.observed.stages[0]!.complete).toMatchObject({ status: 409, code: "STAGE_INCOMPLETE", completed: false });
+  });
+  it("a generate that answers 200 but stops LISTING open fixtures runs 'dry' and is still red (open fixtures)", async () => {
+    class ForgetsFixtures extends FakeLeagueDriver {
+      override async generate() { const g = await super.generate(); return { ...g, fixtures: g.fixtures.filter((f) => f.round_no === 1) }; }
+    }
+    const driver = new ForgetsFixtures();
+    const r = await runOn(driver, "LIFECYCLE");
+    const open = driver.fixtures.filter((f) => !isTerminal(f.status)).length;
+    expect(open).toBe(24); // 28 fixtures, round 1's four played
+    expect(r.checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "fail", checked: 2, evidence: [expect.stringMatching(/^24 fixture\(s\) left unfinished: /)] });
   });
 });
 
@@ -487,14 +590,89 @@ describe("the swiss branch of playStage on the swiss fake", () => {
     const n = r.out.observed.stages[0]!.field.length;
     expect(r.out.observed.stages[0]!.pairRounds).toEqual([{ roundNo: 1, seated: Math.floor(n / 2) }, { roundNo: 2, seated: 0 }]);
     expect(r.checks.find((c) => c.id === "I4-nothing-ends-stuck")!.evidence).toContain("stage 1: round 2 paired nobody (SW-H1)");
+    // …and the loop says why it stopped, with round 2's empty shells still open.
+    expect(r.checks.find((c) => c.id === "life-loop-bounded")!.evidence[0]).toBe("play loop exited empty_pair_round");
   });
-  it("a swiss batch is round r only, even when the stage already lists a later round", async () => {
-    class PairsAhead extends FakeSwissDriver {
-      override async start() { const out = await super.start(); this.pairNext(); return out; }
+  it("a Pair refused by name mid-stage stops the swiss loop and life-loop-bounded names the refusal", async () => {
+    class RefusesRound3 extends FakeSwissDriver {
+      override async generate() {
+        if (this.paired === 2) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "not ready");
+        return super.generate();
+      }
     }
-    const r = await runOn(new PairsAhead(), "LIFECYCLE", { row: "swiss" });
+    const r = await runOn(new RefusesRound3(), "LIFECYCLE", { row: "swiss" });
+    expect(r.out.observed.stages[0]!.generates.at(-1)).toEqual({ status: 409, code: "STAGE_NOT_READY", total: 0, created: 0 });
+    expect(r.checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "fail", evidence: ["play loop exited refused_generate", expect.stringMatching(/fixture\(s\) left unfinished/)] });
+  });
+  it("a swiss batch is round r only, even when the stage already lists a later seated fixture (an ad-hoc addFixture at maxRound + 1)", async () => {
+    class AdHocAhead extends FakeSwissDriver {
+      override async start() { const out = await super.start(); this.seat(this.budget + 1, this.entrants[0]!.id, this.entrants[1]!.id); return out; }
+    }
+    const r = await runOn(new AdHocAhead(), "LIFECYCLE", { row: "swiss" });
     const n = r.out.observed.stages[0]!.field.length;
     expect(r.out.observed.stages[0]!.pairRounds.map((p) => p.seated)).toEqual(r.out.observed.stages[0]!.pairRounds.map(() => Math.floor(n / 2)));
+  });
+  it("m-5: start mints an empty shell per board for EVERY round and seats nobody; each generate seats one round onto its shells", async () => {
+    const driver = new FakeSwissDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "swiss" });
+    const setup = await setUpDivision(ctx, new Recorder(), 7);
+    const budget = driver.budget;
+    // swiss-shell.ts planSwissShells: floor(7/2) boards + one bye shell per round.
+    expect(driver.fixtures).toHaveLength(budget * 4);
+    expect(driver.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null && f.status === "scheduled")).toBe(true);
+    const ids = driver.fixtures.map((f) => f.id);
+    const g = await driver.generate(setup.stage.id);
+    expect(g.created).toBe(0); // seating UPDATEs shells (stages.ts swissGen)
+    expect(driver.fixtures.map((f) => f.id)).toEqual(ids);
+    const r1 = driver.fixtures.filter((f) => f.round_no === 1);
+    expect(r1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)).toHaveLength(3);
+    expect(r1.filter((f) => f.away_entrant_id === null)).toEqual([expect.objectContaining({ status: "forfeited", outcome: { kind: "award", winner: r1.find((f) => f.away_entrant_id === null)!.home_entrant_id } })]);
+    expect(driver.fixtures.filter((f) => (f.round_no ?? 0) > 1).every((f) => f.home_entrant_id === null)).toBe(true);
+    // The next round is refused while this one has an undecided board (stages.ts swissGen gate).
+    await expect(driver.generate(setup.stage.id)).rejects.toMatchObject({ status: 409, code: "STAGE_NOT_READY" });
+  });
+  it("m-5: a withdrawal reshapes the next round's shells to the active field (8 → 7: one board shell dropped, a bye shell minted)", async () => {
+    const r = await runOn(new FakeSwissDriver(), "R4", { row: "swiss" });
+    const fx = r.out.observed.stages[0]!.fixtures;
+    const inRound = (n: number) => fx.filter((f) => f.roundNo === n);
+    expect(inRound(1).filter((f) => f.away === null)).toHaveLength(0);
+    expect([inRound(2).filter((f) => f.home !== null && f.away !== null).length, inRound(2).filter((f) => f.away === null).length]).toEqual([3, 1]);
+    expect(fx.every((f) => isTerminal(f.status))).toBe(true);
+  });
+});
+
+describe("m-6: the swiss canaries each go red on their own check", () => {
+  it.each(["M1", "R4", "F1"] as const)("%s", async (k) => {
+    const r = await runOn(new FakeSwissDriver(), k, { row: "swiss", canary: true });
+    expect(r.state.state).toBe("red");
+    expect(failed(r.checks)).toEqual([SCENARIOS[k].canaryCheck]);
+  });
+});
+
+describe("m-1: brackets on the knockout fake (M1's progression, F1's first round)", () => {
+  it("M1 works: the walkover goes to seed 1 and seed 1 plays on in a later round", async () => {
+    const r = await runOn(new FakeKnockoutDriver(), "M1", { row: "knockout" });
+    expect(r.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
+    expect(r.checks.find((c) => c.id === "m1-winner-progresses")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(r.checks.find((c) => c.id === "I2-bracket-one-champion-ranks-permutation")).toMatchObject({ verdict: "pass" });
+    const canary = await runOn(new FakeKnockoutDriver(), "M1", { row: "knockout", canary: true });
+    expect(failed(canary.checks)).toEqual(["m1-walkover-recorded"]);
+  });
+  it("M1: a bracket that does not carry a walkover's winner forward fails m1-winner-progresses", async () => {
+    class DropsWalkoverWinner extends FakeKnockoutDriver { override carriesForward(f: { status: string }) { return f.status !== "forfeited"; } }
+    const r = await runOn(new DropsWalkoverWinner(), "M1", { row: "knockout" });
+    expect(r.checks.find((c) => c.id === "m1-winner-progresses")).toMatchObject({ verdict: "fail", evidence: ["seed 1 absent from every later round"] });
+  });
+  it("F1: 7 entrants — round 1 seats 3 boards beside seed 1's bye, only round 1 is inspected, and the canary's ceil goes red", async () => {
+    const r = await runOn(new FakeKnockoutDriver(), "F1", { row: "knockout" });
+    expect(r.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
+    const rounds = new Set(r.out.observed.stages[0]!.fixtures.map((f) => f.roundNo));
+    expect(rounds.size).toBe(3); // later rounds hold 2 and 1 boards: inspecting them would red
+    expect(r.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ verdict: "pass", checked: 1 });
+    const bye = r.out.observed.stages[0]!.fixtures.filter((f) => f.roundNo === 1 && f.away === null);
+    expect(bye).toEqual([expect.objectContaining({ home: r.driver.entrants[0]!.id, status: "forfeited", outcome: { kind: "award", winner: r.driver.entrants[0]!.id } })]);
+    const canary = await runOn(new FakeKnockoutDriver(), "F1", { row: "knockout", canary: true });
+    expect(failed(canary.checks)).toEqual(["f1-round-size"]);
   });
 });
 
@@ -511,9 +689,18 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
       { id: "d", status: "cancelled", outcome: null },
     ];
     const good = [after("a", "abandoned", null), after("b", "abandoned", null), after("c", "finalized", { kind: "win", winner: "x" }), after("d", "cancelled", null)];
-    expect(ok(cascadeItems("expunge", "w", before, good, 0))).toEqual([true, true, true, true]);
+    // The last item is the voided count (m-3): two fixtures abandoned by the cascade.
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 2))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 3))).toEqual([true, true, true, true, false]);
     const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x" }), after("c", "abandoned", null), after("d", "abandoned", null)];
-    expect(ok(cascadeItems("expunge", "w", before, bad, 0))).toEqual([false, false, false, false]);
+    expect(ok(cascadeItems("expunge", "w", before, bad, 0, 0))).toEqual([false, false, false, false, true]);
+  });
+
+  it("the voided count covers only what the cascade abandoned — a fixture already abandoned before it does not count (withdrawal.ts applyUpdate)", () => {
+    const before = [{ id: "a", status: "abandoned", outcome: null }, { id: "b", status: "scheduled", outcome: null }];
+    const after2 = [after("a", "abandoned", null), after("b", "abandoned", null)];
+    expect(cascadeItems("expunge", "w", before, after2, 0, 1).at(-1)).toEqual({ ok: true, note: "reported 1 voided, observed 1" });
+    expect(cascadeItems("expunge", "w", before, after2, 0, 2).at(-1)).toEqual({ ok: false, note: "reported 2 voided, observed 1" });
   });
 
   it("walkover: a pending game goes to the OPPONENT; a TBD seat is voided; the reported count must match", () => {
@@ -523,12 +710,14 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
       { id: "t", status: "scheduled", outcome: null },
     ];
     const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x" }), after("t", "abandoned", null, "w", null)];
-    expect(ok(cascadeItems("walkover", "w", before, good, 1))).toEqual([true, true, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, good, 2))).toEqual([true, true, true, false]);
+    // …then the walkover count, then the voided count (the TBD seat).
+    expect(ok(cascadeItems("walkover", "w", before, good, 1, 1))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 2, 1))).toEqual([true, true, true, false, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 1, 0))).toEqual([true, true, true, true, false]);
     const toW = [good[0]!, after("b", "forfeited", { kind: "award", winner: "w" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toW, 0))).toEqual([true, false, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, toW, 0, 1))).toEqual([true, false, true, true, true]);
     const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0))).toEqual([true, false, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1))).toEqual([true, true, false, true]);
+    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 1))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 1))).toEqual([true, true, false, true, false]);
   });
 });
