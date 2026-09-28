@@ -1,6 +1,7 @@
 // --set w1b-probe: the smallest live set that drives W1b's new L3 paths
 // against the real product —
-//  - the single-stage, ungated API-only rows (LIFECYCLE on generic);
+//  - the single-stage API-only rows, gated or not (LIFECYCLE on generic, in an
+//    org denied nothing: the top public plan holds every format gate);
 //  - one DENIED case per gated row (⛔, ruling 24), each org denied its gate;
 //  - one committed variant case per slice sport, its override on the wire.
 // Every part is derived: the rows from the catalogue registry, the gates from
@@ -9,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { API_ONLY_ROWS, ROW_KEYS, stagesForRow, type RowKey } from "./catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, stagesForRow, type RowKey, type StagePostBody } from "./catalogue.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
 import type { CaseSpec } from "./scenarios/types.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "./slice.ts";
@@ -19,19 +20,46 @@ import type { PlannerCli, PlanCases } from "../run.ts";
 
 export const PROBE_SET = "w1b-probe";
 
-/** The API-only rows this set drives: single-stage (a multi-stage row needs
- *  seed-proposal handling, deferred to W1-driving) and ungated (a gated row's
- *  case is its DENIED one). */
-export const PROBE_API_ROWS: readonly RowKey[] = Object.freeze(API_ONLY_ROWS.filter((r) => stagesForRow(r).length === 1 && expectedGate(stagesForRow(r)) === null));
+/** A row's stage derivation threw while the set was being built (fix round 1,
+ *  m-1). Named, so run.ts refuses the set (exit 2) instead of dying at import. */
+export class ProbeRowUnderivable extends Error {
+  readonly row: string;
+  constructor(row: string, cause: unknown) {
+    super(`probe-set: row '${row}' cannot be derived (${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}) — the set is refused before the DB`);
+    this.name = "ProbeRowUnderivable";
+    this.row = row;
+  }
+}
 
-/** Every row the product gates, with its gate, in registry order — from the
- *  gate map, never a typed list, so a product change to the gates moves this
- *  set with it. */
-const PROBE_DENIED: readonly { row: RowKey; gate: FormatGate }[] = Object.freeze(ROW_KEYS.flatMap((row) => {
-  const gate = expectedGate(stagesForRow(row));
-  return gate === null ? [] : [{ row, gate }];
-}));
-export const PROBE_DENIED_ROWS: readonly RowKey[] = Object.freeze(PROBE_DENIED.map((d) => d.row));
+export interface ProbeRows {
+  /** The API-only rows driven LIFECYCLE: single-stage (a multi-stage row needs
+   *  seed-proposal handling, deferred to W1-driving), gated or not — a gated
+   *  row's ALLOWED path is driven here, its refusal by its DENIED case (fix
+   *  round 1, I-1: a 402 alone proves only that the body parses). */
+  readonly api: readonly RowKey[];
+  /** Every row the product gates, with its gate, in registry order — from the
+   *  gate map, never a typed list, so a product change to the gates moves
+   *  this set with it. */
+  readonly denied: readonly { row: RowKey; gate: FormatGate }[];
+}
+
+/** The set's rows, derived on every call and never at import (m-1): run.ts
+ *  value-imports this module, so an import-time throw would kill every mode
+ *  with exit 1 and a raw stack. Here it is ProbeRowUnderivable, raised inside
+ *  runSlice's planner try (exit 2). */
+export function probeRows(stagesFor: (row: RowKey) => readonly StagePostBody[] = stagesForRow): ProbeRows {
+  const isApi = new Set<string>(API_ONLY_ROWS);
+  const api: RowKey[] = [];
+  const denied: { row: RowKey; gate: FormatGate }[] = [];
+  for (const row of ROW_KEYS) {
+    let stages: readonly StagePostBody[];
+    try { stages = stagesFor(row); } catch (e) { throw new ProbeRowUnderivable(row, e); }
+    if (isApi.has(row) && stages.length === 1) api.push(row);
+    const gate = expectedGate(stages);
+    if (gate !== null) denied.push({ row, gate });
+  }
+  return { api: Object.freeze(api), denied: Object.freeze(denied) };
+}
 
 /** The API-only and DENIED cases run on one sport: both row shapes and the
  *  gates are sport-independent (stagesForRow takes no sport; createStages
@@ -98,16 +126,20 @@ export interface ProbeDeps {
   variants?: () => VariantsFile;
   /** Re-scores a bound case (default: variants.ts scorable). */
   rescore?: (vc: VariantCase) => string | null;
+  /** A row's stage bodies (default: catalogue.ts stagesForRow). */
+  stagesFor?: (row: RowKey) => readonly StagePostBody[];
 }
 
 const readVariants = (): VariantsFile => JSON.parse(readFileSync(VARIANTS_JSON, "utf8")) as VariantsFile;
 
-/** The planner, with its file read and its re-score injectable. Everything
- *  that needs no DB — the file, the selection, the re-score — happens here, at
- *  construction, so run.ts refuses a bad set before it opens a connection. */
+/** The planner, with its row derivation, file read and re-score injectable.
+ *  Everything that needs no DB — the rows, the file, the selection, the
+ *  re-score — happens here, at construction, so run.ts refuses a bad set
+ *  before it opens a connection. */
 export function makeProbePlanner(deps: ProbeDeps = {}): PlanCases {
   return (cli) => {
     if (cli.only !== undefined || cli.scenario !== undefined || cli.canary !== undefined) throw new SetTakesNoFilter(PROBE_SET, cli);
+    const rows = probeRows(deps.stagesFor);
     const file = (deps.variants ?? readVariants)();
     const bound = SLICE_SPORTS.map((sport) => {
       const cases = file.sports.find((s) => s.sport === sport)?.cases ?? [];
@@ -117,12 +149,12 @@ export function makeProbePlanner(deps: ProbeDeps = {}): PlanCases {
       // Generic's order picks the API/DENIED variant; every declared sport's
       // order is compared with the offline default before any case (RF5).
       sports: SLICE_SPORTS,
-      deniesFeatures: PROBE_DENIED_ROWS.length > 0,
+      deniesFeatures: rows.denied.length > 0,
       plan: (variantFor) => {
         const out: CaseSpec[] = [];
         const g = variantFor(PROBE_SPORT);
-        for (const row of PROBE_API_ROWS) out.push({ caseId: `${row}|${PROBE_SPORT}|${g}|LIFECYCLE`, row, sport: PROBE_SPORT, variant: g, scenario: "LIFECYCLE", canary: false });
-        for (const { row, gate } of PROBE_DENIED) {
+        for (const row of rows.api) out.push({ caseId: `${row}|${PROBE_SPORT}|${g}|LIFECYCLE`, row, sport: PROBE_SPORT, variant: g, scenario: "LIFECYCLE", canary: false });
+        for (const { row, gate } of rows.denied) {
           out.push({ caseId: `${row}|${PROBE_SPORT}|${g}|DENIED`, row, sport: PROBE_SPORT, variant: g, scenario: "DENIED", canary: false, deny: [gate] });
         }
         for (const vc of bound) {

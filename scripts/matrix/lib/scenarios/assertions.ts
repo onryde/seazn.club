@@ -71,11 +71,14 @@ export function builtAsPosted(built: BuiltReadback, observed: ObservedRun): Chec
     }
     // T3 review G1: the stored config.thirdPlace (judged just above) says
     // nothing about the bracket. A knockout posted with it must BUILD exactly
-    // one third-place match, or knockout_third_place reads as a plain knockout.
-    if (body.kind === "knockout" && body.config.thirdPlace === true) {
+    // one third-place match, or knockout_third_place reads as a plain knockout;
+    // and (fix round 1, m-4) one posted without it must build none, or a
+    // product that mints the match unasked passes both rows.
+    if (body.kind === "knockout") {
+      const asked = body.config.thirdPlace === true;
       const fixtures = observed.stages.find((o) => s !== undefined && o.id === s.id)?.fixtures ?? [];
       const n = fixtures.filter((f) => f.thirdPlace === true).length;
-      items.push({ ok: n === 1, note: `stage ${body.seq}: posted thirdPlace, built ${n} third-place fixture(s)` });
+      items.push({ ok: n === (asked ? 1 : 0), note: `stage ${body.seq}: posted ${asked ? "" : "no "}thirdPlace, built ${n} third-place fixture(s)` });
     }
   }
   items.push({ ok: built.entrants.length === posted.entrants.length, note: `${built.entrants.length} entrant(s) stored, ${posted.entrants.length} posted` });

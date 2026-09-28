@@ -618,10 +618,17 @@ describe("knockout_third_place: the third-place match is BUILT, not only stored 
     expect(one).toMatchObject({ verdict: "pass" });
     expect(builtAsPosted(readback(tp), observed([fx({})]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 0 third-place fixture(s)"] });
     expect(builtAsPosted(readback(tp), observed([fx({ thirdPlace: true }), fx({ id: "f2", thirdPlace: true })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 2 third-place fixture(s)"] });
-    // A plain knockout judges no third-place item at all.
+  });
+  it("fix round 1, m-4: two-sided — a plain knockout must build NO third-place fixture; one unasked reds, naming the count", () => {
+    const one = builtAsPosted(readback(tp), observed([fx({}), fx({ id: "f2", thirdPlace: true })]));
     const plain = builtAsPosted(readback(ko), observed([fx({})]));
     expect(plain.verdict).toBe("pass");
-    expect(plain.checked).toBe(one.checked - 1 - (Object.keys(tp.config).length - Object.keys(ko.config).length));
+    // The plain knockout carries its own third-place item: only the posted thirdPlace key differs.
+    expect(plain.checked).toBe(one.checked - (Object.keys(tp.config).length - Object.keys(ko.config).length));
+    expect(builtAsPosted(readback(ko), observed([fx({}), fx({ id: "f2", thirdPlace: true })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted no thirdPlace, built 1 third-place fixture(s)"] });
+    // A non-knockout body judges no third-place item.
+    const lg = stagesForRow("league")[0]!;
+    expect(builtAsPosted(readback(lg), observed([fx({}), fx({ id: "f2", thirdPlace: true })])).evidence.join("\n")).not.toMatch(/third-place/);
   });
   it("the flag reaches the check from the product's row (`third_place`) through the real scenario's snapshot", async () => {
     /** A knockout product that also mints its third-place match, flagged as the product's row flags it. */
@@ -636,6 +643,16 @@ describe("knockout_third_place: the third-place match is BUILT, not only stored 
     expect(await built(new ThirdPlaceKo(), "knockout_third_place")).toMatchObject({ verdict: "pass" });
     expect(await built(new FakeKnockoutDriver(), "knockout_third_place")).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 0 third-place fixture(s)"] });
     expect(await built(new ThirdPlaceKo(), "knockout")).toMatchObject({ verdict: "pass" });
+    /** m-4: a product that mints the third-place match whether or not it was asked. */
+    class AlwaysThirdPlaceKo extends FakeKnockoutDriver {
+      override async start() {
+        const out = await super.start();
+        this.seat(Math.max(...this.fixtures.map((f) => f.round_no ?? 0)), null, null, { third_place: true } satisfies Partial<FakeFixture>);
+        return out;
+      }
+    }
+    expect(await built(new AlwaysThirdPlaceKo(), "knockout")).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted no thirdPlace, built 1 third-place fixture(s)"] });
+    expect(await built(new AlwaysThirdPlaceKo(), "knockout_third_place")).toMatchObject({ verdict: "pass" });
   });
   it("text pin: the org fixtures list the driver reads selects `f.third_place` and the route does not strip it", () => {
     const usecase = readFileSync(resolve(REPO, "apps/web/src/server/usecases/fixtures.ts"), "utf8");

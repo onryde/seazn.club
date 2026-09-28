@@ -10,7 +10,7 @@ import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, buil
 import { RefusedCall } from "../lib/driver/types.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
-import { PROBE_API_ROWS, PROBE_SET, makeProbePlanner } from "../lib/probe-set.ts";
+import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
@@ -196,6 +196,9 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", PROBE_SET, "--report-dir", dirFor()])).toBe(2);
     expect(io.err()).toMatch(/RedisHidesDeny: .*REDIS_URL/);
+    // Fix round 1, m-2: the refusal says plainly WHICH environment it read.
+    expect(io.err()).toContain("REDIS_URL is set in the harness's own environment");
+    expect(io.err()).toContain("the server's environment is not visible to this check");
     expect(io.err()).not.toContain("redis://localhost:6379");
     expect(d.order).toEqual([]);
   });
@@ -217,6 +220,13 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", PROBE_SET, "--report-dir", dirFor()])).toBe(2);
     expect(io.err()).toMatch(/BoundVariantUnscorable: .*win-home: EngineError: refused now/);
+    expect(d.order).toEqual([]);
+  });
+  it("fix round 1, m-1: a row whose stages cannot be derived refuses the set by name (exit 2, not the zero-cases 1) before the DB", async () => {
+    const d = deps({ planCases: makeProbePlanner({ stagesFor: (row) => { if (row === "group_only") throw new Error("template removed"); return stagesForRow(row); } }) });
+    const io = capture();
+    expect(await runSlice(d, ["--set", PROBE_SET, "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toContain("matrix: ProbeRowUnderivable: probe-set: row 'group_only' cannot be derived (Error: template removed)");
     expect(d.order).toEqual([]);
   });
 });
@@ -638,7 +648,7 @@ describe("runSlice — a run", () => {
     capture();
     expect(await runSlice(d, ["--set", PROBE_SET, "--run-id", "pr", "--report-dir", dir])).toBe(0);
     const cases = resultsIn(dir, "pr").cases;
-    expect(cases.length).toBe(PROBE_API_ROWS.length + 7 + 2);
+    expect(cases.length).toBe(probeRows().api.length + 7 + 2);
     // Every case got its own org, and exactly the gated rows' orgs were denied their own gate.
     expect(d.orgs.length).toBe(cases.length);
     const deniedRows = ROW_KEYS.filter((r) => expectedGate(stagesForRow(r)) !== null);
@@ -646,6 +656,10 @@ describe("runSlice — a run", () => {
     cases.forEach((c, i) => {
       expect(d.orgs[i]?.deny, c.caseId).toEqual(c.scenario === "DENIED" ? [expectedGate(stagesForRow(c.row))] : undefined);
     });
+    // Fix round 1, I-1: a gated row's ALLOWED path runs too, in an org denied nothing.
+    const allowedGated = cases.flatMap((c, i) => (c.scenario === "LIFECYCLE" && expectedGate(stagesForRow(c.row)) !== null ? [{ row: c.row, deny: d.orgs[i]?.deny }] : []));
+    expect(allowedGated).toEqual(probeRows().api.filter((r) => expectedGate(stagesForRow(r)) !== null).map((row) => ({ row, deny: undefined })));
+    expect(allowedGated.length).toBeGreaterThan(0);
     expect(cases.filter((c) => c.scenario === "DENIED").map((c) => c.state)).toEqual(deniedRows.map(() => "refused"));
     // The two variant cases: generic and badminton, each scored under preset + its committed override.
     const bound = cases.filter((c) => /\|[a-z]+#\d{3}$/.test(c.caseId));
@@ -697,7 +711,7 @@ describe("runSlice — aborts after the start gates", () => {
     expect(await runSlice(d, ["--only", "league|generic", "--run-id", "a3", "--report-dir", dir])).toBe(2);
     expect(d.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
     expect(existsSync(join(dir, "a3"))).toBe(false);
-    expect(io.err()).toMatch(/DataDirMismatch/);
+    expect(io.err()).toMatch(/matrix: refused — DataDirMismatch/);
     expect(io.out()).not.toMatch(/\[2\/4\]/);
   });
   it("a failing dispose after the cases is reported, not allowed to lose the run", async () => {
@@ -752,7 +766,11 @@ describe("runSlice — aborts after the start gates", () => {
     const io = capture();
     const dir = dirFor();
     expect(await runSlice(d, ["--run-id", "drift", "--report-dir", dir])).toBe(2);
-    expect(io.err()).toContain(`BuilderDefaultDrift: matrix: generic: the live builder default is '${builderDefaultVariant("generic", drift)}' but the committed catalogue assumes '${offlineBuilderDefault("generic")}'`);
+    // Fix round 1, m-3: a refusal says "refused" (exit 2), and names the remedy
+    // that can work — regenerating the catalogue cannot (the offline default
+    // is derived from the engine at run time).
+    expect(io.err()).toContain(`matrix: refused — BuilderDefaultDrift: matrix: generic: the live builder default is '${builderDefaultVariant("generic", drift)}' but the committed catalogue assumes '${offlineBuilderDefault("generic")}' — the DB collation orders the system variants differently from codepoint order. Fix the ordering or BUILDER_PREFERRED_VARIANT (catalogue.ts); regenerating the catalogue cannot fix it, because the offline default is derived from the engine at run time.`);
+    expect(io.err()).not.toMatch(/aborted|regenerate or fix/);
     expect(d.orgs).toEqual([]);
     expect(existsSync(join(dir, "drift"))).toBe(false);
   });

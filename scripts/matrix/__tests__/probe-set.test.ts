@@ -4,11 +4,12 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { CreateStages } from "../../../apps/web/src/server/api-v1/schemas.ts";
 import { API_ONLY_ROWS, ROW_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { expectedGate } from "../lib/format-gates-copy.ts";
 import {
-  BoundVariantUnscorable, NoProbeVariant, PROBE_API_ROWS, PROBE_SET, SetTakesNoFilter, makeProbePlanner, pickProbeVariant, probePlanner, requireScorable,
+  BoundVariantUnscorable, NoProbeVariant, PROBE_SET, ProbeRowUnderivable, SetTakesNoFilter, makeProbePlanner, pickProbeVariant, probePlanner, probeRows, requireScorable,
 } from "../lib/probe-set.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
@@ -30,24 +31,32 @@ describe("the w1b-probe set", () => {
     expect([...probePlanner({ set: PROBE_SET }).sports]).toEqual(["generic", "badminton"]);
     expect(probePlanner({ set: PROBE_SET }).deniesFeatures).toBe(true);
   });
-  it("API-only LIFECYCLE: exactly the single-stage, ungated API-only rows, on generic (multi-stage stays deferred to W1-driving)", () => {
+  it("API-only LIFECYCLE: exactly the single-stage API-only rows, gated or not, on generic (multi-stage stays deferred to W1-driving)", () => {
     // single-sport: the rows' shapes are sport-independent; generic is the cheapest sport to drive.
-    const want = API_ONLY_ROWS.filter((r) => stagesForRow(r).length === 1 && expectedGate(stagesForRow(r)) === null);
-    expect(want.length).toBeGreaterThan(0);
-    // The filter has something to drop on both sides: a multi-stage API-only
-    // row, and a gated one (else the test could not see either filter go).
+    const want = API_ONLY_ROWS.filter((r) => stagesForRow(r).length === 1);
+    // Fix round 1, I-1: group_only, knockout_third_place, page_playoff_only, stepladder_only.
+    expect(want.length).toBe(4);
+    // The filter has something to drop: a multi-stage API-only row.
     expect(API_ONLY_ROWS.some((r) => stagesForRow(r).length > 1)).toBe(true);
-    expect(API_ONLY_ROWS.some((r) => stagesForRow(r).length === 1 && expectedGate(stagesForRow(r)) !== null)).toBe(true);
-    expect([...PROBE_API_ROWS]).toEqual(want);
+    expect([...probeRows().api]).toEqual(want);
     const got = specs.filter((s) => s.scenario === "LIFECYCLE" && s.overrides === undefined);
     expect(got.map((s) => s.row)).toEqual(want);
     expect(got.every((s) => s.sport === "generic" && s.deny === undefined)).toBe(true);
+  });
+  it("I-1: a gated API-only row is driven on its ALLOWED path (LIFECYCLE, no deny — the org holds the top plan) AND refused on its DENIED one", () => {
+    const gatedApi = API_ONLY_ROWS.filter((r) => stagesForRow(r).length === 1 && expectedGate(stagesForRow(r)) !== null);
+    expect(gatedApi.length).toBeGreaterThan(0);
+    for (const row of gatedApi) {
+      const mine = specs.filter((s) => s.row === row && s.overrides === undefined);
+      expect(mine.map((s) => [s.scenario, s.deny]), row).toEqual([["LIFECYCLE", undefined], ["DENIED", [expectedGate(stagesForRow(row))]]]);
+    }
   });
   it("DENIED: one case per gated row in registry order, each denying exactly its own gate", () => {
     const gated = ROW_KEYS.filter((r) => expectedGate(stagesForRow(r)) !== null);
     expect(gated.length).toBe(7); // false premise 7: seven gated rows today
     const got = specs.filter((s) => s.scenario === "DENIED");
     expect(got.map((s) => s.row)).toEqual(gated);
+    expect(probeRows().denied).toEqual(gated.map((row) => ({ row, gate: expectedGate(stagesForRow(row)) })));
     for (const s of got) expect(s.deny).toEqual([expectedGate(stagesForRow(s.row))]);
     expect(got.every((s) => s.sport === "generic" && s.overrides === undefined)).toBe(true);
   });
@@ -72,14 +81,14 @@ describe("the w1b-probe set", () => {
   });
   it("case ids are unique; the whole set is the three parts and nothing else", () => {
     expect(new Set(specs.map((s) => s.caseId)).size).toBe(specs.length);
-    expect(specs.length).toBe(PROBE_API_ROWS.length + 7 + 2);
+    expect(specs.length).toBe(probeRows().api.length + 7 + 2);
     expect(specs.every((s) => s.canary === false)).toBe(true);
   });
   it("the API and DENIED cases take the LIVE builder default; the variant cases keep their committed preset", () => {
     const asked: string[] = [];
     const live = probePlanner({ set: PROBE_SET }).plan((s) => { asked.push(s); return `live-${s}`; });
     const plain = live.filter((s) => s.overrides === undefined);
-    expect(plain.length).toBe(PROBE_API_ROWS.length + 7);
+    expect(plain.length).toBe(probeRows().api.length + 7);
     expect(plain.every((s) => s.variant === "live-generic" && s.caseId.includes("|live-generic|"))).toBe(true);
     const bound = live.filter((s) => s.overrides !== undefined);
     expect(bound.map((s) => s.variant)).toEqual(SLICE_SPORTS.map((sp) => casesOf(sp).find((c) => Object.keys(c.overrides).length > 0 && c.scorable === null && (SLICE_ROWS as readonly string[]).includes(c.row))!.preset));
@@ -144,5 +153,62 @@ describe("the run-time scorability re-check (T6/T8 carry)", () => {
   it("a scorable case (recorded and re-scored with the real scorable) passes through unchanged", () => {
     const ok = casesOf("badminton").find((c) => c.scorable === null)!;
     expect(requireScorable(ok)).toBe(ok);
+  });
+});
+
+describe("fix round 1, m-1: the rows are derived when the set is BUILT, never at import", () => {
+  const brokenAt = "stepladder_only";
+  const broken = (row: string) => {
+    if (row === brokenAt) throw new Error("template removed");
+    return stagesForRow(row);
+  };
+  it("a derivation that throws is a named refusal naming the row and the cause", () => {
+    expect(() => probeRows(broken)).toThrow(ProbeRowUnderivable);
+    expect(() => probeRows(broken)).toThrow(`probe-set: row '${brokenAt}' cannot be derived (Error: template removed)`);
+    expect(() => makeProbePlanner({ stagesFor: broken })({ set: PROBE_SET })).toThrow(ProbeRowUnderivable);
+  });
+  it("…and every row is asked, so a throw on the LAST registry row is caught too", () => {
+    const last = ROW_KEYS[ROW_KEYS.length - 1]!;
+    const asked: string[] = [];
+    expect(() => probeRows((r) => { asked.push(r); if (r === last) throw new Error("x"); return stagesForRow(r); })).toThrow(`row '${last}'`);
+    expect(asked.length).toBeGreaterThanOrEqual(ROW_KEYS.length);
+  });
+  it("with the catalogue's own stagesForRow broken for one row, probe-set.ts and run.ts still IMPORT; building the set refuses by name", async () => {
+    vi.resetModules();
+    vi.doMock("../lib/catalogue.ts", async (importOriginal) => {
+      const orig = await importOriginal<typeof import("../lib/catalogue.ts")>();
+      return { ...orig, stagesForRow: (row: string, knobs?: Parameters<typeof orig.stagesForRow>[1]) => {
+        if (row === brokenAt) throw new Error("template removed");
+        return orig.stagesForRow(row, knobs);
+      } };
+    });
+    try {
+      const fresh = await import("../lib/probe-set.ts");
+      await expect(import("../run.ts")).resolves.toBeDefined();
+      // The mock is live in the fresh module graph (else the refusal below proves nothing).
+      expect(() => fresh.probeRows()).toThrow(`row '${brokenAt}'`);
+      expect(() => fresh.probePlanner({ set: fresh.PROBE_SET })).toThrow(/ProbeRowUnderivable|cannot be derived/);
+    } finally {
+      vi.doUnmock("../lib/catalogue.ts");
+      vi.resetModules();
+    }
+  });
+});
+
+describe("fix round 1, m-5: every API-only row's body passes the product's POST door (CreateStages)", () => {
+  it("each body parses as the harness posts it (the array of stagesForRow), and the count is every API-only row", () => {
+    let parsed = 0;
+    for (const row of API_ONLY_ROWS) {
+      const r = CreateStages.safeParse(stagesForRow(row));
+      expect(r.success, `${row}: ${r.success ? "" : JSON.stringify(r.error.issues)}`).toBe(true);
+      parsed++;
+    }
+    expect(parsed).toBe(API_ONLY_ROWS.length);
+    // The set's API rows are among them.
+    expect(probeRows().api.every((r) => (API_ONLY_ROWS as readonly string[]).includes(r))).toBe(true);
+  });
+  it("the door is not a pass-through: a body with a stray config key is refused (else the sweep proves nothing)", () => {
+    const [first] = stagesForRow(API_ONLY_ROWS[0]!);
+    expect(CreateStages.safeParse([{ ...first, config: { ...first!.config, notAKey: 1 } }]).success).toBe(false);
   });
 });

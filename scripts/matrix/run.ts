@@ -17,7 +17,8 @@
 //      filter, a run id that is empty or too long once slugged); an unknown
 //      filter value (UnknownFilter — checked before anything else, PF13); an
 //      unknown --set (UnknownSet) or a planner that refuses to be built (a
-//      bound variant case the engine cannot score, BoundVariantUnscorable);
+//      bound variant case the engine cannot score, BoundVariantUnscorable; a
+//      row whose stages cannot be derived, ProbeRowUnderivable);
 //      a planner that plants entitlement denies while REDIS_URL is set
 //      (RedisHidesDeny, Review Focus 4); no base URL; no own-DB proof
 //      (BENCH_EXPECTED_DATA_DIR unset, or a data_directory mismatch at ANY
@@ -25,7 +26,9 @@
 //      product red); a failed preflight; a live builder default that differs
 //      from the offline one the committed catalogue assumes
 //      (BuilderDefaultDrift, Review Focus 5 — found after sign-in, before any
-//      case).
+//      case). BuilderDefaultDrift is an environment refusal, not catalogue
+//      drift (gen-catalogue's exit 1): the codes are per CLI, so a wrapper
+//      switches on the CLI, never on the code alone.
 //   3  aborted after the start gates, reason on stderr: the harness commit,
 //      the DB, sign-in, a planning read, a planner that plans a deny it did
 //      not declare (UndeclaredDeny), or writeResults refusing a secret
@@ -140,10 +143,14 @@ export class UnknownSet extends Error {
 
 /** Review Focus 4: lib/entitlements.ts caches through @/lib/cache, which is a
  *  no-op without REDIS_URL. With Redis on, a cached allow (`ent:<org>:*`,
- *  300 s) can hide the SQL deny, and the ⛔ case would read the Pro plan. */
+ *  300 s) can hide the SQL deny, and the ⛔ case would read the Pro plan.
+ *  Fix round 1, m-2: this proves the HARNESS shell's environment only. The
+ *  cache lives in the SERVER process, and no endpoint reports whether it has
+ *  REDIS_URL (/api/health answers db only), so a live run must also confirm
+ *  the server was started without it (the Task 15 runbook step). */
 export class RedisHidesDeny extends Error {
   constructor() {
-    super("matrix: this run plants entitlement denies, and REDIS_URL is set — lib/entitlements.ts caches through Redis, so a cached allow can hide the deny. Unset REDIS_URL (seazn-local-env: no Redis) and rerun.");
+    super("matrix: this run plants entitlement denies, and REDIS_URL is set in the harness's own environment — lib/entitlements.ts caches through Redis, so a cached allow can hide the deny. Unset REDIS_URL (seazn-local-env: no Redis) and rerun. Note: the server's environment is not visible to this check; start the server without REDIS_URL too.");
     this.name = "RedisHidesDeny";
   }
 }
@@ -155,7 +162,7 @@ export class RedisHidesDeny extends Error {
 export class BuilderDefaultDrift extends Error {
   readonly sport: string;
   constructor(sport: string, live: string, offline: string) {
-    super(`matrix: ${sport}: the live builder default is '${live}' but the committed catalogue assumes '${offline}' (DB collation vs codepoint order) — regenerate or fix the ordering before trusting any case`);
+    super(`matrix: ${sport}: the live builder default is '${live}' but the committed catalogue assumes '${offline}' — the DB collation orders the system variants differently from codepoint order. Fix the ordering or BUILDER_PREFERRED_VARIANT (catalogue.ts); regenerating the catalogue cannot fix it, because the offline default is derived from the engine at run time.`);
     this.name = "BuilderDefaultDrift";
     this.sport = sport;
   }
@@ -419,8 +426,9 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   try {
     return await execute(deps, cli, base, planner);
   } catch (e) {
-    warn(`matrix: aborted — ${errText(e)}`);
-    return e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift ? EXIT.REFUSED : EXIT.ABORTED;
+    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift;
+    warn(`matrix: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
+    return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
 }
 
