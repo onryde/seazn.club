@@ -60,11 +60,29 @@ describe("scripts/matrix import boundary", () => {
     }
   });
 
-  it("invariants.ts and observed.ts import types only (reusable by W1b fast-check and W10 shadow checks)", () => {
+  // PF7: the two TYPE_ONLY modules may VALUE-import each other (invariants.ts
+  // reuses observed.ts's pure helpers rather than duplicating them) and nothing
+  // else. Both files are checked, so the pair as a whole stays free of engine,
+  // HTTP, bench, apps/web and node: value imports. Only `import type` /
+  // `export type … from` count as type-only: `import { type X }` is read as a
+  // value import (the regex keys on the statement keyword), so write the
+  // statement form.
+  it("invariants.ts and observed.ts import types only, except each other (reusable by W1b fast-check and W10 shadow checks)", () => {
+    const pair = new Set([...TYPE_ONLY].map((rel) => join(MATRIX, rel)));
+    let files = 0;
     for (const rel of TYPE_ONLY) {
       const file = join(MATRIX, rel);
-      if (!MODULES.includes(file)) continue; // lands in Task 5; this test then bites
-      for (const imp of importsOf(file)) expect(imp.typeOnly, `${rel}: ${imp.spec}`).toBe(true);
+      // Both must exist: a missing file would skip its whole check (vacuous).
+      expect(MODULES, `${rel} is not a shipped module`).toContain(file);
+      files++;
+      const imports = importsOf(file);
+      expect(imports.length, `${rel}: no imports parsed (the regex read nothing)`).toBeGreaterThan(0);
+      for (const imp of imports) {
+        if (imp.typeOnly) continue;
+        const target = imp.spec.startsWith(".") ? resolve(dirname(file), imp.spec) : null;
+        expect(target !== null && target !== file && pair.has(target), `${rel}: value import of ${imp.spec}`).toBe(true);
+      }
     }
+    expect(files).toBe(TYPE_ONLY.size);
   });
 });
