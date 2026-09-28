@@ -263,6 +263,45 @@ describe("HttpDriver — reads and probes", () => {
   });
 });
 
+// ⛔ (Task 9): a 402 is named only by its feature_key — api-v1/http.ts's
+// PaymentRequiredError branch answers the generic PAYMENT_REQUIRED code, so the
+// key is the one field that says WHICH gate refused.
+describe("HttpDriver — denied stages (Task 9)", () => {
+  const body = [{ seq: 1, kind: "double_elim", config: {}, progression: null }] as never;
+  it("postStages on a 402 throws a RefusedCall carrying feature_key", async () => {
+    const { t } = fake([(c) => (c.method === "POST" ? err(402, "PAYMENT_REQUIRED", { feature_key: "formats.double_elim" }) : undefined)]);
+    const e = await drv(t).postStages("d1", body).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).status).toBe(402);
+    expect((e as RefusedCall).code).toBe("PAYMENT_REQUIRED");
+    expect((e as RefusedCall).featureKey).toBe("formats.double_elim");
+  });
+  it("a refusal without feature_key carries null (empty case)", async () => {
+    const { t } = fake([() => err(422, "INVALID_STAGE")]);
+    const e = await drv(t).postStages("d1", body).catch((x: unknown) => x);
+    expect((e as RefusedCall).featureKey).toBeNull();
+  });
+  it("a RefusedCall built with the five original arguments carries a null featureKey", () => {
+    expect(new RefusedCall("GET", "/x", 400, "X", "m").featureKey).toBeNull();
+  });
+  it("replaceStagesProbe PUTs the body and returns the refusal without throwing", async () => {
+    const { t, calls } = fake([(c) => (c.method === "PUT" ? err(402, "PAYMENT_REQUIRED", { feature_key: "formats.advanced" }) : undefined)]);
+    expect(await drv(t).replaceStagesProbe("d1", body)).toEqual({ status: 402, code: "PAYMENT_REQUIRED", featureKey: "formats.advanced" });
+    expect(calls).toMatchObject([{ path: "/api/v1/divisions/d1/stages", method: "PUT", body }]);
+  });
+  it("replaceStagesProbe on 2xx returns status with null code and key", async () => {
+    const { t } = fake([() => ok([{ id: "s1" }])]);
+    expect(await drv(t).replaceStagesProbe("d1", body)).toEqual({ status: 200, code: null, featureKey: null });
+  });
+  it("replaceStagesProbe reports a 5xx or a keyless 4xx as it came, and counts each call", async () => {
+    const { t } = fake([(c) => (c.method === "PUT" && c.path.includes("/d1/") ? err(500, "INTERNAL") : undefined), () => err(409, "FORMAT_LOCKED")]);
+    const d = drv(t);
+    expect(await d.replaceStagesProbe("d1", body)).toEqual({ status: 500, code: "INTERNAL", featureKey: null });
+    expect(await d.replaceStagesProbe("d2", body)).toEqual({ status: 409, code: "FORMAT_LOCKED", featureKey: null });
+    expect(d.callCount).toBe(2);
+  });
+});
+
 describe("driver errors are redacted (R14a — public repo)", () => {
   it("every driver error redacts its message, and RefusedCall its path", () => {
     const secret = "token=abc123secret";

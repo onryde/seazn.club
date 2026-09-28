@@ -68,6 +68,41 @@ describe("decideState — error reds vs vacuous reds (PF4)", () => {
   });
 });
 
+// ⛔ (Task 9, ruling 24): `mandated` turns a green into `refused` and nothing
+// else — every red and every deferral keeps its own state and reason.
+describe("decideState — mandated refusal (⛔, Task 9)", () => {
+  const pass = (id: string, checked = 1): CheckResult => ({ id, kind: "assertion", verdict: "pass", checked, reason: "", evidence: [] });
+  it("empty case first: a mandated refusal with no checks is still vacuous red, never ⛔", () => {
+    expect(decideState({ checks: [], deferred: null, error: null, mandated: "denied: formats.double_elim" }).state).toBe("red");
+  });
+  it("all checks pass → refused, carrying the mandate as the reason", () => {
+    expect(decideState({ checks: [pass("a")], deferred: null, error: null, mandated: "denied: formats.double_elim" })).toEqual({ state: "refused", reason: "denied: formats.double_elim" });
+  });
+  it("a failed check beats the mandate: red", () => {
+    const failed: CheckResult = { ...pass("b"), verdict: "fail", reason: "stages deleted" };
+    expect(decideState({ checks: [pass("a"), failed], deferred: null, error: null, mandated: "x" }).state).toBe("red");
+  });
+  it("a zero-item applied check beats the mandate: vacuous red", () => {
+    expect(decideState({ checks: [pass("a", 0)], deferred: null, error: null, mandated: "x" }).state).toBe("red");
+  });
+  it("every check abstaining beats the mandate: vacuous red", () => {
+    const abstain: CheckResult = { ...pass("a", 0), verdict: "abstain", reason: "n/a" };
+    expect(decideState({ checks: [abstain], deferred: null, error: null, mandated: "x" })).toEqual({ state: "red", reason: expect.stringMatching(/vacuous/) });
+  });
+  it("an abstention beside an applied pass does not block ⛔ (the applied check carries it)", () => {
+    const abstain: CheckResult = { ...pass("z", 0), verdict: "abstain", reason: "n/a" };
+    expect(decideState({ checks: [pass("a"), abstain], deferred: null, error: null, mandated: "x" }).state).toBe("refused");
+  });
+  it("an error and a deferral each beat the mandate", () => {
+    expect(decideState({ checks: [pass("a")], deferred: null, error: "boom", mandated: "x" })).toEqual({ state: "red", reason: "error: boom" });
+    expect(decideState({ checks: [pass("a")], deferred: { wave: "W9", reason: "later" }, error: null, mandated: "x" })).toEqual({ state: "later", reason: "W9: later" });
+  });
+  it("no mandate: unchanged — works", () => {
+    expect(decideState({ checks: [pass("a")], deferred: null, error: null }).state).toBe("works");
+    expect(decideState({ checks: [pass("a")], deferred: null, error: null, mandated: null }).state).toBe("works");
+  });
+});
+
 describe("glyphs and schema", () => {
   it("every state has a distinct glyph", () => {
     expect(new Set(CASE_STATES.map((s) => GLYPH[s])).size).toBe(CASE_STATES.length);

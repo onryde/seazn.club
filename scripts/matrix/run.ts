@@ -72,7 +72,8 @@ export interface RunDeps {
   preflight(base: string): Promise<{ ok: boolean; refusals: { reason: string; detail: string }[] }>;
   openDb(): Promise<RunDb>;
   signIn(base: string, email: string): Promise<Session>;
-  prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }>;
+  /** `deny` (ruling 24): feature keys the case org is denied after provisioning. */
+  prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string }>;
   driverFor(base: string, session: Session, orgId: string): OrganiserDriver;
   /** MATRIX.md from the results just written (realDeps: renderMatrix). A seam
    *  so the render-failure path is testable without bending shared state. */
@@ -189,6 +190,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   const t0 = Date.now();
   let checks: CheckResult[] = [];
   let deferred: { wave: string; reason: string } | null = null;
+  let mandated: string | null = null;
   let error: string | null = null;
   let refusal: CallRefusal | null = null;
   let driver: OrganiserDriver | null = null;
@@ -197,11 +199,15 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   try {
     const org = await deps.prepareCaseOrg(
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
-      { name: `Matrix ${run.runId} ${i + 1}`, slug: `m-${run.runId}-${i + 1}` },
+      { name: `Matrix ${run.runId} ${i + 1}`, slug: `m-${run.runId}-${i + 1}`, deny: spec.deny },
     );
     driver = deps.driverFor(run.base, run.session, org.orgId);
-    const out = await SCENARIOS[spec.scenario].run({ driver, spec, orgSlug: org.orgSlug, cfg: resolveSportCfg(spec.sport, spec.variant), tag: `${run.runId}-${i + 1}` });
-    checks = [...evaluateInvariants(out.observed), ...out.assertions].map(redactCheck);
+    const scenario = SCENARIOS[spec.scenario];
+    const out = await scenario.run({ driver, spec, orgSlug: org.orgSlug, cfg: resolveSportCfg(spec.sport, spec.variant), tag: `${run.runId}-${i + 1}` });
+    // ⛔ (Task 9): a scenario that builds no stage opts out of the fixture
+    // invariants, and one whose expected state is a refusal says so.
+    checks = [...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions].map(redactCheck);
+    mandated = scenario.mandatedRefusal?.(spec) ?? null;
     counts = { calls: driver.callCount, fixtures: out.observed.stages.reduce((n, s) => n + s.fixtures.length, 0), events: out.events };
     notes = keepNotes(out.notes);
   } catch (e) {
@@ -215,7 +221,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
     }
     if (driver !== null) counts = { ...counts, calls: driver.callCount };
   }
-  const { state, reason } = decideState({ checks, deferred, error });
+  const { state, reason } = decideState({ checks, deferred, error, mandated });
   const result: CaseResult = {
     caseId: spec.caseId, row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
     state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0, notes,

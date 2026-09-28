@@ -41,6 +41,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
       async insertCaseOrg(i) { calls.push("insertCaseOrg"); return { orgId: "o1", orgSlug: i.slug }; },
       async listPlanKeys() { calls.push("listPlanKeys"); return ["pro"]; },
       async variantKeysInBuilderOrder() { calls.push("variantKeysInBuilderOrder"); return ["bwf"]; },
+      async denyFeature() { calls.push("denyFeature"); },
     };
     return { calls, inner };
   };
@@ -49,6 +50,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     () => sql.insertCaseOrg({ userId: "u1", name: "n", slug: "s" }),
     () => sql.listPlanKeys(),
     () => sql.variantKeysInBuilderOrder("badminton"),
+    () => sql.denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" }),
   ];
 
   it("a blank expected dir refuses at construction", () => {
@@ -72,7 +74,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     let reads = 0;
     const sql = gateOnOwnDataDir(inner, async () => { reads++; return "/tmp/pg-fm"; }, "/tmp/pg-fm");
     for (const call of everyMethod(sql)) await call();
-    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder"]);
+    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder", "denyFeature"]);
     expect(reads).toBe(1);
     expect(await sql.insertCaseOrg({ userId: "u1", name: "n", slug: "m-r-1" })).toEqual({ orgId: "o1", orgSlug: "m-r-1" });
   });
@@ -198,6 +200,49 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
   });
 });
 
+describe("denyFeature (ruling 24) — gated, upserted, read back", () => {
+  const DENY_ROWS = (text: string): unknown[] =>
+    text.startsWith("select bool_value") ? [{ bool_value: false, expires_at: null }] : [];
+  it("a foreign data_directory refuses it and runs nothing but the one probe", async () => {
+    const { db, seen } = fakeClient("/usr/local/var/postgres");
+    await expect(matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId: "o1", featureKey: "formats.double_elim", reason: "matrix denied" })).rejects.toBeInstanceOf(DataDirMismatch);
+    expect(seen).toEqual([PROBE]);
+  });
+  it("one transaction: re-prove, upsert false with no expiry, read back", async () => {
+    const { db, seen } = fakeClient("/tmp/pg-fm", DENY_ROWS);
+    await matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId: "o1", featureKey: "formats.double_elim", reason: "matrix denied" });
+    expect(shape(seen)).toEqual(["db show data_directory", "BEGIN", "tx show data_directory", "tx insert into org_entitlement_overrides", "tx select bool_value, expires_at from org_entitlement_overrides where org_id = $ and feature_key = $", "COMMIT"]);
+    const ins = seen.filter((s): s is Stmt => typeof s !== "string")[2]!;
+    expect(ins.values).toEqual(["o1", "formats.double_elim", "matrix denied"]);
+    expect(ins.text).toMatch(/values \(\$, \$, false, \$\) on conflict \(org_id, feature_key\) do update set bool_value = false, int_value = null, reason = excluded\.reason, expires_at = null$/);
+    const back = seen.filter((s): s is Stmt => typeof s !== "string")[3]!;
+    expect(back.values).toEqual(["o1", "formats.double_elim"]);
+  });
+  it("the transaction's own probe answering a foreign dir aborts before the upsert (a reconnect)", async () => {
+    const { db, seen } = fakeClient("/tmp/pg-fm", DENY_ROWS, "/usr/local/var/postgres");
+    await expect(matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" })).rejects.toBeInstanceOf(DataDirMismatch);
+    expect(shape(seen)).toEqual(["db show data_directory", "BEGIN", "tx show data_directory", "ROLLBACK"]);
+  });
+  it("a second deny of the same key is the same upsert, re-proved on its own transaction", async () => {
+    const { db, seen } = fakeClient("/tmp/pg-fm", DENY_ROWS);
+    const sql = matrixSqlOver(db, "/tmp/pg-fm");
+    await sql.denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" });
+    await sql.denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" });
+    expect(shape(seen).filter((s) => s.startsWith("tx insert"))).toHaveLength(2);
+    expect(shape(seen).filter((s) => s === "tx show data_directory")).toHaveLength(2);
+  });
+  it("a read-back that is not a live false refuses (and rolls back)", async () => {
+    let judged = 0;
+    for (const row of [[], [{ bool_value: true, expires_at: null }], [{ bool_value: null, expires_at: null }], [{ bool_value: false, expires_at: "2030-01-01T00:00:00Z" }]]) {
+      const { db, seen } = fakeClient("/tmp/pg-fm", (t) => (t.startsWith("select bool_value") ? row : []));
+      await expect(matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" })).rejects.toThrow(/deny did not hold/);
+      expect(seen.at(-1)).toBe("ROLLBACK");
+      judged++;
+    }
+    expect(judged).toBe(4);
+  });
+});
+
 describe("chooseTopPublicPlan — empty first", () => {
   it("no candidates, or none public, refuses", () => {
     expect(() => chooseTopPublicPlan([])).toThrow(NoPublicPlan);
@@ -277,6 +322,7 @@ describe("prepareCaseOrg", () => {
     async insertCaseOrg(i) { order.push(`insert ${i.userId} ${i.name} ${i.slug}`); return { orgId: "o9", orgSlug: i.slug }; },
     async listPlanKeys() { return []; },
     async variantKeysInBuilderOrder() { return []; },
+    async denyFeature(i) { order.push(`deny ${i.orgId} ${i.featureKey}`); },
   });
 
   it("inserts, switches, then provisions — in that order", async () => {
@@ -291,6 +337,27 @@ describe("prepareCaseOrg", () => {
     const t: Transport = { async raw(_b, _s, path, method = "GET") { order.push(`${method} ${path}`); return okData({ ok: true }); } }; // sets no cookie
     await expect(prepareCaseOrg({ sql: fakeSql(order), transport: t, base: "http://localhost:1", session: fresh(), userId: "u1", plan: "pro", provision: async () => { order.push("provision"); } }, { name: "Matrix 1", slug: "m-r-1" })).rejects.toBeInstanceOf(OrgSwitchFailed);
     expect(order).not.toContain("provision");
+  });
+  it("denies AFTER provisioning, each key once, in order; no deny → no deny call (ruling 24)", async () => {
+    const order: string[] = [];
+    const t: Transport = { async raw(_b, s, path, method = "GET", body) { order.push(`${method} ${path}`); s.cookies[PRODUCT_ORG_COOKIE] = (body as { org_id: string }).org_id; return okData({ ok: true }); } };
+    const deps = { sql: fakeSql(order), transport: t, base: "http://localhost:1", session: fresh(), userId: "u1", plan: "pro", provision: async (o: string, p: string) => { order.push(`provision ${o} ${p}`); } };
+    await prepareCaseOrg(deps, { name: "Matrix 1", slug: "m-r-1", deny: ["formats.double_elim", "formats.advanced"] });
+    expect(order).toEqual(["insert u1 Matrix 1 m-r-1", "POST /api/orgs/active", "provision o9 pro", "deny o9 formats.double_elim", "deny o9 formats.advanced"]);
+    order.length = 0;
+    await prepareCaseOrg({ ...deps, session: fresh() }, { name: "Matrix 1", slug: "m-r-1" });
+    expect(order.some((l) => l.startsWith("deny"))).toBe(false);
+    expect(order).toHaveLength(3);
+    order.length = 0;
+    await prepareCaseOrg({ ...deps, session: fresh() }, { name: "Matrix 1", slug: "m-r-1", deny: [] });
+    expect(order.some((l) => l.startsWith("deny"))).toBe(false);
+    expect(order).toHaveLength(3);
+  });
+  it("a failed provision never denies (the deny would land on an org that is not set up)", async () => {
+    const order: string[] = [];
+    const t: Transport = { async raw(_b, s, _p, _m, body) { s.cookies[PRODUCT_ORG_COOKIE] = (body as { org_id: string }).org_id; return okData({ ok: true }); } };
+    await expect(prepareCaseOrg({ sql: fakeSql(order), transport: t, base: "http://localhost:1", session: fresh(), userId: "u1", plan: "pro", provision: async () => { throw new Error("provision failed"); } }, { name: "Matrix 1", slug: "m-r-1", deny: ["formats.advanced"] })).rejects.toThrow(/provision failed/);
+    expect(order.some((l) => l.startsWith("deny"))).toBe(false);
   });
 });
 
@@ -355,13 +422,35 @@ describe("mirror pin: createOrgForUser's inserts (a product change reds here)", 
     expect(body).toMatch(/insert into org_members\s*\(\s*org_id,\s*user_id,\s*role\s*\)/);
   });
 
-  it("parser discovery guard: exactly the three inserts on each side (none parsed would pass vacuously)", () => {
+  // Task 9: matrixSqlOver also holds ONE insert that mirrors nothing — the
+  // ruling-24 deny upsert, pinned against the resolver below. Any other new
+  // insert still reds the guard.
+  it("parser discovery guard: the product's three inserts; seed-org's three mirrors plus the one deny upsert (none parsed would pass vacuously)", () => {
     expect(insertsIn(body).map((i) => i.table)).toEqual(["subscriptions", "organizations", "org_members"]);
-    expect(insertsIn(fnBody(SEED, "export function matrixSqlOver")).map((i) => i.table)).toEqual(["subscriptions", "organizations", "org_members"]);
+    expect(insertsIn(fnBody(SEED, "export function matrixSqlOver")).map((i) => i.table)).toEqual(["subscriptions", "organizations", "org_members", "org_entitlement_overrides"]);
   });
 
   it("seed-org's inserts equal the product's: same tables, same columns, same literal values ('owner', 'community', 'active', 1)", () => {
-    expect(insertsIn(fnBody(SEED, "export function matrixSqlOver"))).toEqual(insertsIn(body));
+    expect(insertsIn(fnBody(SEED, "export function matrixSqlOver")).filter((i) => i.table !== "org_entitlement_overrides")).toEqual(insertsIn(body));
+  });
+});
+
+describe("mirror pin: the deny is what the product's resolver reads as a live false (lib/entitlements.ts; ruling 24)", () => {
+  const ENT = readFileSync(resolve(REPO, "apps/web/src/lib/entitlements.ts"), "utf8");
+  it("overrideRow reads a null expires_at as live, the overlay lets a false beat the plan, and hasFeature wants === true", () => {
+    expect(fnBody(ENT, "export async function overrideRow")).toMatch(/from org_entitlement_overrides\s+where org_id = \$\{orgId\} and feature_key = \$\{featureKey\}\s+and \(expires_at is null or expires_at > now\(\)\)/);
+    // `??`, not `||`: a false override is an answer, so it wins over any plan value.
+    expect(ENT).toContain("bool_value: ov.bool_value ?? base?.bool_value ?? null,");
+    expect(fnBody(ENT, "export async function hasFeature")).toContain("return row?.bool_value === true;");
+    expect(fnBody(ENT, "export async function requireFeature")).toMatch(/if \(!enabled\) throw new PaymentRequiredError\(featureKey\);/);
+  });
+  it("the upsert's conflict target is the table's primary key, and the columns it writes exist", () => {
+    const v025 = readFileSync(resolve(REPO, "db/migration/v1-baseline/V025__org_entitlement_overrides.sql"), "utf8");
+    const v266 = readFileSync(resolve(REPO, "db/migration/deltas/V266__admin_plan_tools.sql"), "utf8");
+    expect(v025).toMatch(/primary key \(org_id, feature_key\)/);
+    for (const col of ["bool_value", "int_value", "reason"]) expect(v025, col).toMatch(new RegExp(`\\n\\s+${col}\\s`));
+    expect(v266).toMatch(/add column if not exists expires_at timestamptz/);
+    expect(fnBody(SEED, "export function matrixSqlOver")).toMatch(/on conflict \(org_id, feature_key\) do update set bool_value = false, int_value = null, reason = excluded\.reason, expires_at = null/);
   });
 });
 

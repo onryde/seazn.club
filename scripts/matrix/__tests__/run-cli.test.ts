@@ -16,20 +16,21 @@ import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
 import { NOTES_CAP, closeHandles, describeCommit, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
-import { FakeLeagueDriver } from "./fake-driver.ts";
+import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RUN = join(REPO, "scripts/matrix/run.ts");
 
 type PrepareCtx = Parameters<RunDeps["prepareCaseOrg"]>[0];
 interface DriverCall { base: string; session: Session; orgId: string; driver: FakeLeagueDriver }
-type Deps = RunDeps & { order: string[]; orgs: { name: string; slug: string }[]; ctxs: PrepareCtx[]; emails: string[]; drivers: DriverCall[]; session: Session };
+type PrepareInput = Parameters<RunDeps["prepareCaseOrg"]>[1];
+type Deps = RunDeps & { order: string[]; orgs: PrepareInput[]; ctxs: PrepareCtx[]; emails: string[]; drivers: DriverCall[]; session: Session };
 
 /** Every case gets its OWN org id (`org-<slug>`), and driverFor records what it
  *  was handed — so a stale, constant or empty org id cannot pass unseen. */
 function deps(over: Partial<RunDeps> = {}): Deps {
   const order: string[] = [];
-  const orgs: { name: string; slug: string }[] = [];
+  const orgs: PrepareInput[] = [];
   const ctxs: PrepareCtx[] = [];
   const emails: string[] = [];
   const drivers: DriverCall[] = [];
@@ -479,6 +480,42 @@ describe("runSlice — a run", () => {
     expect(reads.sports).toEqual([]);
     expect(existsSync(join(dir, "t8c"))).toBe(false);
   });
+
+  // ⛔ (Task 9). `deniesFeatures` belongs to CasePlanner from Task 10; here it
+  // is an extra, harmless property of the injected planner.
+  const deniedPlan = () => ({ sports: ["generic"], deniesFeatures: true, plan: (v: (s: string) => string) => [
+    { caseId: "double_elim|generic|score|DENIED", row: "double_elim", sport: "generic", variant: v("generic"), scenario: "DENIED", canary: false, deny: ["formats.double_elim"] },
+  ] as never });
+  it("a DENIED case: deny keys reach prepareCaseOrg, invariants are skipped, the state is ⛔ refused", async () => {
+    const dir = dirFor();
+    const d = deps({ planCases: deniedPlan, driverFor: (_b, _s, orgId) => new FakeDeniedDriver(new Map([["double_elim", "formats.double_elim"]]), { deleteFirst: false }, orgId) });
+    capture();
+    expect(await runSlice(d, ["--run-id", "den", "--report-dir", dir])).toBe(0);
+    expect(d.orgs[0]).toMatchObject({ deny: ["formats.double_elim"] });
+    const [c] = resultsIn(dir, "den").cases;
+    expect(c!.state).toBe("refused");
+    expect(c!.reason).toBe("denied: formats.double_elim (ruling 24)");
+    expect(c!.checks.map((k) => k.id)).toEqual(["denied-refused-named", "denied-nothing-created", "denied-put-keeps-stages"]);
+    expect(c!.checks.every((k) => k.kind === "assertion")).toBe(true);
+    expect(readFileSync(join(dir, "den", "MATRIX.md"), "utf8")).toContain("⛔");
+  });
+  it("a DENIED case whose PUT deletes the kept stages is ❌ red, never ⛔ — the mandate cannot hide a failed check", async () => {
+    const dir = dirFor();
+    const d = deps({ planCases: deniedPlan, driverFor: (_b, _s, orgId) => new FakeDeniedDriver(new Map([["double_elim", "formats.double_elim"]]), { deleteFirst: true }, orgId) });
+    capture();
+    expect(await runSlice(d, ["--run-id", "den2", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "den2").cases;
+    expect(c!.state).toBe("red");
+    expect(c!.reason).toMatch(/^denied-put-keeps-stages: /);
+  });
+  it("a slice case carries no deny to prepareCaseOrg", async () => {
+    const dir = dirFor();
+    const d = deps();
+    capture();
+    await runSlice(d, ["--run-id", "den3", "--report-dir", dir, "--only", "league|generic", "--scenario", "LIFECYCLE"]);
+    expect(d.orgs).toHaveLength(1);
+    expect(d.orgs[0]?.deny).toBeUndefined();
+  });
 });
 
 describe("runSlice — aborts after the start gates", () => {
@@ -590,6 +627,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
       insertCaseOrg: async () => { log.push("m.insertCaseOrg"); if (opts.insert) throw opts.insert; return { orgId: "o1", orgSlug: "s" }; },
       listPlanKeys: async () => [],
       variantKeysInBuilderOrder: async () => [],
+      denyFeature: async () => { log.push("m.denyFeature"); },
     };
     const f: DbFactories = {
       matrixSql: () => { log.push("m.open"); return { sql, dispose: async () => { log.push("m.dispose"); if (opts.mThrows) throw new Error("m end timed out"); } }; },

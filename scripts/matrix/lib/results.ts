@@ -112,6 +112,10 @@ export interface DecideInput {
   checks: readonly CheckResult[];
   deferred: { wave: string; reason: string } | null;
   error: string | null;
+  /** ⛔ (ruling 24): the scenario's own expected state is a refusal. It turns
+   *  what would be `works` into `refused`, carrying this reason, and nothing
+   *  else: every red, vacuous or not, and every deferral still wins. */
+  mandated?: string | null;
 }
 
 export function decideState(input: DecideInput): { state: CaseState; reason: string } {
@@ -124,6 +128,7 @@ export function decideState(input: DecideInput): { state: CaseState; reason: str
   if (applied.length === 0) return { state: "red", reason: "every check abstained (vacuous)" };
   const empty = applied.filter((c) => c.checked === 0);
   if (empty.length > 0) return { state: "red", reason: `checked zero items (vacuous): ${empty.map((c) => c.id).join(", ")}` };
+  if (input.mandated != null) return { state: "refused", reason: input.mandated };
   return { state: "works", reason: `${applied.length} checks, ${applied.reduce((n, c) => n + c.checked, 0)} items` };
 }
 

@@ -46,7 +46,9 @@ async function runOn(driver: FakeLeagueDriver, scenario: ScenarioKey, opts: Opts
 }
 const runFake = (scenario: ScenarioKey, opts: Opts = {}) => runOn(new FakeLeagueDriver(), scenario, opts);
 const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) => c.verdict === "fail").map((c) => c.id);
-const SCENARIO_KEYS = Object.keys(SCENARIOS) as ScenarioKey[];
+/** The fixture-driving scenarios. DENIED (⛔, Task 9) builds no stage and runs
+ *  only on a gated row whose org is denied; denied.test.ts is its suite. */
+const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED");
 
 describe("assertion helper — empty first (R25)", () => {
   it("zero items is a fail, abstain carries a reason, one bad item fails", () => {
@@ -697,8 +699,9 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "R4"]);
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
-    for (const k of SCENARIO_KEYS) expect(SCENARIOS[k].key).toBe(k);
+    for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();
     expect([SCENARIOS.M1.canaryCheck, SCENARIOS.R4.canaryCheck, SCENARIOS.F1.canaryCheck]).toEqual(["m1-walkover-recorded", "r4-cascade-consistent", "f1-round-size"]);
   });
@@ -818,11 +821,10 @@ describe("deferrals are named", () => {
     expect(DRIVING_WAVE).toBe(named);
   });
   // group_group_ko is the API-only multi-stage row Task 10's probe expects to
-  // read ⏳ W1-driving; league_ko is the template one. The cast: CaseSpec.row
-  // is still TemplateRowKey (scenarios/types.ts), though setUpDivision takes
-  // any catalogue row at runtime.
+  // read ⏳ W1-driving; league_ko is the template one. CaseSpec.row is RowKey
+  // (Task 9), so the API-only row needs no cast.
   it.each(["league_ko", "group_group_ko"] as const)("%s (multi-stage) is ScenarioUnsupported(DRIVING_WAVE), not a crash, before any driver call", async (key) => {
-    const row = key as Row;
+    const row: Row = key;
     expect(stagesForRow(row).length).toBeGreaterThan(1);
     const driver = new FakeLeagueDriver();
     await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toBeInstanceOf(ScenarioUnsupported);

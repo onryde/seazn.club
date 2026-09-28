@@ -10,13 +10,20 @@ import type { CaseSpec, ScenarioKey } from "./scenarios/types.ts";
 
 export const SLICE_ROWS = ["league", "knockout", "swiss"] as const satisfies readonly TemplateRowKey[];
 export const SLICE_SPORTS = ["generic", "badminton"] as const;
-export const SCENARIO_KEYS: readonly ScenarioKey[] = ["LIFECYCLE", "M1", "R4", "F1"];
+/** Every registered scenario but DENIED (⛔, Task 9), which runs only on a
+ *  gated row whose org carries a deny — typed out so the slice plan cannot
+ *  grow a DENIED case by accident. */
+export type SliceScenarioKey = Exclude<ScenarioKey, "DENIED">;
+export const SCENARIO_KEYS: readonly SliceScenarioKey[] = ["LIFECYCLE", "M1", "R4", "F1"];
 
 /** Each scenario's canary check, read from the registry: a view of Task 8's
  *  `Scenario.canaryCheck`, never a second table. null = no canary. */
-export const CANARY_CHECK: Readonly<Record<ScenarioKey, string | null>> = Object.freeze(
-  Object.fromEntries(SCENARIO_KEYS.map((k) => [k, SCENARIOS[k].canaryCheck])) as Record<ScenarioKey, string | null>,
+export const CANARY_CHECK: Readonly<Record<SliceScenarioKey, string | null>> = Object.freeze(
+  Object.fromEntries(SCENARIO_KEYS.map((k) => [k, SCENARIOS[k].canaryCheck])) as Record<SliceScenarioKey, string | null>,
 );
+
+/** A slice key, found — no cast: the key returned is the declared one. */
+const sliceKey = (s: string): SliceScenarioKey | undefined => SCENARIO_KEYS.find((k) => k === s);
 
 export class UnknownFilter extends Error {
   constructor(what: string, value: string, allowed: readonly string[]) {
@@ -36,15 +43,16 @@ const sliceCells = (): string[] => SLICE_ROWS.flatMap((row) => SLICE_SPORTS.map(
 export function checkSliceFilter(filter: SliceFilter): void {
   const cells = sliceCells();
   if (filter.only !== undefined && !cells.includes(filter.only)) throw new UnknownFilter("--only cell", filter.only, cells);
-  if (filter.scenario !== undefined && !SCENARIO_KEYS.includes(filter.scenario as ScenarioKey)) throw new UnknownFilter("--scenario", filter.scenario, SCENARIO_KEYS);
+  if (filter.scenario !== undefined && sliceKey(filter.scenario) === undefined) throw new UnknownFilter("--scenario", filter.scenario, SCENARIO_KEYS);
 }
 
 /** The scenario key a --canary value names, or UnknownFilter when that
  *  scenario has no canary check (LIFECYCLE) or does not exist. */
-export function checkCanary(scenario: string): ScenarioKey {
+export function checkCanary(scenario: string): SliceScenarioKey {
   const withCanary = SCENARIO_KEYS.filter((k) => CANARY_CHECK[k] !== null);
-  if (!withCanary.includes(scenario as ScenarioKey)) throw new UnknownFilter("--canary", scenario, withCanary);
-  return scenario as ScenarioKey;
+  const key = sliceKey(scenario);
+  if (key === undefined || !withCanary.includes(key)) throw new UnknownFilter("--canary", scenario, withCanary);
+  return key;
 }
 
 export function planSliceCases(variantFor: (sport: string) => string, filter: SliceFilter = {}): CaseSpec[] {

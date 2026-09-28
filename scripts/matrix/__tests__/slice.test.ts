@@ -34,6 +34,11 @@ describe("planSliceCases — empty/unknown first", () => {
     expect(() => checkSliceFilter({ only: "swiss|badminton", scenario: "F1" })).not.toThrow();
     expect(checkCanary("R4")).toBe("R4");
   });
+  it("DENIED is registered but is not a slice scenario: --scenario and --canary refuse it (Task 9)", () => {
+    expect(SCENARIOS.DENIED.key).toBe("DENIED");
+    expect(() => checkSliceFilter({ scenario: "DENIED" })).toThrow("slice: unknown --scenario 'DENIED' (allowed: LIFECYCLE, M1, R4, F1)");
+    expect(() => checkCanary("DENIED")).toThrow("slice: unknown --canary 'DENIED' (allowed: M1, R4, F1)");
+  });
 });
 
 describe("planSliceCases", () => {
@@ -60,7 +65,10 @@ describe("planSliceCases", () => {
     );
   });
   it("every scenario key is registered, and each pilot names its canary check", () => {
-    expect([...SCENARIO_KEYS].sort()).toEqual(Object.keys(SCENARIOS).sort());
+    // Every registered scenario but DENIED (⛔, Task 9: gated rows under a deny only).
+    expect([...SCENARIO_KEYS].sort()).toEqual(Object.keys(SCENARIOS).filter((k) => k !== "DENIED").sort());
+    expect(Object.keys(SCENARIOS)).toContain("DENIED");
+    expect(SCENARIO_KEYS as readonly string[]).not.toContain("DENIED");
     for (const k of ["M1", "R4", "F1"] as const) {
       expect(SCENARIOS[k].canaryCheck).not.toBeNull();
       expect(planCanaryCase(v, k)).toMatchObject({ canary: true, row: "league", sport: "generic", scenario: k });
@@ -70,7 +78,7 @@ describe("planSliceCases", () => {
 
 describe("CANARY_CHECK and planCanaryCase", () => {
   it("CANARY_CHECK is a view of the registry, never a second table", () => {
-    expect(CANARY_CHECK).toEqual(Object.fromEntries(Object.entries(SCENARIOS).map(([k, s]) => [k, s.canaryCheck])));
+    expect(CANARY_CHECK).toEqual(Object.fromEntries(Object.entries(SCENARIOS).filter(([k]) => k !== "DENIED").map(([k, s]) => [k, s.canaryCheck])));
     expect(CANARY_CHECK.LIFECYCLE).toBeNull();
   });
   it("a canary case is league|generic under generic's builder variant, with an id no slice case can hold", () => {

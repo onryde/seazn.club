@@ -49,6 +49,10 @@ export function retryKey(key: string): string {
   return `${key}:retry`;
 }
 export interface ProbeOutcome { status: number; code: string | null }
+/** A stage write's answer as a probe reads it. `featureKey` is api-v1's 402
+ *  `feature_key` (server/api-v1/http.ts): PAYMENT_REQUIRED is a generic code
+ *  (observed.ts GENERIC_ERROR_CODES), so the key is what names WHICH gate refused. */
+export interface StagesProbe { status: number; code: string | null; featureKey: string | null }
 
 export interface OrganiserDriver {
   createCompetition(input: { name: string; slug: string }): Promise<CompetitionRef>;
@@ -72,25 +76,29 @@ export interface OrganiserDriver {
   publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut>;
   /** A probe: returns the refusal, never throws on 4xx. */
   patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome>;
+  /** A probe: PUT /divisions/:id/stages; returns the refusal, never throws on 4xx. */
+  replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe>;
   readonly callCount: number;
 }
 
 /** A product answer outside 2xx (or a 2xx with no data). Carries what I4's
  *  named-refusal check reads (observed.ts isNamedRefusal: status + code) and
  *  what a reader needs to find the call (method + path). Message and path are
- *  redacted (R14a). */
+ *  redacted (R14a). `featureKey` is a 402's `feature_key` (Task 9), else null. */
 export class RefusedCall extends Error {
   readonly method: string;
   readonly path: string;
   readonly status: number;
   readonly code: string | null;
-  constructor(method: string, path: string, status: number, code: string | null, message: string | null) {
+  readonly featureKey: string | null;
+  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null) {
     super(redact(`${method} ${path} → HTTP ${status} ${code ?? "(no code)"}: ${message ?? "(no message)"}`));
     this.name = "RefusedCall";
     this.method = method;
     this.path = redact(path);
     this.status = status;
     this.code = code;
+    this.featureKey = featureKey;
   }
 }
 

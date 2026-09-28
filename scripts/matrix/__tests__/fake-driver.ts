@@ -19,7 +19,7 @@ import {
   RefusedCall, idempotencyKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
@@ -271,6 +271,13 @@ export class FakeLeagueDriver implements OrganiserDriver {
       return { status: 200, code: null };
     });
   }
+  /** The league fake models no stage replacement: FakeDeniedDriver does. */
+  replaceStagesProbe(_d: string, _stages: readonly StagePostBody[]): Promise<StagesProbe> {
+    return settle(() => {
+      this.log("replaceStagesProbe");
+      return { status: 422, code: "UNSUPPORTED_IN_FAKE", featureKey: null };
+    });
+  }
   #f(id: string): FakeFixture { const f = this.fixtures.find((x) => x.id === id); if (!f) throw new Error(`fake: no fixture ${id}`); return f; }
 }
 
@@ -424,6 +431,64 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       }
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
       return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(champion === null ? [] : [champion]), ...out.map((x) => x.id)] }] };
+    });
+  }
+}
+
+/** A product that gates stage kinds by feature (ruling 24): `deny` maps a
+ *  kind to the feature_key its 402 names, and is read in insertion order —
+ *  the FIRST entry whose kind any posted stage has answers, as createStages
+ *  checks its gates in order over every stage (stages.ts:373-382). Only kinds:
+ *  the advanced gate's config keys (byes, cross_feeds, placements) are carried
+ *  by no catalogue row. Stages are kept per division (ids d1, d2, …).
+ *  deleteFirst mirrors today's replaceStages (stages.ts: delete, THEN gate). */
+export class FakeDeniedDriver extends FakeLeagueDriver {
+  readonly deny: ReadonlyMap<string, string>;
+  readonly deleteFirst: boolean;
+  readonly byDivision = new Map<string, StageRef[]>();
+  #divisions = 0;
+  constructor(deny: ReadonlyMap<string, string>, opts: { deleteFirst: boolean }, orgId = "org-fake") {
+    super(orgId);
+    this.deny = deny;
+    this.deleteFirst = opts.deleteFirst;
+  }
+  override createDivision(c: string, i: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
+    return super.createDivision(c, i).then((d) => {
+      const id = `d${++this.#divisions}`;
+      this.byDivision.set(id, []);
+      return { ...d, id };
+    });
+  }
+  #refusal(stages: readonly StagePostBody[]): RefusedCall | null {
+    for (const [kind, featureKey] of this.deny) {
+      if (stages.some((s) => s.kind === kind)) return new RefusedCall("POST", "/api/v1/divisions/d/stages", 402, "PAYMENT_REQUIRED", "upgrade", featureKey);
+    }
+    return null;
+  }
+  override postStages(d: string, stages: readonly StagePostBody[]): Promise<StageRef[]> {
+    return settle(() => {
+      this.log("postStages");
+      const refused = this.#refusal(stages);
+      if (refused !== null) throw refused;
+      const made = stages.map((s, k) => ({ id: `${d}-s${k + 1}`, seq: s.seq, kind: s.kind, config: { ...s.config }, status: "pending" }));
+      this.byDivision.set(d, made);
+      return made.map((s) => ({ ...s }));
+    });
+  }
+  override listStages(d = "d1"): Promise<StageRef[]> {
+    return settle(() => {
+      this.log("listStages");
+      return (this.byDivision.get(d) ?? []).map((s) => ({ ...s }));
+    });
+  }
+  override replaceStagesProbe(d: string, stages: readonly StagePostBody[]): Promise<StagesProbe> {
+    return settle(() => {
+      this.log("replaceStagesProbe");
+      if (this.deleteFirst) this.byDivision.set(d, []);
+      const refused = this.#refusal(stages);
+      if (refused !== null) return { status: refused.status, code: refused.code, featureKey: refused.featureKey };
+      this.byDivision.set(d, stages.map((s, k) => ({ id: `${d}-r${k + 1}`, seq: s.seq, kind: s.kind, config: { ...s.config }, status: "pending" })));
+      return { status: 200, code: null, featureKey: null };
     });
   }
 }

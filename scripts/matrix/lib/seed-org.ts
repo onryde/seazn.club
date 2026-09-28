@@ -34,6 +34,8 @@ export interface MatrixSql {
   insertCaseOrg(input: { userId: string; name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }>;
   listPlanKeys(): Promise<string[]>;
   variantKeysInBuilderOrder(sportKey: string): Promise<string[]>;
+  /** ⛔ (ruling 24): a live `org_entitlement_overrides` deny for one feature. */
+  denyFeature(input: { orgId: string; featureKey: string; reason: string }): Promise<void>;
 }
 
 export class DataDirUnset extends Error {
@@ -71,6 +73,7 @@ export function gateOnOwnDataDir(inner: MatrixSql, readDataDir: () => Promise<st
     async insertCaseOrg(input) { await proven(); return inner.insertCaseOrg(input); },
     async listPlanKeys() { await proven(); return inner.listPlanKeys(); },
     async variantKeysInBuilderOrder(sportKey) { await proven(); return inner.variantKeysInBuilderOrder(sportKey); },
+    async denyFeature(input) { await proven(); return inner.denyFeature(input); },
   };
 }
 
@@ -139,10 +142,14 @@ export interface PrepareCaseOrgDeps {
   provision: (orgId: string, plan: string) => Promise<void>;
 }
 
-export async function prepareCaseOrg(deps: PrepareCaseOrgDeps, input: { name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }> {
+/** `deny` (ruling 24): feature keys the case org is denied AFTER provisioning,
+ *  so the plan write cannot touch them and the org holds the top plan with
+ *  exactly these features off. */
+export async function prepareCaseOrg(deps: PrepareCaseOrgDeps, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string }> {
   const org = await deps.sql.insertCaseOrg({ userId: deps.userId, name: input.name, slug: input.slug });
   await switchToCaseOrg(deps.transport, deps.base, deps.session, org.orgId);
   await deps.provision(org.orgId, deps.plan);
+  for (const featureKey of input.deny ?? []) await deps.sql.denyFeature({ orgId: org.orgId, featureKey, reason: "format-matrix denied state (ruling 24)" });
   return org;
 }
 
@@ -200,6 +207,25 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
       return (await db<{ key: string }[]>`
         select key from sport_variants where sport_key = ${sportKey} and org_id is null
         order by is_system desc, name`).map((r) => r.key);
+    },
+    async denyFeature({ orgId, featureKey, reason }) {
+      // Ruling 24: the denied state is an override deny (lib/entitlements.ts:
+      // a live override wins over the plan — pinned by seed-org.test.ts).
+      // Upsert, then read back: an expired or true row would let the gate
+      // through and the case would read as an entitlement bug instead of the
+      // harness's own miss.
+      await db.begin(async (tx) => {
+        // Re-proven on THIS transaction's connection, before its write.
+        const [dir] = await tx<{ data_directory: string }[]>`show data_directory`;
+        const actual = dir?.data_directory ?? "";
+        if (actual !== expectedDataDir) throw new DataDirMismatch(expectedDataDir, actual);
+        await tx`
+          insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+          values (${orgId}, ${featureKey}, false, ${reason}) on conflict (org_id, feature_key) do update set bool_value = false, int_value = null, reason = excluded.reason, expires_at = null`;
+        const [row] = await tx<{ bool_value: boolean | null; expires_at: string | null }[]>`
+          select bool_value, expires_at from org_entitlement_overrides where org_id = ${orgId} and feature_key = ${featureKey}`;
+        if (row?.bool_value !== false || row.expires_at !== null) throw new Error(redact(`seed-org: deny did not hold for ${featureKey} (read back ${JSON.stringify(row ?? null)})`));
+      });
     },
   };
   const readDataDir = async (): Promise<string> => {

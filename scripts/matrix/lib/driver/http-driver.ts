@@ -14,7 +14,7 @@ import {
   DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded, idempotencyKey, retryKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -29,11 +29,12 @@ export interface HttpDriverOptions {
 }
 
 /** api-v1's envelope (server/api-v1/http.ts): `{ok:true, data}` or
- *  `{ok:false, error:{code, message, current_seq?}}`. A non-v1 or non-JSON
- *  answer can carry a bare string `error`; it then yields no code. */
-interface Envelope { ok?: boolean; data?: unknown; error?: { code?: string; message?: string; current_seq?: number } | string }
+ *  `{ok:false, error:{code, message, current_seq?, feature_key?}}` (a 402
+ *  carries `feature_key`). A non-v1 or non-JSON answer can carry a bare string
+ *  `error`; it then yields no code. */
+interface Envelope { ok?: boolean; data?: unknown; error?: { code?: string; message?: string; current_seq?: number; feature_key?: string } | string }
 
-function errorOf(r: RawResult): { code?: string; message?: string; current_seq?: number } {
+function errorOf(r: RawResult): { code?: string; message?: string; current_seq?: number; feature_key?: string } {
   const e = (r.json as unknown as Envelope | null)?.error;
   if (typeof e === "string") return { message: e };
   return e ?? {};
@@ -72,7 +73,7 @@ export class HttpDriver implements OrganiserDriver {
   #unwrap<T>(method: string, path: string, r: RawResult): T {
     if (!is2xx(r)) {
       const e = errorOf(r);
-      throw new RefusedCall(method, path, r.status, e.code ?? null, e.message ?? null);
+      throw new RefusedCall(method, path, r.status, e.code ?? null, e.message ?? null, e.feature_key ?? null);
     }
     const data = (r.json as unknown as Envelope | null)?.data;
     if (data === undefined) throw new RefusedCall(method, path, r.status, "NO_DATA", "response carried no data");
@@ -215,5 +216,12 @@ export class HttpDriver implements OrganiserDriver {
   async patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
     const r = await this.#send(`/api/v1/divisions/${divisionId}`, "PATCH", { config });
     return { status: r.status, code: is2xx(r) ? null : (errorOf(r).code ?? null) };
+  }
+
+  async replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe> {
+    const r = await this.#send(`/api/v1/divisions/${divisionId}/stages`, "PUT", stages);
+    if (is2xx(r)) return { status: r.status, code: null, featureKey: null };
+    const e = errorOf(r);
+    return { status: r.status, code: e.code ?? null, featureKey: e.feature_key ?? null };
   }
 }
