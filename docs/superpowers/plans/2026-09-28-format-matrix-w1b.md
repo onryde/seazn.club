@@ -5727,16 +5727,17 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec &
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node -e 'const r=require("./matrix-report/w1b-probe-0928a/results.json");for(const c of r.cases)console.log(c.state.padEnd(8),c.caseId,"|",c.reason.slice(0,140))'
 ```
 
-Expected: `PROBE_API_ROWS.length + 7 + 2` lines, the same sum Task 10's "the probe set" test pins (pre-flight ruling R-PF6; 12 at plan time, 3 + 7 + 2). Read the length from the code rather than typing it:
+Expected: `probeRows().api.length + probeRows().denied.length + 2` lines, the same sum Task 10's "the probe set" test pins (13 after Task 10's fix round 1 added `page_playoff_only`'s allowed path: 4 + 7 + 2). Read it from the code rather than typing it:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types -e 'const { PROBE_API_ROWS } = await import("./scripts/matrix/lib/probe-set.ts"); console.log(JSON.stringify({ apiRows: PROBE_API_ROWS, expected: PROBE_API_ROWS.length + 7 + 2 }))'
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types -e 'const { probeRows } = await import("./scripts/matrix/lib/probe-set.ts"); const r = probeRows(); console.log(JSON.stringify({ apiRows: r.api, denied: r.denied.map((d) => d.row), expected: r.api.length + r.denied.length + 2 }))'
 ```
 
 The printed `expected` must equal the line count above; a mismatch is a finding before any state is read. Record each case's state and reason in the report. Each one reads differently:
 
-- **DENIED ×7.** ⛔ `refused` means all three checks held. A ❌ on `denied-put-keeps-stages` confirms false premise 8 live: `replaceStages` deletes before it gates. Record it as a finding **routed to W9**, with the case id and evidence, and change no product code. A ❌ on `denied-refused-named` means the deny did not reach the gate. Check `REDIS_URL` and the read-back first (environment before defect).
-- **API-only LIFECYCLE ×`PROBE_API_ROWS.length`.** Each state is data, whatever it is. A ❌ is a finding for the row's owning wave, per the design's wave table. A ⏳ must name `W1-driving`.
+- **Before reading any state:** confirm the server was started without Redis. `ps eww -p <server pid> | grep -c REDIS_URL` must print `0` (Task 10 m-2: the harness guard can see only its own environment). An exit 2 naming `PlanLacksGate` means the case org's plan does not grant a gate. That is an environment/catalogue fact, not a product ❌; fix it by choosing a granting plan per case (`bench/lib/plan.ts` `chooseGrantingPlan`).
+- **DENIED ×`probeRows().denied.length` (7).** ⛔ `refused` means all three checks held. A ❌ on `denied-put-keeps-stages` confirms false premise 8 live: `replaceStages` deletes before it gates. Record it as a finding **routed to W9**, with the case id and evidence, and change no product code. A ❌ on `denied-refused-named` means the deny did not reach the gate. Check `REDIS_URL` and the read-back first (environment before defect).
+- **API-only LIFECYCLE ×`probeRows().api.length` (4, including `page_playoff_only`'s allowed path).** Each state is data, whatever it is. A ❌ is a finding for the row's owning wave, per the design's wave table. A ⏳ must name `W1-driving`.
 - **Variant ×2.** These are expected to be ✅. A ❌ on `life-built-as-posted` naming `config.<key>` means the product stores the override differently from the engine's parse: a finding.
 
 Copy the evidence:
