@@ -7,16 +7,17 @@ import type { DictionaryKey } from "@/lib/i18n-keys";
 /** The dict key naming each disputed product. `Record<PassKey, …>` over the pass
  *  rungs (v17 #294): a new rung in PASS_KEYS without a label here is a compile
  *  error, not a $59 chargeback triaged as the $29 product. */
-const KIND_LABEL_KEY: Record<"subscription" | PassKey, DictionaryKey> = {
+const KIND_LABEL_KEY: Record<"subscription" | "stream_credits" | PassKey, DictionaryKey> = {
   subscription: "staffDisputeAlert.kind.subscription",
+  stream_credits: "staffDisputeAlert.kind.streamCredits",
   event_pass: "staffDisputeAlert.kind.pass",
   event_pass_l: "staffDisputeAlert.kind.passL",
 };
 
 export interface StaffDisputeAlertArgs {
-  /** Which platform charge was disputed — a subscription, or the Event Pass rung
-   *  that was bought (v17 #294). */
-  kind: "subscription" | PassKey;
+  /** Which platform charge was disputed — a subscription, a match-credit pack
+   *  (streaming R1), or the Event Pass rung that was bought (v17 #294). */
+  kind: "subscription" | "stream_credits" | PassKey;
   orgName: string;
   phase: "created" | "closed";
   /** Stripe dispute status (needs_response / won / lost / …). */
@@ -47,7 +48,14 @@ export function staffDisputeAlertTemplate(
         : opts.status === "lost"
           ? opts.kind === "subscription"
             ? "staffDisputeAlert.outcome.downgraded"
-            : "staffDisputeAlert.outcome.revoked"
+            : // A lost match-credit dispute claws credits back CAPPED at the
+              // balance and returns no competition to any allowance, so the
+              // pass sentence ("the competition returns to the plan allowance")
+              // would be false in both halves. The outcome line is the one
+              // sentence a staffer acts on, so it gets its own key.
+              opts.kind === "stream_credits"
+              ? "staffDisputeAlert.outcome.creditsClawedBack"
+              : "staffDisputeAlert.outcome.revoked"
           : "staffDisputeAlert.outcome.closed";
   // `kind` is handed to EVERY outcome, and only `revoked` interpolates it: that
   // line said a flat "the Event Pass has been revoked" for both rungs, so a lost

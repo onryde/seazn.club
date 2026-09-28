@@ -149,6 +149,226 @@ export async function recordPurchase(args: {
   }) as Promise<{ id: string; applied: boolean; balance: number }>;
 }
 
+// ---------------------------------------------------------------------------
+// Stripe claw-back (streaming R1 lane-B tail, OWNER RULING 2026-09-28)
+// ---------------------------------------------------------------------------
+
+/** What one refunded/disputed pack charge bought, and which org holds it. */
+export interface StreamPurchaseMatch {
+  orgId: string;
+  /** The credits that purchase row granted. */
+  purchased: number;
+  /** When the ledger recorded it — the ATTRIBUTION BOUNDARY: consumption from
+   *  this instant onward is what this purchase has spent. */
+  purchasedAt: Date;
+}
+
+/** THE PAYMENT-INTENT GATE — one authority for it, because the refund arm, the
+ *  partial-refund arm and the dispute arm must all answer "is this charge one of
+ *  ours?" the same way or they disagree about what a match is.
+ *
+ *  The gate is `stripe_payment_intent_id`, never `charge.metadata`: Stripe does
+ *  NOT copy `payment_intent_data.metadata` onto the Charge, so a
+ *  Checkout-created pack charge arrives with `metadata: {}`, and reading it as
+ *  the gate returns early on every real refund (it bit the AI pack path once —
+ *  `handlePackChargeRefunded`'s own doc comment records it). `recordPurchase`
+ *  already stores the intent, so this is a real COLUMN to match on and the
+ *  matched path needs no Stripe round trip at all.
+ *
+ *  It is NOT indexed: V410 creates exactly three indexes on this table —
+ *  `(org_id, created_at)` (:279), `(stripe_checkout_session_id) where … is not
+ *  null` (:280) and the partial unique on `idempotency_key` (:284-285). This
+ *  lookup is therefore a seq scan, and it runs once per refunded charge, once
+ *  per partial refund and once per dispute carrying an intent. Harmless at
+ *  today's row count; the forward delta
+ *  `create index on org_stream_credits (stripe_payment_intent_id) where
+ *  stripe_payment_intent_id is not null` is owed to whichever wave next opens a
+ *  migration (V420+ — V419 is taken). Do NOT amend V410, which is merged.
+ *
+ *  `reason = 'purchase'` scopes it to the BOUGHT row. A claw-back row carries
+ *  the same intent (so a human can walk the ledger back to the Stripe object),
+ *  and without this predicate a second refund event would match its own earlier
+ *  revoke and read `purchased` as a negative number.
+ *
+ *  One checkout session mints one payment intent and writes one purchase row
+ *  (`stripe_event_id` is the session id and is unique table-wide), so at most
+ *  one row can match; `order by created_at limit 1` makes that assumption
+ *  explicit rather than depending on an unordered scan. */
+export async function findStreamPurchase(
+  exec: Executor,
+  paymentIntentId: string,
+): Promise<StreamPurchaseMatch | null> {
+  const [row] = await exec<{ org_id: string; delta: number; created_at: Date }[]>`
+    select org_id, delta, created_at from org_stream_credits
+     where reason = 'purchase' and stripe_payment_intent_id = ${paymentIntentId}
+     order by created_at limit 1`;
+  return row ? { orgId: row.org_id, purchased: row.delta, purchasedAt: new Date(row.created_at) } : null;
+}
+
+/** The Stripe object that caused a claw-back. Note copy only — deliberately NOT
+ *  part of the idempotency key, which is keyed on the payment intent alone so a
+ *  lost dispute and a refund of the SAME charge collapse onto one row. */
+const CLAWBACK_CAUSE = { refund: "refunded charge", dispute: "lost dispute" } as const;
+
+export interface StreamPackRefundResult {
+  /** A `purchase` row exists for this payment intent — i.e. this charge sold match credits. */
+  matched: boolean;
+  /** Credits revoked against this intent IN TOTAL, by this call or an earlier one. */
+  clawedBack: number;
+  /** Credits the matched purchase granted. 0 when nothing matched. */
+  purchased: number;
+  /** The org that holds them. Null when nothing matched. */
+  orgId: string | null;
+  /** Did THIS call write the revoke row? False on a replay, and false when there
+   *  was nothing left to claw back. */
+  applied: boolean;
+}
+
+/**
+ * Claw back a refunded (or lost-disputed) match-credit pack — OWNER RULING
+ * 2026-09-28, the ruling block in the streaming R1 `_STATE.md`.
+ *
+ * **Bounded by what THIS PURCHASE still has outstanding, and then by the
+ * balance** — `min(purchased − consumedSince, balance)`. A SPENT match credit
+ * means the stream already broadcast and Cloudflare already billed us for those
+ * minutes; we cannot un-deliver it. The caller compares `clawedBack` with
+ * `purchased` and alerts a human on the difference; this writer never judges.
+ *
+ * The owner ruling's own words are `min(creditsPurchased, currentBalance)`, and
+ * THAT formula caps by the org's TOTAL balance, which is not the same thing once
+ * an org holds two packs (review C-1/G-1; orchestrator ruling 2026-09-28,
+ * carrying the owner's reasoning, owner informed and able to veto). Worked
+ * example of what the ruled formula does on a FIRST delivery: buy pack A (5),
+ * stream all 5, buy pack B (5) — balance 5 — then refund A. `min(5, 5) = 5`
+ * revokes pack B's credits, the org is refunded for A and silently loses the B
+ * it paid for separately, and because `clawedBack === purchased` it reads as a
+ * clean reversal and nobody is told. The attribution bound is a TIGHTENING: it
+ * can only ever claw LESS than the ruled formula, never more.
+ *
+ * The balance limb is kept as a floor, because attribution alone does not see a
+ * non-consume reduction: an expiry or a staff revoke lowers the balance without
+ * spending the purchase, and an uncapped revoke would then write a negative
+ * `balance_after` and trip V410's CHECK inside the webhook.
+ *
+ * This is ALSO what closes the zero-claw replay hole. A fully-spent pack writes
+ * no row (V410's `delta <> 0`), so it mints no idempotency key, and a lost
+ * dispute arriving weeks later carries a DIFFERENT Stripe event id that the
+ * `billing_events` claim does not stop. `consumedSince` only ever grows, so
+ * `outstanding` only ever shrinks: that dispute can never claw more than the
+ * refund already did, with no sentinel row and no schema change. The two guards
+ * cover DIFFERENT hazards and neither stands in for the other — the key is what
+ * stops a double-claw after a claw-back that DID write a row (attribution alone
+ * would still see the same outstanding), so both are mutated separately.
+ *
+ * **Reason `revoke`, never `refund`:** in `org_stream_credits` a `refund` ADDS
+ * credits back — it is the /admin remedy for a stream that failed. A card
+ * claw-back moves the other way, and V410's `reason in (…)` CHECK is merged and
+ * unamendable, so `revoke` is both the correct direction and the only value
+ * available.
+ *
+ * **Idempotent on `stream_pack_refund:${paymentIntentId}`**, the donor's
+ * `pass_refund:${intent}` pattern (lib/credits.ts:931, used by BOTH the refund
+ * and the dispute arm there). The key names the intent and nothing else, so a
+ * lost dispute that follows a refund of the same charge collapses onto the row
+ * the refund already wrote. The check sits under the money lock and BEFORE the
+ * cap, exactly as `staffRow`'s does: the balance cap CANNOT stand in for it —
+ * an org that has since bought a NEW pack has a non-zero balance again, and a
+ * replay reaching the cap would revoke the new pack's credits.
+ *
+ * **Zero claw-back writes NO row.** V410 constrains `delta <> 0`, so there is no
+ * row to write when everything was already spent; `matched: true, applied:
+ * false, clawedBack: 0` is how the caller tells that apart from "not our
+ * charge". It also means a fully-spent claw-back mints no idempotency key —
+ * which is safe only because the attribution bound above is independent of the
+ * key, and is what the "lost dispute after a refund that clawed NOTHING" test
+ * pins.
+ *
+ * **No `staff_audit_log` row.** `staff_audit_log.actor_id` is NOT NULL against
+ * `users` and a webhook has no actor; the donor writes none for a webhook
+ * claw-back either. The ledger row IS the trail, and the staff alert is the
+ * notification.
+ */
+export async function recordStreamPackRefund(args: {
+  paymentIntentId: string;
+  /** Which arm called — note copy only. */
+  via: "refund" | "dispute";
+  /** The charge id (refund) or dispute id (dispute), for the note. */
+  reference: string;
+}): Promise<StreamPackRefundResult> {
+  const intent = args.paymentIntentId;
+  const key = `stream_pack_refund:${intent}`;
+  return sql.begin(async (tx) => {
+    // Read FIRST, unlocked, to learn WHICH org to lock — the donor's ordering
+    // (lib/credits.ts:978-984). A non-stream charge (the common case: this arm
+    // runs on every refunded charge in the system) leaves with no lock taken and
+    // nothing written.
+    const match = await findStreamPurchase(tx, intent);
+    if (!match) return { matched: false, clawedBack: 0, purchased: 0, orgId: null, applied: false };
+
+    await lockOrg(tx, match.orgId);
+
+    // THE KEY CHECK — under the lock, ahead of the cap (staffRow's order). It
+    // reports the EARLIER claw-back's size rather than zero, so the caller's
+    // `clawedBack < purchased` alert decision is a function of ledger STATE and
+    // not of call history: a redelivery must reach the same verdict as the
+    // first delivery. (A deliberate departure from the donor, whose caller does
+    // not read the number at all.)
+    const [prior] = await tx<{ delta: number }[]>`
+      select delta from org_stream_credits where idempotency_key = ${key}`;
+    if (prior) {
+      return { matched: true, clawedBack: -prior.delta, purchased: match.purchased, orgId: match.orgId, applied: false };
+    }
+
+    const balance = await creditBalance(tx, match.orgId);
+    // A NAMED REFUSAL, not a silent `Math.max(0, balance)` clamp (house rule:
+    // assumptions are guards, not comments). V410's `balance_after >= 0` CHECK
+    // constrains each row's SNAPSHOT, not `sum(delta)`, so a corrupt row can
+    // still put the true balance below zero. A clamp would quietly claw back
+    // nothing and look like an ordinary fully-spent pack; this throws, the
+    // webhook does not ACK, Stripe retries, and a human is made to look.
+    if (balance < 0) {
+      throw new HttpError(500, `This organisation's match-credit balance is ${balance}; refusing to claw back against a negative ledger`, "ledger_negative");
+    }
+
+    // ATTRIBUTION. Consumption from this purchase's own instant onward, which is
+    // what it has spent. FIFO by ledger order: credits are fungible, so the
+    // oldest outstanding purchase owns the oldest consume.
+    //
+    // The bound is `>=`, and the tie case is REAL rather than theoretical:
+    // `org_stream_credits.id` is `gen_random_uuid()` (V410:251) — random, not
+    // time-sortable — and the table has no sequence column, so two rows sharing
+    // a `created_at` CANNOT be ordered. `>=` counts a tied consume as spent from
+    // THIS purchase, i.e. more counted spent, less clawed back — the
+    // conservative direction on a money path, and the one that cannot take a
+    // credit the customer still holds. The purchase row cannot count itself:
+    // `reason = 'consume'` excludes it.
+    const [spent] = await tx<{ consumed: number }[]>`
+      select coalesce(-sum(delta), 0)::int as consumed from org_stream_credits
+       where org_id = ${match.orgId} and reason = 'consume' and created_at >= ${match.purchasedAt}`;
+    // May go NEGATIVE when later packs' credits were also spent (consumedSince
+    // counts every consume after this purchase, not just this pack's). The
+    // `clawback <= 0` guard below is the single place that answers that, so
+    // there is no second clamp here to cover for it.
+    const outstanding = match.purchased - spent!.consumed;
+    const clawback = Math.min(outstanding, balance);
+    if (clawback <= 0) {
+      return { matched: true, clawedBack: 0, purchased: match.purchased, orgId: match.orgId, applied: false };
+    }
+    // FS10 in memory before the row, as every other writer here does; the
+    // balance_after CHECK is the backstop, not the guard. `clawback <= balance`
+    // by construction above, so this cannot raise.
+    const { balanceAfter } = debit(balance, clawback);
+
+    await tx`
+      insert into org_stream_credits (org_id, delta, reason, balance_after, note,
+                                      stripe_payment_intent_id, idempotency_key)
+      values (${match.orgId}, ${-clawback}, 'revoke', ${balanceAfter},
+              ${`Stripe claw-back — ${CLAWBACK_CAUSE[args.via]} ${args.reference}, payment intent ${intent}`},
+              ${intent}, ${key})`;
+    return { matched: true, clawedBack: clawback, purchased: match.purchased, orgId: match.orgId, applied: true };
+  }) as Promise<StreamPackRefundResult>;
+}
+
 /** The staff_audit_log actions of the three staff writers. Spread into admin-adjustments-log.ts's
  *  ADJUSTMENT_ACTIONS the way `...SUSPENSION_ACTIONS` (:64) and `...DISCOVERY_AUDIT_ACTIONS` (:67)
  *  are — NOT the way PASS_CREDIT_RESOLVE_ACTION (:71) is, which is a bare value, not a spread

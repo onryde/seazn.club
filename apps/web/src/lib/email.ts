@@ -791,6 +791,76 @@ export async function sendStreamCreditGrantFailedAlertEmail(
   return send({ to: opts.to, transactional: true, subject, html, text });
 }
 
+export interface StreamCreditClawbackAlertEmail {
+  to: string;
+  /** The Stripe object a staffer opens: the refunded charge, or the dispute id
+   *  when a lost chargeback is what triggered the claw-back. */
+  chargeId: string;
+  orgId: string;
+  /** What the refunded pack granted. Absent when no purchase row matched. */
+  purchased?: number;
+  /** What was actually revoked — 0 on a fully-spent pack, absent when nothing matched. */
+  clawedBack?: number;
+  reason: string;
+}
+
+/** Internal staff alert (streaming R1 lane-B tail, OWNER RULING 2026-09-28): a
+ *  match-credit pack charge was refunded, partially refunded or lost at dispute,
+ *  and the webhook could not reverse it cleanly. Three reason shapes across four
+ *  call sites (the short one serves both the refund and the lost-dispute arm),
+ *  one builder:
+ *   * a FULL refund, or a LOST dispute, that clawed back FEWER credits than the
+ *     pack granted — the
+ *     customer bought, streamed, then asked for the money back. Cloudflare has
+ *     already billed us for the minutes that went out, so the difference is a
+ *     real loss. The webhook records and alerts; a human decides whether to chase.
+ *   * a PARTIAL refund — nothing is clawed back automatically, because the fair
+ *     proportion is a judgement call.
+ *   * a refunded charge with NO match-credit purchase row — nothing to reverse.
+ *
+ *  NOT a reuse of `sendStreamCreditGrantFailedAlertEmail`: that subject says
+ *  credits could not be GRANTED and its body tells the reader to grant them
+ *  manually, which is exactly backwards here. Its own doc comment records that
+ *  it was kept separate from the AI-wallet builder so the subject does not send
+ *  triage to the wrong balance; the same argument separates this one from it.
+ *
+ *  Ops-only, no user-facing i18n (mirrors the builders above). Guarded at the
+ *  CALL SITE on STAFF_ALERT_EMAIL and fired `void … .catch(() => {})`, so it can
+ *  never block the webhook ACK. */
+export async function sendStreamCreditClawbackAlertEmail(
+  opts: StreamCreditClawbackAlertEmail,
+): Promise<boolean> {
+  const subject = `Match credits claw-back needs review: ${opts.chargeId}`;
+  const movement =
+    opts.purchased === undefined
+      ? "No match-credit purchase row matched this charge, so nothing was reversed."
+      : `The pack granted ${opts.purchased} match credit${opts.purchased === 1 ? "" : "s"}; ` +
+        `${opts.clawedBack ?? 0} ${(opts.clawedBack ?? 0) === 1 ? "was" : "were"} revoked.`;
+  const bodyText =
+    `A match-credit charge (${opts.chargeId}, org ${opts.orgId}) was refunded: ${opts.reason}. ` +
+    `${movement} ` +
+    `Credits already spent cannot be reversed — the streams they paid for have already gone out and ` +
+    `Cloudflare has already billed us for the minutes. Review the refund in Stripe and decide whether ` +
+    `to chase it; nothing further happens automatically.`;
+  const html = renderEmail({
+    subject,
+    preheader: `Refunded match credits — org ${opts.orgId}`,
+    eyebrow: "Billing · Match credits",
+    title: "Match credit claw-back",
+    contentHtml:
+      paragraph(escapeHtml(bodyText)) +
+      panel(
+        "Charge",
+        `${opts.chargeId}\norg: ${opts.orgId}` +
+          `${opts.purchased === undefined ? "" : `\npurchased: ${opts.purchased}\nclawed back: ${opts.clawedBack ?? 0}`}` +
+          `\nreason: ${opts.reason}`,
+      ),
+    footerNote: "Automated staff alert — match credits webhook (streaming R1).",
+  });
+  const text = `${bodyText}\n\nCharge: ${opts.chargeId} · org ${opts.orgId} · reason: ${opts.reason}`;
+  return send({ to: opts.to, transactional: true, subject, html, text });
+}
+
 export interface PassCreditReversalIncompleteAlertEmail {
   to: string;
   orgId: string;
