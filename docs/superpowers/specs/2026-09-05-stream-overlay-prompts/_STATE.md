@@ -420,6 +420,39 @@ full polish; this exemption is `/admin` only.
   client for the YouTube integration is the clean move, at the cost of a second brand review and its own
   quota. Either way the submission is the long pole and should start when the wave is scheduled.
 
+**OWNER RULINGS 2026-09-28 (second round) — (3), (4) and (5) now RULED; the Sentry question CLOSED.**
+
+- **Sentry DSN: it IS configured, in the Fly deploy config, and the earlier "not present" note was
+  looking in the wrong place.** Verified by key name 2026-09-28 (names only, never values):
+  `NEXT_PUBLIC_SENTRY_DSN` is set in **`fly.stg.toml:16`** and **`fly.toml:19`**, baked at BUILD time
+  through the Dockerfile (`ARG`/`ENV NEXT_PUBLIC_SENTRY_DSN`, :31/:39) — which is the correct shape,
+  since a `NEXT_PUBLIC_*` value is compiled into the bundle and cannot be injected at runtime.
+  `SENTRY_AUTH_TOKEN` is deliberately kept OUT of both toml files and passed as a build secret by
+  `.github/workflows/stg.yml:167` and `prod.yml:170`, with `SENTRY_ORG` / `SENTRY_PROJECT` as build
+  args for the source-map upload. A local `.env.local` has no Sentry key and is not supposed to.
+  **Nothing is owed by the owner for Task 17** — strike it from the owed list.
+- **(3) The device app is PLANNED WITH the wave, not decided ahead of it** (owner: "we need to plan
+  along with the wave so that we can know the limitations and issues"). So do NOT pre-commit to the PWA
+  stand-in or to waiting for R3's native capture app. The wave's own scout/spike answers it, and the
+  question it must answer first is the one flagged as unverified: whether a browser can push ingest to
+  Cloudflare Stream (WHIP) and hold frame timing. R0 killed browser-as-COMPOSITOR, which is a different
+  claim and must not be cited as if it settled this one. The fallback that costs nothing either way is a
+  third-party RTMP app pointed at the key we already mint.
+- **(4) RULED: revocation is a device-status check on the heartbeat AND on every mutating request.**
+  ~20 s worst-case revocation, no refresh-token plumbing. The 5 h 30 m token life stops being the only
+  thing standing between a revoked device and the ingest.
+- **(5) RULED: broadcasts default to PUBLIC, and the org can change it.** The per-competition switch is
+  still owed as a control; the DEFAULT is public. (The recommendation on file argued for unlisted on
+  safeguarding grounds; the owner took public with an org-level override. Recorded so the recommendation
+  is not re-run as if it were open.)
+- **YouTube OAuth: ONE client credential, and the brand is already verified** (owner). So the earlier
+  suggestion of a SEPARATE Cloud project and client is **withdrawn** — it was contingent on protecting an
+  unverified login flow, which does not apply. **One caveat to check against Google's CURRENT docs before
+  the wave commits, not to take from this file:** brand verification and SENSITIVE-SCOPE review are
+  believed to be separate gates, so adding `.../auth/youtube` may still trigger a scope review even
+  though the brand passed. If it does, it hits only the "Connect YouTube" consent, never login, because
+  the scope is requested incrementally rather than at sign-in. Verify before planning around it.
+
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
