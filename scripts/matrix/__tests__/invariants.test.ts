@@ -198,6 +198,16 @@ describe("I2 bracket-one-champion-ranks-permutation", () => {
     expect(evaluateInvariant(I2, run([bracket(null, false)])).verdict).toBe("abstain");
     expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d"])], { facts: facts("shared_place_declared") })).verdict).toBe("abstain");
   });
+  // W1a carry 1, review M-2: I2 reads s.field too. This later bracket is a
+  // correct bracket over its field, so without the guard it would PASS — judged
+  // against the division's entrants instead of the ones seeded into it.
+  it("a later-stage bracket (seq 2) with a division-wide field FAILS by name; seeded is judged; the root is still judged beside it", () => {
+    const carry1 = "stage seq 2: field is division-wide — per-stage entrants were not observed (W1a carry 1)";
+    const later = (fieldSource: "division" | "seeded"): ObservedStage => ({ ...bracket(["a", "b", "c", "d"]), id: "s2", seq: 2, fieldSource });
+    expect(evaluateInvariant(I2, run([later("division")]))).toMatchObject({ verdict: "fail", checked: 0, evidence: [carry1] });
+    expect(evaluateInvariant(I2, run([later("seeded")]))).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d"]), later("division")]))).toMatchObject({ verdict: "fail", checked: 5, evidence: [carry1] });
+  });
 });
 
 describe("I3 table-points-equal-declared", () => {
@@ -597,6 +607,13 @@ describe("I7 — no round-robin pair over its legs (step-safe, no abstentions)",
     const three = [0, 1, 2].map((i) => fx({ id: `f${i}`, home: "a", away: "b" }));
     expect(evaluateInvariant(I7, run([stage({ fixtures: three, config: { legs: 2 } })])).verdict).toBe("fail");
   });
+  // Review M-1: I1 flags self-play but abstains on every fact below and is not
+  // step-safe; I6 covers swiss only. I7 is the model's only step check that sees it.
+  it("an entrant seated against itself fails as a step failure, named — even where I1 abstains", () => {
+    const r = run([stage({ fixtures: [fx({ id: "sp", home: "a", away: "a" }), fx({ id: "ok", home: "a", away: "b" })] })], { facts: ["late_entry"] });
+    expect(evaluateInvariant(spec("I1-rr-pair-once-per-leg"), r).verdict).toBe("abstain");
+    expect(evaluateInvariant(I7, r)).toMatchObject({ verdict: "fail", checked: 2, evidence: ["sp: self-play a"] });
+  });
   // Beyond the brief: the other state transitions I1 goes silent on.
   it("still speaks under EVERY fact I1 abstains on — withdrawal, expunge, void, cut short, late entry (swept from I1's own declaration)", () => {
     const I1 = spec("I1-rr-pair-once-per-leg");
@@ -624,12 +641,14 @@ describe("I7 — no round-robin pair over its legs (step-safe, no abstentions)",
 
 describe("I8 — every Generate answer is fixtures or a named refusal", () => {
   const I8 = INVARIANTS.find((s) => s.id === "I8-generate-named")!;
-  const g = (status: number, code: string | null) => ({ status, code, total: 0, created: 0 });
+  // `total` is the stage's full fixture list as the answer carried it
+  // (recordGenerate: total = fixtures.length); a refusal carries none.
+  const g = (status: number, code: string | null, total = 0, created = total) => ({ status, code, total, created });
   it("empty case first: no generate recorded → abstain", () => {
     expect(evaluateInvariant(I8, run([stage({ generates: [] })])).verdict).toBe("abstain");
   });
   it("200 and 422 STAGE_NOT_READY pass (checked 2); 409 CONFLICT, 500 INTERNAL and a code-less 422 fail", () => {
-    expect(evaluateInvariant(I8, run([stage({ generates: [g(200, null), g(422, "STAGE_NOT_READY")] })]))).toMatchObject({ verdict: "pass", checked: 2 });
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(200, null, 6), g(422, "STAGE_NOT_READY")] })]))).toMatchObject({ verdict: "pass", checked: 2 });
     for (const bad of [g(409, "CONFLICT"), g(500, "INTERNAL"), g(422, null)]) {
       expect(evaluateInvariant(I8, run([stage({ generates: [bad] })])).verdict).toBe("fail");
     }
@@ -650,10 +669,25 @@ describe("I8 — every Generate answer is fixtures or a named refusal", () => {
   });
   it("a second Generate is judged too, in any stage: one unnamed answer among named ones fails, naming its stage", () => {
     const r = evaluateInvariant(I8, run([
-      stage({ generates: [g(200, null), g(422, "STAGE_NOT_READY")] }),
-      stage({ id: "s2", seq: 2, generates: [g(200, null), g(409, "CONFLICT")] }),
+      stage({ generates: [g(200, null, 6), g(422, "STAGE_NOT_READY")] }),
+      stage({ id: "s2", seq: 2, generates: [g(200, null, 3), g(409, "CONFLICT")] }),
     ]));
     expect(r).toMatchObject({ verdict: "fail", checked: 4, evidence: ["stage 2: generate → 409 CONFLICT"] });
+  });
+  // Review I-1. R13 (_RULES.md): "an empty result is a failure: … an empty
+  // generate". I4 carries that clause but is not step-safe, and the model
+  // evaluates only the step-safe set — so I8 has to carry it too, or its
+  // "fixtures (2xx)" pass reason would print over an answer with none.
+  it("R13: a 2xx Generate that answered NO fixtures fails, named — any 2xx, beside named refusals", () => {
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(422, "STAGE_NOT_READY"), g(200, null, 0)] })])))
+      .toMatchObject({ verdict: "fail", checked: 2, evidence: ["stage 1: empty generate (R13)"] });
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(201, null, 0)] })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: empty generate (R13)"] });
+  });
+  // The product's Generate answers EVERY fixture of the stage, not only the new
+  // ones (server/usecases/stages.ts generate's return), so a repeat call has
+  // total > 0 and created 0. Keying R13 on `created` would red every re-Generate.
+  it("a repeat Generate (the stage's full list, nothing new created) passes — no false red on a second call", () => {
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(200, null, 6, 6), g(200, null, 6, 0)] })]))).toMatchObject({ verdict: "pass", checked: 2 });
   });
 });
 

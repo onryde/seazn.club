@@ -27,6 +27,11 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}~${b}` : `${b}~${a}`);
 const result = (fails: string[], checked: number, notes: string[] = []): InvariantResult =>
   ({ verdict: fails.length > 0 ? "fail" : "pass", checked, evidence: [...fails, ...notes].slice(0, 12) });
 const ABSTAIN = (why: string): InvariantResult => ({ verdict: "abstain", checked: 0, evidence: [`abstain: ${why}`] });
+/** W1a carry 1: a later stage (seq > 1) whose `field` is the whole division's
+ *  would be judged against the wrong entrants. Every spec that reads `s.field`
+ *  (I1, I2) refuses it by name — fail closed, never a wrong pass. */
+const divisionWideLaterStage = (s: ObservedStage): string | null =>
+  s.seq > 1 && s.fieldSource !== "seeded" ? `stage seq ${s.seq}: field is division-wide — per-stage entrants were not observed (W1a carry 1)` : null;
 
 const I1: InvariantSpec = {
   id: "I1-rr-pair-once-per-leg",
@@ -40,10 +45,8 @@ const I1: InvariantSpec = {
     const fails: string[] = [];
     let checked = 0;
     for (const s of stages) {
-      if (s.seq > 1 && s.fieldSource !== "seeded") {
-        fails.push(`stage seq ${s.seq}: field is division-wide — per-stage entrants were not observed (W1a carry 1)`);
-        continue;
-      }
+      const unobserved = divisionWideLaterStage(s);
+      if (unobserved !== null) { fails.push(unobserved); continue; }
       const legs = typeof s.config.legs === "number" ? s.config.legs : 1;
       const met = new Map<string, number>();
       for (const f of s.fixtures.filter(twoSided)) {
@@ -104,6 +107,8 @@ const I2: InvariantSpec = {
     const fails: string[] = [];
     let checked = 0;
     for (const s of stages) {
+      const unobserved = divisionWideLaterStage(s);
+      if (unobserved !== null) { fails.push(unobserved); continue; }
       const ranks = s.complete?.finalRanks ?? [];
       const counts = new Map<string, number>();
       for (const id of ranks) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -309,6 +314,7 @@ const I7: InvariantSpec = {
       const legs = typeof s.config.legs === "number" ? s.config.legs : 1;
       const met = new Map<string, string[]>();
       for (const f of s.fixtures.filter(twoSided)) {
+        if (f.home === f.away) fails.push(`${f.id}: self-play ${f.home}`);
         const k = pairKey(f.home!, f.away!);
         met.set(k, [...(met.get(k) ?? []), f.id]);
       }
@@ -337,8 +343,12 @@ const I8: InvariantSpec = {
     let checked = 0;
     for (const s of stages) for (const g of s.generates) {
       checked++;
-      const ok = (g.status >= 200 && g.status < 300) || isNamedRefusal(g.status, g.code);
-      if (!ok) fails.push(`stage ${s.seq}: generate → ${g.status} ${g.code ?? "(no code)"}`);
+      const ok2xx = g.status >= 200 && g.status < 300;
+      // R13: an empty generate is a failure. `total` is the stage's FULL list
+      // (the product answers every fixture, not only new ones), so an
+      // idempotent re-Generate still carries total > 0.
+      if (ok2xx && g.total === 0) fails.push(`stage ${s.seq}: empty generate (R13)`);
+      else if (!ok2xx && !isNamedRefusal(g.status, g.code)) fails.push(`stage ${s.seq}: generate → ${g.status} ${g.code ?? "(no code)"}`);
     }
     if (checked === 0) return ABSTAIN("no generate recorded");
     return result(fails, checked);
