@@ -617,6 +617,15 @@ const STREAM_SESSION_CREATE_ERRORS = {
   }),
   409: scopedErrorEnvelope({
     sessionId: { type: ["string", "null"], format: "uuid", description: "On active_session (409): the fixture's running session — resume it rather than start another" },
+    holder: {
+      type: ["object", "null"],
+      description: "On target_in_use (409): the fixture (always this organisation's) whose stream holds the destination; null when a concurrent start won the race and there is no holder to name",
+      properties: {
+        fixtureId: { type: ["string", "null"], format: "uuid", description: "The holding fixture; null if it was deleted" },
+        courtName: { type: ["string", "null"], description: "The holding fixture's court, when it has one" },
+        label: { type: "string", description: "The destination's own label" },
+      },
+    },
   }),
   422: DESTINATION_NOT_ALLOWED_ENVELOPE,
   503: scopedErrorEnvelope({

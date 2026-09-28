@@ -254,4 +254,29 @@ describe("the relay's routes are never key-reachable", () => {
     }
     expect(others, "other routes with a 422 checked").toBeGreaterThan(0);
   });
+
+  // Task 11 follow-up (controller ruling): a start refused `target_in_use` names the fixture holding the destination —
+  // `holder: { fixtureId, courtName, label }`, or null when the index race gives no holder to name. It is a wire field,
+  // so the create route's 409 documents it (next to active_session's `sessionId`), SCOPED to that route.
+  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, courtName, label }`; no other route's 409 gains `holder`", () => {
+    type Prop = { type?: string | string[]; properties?: Record<string, Prop> };
+    type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop } } } } }> }>> };
+    const doc = buildOpenApiDocument() as Doc;
+    const err409 = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.responses["409"]!.content["application/json"].schema.properties.error;
+    expect(Object.keys(err409.properties ?? {}).sort()).toEqual(["code", "current_seq", "holder", "message", "sessionId"]);
+    const holder = err409.properties!.holder!;
+    expect(holder.type, "holder is nullable (the race-loser refusal has no holder to name)").toEqual(["object", "null"]);
+    expect(Object.keys(holder.properties ?? {}).sort()).toEqual(["courtName", "fixtureId", "label"]);
+    let others = 0;
+    for (const [path, ops] of Object.entries(doc.paths)) {
+      for (const [method, o] of Object.entries(ops)) {
+        if (`${method} ${path}` === "post /api/v1/fixtures/{id}/stream-sessions") continue;
+        const e = o.responses["409"]?.content["application/json"].schema.properties.error;
+        if (!e) continue;
+        expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("holder");
+        others++;
+      }
+    }
+    expect(others, "other routes with a 409 checked").toBeGreaterThan(0);
+  });
 });

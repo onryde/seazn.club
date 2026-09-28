@@ -37,13 +37,14 @@ import { baseUrl } from "@/lib/oauth";
 import { destinationRefusal } from "@/lib/stream-destinations";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { StreamSessionCreated, StreamSessionCurrent } from "@/server/api-v1/schemas";
-import { MAX_DURATION_MINUTES } from "@/server/relay/config";
+import { MAX_DURATION_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { StorageUsage } from "@/server/relay/ports";
 import { resealTargetDestination, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { grantCredits } from "@/server/usecases/stream-credits";
+import { defaultDeps, heartbeat } from "@/server/usecases/stream-sessions";
 import { createStreamTarget } from "@/server/usecases/stream-targets";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
@@ -109,6 +110,13 @@ const stop = async (fixtureId: string, sid: string, headers?: Record<string, str
 async function sessionsOn(fixtureId: string): Promise<number> {
   const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fixtureId}`;
   return n;
+}
+
+/** Puts `fixtureId` on a court named `name` at a venue of `orgId` (the stream-sessions I1 rig's seeding). */
+async function onCourt(orgId: string, fixtureId: string, name: string): Promise<void> {
+  const [v] = await sql<{ id: string }[]>`insert into venues (org_id, name, address) values (${orgId}, 'Main Arena', '12 Court Road') returning id`;
+  const [c] = await sql<{ id: string }[]>`insert into courts (venue_id, org_id, name) values (${v!.id}, ${orgId}, ${name}) returning id`;
+  await sql`update fixtures set court_id = ${c!.id} where id = ${fixtureId}`;
 }
 
 afterEach(() => setRelayDriversForTest(null));
@@ -241,14 +249,16 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect(await refuse("active_session", busy.fixtureId, { mode: "passthrough", targetId: busy.target.id }, 409))
       .toMatchObject({ code: "active_session", sessionId: first });
 
-    // 409 target_in_use — the destination is held by ANOTHER fixture's live session. The holder is named in the
-    // operator's message; see the Task 11 report for why it is not (yet) a machine-readable extra.
+    // 409 target_in_use — the destination is held by ANOTHER fixture's ACTIVE session. `holder` names that fixture, its
+    // court and the destination's own label — each compared with what THIS test seeded, never with the usecase's output.
     const shared = await organiser({ fixtures: 2 });
     const holderFixture = shared.fixtureIds[0]!;
+    const court = `Court ${randomUUID().slice(0, 4)}`;
+    await onCourt(shared.auth.orgId, holderFixture, court);
     expect((await create(holderFixture, { mode: "passthrough", targetId: shared.target.id })).status).toBe(201);
     const inUse = await refuse("target_in_use", shared.fixtureIds[1]!, { mode: "passthrough", targetId: shared.target.id }, 409);
-    expect(inUse).toMatchObject({ code: "target_in_use" });
-    expect(String(inUse.message)).toContain(holderFixture);
+    expect(inUse).toMatchObject({ code: "target_in_use", holder: { fixtureId: holderFixture, courtName: court, label: shared.target.label } });
+    expect(String(inUse.message)).toContain(court);
 
     // 422 DESTINATION_NOT_ALLOWED — A20: a SAVED destination the allowlist no longer admits is refused at the start,
     // with the rule the ONE validator names for that url (lib/stream-destinations.ts), never the url itself.
@@ -269,15 +279,52 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     const op = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
     let extrasChecked = 0;
     for (const s of seen) {
-      const documented = op.responses[String(s.status)]?.content["application/json"].schema.properties.error.properties ?? {};
-      for (const key of Object.keys(s.error)) {
+      const documented = (op.responses[String(s.status)]?.content["application/json"].schema.properties.error.properties ?? {}) as Record<string, { properties?: Record<string, unknown> }>;
+      for (const [key, value] of Object.entries(s.error)) {
         if (key === "code" || key === "message") continue;
         expect(documented, `${s.label} (${s.status}) carries \`${key}\` on the wire; the spec must document it`).toHaveProperty(key);
         extrasChecked += 1;
+        // One level down: an OBJECT extra (target_in_use's `holder`) documents each of its own keys too.
+        if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+          for (const inner of Object.keys(value)) {
+            expect(documented[key]!.properties ?? {}, `${s.label}: \`${key}.${inner}\` is on the wire; the spec must document it`).toHaveProperty(inner);
+            extrasChecked += 1;
+          }
+        }
       }
     }
     expect(seen.map((s) => s.label)).toEqual(["no_credits", "plan_lacks_overlay", "storage_exhausted", "active_session", "target_in_use", "DESTINATION_NOT_ALLOWED"]);
-    expect(extrasChecked, "anti-vacuity: the refusals above carry extras").toBeGreaterThanOrEqual(6);
+    expect(extrasChecked, "anti-vacuity: the refusals above carry extras").toBeGreaterThanOrEqual(10);
+  });
+
+  // Task 10's I1 path, over HTTP: ANOTHER fixture's ENDED composed session whose Machine the provider still lists (its
+  // forced destroy never confirmed) holds the destination. B's admission tries that destroy; while it keeps failing the
+  // start is 409 target_in_use, and the wire names the holder exactly as the active-holder refusal does.
+  it("I1 over HTTP: a failed destroy of another fixture's orphan Machine refuses 409 target_in_use WITH the holder on the wire, and nothing is created", async () => {
+    const o = await organiser({ fixtures: 2, credits: 2 });   // A spends one; the admitted positive pair at the end, the other
+    const [a, b] = [o.fixtureIds[0]!, o.fixtureIds[1]!];
+    const court = `Court ${randomUUID().slice(0, 4)}`;
+    await onCourt(o.auth.orgId, a, court);
+    const old = (await create(a, { mode: "composed", targetId: o.target.id })).body.data!.sessionId;
+    await heartbeat(old, o.runner.created[0]!.jobToken, { state: "playing" }, defaultDeps("http://app.test"));
+    const [{ machine_id: machine }] = await sql<{ machine_id: string }[]>`select machine_id from fixture_stream_sessions where id = ${old}`;
+    // Seeded as Task 10's I1 test seeds it: a stop past grace + slack, so the next look completes the row.
+    await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = now(), runner_state = 'stopping',
+                  runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${old}`;
+    const failing = Object.assign(Object.create(o.runner) as FakeRunner, {
+      async destroy() { throw Object.assign(new Error("fake destroy failed"), { status: 503 }); },
+    });
+    setRelayDriversForTest({ ingest: o.ingest, runner: failing });
+    expect((await current(a)).status).toBeGreaterThanOrEqual(500);   // the organiser's poll completes A; its forced destroy fails
+    expect((await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${old}`)[0]!.state).toBe("completed");
+    expect((await o.runner.list()).map((m) => m.runnerId)).toContain(machine);
+    const refused = await create(b, { mode: "passthrough", targetId: o.target.id });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatchObject({ code: "target_in_use", holder: { fixtureId: a, courtName: court, label: o.target.label } });
+    expect(await sessionsOn(b)).toBe(0);
+    // The positive pair: once the provider confirms the orphan's destroy, the same start is admitted.
+    setRelayDriversForTest({ ingest: o.ingest, runner: o.runner });
+    expect((await create(b, { mode: "passthrough", targetId: o.target.id })).status).toBe(201);
   });
 
   it("create: an empty body, a non-JSON body and an unknown field are 400 VALIDATION, and no row is written", async () => {

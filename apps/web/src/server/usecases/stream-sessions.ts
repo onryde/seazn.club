@@ -663,7 +663,12 @@ async function tearDownPriorMachines(
  *  ended session whose still-listed Machine admission could not destroy (I1). `code` is what the client acts on (Task
  *  13's `CreateErrorCode`, Task 14's dictionary key). The MESSAGE names the holder — the court when the fixture has one, else the fixture id — because
  *  "in use" alone sends an organiser hunting; it is the operator's line in the log and in Sentry. The client renders the
- *  DICTIONARY string keyed by `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal). */
+ *  DICTIONARY string keyed by `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal).
+ *  Task 11 (controller ruling): the holder also rides as the machine-readable `extra` `{ holder: { fixtureId, courtName,
+ *  label } }`, so that dictionary string can name the court. SAME-ORG BY CONSTRUCTION: both producers read only the
+ *  caller's org (`targetHolderFor`: `t.org_id = $org`; `tearDownPriorMachines`: `org_id = $org`), and a session can only
+ *  reference a target `admit` proved is the org's — so the extra never names another organisation's fixture. The
+ *  holder's SESSION id is deliberately not in it: nothing a client does with it. */
 interface Holder { sessionId: string; label: string; courtName: string | null; holderFixtureId: string | null }
 
 function targetInUse(h: Holder): HttpError {
@@ -671,6 +676,7 @@ function targetInUse(h: Holder): HttpError {
     409,
     `the destination "${h.label}" is already streaming for ${h.courtName ? `court ${h.courtName}` : `fixture ${h.holderFixtureId ?? "(deleted)"}`}`,
     "target_in_use",
+    { holder: { fixtureId: h.holderFixtureId, courtName: h.courtName, label: h.label } },
   );
 }
 
@@ -805,7 +811,7 @@ export async function createSession(
       // Never `active_session` — a different fact with a different dictionary string. The message cannot name the holder
       // here (the transaction rolled back and the read is gone), which is exactly why `targetHolderFor` refuses first:
       // this branch is the loser of a real race (G-T6), not the path an organiser normally meets.
-      throw new HttpError(409, "that destination is already streaming for another fixture", "target_in_use");
+      throw new HttpError(409, "that destination is already streaming for another fixture", "target_in_use", { holder: null });
     }
     throw err;
   });
