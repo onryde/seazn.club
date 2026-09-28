@@ -190,6 +190,7 @@ import {
   seedOrg,
   asOwner,
   rig,
+  farFutureDate,
   loadWithGroup,
   seedSecondEntry,
   seedRegistration,
@@ -1120,7 +1121,12 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
     await sql`update organizations
               set stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}, stripe_charges_enabled = true
               where id = ${orgId}`;
-    const { competition, division } = await rig(owner, { startsOn: "2026-12-25" }); // far future
+    // Upcoming by the REAL clock, not a literal. This was "2026-12-25": from
+    // that day the starts_on fallback also reads "locked", so the explicit
+    // lock below no longer changes the answer and this test stays green while
+    // proving nothing. `farFutureDate()` keeps the two deadlines on opposite
+    // sides of today, which is the differential this test exists for.
+    const { competition, division } = await rig(owner, { startsOn: farFutureDate() });
     const settings = await putRegistrationSettings(owner, division.id, {
       enabled: true,
       entrant_kind: "individual",
