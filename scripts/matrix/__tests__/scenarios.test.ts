@@ -11,7 +11,7 @@ import {
   CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
+  DRIVING_WAVE, MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
@@ -810,21 +810,27 @@ describe("1b: a stage whose fixtures are ALL finished must complete — in EVERY
 });
 
 describe("deferrals are named", () => {
-  it("a multi-stage row is ScenarioUnsupported(W1b), not a crash, before any driver call", async () => {
+  it("the driving wave is the one ruling 28 (Q-A) names in the programme index", () => {
+    const index = readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md"), "utf8");
+    const named = /^28\. \*\*Q-A — W1a's deferred driving work becomes a "([\w-]+)" wave/m.exec(index)?.[1];
+    expect(named).toBeDefined();
+    expect(DRIVING_WAVE).toBe(named);
+  });
+  it("a multi-stage row is ScenarioUnsupported(DRIVING_WAVE), not a crash, before any driver call", async () => {
     const driver = new FakeLeagueDriver();
     await expect(runOn(driver, "LIFECYCLE", { row: "league_ko" })).rejects.toBeInstanceOf(ScenarioUnsupported);
-    await expect(runOn(driver, "LIFECYCLE", { row: "league_ko" })).rejects.toMatchObject({ wave: "W1b", message: expect.stringMatching(/multi-stage/) });
+    await expect(runOn(driver, "LIFECYCLE", { row: "league_ko" })).rejects.toMatchObject({ wave: DRIVING_WAVE, message: expect.stringMatching(/multi-stage/) });
     expect(driver.calls).toEqual([]);
   });
-  it.each(["ladder", "americano", "mexicano"] as const)("%s is ScenarioUnsupported(W1b) before any driver call", async (row) => {
+  it.each(["ladder", "americano", "mexicano"] as const)("%s is ScenarioUnsupported(DRIVING_WAVE) before any driver call", async (row) => {
     const driver = new FakeLeagueDriver();
-    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: "W1b", message: expect.stringContaining(row) });
+    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: `${row}: challenge/rotation driving lands in ${DRIVING_WAVE}` });
     expect(driver.calls).toEqual([]);
   });
-  it("a team sport is ScenarioUnsupported(W1b, team rosters) before any driver call", async () => {
+  it("a team sport is ScenarioUnsupported(DRIVING_WAVE, team rosters) before any driver call", async () => {
     const driver = new FakeLeagueDriver();
     const football = Object.keys(sportModule("football").variants as object)[0]!;
-    await expect(runOn(driver, "LIFECYCLE", { sport: "football", variant: football })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: "W1b", message: "team rosters" });
+    await expect(runOn(driver, "LIFECYCLE", { sport: "football", variant: football })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: "team rosters" });
     expect(driver.calls).toEqual([]);
   });
 });

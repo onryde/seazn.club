@@ -79,6 +79,11 @@ export class Recorder {
   events = 0;
 }
 
+/** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
+ *  americano / mexicano, multi-stage seeding, team rosters — is its own wave.
+ *  A deferral names a wave that is not done (scenario-catalogue.test.ts). */
+export const DRIVING_WAVE = "W1-driving";
+
 const FORMAT_LATER = new Set(["ladder", "americano", "mexicano"]);
 /** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */
 export const MAX_ITERATIONS = 64;
@@ -87,11 +92,11 @@ const BYE_PHANTOM = "__bye__";
 
 export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number): Promise<DivisionSetup> {
   // Every deferral fires before the first driver call.
-  if (FORMAT_LATER.has(ctx.spec.row)) throw new ScenarioUnsupported("W1b", `${ctx.spec.row}: challenge/rotation driving lands in W1b`);
+  if (FORMAT_LATER.has(ctx.spec.row)) throw new ScenarioUnsupported(DRIVING_WAVE, `${ctx.spec.row}: challenge/rotation driving lands in ${DRIVING_WAVE}`);
   const bodies = stagesForRow(ctx.spec.row);
-  if (bodies.length > 1) throw new ScenarioUnsupported("W1b", "multi-stage rows need seed-proposal handling");
+  if (bodies.length > 1) throw new ScenarioUnsupported(DRIVING_WAVE, "multi-stage rows need seed-proposal handling");
   const kind = entrantKindFor(ctx.spec.sport, ctx.cfg);
-  if (kind === "team") throw new ScenarioUnsupported("W1b", "team rosters");
+  if (kind === "team") throw new ScenarioUnsupported(DRIVING_WAVE, "team rosters");
   const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
   const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
   const division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant });
