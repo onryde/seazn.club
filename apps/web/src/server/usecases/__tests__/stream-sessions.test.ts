@@ -70,19 +70,92 @@ const ROOMY_STORAGE_MINUTES = 100_000_000;
 /** Drawn sequences per run of the lifecycle model (the last describe). Each draws a fresh org, two fixtures and one destination. */
 const MODEL_RUNS = 15;
 
-/** A C3 test's pool: `used` minutes recorded, and exactly `headroomBeforeOthers` minutes of headroom once the database's
- *  FOREIGN reservations are subtracted. Two moves make that exact while other suites write sessions concurrently:
- *   1. the rig's clock jumps FAR past every foreign row (400 days) — a row another suite inserts at the real now is by
- *      then past its wall clock / warming / requested / provision timeout, so the policy excludes it, and it cannot move
- *      the baseline mid-test. The test's own rows are seeded relative to the RIG's clock, not the database's.
- *   2. what the policy still keeps at that instant (a stop-marked runner past its grace: `grace_expired` still records)
- *      is MEASURED through the admission read itself — the foreign baseline is observed, never typed. The assertions then
- *      rest on the DELTA the test's own rows make, which is the claim. */
-async function poolFor(r: { deps: SessionDeps; tick: (ms: number) => void }, used: number, headroomBeforeOthers: number) {
-  r.tick(400 * 86_400_000);
-  const foreign = ROOMY_STORAGE_MINUTES - (await storageHeadroomMinutes(sql, { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 }, r.deps.now()));
+/** How far a C3 test's rig clock jumps: past every row another suite writes at the real now, which is by then past its wall
+ *  clock / warming / requested / provision timeout and so excluded by the policy. */
+const C3_CLOCK_JUMP_MS = 400 * 86_400_000;
+/** One full booking past the rig clock. Every row a C3 test seeds is anchored AT or BEFORE the rig clock and books at most
+ *  MAX_DURATION_MINUTES (V410's CHECK caps `max_duration_minutes` there), so the policy has ended every one of them by this
+ *  offset — the wall clock is its first rule. */
+const OWN_ROWS_EXPIRED_MS = (MAX_DURATION_MINUTES + 1) * 60_000;
+/** Admissions tried before a C3 pool that never settles is a red (see `admitAgainstPool`). */
+const POOL_ATTEMPTS = 5;
+
+/** The DB-wide reservation baseline at a clock where this test's own rows cannot count (OWN_ROWS_EXPIRED_MS), read through
+ *  the admission's own read — observed, never typed. */
+async function foreignBaseline(r: { deps: SessionDeps }): Promise<number> {
+  const past = new Date(r.deps.now().getTime() + OWN_ROWS_EXPIRED_MS);
+  const foreign = ROOMY_STORAGE_MINUTES - (await storageHeadroomMinutes(sql, { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 }, past));
   expect(foreign, "the foreign baseline cannot be negative").toBeGreaterThanOrEqual(0);
-  return { totalStorageMinutes: used, totalStorageMinutesLimit: used + foreign + headroomBeforeOthers, videoCount: 3 };
+  return foreign;
+}
+
+/** Rows the C3 tests seat at the rig's far-future clock, retired. A run killed before its `finally` leaves them active, and
+ *  at the next run's clock (minutes later) a warming one still COUNTS while the baseline — measured a booking later — does
+ *  not, so every attempt would disagree with its own snapshot. Nothing else in the tree anchors a session this far ahead
+ *  (the only far-future ticks are this file's C3 tests), so the predicate cannot touch another suite's rows. */
+async function retireC3Rows(ids?: string[]): Promise<void> {
+  if (ids) {
+    if (ids.length) await sql`update fixture_stream_sessions set state = 'completed', ended_at = now() where id in ${sql(ids)} and state in ${sql([...ACTIVE_STATES])}`;
+    return;
+  }
+  await sql`update fixture_stream_sessions set state = 'completed', ended_at = now()
+             where state in ${sql([...ACTIVE_STATES])} and coalesce(started_at, created_at) > now() + interval '30 days'`;
+}
+
+/** A C3 admission, made HERMETIC (lane-close sweep; Task 11 report "C3 + B", review G8). The pool is ONE account-wide figure
+ *  by the PRODUCTION rule — `storageHeadroomMinutes` reserves against every active session in the database, whichever
+ *  org, because recording storage is one Cloudflare account — so it is NOT scoped to this test's org. A row another suite
+ *  wrote between the old one-off measurement and the admission's read flipped these tests either way (G8: 1 in 4 scoped
+ *  runs). Three moves make every ASSERTED admission exact:
+ *   1. the rig clock is FROZEN far past every other file's rows (C3_CLOCK_JUMP_MS), so only a concurrent WRITE can move
+ *      the reservation set — never the passage of time;
+ *   2. the foreign baseline is measured INSIDE the admission call — the fake's `storageUsage`, a few statements before the
+ *      admission's own read — at a clock where this test's rows cannot count (`foreignBaseline`), so whether THEY count
+ *      is never assumed by the measurement;
+ *   3. the admission RECORDS what it read: its storage snapshot is written in the transaction that decides. An attempt
+ *      counts only when that snapshot reserved exactly baseline + `ownReserved` — the minutes the test's claim says its
+ *      own rows hold. Otherwise a concurrent write moved the pool inside the window: the attempt proves nothing either
+ *      way, any session it made is retired, and the admission is measured again, at most POOL_ATTEMPTS times.
+ *  A pool that never settles is a RED with every attempt's numbers, never a pass — and a false claim (the policy stops
+ *  counting a row it should) can never settle, so it reds the same way; `after` (the baseline re-read once the attempt
+ *  returned) tells the two apart in the message: a baseline stable across every attempt is not drift. */
+async function admitAgainstPool(
+  r: Awaited<ReturnType<typeof rig>>, pool: { used: number; headroomBeforeOwn: number; ownReserved: number },
+): Promise<{ made: { sessionId: string } | null; refusal: unknown; snapshot: { reserved: number; headroom: number }; attempts: number; retired: string[] }> {
+  const at = r.deps.now();
+  const tried: { foreign: number; reserved: number; after: number }[] = [];
+  const retired: string[] = [];
+  const storageUsage = r.ingest.storageUsage;
+  try {
+    for (let i = 0; i < POOL_ATTEMPTS; i++) {
+      let limit = -1;
+      let foreign = -1;
+      r.ingest.storageUsage = async () => {
+        foreign = await foreignBaseline(r);
+        limit = pool.used + foreign + pool.headroomBeforeOwn;
+        return { totalStorageMinutes: pool.used, totalStorageMinutesLimit: limit, videoCount: 3 };
+      };
+      const [{ mark }] = await sql<{ mark: string }[]>`select coalesce(max(id), 0)::text as mark from stream_storage_snapshots`;
+      const outcome = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).then(
+        (made) => ({ made, refusal: null as unknown }), (refusal: unknown) => ({ made: null, refusal }));
+      const snaps = await sql<{ reserved: number; headroom: number }[]>`
+        select reserved_minutes as reserved, headroom_minutes as headroom from stream_storage_snapshots
+         where id > ${mark}::bigint and source = 'admission' and taken_at = ${at} and used_minutes = ${pool.used} and limit_minutes = ${limit}`;
+      // No snapshot: the call ended before the admission's read (a refusal that is not about the pool) — not ours to judge.
+      if (snaps.length === 0) throw outcome.refusal ?? new Error("an admission that wrote no storage snapshot");
+      expect(snaps, "one admission, one snapshot").toHaveLength(1);
+      const snapshot = snaps[0]!;
+      tried.push({ foreign, reserved: snapshot.reserved, after: await foreignBaseline(r) });
+      if (snapshot.reserved === foreign + pool.ownReserved) return { ...outcome, snapshot, attempts: tried.length, retired };
+      if (outcome.made) {
+        retired.push(outcome.made.sessionId);
+        await retireC3Rows([outcome.made.sessionId]);
+      }
+    }
+  } finally {
+    r.ingest.storageUsage = storageUsage;
+  }
+  throw new Error(`C3: no admission in ${POOL_ATTEMPTS} reserved baseline + ${pool.ownReserved} own minutes — ${JSON.stringify(tried)}`);
 }
 
 async function override(orgId: string, key: string, value: boolean) {
@@ -171,60 +244,95 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(s!.created_by).toBe(r.auth.userId);
   });
 
+  // The two C3 tests pin the pool through `admitAgainstPool` (hermetic against other suites' rows — see its comment). Each
+  // leg names the minutes its CLAIM says the test's own rows reserve (the rows' own `max_duration_minutes`, V410's default,
+  // read back — never typed), and asserts the admission's decision over a pool whose every term is known.
+  const reservedBy = async (ids: string[]) =>
+    (await sql<{ m: number }[]>`select coalesce(sum(max_duration_minutes), 0)::int as m from fixture_stream_sessions where id in ${sql(ids)}`)[0]!.m;
+
   it("C3 differential: raw headroom sufficient, but other sessions' RESERVATIONS push it under → 503 and no row; the same sessions completed → 201", async () => {
+    await retireC3Rows();
     const r = await rig({ credits: 1 });
-    // Raw headroom (limit − used) is 900 + the measured foreign baseline — always ≥ MAX_DURATION_MINUTES; the three rows below
-    // reserve 3 × MAX_DURATION_MINUTES = 900 of it, leaving 0.
-    r.ingest.storage = await poolFor(r, 100, 3 * MAX_DURATION_MINUTES);
+    r.tick(C3_CLOCK_JUMP_MS);
     const rigNow = r.deps.now();
     const others: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      const o = await rig({ credits: 1 });
-      // Db/Dc: sport_key, competition_id, division_id and entitlement_via_override are NOT NULL with no
-      // default, so every raw insert derives them from the fixture's own division (the same sources
-      // createSession reads). A `values (...)` form here fails 23502 and the test never reaches its assertions.
-      const [s] = await sql<{ id: string }[]>`
-        insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
-                                             sport_key, competition_id, division_id, entitlement_via_override)
-        select ${o.fixtureId}, ${o.auth.orgId}, 'passthrough', 'live', ${o.target.id}, ${o.auth.userId}, ${rigNow},
-               d.sport_key, d.competition_id, f.division_id, true
-          from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixtureId}
-        returning id`;
-      others.push(s!.id);
+    try {
+      for (let i = 0; i < 3; i++) {
+        const o = await rig({ credits: 1 });
+        // Db/Dc: sport_key, competition_id, division_id and entitlement_via_override are NOT NULL with no
+        // default, so every raw insert derives them from the fixture's own division (the same sources
+        // createSession reads). A `values (...)` form here fails 23502 and the test never reaches its assertions.
+        const [s] = await sql<{ id: string }[]>`
+          insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
+                                               sport_key, competition_id, division_id, entitlement_via_override)
+          select ${o.fixtureId}, ${o.auth.orgId}, 'passthrough', 'live', ${o.target.id}, ${o.auth.userId}, ${rigNow},
+                 d.sport_key, d.competition_id, f.division_id, true
+            from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixtureId}
+          returning id`;
+        others.push(s!.id);
+      }
+      expect(others).toHaveLength(3);
+      const ownReserved = await reservedBy(others);
+      expect(ownReserved, "three live rows reserve three bookings").toBe(3 * MAX_DURATION_MINUTES);
+      // Raw headroom (limit − used) is ownReserved + the measured foreign baseline — always ≥ MAX_DURATION_MINUTES; the three
+      // rows reserve all of the headroom that is left after the foreign baseline, leaving 0.
+      const pool = { used: 100, headroomBeforeOwn: ownReserved };
+      const refused = await admitAgainstPool(r, { ...pool, ownReserved });
+      expect(refused.snapshot.headroom, "the admission's own figure: the three reservations took it all").toBe(pool.headroomBeforeOwn - ownReserved);
+      expect(refused.made).toBeNull();
+      expect(refused.refusal).toMatchObject({ status: 503, code: "storage_exhausted" });
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId} and not (id = any(${refused.retired}::uuid[]))`;
+      expect(n, "a refused start writes no row").toBe(0);
+      await retireC3Rows(others);
+      const admitted = await admitAgainstPool(r, { ...pool, ownReserved: 0 });   // completed rows reserve nothing
+      expect(admitted.snapshot.headroom).toBe(pool.headroomBeforeOwn);
+      expect(admitted.refusal).toBeNull();
+      expect(admitted.made?.sessionId).toBeDefined();
+    } finally {
+      await retireC3Rows(others);
     }
-    expect(others).toHaveLength(3);
-    await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 503, code: "storage_exhausted" });
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
-    expect(n).toBe(0);
-    await sql`update fixture_stream_sessions set state = 'completed', ended_at = now() where id in ${sql(others)}`;
-    const made = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    expect(made.sessionId).toBeDefined();
   });
 
   it("C3 + B: a reservation held by a session the expiry policy ALREADY expires (warming 11 min, unread by anyone) no longer counts; at 9 min it still does", async () => {
+    await retireC3Rows();
     const r = await rig({ credits: 1 });
-    // Two warming rows reserve 2 × MAX_DURATION_MINUTES of a 2 × MAX_DURATION_MINUTES headroom (after the foreign baseline) → 0.
-    r.ingest.storage = await poolFor(r, 400, 2 * MAX_DURATION_MINUTES);
+    r.tick(C3_CLOCK_JUMP_MS);
     const rigNow = r.deps.now();
     const ago = (minutes: number) => new Date(rigNow.getTime() - minutes * 60_000);
     const stale = await rig({ credits: 1 });
     const fresh = await rig({ credits: 1 });
-    const [a] = await sql<{ id: string }[]>`insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, created_at,
-                                            sport_key, competition_id, division_id, entitlement_via_override)
-      select ${stale.fixtureId}, ${stale.auth.orgId}, 'passthrough', 'warming', ${stale.target.id}, ${stale.auth.userId}, ${ago(WARMING_TIMEOUT_MINUTES - 1)},
-             d.sport_key, d.competition_id, f.division_id, true
-        from fixtures f join divisions d on d.id = f.division_id where f.id = ${stale.fixtureId}
-      returning id`;
-    await sql`insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, created_at,
-                                                   sport_key, competition_id, division_id, entitlement_via_override)
-      select ${fresh.fixtureId}, ${fresh.auth.orgId}, 'passthrough', 'warming', ${fresh.target.id}, ${fresh.auth.userId}, ${ago(1)},
-             d.sport_key, d.competition_id, f.division_id, true
-        from fixtures f join divisions d on d.id = f.division_id where f.id = ${fresh.fixtureId}`;
-    await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ code: "storage_exhausted" });
-    // Push the stale one past the warming timeout — nobody reads it, no sweep runs — and the reserve is released by the POLICY alone.
-    await sql`update fixture_stream_sessions set created_at = ${ago(WARMING_TIMEOUT_MINUTES + 1)} where id = ${a!.id}`;
-    const made = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    expect(made.sessionId).toBeDefined();
+    const own: string[] = [];
+    try {
+      const [a] = await sql<{ id: string }[]>`insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, created_at,
+                                              sport_key, competition_id, division_id, entitlement_via_override)
+        select ${stale.fixtureId}, ${stale.auth.orgId}, 'passthrough', 'warming', ${stale.target.id}, ${stale.auth.userId}, ${ago(WARMING_TIMEOUT_MINUTES - 1)},
+               d.sport_key, d.competition_id, f.division_id, true
+          from fixtures f join divisions d on d.id = f.division_id where f.id = ${stale.fixtureId}
+        returning id`;
+      own.push(a!.id);
+      const [b] = await sql<{ id: string }[]>`insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, created_at,
+                                              sport_key, competition_id, division_id, entitlement_via_override)
+        select ${fresh.fixtureId}, ${fresh.auth.orgId}, 'passthrough', 'warming', ${fresh.target.id}, ${fresh.auth.userId}, ${ago(1)},
+               d.sport_key, d.competition_id, f.division_id, true
+          from fixtures f join divisions d on d.id = f.division_id where f.id = ${fresh.fixtureId}
+        returning id`;
+      own.push(b!.id);
+      // Both warming rows hold their reservation at 9 min and 1 min: the two together take the whole headroom → 0.
+      const both = await reservedBy(own);
+      const pool = { used: 400, headroomBeforeOwn: both };
+      const refused = await admitAgainstPool(r, { ...pool, ownReserved: both });
+      expect(refused.snapshot.headroom).toBe(0);
+      expect(refused.refusal).toMatchObject({ code: "storage_exhausted" });
+      // Push the stale one past the warming timeout — nobody reads it, no sweep runs — and the reserve is released by the POLICY alone.
+      await sql`update fixture_stream_sessions set created_at = ${ago(WARMING_TIMEOUT_MINUTES + 1)} where id = ${a!.id}`;
+      const admitted = await admitAgainstPool(r, { ...pool, ownReserved: await reservedBy([b!.id]) });
+      expect(admitted.snapshot.headroom, "only the fresh row still reserves").toBe(both - (await reservedBy([b!.id])));
+      expect(admitted.refusal).toBeNull();
+      expect(admitted.made?.sessionId).toBeDefined();
+    } finally {
+      await retireC3Rows(own);
+    }
   });
 
   it("M3: provisioning writes EXACTLY ONE input row whose slot VALUE is 0; passthrough adds exactly one output, composed adds zero and creates one runner with the deadline env (C9, B)", async () => {
