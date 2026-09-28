@@ -3691,7 +3691,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#002",
@@ -3766,7 +3766,7 @@
             "maxOversPerBowler": 1,
             "superOver": false
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#005",
@@ -3853,7 +3853,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#008",
@@ -3880,7 +3880,7 @@
             },
             "playersPerSide": 11
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#009",
@@ -3931,7 +3931,7 @@
             "maxOversPerBowler": 26,
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#011",
@@ -3987,7 +3987,7 @@
             },
             "playersPerSide": 7
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#013",
@@ -4098,7 +4098,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#017",
@@ -4153,7 +4153,7 @@
             "superOver": false,
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#019",
@@ -4211,7 +4211,7 @@
             },
             "playersPerSide": 11
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#021",
@@ -4291,7 +4291,7 @@
             "superOver": false,
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#024",
@@ -4322,7 +4322,7 @@
             },
             "playersPerSide": 11
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#025",
@@ -4353,7 +4353,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#026",
@@ -4433,7 +4433,7 @@
             },
             "playersPerSide": 7
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#029",
@@ -4464,7 +4464,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#030",
@@ -4542,7 +4542,7 @@
             },
             "playersPerSide": 7
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#033",
@@ -4573,7 +4573,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#034",
@@ -4653,7 +4653,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#037",
@@ -4684,7 +4684,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#038",
@@ -4764,7 +4764,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#041",
@@ -4795,7 +4795,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#042",
@@ -4875,7 +4875,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#045",
@@ -4906,7 +4906,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#046",
@@ -4986,7 +4986,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#049",
@@ -5017,7 +5017,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#050",
@@ -5097,7 +5097,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#053",
@@ -5128,7 +5128,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#054",
@@ -5208,7 +5208,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#057",
@@ -5239,7 +5239,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#058",
@@ -5319,7 +5319,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#061",
@@ -5350,7 +5350,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#062",
@@ -5430,7 +5430,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#065",
@@ -5461,7 +5461,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#066",
@@ -5541,7 +5541,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#069",
@@ -5572,7 +5572,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#070",
@@ -5652,7 +5652,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#073",
@@ -5683,7 +5683,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#074",
@@ -5763,7 +5763,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#077",
@@ -5794,7 +5794,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#078",
@@ -5874,7 +5874,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#081",
@@ -5905,7 +5905,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#082",
@@ -5985,7 +5985,7 @@
               "edition": "standard"
             }
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#085",
@@ -6011,7 +6011,7 @@
             "superOver": false,
             "playersPerSide": 3
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#086",
@@ -6069,7 +6069,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#088",
@@ -6129,7 +6129,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#090",
@@ -6160,7 +6160,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#091",
@@ -6191,7 +6191,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#092",
@@ -6222,7 +6222,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#093",
@@ -6253,7 +6253,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#094",
@@ -6284,7 +6284,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#095",
@@ -6315,7 +6315,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#096",
@@ -6346,7 +6346,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#097",
@@ -6377,7 +6377,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#098",
@@ -6408,7 +6408,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#099",
@@ -6439,7 +6439,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#100",
@@ -6470,7 +6470,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#101",
@@ -6501,7 +6501,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#102",
@@ -6532,7 +6532,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#103",
@@ -6563,7 +6563,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#104",
@@ -6594,7 +6594,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#105",
@@ -6625,7 +6625,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: EngineError: wickets exceed all-out (2)"
+          "scorable": null
         },
         {
           "id": "cricket#106",
@@ -6656,7 +6656,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         },
         {
           "id": "cricket#107",
@@ -6687,7 +6687,7 @@
             },
             "playersPerSide": 3
           },
-          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams land with W2's cricket rulebook"
+          "scorable": "win-home: GeneratorUnsupported: streams: cricket generator does not build 'win-home' — two-innings streams are W1-driving's generator work"
         }
       ],
       "uncoverable": [

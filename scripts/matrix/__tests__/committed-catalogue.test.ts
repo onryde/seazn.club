@@ -334,8 +334,9 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(c.variants.scorable + c.variants.unscorable).toBe(total);
     // The committed per-case field agrees with the independent fold.
     expect(v.sports.flatMap((s) => s.cases.filter((x) => x.scorable === null).map((x) => x.id))).toEqual(got.scorable);
-    // Anti-vacuity: both unscorable classes are live today (cricket wickets and
-    // set-to-1 refused by the engine; cricket `test` two-innings streams).
+    // Anti-vacuity: both unscorable classes are live today (set-to-1 at
+    // win-by-2 refused by the engine, ruling 31; cricket `test` two-innings
+    // streams).
     expect(got.engine.length).toBeGreaterThan(0);
     expect(got.generator.length).toBeGreaterThan(0);
     console.info(`committed-catalogue: ${judged} variant cases folded — ${got.scorable.length} scorable, ${got.engine.length} engine-unscorable, ${got.generator.length} generator-unsupported`);

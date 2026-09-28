@@ -1738,7 +1738,7 @@
     {
       "scenario": "M5",
       "kind": "harness-gap",
-      "reason": "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving; it applies at 38: t20 (builder default), cricket#002, cricket#003, …; the other committed variants that enable it (28: cricket#004, cricket#007, cricket#008, …) cannot be scored by the harness",
+      "reason": "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving; it applies at 42: t20 (builder default), cricket#002, cricket#003, …; the other committed variants that enable it (24: cricket#004, cricket#008, cricket#012, …) cannot be scored by the harness",
       "count": 14,
       "cells": {
         "league_ko": [

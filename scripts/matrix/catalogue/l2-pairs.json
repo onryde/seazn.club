@@ -6642,7 +6642,7 @@
       "row": "league",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 360,
       "covers": [
         "row",
@@ -6656,7 +6656,7 @@
       "row": "triple_rr",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 375,
       "covers": [
         "row"
@@ -6669,7 +6669,7 @@
       "row": "league_ko",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 390,
       "covers": [
         "row"
@@ -6682,7 +6682,7 @@
       "row": "groups_ko",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 430,
       "covers": [
         "row"
@@ -6695,7 +6695,7 @@
       "row": "group_stepladder",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 768,
       "covers": [
         "row"
@@ -6708,7 +6708,7 @@
       "row": "group_playoffs",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 834,
       "covers": [
         "row"
@@ -6721,7 +6721,7 @@
       "row": "swiss",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 320,
       "covers": [
         "row"
@@ -6734,7 +6734,7 @@
       "row": "swiss_playoff",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 360,
       "covers": [
         "row"
@@ -6747,7 +6747,7 @@
       "row": "swiss_knockout",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 375,
       "covers": [
         "row"
@@ -6760,7 +6760,7 @@
       "row": "knockout",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 390,
       "covers": [
         "row"
@@ -6773,7 +6773,7 @@
       "row": "ko_plate",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 430,
       "covers": [
         "row"
@@ -6786,7 +6786,7 @@
       "row": "qualifying_main",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 768,
       "covers": [
         "row"
@@ -6799,7 +6799,7 @@
       "row": "double_elim",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 834,
       "covers": [
         "row"
@@ -6812,7 +6812,7 @@
       "row": "americano",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 320,
       "covers": [
         "row"
@@ -6825,7 +6825,7 @@
       "row": "mexicano",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 360,
       "covers": [
         "row"
@@ -6838,7 +6838,7 @@
       "row": "ladder",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 375,
       "covers": [
         "row"
@@ -6851,7 +6851,7 @@
       "row": "group_only",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 390,
       "covers": [
         "row"
@@ -6864,7 +6864,7 @@
       "row": "group_group_ko",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 430,
       "covers": [
         "row"
@@ -6877,7 +6877,7 @@
       "row": "knockout_third_place",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 768,
       "covers": [
         "row"
@@ -6890,7 +6890,7 @@
       "row": "page_playoff_only",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 834,
       "covers": [
         "row"
@@ -6903,7 +6903,7 @@
       "row": "stepladder_only",
       "sport": "cricket",
       "preset": "hundred",
-      "bound": "cricket#005",
+      "bound": "cricket#001",
       "width": 320,
       "covers": [
         "row"
@@ -7156,8 +7156,8 @@
       "scenario": "M6",
       "row": "triple_rr",
       "sport": "cricket",
-      "preset": "odi",
-      "bound": "cricket#006",
+      "preset": "hundred",
+      "bound": "cricket#001",
       "width": 834,
       "covers": [
         "row",
