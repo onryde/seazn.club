@@ -10,7 +10,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **plan written** (`docs/superpowers/plans/2026-09-27-format-matrix-w1a.md`, 11 tasks, `54626389e`); awaiting owner review + execution choice |
+| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **plan approved** (ruling 22; `docs/superpowers/plans/2026-09-27-format-matrix-w1a.md`, 11 tasks); executing subagent-driven in worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a` |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | not started |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | not started |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
@@ -103,6 +103,18 @@ a peer session as the other.
     `forEachSport` sweep by default, production shadow invariants logging to
     Sentry (W10 lane, after #878), and the PR row-declaration + four reviewer
     questions.
+22. **W1a plan approved** (2026-09-28): `docs/superpowers/plans/2026-09-27-format-matrix-w1a.md`
+    as written; execution is subagent-driven (fresh implementer + reviewer per
+    task, whole-branch review at the end).
+23. **Read-only transitive `PackSchema` load accepted** (W1a open question 1):
+    importing `scripts/bench/lib/plan.ts` transitively loads the pack schema
+    for reading; R3 still forbids importing or editing `run-suite.ts` /
+    `pack-schema.ts` directly.
+24. **W1a/W1b defaults** (W1a open questions 2–3): the W1b double_elim denied
+    state is produced by an entitlement-override deny, not a plan downgrade;
+    "default config" = the builder's own default (`pickVariant`). Volleyball
+    defaulting to beach and chess to blitz are flagged for a product look, not
+    changed in W1a.
 
 ## Recommendations (mine — not rulings)
 
