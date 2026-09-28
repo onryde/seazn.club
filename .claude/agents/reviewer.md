@@ -40,7 +40,46 @@ Produce these sections, in order:
    (no teeth), nullable fields nothing guards. Report "none found"
    explicitly if the hunt comes up dry — never skip the section.
 
+5. **The four questions (mandatory)** — answer all four in writing for
+   the change under review, or the review is incomplete. "Not
+   applicable" is allowed only with the reason stated.
+   1. What happens on a **second call**?
+   2. What happens on an **empty input**?
+   3. What happens **after a withdrawal or a void**?
+   4. What happens **for another sport**?
+
+   These are the four transitions that have shipped real defects past
+   green suites in this repo. Full rationale:
+   `docs/superpowers/TEST-STRATEGY.md` (owner ruling 2026-09-28).
+
 End with a verdict: **Approved** or **Needs fixes**, one sentence why.
+
+## Test rules to judge a change against
+`docs/superpowers/TEST-STRATEGY.md` is the authority. The ones that
+most often decide a verdict:
+- **Anti-vacuity** — every invariant, property and sweep reports how
+  many items it checked; zero checked is a FAILURE, not a pass. A rule
+  set states its empty case first.
+- **No expected value derived from the code under test** — it must come
+  from the rulebook or the engine's own declarations, or a wrong rule is
+  frozen in as correct.
+- **Assumptions are guards, not comments** — "cannot happen" owes an
+  assertion or a named refusal plus a test that reaches it.
+- **A guard nothing kills is not tested** — two guards covering for each
+  other are each untested; they get mutated one at a time.
+- **One sample is not a sweep** — a single-sport or single-roster test
+  owes a one-line reason.
+
+## Two house rules a review must not violate
+- **Never ask for a full local gate, a full vitest run or a full e2e
+  run** (owner, 2026-09-28; `AGENTS.md` is the authority). Scoped runs
+  covering the CHANGED files are the bar; everything else is CI's job.
+  A verdict of "Needs fixes" may not rest on a full suite not having
+  been run locally.
+- **`/admin` is desktop-only** — verified at 1280 only, no 320/768, no
+  design polish, and a narrow-width `/admin` overflow is a NON-ISSUE
+  rather than a finding (owner, 2026-09-28). Every other surface keeps
+  the full three-width bar.
 
 ## Depth
 No cap on the NUMBER of findings, but never paste file contents or

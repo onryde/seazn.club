@@ -36,7 +36,9 @@ do not hold: a production change routinely forces a test-file edit into
 someone else's lane. Overlap → sequential, or `isolation: "worktree"`.
 
 **Never accept "done, tests pass"** without the raw counts pasted back.
-Rerun the gate yourself at the wave boundary.
+Rerun the gate yourself at the wave boundary — the SCOPED gate: the
+tests, specs and walkthroughs covering the changed files, never the
+full suite (see the standing rule below).
 
 ## Environment setup
 
@@ -349,6 +351,18 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 - Smoke CI runs on **PRs only** — merging locally and pushing to `main`
   skips it. Behavior changes need a PR or a local full-smoke first.
 - Every change ships a test that fails without it.
+- **Read `docs/superpowers/TEST-STRATEGY.md`** — house test rules, owner
+  ruling 2026-09-28, binding on every agent in every wave. Five audits
+  found ~150 gaps behind green suites; that file says why and what is
+  owed. The four that bite on every task: **anti-vacuity** (every
+  invariant, property and sweep reports how many items it checked, and
+  zero checked is a FAILURE); **never derive an expected value from the
+  code under test** (derive it from the rulebook or the engine's own
+  declarations); **assumptions are guards, not comments** ("cannot
+  happen" becomes an assertion plus a test that reaches it); and
+  **mutate the guard you added, once**, before calling anything green.
+  Test the SEQUENCE, not just the feature — a second call, an empty
+  input, after a withdrawal or void, and another sport.
 - **NEVER run the full gate, the full vitest suite or the full e2e suite
   locally** (owner, 2026-09-28). Run ONLY the tests, specs and walkthroughs
   that cover the files you CHANGED — the scoped vitest paths, the specific
