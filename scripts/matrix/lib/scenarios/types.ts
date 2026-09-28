@@ -13,7 +13,10 @@ export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED";
  *  the case org is denied through `org_entitlement_overrides`. */
 export interface CaseSpec { caseId: string; row: RowKey; sport: string; variant: string; scenario: ScenarioKey; canary: boolean; deny?: readonly string[] }
 
-export interface ScenarioContext { driver: OrganiserDriver; spec: CaseSpec; orgSlug: string; cfg: unknown; tag: string }
+/** `denied`: the feature keys prepareCaseOrg actually denied the case org
+ *  (each one's read-back held) — what the org IS, where `spec.deny` is only
+ *  what the plan asked for. */
+export interface ScenarioContext { driver: OrganiserDriver; spec: CaseSpec; orgSlug: string; cfg: unknown; tag: string; denied: readonly string[] }
 
 export interface ScenarioOutput {
   observed: ObservedRun;

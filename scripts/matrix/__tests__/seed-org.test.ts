@@ -1,12 +1,13 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import type { Transport } from "../lib/driver/http-driver.ts";
+import { slugify as productSlugify } from "../../../apps/web/src/server/usecases/slugs.ts";
 import {
-  DataDirMismatch, DataDirUnset, NoPublicPlan, ORG_COOKIE, OrgSwitchFailed, chooseTopPublicPlan, createRealMatrixSql, gateOnOwnDataDir,
-  matrixSqlOver, ownerEmail, prepareCaseOrg, requireOwnDataDir, switchToCaseOrg, type MatrixSql,
+  CASE_ORG_SLUG_LIKE, CASE_OWNER_EMAIL_LIKE, DataDirMismatch, DataDirUnset, NoPublicPlan, NotACaseOrg, ORG_COOKIE, OrgSwitchFailed, caseOrgSlug,
+  chooseTopPublicPlan, createRealMatrixSql, gateOnOwnDataDir, matrixSqlOver, ownerEmail, prepareCaseOrg, requireOwnDataDir, switchToCaseOrg, type MatrixSql,
 } from "../lib/seed-org.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -106,14 +107,14 @@ describe("createRealMatrixSql — refuses before it configures a client", () => 
 type Stmt = { via: "db" | "tx"; text: string; values: unknown[] };
 /** `txDataDir` is what `show data_directory` answers INSIDE a transaction —
  *  standing in for the connection postgres.js silently reconnected to. */
-function fakeClient(dataDir: string | null, rows: (text: string) => unknown[] = () => [], txDataDir: string | null = dataDir) {
+function fakeClient(dataDir: string | null, rows: (text: string, values: unknown[]) => unknown[] = () => [], txDataDir: string | null = dataDir) {
   const seen: (Stmt | "BEGIN" | "COMMIT" | "ROLLBACK")[] = [];
   const tag = (via: "db" | "tx") => (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join("$").replace(/\s+/g, " ").trim();
     seen.push({ via, text, values });
     const dir = via === "db" ? dataDir : txDataDir;
     if (text === "show data_directory") return Promise.resolve(dir === null ? [] : [{ data_directory: dir }]);
-    return Promise.resolve(rows(text));
+    return Promise.resolve(rows(text, values));
   };
   const db = Object.assign(tag("db"), {
     begin: async (cb: (tx: unknown) => Promise<unknown>) => {
@@ -200,9 +201,15 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
   });
 });
 
+/** The deny upsert, as the fake reads it: its WHERE is exactly these three
+ *  conjuncts, bound in this order (pinned by the "one transaction" test). */
+const DENY_UPSERT = "insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) select o.id, $, false, $ from organizations o join users u on u.id = o.created_by where o.id = $ and o.slug like $ and u.email like $ on conflict (org_id, feature_key) do update set bool_value = false, int_value = null, reason = excluded.reason, expires_at = null returning org_id";
+
 describe("denyFeature (ruling 24) — gated, upserted, read back", () => {
+  // The upsert confirms a case org (one row back); the read-back answers a live false.
   const DENY_ROWS = (text: string): unknown[] =>
-    text.startsWith("select bool_value") ? [{ bool_value: false, expires_at: null }] : [];
+    text.startsWith("insert into org_entitlement_overrides") ? [{ org_id: "o1" }]
+    : text.startsWith("select bool_value") ? [{ bool_value: false, expires_at: null }] : [];
   it("a foreign data_directory refuses it and runs nothing but the one probe", async () => {
     const { db, seen } = fakeClient("/usr/local/var/postgres");
     await expect(matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId: "o1", featureKey: "formats.double_elim", reason: "matrix denied" })).rejects.toBeInstanceOf(DataDirMismatch);
@@ -213,8 +220,9 @@ describe("denyFeature (ruling 24) — gated, upserted, read back", () => {
     await matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId: "o1", featureKey: "formats.double_elim", reason: "matrix denied" });
     expect(shape(seen)).toEqual(["db show data_directory", "BEGIN", "tx show data_directory", "tx insert into org_entitlement_overrides", "tx select bool_value, expires_at from org_entitlement_overrides where org_id = $ and feature_key = $", "COMMIT"]);
     const ins = seen.filter((s): s is Stmt => typeof s !== "string")[2]!;
-    expect(ins.values).toEqual(["o1", "formats.double_elim", "matrix denied"]);
-    expect(ins.text).toMatch(/values \(\$, \$, false, \$\) on conflict \(org_id, feature_key\) do update set bool_value = false, int_value = null, reason = excluded\.reason, expires_at = null$/);
+    // m-2: the case-org identity is BOUND (never spliced into the text).
+    expect(ins.values).toEqual(["formats.double_elim", "matrix denied", "o1", CASE_ORG_SLUG_LIKE, CASE_OWNER_EMAIL_LIKE]);
+    expect(ins.text).toBe(DENY_UPSERT);
     const back = seen.filter((s): s is Stmt => typeof s !== "string")[3]!;
     expect(back.values).toEqual(["o1", "formats.double_elim"]);
   });
@@ -234,12 +242,120 @@ describe("denyFeature (ruling 24) — gated, upserted, read back", () => {
   it("a read-back that is not a live false refuses (and rolls back)", async () => {
     let judged = 0;
     for (const row of [[], [{ bool_value: true, expires_at: null }], [{ bool_value: null, expires_at: null }], [{ bool_value: false, expires_at: "2030-01-01T00:00:00Z" }]]) {
-      const { db, seen } = fakeClient("/tmp/pg-fm", (t) => (t.startsWith("select bool_value") ? row : []));
+      const { db, seen } = fakeClient("/tmp/pg-fm", (t) => (t.startsWith("insert into") ? [{ org_id: "o1" }] : t.startsWith("select bool_value") ? row : []));
       await expect(matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" })).rejects.toThrow(/deny did not hold/);
       expect(seen.at(-1)).toBe("ROLLBACK");
       judged++;
     }
     expect(judged).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1 (m-2): the deny is confined IN THE SQL to a case org — slug
+// stamped by caseOrgSlug, created by the run's ownerEmail — whatever org id
+// reaches it. The fake below holds real org rows and evaluates the bound LIKE
+// patterns the way Postgres does, and keeps the overrides it was given, so
+// the read-back sees only what the upsert actually wrote.
+// ---------------------------------------------------------------------------
+
+/** SQL LIKE with the default escape: `%` any run, `_` one character, the rest literal and case-sensitive. */
+const like = (s: string, pattern: string): boolean =>
+  new RegExp(`^${[...pattern].map((c) => (c === "%" ? ".*" : c === "_" ? "." : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("")}$`, "s").test(s);
+
+interface OrgRow { id: string; slug: string; ownerEmail: string }
+function orgsDb(orgs: readonly OrgRow[]) {
+  const overrides = new Map<string, { bool_value: boolean; expires_at: null }>();
+  const client = fakeClient("/tmp/pg-fm", (text, values) => {
+    if (text.startsWith("insert into org_entitlement_overrides")) {
+      if (text !== DENY_UPSERT) throw new Error(`fake: the deny upsert changed shape: ${text}`);
+      const [featureKey, , orgId, slugLike, emailLike] = values as string[];
+      const hit = orgs.find((o) => o.id === orgId && like(o.slug, slugLike ?? "") && like(o.ownerEmail, emailLike ?? ""));
+      if (hit === undefined) return [];
+      overrides.set(`${hit.id}|${featureKey ?? ""}`, { bool_value: false, expires_at: null });
+      return [{ org_id: hit.id }];
+    }
+    if (text.startsWith("select bool_value")) {
+      const row = overrides.get(`${String(values[0])}|${String(values[1])}`);
+      return row === undefined ? [] : [row];
+    }
+    return [];
+  });
+  return { ...client, overrides };
+}
+
+const HELPERS = readFileSync(resolve(REPO, "apps/web/e2e/helpers.ts"), "utf8");
+/** The e2e suite's signed-in identities (AUTH_STATE is the PRO one), read from helpers.ts. */
+const E2E_EMAIL_PREFIXES = [...HELPERS.matchAll(/\nexport const (\w+)_EMAIL_PREFIX = "([^"]+)";/g)].map((m) => ({ who: m[1] ?? "", prefix: m[2] ?? "" }));
+const E2E_EMAIL_DOMAIN = /\nexport const proEmail = \(\) => `\$\{PRO_EMAIL_PREFIX\}\$\{TAG\}(@[a-z.]+)`;/.exec(HELPERS)?.[1] ?? "(proEmail moved)";
+/** The org a first sign-in auto-provisions (auth.ts), whose slug the product derives from its name. */
+const SIGNUP_ORG_NAME = /\n\s+const created = await createOrgForUser\(userId, "([^"]+)"/.exec(AUTH)?.[1] ?? "(createOrgForUser call moved)";
+const SIGNUP_SLUGS = [productSlugify(SIGNUP_ORG_NAME), `${productSlugify(SIGNUP_ORG_NAME)}-2`];
+
+describe("denyFeature confinement (m-2) — only a case org can be denied, in the SQL itself", () => {
+  const CASE: OrgRow = { id: "o-case", slug: caseOrgSlug("fm-r1", 1), ownerEmail: ownerEmail("fm-r1") };
+  const deny = (db: ReturnType<typeof orgsDb>["db"], orgId: string) =>
+    matrixSqlOver(db, "/tmp/pg-fm").denyFeature({ orgId, featureKey: "formats.double_elim", reason: "matrix denied" });
+
+  it("the identities are read from the product and the e2e helpers, not typed", () => {
+    expect(E2E_EMAIL_PREFIXES.map((e) => e.who)).toContain("PRO");
+    expect(E2E_EMAIL_PREFIXES.length).toBeGreaterThanOrEqual(2);
+    expect(E2E_EMAIL_DOMAIN).toMatch(/^@[a-z.]+$/);
+    expect(SIGNUP_ORG_NAME).not.toMatch(/moved/);
+    expect(SIGNUP_SLUGS[0]).toMatch(/^[a-z0-9-]+$/);
+  });
+  it("the case org — slug from caseOrgSlug, owner from ownerEmail — is denied, and the read-back sees it", async () => {
+    const { db, seen, overrides } = orgsDb([CASE]);
+    await deny(db, CASE.id);
+    expect(overrides.get("o-case|formats.double_elim")).toEqual({ bool_value: false, expires_at: null });
+    expect(seen.at(-1)).toBe("COMMIT");
+  });
+  it("the shared AUTH_STATE org (and every other e2e identity's sign-up org) cannot be hit: NotACaseOrg, nothing written, rolled back", async () => {
+    let n = 0;
+    for (const { prefix } of E2E_EMAIL_PREFIXES) for (const slug of SIGNUP_SLUGS) {
+      const e2e: OrgRow = { id: "o-e2e", slug, ownerEmail: `${prefix}t1759000000${E2E_EMAIL_DOMAIN}` };
+      const { db, seen, overrides } = orgsDb([CASE, e2e]);
+      const err = await deny(db, e2e.id).catch((e: unknown) => e);
+      expect(err, `${slug} / ${e2e.ownerEmail}`).toBeInstanceOf(NotACaseOrg);
+      expect(overrides.size).toBe(0);
+      expect(seen.at(-1)).toBe("ROLLBACK");
+      expect(shape(seen).some((s) => s.startsWith("tx select bool_value"))).toBe(false);
+      n++;
+    }
+    expect(n).toBe(E2E_EMAIL_PREFIXES.length * SIGNUP_SLUGS.length);
+    expect(n).toBeGreaterThan(0);
+  });
+  it("each conjunct refuses on its own: a case slug with a foreign owner, the matrix owner with a foreign slug, an unknown id", async () => {
+    const proPrefix = E2E_EMAIL_PREFIXES.find((e) => e.who === "PRO")?.prefix ?? "(PRO prefix missing)";
+    const cases: [string, OrgRow[], string][] = [
+      ["slug holds, owner does not", [{ id: "o-x", slug: caseOrgSlug("fm-r1", 2), ownerEmail: `${proPrefix}t1${E2E_EMAIL_DOMAIN}` }], "o-x"],
+      ["owner holds, slug does not", [{ id: "o-x", slug: SIGNUP_SLUGS[0] ?? "", ownerEmail: ownerEmail("fm-r1") }], "o-x"],
+      ["no such org (the case org exists under another id)", [CASE], "o-missing"],
+    ];
+    let n = 0;
+    for (const [why, orgs, id] of cases) {
+      const { db, overrides } = orgsDb(orgs);
+      await expect(deny(db, id), why).rejects.toBeInstanceOf(NotACaseOrg);
+      expect(overrides.size, why).toBe(0);
+      n++;
+    }
+    expect(n).toBe(3);
+  });
+  it("the stamps satisfy the patterns, which carry no LIKE wildcard but their one %", () => {
+    for (const runId of ["fm-r1", "fm-w1b-a", "a"]) {
+      expect(like(caseOrgSlug(runId, 1), CASE_ORG_SLUG_LIKE), runId).toBe(true);
+      expect(like(ownerEmail(runId), CASE_OWNER_EMAIL_LIKE), runId).toBe(true);
+    }
+    for (const p of [CASE_ORG_SLUG_LIKE, CASE_OWNER_EMAIL_LIKE]) {
+      expect(p.split("%")).toHaveLength(2);
+      expect(p).not.toMatch(/[_\\]/);
+    }
+  });
+  it("NotACaseOrg redacts what it echoes", async () => {
+    const { db } = orgsDb([CASE]);
+    const err = await deny(db, "token=abc123secret").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotACaseOrg);
+    expect((err as Error).message).not.toContain("abc123secret");
   });
 });
 
@@ -329,7 +445,7 @@ describe("prepareCaseOrg", () => {
     const order: string[] = [];
     const t: Transport = { async raw(_b, s, path, method = "GET", body) { order.push(`${method} ${path}`); s.cookies[PRODUCT_ORG_COOKIE] = (body as { org_id: string }).org_id; return okData({ ok: true }); } };
     const out = await prepareCaseOrg({ sql: fakeSql(order), transport: t, base: "http://localhost:1", session: fresh(), userId: "u1", plan: "pro", provision: async (o, p) => { order.push(`provision ${o} ${p}`); } }, { name: "Matrix 1", slug: "m-r-1" });
-    expect(out).toEqual({ orgId: "o9", orgSlug: "m-r-1" });
+    expect(out).toEqual({ orgId: "o9", orgSlug: "m-r-1", denied: [] });
     expect(order).toEqual(["insert u1 Matrix 1 m-r-1", "POST /api/orgs/active", "provision o9 pro"]);
   });
   it("a failed switch never provisions (provisioning elevates the owner to superadmin in SQL)", async () => {
@@ -342,8 +458,9 @@ describe("prepareCaseOrg", () => {
     const order: string[] = [];
     const t: Transport = { async raw(_b, s, path, method = "GET", body) { order.push(`${method} ${path}`); s.cookies[PRODUCT_ORG_COOKIE] = (body as { org_id: string }).org_id; return okData({ ok: true }); } };
     const deps = { sql: fakeSql(order), transport: t, base: "http://localhost:1", session: fresh(), userId: "u1", plan: "pro", provision: async (o: string, p: string) => { order.push(`provision ${o} ${p}`); } };
-    await prepareCaseOrg(deps, { name: "Matrix 1", slug: "m-r-1", deny: ["formats.double_elim", "formats.advanced"] });
+    const out = await prepareCaseOrg(deps, { name: "Matrix 1", slug: "m-r-1", deny: ["formats.double_elim", "formats.advanced"] });
     expect(order).toEqual(["insert u1 Matrix 1 m-r-1", "POST /api/orgs/active", "provision o9 pro", "deny o9 formats.double_elim", "deny o9 formats.advanced"]);
+    expect(out.denied).toEqual(["formats.double_elim", "formats.advanced"]);
     order.length = 0;
     await prepareCaseOrg({ ...deps, session: fresh() }, { name: "Matrix 1", slug: "m-r-1" });
     expect(order.some((l) => l.startsWith("deny"))).toBe(false);
@@ -423,15 +540,18 @@ describe("mirror pin: createOrgForUser's inserts (a product change reds here)", 
   });
 
   // Task 9: matrixSqlOver also holds ONE insert that mirrors nothing — the
-  // ruling-24 deny upsert, pinned against the resolver below. Any other new
-  // insert still reds the guard.
-  it("parser discovery guard: the product's three inserts; seed-org's three mirrors plus the one deny upsert (none parsed would pass vacuously)", () => {
+  // ruling-24 deny upsert, an `insert … select` since fix round 1 (m-2), so
+  // the values parser does not read it. Every insert is counted by table
+  // below, parsed or not: any other new one still reds the guard.
+  it("parser discovery guard: the product's three inserts; seed-org's three mirrors, plus the one deny upsert among ALL its inserts (none parsed would pass vacuously)", () => {
     expect(insertsIn(body).map((i) => i.table)).toEqual(["subscriptions", "organizations", "org_members"]);
-    expect(insertsIn(fnBody(SEED, "export function matrixSqlOver")).map((i) => i.table)).toEqual(["subscriptions", "organizations", "org_members", "org_entitlement_overrides"]);
+    const seed = fnBody(SEED, "export function matrixSqlOver");
+    expect(insertsIn(seed).map((i) => i.table)).toEqual(["subscriptions", "organizations", "org_members"]);
+    expect([...seed.matchAll(/insert into (\w+)/g)].map((m) => m[1])).toEqual(["subscriptions", "organizations", "org_members", "org_entitlement_overrides"]);
   });
 
   it("seed-org's inserts equal the product's: same tables, same columns, same literal values ('owner', 'community', 'active', 1)", () => {
-    expect(insertsIn(fnBody(SEED, "export function matrixSqlOver")).filter((i) => i.table !== "org_entitlement_overrides")).toEqual(insertsIn(body));
+    expect(insertsIn(fnBody(SEED, "export function matrixSqlOver"))).toEqual(insertsIn(body));
   });
 });
 
@@ -444,13 +564,102 @@ describe("mirror pin: the deny is what the product's resolver reads as a live fa
     expect(fnBody(ENT, "export async function hasFeature")).toContain("return row?.bool_value === true;");
     expect(fnBody(ENT, "export async function requireFeature")).toMatch(/if \(!enabled\) throw new PaymentRequiredError\(featureKey\);/);
   });
-  it("the upsert's conflict target is the table's primary key, and the columns it writes exist", () => {
-    const v025 = readFileSync(resolve(REPO, "db/migration/v1-baseline/V025__org_entitlement_overrides.sql"), "utf8");
-    const v266 = readFileSync(resolve(REPO, "db/migration/deltas/V266__admin_plan_tools.sql"), "utf8");
-    expect(v025).toMatch(/primary key \(org_id, feature_key\)/);
-    for (const col of ["bool_value", "int_value", "reason"]) expect(v025, col).toMatch(new RegExp(`\\n\\s+${col}\\s`));
-    expect(v266).toMatch(/add column if not exists expires_at timestamptz/);
-    expect(fnBody(SEED, "export function matrixSqlOver")).toMatch(/on conflict \(org_id, feature_key\) do update set bool_value = false, int_value = null, reason = excluded\.reason, expires_at = null/);
+  // Fix round 1 (m-3): EVERY migration flyway applies is swept (its locations
+  // read from db/flyway.toml), and every mention of the table must be
+  // understood: a read or write (DML), a `create table`, or an `alter table`
+  // whose every action adds a nullable column. Anything else — a trigger, an
+  // index, a policy, a constraint, a rename, a drop, a NOT NULL column — reds,
+  // naming the file. The deny's own columns are read from seed-org's SQL.
+  it("the deny upsert holds against the table as EVERY migration that touches it defines it", () => {
+    const TABLE = "org_entitlement_overrides";
+    const locations = [...readFileSync(resolve(REPO, "db/flyway.toml"), "utf8").matchAll(/"filesystem:([^"]+)"/g)].map((m) => m[1] ?? "");
+    expect(locations.length).toBeGreaterThan(0);
+    const files = locations.flatMap((dir) => readdirSync(resolve(REPO, dir), { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".sql")).map((f) => join(dir, f)).sort());
+    expect(files.length).toBeGreaterThan(0);
+
+    /** Split at top-level commas (a type like numeric(5, 2) stays whole). */
+    const topLevel = (s: string): string[] => {
+      const out: string[] = [];
+      let depth = 0;
+      let cur = "";
+      for (const c of s) {
+        if (c === "(") depth++;
+        if (c === ")") depth--;
+        if (c === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += c;
+      }
+      return [...out, cur.trim()].filter((x) => x !== "");
+    };
+    const unknown: string[] = [];
+    const creates: { file: string; cols: Map<string, { notNull: boolean; hasDefault: boolean }>; pk: string[] }[] = [];
+    const added = new Map<string, string>();
+    let dml = 0;
+    let mentions = 0;
+    for (const file of files) {
+      const sql = readFileSync(resolve(REPO, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ").replace(/\s+/g, " ").toLowerCase();
+      for (const m of sql.matchAll(new RegExp(`\\b${TABLE}\\b`, "g"))) {
+        mentions++;
+        const at = m.index;
+        const before = sql.slice(Math.max(0, at - 40), at);
+        const end = sql.indexOf(";", at);
+        const rest = sql.slice(at + TABLE.length, end < 0 ? undefined : end).trim();
+        if (/\b(insert into|delete from|from|join|update) (public\.)?$/.test(before)) { dml++; continue; }
+        if (/\bcreate table (if not exists )?(public\.)?$/.test(before)) {
+          const body = /^\((.*)\)$/.exec(rest)?.[1];
+          if (body === undefined) { unknown.push(`${file}: create table ${TABLE} ${rest.slice(0, 80)}`); continue; }
+          const cols = new Map<string, { notNull: boolean; hasDefault: boolean }>();
+          let pk: string[] = [];
+          for (const el of topLevel(body)) {
+            const key = /^primary key \(([^)]*)\)$/.exec(el);
+            if (key) { pk = (key[1] ?? "").split(",").map((c) => c.trim()); continue; }
+            const col = /^(\w+) (\w+)(.*)$/.exec(el);
+            if (col === null || ["constraint", "unique", "check", "foreign", "exclude", "like"].includes(col[1] ?? "")) { unknown.push(`${file}: create table element "${el}"`); continue; }
+            cols.set(col[1] ?? "", { notNull: /\bnot null\b/.test(col[3] ?? ""), hasDefault: /\bdefault\b/.test(col[3] ?? "") });
+            if (/\bprimary key\b/.test(col[3] ?? "")) pk = [col[1] ?? ""];
+          }
+          creates.push({ file, cols, pk });
+          continue;
+        }
+        if (/\balter table (if exists )?(only )?(public\.)?$/.test(before)) {
+          for (const action of topLevel(rest)) {
+            const add = /^add column (if not exists )?(\w+) (timestamptz|timestamp with time zone|text|boolean|integer|bigint|jsonb|uuid|date)$/.exec(action);
+            if (add === null) unknown.push(`${file}: alter table ${TABLE} ${action}`);
+            else added.set(add[2] ?? "", file);
+          }
+          continue;
+        }
+        unknown.push(`${file}: …${before}${TABLE} ${rest.slice(0, 60)}`);
+      }
+    }
+    // Anti-vacuity: the sweep saw the table, and each kind it judges at least once.
+    expect(mentions).toBeGreaterThan(0);
+    expect(dml).toBeGreaterThan(0);
+    expect(creates.length).toBeGreaterThan(0);
+    expect(added.size).toBeGreaterThan(0);
+    expect(unknown, "a migration changes org_entitlement_overrides in a way this pin does not understand").toEqual([]);
+
+    // What the deny needs, read from its own SQL.
+    const seed = fnBody(SEED, "export function matrixSqlOver").replace(/\s+/g, " ");
+    const upsert = /insert into org_entitlement_overrides [^`]*`/.exec(seed)?.[0] ?? "(the deny upsert moved)";
+    const insertCols = (/insert into org_entitlement_overrides \(([^)]*)\)/.exec(upsert)?.[1] ?? "").split(",").map((c) => c.trim());
+    const target = (/on conflict \(([^)]*)\) do update set /.exec(upsert)?.[1] ?? "").split(",").map((c) => c.trim());
+    const setCols = [...(/do update set (.*?) returning /.exec(upsert)?.[1] ?? "").matchAll(/(\w+) = /g)].map((x) => x[1] ?? "");
+    const returning = /returning (\w+)`/.exec(upsert)?.[1] ?? "";
+    const readBack = (/select ([\w, ]+) from org_entitlement_overrides where/.exec(seed)?.[1] ?? "").split(",").map((c) => c.trim());
+    const named = [...insertCols, ...target, ...setCols, returning, ...readBack];
+    expect(insertCols).toEqual(["org_id", "feature_key", "bool_value", "reason"]);
+    expect(setCols).toEqual(["bool_value", "int_value", "reason", "expires_at"]);
+    expect([returning, ...readBack]).toEqual(["org_id", "bool_value", "expires_at"]);
+    expect(named.length).toBeGreaterThan(0);
+    let judged = 0;
+    for (const c of creates) {
+      // Whichever create ran first defines the table (both are `if not exists`).
+      expect([...c.pk].sort(), `${c.file}: the conflict target must be the primary key`).toEqual([...target].sort());
+      const columns = new Set([...c.cols.keys(), ...added.keys()]);
+      for (const col of named) expect(columns.has(col), `${c.file}: ${col} does not exist`).toBe(true);
+      for (const [col, f] of c.cols) if (f.notNull && !f.hasDefault) expect(insertCols, `${c.file}: NOT NULL ${col} is not written`).toContain(col);
+      judged++;
+    }
+    expect(judged).toBe(creates.length);
   });
 });
 

@@ -52,9 +52,11 @@ export const denied: Scenario = {
     // Both refusals come before any call.
     const want = gateOf(ctx.spec);
     // An org that was never denied accepts the POST, and that would read as a
-    // product that forgot its paywall.
-    if (!(ctx.spec.deny ?? []).includes(want)) {
-      throw new DeniedMisuse(`denied: case ${ctx.spec.caseId} carries no deny for ${want} (deny: ${(ctx.spec.deny ?? []).join(", ") || "none"}) — its org was never denied`);
+    // product that forgot its paywall. Judged on the deny prepareCaseOrg
+    // APPLIED, not the one the spec asked for: a hop that drops it is ours.
+    if (!ctx.denied.includes(want)) {
+      const list = (keys: readonly string[] | undefined): string => (keys ?? []).join(", ") || "none";
+      throw new DeniedMisuse(`denied: case ${ctx.spec.caseId} carries no deny for ${want} (applied: ${list(ctx.denied)}; asked: ${list(ctx.spec.deny)}) — its org was never denied`);
     }
     const gated = stagesForRow(ctx.spec.row);
     const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");

@@ -47,7 +47,7 @@ import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
 import {
-  DataDirMismatch, DataDirUnset, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
+  DataDirMismatch, DataDirUnset, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
 } from "./lib/seed-org.ts";
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
 import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
@@ -72,8 +72,9 @@ export interface RunDeps {
   preflight(base: string): Promise<{ ok: boolean; refusals: { reason: string; detail: string }[] }>;
   openDb(): Promise<RunDb>;
   signIn(base: string, email: string): Promise<Session>;
-  /** `deny` (ruling 24): feature keys the case org is denied after provisioning. */
-  prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string }>;
+  /** `deny` (ruling 24): feature keys the case org is denied after provisioning;
+   *  `denied` is what was applied, and it is what the scenario judges. */
+  prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string; denied: readonly string[] }>;
   driverFor(base: string, session: Session, orgId: string): OrganiserDriver;
   /** MATRIX.md from the results just written (realDeps: renderMatrix). A seam
    *  so the render-failure path is testable without bending shared state. */
@@ -199,11 +200,11 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   try {
     const org = await deps.prepareCaseOrg(
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
-      { name: `Matrix ${run.runId} ${i + 1}`, slug: `m-${run.runId}-${i + 1}`, deny: spec.deny },
+      { name: `Matrix ${run.runId} ${i + 1}`, slug: caseOrgSlug(run.runId, i + 1), deny: spec.deny },
     );
     driver = deps.driverFor(run.base, run.session, org.orgId);
     const scenario = SCENARIOS[spec.scenario];
-    const out = await scenario.run({ driver, spec, orgSlug: org.orgSlug, cfg: resolveSportCfg(spec.sport, spec.variant), tag: `${run.runId}-${i + 1}` });
+    const out = await scenario.run({ driver, spec, orgSlug: org.orgSlug, cfg: resolveSportCfg(spec.sport, spec.variant), tag: `${run.runId}-${i + 1}`, denied: org.denied });
     // ⛔ (Task 9): a scenario that builds no stage opts out of the fixture
     // invariants, and one whose expected state is a refusal says so.
     checks = [...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions].map(redactCheck);

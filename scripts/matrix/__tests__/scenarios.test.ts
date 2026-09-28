@@ -36,7 +36,7 @@ function ctxFor(driver: FakeLeagueDriver, scenario: ScenarioKey, opts: Opts = {}
   const variant = opts.variant ?? "score";
   const row = opts.row ?? "league";
   const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|${scenario}`, row, sport, variant, scenario, canary: opts.canary ?? false };
-  return { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t" };
+  return { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
 }
 
 async function runOn(driver: FakeLeagueDriver, scenario: ScenarioKey, opts: Opts = {}) {

@@ -9,10 +9,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "../lib/catalogue.ts";
-import type { StageRef, StagesProbe } from "../lib/driver/types.ts";
+import { RefusedCall, type StageRef, type StagesProbe } from "../lib/driver/types.ts";
 import { expectedGate } from "../lib/format-gates-copy.ts";
 import { DENIED_CHECKS, DeniedMisuse, PAYMENT_REFUSAL, denied } from "../lib/scenarios/denied.ts";
-import type { CaseSpec } from "../lib/scenarios/types.ts";
+import type { CaseSpec, ScenarioContext } from "../lib/scenarios/types.ts";
 import { sportModule } from "../lib/sport-cfg.ts";
 import { FakeDeniedDriver } from "./fake-driver.ts";
 
@@ -48,12 +48,20 @@ const DENY: ReadonlyMap<string, string> = (() => {
 /** The product's gate for a row: the first gate, in createStages order, one of whose kinds the row posts. */
 const productGateOf = (row: RowKey): string | null => GATES.find((g) => stagesForRow(row).some((s) => g.kinds.includes(s.kind)))?.key ?? null;
 
+/** api-v1's answer to a PaymentRequiredError, as http.ts spells it. */
+const HTTP_402 = (() => {
+  const m = /if \(err instanceof PaymentRequiredError\) \{[\s\S]*?return errorResponse\(requestId, (\d{3}), "([A-Z_]+)", err\.message, \{([\s\S]*?)\}\);/.exec(read("apps/web/src/server/api-v1/http.ts"));
+  return { status: Number(m?.[1]), code: m?.[2] ?? "(PaymentRequiredError branch moved)", extras: m?.[3] ?? "" };
+})();
+
 const GATED = ROW_KEYS.filter((r) => expectedGate(stagesForRow(r)) !== null);
 const UNGATED = ROW_KEYS.filter((r) => expectedGate(stagesForRow(r)) === null);
 const firstVariant = (sport: string): string => Object.keys(sportModule(sport).variants as object)[0] ?? "";
 const spec = (row: RowKey, sport = "generic", variant = "score"): CaseSpec =>
   ({ caseId: `${row}|${sport}|${variant}|DENIED`, row, sport, variant, scenario: "DENIED", canary: false, deny: [productGateOf(row) ?? "(ungated)"] });
-const ctx = (s: CaseSpec, driver: FakeDeniedDriver) => ({ driver, spec: s, orgSlug: "o", cfg: null, tag: "t" });
+/** `denied` is what prepareCaseOrg applied; by default the org got what the spec asked for. */
+const ctx = (s: CaseSpec, driver: FakeDeniedDriver, applied: readonly string[] = s.deny ?? []): ScenarioContext =>
+  ({ driver, spec: s, orgSlug: "o", cfg: null, tag: "t", denied: applied });
 const check = (out: Awaited<ReturnType<typeof denied.run>>, id: (typeof DENIED_CHECKS)[number]) => {
   const c = out.assertions.find((a) => a.id === id);
   if (c === undefined) throw new Error(`denied.test: no ${id} check`);
@@ -67,11 +75,9 @@ describe("the product's gate table (the fake's source of truth)", () => {
     expect(DENY.size).toBe(new Set(GATES.flatMap((g) => g.kinds)).size);
   });
   it("the 402 the scenario expects is api-v1's PaymentRequiredError answer, and it carries feature_key", () => {
-    const http = read("apps/web/src/server/api-v1/http.ts");
-    const branch = /if \(err instanceof PaymentRequiredError\) \{[\s\S]*?return errorResponse\(requestId, (\d{3}), "([A-Z_]+)", err\.message, \{([\s\S]*?)\}\);/.exec(http);
-    expect(branch, "api-v1/http.ts PaymentRequiredError branch moved").not.toBeNull();
-    expect(PAYMENT_REFUSAL).toEqual({ status: Number(branch?.[1]), code: branch?.[2] });
-    expect(branch?.[3]).toMatch(/\bfeature_key: err\.featureKey,/);
+    expect(HTTP_402.code, "api-v1/http.ts PaymentRequiredError branch moved").toMatch(/^[A-Z_]+$/);
+    expect(PAYMENT_REFUSAL).toEqual({ status: HTTP_402.status, code: HTTP_402.code });
+    expect(HTTP_402.extras).toMatch(/\bfeature_key: err\.featureKey,/);
   });
 });
 
@@ -126,6 +132,65 @@ describe("DENIED scenario", () => {
     const named = check(out, "denied-refused-named");
     expect(named.verdict).toBe("fail");
     expect(named.evidence.join(" ")).toContain("want formats.double_elim");
+  });
+  // Fix round 1 (I-1): one witness per named item. The product refuses
+  // gate-first, so both divisions keep their stages. Each witness changes
+  // exactly ONE thing about one refusal, and only that item may fail.
+  describe("each named-refusal item has its own witness: one field wrong, everything else right", () => {
+    /** The gate-first product, with `skew` spread over the POST refusal and/or the PUT's answer. */
+    class Skewed extends FakeDeniedDriver {
+      readonly skew: { post?: Partial<StagesProbe>; put?: Partial<StagesProbe> };
+      constructor(skew: { post?: Partial<StagesProbe>; put?: Partial<StagesProbe> }) {
+        super(DENY, { deleteFirst: false });
+        this.skew = skew;
+      }
+      override postStages(d: string, stages: readonly StagePostBody[]): Promise<StageRef[]> {
+        return super.postStages(d, stages).catch((e: unknown) => {
+          if (!(e instanceof RefusedCall) || this.skew.post === undefined) throw e;
+          const p = { status: e.status, code: e.code, featureKey: e.featureKey, ...this.skew.post };
+          throw new RefusedCall(e.method, e.path, p.status, p.code, "skewed", p.featureKey);
+        });
+      }
+      override async replaceStagesProbe(d: string, stages: readonly StagePostBody[]): Promise<StagesProbe> {
+        return { ...(await super.replaceStagesProbe(d, stages)), ...this.skew.put };
+      }
+    }
+    // One row per gate: the items are row-independent (the sweep above covers
+    // every gated row), and each gate's own key must be the one wanted.
+    const ROWS: RowKey[] = GATES.map((g) => GATED.find((r) => productGateOf(r) === g.key)).filter((r): r is RowKey => r !== undefined);
+    const otherKey = (want: string): string => GATES.find((g) => g.key !== want)?.key ?? "(none)";
+    const cases = (want: string) => [
+      { name: "POST status", skew: { post: { status: 403 } }, id: "denied-refused-named", evidence: [`POST stages: status 403, want ${HTTP_402.status}`] },
+      { name: "POST code", skew: { post: { code: "UPGRADE_REQUIRED" } }, id: "denied-refused-named", evidence: [`POST stages: code UPGRADE_REQUIRED, want ${HTTP_402.code}`] },
+      { name: "POST feature_key", skew: { post: { featureKey: otherKey(want) } }, id: "denied-refused-named", evidence: [`POST stages: feature_key ${otherKey(want)}, want ${want}`] },
+      { name: "PUT status", skew: { put: { status: 403 } }, id: "denied-put-keeps-stages", evidence: [`PUT stages: status 403, want ${HTTP_402.status}`] },
+      { name: "PUT code", skew: { put: { code: "FORMAT_LOCKED" } }, id: "denied-put-keeps-stages", evidence: [`PUT stages: code FORMAT_LOCKED, want ${HTTP_402.code}`] },
+      { name: "PUT feature_key", skew: { put: { featureKey: otherKey(want) } }, id: "denied-put-keeps-stages", evidence: [`PUT stages: feature_key ${otherKey(want)}, want ${want}`] },
+      // A W9 fix that gates before the delete but answers another refusal: the stages stay, the answer is wrong.
+      { name: "PUT 409 FORMAT_LOCKED", skew: { put: { status: 409, code: "FORMAT_LOCKED", featureKey: null } }, id: "denied-put-keeps-stages", evidence: [`PUT stages: status 409, want ${HTTP_402.status}`, `PUT stages: code FORMAT_LOCKED, want ${HTTP_402.code}`, `PUT stages: feature_key none, want ${want}`] },
+    ] as const;
+
+    it("the witnesses are built from the product's two gates, each wanting its own key", () => {
+      expect(ROWS).toEqual(GATED.filter((r) => ROWS.includes(r)));
+      expect(ROWS.map((r) => productGateOf(r))).toEqual(["formats.double_elim", "formats.advanced"]);
+      expect(ROWS.map((r) => otherKey(productGateOf(r) ?? ""))).toEqual(["formats.advanced", "formats.double_elim"]);
+    });
+    it("the unskewed product passes all three checks (the baseline every witness departs from)", async () => {
+      for (const row of ROWS) {
+        const out = await denied.run(ctx(spec(row), new Skewed({})));
+        expect(out.assertions.filter((a) => a.verdict !== "pass").map((a) => a.id), row).toEqual([]);
+      }
+    });
+    const TABLE = ROWS.flatMap((row) => cases(productGateOf(row) ?? "(ungated)").map((c) => ({ row, ...c })));
+    it("the witness table holds seven witnesses per gate (a table of none would pass vacuously)", () => {
+      expect(TABLE.length).toBe(ROWS.length * 7);
+      expect(TABLE.length).toBeGreaterThan(0);
+    });
+    it.each(TABLE.map((t) => [`${t.row}: ${t.name}`, t] as const))("%s — fails ONLY its own check, with ONLY its own note as evidence", async (_label, t) => {
+      const out = await denied.run(ctx(spec(t.row), new Skewed(t.skew)));
+      expect(out.assertions.filter((a) => a.verdict === "fail").map((a) => a.id)).toEqual([t.id]);
+      expect(check(out, t.id).evidence).toEqual([...t.evidence]);
+    });
   });
   it("a product that refuses AFTER inserting reds denied-nothing-created: the read-back is judged, not the refusal", async () => {
     class GatesLate extends FakeDeniedDriver {
@@ -182,6 +247,27 @@ describe("DENIED scenario", () => {
       n++;
     }
     expect(n).toBe(3);
+  });
+  // Fix round 1 (m-1): the guard reads the deny prepareCaseOrg APPLIED. A hop
+  // that dropped it (the spec still asking) must be named, never read as a
+  // product that forgot its paywall.
+  it("the spec asks for the deny but the org was never denied: refused by name before any call, naming both sets", async () => {
+    let n = 0;
+    for (const applied of [[], ["formats.advanced"]]) {
+      const d = new FakeDeniedDriver(DENY, { deleteFirst: false });
+      const s = spec("double_elim");
+      expect(s.deny).toEqual(["formats.double_elim"]);
+      const err = await denied.run(ctx(s, d, applied)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DeniedMisuse);
+      expect((err as Error).message).toMatch(/carries no deny for formats\.double_elim \(applied: [^)]*; asked: formats\.double_elim\)/);
+      expect(d.callCount).toBe(0);
+      n++;
+    }
+    expect(n).toBe(2);
+  });
+  it("the applied deny is what counts: applied but not asked still runs (the org IS denied)", async () => {
+    const out = await denied.run(ctx({ ...spec("double_elim"), deny: [] }, new FakeDeniedDriver(DENY, { deleteFirst: false }), ["formats.double_elim"]));
+    expect(out.assertions.map((a) => a.verdict)).toEqual(["pass", "pass", "pass"]);
   });
   it("declares a mandated refusal naming the gate, refuses one for an ungated row, and opts out of the fixture invariants", () => {
     expect(denied.key).toBe("DENIED");

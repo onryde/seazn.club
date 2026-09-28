@@ -1,4 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -6,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
+import { INVARIANTS } from "../lib/invariants.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
@@ -13,7 +16,7 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
 import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
-import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
+import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
 import { NOTES_CAP, closeHandles, describeCommit, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
@@ -52,7 +55,7 @@ function deps(over: Partial<RunDeps> = {}): Deps {
       dispose: async () => { order.push("dispose"); },
     }; },
     signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return session; },
-    prepareCaseOrg: async (ctx, i) => { orgs.push(i); ctxs.push(ctx); return { orgId: `org-${i.slug}`, orgSlug: i.slug }; },
+    prepareCaseOrg: async (ctx, i) => { orgs.push(i); ctxs.push(ctx); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [...(i.deny ?? [])] }; },
     driverFor: (base, s, orgId) => { const driver = new FakeLeagueDriver(orgId); drivers.push({ base, session: s, orgId, driver }); return driver; },
     render: renderMatrix,
     ...over,
@@ -179,6 +182,25 @@ describe("runSlice — a run", () => {
     expect(io.out()).toMatch(/^\[1\/1\] league\|generic\|score\|LIFECYCLE → works \d+ checks, \d+ items$/m);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
+  });
+  // Fix round 1 (I-2): through the REAL runCase — scenarios.test's runOn is a
+  // copy of its composition and cannot see runCase drop the invariants. A
+  // scenario that does not declare `evaluatesInvariants` gets all of them.
+  it("a LIFECYCLE case carries every registered invariant, in registry order, and each that applied checked > 0 items", async () => {
+    capture();
+    const dir = dirFor();
+    expect(SCENARIOS.LIFECYCLE.evaluatesInvariants).toBeUndefined();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "inv1", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "inv1").cases;
+    const inv = (c?.checks ?? []).filter((k) => k.kind === "invariant");
+    expect(INVARIANTS.length).toBeGreaterThan(0);
+    expect(inv.map((k) => k.id)).toEqual(INVARIANTS.map((s) => s.id));
+    const applied = inv.filter((k) => k.verdict !== "abstain");
+    expect(applied.length, "no invariant applied to a built league — the check would be vacuous").toBeGreaterThan(0);
+    for (const k of applied) {
+      expect(k.verdict, `${k.id}: ${k.reason}`).toBe("pass");
+      expect(k.checked, k.id).toBeGreaterThan(0);
+    }
   });
   it("M4: results.json snapshots the catalogue grid as it is at run time, and MATRIX.md is its render", async () => {
     capture();
@@ -508,6 +530,25 @@ describe("runSlice — a run", () => {
     expect(c!.state).toBe("red");
     expect(c!.reason).toMatch(/^denied-put-keeps-stages: /);
   });
+  // Fix round 1 (m-1): what reaches the scenario is the deny prepareCaseOrg
+  // APPLIED. One that did not land is a named harness error, never the
+  // product "forgetting its paywall".
+  it("a DENIED case whose org came back undenied is a named DeniedMisuse red, with no product call made", async () => {
+    const dir = dirFor();
+    const drivers: FakeDeniedDriver[] = [];
+    const d = deps({
+      planCases: deniedPlan,
+      prepareCaseOrg: async (_c, i) => ({ orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }),
+      driverFor: (_b, _s, orgId) => { const f = new FakeDeniedDriver(new Map([["double_elim", "formats.double_elim"]]), { deleteFirst: false }, orgId); drivers.push(f); return f; },
+    });
+    capture();
+    expect(await runSlice(d, ["--run-id", "den4", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "den4").cases;
+    expect(c!.state).toBe("red");
+    expect(c!.reason).toMatch(/^error: DeniedMisuse: denied: case double_elim\|generic\|score\|DENIED carries no deny for formats\.double_elim \(applied: none; asked: formats\.double_elim\)/);
+    expect(drivers).toHaveLength(1);
+    expect(drivers[0]!.callCount).toBe(0);
+  });
   it("a slice case carries no deny to prepareCaseOrg", async () => {
     const dir = dirFor();
     const d = deps();
@@ -655,6 +696,60 @@ describe("realDeps wiring (Task 7 M3)", () => {
       expect(log).toEqual(["m.open", "p.open", "m.dispose", "p.dispose"]);
       expect(io.err()).toMatch(/matrix: dispose failed — Error: [mp] end timed out/);
     });
+
+  // Fix round 1 (m-1): the deny's hop THROUGH realDeps — the one a refactor
+  // rebuilding `{ name, slug }` there would silently drop. bench raw() and
+  // request() run for real against a loopback server standing in for the
+  // product's two routes; only the two SQL handles are fakes.
+  it("prepareCaseOrg carries the deny through realDeps to denyFeature, after the provision, and returns what was applied", async () => {
+    const hits: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => { body += c.toString("utf8"); });
+      req.on("end", () => {
+        hits.push(`${req.method} ${req.url}`);
+        const reply = (status: number, v: unknown, cookie?: string) => {
+          res.writeHead(status, { "content-type": "application/json", ...(cookie === undefined ? {} : { "set-cookie": cookie }) });
+          res.end(JSON.stringify(v));
+        };
+        if (req.method === "POST" && req.url === "/api/orgs/active") return reply(200, { ok: true, data: {} }, `${ORG_COOKIE}=${(JSON.parse(body) as { org_id: string }).org_id}; Path=/`);
+        if (req.url === "/api/admin/orgs/o1/entitlement-override") return reply(200, { ok: true, data: {} });
+        return reply(404, { ok: false, error: "not found" });
+      });
+    });
+    await new Promise<void>((r) => { server.listen(0, "127.0.0.1", r); });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const log: string[] = [];
+      const m: MatrixSql = {
+        userIdForEmail: async () => "u1",
+        insertCaseOrg: async (i) => { log.push(`m.insert ${i.slug}`); return { orgId: "o1", orgSlug: i.slug }; },
+        listPlanKeys: async () => [],
+        variantKeysInBuilderOrder: async () => [],
+        denyFeature: async (i) => { log.push(`m.deny ${i.orgId} ${i.featureKey}`); },
+      };
+      const p = {
+        getOrgSubscriptionId: async (o: string) => { log.push(`p.subscription? ${o}`); return "sub1"; },
+        updateSubscriptionPlan: async (s: string, plan: string) => { log.push(`p.plan ${s} ${plan}`); },
+        createSubscriptionForOrg: async () => { log.push("p.create"); },
+        setOwnerStaff: async (o: string, on: boolean) => { log.push(`p.staff ${o} ${String(on)}`); },
+      };
+      const f: DbFactories = { matrixSql: () => ({ sql: m, dispose: async () => {} }), planSql: () => ({ sql: p as never, dispose: async () => {} }) };
+      const ctx = { base: `http://127.0.0.1:${port}`, session: { cookies: {} }, userId: "u1", plan: "pro" };
+      const out = await realDeps(f).prepareCaseOrg(ctx, { name: "Matrix r 1", slug: "m-r-1", deny: ["formats.double_elim", "formats.advanced"] });
+      expect(out).toEqual({ orgId: "o1", orgSlug: "m-r-1", denied: ["formats.double_elim", "formats.advanced"] });
+      expect(log).toEqual(["m.insert m-r-1", "p.subscription? o1", "p.plan sub1 pro", "p.staff o1 true", "p.staff o1 false", "m.deny o1 formats.double_elim", "m.deny o1 formats.advanced"]);
+      expect(hits).toEqual(["POST /api/orgs/active", "POST /api/admin/orgs/o1/entitlement-override", "DELETE /api/admin/orgs/o1/entitlement-override"]);
+      // The second call, with no deny: nothing denied, nothing claimed.
+      log.length = 0;
+      const plain = await realDeps(f).prepareCaseOrg({ ...ctx, session: { cookies: {} } }, { name: "Matrix r 2", slug: "m-r-2" });
+      expect(plain).toEqual({ orgId: "o1", orgSlug: "m-r-2", denied: [] });
+      expect(log.filter((l) => l.startsWith("m.deny"))).toEqual([]);
+      expect(log[0]).toBe("m.insert m-r-2");
+    } finally {
+      await new Promise<void>((r) => { server.close(() => { r(); }); });
+    }
+  });
 
   it("a case's org seeding: a throwing dispose neither leaks the other handle nor masks an in-flight DataDirMismatch", async () => {
     capture();
