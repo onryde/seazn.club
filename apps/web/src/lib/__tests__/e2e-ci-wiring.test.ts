@@ -444,6 +444,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // suites decode a sheet built in-process — only a browser prints the one a
   // person downloads, with the prod build's embedded brand fonts.
   "scorer-sheets-print-scan.spec.ts",
+
+  // Streaming R1 — the staff "Match credits" panel on /admin/orgs/[id] (Task 7A): grant, refund
+  // and revoke through the real panel and route, a lost-then-retried grant replaying its key
+  // (one row), a lost-then-EDITED refund refused as a reused key and reset, a revoke below zero
+  // refused, the widths, and a non-staff caller refused.
+  // (Task 15 adds stream-relay.spec.ts to this block.)
+  "stream-credits-admin.spec.ts",
 ];
 
 afterEach(() => {
