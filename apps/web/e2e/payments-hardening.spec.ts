@@ -191,11 +191,19 @@ async function seedComp(
   const tag = randomBytes(5).toString("hex");
   return withDb(async (sql) => {
     const compSlug = `ph-cup-${TAG}-${tag}`;
+    // A competition that always lies ahead. This used to be a fixed window,
+    // '2026-09-15'..'2026-09-20', written 2026-07-19 when that date was still
+    // in the future, and it went stale. An Event Pass stops applying
+    // PASS_END_GRACE_DAYS after ends_on (lib/entitlements.ts `passLockReason`,
+    // matched by the SQL resolver's pass arm). So from 2026-09-28 UTC, every
+    // pass seeded onto these comps was locked on arrival: T3, T7 and T10's
+    // entry 65 waitlisted under the community cap instead of holding a spot
+    // under the pass's.
     const [{ id: compId }] = await sql<{ id: string }[]>`
       insert into competitions
         (org_id, name, slug, visibility, branding, starts_on, ends_on, discoverable)
       values (${orgId}, ${"PH Cup " + tag}, ${compSlug}, ${visibility},
-              ${sql.json({})}, '2026-09-15', '2026-09-20', false)
+              ${sql.json({})}, current_date + 30, current_date + 35, false)
       returning id`;
     return { compId, compSlug };
   });
