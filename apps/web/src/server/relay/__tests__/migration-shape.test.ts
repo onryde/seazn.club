@@ -324,6 +324,34 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     );
   });
 
+  it("org_stream_credits_payment_intent (V420) exists, is PARTIAL on the null test, and is NOT narrowed to purchases", async () => {
+    // findStreamPurchase asks "was this charge a match-credit pack?" with no org in the
+    // predicate — finding out whose org it is IS the query's purpose — so V410's
+    // (org_id, created_at) cannot serve it and, without this index, the claw-back seq-scans
+    // every row of every org on a path that refunds for registration, sponsor, Event Pass and
+    // AI credit packs all reach as well.
+    //
+    // Pinned as TEXT, not by behaviour, for the same reason as the index above: on a small
+    // test table the planner prefers a seq scan whether or not the index exists, so an
+    // EXPLAIN assertion would pass with the index dropped. Two properties are load-bearing and
+    // neither is reachable from a query result.
+    //
+    // PARTIAL on `is not null` is what keeps it small — the column is written on the purchase
+    // row only, and consume rows (one per stream session) are the bulk of this table.
+    //
+    // The predicate must NOT also be `reason = 'purchase'`. A claw-back row deliberately
+    // carries the same payment intent so a human can walk the ledger back to the Stripe
+    // object; an index narrowed to purchases could not serve that walk. A future edit that
+    // "tightens" the predicate is the mutant this line exists to catch.
+    const [idx] = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+       where schemaname = current_schema() and tablename = 'org_stream_credits'
+         and indexname = 'org_stream_credits_payment_intent'`;
+    expect(idx?.indexdef, "org_stream_credits_payment_intent is missing or renamed").toMatch(
+      /^CREATE INDEX org_stream_credits_payment_intent ON \w+\.org_stream_credits USING btree \(stripe_payment_intent_id\) WHERE \(stripe_payment_intent_id IS NOT NULL\)$/,
+    );
+  });
+
   it("max_duration_minutes: 0 is refused by check (max_duration_minutes > 0) — domain/expiry.ts deadlineOf would read a stored 0 as 300; 1 lands, and the default is still 300 (the Task 7 amend, Task 2B review M4)", async () => {
     const r = await rig();
     const sid = await insertSession(r, "requested");
