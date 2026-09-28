@@ -1,7 +1,7 @@
 // M1: seed 1's first opponent does not turn up. The walkover is recorded for
 // seed 1 and, in a bracket, seed 1 goes on. Canary: expect the ABSENT side.
 import { winnerOf } from "../observed.ts";
-import { assertion, foldParity, loopBounded, stageCompleted } from "./assertions.ts";
+import { assertion, foldParity, resultsAsPosted, loopBounded, stageCompleted } from "./assertions.ts";
 import { Recorder, decideFixture, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -42,6 +42,7 @@ export const m1Walkover: Scenario = {
       events: rec.events,
       assertions: [
         foldParity(rec),
+        resultsAsPosted(rec, observed),
         assertion("m1-walkover-recorded", fx === undefined ? [{ ok: false, note: "no round fixture seated seed 1" }] : [
           { ok: fx.status === "forfeited", note: `status ${fx.status}, expected forfeited` },
           { ok: winnerOf(fx.outcome) === expected, note: `winner ${winnerOf(fx.outcome)}, expected ${expected}` },

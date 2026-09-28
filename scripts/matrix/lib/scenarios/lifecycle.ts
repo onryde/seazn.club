@@ -2,7 +2,7 @@
 // the public table. No canary — its assertions are the shared ones.
 import type { StageKind } from "@seazn/engine/core";
 import { drawsAllowed } from "../sport-cfg.ts";
-import { drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, stageCompleted } from "./assertions.ts";
+import { drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, resultsAsPosted, loopBounded, publicStandingsMatch, stageCompleted } from "./assertions.ts";
 import { Recorder, configProbe, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -26,6 +26,7 @@ export const lifecycle: Scenario = {
       events: rec.events,
       assertions: [
         foldParity(rec),
+        resultsAsPosted(rec, observed),
         publicStandingsMatch(observed, pub),
         drawPathExercised(rec, observed, drawOk),
         formatEditRefusedNamed(configEdit),

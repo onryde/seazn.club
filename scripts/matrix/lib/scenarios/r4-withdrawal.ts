@@ -3,7 +3,7 @@
 // the rulebook's call (W2+). Canary: judge the cascade against the opposite
 // policy.
 import { isTerminal, sameResult, snap, toObservedOutcome, winnerOf, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
-import { assertion, foldParity, loopBounded, stageCompleted, type Item } from "./assertions.ts";
+import { assertion, foldParity, resultsAsPosted, loopBounded, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -67,6 +67,7 @@ export const r4Withdrawal: Scenario = {
           .map((f) => snap({ id: f.id, stageId: f.stage_id, poolId: f.pool_id, roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: toObservedOutcome(f.outcome), declared: null }));
         const out = await ctx.driver.withdraw(seed3);
         rec.facts.add("withdrawn");
+        rec.withdrawn.add(seed3);
         if (out.policy === "expunge") rec.facts.add("expunged");
         withdrawal = { entrantId: seed3, afterRound: 1, policy: out.policy, walkovers: out.walkovers, voided: out.voided, skippedFinalized: out.skipped_finalized, before };
       },
@@ -78,7 +79,7 @@ export const r4Withdrawal: Scenario = {
       return {
         observed,
         events: rec.events,
-        assertions: [foldParity(rec), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
+        assertions: [foldParity(rec), resultsAsPosted(rec, observed), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
       };
     }
     const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
@@ -90,6 +91,7 @@ export const r4Withdrawal: Scenario = {
       events: rec.events,
       assertions: [
         foldParity(rec),
+        resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }]),
         assertion("r4-cascade-consistent", cascadeItems(judged, w.entrantId, w.before, mine, w.walkovers, w.voided)),
         assertion("r4-not-paired-later",

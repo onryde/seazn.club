@@ -133,3 +133,28 @@ export function sameResult(
 export function snap(f: ObservedFixture): FixtureSnap {
   return { id: f.id, status: f.status, outcome: f.outcome };
 }
+
+/** Pending, in the product's reading (lib/table-withdrawal.ts). */
+export const PENDING_STATUSES: readonly string[] = Object.freeze(["scheduled", "in_play"]);
+/** Locked: the cascade reports these and never touches them (withdrawal.ts:102). */
+export const LOCKED_STATUSES: readonly string[] = Object.freeze(["finalized", "cancelled"]);
+
+/** A bye is the engine's only legitimate one-sided finished shape: a
+ *  forfeited AWARD to the seated side (competition/stage.ts:30-34). */
+export function isBye(f: ObservedFixture): boolean {
+  return !twoSided(f) && (f.home !== null || f.away !== null) && f.status === "forfeited" && f.outcome?.kind === "award" && f.outcome.winner === (f.home ?? f.away);
+}
+
+/** What the RECORDED withdrawal cascade itself wrote (final review I-1): a
+ *  fixture of the withdrawn entrant that the cascade could touch — pending
+ *  under walkover, unlocked under expunge, read off the snapshot taken just
+ *  before the call — and that now carries a status that policy writes (a
+ *  walkover forfeit or the void of a TBD opponent; an expunge's abandon).
+ *  Whether it wrote the RIGHT thing is r4-cascade-consistent's question. */
+export function cascadeWrote(f: ObservedFixture, w: WithdrawalObs | null): boolean {
+  if (w === null || (f.home !== w.entrantId && f.away !== w.entrantId)) return false;
+  const before = w.before.find((b) => b.id === f.id);
+  if (before === undefined) return false;
+  if (w.policy === "walkover") return PENDING_STATUSES.includes(before.status) && (f.status === "abandoned" || f.status === "forfeited");
+  return w.policy === "expunge" && !LOCKED_STATUSES.includes(before.status) && f.status === "abandoned";
+}

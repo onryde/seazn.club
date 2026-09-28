@@ -8,7 +8,7 @@
 // helpers have one authority instead of a copy here.
 import type { CheckResult } from "./results.ts";
 import type { CaseFact, InvariantResult, ObservedFixture, ObservedRun, ObservedStage } from "./observed.ts";
-import { isNamedRefusal, isTerminal, sameOutcome, sameResult, twoSided, winnerOf } from "./observed.ts";
+import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, sameResult, twoSided, winnerOf } from "./observed.ts";
 
 export interface InvariantSpec {
   readonly id: string;
@@ -136,16 +136,6 @@ type Judged =
 
 const outcomeText = (o: ObservedFixture["outcome"]): string => (o === null ? "no outcome" : `${o.kind}${winnerOf(o) === null ? "" : ` ${winnerOf(o)}`}`);
 
-/** A bye is the engine's only legitimate one-sided finished shape: a
- *  forfeited AWARD to the seated side (competition/stage.ts:30-34). */
-const isBye = (f: ObservedFixture): boolean =>
-  !twoSided(f) && (f.home !== null || f.away !== null) && f.status === "forfeited" && f.outcome?.kind === "award" && f.outcome.winner === (f.home ?? f.away);
-
-/** Pending, in the product's reading (lib/table-withdrawal.ts). */
-const PENDING_STATUSES: readonly string[] = ["scheduled", "in_play"];
-/** Locked: the cascade reports these and never touches them (withdrawal.ts:102). */
-const LOCKED_STATUSES: readonly string[] = ["finalized", "cancelled"];
-
 function judge(f: ObservedFixture, w: ObservedRun["withdrawal"]): Judged {
   // The recorded withdrawal, when this fixture seats the withdrawn entrant.
   const mine = w !== null && (f.home === w.entrantId || f.away === w.entrantId) ? w : null;
@@ -157,15 +147,9 @@ function judge(f: ObservedFixture, w: ObservedRun["withdrawal"]): Judged {
   if (mine !== null && mine.policy === "expunge" && f.status === "abandoned") return { kind: "zero" };
   const d = f.declared;
   if (d !== null && sameOutcome(f.outcome, d.forOutcome)) return { kind: "counts", home: d.home, away: d.away };
-  // What the recorded cascade itself wrote: a fixture of the withdrawn
-  // entrant that the cascade could touch (pending under walkover, unlocked
-  // under expunge — read off the snapshot taken just before it) and that now
-  // carries a status the cascade writes (a walkover forfeit, or the void of a
-  // TBD opponent).
-  const before = mine?.before.find((b) => b.id === f.id);
-  if (mine !== null && before !== undefined
-    && (mine.policy === "walkover" ? PENDING_STATUSES.includes(before.status) : !LOCKED_STATUSES.includes(before.status))
-    && (f.status === "abandoned" || (mine.policy === "walkover" && f.status === "forfeited"))) return { kind: "unjudged" };
+  // What the recorded cascade itself wrote (a walkover forfeit, or the void
+  // of a TBD opponent) is not a result the harness declared.
+  if (cascadeWrote(f, w)) return { kind: "unjudged" };
   if (d !== null) return { kind: "unexplained", why: `stored ${f.status} ${outcomeText(f.outcome)}, but the harness posted ${outcomeText(d.forOutcome)}` };
   if (isBye(f)) return { kind: "unjudged" };
   if (f.outcome === null && twoSided(f)) return { kind: "zero" };

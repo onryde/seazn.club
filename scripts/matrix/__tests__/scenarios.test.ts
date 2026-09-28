@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import { isTerminal, type ObservedFixture, type ObservedRun } from "../lib/observed.ts";
+import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
 import { decideState } from "../lib/results.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
-  assertion, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, stageCompleted,
+  assertion, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type DivisionSetup,
+  MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems } from "../lib/scenarios/r4-withdrawal.ts";
@@ -56,13 +56,71 @@ describe("shared assertions — empty case first, then each way to go red", () =
   it("foldParity: nothing posted is vacuous; a differing product outcome fails; foreign events are unjudgeable", () => {
     expect(foldParity(new Recorder())).toMatchObject({ id: "life-fold-parity", verdict: "fail", checked: 0 });
     const rec = new Recorder();
-    rec.parity.push({ fixtureId: "f1", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0 });
+    rec.parity.push({ fixtureId: "f1", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0, finishedBefore: null });
     expect(foldParity(rec)).toMatchObject({ verdict: "pass", checked: 1 });
-    rec.parity.push({ fixtureId: "f2", local: { kind: "win", winner: "a" }, product: { kind: "draw" }, foreign: 0 });
+    rec.parity.push({ fixtureId: "f2", local: { kind: "win", winner: "a" }, product: { kind: "draw" }, foreign: 0, finishedBefore: null });
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 2, evidence: [expect.stringMatching(/^f2: engine/)] });
     const rec2 = new Recorder();
-    rec2.parity.push({ fixtureId: "f3", local: null, product: { kind: "win", winner: "a" }, foreign: 1 });
+    rec2.parity.push({ fixtureId: "f3", local: null, product: { kind: "win", winner: "a" }, foreign: 1, finishedBefore: null });
     expect(foldParity(rec2)).toMatchObject({ verdict: "fail", checked: 1, evidence: [expect.stringMatching(/f3: 1 event\(s\) .*did not post/)] });
+    // I-1: a fixture already finished before the harness posted fails even when
+    // its event count reads 0 (a status written with no events).
+    const rec3 = new Recorder();
+    rec3.parity.push({ fixtureId: "f4", local: null, product: null, foreign: 0, finishedBefore: "decided" });
+    expect(foldParity(rec3)).toMatchObject({ verdict: "fail", checked: 1, evidence: ["f4: already decided before the harness posted — a result it never wrote, and no recorded withdrawal explains it"] });
+  });
+
+  it("resultsAsPosted (final review I-1): the STORED result of every finished fixture is the harness's fold, a bye, or the recorded cascade's — else it fails", () => {
+    const win = (w: string) => ({ kind: "win" as const, winner: w });
+    const posted = (rec: Recorder, id: string, local: ObservedOutcome | null, over: Partial<ParityObs> = {}) =>
+      rec.parity.push({ fixtureId: id, local, product: local, foreign: 0, finishedBefore: null, ...over });
+    // Empty first: nothing finished is vacuous, and so is a stage whose only finished rows seat nobody.
+    expect(resultsAsPosted(new Recorder(), run([]))).toMatchObject({ id: "life-results-as-posted", verdict: "fail", checked: 0 });
+    expect(resultsAsPosted(new Recorder(), run([], [fx({ home: null, away: null, status: "abandoned", outcome: null }), fx({ id: "f2", status: "scheduled", outcome: null })])))
+      .toMatchObject({ verdict: "fail", checked: 0 });
+    const rec = new Recorder();
+    posted(rec, "f1", win("a"));
+    expect(resultsAsPosted(rec, run([], [fx({})]))).toMatchObject({ verdict: "pass", checked: 1 });
+    // The method is not compared (the fold and the row may name it differently); kind and winner are.
+    expect(resultsAsPosted(rec, run([], [fx({ outcome: { kind: "win", winner: "a", method: "regulation" } })]))).toMatchObject({ verdict: "pass" });
+    // Stored with the other winner, though the harness posted and folded "a".
+    expect(resultsAsPosted(rec, run([], [fx({ outcome: win("b") })])))
+      .toMatchObject({ verdict: "fail", checked: 1, evidence: ['f1: stored decided {"kind":"win","winner":"b"}, the harness posted and folded {"kind":"win","winner":"a"}'] });
+    // Posted, then voided by nobody the harness can name.
+    expect(resultsAsPosted(rec, run([], [fx({ status: "abandoned", outcome: null })]))).toMatchObject({ verdict: "fail", checked: 1 });
+    // A result the harness never posted: two-sided, then one-sided but not a bye.
+    expect(resultsAsPosted(new Recorder(), run([], [fx({})])))
+      .toMatchObject({ verdict: "fail", checked: 1, evidence: ['f1: stored decided {"kind":"win","winner":"a"} — the harness never posted it, and no bye or recorded withdrawal explains it'] });
+    expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "decided", outcome: win("a") })]))).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "b" } })]))).toMatchObject({ verdict: "fail", checked: 1 });
+    // A bye (a forfeited award to the seated side) is accounted for.
+    expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "a" } })]))).toMatchObject({ verdict: "pass", checked: 1 });
+    // The harness cannot fold what it does not hold whole: foreign events, finished before it posted, a null local fold.
+    for (const over of [{ foreign: 2 }, { finishedBefore: "decided" }, {}] as Partial<ParityObs>[]) {
+      const r = new Recorder();
+      posted(r, "f1", over.foreign === undefined && over.finishedBefore === undefined ? null : win("a"), over);
+      expect(resultsAsPosted(r, run([], [fx({})])), JSON.stringify(over)).toMatchObject({ verdict: "fail", checked: 1, evidence: [expect.stringMatching(/cannot fold/)] });
+    }
+  });
+
+  it("resultsAsPosted: only the RECORDED withdrawal's cascade explains a result the harness did not post", () => {
+    const withW = (fixtures: ObservedFixture[], policy: "walkover" | "expunge", before: { id: string; status: string }[], entrantId = "b"): ObservedRun =>
+      ({ ...run([], fixtures), withdrawal: { entrantId, afterRound: 1, policy, walkovers: 0, voided: 0, skippedFinalized: 0, before: before.map((b) => ({ ...b, outcome: null })) } });
+    const wo = fx({ id: "wo", status: "forfeited", outcome: { kind: "award", winner: "a" } });
+    expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", [{ id: "wo", status: "scheduled" }]))).toMatchObject({ verdict: "pass", checked: 1 });
+    // Its twins fail: the fixture was already decided before the withdrawal, another entrant withdrew, no snapshot, or no withdrawal at all.
+    expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", [{ id: "wo", status: "decided" }]))).toMatchObject({ verdict: "fail" });
+    expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", [{ id: "wo", status: "scheduled" }], "z"))).toMatchObject({ verdict: "fail" });
+    expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", []))).toMatchObject({ verdict: "fail" });
+    expect(resultsAsPosted(new Recorder(), run([], [wo]))).toMatchObject({ verdict: "fail" });
+    // An expunge strikes a result the harness posted: the stored void differs from the fold and is still accounted for...
+    const rec = new Recorder();
+    rec.parity.push({ fixtureId: "x", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0, finishedBefore: null });
+    const struck = fx({ id: "x", status: "abandoned", outcome: null });
+    expect(resultsAsPosted(rec, withW([struck], "expunge", [{ id: "x", status: "decided" }]))).toMatchObject({ verdict: "pass", checked: 1 });
+    // ...but not when the fixture was locked before it, nor under a walkover (which leaves played results standing).
+    expect(resultsAsPosted(rec, withW([struck], "expunge", [{ id: "x", status: "finalized" }]))).toMatchObject({ verdict: "fail" });
+    expect(resultsAsPosted(rec, withW([struck], "walkover", [{ id: "x", status: "decided" }]))).toMatchObject({ verdict: "fail" });
   });
 
   it("publicStandingsMatch: nothing on either side is vacuous; a missing pool, a rank and a points drift each fail", () => {
@@ -263,12 +321,104 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
-    ["LIFECYCLE", ["life-fold-parity", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded"]],
-    ["M1", ["life-fold-parity", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded"]],
-    ["R4", ["life-fold-parity", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded"]],
-    ["F1", ["life-fold-parity", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded"]],
+    ["LIFECYCLE", ["life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded"]],
+    ["M1", ["life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded"]],
+    ["R4", ["life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded"]],
+    ["F1", ["life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded"]],
   ] as const)("%s", async (k, ids) => {
     expect((await runFake(k)).out.assertions.map((a) => a.id)).toEqual(ids);
+  });
+});
+
+describe("final review I-1 on the fakes: a result the harness did not post, or one stored differently, reds the case", () => {
+  /** The product decides a seated fixture by itself when the division starts: no withdrawal, no bye. */
+  function autoDecides<T extends new () => FakeLeagueDriver>(Base: T) {
+    return class extends Base {
+      override async start() {
+        const out = await super.start();
+        const f = this.fixtures.find((x) => x.home_entrant_id !== null && x.away_entrant_id !== null)!;
+        await this.postStream(f.id, [START, { type: "core.forfeit", payload: { by: f.away_entrant_id, reason: "walkover" } }], "server");
+        return out;
+      }
+    };
+  }
+  /** The product answers each POST correctly but READS BACK the first two-sided decided fixture with the other winner. */
+  function flipsStored<T extends new () => FakeLeagueDriver>(Base: T) {
+    return class extends Base {
+      override rows() {
+        const rows = super.rows();
+        const r = rows.find((x) => x.status === "decided" && x.home_entrant_id !== null && x.away_entrant_id !== null && (x.outcome as { kind?: string } | null)?.kind === "win");
+        if (r !== undefined) {
+          const o = r.outcome as { winner: string };
+          r.outcome = { ...o, winner: o.winner === r.home_entrant_id ? r.away_entrant_id : r.home_entrant_id };
+        }
+        return rows;
+      }
+    };
+  }
+  it.each(["LIFECYCLE", "F1"] as const)("league %s: a result the product wrote on start reds I3 and life-results-as-posted", async (k) => {
+    const r = await runOn(new (autoDecides(FakeLeagueDriver))(), k);
+    expect(r.state.state).toBe("red");
+    expect(failed(r.checks)).toEqual(["I3-table-points-equal-declared", "life-results-as-posted"]);
+    expect(r.checks.find((c) => c.id === "life-results-as-posted")!.evidence).toEqual([expect.stringMatching(/^f1: stored forfeited .* the harness never posted it/)]);
+  });
+  it.each(["LIFECYCLE", "F1"] as const)("league %s: a stored winner that differs from the posted one reds I3 and life-results-as-posted (parity reads the POST answer, so it passes)", async (k) => {
+    const r = await runOn(new (flipsStored(FakeLeagueDriver))(), k);
+    expect(r.state.state).toBe("red");
+    expect(failed(r.checks)).toEqual(["I3-table-points-equal-declared", "life-results-as-posted"]);
+    expect(r.checks.find((c) => c.id === "life-fold-parity")).toMatchObject({ verdict: "pass" });
+  });
+  it.each(["M1", "F1"] as const)("knockout %s: no table invariant applies — a result written on start reds life-results-as-posted ALONE; a flipped stored winner also reds I2", async (k) => {
+    const auto = await runOn(new (autoDecides(FakeKnockoutDriver))(), k, { row: "knockout" });
+    expect(auto.state.state).toBe("red");
+    expect(failed(auto.checks)).toEqual(["life-results-as-posted"]);
+    expect(auto.checks.find((c) => c.id === "life-results-as-posted")!.evidence).toEqual([expect.stringMatching(/^f\d+: stored forfeited \{"kind":"award".* the harness never posted it/)]);
+    const flip = await runOn(new (flipsStored(FakeKnockoutDriver))(), k, { row: "knockout" });
+    expect(failed(flip.checks)).toEqual(["I2-bracket-one-champion-ranks-permutation", "life-results-as-posted"]);
+    expect(flip.checks.find((c) => c.id === "life-results-as-posted")!.evidence).toEqual([expect.stringMatching(/^f\d+: stored decided \{"kind":"win","winner":"(e\d+)".*\}, the harness posted and folded \{"kind":"win","winner":"(?!\1)e\d+"/)]);
+  });
+  it("R4: a fixture the RECORDED withdrawal finished is left alone even when a stale list still offers it as open", async () => {
+    /** The first generate after the withdrawal answers the rows as they stood before it (a lagging read). */
+    class StaleAfterWithdraw extends FakeLeagueDriver {
+      stale: ReturnType<FakeLeagueDriver["rows"]> | null = null;
+      /** Fixtures the harness asked about while they were already finished. */
+      readonly askedFinished: string[] = [];
+      override async withdraw(id: string) { this.stale = this.rows(); return super.withdraw(id); }
+      override async fixtureState(id: string) {
+        const s = await super.fixtureState(id);
+        if (isTerminal(s.status)) this.askedFinished.push(id);
+        return s;
+      }
+      override async generate() {
+        if (this.stale === null) return super.generate();
+        const fixtures = this.stale;
+        this.stale = null;
+        this.log("generate");
+        return { created: 0, existing: fixtures.length, fixtures };
+      }
+    }
+    const driver = new StaleAfterWithdraw();
+    const r = await runOn(driver, "R4");
+    const w = r.out.observed.withdrawal!;
+    // The stale batch did offer fixtures the cascade had already finished (pending before it), and they were asked about, never posted over.
+    const cascaded = w.before.filter((b) => !isTerminal(b.status)).map((b) => b.id);
+    expect(driver.askedFinished.filter((id) => cascaded.includes(id)).length).toBeGreaterThan(0);
+    expect(w.policy).toBe("expunge"); // 1 of 7 played after round 1
+    expect(r.out.observed.stages[0]!.fixtures.filter((f) => cascaded.includes(f.id)).map((f) => f.status)).toEqual(cascaded.map(() => "abandoned"));
+    expect(r.state.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toBe("works");
+  });
+  it("the unmodified fakes stay works on every scenario and row (the new check is not a blanket red)", async () => {
+    for (const k of SCENARIO_KEYS) {
+      const league = await runOn(new FakeLeagueDriver(), k);
+      expect(league.checks.find((c) => c.id === "life-results-as-posted"), k).toMatchObject({ verdict: "pass" });
+      expect(league.checks.find((c) => c.id === "life-results-as-posted")!.checked, k).toBeGreaterThan(0);
+    }
+    for (const k of ["M1", "F1"] as const) {
+      const ko = await runOn(new FakeKnockoutDriver(), k, { row: "knockout" });
+      expect(ko.checks.find((c) => c.id === "life-results-as-posted"), k).toMatchObject({ verdict: "pass" });
+    }
+    const swiss = await runOn(new FakeSwissDriver(), "F1", { row: "swiss" });
+    expect(swiss.checks.find((c) => c.id === "life-results-as-posted")).toMatchObject({ verdict: "pass" });
   });
 });
 
@@ -555,13 +705,33 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1 });
     expect(rec.declared.has(f.id)).toBe(false);
   });
-  it("a fixture already finished (a server cascade) is left alone", async () => {
+  // Final review I-1. This test used to be "a fixture already finished (a
+  // server cascade) is left alone", with no cascade in its setup: it pinned a
+  // silent return for ANY finished fixture, a frozen bug. A result the harness
+  // never wrote now fails parity unless it posted there itself or a recorded
+  // withdrawal's cascade could have.
+  it("a fixture already finished by a write the harness never made is a failing parity item, not a silent return", async () => {
     const { driver, ctx, rec, setup, f } = await onBadminton();
-    await driver.forfeit(f.id, f.away_entrant_id!, "walkover", "x");
+    await driver.forfeit(f.id, f.away_entrant_id!, "walkover", "x"); // not recorded: a foreign write
     const before = driver.calls.length;
     await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
-    expect(driver.calls.slice(before)).toEqual(["fixtureState"]);
-    expect(rec.parity).toHaveLength(0);
+    expect(driver.calls.slice(before)).toEqual(["fixtureState"]); // still posts nothing over it
+    expect(rec.parity).toEqual([{ fixtureId: f.id, local: null, product: { kind: "award", winner: f.home_entrant_id, method: "walkover" }, foreign: 2, finishedBefore: "forfeited" }]);
+    expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1, evidence: [`${f.id}: already forfeited before the harness posted — a result it never wrote, and no recorded withdrawal explains it`] });
+    expect(rec.declared.has(f.id)).toBe(false);
+  });
+  it("...and left alone only when the harness posted there itself (M1's forfeit) or a RECORDED withdrawal seats it", async () => {
+    for (const explain of ["own post", "withdrawn home", "withdrawn away"] as const) {
+      const { driver, ctx, rec, setup, f } = await onBadminton();
+      const posted = await driver.forfeit(f.id, f.away_entrant_id!, "walkover", "x");
+      if (explain === "own post") rec.streams.set(f.id, driver.fixtures.find((x) => x.id === f.id)!.events);
+      else rec.withdrawn.add(explain === "withdrawn home" ? f.home_entrant_id! : f.away_entrant_id!);
+      expect(posted.at(-1)!.status).toBe("forfeited");
+      const before = driver.calls.length;
+      await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
+      expect(driver.calls.slice(before), explain).toEqual(["fixtureState"]);
+      expect(rec.parity, explain).toHaveLength(0);
+    }
   });
 });
 

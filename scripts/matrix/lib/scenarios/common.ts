@@ -32,6 +32,10 @@ export interface ParityObs {
   /** The product's event count minus the harness's own, before this post: 0
    *  when the harness knows the whole stream. Non-zero leaves `local` null. */
   foreign: number;
+  /** Final review I-1: the status the fixture ALREADY held when the harness
+   *  came to decide it — finished by a write the harness never made, on a
+   *  fixture that seats no recorded withdrawn entrant. null: it posted. */
+  finishedBefore: string | null;
 }
 
 /** Why playStage stopped (I-1). Only "drained" — generate answered and no
@@ -50,6 +54,9 @@ export class Recorder {
    *  whole stream as far as the harness knows it (Task 6 ruling). */
   readonly streams = new Map<string, StreamEvent[]>();
   readonly facts = new Set<CaseFact>();
+  /** Entrants a recorded withdrawal took out: their fixtures may be finished
+   *  by the product's cascade, not the harness (R4 sets it). */
+  readonly withdrawn = new Set<string>();
   readonly notes: string[] = [];
   drawsPosted = 0;
   decided = 0;
@@ -114,9 +121,18 @@ const stageCtx = (kind: string, f: { pool_id: string | null; round_no: number | 
 
 export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow, outcome: RequestedOutcome): Promise<void> {
   const state = await ctx.driver.fixtureState(f.id);
-  if (isTerminal(state.status)) return; // a server cascade got here first
   const home = f.home_entrant_id!;
   const away = f.away_entrant_id!;
+  if (isTerminal(state.status)) {
+    // Final review I-1: only the harness's own earlier post (M1's forfeit) or
+    // a RECORDED withdrawal's cascade may have finished it. Anything else is a
+    // result nobody the harness can name wrote — a failing parity item, never
+    // a silent return.
+    if (rec.streams.has(f.id) || rec.withdrawn.has(home) || rec.withdrawn.has(away)) return;
+    rec.parity.push({ fixtureId: f.id, local: null, product: toObservedOutcome(state.outcome), foreign: state.last_seq, finishedBefore: state.status });
+    rec.notes.push(`${f.id}: already ${state.status} before the harness posted`);
+    return;
+  }
   const generated = generateStream({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: setup.stage.kind as StageKind, home, away, outcome });
   // What the driver actually sends: a forfeit on a fixture already under way
   // is the bare core.forfeit (http-driver.ts forfeit), so START only when the
@@ -134,12 +150,12 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   if (outcome.kind === "draw") rec.drawsPosted++;
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {
-    rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign });
+    rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null });
     rec.notes.push(`${f.id}: product held ${state.last_seq} event(s), the harness had posted ${prior.length}`);
     return;
   }
   const m = sportModule(ctx.spec.sport);
-  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(foldStream(m, ctx.cfg, home, away, whole).outcome), product: productOutcome, foreign: 0 });
+  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(foldStream(m, ctx.cfg, home, away, whole).outcome), product: productOutcome, foreign: 0, finishedBefore: null });
   const dp = declaredPoints(m, ctx.cfg, stageCtx(setup.stage.kind, f), home, away, whole);
   if (dp !== null) rec.declared.set(f.id, { home: dp.home, away: dp.away, forOutcome: toObservedOutcome(dp.forOutcome)! });
 }

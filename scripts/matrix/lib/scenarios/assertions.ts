@@ -2,7 +2,7 @@
 // them exactly as it does for the invariants: zero items checked is a FAIL,
 // and only a stated reason may abstain.
 import type { PublicStandingsOut } from "../driver/types.ts";
-import { isNamedRefusal, isTerminal, type ConfigEditObs, type ObservedRun } from "../observed.ts";
+import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import type { Recorder } from "./common.ts";
 
@@ -20,7 +20,9 @@ export function assertion(id: string, items: readonly Item[], abstainReason: str
  *  harness never posted cannot be refolded here, so it is unjudgeable — a
  *  failing item, never a silent pass. */
 export function foldParity(rec: Recorder): CheckResult {
-  return assertion("life-fold-parity", rec.parity.map((p) => (p.foreign !== 0
+  return assertion("life-fold-parity", rec.parity.map((p) => (p.finishedBefore !== null
+    ? { ok: false, note: `${p.fixtureId}: already ${p.finishedBefore} before the harness posted — a result it never wrote, and no recorded withdrawal explains it` }
+    : p.foreign !== 0
     ? {
       ok: false,
       note: p.foreign > 0
@@ -28,6 +30,44 @@ export function foldParity(rec: Recorder): CheckResult {
         : `${p.fixtureId}: the product holds ${-p.foreign} fewer event(s) than the harness posted — parity unjudgeable`,
     }
     : { ok: JSON.stringify(p.local) === JSON.stringify(p.product), note: `${p.fixtureId}: engine ${JSON.stringify(p.local)} vs product ${JSON.stringify(p.product)}` })));
+}
+
+const text = (o: ObservedOutcome | null): string => JSON.stringify(o);
+
+/** Final review I-1: every finished fixture's STORED result is one the
+ *  harness can account for. foldParity reads the POST answer; this reads the
+ *  row the product kept (GET …/fixtures), so a product that answers one
+ *  result and stores another cannot pass both. Per finished fixture with a
+ *  seated side:
+ *  - the harness posted its whole stream: the stored outcome is the local
+ *    fold's (kind and winner) — unless the recorded cascade struck it since;
+ *  - otherwise it is a bye, or the recorded withdrawal cascade wrote it;
+ *  - anything else (a result nobody posted, a posted one stored differently,
+ *    a stream the harness does not hold whole) fails. */
+export function resultsAsPosted(rec: Recorder, observed: ObservedRun): CheckResult {
+  const items: Item[] = [];
+  const w = observed.withdrawal;
+  for (const f of observed.stages.flatMap((s) => s.fixtures)) {
+    if (!isTerminal(f.status) || (f.home === null && f.away === null)) continue;
+    const p = rec.parity.find((x) => x.fixtureId === f.id);
+    const stored = `${f.id}: stored ${f.status} ${text(f.outcome)}`;
+    if (p !== undefined && p.finishedBefore === null && p.foreign === 0 && p.local !== null) {
+      const same = sameOutcome(f.outcome, p.local);
+      items.push(same || !cascadeWrote(f, w)
+        ? { ok: same, note: `${stored}, the harness posted and folded ${text(p.local)}` }
+        : { ok: true, note: `${stored}: struck by the recorded ${w!.policy} after the harness posted it` });
+    } else if (p !== undefined) {
+      const why = p.finishedBefore !== null ? `already ${p.finishedBefore} before it posted` : p.foreign !== 0 ? `${p.foreign} foreign event(s)` : "its local fold has no outcome";
+      items.push({ ok: false, note: `${stored} over a stream the harness cannot fold (${why})` });
+    } else if (isBye(f)) {
+      items.push({ ok: true, note: `${stored}: a bye` });
+    } else if (cascadeWrote(f, w)) {
+      items.push({ ok: true, note: `${stored}: written by the recorded ${w!.policy}` });
+    } else {
+      items.push({ ok: false, note: `${stored} — the harness never posted it, and no bye or recorded withdrawal explains it` });
+    }
+  }
+  return assertion("life-results-as-posted", items);
 }
 
 /** The public table equals the org one, both ways (m-4): every org row is on
