@@ -34,4 +34,7 @@ export const ADJUSTMENT_LABELS: Record<AdjustmentAction, string> = {
   discovery_block: "Blocked from discovery",
   discovery_unblock: "Unblocked in discovery",
   pass_credit_reversal_resolve: "Pass credit reversal resolved",
+  stream_credit_grant: "Match credits granted",
+  stream_credit_refund: "Match credits refunded",
+  stream_credit_revoke: "Match credits revoked",
 };

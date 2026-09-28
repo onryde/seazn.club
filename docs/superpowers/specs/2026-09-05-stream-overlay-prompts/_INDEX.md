@@ -2947,3 +2947,31 @@ On 2026-09-14 every GitHub Actions job on `main` — E2E, Stg, Build guard — f
 annotated *"recent account payments have failed or your spending limit needs to be increased"*.
 `ci.yml` on a pull request draws on the same account, so PR-R1's checks cannot run until the Actions
 billing is cleared.
+
+## 2026-09-27 — scenario captured: the court-bound device (NOT ruled, NOT scheduled)
+
+Owner brought a scenario from a live event: a phone mounted per court ("Court 1 Mobile A"), a device
+identity registered uniquely and outliving any fixture, the org pushing the next match to it without
+touching the phone, and the device screen split between live video and a scoring QR. Captured with the
+schema evidence, the seam it lands on, a product-owner recommendation and the two questions that gate it:
+`_SCENARIO-2026-09-27-court-bound-device.md` beside this file. It is R3 plus a control-plane hook, not R1,
+and it changed nothing in lane B.
+
+## 2026-09-27 — owner ruled OAuth for YouTube ("Let's use OAUTH"), and asked how destinations are scoped
+
+Destinations are ORG level today (`org_stream_targets.org_id`, no competition/division/court column). Recommended
+a per-COURT default, which is VENUE-shaped — set up once per venue, inherited by every tournament there; division
+level collides with itself and tournament level buys nothing. OAuth direction, what it buys (titled per-match
+broadcasts and a STORABLE per-match watch url, which the pasted-key path cannot give), the two gates (Google
+verification is sensitive-scope and is CALENDAR time; Data API quota is per Cloud project and shared by every
+org) and the open visibility question: `_OAUTH-youtube-connect.md` beside this file. R1 keeps the pasted key.
+
+## 2026-09-27 — an outside prompt for "Court Camera Devices & Match Livestreaming", aligned
+
+Owner brought a prompt written in another chat with no sight of this repo. Verdict and item-by-item mapping:
+`_ALIGNMENT-2026-09-27-court-camera-prompt.md`. Short form: its Phase 1 is a usable skeleton for the
+court-bound device we had already scoped; its Phase 2 is largely BUILT (R1 merged) and would reopen the
+bench-measured ingest decision and add a minutes+holds money model beside the merged per-match credit ledger;
+its Phase 3 belongs to `seazn-capture`. Six false premises recorded, the load-bearing ones being that RLS is
+not the read boundary for the streaming tables (forced, zero policies, superuser-only) and that this repo has
+no down-migration convention at all.

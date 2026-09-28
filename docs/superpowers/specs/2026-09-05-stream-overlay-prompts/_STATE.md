@@ -196,6 +196,66 @@ the account held zero videos, so TRUNCATION ITSELF remains unobserved and this c
 - Earlier: "keep the fly app" — `seazn-relay` (org seazn-club, `p7vx1jevmyrw9k3z`) STAYS; "yes, you can create and
   delete" — live create+delete authorised against Fly and Cloudflare, under confirm-the-destroy conditions.
 
+## LANE B — OPEN 2026-09-27 (session `r1-laneb`). Read this with the CURRENT block above it.
+
+**Lane A MERGED as PR #812**, `main` = `b392be909`. Lane B worktree `.claude/worktrees/relay-b`, branch
+`feat/stream-relay-b`, cut from that merge; `.env.local` symlinked both levels, `pnpm install --frozen-lockfile`
+exit 0 with `node_modules/@seazn/engine` resolving INSIDE the worktree. The lane-A ledger was copied across, and
+what lane A owes this lane is written up as
+`.superpowers/sdd/2026-09-13-streaming-r1/lane-b-carries.md` — the four INERT Task 10 call sites
+(`runnerDeadlineOf` → `RunnerSpec.deadlineAt`; `createFailedFrom(e)` from the create catch;
+`readTargetSecret(tx, orgId, targetId)`; the three V410 exit columns read by `failReasonFromExit`, never
+`last_heartbeat -> 'lastExit'`) plus the unknown-outcome create (an unmarked create routes the runner to `lost`
+and emits `force_destroy`, signals the SESSION nothing, and on the LAST attempt now reports `machine_crash`
+where it used to report `machine_create_failed`).
+
+**OWNER RULING 2026-09-27 — the Task 7A panel is OPTION B: one button, one modal, ledger rail below**
+(owner's word: "B", asked before any implementer ran, per the 2026-09-20 ruling "bring ≥2 UI options for the
+staff credits panel at the START of lane B"). Three options were put: A = three inline action cards (what the
+plan said), B = donor parity with `admin-credits-panel.tsx` — balance + one "Adjust credits" button opening a
+`Modal` that carries the kind, amount, note and (refund only) session, C = B with no ledger rail, reusing the
+page's existing Adjustments log. B was recommended and ruled.
+
+Why it was recommended, kept here because the reasons decide later arguments: the three money verbs sit behind
+one deliberate open, so `revoke` is never a button adjacent to `grant` on a staff page; it matches the ONLY
+money precedent on that page, so staff learn one pattern for both wallets; and the rail stays because the
+Adjustments log shows actor/action/category/reason/when/reversible but NOT the delta, the running balance or
+the session link — which is exactly what a linked refund's cap is judged against (why C was rejected).
+
+**What B moves and what it does not.** The route, the usecase, the zod body, the 401/400/404/409/422 codes and
+every DB test are IDENTICAL under all three options; only `admin-stream-credits-panel.tsx`, its testids, its
+component test and the walkthrough spec's steps change.
+
+**The modal's opening values STAY in the component test — the "node cannot see inside a modal" worry was
+WRONG, checked against the tree 2026-09-27 and corrected here.** `components/__tests__/_hook-harness.tsx`
+exports `renderIsland`, `expandWithHooks`, `walk`, `textOf` and `propsOf`, and two live precedents drive a
+closed modal open in `environment: "node"`: `v2/__tests__/stages-panel-court-tags-modal.test.tsx:47` calls the
+trigger's own `onClick` prop (`(propsOf(button!).onClick as () => void)()`) and then asserts the modal BODY, and
+`registration-hub-config-panel.test.tsx` finds the modal by `e.type === Modal` and expands both `children` and
+`footer`. So the class-19 case — amount OPENS AT 1, `min` 1, `max` = the `maxDelta` prop (not the route's 50),
+note and session empty, submit disabled until a note is typed — is asserted in the unit test as it would have
+been under option A. Two traps came with the precedent: `island.text()` reaches `children` but is BLIND to
+`footer`, which is exactly where the donor puts Cancel and the submit button; and an input's opening value is a
+PROP, so it is read with `propsOf(el).value`, never from text. The only thing that genuinely moves to the
+walkthrough is what a person does with it — open, type, submit, see the row.
+
+**Lane B path note:** the plan's step commands are written against `.claude/worktrees/relay/` (42 occurrences).
+Lane B runs in `.claude/worktrees/relay-b`; every such path reads as `relay-b` for Tasks 7 / 7A / 8.
+
+**TEST STRATEGY — owner ruling 2026-09-27 ("update and store this similar rules for all R1 waves/lanes"):**
+the format-matrix programme's ruling-21 practices are now RULES for every R1 lane and wave, adapted to this
+programme's axis (mode x driver x state, not format x sport) and stored as `_RULES.md` "Test strategy" — S1
+model-based sequence testing over the two machines (fast-check is ALREADY a devDependency of both packages and
+already used in a money suite, so no new dependency; the command model is new to the repo), S2 anti-vacuity
+(zero checked = failure), S3 both mutation layers (hand mutant per surface unconditional; a scoped Stryker run
+waits on the owner's go for the CI spend), S4 sweep the axis by default, S5 shadow invariants logged never
+blocking (needs the Sentry DSN the owner owes), S6 assumptions are guards, S7 rows declared per PR, S8 the four
+reviewer questions translated to failure/expiry/refund/revoke, S9 rules before building, and S10 the
+reconciliation of "values from code freeze wrong rules" with failure class 19 (a declared rule is the oracle; an
+engine constant only for what the engine owns, imported not retyped; observed output is never an oracle).
+**They apply from the next dispatch** — Task 7 keeps the brief it was dispatched with, and its REVIEW applies
+them. Not yet ruled: whether they carry to R2/R3 as well, which I would recommend.
+
 **Owner decisions this session (owner's words):**
 - "No fine" (2026-09-16) — keep lane order: lane A (3→4→5A→5→6) before lane B.
 - "Can we create the PR for each Lane, after each lane finish, we can start a new session and start a new lane?" —
@@ -298,6 +358,155 @@ data".
 **Merge path:** a PR (not a direct push), with `ci.yml` green, e2e dispatched against the PR, a
 review, and the owner's per-screen sign-off. R2's plan follows PR-R1's merge; R3 lives in the
 capture repo.
+
+
+**Lane B progress, 2026-09-28.** **Task 7 is CLOSED and committed** — `f02816779` (the ledger usecases,
+5 files, +884) plus `353e78f3e` (fix round 2, test-only, +44). Verdict Approved-with-minors, **0 Critical**.
+The last fix closed a MONEY regression that two review rounds and eighteen tests had missed: the staff
+prior-row comparison and the purchase read-back both compare a stored lower-case org id, and comparing
+either against the RAW argument turns an org's own replay (a hand-typed `/admin/orgs/<ID>` URL) into a 409
+`idempotency_key_reused` — whose documented panel response is to drop the key and retry, which mints a new
+key and grants a SECOND time. The orchestrator re-applied both mutants itself rather than taking the
+implementer's word; each kills exactly the one test named for it.
+
+**Task 7A is SPLIT in two.** Its plan section is 1820 lines and 20 steps ending in a browser walkthrough
+with six screenshots; one dispatch would blow its budget and would review the money half alongside pixels.
+**7A-i** (dispatched 2026-09-28) is Steps 1-9 — the read usecase, the admin write route, both tests — plus
+the four carries the Task 7 re-review routed here: `note` validated at the WRITER (not only in the route's
+zod) against an exported length bound, the zod IMPORTING `STAFF_CREDIT_MAX` rather than typing 50, the
+audit/ledger atomicity probe (the `created_by` no-FK vs `actor_id` FK asymmetry makes a real 23503 without
+a mock), and `recordPurchase`'s codeless 422. M1 — the replay branch echoes the CURRENT balance, not the
+original row's `balance_after` — is carried into the route's response CONTRACT rather than changed, because
+the panel is what echoes it. **7A-ii** is Steps 10-20 (the Option B panel, its component test, the
+walkthrough, the mount, the six screenshots, the smoke wiring) and reads 7A-i's report first.
+
+**OWNER RULING 2026-09-28 — the admin panel gets NO polish.** Owner's words: *"Admin panel doesn't need
+fancy look or cosmetic changes."* Said while Task 7A-ii was in flight and relayed to it as a scope
+NARROWING. It confirms AGENTS.md's functional bar for `/admin` rather than changing it: copy the donor
+`admin-credits-panel.tsx`'s classes and shape, decide nothing aesthetic, add no polish the donor lacks, and
+do not improve the surrounding admin page in passing. **The six screenshots stay** — they are a LAYOUT gate
+(a modal that never opened, a control that never rendered, horizontal scroll at 320), not a design review,
+and the standing "verify visually, always" rule is unaffected. Every other surface in this programme keeps
+full polish; this exemption is `/admin` only.
+
+**OWNER ANSWERS 2026-09-28 (owner's words in quotes).** Put as a numbered list; answers arrived as
+"1 Ok, 2 ok ... 6 Yes".
+- **(1) Deviation (f) ACCEPTED as built** — after a 409 the modal resets to its opening state and the
+  action returns to `grant`; a staff member mid-refund re-picks it. The implementer recommended
+  preserving `kind`; the owner did not take that. **Closed — do not re-raise, and do not "fix" it.**
+- **(2) The ledger rail stays at the latest 20 with NO pager**, stated in the copy ("Latest 20 ledger
+  entries"). An org past 20 adjustments reads its older rows from the Adjustments log, not this panel.
+- **(6) The S1-S10 test-strategy rules DO carry to R2 and R3**, not just R1.
+- **(3) device app, (4) revocation, (5) broadcast visibility: the owner asked for the best option
+  rather than ruling.** Recommendations on file, NOT yet ruled: (3) the PWA stand-in for the pilot,
+  with the browser-WHIP-to-Cloudflare ingest path flagged as UNVERIFIED (R0 killed browser-as-
+  COMPOSITOR, which is a different claim) and a third-party RTMP app as the zero-cost fallback;
+  (4) a device-status check on the heartbeat and on every mutating request, giving ~20 s worst-case
+  revocation without refresh-token plumbing, in place of the 5 h 30 m token life; (5) UNLISTED by
+  default with a per-competition switch to public — the argument is safeguarding, not reach, since an
+  accidental public broadcast of a junior event cannot be taken back and YouTube's copy outlives ours.
+- **`RELAY_KEK` as a Fly secret: DONE** (owner). Struck from the owed list.
+- **Sentry DSN — the owner believes it is in `.env.local`; it is NOT.** Key-name check 2026-09-28 (names
+  only, never values): neither the root nor `apps/web/.env.local` contains ANY Sentry key.
+  `.env.example` declares `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`,
+  and the code reads `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN`. Most likely it is set in the deploy
+  environment only, which may well be all Task 17 needs — but a local run has no DSN, so do not build a
+  step that assumes one without checking.
+- **Google OAuth: ask for the YouTube scope SEPARATELY, not at login** (owner's direction). Incremental
+  authorization — login keeps `openid email profile`, and "Connect YouTube" triggers its own consent for
+  only the orgs that use it. **This does NOT avoid Google's verification**: review is per OAuth client
+  and per requested scope, so asking later still asks. What it buys is that the unverified-app warning
+  and the user cap hit only the connect flow. To insulate login completely, a SEPARATE Cloud project and
+  client for the YouTube integration is the clean move, at the cost of a second brand review and its own
+  quota. Either way the submission is the long pole and should start when the wave is scheduled.
+
+**OWNER RULINGS 2026-09-28 (second round) — (3), (4) and (5) now RULED; the Sentry question CLOSED.**
+
+- **Sentry DSN: it IS configured, in the Fly deploy config, and the earlier "not present" note was
+  looking in the wrong place.** Verified by key name 2026-09-28 (names only, never values):
+  `NEXT_PUBLIC_SENTRY_DSN` is set in **`fly.stg.toml:16`** and **`fly.toml:19`**, baked at BUILD time
+  through the Dockerfile (`ARG`/`ENV NEXT_PUBLIC_SENTRY_DSN`, :31/:39) — which is the correct shape,
+  since a `NEXT_PUBLIC_*` value is compiled into the bundle and cannot be injected at runtime.
+  `SENTRY_AUTH_TOKEN` is deliberately kept OUT of both toml files and passed as a build secret by
+  `.github/workflows/stg.yml:167` and `prod.yml:170`, with `SENTRY_ORG` / `SENTRY_PROJECT` as build
+  args for the source-map upload. A local `.env.local` has no Sentry key and is not supposed to.
+  **Nothing is owed by the owner for Task 17** — strike it from the owed list.
+- **(3) The device app is PLANNED WITH the wave, not decided ahead of it** (owner: "we need to plan
+  along with the wave so that we can know the limitations and issues"). So do NOT pre-commit to the PWA
+  stand-in or to waiting for R3's native capture app. The wave's own scout/spike answers it, and the
+  question it must answer first is the one flagged as unverified: whether a browser can push ingest to
+  Cloudflare Stream (WHIP) and hold frame timing. R0 killed browser-as-COMPOSITOR, which is a different
+  claim and must not be cited as if it settled this one. The fallback that costs nothing either way is a
+  third-party RTMP app pointed at the key we already mint.
+- **(4) RULED: revocation is a device-status check on the heartbeat AND on every mutating request.**
+  ~20 s worst-case revocation, no refresh-token plumbing. The 5 h 30 m token life stops being the only
+  thing standing between a revoked device and the ingest.
+- **(5) RULED: broadcasts default to PUBLIC, and the org can change it.** The per-competition switch is
+  still owed as a control; the DEFAULT is public. (The recommendation on file argued for unlisted on
+  safeguarding grounds; the owner took public with an org-level override. Recorded so the recommendation
+  is not re-run as if it were open.)
+- **YouTube OAuth: ONE client credential, and the brand is already verified** (owner). So the earlier
+  suggestion of a SEPARATE Cloud project and client is **withdrawn** — it was contingent on protecting an
+  unverified login flow, which does not apply. **One caveat to check against Google's CURRENT docs before
+  the wave commits, not to take from this file:** brand verification and SENSITIVE-SCOPE review are
+  believed to be separate gates, so adding `.../auth/youtube` may still trigger a scope review even
+  though the brand passed. If it does, it hits only the "Connect YouTube" consent, never login, because
+  the scope is requested incrementally rather than at sign-in. Verify before planning around it.
+
+**OWNER RULING 2026-09-28 — `/admin` is DESKTOP-ONLY and exempt from the mobile bar.** Owner's words:
+*"we don't need to worry about /admin mobile responsive design, admin always view in desktop."* This
+goes further than the no-polish ruling earlier the same day and replaces the width half of the standing
+UI rule for `/admin` alone; `AGENTS.md`'s bullet was amended to say so. Consequences:
+- An `/admin` change is signed off at **1280 only** — no 320, no 768, no phone-width captures.
+- **The `/admin` page overflow at 320 (44px) and 360 (4px) is CLOSED as a non-issue**, not deferred. It
+  is `app/admin/layout.tsx:31-37`'s staff identity spans, it predates every branch in this programme, and
+  the panel was measured to contribute nothing (mounted vs removed identical at five widths). Do not fix
+  it, do not work around it, and do not re-raise it as a finding.
+- Task 7A-ii's fix round was narrowed mid-flight: the 320 and 768 captures are no longer owed, only the
+  1280 pair and the flow shot if the markup moved.
+- **Every other surface keeps the full bar** — mobile-first, 1280 / 320 / 768, no horizontal scroll. The
+  exemption is `/admin` and nothing else.
+- Guard against the obvious over-application: a test that proves real behaviour is NOT deleted merely
+  because it happens to run at a narrow width.
+
+**LANE B REVIEW 2026-09-28 — Needs fixes, 0 Critical, 4 Important, 6 Minor.**
+`.superpowers/sdd/2026-09-13-streaming-r1/lane-b-review.md`. The reviewer's own words on the money core:
+it found nothing that moves credits twice, loses their trail, refuses a legitimate movement or crosses an
+org. **All four Importants are in Task 8's `billing-events.ts` branch — the one file no earlier review in
+this lane covered**, which is the lesson: a per-task review pass leaves whatever sits between the tasks
+unread, and the whole-lane pass is not optional.
+
+- **I4 (the one that would have shipped)** — three surfaces with NO mutant, all measured SURVIVING:
+  `link.paymentIntentId` → null (35/35), deleting `linkStripeCustomer` + `pinBillingCurrency` (10/10),
+  and deleting the arm's trailing `return;` (10/10, NOT equivalent).
+- **I2** — paid-but-ungranted logs and alerts nobody; the file's own convention (`:267`, `:418`, `:531`)
+  sends a `STAFF_ALERT_EMAIL` beside the `log.error`. A customer has paid and holds no credits.
+- **I3** — the producer/consumer metadata seam is a hand-typed literal on BOTH ends; a fixture on both
+  ends proves the fixture.
+- **I1** — `async_payment_succeeded` (`:2456`) dispatches `registration_group` only, so a delayed
+  notification method would take the money and never grant.
+- **M6, ruled fix-now rather than owner-deferred** — `no_payment_required` is dropped with no log while
+  promo codes are ON, so a 100% promo session pays zero, completes legitimately, and grants nothing.
+
+**Two judgements the review SETTLED, recorded so they are not re-opened:** keying `recordPurchase` on
+`session.id` rather than `payment_intent ?? session.id` is CORRECT here — `payment_intent` is null on a
+zero-amount session and `return_url` carries `{CHECKOUT_SESSION_ID}`, so a reconcile path can key on
+nothing else. And Task 8's `m34` equivalence is accepted; the guard it depends on was re-run and kills.
+
+**M9 — the buyer-facing half of Task 8 is INERT, not rendered.** `/api/billing/relay-checkout`,
+`fetchRelayCheckoutClientSecret` and the tile fields of `STREAM_CREDIT_PACKS` have no production consumer;
+**lane C wires the Phone tab**, and until it does, no real purchase can reach the webhook branch. Anything
+in this file or in a header comment that says those tiles "render" is a FORWARD CLAIM, not present fact.
+
+**Routed to lane C:** M7 (`stream_credits.stripe_event_id` holds a `cs_…`, so the column name understates
+what it holds) and M9's wiring. **Owner notes:** M10 — staff adjustments are capped at 1..50 per action
+with no aggregate cap or rate limit; and the `charge.refunded` clawback gap already recorded.
+
+**Not yet confirmed by anyone:** the reviewer ran only the nine lane suites, so NONE of the three
+environmental red families was re-confirmed by it. That confirmation is still owed at the gate, along with
+smoke, which has not run since `a87929516`. Playwright was not run by the review either — every e2e-killed
+guard (key lifetime, the 409 reset, double-submit, the seven widths, the linked-refund proof) is on the
+record rather than witnessed by this pass.
 
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 

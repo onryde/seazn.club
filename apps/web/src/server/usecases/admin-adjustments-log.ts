@@ -9,6 +9,7 @@
 import { sql } from "@/lib/db";
 import { DISCOVERY_AUDIT_ACTIONS, SUSPENSION_ACTIONS } from "@/lib/admin";
 import { PASS_CREDIT_RESOLVE_ACTION } from "@/server/usecases/pass-credit";
+import { STREAM_CREDIT_AUDIT_ACTIONS } from "@/server/usecases/stream-credits";
 
 /** The org-adjustment action subset that surfaces in the log. Excludes
  *  view/impersonate and the non-per-org catalog actions (coupon, fee,
@@ -69,6 +70,10 @@ export const ADJUSTMENT_ACTIONS = [
   // The audit row IS the record — there is no column for the decision — so a
   // decision an operator cannot find is a decision that was not recorded.
   PASS_CREDIT_RESOLVE_ACTION,
+  // Streaming R1 (Task 7 / 7A): the staff match-credit grant, refund and revoke. They move
+  // an org's streaming balance, so they belong in the panel an operator reads. Spread from
+  // the writer so a new staff kind reaches the maps below as a missing key.
+  ...STREAM_CREDIT_AUDIT_ACTIONS,
 ] as const;
 
 export type AdjustmentAction = (typeof ADJUSTMENT_ACTIONS)[number];
@@ -109,6 +114,11 @@ export const ADJUSTMENT_CATEGORY: Record<AdjustmentAction, AdjustmentCategory> =
   // then had nothing mapped to it, which is what an unnoticed omission looks
   // like from the outside.
   [PASS_CREDIT_RESOLVE_ACTION]: "pass",
+  // Match credits are a balance, like credit_adjust above — the same category, a different
+  // currency (org_stream_credits, not ai_credit_ledger).
+  stream_credit_grant: "credits",
+  stream_credit_refund: "credits",
+  stream_credit_revoke: "credits",
 };
 
 /** action → has a compensating action a staffer can apply to undo it. The
@@ -139,6 +149,11 @@ export const ADJUSTMENT_REVERSIBLE: Record<AdjustmentAction, boolean> = {
   // no staff control that undoes it — changing one's mind is a NEW decision,
   // logged as its own row, not a reversal of this one.
   [PASS_CREDIT_RESOLVE_ACTION]: false,
+  // A revoke compensates either of the first two, so both are reversible; the revoke IS the
+  // compensating action, like addon_revoke above.
+  stream_credit_grant: true,
+  stream_credit_refund: true,
+  stream_credit_revoke: false,
 };
 
 export interface AdjustmentEntry {

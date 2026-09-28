@@ -4,6 +4,7 @@ import { sql } from "@/lib/db";
 import { AdminOrgActions } from "@/components/admin-org-actions";
 import { AdminPlanPanel } from "@/components/admin-plan-panel";
 import { AdminCreditsPanel } from "@/components/admin-credits-panel";
+import { AdminStreamCreditsPanel } from "@/components/admin-stream-credits-panel";
 import { AdminDiscoveryActions } from "@/components/admin-discovery-actions";
 import { hasFeature } from "@/lib/entitlements";
 import { cardsForCustomer, planPanel } from "@/server/usecases/admin-plan";
@@ -11,6 +12,8 @@ import { feePercentFor } from "@/server/usecases/registrations";
 import { requireStaff } from "@/lib/admin";
 import { walletIdFor, balance as walletBalance } from "@/lib/credits";
 import { adjustmentsForOrg } from "@/server/usecases/admin-adjustments-log";
+import { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, streamCreditsForOrg } from "@/server/usecases/admin-stream-credits";
+import { STAFF_NOTE_MAX } from "@/server/usecases/stream-credits";
 import { slotConsumingDivisions } from "@/server/usecases/admin-divisions";
 import { SlotWaiverButton } from "./slot-waiver-button";
 import { ADJUSTMENT_LABELS } from "./adjustment-labels";
@@ -76,6 +79,7 @@ export default async function AdminOrgPage({
     select count(*)::int as n from organizations
     where coalesce(subscription_id, id)::text = ${walletId}`;
   const adjustments = await adjustmentsForOrg(id, { limit: 50 });
+  const streamCredits = await streamCreditsForOrg(id);
 
   // V354: archived divisions still holding a `divisions.per_competition.max`
   // slot, because they have recorded results. The only rows the waiver means
@@ -132,6 +136,17 @@ export default async function AdminOrgPage({
         sharedByOrgs={sharedByOrgs}
         balance={walletBal}
         staffRole={staff.staff_role}
+      />
+
+      {/* Match credits (streaming R1, Task 7A — owner ruling 15): org_stream_credits balance +
+          latest ledger rows, and staff grant / refund / revoke through Task 7's ledger. */}
+      <AdminStreamCreditsPanel
+        orgId={id}
+        balance={streamCredits.balance}
+        rows={streamCredits.rows}
+        maxDelta={STREAM_CREDIT_ADJUST_MAX}
+        ledgerLimit={STREAM_CREDIT_LEDGER_LIMIT}
+        noteMax={STAFF_NOTE_MAX}
       />
 
       <div className="grid gap-4 lg:grid-cols-2">

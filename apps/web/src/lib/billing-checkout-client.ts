@@ -119,3 +119,18 @@ export async function fetchCreditPackCheckoutClientSecret(
     fetchFn,
   );
 }
+
+/** Match credits (streaming R1): the Phone tab's embedded Checkout. Same
+ *  contract as the AI packs — the client_secret is fetched UP FRONT and
+ *  <EmbeddedCheckout> mounts only once it resolves.
+ *
+ *  A DIFFERENT currency from the pack above, on a different route and a
+ *  different ledger (`org_stream_credits`, not the AI wallet). The paywall
+ *  refusal is `status === 402`: `CheckoutSecretResult` carries no `code`, so
+ *  a caller testing `result.code` would compare undefined to undefined. */
+export function fetchRelayCheckoutClientSecret(
+  args: { orgId: string; fixtureId: string; pack: 1 | 5 | 20 },
+  fetchFn: typeof fetch = fetch,
+): Promise<CheckoutSecretResult> {
+  return fetchClientSecret("/api/billing/relay-checkout", args, fetchFn);
+}

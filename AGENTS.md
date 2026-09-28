@@ -349,6 +349,13 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 - Smoke CI runs on **PRs only** — merging locally and pushing to `main`
   skips it. Behavior changes need a PR or a local full-smoke first.
 - Every change ships a test that fails without it.
+- **NEVER run the full gate, the full vitest suite or the full e2e suite
+  locally** (owner, 2026-09-28). Run ONLY the tests, specs and walkthroughs
+  that cover the files you CHANGED — the scoped vitest paths, the specific
+  e2e spec, the specific walkthrough. Everything else is CI's job. A full
+  local run costs an hour, saturates the machine (which itself reds
+  unrelated suites), and answers a question CI answers for free. This binds
+  the orchestrator as much as any subagent.
 - Any new or changed user-facing string → all 4 locale dictionaries,
   never hardcoded English. Two exceptions, both English-only with no
   i18n work owed: `content/help/**` (one English tree) and
@@ -357,9 +364,15 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 - UI work is verified by screenshot at desktop (1280), **320px**, and
   **768px**, with no horizontal page scroll at any of them; the
   seven-width e2e matrix (320/360/375/390/430/768/834, `mobile.spec.ts`
-  projects) is the enforcement backstop. `/admin` is staff-only —
-  functional bar, skip design polish; every other surface keeps full
-  polish.
+  projects) is the enforcement backstop. **`/admin` is exempt from ALL of
+  it** — staff-only, always viewed on a desktop (owner, 2026-09-28: "we
+  don't need to worry about /admin mobile responsive design"). So an
+  `/admin` change is verified at **1280 only**: no 320, no 768, no phone
+  widths, no design polish, and an existing `/admin` overflow at a narrow
+  width is a NON-ISSUE rather than a deferred defect. Never weaken a test
+  that proves real behaviour just because it runs at a narrow width.
+  **Every other surface keeps the full bar**, mobile-first, all three
+  widths.
 - New branches go in a worktree; never check out in the main repo dir.
 
 ## Live programmes — read the index before touching their code
