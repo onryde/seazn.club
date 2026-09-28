@@ -429,6 +429,17 @@ jobs:
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
       NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      # sitemap.spec.ts: the sitemap's competition read is cached for an hour
+      # when shipped (server/public-site/sitemap-cache.ts), and the spec proves
+      # both halves of that — not re-read inside the window, picked up after
+      # it — so it needs a window it can wait out. Runtime, not build: set at
+      # JOB level so the server started below and the Playwright runner read the
+      # same number; under CI the spec FAILS without it, and e2e-ci-wiring.test.ts
+      # pins this line (and ci-local.sh's e2e_env copy of it). 20s leaves
+      # room to create a competition inside the window on a slow runner.
+      # Anything unusable falls back to the shipped hour, whose own test is
+      # pinned on the default and so untouched by this override.
+      SITEMAP_REVALIDATE_SECONDS: "20"
       # Payments-hardening e2e (payments-hardening.spec.ts): signed synthetic
       # webhooks hit the REAL /api/webhooks/stripe route. constructEvent needs a
       # non-empty STRIPE_SECRET_KEY (any value — signature verification uses the

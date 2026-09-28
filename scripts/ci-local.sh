@@ -305,6 +305,8 @@ e2e_env() {
   export STRIPE_SECRET_KEY=sk_test_ci_e2e_dummy
   export STRIPE_WEBHOOK_SECRET=whsec_e2e_payments
   export ANTHROPIC_API_KEY=sk-ant-e2e-fixture
+  # e2e.yml's e2e-parallel job sets this for sitemap.spec.ts (server AND runner).
+  export SITEMAP_REVALIDATE_SECONDS=20
 }
 
 # ===========================================================================
