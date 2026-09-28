@@ -9,13 +9,13 @@
 //   STRIPE_SECRET_KEY=sk_test_… node --experimental-strip-types scripts/stripe-stream-packs.ts
 //
 // Refuses a live key: the prices here are PLACEHOLDERS (£6 / £25 / £80) until
-// the owner rules on real prices before the GA flip. Currency options mirror
-// apps/web/src/config/stripe-plans.json's pack shape (gbp base; eur/usd/inr
-// rough conversions, also placeholders). The lookup keys are the names
-// apps/web/src/lib/stream-credit-packs.ts resolves at checkout time — that
-// file is the authority and this script reads it, so the two cannot drift.
+// the owner rules on real prices before the GA flip. GBP is the base and the
+// other currencies are rough multipliers, also placeholders. This script
+// RETYPES nothing: both the lookup keys and the currency multipliers come out
+// of apps/web/src/lib/stream-credit-packs.ts, which is the authority, so the
+// two cannot drift.
 import Stripe from "stripe";
-import { STREAM_CREDIT_PACKS } from "../apps/web/src/lib/stream-credit-packs.ts";
+import { STREAM_CREDIT_PACKS, STREAM_PACK_FX } from "../apps/web/src/lib/stream-credit-packs.ts";
 
 const key = process.env.STRIPE_SECRET_KEY;
 if (!key) throw new Error("STRIPE_SECRET_KEY (a sandbox sk_test_ key) is required");
@@ -25,7 +25,6 @@ if (!key.startsWith("sk_test_")) {
 const stripe = new Stripe(key, { apiVersion: "2026-06-24.dahlia" });
 
 const PRODUCT_NAME = "Seazn Club Match Credits";
-const FX = { eur: 1.17, usd: 1.33, inr: 111 } as const;
 
 /** MEASURED, 2026-09-28: `stripe.products.search` is index-backed and lags
  *  creation by seconds, so a second run moments after the first found nothing
@@ -70,11 +69,20 @@ async function ensurePrice(
     lookup_key: lookupKey,
     transfer_lookup_key: true,
     nickname: `${credits} match credit${credits === 1 ? "" : "s"}`,
-    currency_options: {
-      eur: { unit_amount: Math.round(gbpPence * FX.eur) },
-      usd: { unit_amount: Math.round(gbpPence * FX.usd) },
-      inr: { unit_amount: Math.round(gbpPence * FX.inr) },
-    },
+    // DERIVED from STREAM_PACK_FX, never retyped: the key set has to equal
+    // SUPPORTED_CURRENCIES minus gbp, or a buyer quoted in the missing
+    // currency meets a Stripe refusal. This script cannot import
+    // `lib/currency.ts` to check that (measured: TS1543 + TS2307 under
+    // nodenext, and the `@/` alias does not resolve under
+    // --experimental-strip-types), so the table lives beside the catalogue and
+    // `apps/web/src/lib/__tests__/relay-checkout.test.ts` holds it to the
+    // authority.
+    currency_options: Object.fromEntries(
+      Object.entries(STREAM_PACK_FX).map(([code, rate]) => [
+        code,
+        { unit_amount: Math.round(gbpPence * rate) },
+      ]),
+    ),
     metadata: { kind: "stream_credits", credits: String(credits) },
   });
   return `${lookupKey} = ${price.id} (created)`;

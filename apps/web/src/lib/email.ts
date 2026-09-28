@@ -741,6 +741,56 @@ export async function sendSizePackGrantFailedAlertEmail(
   return send({ to: opts.to, transactional: true, subject, html, text });
 }
 
+export interface StreamCreditGrantFailedAlertEmail {
+  to: string;
+  sessionId: string;
+  orgId: string;
+  /** The `pack` size the session named, when it named one at all. */
+  packRaw?: string;
+  reason: string;
+}
+
+/** Internal staff alert (streaming R1, lane-B review I2): a match-credit
+ *  checkout session was PAID (or completed with nothing to pay) and the
+ *  credits could not be granted — either no usable credits snapshot and no
+ *  resolvable pack, or a Checkout Session id already recorded against a
+ *  DIFFERENT organisation. Both are terminal: the webhook ACKs, so Stripe will
+ *  never redeliver and this email is the ONLY thing that tells a human a
+ *  customer paid and holds nothing.
+ *
+ *  MATCH credits, not the AI credit wallet — a separate ledger
+ *  (`org_stream_credits`) and a separate remedy (the /admin Match credits
+ *  panel's grant, capped at 50 per action). Kept as its own builder rather
+ *  than reusing `sendCreditPackGrantFailedAlertEmail` precisely so the subject
+ *  line does not send whoever triages it to the wrong balance.
+ *  Ops-only, no user-facing i18n (mirrors the two builders above). */
+export async function sendStreamCreditGrantFailedAlertEmail(
+  opts: StreamCreditGrantFailedAlertEmail,
+): Promise<boolean> {
+  const subject = `Match credits could not be granted: ${opts.sessionId}`;
+  const bodyText =
+    `A completed match-credit checkout session (${opts.sessionId}, org ${opts.orgId}` +
+    `${opts.packRaw ? `, pack ${opts.packRaw}` : ""}) could not be granted: ${opts.reason}. ` +
+    `The buyer was charged but holds no match credits — inspect and grant manually from ` +
+    `/admin/orgs/${opts.orgId}, panel "Match credits (streaming)", action "Grant — add credits".`;
+  const html = renderEmail({
+    subject,
+    preheader: `Paid match credits ungranted — org ${opts.orgId}`,
+    eyebrow: "Billing · Match credits",
+    title: "Match credit grant failed",
+    contentHtml:
+      paragraph(escapeHtml(bodyText)) +
+      panel(
+        "Session",
+        `${opts.sessionId}\norg: ${opts.orgId}` +
+          `${opts.packRaw ? `\npack: ${opts.packRaw}` : ""}\nreason: ${opts.reason}`,
+      ),
+    footerNote: "Automated staff alert — match credits webhook (streaming R1).",
+  });
+  const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · reason: ${opts.reason}`;
+  return send({ to: opts.to, transactional: true, subject, html, text });
+}
+
 export interface PassCreditReversalIncompleteAlertEmail {
   to: string;
   orgId: string;

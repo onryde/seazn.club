@@ -1,11 +1,23 @@
 // lib/stream-credit-packs.ts — THE match-credit pack catalogue (design §5.2,
-// _THEMES.md §8b). Client-safe on purpose: the Phone tab renders these tiles
-// and the relay checkout charges them — one table, two readers (P14: the
-// panel's own CREDIT_PACKS display table was a second authority and is gone).
-// Sandbox placeholders: £6 / £25 / £80; real prices are an owner ruling
-// before the GA flip. The lookup keys are the ONE name each price has in
-// Stripe (scripts/stripe-stream-packs.ts creates them; relay-checkout.ts
-// resolves them) — never an env value, so `_INDEX.md` can record the names.
+// _THEMES.md §8b). Client-safe on purpose, because the tiles are meant to be
+// rendered by a client component.
+//
+// INERT, as of this commit. The tile fields — `labelKey`, `popular`,
+// `gbpPence` — have NO production consumer: nothing renders a tile, and
+// `/api/billing/relay-checkout` and `fetchRelayCheckoutClientSecret` have no
+// caller either. Lane C wires the Phone tab and is what makes any of this
+// reachable by a buyer; until it lands, no real purchase can reach the
+// webhook branch. The only fields with live readers today are `lookupKey`
+// (scripts/stripe-stream-packs.ts creates the prices; relay-checkout.ts
+// resolves them), `size` and `credits` (the webhook's catalogue fallback).
+// Stated plainly on purpose: this repo has six recorded cases of a seam left
+// unwired because a comment described the plan as if it had already happened.
+//
+// ONE table, for however many readers arrive (P14: the panel's own
+// CREDIT_PACKS display table was a second authority and is gone). Sandbox
+// placeholders: £6 / £25 / £80; real prices are an owner ruling before the GA
+// flip. A lookup key is never an env value, so `_INDEX.md` can record the
+// names.
 //
 // MATCH credits are NOT the AI credit wallet. That currency is
 // `lib/credit-packs.ts` / `lib/credits.ts` and its webhook discriminator is
@@ -61,6 +73,31 @@ export const STREAM_CREDIT_PACKS: readonly StreamCreditPack[] = [
 export function streamPack(size: number): StreamCreditPack | undefined {
   return STREAM_CREDIT_PACKS.find((p) => p.size === size);
 }
+
+/**
+ * The non-GBP currency options every match-credit price carries, as rough
+ * multipliers on the GBP amount. PLACEHOLDERS, like the GBP prices above, and
+ * superseded by the owner's pre-GA pricing ruling.
+ *
+ * It lives HERE rather than in `scripts/stripe-stream-packs.ts`, which is its
+ * only reader, for one reason: the key set has to stay equal to
+ * `SUPPORTED_CURRENCIES` minus `gbp`, and the script CANNOT import
+ * `lib/currency.ts` to check that itself. Measured 2026-09-28 under
+ * `tsconfig.scripts.json` (`moduleResolution: "nodenext"`): that import reds
+ * with TS1543 on currency.ts's own `@/config/stripe-plans.json` import (no
+ * `with { type: "json" }` attribute) and TS2307 on its extensionless
+ * `@/lib/types` — and `node --experimental-strip-types` would not resolve the
+ * `@/` alias at runtime either. From here, a vitest test in `apps/web` can
+ * import BOTH this table and `SUPPORTED_CURRENCIES` and red the day a fifth
+ * currency is added. Without that, `preferredCurrency` would hand
+ * `buildRelayCheckoutParams` a currency the Stripe price has no option for,
+ * Stripe would refuse the session, and the buyer would see a 500.
+ */
+export const STREAM_PACK_FX: Readonly<Record<string, number>> = {
+  eur: 1.17,
+  usd: 1.33,
+  inr: 111,
+};
 
 export function formatGbp(pence: number): string {
   return pence % 100 === 0 ? `£${pence / 100}` : `£${(pence / 100).toFixed(2)}`;

@@ -5,8 +5,9 @@
 // (_THEMES.md §8b), so they are the one place a literal is the oracle rather
 // than a retyped copy of one (S10).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { STREAM_CREDIT_PACKS, formatGbp, perMatchGbp, streamPack } from "../stream-credit-packs";
+import { STREAM_CREDIT_PACKS, STREAM_PACK_FX, formatGbp, perMatchGbp, streamPack } from "../stream-credit-packs";
 import { messages, type MessageKey } from "@/lib/messages";
+import { SUPPORTED_CURRENCIES } from "@/lib/currency";
 
 const stripeMock = vi.hoisted(() => ({
   pricesList: vi.fn(),
@@ -130,6 +131,32 @@ describe("buildRelayCheckoutParams", () => {
     // two discriminators must never collide, or a match-credit purchase tops
     // up the wrong balance.
     expect(params.metadata?.kind).not.toBe("credit_pack");
+  });
+});
+
+// `scripts/stripe-stream-packs.ts` writes ONE Stripe price per pack carrying a
+// `currency_options` entry per non-GBP currency. If that key set ever falls
+// short of what the platform quotes, `preferredCurrency` hands
+// `buildRelayCheckoutParams` a currency the price has no option for, Stripe
+// refuses the session, and the buyer meets a 500 with nothing to do about it.
+//
+// The script cannot assert this itself: it runs under `nodenext` +
+// `--experimental-strip-types`, where importing `lib/currency.ts` reds twice
+// (TS1543 on its JSON import, TS2307 on `@/lib/types`) and the `@/` alias does
+// not resolve at runtime. So the table lives in `lib/stream-credit-packs.ts`,
+// which the script CAN import, and the parity claim lives here, where
+// `SUPPORTED_CURRENCIES` is importable. Add a fifth currency and this reds.
+describe("STREAM_PACK_FX", () => {
+  it("carries exactly the platform's non-GBP currencies — never a retyped subset", () => {
+    expect(new Set(Object.keys(STREAM_PACK_FX))).toEqual(
+      new Set(SUPPORTED_CURRENCIES.filter((c) => c !== "gbp")),
+    );
+    // GBP is the base the multipliers are applied TO — an option for it would
+    // be a second, disagreeing GBP amount on the same price.
+    expect(Object.keys(STREAM_PACK_FX)).not.toContain("gbp");
+    // Non-vacuous: an empty table would satisfy a subset check.
+    expect(Object.keys(STREAM_PACK_FX).length).toBeGreaterThan(0);
+    for (const rate of Object.values(STREAM_PACK_FX)) expect(rate).toBeGreaterThan(0);
   });
 });
 

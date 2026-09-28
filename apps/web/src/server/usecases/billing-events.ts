@@ -60,6 +60,7 @@ import {
   sendStaffDisputeAlertEmail,
   sendStuckEventsAlertEmail,
   sendCreditPackGrantFailedAlertEmail,
+  sendStreamCreditGrantFailedAlertEmail,
   sendSizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
   sendPassUnknownCompetitionAlertEmail,
@@ -305,7 +306,17 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // each other are each untested: the outer claim's killer is the webhook
   // test's `runEvent(ev)` → false, the inner one's is Task 7's replay test.
   if (session.metadata?.kind === "stream_credits") {
-    if (session.payment_status === "paid") {
+    // TWO settled states, written as two comparisons so each is killable on
+    // its own. `paid` is the ordinary charge. `no_payment_required` is what
+    // Stripe reports when a 100%-off promotion code leaves nothing to
+    // collect — `allow_promotion_codes: true` is set on this checkout
+    // (lib/relay-checkout.ts), so it is reachable today, and it is a SETTLED
+    // session with no PaymentIntent, not an unpaid one. Anything else
+    // (`unpaid`) is a delayed-notification session whose outcome arrives
+    // later as `checkout.session.async_payment_succeeded`.
+    const settled =
+      session.payment_status === "paid" || session.payment_status === "no_payment_required";
+    if (settled) {
       const snapshot = Number(session.metadata.credits);
       const credits =
         Number.isInteger(snapshot) && snapshot > 0
@@ -352,6 +363,20 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
               { orgId, sessionId: session.id, credits },
               "billing: stream_credits session id already recorded for another organisation — acknowledged, nothing granted",
             );
+            // ACKed means Stripe stops asking, so the log line is the ONLY
+            // remaining trail — page a human, exactly as the donor branches do
+            // (:267 credit_pack, :418 pass, :531 size_pack). The buyer was
+            // charged and holds nothing; only a manual grant fixes it.
+            const alertTo = process.env.STAFF_ALERT_EMAIL;
+            if (alertTo) {
+              void sendStreamCreditGrantFailedAlertEmail({
+                to: alertTo,
+                sessionId: session.id,
+                orgId,
+                packRaw: session.metadata?.pack,
+                reason: "checkout session id already recorded for another organisation",
+              }).catch(() => {});
+            }
             return null;
           }
           throw err;
@@ -368,6 +393,18 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           { sessionId: session.id, orgId },
           "billing: stream_credits session paid but ungranted — no credits snapshot and no resolvable pack",
         );
+        // Same reasoning as the mismatch limb above: acknowledged, unretryable,
+        // and invisible to everyone unless somebody is told.
+        const alertTo = process.env.STAFF_ALERT_EMAIL;
+        if (alertTo) {
+          void sendStreamCreditGrantFailedAlertEmail({
+            to: alertTo,
+            sessionId: session.id,
+            orgId,
+            packRaw: session.metadata?.pack,
+            reason: "no credits snapshot and no resolvable pack",
+          }).catch(() => {});
+        }
       }
     }
     return;
@@ -2454,15 +2491,28 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
       await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
       break;
     case "checkout.session.async_payment_succeeded": {
-      // Delayed-notification success (registrations only, so far — the only
-      // kind minted here that can carry one of these methods): same
-      // fulfilment path as a same-request paid completion.
-      // handleRegistrationCheckoutCompleted's own payment_status gate makes
-      // this safe unconditionally even though this event's session is always
-      // "paid" by the time Stripe sends it.
+      // Delayed-notification success: same fulfilment path as a same-request
+      // paid completion. handleRegistrationCheckoutCompleted's own
+      // payment_status gate makes this safe unconditionally even though this
+      // event's session is always "paid" by the time Stripe sends it.
       const session = event.data.object as Stripe.Checkout.Session;
       if (session.metadata?.kind === "registration_group") {
         await handleRegistrationCheckoutCompleted(session);
+      } else if (session.metadata?.kind === "stream_credits") {
+        // Match credits (streaming R1). A delayed method completes the session
+        // UNPAID, so the `completed` event's payment_status gate refuses the
+        // grant and THIS event is the only one carrying the outcome — without
+        // this arm the buyer is charged and never credited. Routed through
+        // handleCheckoutCompleted rather than a copy of the branch, so the
+        // snapshot/fallback/idempotency rules have exactly one home. The
+        // ledger is keyed on the Checkout Session id, which both events carry,
+        // so a paid `completed` followed by this one cannot double-grant.
+        //
+        // Unreachable on the Stripe account as configured TODAY — its one
+        // payment method configuration enables no delayed-notification method
+        // — and deliberately wired anyway: enabling one is a Dashboard toggle
+        // nobody would pair with a webhook change.
+        await handleCheckoutCompleted(session);
       }
       break;
     }
