@@ -1438,12 +1438,31 @@ export async function reconcilePassCheckout(
     const session = await getStripe().checkout.sessions.retrieve(sessionId, {
       expand: ["line_items"],
     });
-    // Only trust a paid, pass-shaped session that belongs to this org.
+    // Only trust a SETTLED, pass-shaped session that belongs to this org.
     const passKey = passKeyForSession(session);
     if (!passKey) return false;
     if (session.metadata?.org_id !== orgId) return false;
     const competitionId = session.metadata.competition_id;
-    if (!competitionId || session.payment_status !== "paid") return false;
+    // "Settled" is `paid` OR `no_payment_required` — the latter is what a
+    // session fully covered by a promotion code completes as, and
+    // `buildPassCheckoutParams` sets `allow_promotion_codes: true`. Refusing it
+    // here left a buyer who redeemed a valid code with no pass on the return
+    // render, silently, exactly as the webhook twin did. Two comparisons,
+    // inline, and deliberately NOT lifted into a predicate shared with the
+    // webhook limb in billing-events.ts: these gates attract concurrent
+    // branches editing one site each, and folding them together would turn
+    // that merge into "one side refactored, the other edited".
+    // NOTE the inverted polarity — this gate names what it REFUSES, so each
+    // comparison is an exemption. Mutate an exemption by forcing it `true`
+    // (which removes it); forcing it `false` only makes the whole guard
+    // vacuous and is killed by the unpaid test rather than by a settled one.
+    if (
+      !competitionId ||
+      (session.payment_status !== "paid" &&
+        session.payment_status !== "no_payment_required")
+    ) {
+      return false;
+    }
     // The rung named in the metadata must agree with the price actually
     // charged, or nothing is minted (v17 gap #326). Refusing reports `false`,
     // which this function's contract already means as "nothing to reconcile" —

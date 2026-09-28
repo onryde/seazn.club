@@ -90,14 +90,22 @@ function passSession(
   over?: Partial<{
     customer: string | null;
     currency: string | null;
-    payment_intent: string;
+    /** Nullable on purpose: a session fully covered by a promotion code can
+     *  settle without ever creating a PaymentIntent, so `null` is a REAL shape
+     *  the fulfilment paths have to survive, not a synthetic one. Read with
+     *  `in over` rather than `??` so an explicit null is not silently replaced
+     *  by the default id. */
+    payment_intent: string | null;
+    /** Defaults to "paid". The other settled value is "no_payment_required". */
+    payment_status: string;
     passKey: string;
   }>,
 ): Stripe.Checkout.Session {
   return {
     metadata: { org_id: orgId, competition_id: compId, pass_key: over?.passKey ?? "event_pass" },
-    payment_status: "paid",
-    payment_intent: over?.payment_intent ?? "pi_trace_" + uniq(),
+    payment_status: over?.payment_status ?? "paid",
+    payment_intent:
+      over && "payment_intent" in over ? over.payment_intent : "pi_trace_" + uniq(),
     customer: over && "customer" in over ? over.customer : "cus_trace_" + uniq(),
     currency: over && "currency" in over ? over.currency : "gbp",
   } as unknown as Stripe.Checkout.Session;
@@ -334,6 +342,92 @@ describe.skipIf(!HAS_DB)("Event Pass grants one-time AI credits", () => {
     });
     expect(res.recorded).toBe(true);
     expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
+  });
+
+  // A 100% promotion code — `buildPassCheckoutParams` sets
+  // `allow_promotion_codes: true` (lib/billing.ts) — settles the session as
+  // `no_payment_required`, never `paid`. Both fulfilment paths used to gate on
+  // `paid` alone, so the buyer redeemed a valid code and got NO pass: the rung
+  // guard cannot catch it either, because it compares price IDs and a discount
+  // does not move the price id. Silent in every direction. Both paths below
+  // therefore assert the PASS ROW and the CREDIT GRANT actually landed — not
+  // merely that the function returned.
+  it("a 100%-promotion-code session ('no_payment_required') grants the pass on the WEBHOOK path", async () => {
+    const { orgId, compId } = await seedPassBuyer();
+    const walletId = await walletIdFor(orgId);
+    expect(await balance(walletId)).toBe(0);
+
+    await processStripeEvent(
+      passEvent(
+        passSession(orgId, compId, {
+          payment_status: "no_payment_required",
+          // Zero to collect ⇒ Stripe need not mint a PaymentIntent at all.
+          payment_intent: null,
+          customer: "cus_promo_hook_" + uniq(),
+          currency: "gbp",
+        }),
+      ),
+    );
+
+    const [pass] = await sql<{ competition_id: string; pass_key: string }[]>`
+      select competition_id, pass_key from competition_passes
+      where competition_id = ${compId} and org_id = ${orgId}`;
+    expect(pass?.competition_id).toBe(compId);
+    expect(pass?.pass_key).toBe("event_pass");
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
+  });
+
+  it("a 100%-promotion-code session ('no_payment_required') grants the pass on the RECONCILE-ON-RETURN path", async () => {
+    const { orgId, compId } = await seedPassBuyer();
+    const walletId = await walletIdFor(orgId);
+    stripeMock.retrieve.mockResolvedValue(
+      passSession(orgId, compId, {
+        payment_status: "no_payment_required",
+        payment_intent: null,
+        customer: "cus_promo_reconcile_" + uniq(),
+        currency: "gbp",
+      }),
+    );
+
+    // `true` means "recorded"; the two assertions under it are what prove the
+    // buyer actually holds a pass rather than a truthy return value.
+    expect(await reconcilePassCheckout(orgId, "cs_promo_reconcile")).toBe(true);
+
+    const [pass] = await sql<{ competition_id: string }[]>`
+      select competition_id from competition_passes
+      where competition_id = ${compId} and org_id = ${orgId}`;
+    expect(pass?.competition_id).toBe(compId);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
+  });
+
+  it("a promo pass with NO payment intent is not mistaken for a duplicate second charge", async () => {
+    // Both settled paths run on the same intentless session. Nothing here keys
+    // off a payment intent, so the anchors have to hold on their own:
+    // `competition_passes` de-dupes `on conflict (competition_id)`, and
+    // recordPassGrant falls back from the intent to the COMPETITION id
+    // (`anchor = paymentIntent ?? competitionId`, lib/credits.ts) — so the
+    // grant is once-per-competition rather than once-per-`null`. And
+    // `duplicateIntent` is only computed when an intent exists, so the second
+    // delivery must NOT be auto-refunded as a duplicate second charge.
+    const { orgId, compId } = await seedPassBuyer();
+    const walletId = await walletIdFor(orgId);
+    const session = passSession(orgId, compId, {
+      payment_status: "no_payment_required",
+      payment_intent: null,
+      customer: "cus_promo_replay_" + uniq(),
+      currency: "gbp",
+    });
+    stripeMock.retrieve.mockResolvedValue(session);
+
+    await processStripeEvent(passEvent(session));
+    expect(await reconcilePassCheckout(orgId, "cs_promo_replay")).toBe(true);
+
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from competition_passes
+       where competition_id = ${compId} and org_id = ${orgId}`;
+    expect(n).toBe(1);
   });
 
   it("a webhook + reconcile replay of the same payment does NOT double-grant", async () => {

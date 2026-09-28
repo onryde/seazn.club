@@ -443,7 +443,21 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   const passKey = passKeyForSession(session);
   if (passKey) {
     const competitionId = session.metadata?.competition_id;
-    if (competitionId && session.payment_status === "paid") {
+    // SETTLED, not merely "paid" — third instance of the same widening, after
+    // the size_pack and credit_pack limbs above. `buildPassCheckoutParams` sets
+    // `allow_promotion_codes: true` (lib/billing.ts), so a code covering the
+    // whole price is reachable and Stripe settles that session as
+    // `no_payment_required`. Nothing downstream catches it: the rung guard
+    // below compares PRICE IDS, and a discount does not move the price id, so
+    // it returns true and the buyer is left with no pass, no log and no alert.
+    // Two comparisons, inline, deliberately duplicated rather than folded into
+    // a shared predicate with the limbs above or with the twin of this gate in
+    // `reconcilePassCheckout` — see the size_pack limb for why.
+    if (
+      competitionId &&
+      (session.payment_status === "paid" ||
+        session.payment_status === "no_payment_required")
+    ) {
       // Same mint guard as reconcile-on-return (v17 gap #326) — the check lives
       // in ONE place (lib/billing.ts) precisely so the two paths cannot drift on
       // what a session means, exactly like passKeyForSession above it. ACK the
