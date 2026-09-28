@@ -11,8 +11,16 @@
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): relay is sport-agnostic — nothing on these two routes reads the sport,
 // so every rig rides `_rig`'s `generic` division. The two MODES are what varies here, and both appear below.
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+
+// The sample writer, passed through untouched — one test makes it fail ONCE, to prove a telemetry failure can never
+// cost a beat its lifecycle half (Task 11 review I1b). Every other test runs the real writer.
+vi.mock("@/server/relay/telemetry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/relay/telemetry")>();
+  return { ...actual, recordSample: vi.fn(actual.recordSample) };
+});
+
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, STALE_HEARTBEAT_SECONDS } from "@/server/relay/config";
@@ -20,6 +28,7 @@ import { failReasonFromExit, type ExitInfo } from "@/server/relay/domain/runner"
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
+import { recordSample } from "@/server/relay/telemetry";
 import { mintRelayToken, verifyRelayToken } from "@/server/relay/tokens";
 import { GET as facts } from "@/app/api/internal/relay/sessions/[sid]/route";
 import { POST as beat } from "@/app/api/internal/relay/sessions/[sid]/heartbeat/route";
@@ -84,6 +93,25 @@ async function samples(sid: string) {
   return sql<{ fps: number | null; bitrate_kbps: number | null; source: string }[]>`
     select fps, bitrate_kbps, source from fixture_stream_samples where session_id = ${sid} order by id`;
 }
+/** Every typed column of the session's one sample (the numeric ones and the state word). */
+async function sampleRow(sid: string) {
+  const rows = await sql<{ ingest_state: string | null; bitrate_kbps: number | null; fps: number | null; dropped_frames: number | null;
+    runner_cpu_pct: number | null; runner_mem_mb: number | null; encoder_speed: number | null }[]>`
+    select ingest_state, bitrate_kbps, fps, dropped_frames, runner_cpu_pct, runner_mem_mb, encoder_speed
+      from fixture_stream_samples where session_id = ${sid} order by id`;
+  expect(rows, "exactly one sample").toHaveLength(1);
+  return rows[0]!;
+}
+async function egressOf(sid: string): Promise<number> {
+  const [r] = await sql<{ n: string }[]>`select egress_bytes::text as n from fixture_stream_sessions where id = ${sid}`;
+  return Number(r!.n);
+}
+/** The two headers a secret-bearing GET owes on EVERY status (Task 11 review I2; the 2026-09-22 edge review's F-CF1). */
+function expectNoStore(res: Response, label: string) {
+  expect(res.headers.get("cache-control"), `${label}: Cache-Control`).toMatch(/(^|,\s*)no-store(\s*,|$)/);
+  expect(res.headers.get("vary") ?? "", `${label}: Vary`).toMatch(/(^|,\s*)authorization(\s*,|$)/i);
+}
+
 async function row(sid: string) {
   const [r] = await sql<{
     state: string; fail_reason: string | null; end_reason: string | null; desired_state: string; heartbeat_at: string | null;
@@ -210,6 +238,84 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     expect(rows[0]).toEqual({ source: "heartbeat", fps: 47, bitrate_kbps: 3100 });
   });
 
+  // Task 11 review I1a. ffmpeg reports bitrate=2998.7kbits/s; a Machine's memory and a dropped-frame counter are whatever
+  // its supervisor reads. RelayHeartbeat accepts them (finite, non-negative), and the beat must too — the lifecycle half
+  // included. Expected stored values are Postgres's own: its numeric→integer cast, int4's largest, float32's largest.
+  it("real ffmpeg numbers through the ROUTE: a fractional bitrate and memory, a 29.97 fps and a counter past int4 are 200 with the lifecycle applied, and land fitted to their columns", async () => {
+    const s = await session();
+    const sent = { state: "playing", fps: 29.97, bitrateKbps: 2998.7, memMb: 511.7, droppedFrames: 3e9, cpuPct: 1e39, encoderSpeed: 1e-50 };
+    const res = await postBeat(s.sessionId, sent, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    expect(((await json(res)) as { data: unknown }).data).toEqual({ desiredState: "live" });
+    expect(await row(s.sessionId), "callback_playing ran: the beat's lifecycle half was not skipped").toMatchObject({ state: "live", runner_state: "playing" });
+    const [cast] = await sql<{ bitrate: number; mem: number }[]>`select 2998.7::numeric::integer as bitrate, 511.7::numeric::integer as mem`;
+    const stored = await sampleRow(s.sessionId);
+    expect(stored).toMatchObject({ ingest_state: "playing", bitrate_kbps: cast!.bitrate, runner_mem_mb: cast!.mem, dropped_frames: 2147483647, encoder_speed: 0 });
+    expect(Math.fround(stored.fps!)).toBe(Math.fround(29.97));
+    expect(Math.fround(stored.runner_cpu_pct!)).toBe(Math.fround(3.4028234663852886e38));
+    // The raw body keeps what the Machine actually said — only the TYPED columns are fitted.
+    const [{ raw }] = await sql<{ raw: Record<string, unknown> }[]>`select raw from fixture_stream_samples where session_id = ${s.sessionId}`;
+    expect(raw).toMatchObject({ bitrateKbps: 2998.7, memMb: 511.7, droppedFrames: 3e9 });
+  });
+
+  // Task 11 review I1b. A sample is telemetry; the beat is the control channel. A failing sample write is logged and the
+  // beat still answers — callback_playing included — and the beat itself (heartbeat_at) is still recorded.
+  it("a sample write that FAILS never costs the beat its lifecycle: 200 { desiredState }, callback_playing applied, the beat recorded, no sample", async () => {
+    const s = await session();
+    expect(await row(s.sessionId)).toMatchObject({ state: "warming", runner_state: "booting" });
+    vi.mocked(recordSample).mockRejectedValueOnce(Object.assign(new Error("invalid input syntax for type integer"), { code: "22P02" }));
+    const res = await postBeat(s.sessionId, { state: "playing", fps: 30 }, { token: s.jobToken });
+    expect(res.status).toBe(200);
+    expect(((await json(res)) as { data: unknown }).data).toEqual({ desiredState: "live" });
+    const after = await row(s.sessionId);
+    expect(after).toMatchObject({ state: "live", runner_state: "playing" });
+    expect(after.heartbeat_at, "the beat itself is recorded").not.toBeNull();
+    expect(await samples(s.sessionId), "the failed write left no row").toEqual([]);
+    expect(vi.mocked(recordSample)).toHaveBeenCalled();
+    // The positive pair: the next beat samples normally.
+    expect((await postBeat(s.sessionId, { state: "playing", fps: 31 }, { token: s.jobToken })).status).toBe(200);
+    expect((await samples(s.sessionId)).map((r) => r.fps)).toEqual([31]);
+  });
+
+  // Task 11 review G5: `egressBytes` is optional, and an omitted field is NOT a measured zero.
+  it("egressBytes: a beat that reports it stores it; a beat that OMITS it leaves the stored value alone; a beat that reports 0 stores 0", async () => {
+    const s = await session();
+    expect(await egressOf(s.sessionId), "the column's default before any beat").toBe(0);
+    const steps: [Record<string, unknown>, number][] = [
+      [{ state: "playing", egressBytes: 5_000_000 }, 5_000_000],
+      [{ state: "playing" }, 5_000_000],
+      [{ state: "playing", fps: 30 }, 5_000_000],
+      [{ state: "playing", egressBytes: 7_250_000 }, 7_250_000],
+      [{ state: "playing", egressBytes: 0 }, 0],
+    ];
+    let checked = 0;
+    for (const [body, expected] of steps) {
+      expect((await postBeat(s.sessionId, body, { token: s.jobToken })).status, JSON.stringify(body)).toBe(200);
+      expect(await egressOf(s.sessionId), JSON.stringify(body)).toBe(expected);
+      checked += 1;
+    }
+    expect(checked).toBe(steps.length);
+  });
+
+  // Task 11 review I2: the facts GET carries the DECRYPTED stream key and a page token, gated only by the bearer. An edge
+  // that cached one 200 would serve it to the next caller whatever they sent — so no-store + Vary: Authorization, on
+  // every status the route answers.
+  it("GET facts is no-store + Vary: Authorization on the 200 (the decrypted key), the 401 and the 410", async () => {
+    const s = await session();
+    const ok = await getFacts(s.sessionId, { token: s.jobToken });
+    expect(ok.status).toBe(200);
+    expect(((await json(ok)) as { data: { target: { streamKey: string } } }).data.target.streamKey).toBe(s.streamKey);
+    expectNoStore(ok, "200");
+    const refused = await getFacts(s.sessionId);
+    expect(refused.status).toBe(401);
+    expectNoStore(refused, "401");
+    const p = await session("passthrough");
+    await stopSession(p.auth, p.fixtureId, p.sessionId, defaultDeps("http://app.test"));
+    const gone = await getFacts(p.sessionId, { token: p.jobToken });
+    expect(gone.status).toBe(410);
+    expectNoStore(gone, "410");
+  });
+
   it("second call: a replayed beat is answered the same and recorded twice (every beat is a sample); a replayed read serves the same facts", async () => {
     const s = await session();
     const a = await postBeat(s.sessionId, { state: "starting", fps: 12 }, { token: s.jobToken });
@@ -241,7 +347,12 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
       async destroy() { throw Object.assign(new Error("fake destroy failed"), { status: 503 }); },
     });
     setRelayDriversForTest({ ingest: s.ingest, runner: failing });
-    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBeGreaterThanOrEqual(500);
+    // Task 11 review m5: the failed teardown is recorded on the ledger and retried by the table (a stale beat re-issues a
+    // lost runner's destroy) — it is not the READER's error. The Machine's read answers its facts.
+    expect((await getFacts(s.sessionId, { token: s.jobToken })).status).toBe(200);
+    const [{ result }] = await sql<{ result: string }[]>`
+      select result from fixture_stream_events where session_id = ${s.sessionId} and kind = 'effect' and type = 'force_destroy' order by seq desc limit 1`;
+    expect(result, "the failed destroy is on the ledger").toBe("failed");
     expect(await row(s.sessionId)).toMatchObject({
       state: "live", runner_state: "lost",
       runner_exit_code: OOM_EXIT.exitCode, runner_oom_killed: OOM_EXIT.oomKilled, runner_requested_stop: OOM_EXIT.requestedStop,

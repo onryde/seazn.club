@@ -76,6 +76,42 @@ export interface SampleInput {
   sampledAt?: Date;
 }
 
+/** The range of each Postgres numeric type a sample column is declared as — the type's own definition, not a guess:
+ *  `integer` is a 4-byte two's-complement integer (Postgres manual §8.1.1); `real` is an IEEE-754 single (§8.1.3), whose
+ *  largest finite value is (2 − 2⁻²³)·2¹²⁷ and whose smallest NORMAL magnitude is 2⁻¹²⁶. Postgres refuses a value
+ *  outside the type (22003) and refuses a fraction for an integer parameter outright (22P02) — measured on the rlc DB
+ *  2026-09-28, and by the Task 11 review's probe. telemetry.test.ts proves each bound against the DB itself. */
+export const PG_NUMERIC_RANGE = {
+  integer: { min: -(2 ** 31), max: 2 ** 31 - 1, integral: true, minNormal: 0 },
+  real: { min: -((2 - 2 ** -23) * 2 ** 127), max: (2 - 2 ** -23) * 2 ** 127, integral: false, minNormal: 2 ** -126 },
+} as const;
+
+/** fixture_stream_samples' numeric columns and the type V410 DECLARES each as — telemetry.test.ts pins this map to the
+ *  migration file, so a column retyped there reds here instead of 500-ing a beat. */
+export const SAMPLE_NUMERIC_COLUMNS = {
+  bitrate_kbps: "integer",
+  fps: "real",
+  dropped_frames: "integer",
+  runner_cpu_pct: "real",
+  runner_mem_mb: "integer",
+  encoder_speed: "real",
+} as const satisfies Record<string, keyof typeof PG_NUMERIC_RANGE>;
+
+/** The ONE place a sample's number is fitted to its column (Task 11 review I1). ffmpeg reports `bitrate=2998.7kbits/s`,
+ *  and RelayHeartbeat accepts it (finite, non-negative) — so the writer, not the Machine, owes the column its type:
+ *  - absent → NULL, never a measured zero (A29); a non-finite number measured nothing, so it is NULL too;
+ *  - an `integer` column gets the value ROUNDED, as Postgres's own numeric → integer cast does (half away from zero —
+ *    Math.round agrees on every non-negative value, and RelayHeartbeat admits no other);
+ *  - a `real` column gets a magnitude below float32's smallest normal flushed to 0 (Postgres refuses `1e-50` as real);
+ *  - either is then clamped to its type's range, so a counter past int4 stores int4's largest instead of 500-ing the beat.
+ *  `raw` (the sanitised body) keeps what was actually sent. */
+export function fitToColumn(column: keyof typeof SAMPLE_NUMERIC_COLUMNS, value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  const r = PG_NUMERIC_RANGE[SAMPLE_NUMERIC_COLUMNS[column]];
+  const n = r.integral ? Math.round(value) : Math.abs(value) < r.minNormal ? 0 : value;
+  return Math.min(r.max, Math.max(r.min, n));
+}
+
 /** One row per beat/poll, capped per session. The cap is checked in the same
  *  statement as the insert (`where (select count(*) …) < cap`), so two
  *  concurrent beats at the boundary cannot both land. */
@@ -84,9 +120,9 @@ export async function recordSample(exec: Exec, s: SampleInput): Promise<"written
     insert into fixture_stream_samples
       (session_id, sampled_at, source, ingest_state, bitrate_kbps, fps, dropped_frames,
        output_state, runner_cpu_pct, runner_mem_mb, encoder_speed, ingest_reason, app_build_sha, raw)
-    select ${s.sessionId}, ${s.sampledAt ?? new Date()}, ${s.source}, ${s.ingestState ?? null}, ${s.bitrateKbps ?? null},
-           ${s.fps ?? null}, ${s.droppedFrames ?? null}, ${s.outputState ?? null},
-           ${s.runnerCpuPct ?? null}, ${s.runnerMemMb ?? null}, ${s.encoderSpeed ?? null}, ${s.ingestReason ?? null},
+    select ${s.sessionId}, ${s.sampledAt ?? new Date()}, ${s.source}, ${s.ingestState ?? null}, ${fitToColumn("bitrate_kbps", s.bitrateKbps)},
+           ${fitToColumn("fps", s.fps)}, ${fitToColumn("dropped_frames", s.droppedFrames)}, ${s.outputState ?? null},
+           ${fitToColumn("runner_cpu_pct", s.runnerCpuPct)}, ${fitToColumn("runner_mem_mb", s.runnerMemMb)}, ${fitToColumn("encoder_speed", s.encoderSpeed)}, ${s.ingestReason ?? null},
            ${APP_BUILD_SHA}, ${exec.json(sanitise(s.raw) as never)}
      where (select count(*) from fixture_stream_samples where session_id = ${s.sessionId}) < ${SAMPLES_PER_SESSION_CAP}
     returning id`;

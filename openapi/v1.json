@@ -38443,7 +38443,7 @@
                 "1"
               ]
             },
-            "description": "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; any other value, or none, is a poll and counts nothing"
+            "description": "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; absent, the read is a poll and counts nothing; any other value is 400"
           }
         ],
         "responses": {

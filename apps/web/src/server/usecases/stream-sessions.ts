@@ -497,7 +497,20 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
         const mine = (await deps.drivers.runner.list()).find((m) => m.sessionId === s.id && m.name === s.runner.name);   // T5-a: THIS attempt's, by name
         id = mine?.runnerId ?? null;
       }
-      if (id) await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(id), { machineId: id });   // 404 = success (C7)
+      if (id) {
+        try {
+          await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(id), { machineId: id });   // 404 = success (C7)
+        } catch (err) {
+          // Task 11 review m5: a DELETE that fails is already a `failed` effect row on this session's ledger (recordEffect),
+          // and the table owns the retry — a LOST runner's teardown is re-issued on the next stale beat; a TERMINAL
+          // session's orphan is destroyed by the next admission on its fixture or destination (tearDownPriorMachines), and
+          // by Task 12's daily orphan sweep once it lands. Throwing it on to the READER re-issued nothing: it turned the organiser's poll (or the
+          // Machine's own facts read) into a 500 carrying the provider's text at the moment a stream ended, and skipped
+          // every effect after this one in the same decision (a completion's fill_replay). No destroy_ok: nothing was confirmed.
+          log.error({ sid: s.id, attempt: s.runner.attempt, machineId: id, err: String(err) }, "stream session: forced Machine destroy failed — recorded; the table retries it");
+          return s;
+        }
+      }
       // F-B (orchestrator ruling, post-2C-post plan sync): this effect runs after commit, and while the DELETE was out another
       // request may have confirmed this attempt's Machine gone (an observed `destroyed`) and run the ONE retry — the row now names
       // attempt + 1 in `creating` or `booting`, where `destroy_ok` is ✗ (InvalidRunnerTransition: a 500 out of the organiser's
@@ -996,21 +1009,11 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   if (!before) throw new HttpError(404, "session not found");
   if (isTerminal(before.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
   // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
-  await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(body as never)}, heartbeat_at = ${deps.now()}, egress_bytes = ${body.egressBytes ?? 0} where id = ${sessionId}`;
-  // Ruling 13: every beat is a SAMPLE — typed columns from the fields RelayHeartbeat (Task 9) declares, the whole body in `raw` (sanitised). Capped per session; the cap is reported ONCE as an event.
-  const wrote = await recordSample(sql, { sessionId, source: "heartbeat", sampledAt: deps.now(), ingestState: body.state ?? null,
-    fps: body.fps ?? null, bitrateKbps: body.bitrateKbps ?? null, droppedFrames: body.droppedFrames ?? null, encoderSpeed: body.encoderSpeed ?? null,
-    runnerCpuPct: body.cpuPct ?? null, runnerMemMb: body.memMb ?? null,
-    // Dh has NO source on this path, stated rather than left to look forgotten: `ingest_reason` is
-    // Cloudflare's status.current.reason, and a Machine's beat reports the MACHINE, not the ingest
-    // input. Reading the input here would add a paid Cloudflare call per beat (every 5 s per live
-    // session). Explicitly null — a borrowed value in a column whose whole purpose is "what the
-    // provider said" is a fabricated fact, and the poll writer is the one that fills it.
-    ingestReason: null, raw: body });
-  if (wrote === "capped") {
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'samples_capped'`;
-    if (n === 0) await sql.begin(async (tx) => { await lockRow(tx, sessionId); await recordEvent(tx, { sessionId, orgId: before.org_id, source: "runner", kind: "event", type: "samples_capped", occurredAt: deps.now(), payload: { count: SAMPLES_PER_SESSION_CAP } }); });
-  }
+  // G5 (Task 11 review): `egressBytes` is optional, and an omitted field leaves the stored count alone — only a Machine
+  // that REPORTS 0 stores 0 (the A29 rule: absent is not a measured zero).
+  await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(body as never)}, heartbeat_at = ${deps.now()},
+              egress_bytes = coalesce(${body.egressBytes ?? null}::bigint, egress_bytes) where id = ${sessionId}`;
+  await sampleBeat(sessionId, before.org_id, body, deps);
   let s = (await applyExpiry(sessionId, deps))!;
   // The runner's own callbacks are lifecycle triggers (plan §"Fly machine lifecycle"): playing/stopped, nothing else moves the table from a beat.
   if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing") && body.state === "playing") {
@@ -1020,6 +1023,35 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
     s = (await apply(sessionId, { type: "runner", trigger: { type: "callback_stopped" } }, deps))!;
   }
   return { desiredState: s.desiredState };
+}
+
+/** Ruling 13: every beat is a SAMPLE — typed columns from the fields RelayHeartbeat (Task 9) declares, the whole body in
+ *  `raw` (sanitised). Capped per session; the cap is reported ONCE as an event.
+ *
+ *  ISOLATED, not transactional (Task 11 review I1b): a sample is telemetry and the beat is the control channel. A sample
+ *  write that throws is logged and the beat goes on — its expiry tick, its callback_playing / callback_stopped and its
+ *  reply. ONE transaction with the lifecycle is not available: the lifecycle is several transactions by design
+ *  (applyExpiry and each callback `apply` take the row lock, commit, THEN run provider effects — the row lock is never
+ *  held across a provider call), and a sample inside any of them would roll that transition back with it. telemetry.ts's
+ *  `fitToColumn` removes the known cause (ffmpeg's fractional numbers in integer columns); this isolation is for the next. */
+async function sampleBeat(sessionId: string, orgId: string, body: RelayHeartbeat, deps: SessionDeps): Promise<void> {
+  try {
+    const wrote = await recordSample(sql, { sessionId, source: "heartbeat", sampledAt: deps.now(), ingestState: body.state ?? null,
+      fps: body.fps ?? null, bitrateKbps: body.bitrateKbps ?? null, droppedFrames: body.droppedFrames ?? null, encoderSpeed: body.encoderSpeed ?? null,
+      runnerCpuPct: body.cpuPct ?? null, runnerMemMb: body.memMb ?? null,
+      // Dh has NO source on this path, stated rather than left to look forgotten: `ingest_reason` is
+      // Cloudflare's status.current.reason, and a Machine's beat reports the MACHINE, not the ingest
+      // input. Reading the input here would add a paid Cloudflare call per beat (every 5 s per live
+      // session). Explicitly null — a borrowed value in a column whose whole purpose is "what the
+      // provider said" is a fabricated fact, and the poll writer is the one that fills it.
+      ingestReason: null, raw: body });
+    if (wrote === "capped") {
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'samples_capped'`;
+      if (n === 0) await sql.begin(async (tx) => { await lockRow(tx, sessionId); await recordEvent(tx, { sessionId, orgId, source: "runner", kind: "event", type: "samples_capped", occurredAt: deps.now(), payload: { count: SAMPLES_PER_SESSION_CAP } }); });
+    }
+  } catch (err) {
+    log.error({ sid: sessionId, code: (err as { code?: string }).code ?? null, err: String(err) }, "stream session: a heartbeat sample was not recorded — the beat is answered anyway");
+  }
 }
 
 export async function sessionFactsForJob(sessionId: string, token: string, deps: SessionDeps) {

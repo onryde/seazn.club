@@ -613,7 +613,9 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const failing = Object.assign(Object.create(r.runner) as FakeRunner, {
       async destroy() { throw Object.assign(new Error("fake destroy failed"), { status: 503 }); },
     });
-    await expect(currentSession(r.auth, r.fixtureId, { ...r.deps, drivers: { ...r.deps.drivers, runner: failing } })).rejects.toMatchObject({ status: 503 });
+    // Task 11 review m5: the failed teardown is recorded on the ledger and re-issued by the table (below: a stale beat) —
+    // it is not the organiser's error. The read answers the session as it now stands.
+    expect(await currentSession(r.auth, r.fixtureId, { ...r.deps, drivers: { ...r.deps.drivers, runner: failing } })).toMatchObject({ id: sessionId, state: "live" });
     expect(await r.row(sessionId)).toMatchObject({
       state: "live", runner_state: "lost", runner_exit_code: OOM_EXIT.exitCode, runner_oom_killed: OOM_EXIT.oomKilled, runner_requested_stop: OOM_EXIT.requestedStop,
     });
@@ -806,7 +808,9 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const flaky: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: failing } };
 
     // (1) The organiser's poll forces the destroy and F-A completes the session on that decision; the DELETE then fails.
-    await expect(currentSession(r.auth, r.fixtureId, flaky)).rejects.toMatchObject({ status: 503 });
+    // Task 11 review m5: the failed DELETE is on the ledger (the effect rows below) and admission retries it — the
+    // organiser's poll answers the session as it now stands, completed as stopped, never the provider's error.
+    expect(await currentSession(r.auth, r.fixtureId, flaky)).toMatchObject({ id: old, state: "completed", endReason: "stopped" });
     expect(await r.row(old)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "destroyed" });   // the one-active index has released
     expect((await r.runner.list()).map((m) => m.runnerId)).toContain(machine);                                        // …and the Machine is still listed
 
@@ -1633,7 +1637,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
       async destroy(id: string) { destroyCalls.push(id); throw Object.assign(new Error("fake destroy failed"), { status: 503 }); },
     });
     const flaky: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: failing } };
-    await expect(currentSession(r.auth, a, flaky)).rejects.toMatchObject({ status: 503 });
+    expect(await currentSession(r.auth, a, flaky)).toMatchObject({ id: old, state: "completed" });   // Task 11 review m5: the poll answers; the failure is A's ledger's
     expect(await r.row(old)).toMatchObject({ state: "completed", runner_state: "destroyed" });   // terminal: no index, no holder…
     expect((await r.runner.list()).map((m) => m.runnerId)).toContain(machine);                  // …and the Machine still pushing
     return { r, a, b, old, machine, flaky, destroyCalls };
@@ -1762,6 +1766,9 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     expect(won).toHaveLength(1);
     expect(lost).toHaveLength(1);
     expect(lost[0]!.reason).toMatchObject({ status: 409, code: "target_in_use" });
+    // Task 11 review m1: whichever guard refused, the extra names the holder — an object from the pre-check, `null` from
+    // the index (routes.test.ts pins the null deterministically, on the wire).
+    expect(lost[0]!.reason).toHaveProperty("extra.holder");
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
     expect(n).toBe(1);

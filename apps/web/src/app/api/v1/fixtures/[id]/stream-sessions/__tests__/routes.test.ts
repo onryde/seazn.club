@@ -4,7 +4,9 @@
 //   - the envelope: 201 { sessionId }, the projection, the idempotent second stop, `null` when there is no session;
 //   - every typed refusal reaches the WIRE with its machine-readable extra (lane C A21), and each extra the wire carries
 //     is documented on that route × status in the OpenAPI spec (truthful envelopes);
-//   - `?reveal=1` is the only thing that moves the reveal counters (a poll is not a reveal — De);
+//   - `?reveal=1` is the only thing that moves the reveal counters (a poll is not a reveal — De), and any other value
+//     is a 400, never a silent poll (the house `assertOneOf` rule);
+//   - `current` serves ingest credentials, so it is no-store on every status (Task 11 review I2);
 //   - the Machine is told to call back at THIS request's base URL (the create route's `defaultDeps(baseUrl(req))`);
 //   - API keys are refused at the door on all three (NEVER_KEY_ROUTES — a money route), and it is THAT refusal, not the
 //     usecase's own "signed-in organiser" 403 that shares its status.
@@ -104,6 +106,8 @@ const create = async (fixtureId: string, body: unknown, headers?: Record<string,
   read<{ sessionId: string }>(await createRoute(request("POST", `/fixtures/${fixtureId}/stream-sessions`, body, headers), { params: Promise.resolve({ id: fixtureId }) }));
 const current = async (fixtureId: string, query = "", headers?: Record<string, string>) =>
   read<StreamSessionCurrent | null>(await currentRoute(request("GET", `/fixtures/${fixtureId}/stream-sessions/current${query}`, undefined, headers), { params: Promise.resolve({ id: fixtureId }) }));
+const currentRaw = async (fixtureId: string, query = "", headers?: Record<string, string>) =>
+  currentRoute(request("GET", `/fixtures/${fixtureId}/stream-sessions/current${query}`, undefined, headers), { params: Promise.resolve({ id: fixtureId }) });
 const stop = async (fixtureId: string, sid: string, headers?: Record<string, string>) =>
   read<StreamSessionCurrent>(await stopRoute(request("POST", `/fixtures/${fixtureId}/stream-sessions/${sid}/stop`, undefined, headers), { params: Promise.resolve({ id: fixtureId, sid }) }));
 
@@ -193,20 +197,61 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect(after.body.data).toMatchObject({ id: made.body.data!.sessionId, state: "completed", endReason: "stopped", failReason: null });
   });
 
-  it("?reveal=1 — and nothing else — moves the reveal counters: a poll serves the QR without counting a reveal (De)", async () => {
+  // Task 11 review m3: `?reveal=` is a member check (api-v1/http.ts `assertOneOf`). A value that is not `1` used to be
+  // a silent poll — an audit counter for credential disclosure that under-counts `?reveal=true` is the "worst of the
+  // three behaviours" that rule exists for. Now it is a 400 that names the accepted value, and it counts nothing.
+  it("?reveal=1 — and nothing else — moves the reveal counters: a poll serves the QR without counting; any other value is 400 and counts nothing", async () => {
     const o = await organiser();
     const { sessionId } = (await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id })).body.data!;
     const reveals = async () => (await sql<{ n: number }[]>`select credentials_reveal_count as n from fixture_stream_sessions where id = ${sessionId}`)[0]!.n;
-    const steps: [string, number][] = [["", 0], ["", 0], ["?reveal=1", 1], ["?reveal=true", 1], ["?reveal=0", 1], ["", 1], ["?reveal=1", 2]];
+    const steps: [string, number, number][] = [
+      ["", 200, 0], ["", 200, 0], ["?reveal=1", 200, 1],
+      ["?reveal=true", 400, 1], ["?reveal=0", 400, 1], ["?reveal=", 400, 1], ["?reveal=1&reveal=true", 200, 2],
+      ["", 200, 2], ["?reveal=1", 200, 3],
+    ];
     let checked = 0;
-    for (const [query, expected] of steps) {
+    for (const [query, status, expected] of steps) {
       const r = await current(o.fixtureId, query);
-      expect(r.status, query).toBe(200);
-      expect(r.body.data!.qr, `${query}: the QR is served while warming`).not.toBeNull();
+      expect(r.status, query).toBe(status);
+      if (status === 200) expect(r.body.data!.qr, `${query}: the QR is served while warming`).not.toBeNull();
+      else expect(r.body.error, query).toMatchObject({ code: "VALIDATION" });
       expect(await reveals(), `after GET current${query}`).toBe(expected);
       checked += 1;
     }
     expect(checked).toBe(steps.length);
+    // Truthful envelope: the spec's `reveal` admits exactly the one value the route does (openapi.ts documents a 400 on
+    // EVERY operation, so the 400 itself needs no route-specific row).
+    type Op = { parameters?: { name: string; schema?: { enum?: string[] } }[] };
+    const op = (buildOpenApiDocument() as { paths: Record<string, Record<string, Op>> }).paths["/api/v1/fixtures/{id}/stream-sessions/current"]!.get!;
+    expect(op.parameters?.find((p) => p.name === "reveal")?.schema?.enum).toEqual(["1"]);
+  });
+
+  // Task 11 review I2: `current` carries the QR's SRT/RTMPS ingest credentials while a session warms. An edge that cached
+  // one 200 would hand them to the next caller whoever they are — so no-store, varying on both credentials the route
+  // reads (the session cookie; an API key's Authorization, refused at the door), on EVERY status it answers.
+  it("GET current is private, no-store and varies on Cookie + Authorization — on the 200 with credentials, the 200 with null, the 400 and the 403", async () => {
+    const o = await organiser();
+    const answers: [string, Awaited<ReturnType<typeof currentRaw>>][] = [];
+    answers.push(["200 null (no session)", await currentRaw(o.fixtureId)]);
+    expect((await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id })).status).toBe(201);
+    answers.push(["200 with the QR", await currentRaw(o.fixtureId, "?reveal=1")]);
+    answers.push(["400 bad reveal", await currentRaw(o.fixtureId, "?reveal=yes")]);
+    await override(o.auth.orgId, "api.access", true);
+    await override(o.auth.orgId, "api.write", true);
+    const { secret } = await createApiKey(o.auth, { name: `cache-${randomUUID().slice(0, 6)}`, scopes: ["manage"] });
+    answers.push(["403 an API key", await currentRaw(o.fixtureId, "", { authorization: `Bearer ${secret}` })]);
+    expect(answers.map(([, r]) => r.status)).toEqual([200, 200, 400, 403]);
+    const withQr = (await answers[1]![1].clone().json()) as Envelope<StreamSessionCurrent>;
+    expect(withQr.data!.qr, "the 200 really carries the ingest credentials").not.toBeNull();
+    let checked = 0;
+    for (const [label, r] of answers) {
+      expect(r.headers.get("cache-control"), label).toMatch(/(^|,\s*)no-store(\s*,|$)/);
+      expect(r.headers.get("cache-control"), label).toMatch(/(^|,\s*)private(\s*,|$)/);
+      const vary = (r.headers.get("vary") ?? "").toLowerCase().split(/\s*,\s*/);
+      expect(vary, label).toEqual(expect.arrayContaining(["cookie", "authorization"]));
+      checked += 1;
+    }
+    expect(checked).toBe(4);
   });
 
   it("A21: every typed refusal reaches the wire WITH its extra, and every extra on the wire is documented on that route × status in the OpenAPI spec", async () => {
@@ -315,8 +360,15 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
       async destroy() { throw Object.assign(new Error("fake destroy failed"), { status: 503 }); },
     });
     setRelayDriversForTest({ ingest: o.ingest, runner: failing });
-    expect((await current(a)).status).toBeGreaterThanOrEqual(500);   // the organiser's poll completes A; its forced destroy fails
-    expect((await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${old}`)[0]!.state).toBe("completed");
+    // Task 11 review m5: the organiser's poll completes A and its forced destroy fails. That failure is recorded on A's
+    // ledger and retried by admission (below) and the orphan sweep — it is not the organiser's error: the poll answers
+    // the session as it now stands, completed as STOPPED.
+    const polled = await current(a);
+    expect(polled.status).toBe(200);
+    expect(polled.body.data).toMatchObject({ id: old, state: "completed", endReason: "stopped", failReason: null });
+    const [{ result }] = await sql<{ result: string }[]>`
+      select result from fixture_stream_events where session_id = ${old} and kind = 'effect' and type = 'force_destroy' order by seq desc limit 1`;
+    expect(result, "the failed destroy is on A's ledger").toBe("failed");
     expect((await o.runner.list()).map((m) => m.runnerId)).toContain(machine);
     const refused = await create(b, { mode: "passthrough", targetId: o.target.id });
     expect(refused.status).toBe(409);
@@ -325,6 +377,31 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     // The positive pair: once the provider confirms the orphan's destroy, the same start is admitted.
     setRelayDriversForTest({ ingest: o.ingest, runner: o.runner });
     expect((await create(b, { mode: "passthrough", targetId: o.target.id })).status).toBe(201);
+  });
+
+  // Task 11 review m1: the destination index's race loser. createSession reads the storage pool AFTER its destination
+  // pre-check and BEFORE its insert, so A's whole create is run inside B's storage read: B's pre-check saw no holder,
+  // and only V421's index can refuse B. There is no holder to name (the read is gone), and the wire says so with
+  // `holder: null` — present and null, the value the OpenAPI envelope documents — never an absent key.
+  it("m1: the index race's loser is 409 target_in_use with holder: null ON THE WIRE — present and null, never absent — and writes nothing", async () => {
+    const o = await organiser({ fixtures: 2, credits: 2 });
+    const [a, b] = [o.fixtureIds[0]!, o.fixtureIds[1]!];
+    const real = o.ingest.storageUsage.bind(o.ingest);
+    let winner: string | null = null;
+    const spy = vi.spyOn(o.ingest, "storageUsage").mockImplementationOnce(async () => {
+      const first = await create(a, { mode: "passthrough", targetId: o.target.id });
+      expect(first.status).toBe(201);
+      winner = first.body.data!.sessionId;
+      return real();
+    });
+    const lost = await create(b, { mode: "passthrough", targetId: o.target.id });
+    expect(spy, "B's storage read, then A's inside it").toHaveBeenCalledTimes(2);
+    expect(winner).not.toBeNull();
+    expect(lost.status).toBe(409);
+    expect(lost.body.error!.code).toBe("target_in_use");
+    expect(lost.body.error, "holder is on the wire, and null").toHaveProperty("holder", null);
+    expect(await sessionsOn(b)).toBe(0);
+    expect(await sessionsOn(a)).toBe(1);
   });
 
   it("create: an empty body, a non-JSON body and an unknown field are 400 VALIDATION, and no row is written", async () => {
