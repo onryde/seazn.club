@@ -335,7 +335,7 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
   // alarmed, not the reader's error"; if the LEDGER write that records it fails too, nothing recorded it — that is a
   // database fault, and it is thrown on (the wrapper's own Sentry call reports it), never swallowed. Driven through the
   // Machine's own read (the facts usecase) at the grace-expired completion, where the forced destroy runs.
-  it("N3: a forced destroy whose provider call fails AND whose ledger write fails is thrown — the ledger error, not the provider's — and is not treated as a provider failure", async () => {
+  it("N3: a forced destroy whose provider call fails AND whose ledger write fails is thrown — the ledger error, not the provider's, which rides as its cause (r2-m1) — and is not treated as a provider failure", async () => {
     const providerFailure = Object.assign(new Error("fake destroy failed"), { status: 503 });
     /** A live composed session one look away from its grace-expired completion, on a runner whose DELETE fails. */
     const atTheBrink = async () => {
@@ -358,6 +358,9 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     try {
       const err = await sessionFactsForJob(s.sessionId, s.jobToken, defaultDeps("http://app.test")).catch((e: unknown) => e);
       expect(err, "the LEDGER failure reaches the caller").toBe(ledgerFailure);
+      // r2-m1: …carrying the PROVIDER's failure as its cause, so the wrapper's one report still says a DELETE failed and
+      // a Machine may be running — the alarm forceDestroy would have raised is not lost with the ledger row.
+      expect((err as Error).cause, "the provider failure rides as cause").toBe(providerFailure);
     } finally {
       vi.mocked(recordEvent).mockImplementation(real);
     }

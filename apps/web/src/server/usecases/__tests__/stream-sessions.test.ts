@@ -23,13 +23,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { inputEnvelopesHex, resealTargetDestination, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
-  FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
+  FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
   PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
   RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS, STALE_HEARTBEAT_SECONDS,
   TOKEN_GRACE_MINUTES, WARMING_TIMEOUT_MINUTES,
@@ -44,8 +45,13 @@ import { createStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
-  reconcileSession, relayBalance, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes,
+  reconcileSession, relayBalance, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
+
+// The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
+// each of its four sites (r2-m3).
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1036,6 +1042,68 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(effects.map((e) => e.result)).toEqual(["failed", "failed", "ok"]);   // the poll's DELETE, admission's refused try, admission's teardown
   });
 
+  // r2-m2 / r2-m3 (Task 11 re-review): a FAILED forced destroy may leave a Machine running, billing and pushing to a public
+  // destination, so EVERY site alarms through the house Sentry helper — admission's teardown only logged a warning — and
+  // each site's log line names the retry owner that really exists there. The shared "the table retries it" was false for a
+  // stale create: no row names that Machine, and the daily sweep's orphan pass (Task 12, A22(b)) is what retries it. The
+  // expected owners are typed here from each site's retry path (Task 11 m5, Task 12 A22(b)), never read from the module.
+  it("r2-m2/r2-m3: a failed forced destroy is ALARMED at every site — the poll's, admission's, the sweep's and a stale create's — and each log line names that site's real retry owner", async () => {
+    const failure = () => Object.assign(new Error("fake destroy failed"), { status: 503 });
+    const logged: { site: string; msg: string }[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation(((obj: { site?: string } | undefined, msg?: string) => {
+      if (typeof msg === "string" && msg.startsWith("stream session: forced Machine destroy failed")) logged.push({ site: String(obj?.site), msg });
+    }) as never);
+    const alarms = () => sentry.captureError.mock.calls
+      .filter(([, ctx]) => (ctx as { route?: string }).route === "relay.force_destroy")
+      .map(([, ctx]) => (ctx as { extra: { site: string } }).extra.site);
+    sentry.captureError.mockClear();
+    try {
+      // (1) force_destroy: the poll's forced destroy at grace + slack fails (seeded as 2C-post m5 seeds it).
+      const r = await rig({ credits: 2 });
+      const { sessionId: old } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+      await heartbeat(old, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+      const machine = (await r.row(old)).machine_id!;
+      await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = now(), runner_state = 'stopping',
+                    runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${old}`;
+      const failing = Object.assign(Object.create(r.runner) as FakeRunner, { async destroy() { throw failure(); } });
+      const flaky: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: failing } };
+      expect(await currentSession(r.auth, r.fixtureId, flaky)).toMatchObject({ id: old, state: "completed" });
+      // (2) admission: the next start's teardown of that still-listed Machine fails — refused 409, and now alarmed.
+      await expect(createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), flaky)).rejects.toMatchObject({ status: 409 });
+      // (3) sweep: the daily orphan pass destroys a listed Machine through the shared helper.
+      expect(await destroyListedMachine(old, { runnerId: machine, name: machineNameFor(old, 1) }, flaky)).toBe(false);
+      // (4) stale_create: a create that returns after its attempt moved on, and whose DELETE fails.
+      const s = await rig({ credits: 1 });
+      const slow = Object.assign(Object.create(s.runner) as FakeRunner, {
+        async create(spec: RunnerSpec) {
+          const handle = await s.runner.create(spec);
+          await sql`update fixture_stream_sessions set runner_state = 'creating', runner_attempts = ${spec.attempt + 1}, runner_retries = 1,
+                        runner_name = ${machineNameFor(spec.sessionId, spec.attempt + 1)} where id = ${spec.sessionId}`;
+          return handle;
+        },
+        async destroy() { throw failure(); },
+      });
+      await createSession(s.auth, s.fixtureId, body(s.target.id, "composed"), { ...s.deps, drivers: { ...s.deps.drivers, runner: slow } });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(alarms()).toEqual(["force_destroy", "admission", "sweep", "stale_create"]);
+    const owner: Record<string, RegExp> = {
+      force_destroy: /the runner table re-issues it/,
+      sweep: /the next daily sweep retries it/,
+      stale_create: /no row names this Machine.*the daily sweep's orphan pass retries it/,
+    };
+    expect(logged.map((l) => l.site)).toEqual(["force_destroy", "sweep", "stale_create"]);
+    let checked = 0;
+    for (const { site, msg } of logged) {
+      expect(msg, site).toMatch(owner[site]!);
+      expect(msg, site).not.toContain("the table retries it");
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(new Set(logged.map((l) => l.msg)).size, "each site names its own owner").toBe(3);
+  });
+
   // A7: every writer that takes both locks takes the ORG's money lock first, then the session row — stream-credits.ts's
   // own order (lockOrg "FIRST, before any read, by every writer", :60-66; staffRow :445; the linked refund's FOR KEY SHARE
   // on the session row comes after it). The plan's `apply` held the row FOR UPDATE and then asked consumeForSession for
@@ -1459,7 +1527,9 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
       select est_cost_minor, machine_seconds from fixture_stream_sessions where id = ${made.sessionId}`;
     const secs = cf!.machine_seconds;
     const cpu = (RUNNER_DEFAULT_GUEST.cpus * FLY_PERFORMANCE_CPU_MICROS_PER_MONTH * secs) / FLY_BILLING_SECONDS_PER_MONTH;
-    const ram = ((RUNNER_DEFAULT_GUEST.memoryMb / 1024) * FLY_RAM_MICROS_PER_GB_MONTH * secs) / FLY_BILLING_SECONDS_PER_MONTH;
+    // Only RAM above the preset's allowance is billed (the "declared PRESET" test below pins the rule on the page's numbers).
+    const extraGb = Math.max(0, RUNNER_DEFAULT_GUEST.memoryMb / 1024 - RUNNER_DEFAULT_GUEST.cpus * FLY_PERFORMANCE_INCLUDED_GB_PER_CPU);
+    const ram = (extraGb * FLY_RAM_MICROS_PER_GB_MONTH * secs) / FLY_BILLING_SECONDS_PER_MONTH;
     expect(cf!.est_cost_minor).toBe(Math.round(((600 / 60) * CLOUDFLARE_STORED_MICROS_PER_MINUTE + cpu + ram) / 10_000));
     expect(cf!.est_cost_minor).toBeGreaterThan(storageOnly);               // the differential: the two modes cannot both be right at one value
   });
@@ -1479,6 +1549,30 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     void _typed;
     expect(estimateCostMinor(withViewers)).toBe(estimateCostMinor(base));
     expect(estimateCostMinor({ ...base, recordingSeconds: 1200 }), "the formula DOES read its declared inputs").not.toBe(estimateCostMinor(base));
+  });
+
+  // The DECLARED pricing (config.ts, read from Fly's pricing page 2026-09-16): "performance-1x (1 performance CPU, 2GB)
+  // $31.00/month … performance-4x (4, 8GB) $124.00/month … The preset price INCLUDES 2 GB per performance CPU", plus "about
+  // $5 per 30 days per GB of additional RAM … ADDITIONAL RAM only — above the preset's 2 GB per CPU". The dollar figures
+  // below are the page's, in cents (EST_COST_CURRENCY usd), over one 30-day billing month — never the function's output.
+  // Before the lane-close sweep the formula charged EVERY guest GB: performance-4x/8GB read $164.00, not $124.00.
+  it("compute is priced as the declared PRESET: a performance CPU's price includes 2 GB, and only RAM ABOVE that allowance is charged — the page's own examples", () => {
+    const month = { recordingSeconds: 0, machineSeconds: FLY_BILLING_SECONDS_PER_MONTH, guestCpuClass: "dedicated" };
+    const cases: [string, number, number, number][] = [
+      ["performance-4x at its 8 GB preset: $124.00", 4, 8192, 12_400],
+      ["performance-1x at its 2 GB preset: $31.00", 1, 2048, 3_100],
+      ["performance-1x at 4 GB: $31.00 + 2 GB × $5 = $41.00 (the page shows $41.01; its $5 is 'about')", 1, 4096, 4_100],
+      ["performance-4x at 16 GB: $124.00 + 8 GB × $5 = $164.00", 4, 16_384, 16_400],
+      ["performance-1x BELOW its preset (1 GB) is no discount: $31.00", 1, 1024, 3_100],
+    ];
+    let checked = 0;
+    for (const [name, guestCpus, guestMemoryMb, cents] of cases) {
+      expect(estimateCostMinor({ ...month, guestCpus, guestMemoryMb }), name).toBe(cents);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // The guest the relay actually boots sits exactly at its preset — no additional RAM at all.
+    expect(RUNNER_DEFAULT_GUEST.memoryMb / 1024, "RUNNER_DEFAULT_GUEST's RAM is its 2 GB per CPU").toBe(RUNNER_DEFAULT_GUEST.cpus * 2);
   });
 
   it("Df: a guest class the rates do not cover gets null, never a borrowed rate", () => {
@@ -1673,12 +1767,12 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
   });
 
   // m7 (fix round 1): a repeated stop — a double tap, or a retry after a lost response — gets the same 200 projection the
-  // first stop gave, and writes nothing OF ITS OWN: no action row, no decision, no provider call. The projection is a
-  // poll, and a poll records what it observes (samples; a draining Machine's observation) — so for a live Machine the
-  // claim is "exactly what a poll writes", and for a completed session, which a poll does not reconcile, "nothing". A
-  // stop naming a session the fixture has since SUPERSEDED is still 409 not_active — the projection would describe a
-  // different session.
-  it("m7: a SECOND stop is idempotent — the same answer, nothing written of its own, no provider call — in both modes; a stop naming a SUPERSEDED session is 409 not_active", async () => {
+  // first stop gave, and DECIDES nothing: no decision, no provider call. The projection is a poll, and a poll records what
+  // it observes (samples; a draining Machine's observation) — so for a live Machine the claim is "exactly what a poll
+  // writes, plus the tap", and for a completed session, which a poll does not reconcile, "nothing". Task 10 n5: the TAP on
+  // an `ending` session is an `action:stop` row — the audit keeps every Stop the organiser pressed. A stop naming a session
+  // the fixture has since SUPERSEDED is still 409 not_active — the projection would describe a different session.
+  it("m7: a SECOND stop is idempotent — the same answer, no decision, no provider call — in both modes; on an ENDING session the tap alone is recorded (n5), on a completed one nothing; a stop naming a SUPERSEDED session is 409 not_active", async () => {
     // The whole history ledger, in order — so a moved row shows up in the diff by kind and type, not as a count.
     const eventsOf = async (sid: string) => (await sql<{ seq: number; kind: string; type: string }[]>`
       select seq, kind, type from fixture_stream_events where session_id = ${sid} order by seq`).map((e) => `${e.seq}:${e.kind}:${e.type}`);
@@ -1713,8 +1807,8 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(firstC.state).toBe("ending");
     // The answer IS the projection, and the projection of a non-terminal session is a poll — its reconcile records what it
     // observed (a `runner_transition:observed` row per look at a draining Machine), exactly as the first stop's answer did.
-    // So the claim is a DIFFERENTIAL: a repeated stop writes exactly what a plain poll writes, and nothing of its own (no
-    // action, no transition, no effect).
+    // So the claim is a DIFFERENTIAL: a repeated stop writes exactly what a plain poll writes plus its own TAP (n5) — the
+    // action row, first — and decides nothing (no transition, no effect).
     const delta = async (fn: () => Promise<unknown>) => {
       const b = await eventsOf(s3.sessionId);
       await fn();
@@ -1724,10 +1818,43 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     let secondC: Awaited<ReturnType<typeof stopSession>> | null = null;
     const stopDelta = await delta(async () => { secondC = await stopSession(c.auth, c.fixtureId, s3.sessionId, dd); });
     expect(secondC).toMatchObject({ id: s3.sessionId, state: "ending" });
-    expect(stopDelta, "a repeated stop writes exactly what a poll writes").toEqual(pollDelta);
-    expect(stopDelta.filter((k) => /^(action|transition|effect):/.test(k)), "nothing of the stop's own").toEqual([]);
+    expect(stopDelta, "a repeated stop writes its tap, then exactly what a poll writes").toEqual(["action:stop", ...pollDelta]);
+    expect(stopDelta.filter((k) => /^(transition|effect):/.test(k)), "the stop decides nothing").toEqual([]);
+    const taps = await sql<{ actor_user_id: string | null; payload: Record<string, unknown> }[]>`
+      select actor_user_id, payload from fixture_stream_events where session_id = ${s3.sessionId} and kind = 'action' and type = 'stop' order by seq`;
+    expect(taps, "both taps, each with its organiser and the state it met").toEqual([
+      { actor_user_id: c.auth.userId, payload: { state: "live" } },
+      { actor_user_id: c.auth.userId, payload: { state: "ending" } },
+    ]);
     expect(c.runner.stops).toHaveLength(1);                                   // ONE SIGINT
     expect(c.runner.destroyed).toEqual([]);
+  });
+
+  it("n5: a Stop tapped on a session ENDING for another reason — the deadline — is the organiser's recorded action (who, and the state it met), and decides nothing: no transition, no effect, no second SIGINT", async () => {
+    const c = await rig({ credits: 1 });
+    const draining = Object.assign(Object.create(c.runner) as FakeRunner, {
+      async stop(id: string, opts: { signal: "SIGINT"; timeoutSeconds: number }) { await c.runner.stop(id, opts); c.runner.setObserved(id, "stopping"); },
+    });
+    const dd: SessionDeps = { ...c.deps, drivers: { ...c.deps.drivers, runner: draining } };
+    const { sessionId } = await createSession(c.auth, c.fixtureId, body(c.target.id, "composed"), dd);
+    await heartbeat(sessionId, c.runner.created[0]!.jobToken, { state: "playing" }, dd);
+    c.tick((MAX_DURATION_MINUTES + 1) * 60_000);   // past the booking: the wall clock ends it on the next read
+    expect(await currentSession(c.auth, c.fixtureId, dd)).toMatchObject({ id: sessionId, state: "ending", endReason: "max_duration" });
+    const stopsBefore = c.runner.stops.length;
+    expect(stopsBefore, "the deadline sent its SIGINT").toBe(1);
+    const ledger = async () => (await sql<{ kind: string; type: string }[]>`
+      select kind, type from fixture_stream_events where session_id = ${sessionId} order by seq`).map((e) => `${e.kind}:${e.type}`);
+    const before = await ledger();
+    expect(before.filter((k) => k === "action:stop"), "the deadline is not the organiser's stop").toEqual([]);
+    const answered = await stopSession(c.auth, c.fixtureId, sessionId, dd);
+    expect(answered).toMatchObject({ id: sessionId, state: "ending", endReason: "max_duration" });
+    const added = (await ledger()).slice(before.length);
+    expect(added.filter((k) => k.startsWith("action:")), "the tap is on the ledger").toEqual(["action:stop"]);
+    expect(added.filter((k) => /^(transition|effect):/.test(k)), "and decides nothing").toEqual([]);
+    const [tap] = await sql<{ actor_user_id: string | null; payload: Record<string, unknown> }[]>`
+      select actor_user_id, payload from fixture_stream_events where session_id = ${sessionId} and kind = 'action' and type = 'stop'`;
+    expect(tap).toEqual({ actor_user_id: c.auth.userId, payload: { state: "ending" } });
+    expect(c.runner.stops).toHaveLength(stopsBefore);
   });
 
   it("stop with no Machine completes AT ONCE, and a stop while `creating` goes to ending and is torn down when the create returns", async () => {

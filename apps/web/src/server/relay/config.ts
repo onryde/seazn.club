@@ -213,6 +213,9 @@ export const FLY_PERFORMANCE_CPU_MICROS_PER_MONTH = 31_000_000;
  *  RAM only — above the preset's 2 GB per CPU. The plan snapshot said $5.34; the
  *  page wins. */
 export const FLY_RAM_MICROS_PER_GB_MONTH = 5_000_000;
+/** Same page: the RAM a performance preset's price already includes, per CPU (performance-1x = 1 CPU + 2 GB,
+ *  performance-4x = 4 + 8 GB). FLY_RAM_MICROS_PER_GB_MONTH prices only the GB above cpus × this; fewer GB is no discount. */
+export const FLY_PERFORMANCE_INCLUDED_GB_PER_CPU = 2;
 /** Same page, read 2026-09-16: prices are "per 30 days", and $31.00/month ↔
  *  $0.00001196/second reproduces only with a 30-day month (2,592,000 s). The plan
  *  snapshot used a 730-hour month (R0-memo.md's $0.0000317/s for

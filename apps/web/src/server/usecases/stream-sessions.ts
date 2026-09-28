@@ -21,7 +21,7 @@ import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { checkDestination } from "@/lib/stream-destinations";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
-  FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_RAM_MICROS_PER_GB_MONTH,
+  FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
   MAX_DURATION_MINUTES, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, SRT_LATENCY_MS,
   relayEnvironment,
 } from "@/server/relay/config";
@@ -184,7 +184,9 @@ export function estimateCostMinor(f: {
     // which is the differential the test uses: passthrough and composed MUST differ.
     if (f.guestCpuClass !== "dedicated" || f.guestCpus === null || f.guestMemoryMb === null) return null;
     const cpu = (f.guestCpus * FLY_PERFORMANCE_CPU_MICROS_PER_MONTH * f.machineSeconds) / FLY_BILLING_SECONDS_PER_MONTH;
-    const ram = ((f.guestMemoryMb / 1024) * FLY_RAM_MICROS_PER_GB_MONTH * f.machineSeconds) / FLY_BILLING_SECONDS_PER_MONTH;
+    // The preset price includes FLY_PERFORMANCE_INCLUDED_GB_PER_CPU per CPU; only the GB ABOVE it is billed (config.ts).
+    const extraGb = Math.max(0, f.guestMemoryMb / 1024 - f.guestCpus * FLY_PERFORMANCE_INCLUDED_GB_PER_CPU);
+    const ram = (extraGb * FLY_RAM_MICROS_PER_GB_MONTH * f.machineSeconds) / FLY_BILLING_SECONDS_PER_MONTH;
     computeMicros = cpu + ram;
   }
   return Math.round((storedMicros + computeMicros) / 10_000);
@@ -359,8 +361,9 @@ async function recordEffect<T>(s: Session, type: string, source: "ingest" | "run
  *  it (re-review N1). It names the session and the Machine — never the destination, its key or any URL.
  *
  *  Narrowed to the provider call (re-review N3): if the LEDGER write fails — recordEffect's own `write`, before or after
- *  the DELETE — nothing recorded the outcome, and that database fault is thrown on untouched (the route wrapper reports
- *  it). Told apart by identity: only the exact error the provider call threw is caught here.
+ *  the DELETE — nothing recorded the outcome, and that database fault is thrown on (the route wrapper reports it), carrying
+ *  the provider's failure as its `cause` when the DELETE had failed first (r2-m1). Told apart by identity: only the exact
+ *  error the provider call threw is caught here.
  *
  *  THIRD site, `sweep` (Task 12, A22(b)): the daily sweep's orphan pass destroys a listed Machine its session no longer
  *  owns through THIS helper — the retry owner of every forced destroy that failed at the other two sites — so its row is
@@ -369,8 +372,20 @@ async function recordEffect<T>(s: Session, type: string, source: "ingest" | "run
  *
  *  A FAILED destroy also CLEARS the session's `runner_gone_confirmed_at` (V422, A22(c)): that mark lets admission skip
  *  the provider for this session, and a Machine that survived a DELETE is exactly what admission must find again. */
+type ForceDestroySite = "force_destroy" | "stale_create" | "sweep";
+
+/** r2-m2 (Task 11 re-review): WHO retries a failed forced destroy, per site — the log line names the owner that really
+ *  exists. A lost runner's teardown is re-issued by the table on its next stale beat, and a terminal session's orphan by
+ *  the next admission on its fixture or destination (tearDownPriorMachines) and the daily sweep. A stale create's Machine
+ *  is named by no row, so no cell ever re-issues it: the daily sweep's orphan pass (A22(b)) owns it. */
+const DESTROY_RETRY_OWNER: Record<ForceDestroySite, string> = {
+  force_destroy: "the runner table re-issues it while the session lives, then admission and the daily sweep",
+  stale_create: "no row names this Machine, so the daily sweep's orphan pass retries it",
+  sweep: "the next daily sweep retries it",
+};
+
 async function forceDestroy(
-  s: Session, machineId: string, site: "force_destroy" | "stale_create" | "sweep", payload: Record<string, unknown>, deps: SessionDeps,
+  s: Session, machineId: string, site: ForceDestroySite, payload: Record<string, unknown>, deps: SessionDeps,
 ): Promise<boolean> {
   const provider: { failure?: unknown } = {};
   try {
@@ -384,12 +399,17 @@ async function forceDestroy(
     }, payload);
     return true;
   } catch (err) {
-    if (!("failure" in provider) || err !== provider.failure) throw err;   // the ledger failed, not the provider
+    if (!("failure" in provider) || err !== provider.failure) {
+      // The ledger failed, not the provider (N3): thrown on. r2-m1: when the DELETE had failed first, its error rides as
+      // `cause`, so the wrapper's one report still says a Machine may be running — the alarm below is never reached.
+      if ("failure" in provider && err instanceof Error) err.cause ??= provider.failure;
+      throw err;
+    }
     await sql`update fixture_stream_sessions set runner_gone_confirmed_at = null where id = ${s.id} and runner_gone_confirmed_at is not null`;
     const machineName = typeof payload.machineName === "string" ? payload.machineName : s.runner.name;
     const extra = { sessionId: s.id, machineId, machineName, attempt: s.runner.attempt, site };
     captureError(err, { orgId: s.orgId, route: "relay.force_destroy", extra });
-    log.error({ ...extra, err: String(err) }, "stream session: forced Machine destroy failed — recorded and reported; the table retries it");
+    log.error({ ...extra, err: String(err) }, `stream session: forced Machine destroy failed — recorded and reported; ${DESTROY_RETRY_OWNER[site]}`);
     return false;
   }
 }
@@ -748,6 +768,9 @@ async function tearDownPriorMachines(
     try {
       await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(m.runnerId), { machineId: m.runnerId, machineName: m.name, reason: "admission", fixtureId });
     } catch (err) {
+      // r2-m3 (Task 11 re-review): a Machine that survived this DELETE may still be pushing to the destination — the same
+      // alarm as forceDestroy's (route, extra shape), site `admission`, beside the 409 the organiser sees.
+      captureError(err, { orgId, route: "relay.force_destroy", extra: { sessionId: s.id, machineId: m.runnerId, machineName: m.name, attempt: s.runner.attempt, site: "admission" } });
       if (s.fixtureId !== fixtureId) {
         log.warn({ sid: s.id, fixtureId, holderFixtureId: s.fixtureId, targetId, machineId: m.runnerId, err: String(err) }, "stream session: another fixture's ended session still has a Machine on this destination and its destroy failed — start refused");
         return { sameFixture: null, otherFixture: holder };
@@ -1071,11 +1094,21 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
   const row = await readRow(sessionId);
   if (!row || row.fixture_id !== fixtureId || row.org_id !== auth.orgId) throw new HttpError(404, "session not found");
   // m7 (fix round 1): a REPEATED stop — a double tap, or a retry after a lost response — is idempotent. A session already
-  // stopping (`ending`) or stopped is answered with the same projection the first stop returned, and nothing is written:
-  // no action row, no decision, no provider call. A stop naming a session the fixture has since SUPERSEDED stays 409
-  // not_active: the fixture's projection would describe a DIFFERENT session.
+  // stopping (`ending`) or stopped is answered with the same projection the first stop returned, and nothing is DECIDED:
+  // no decision, no provider call. A stop naming a session the fixture has since SUPERSEDED stays 409 not_active: the
+  // fixture's projection would describe a DIFFERENT session.
   if (row.state === "ending" || isTerminal(row.state)) {
     if ((await latestRow(fixtureId))?.id !== sessionId) throw new HttpError(409, "session is not running", "not_active");
+    // Task 10 n5: the TAP is still the organiser's action. A session `ending` for another reason (the deadline, a failure)
+    // otherwise kept no record that anyone pressed Stop. The row names the actor and the state the tap met, under the row
+    // lock (`seq` is per session); it decides nothing. A finished session's tap asks for nothing and is not recorded.
+    if (row.state === "ending") {
+      await sql.begin(async (tx) => {
+        const locked = await lockRow(tx, sessionId);
+        await recordEvent(tx, { sessionId, orgId: row.org_id, source: "client", kind: "action", type: "stop", actorUserId: auth.userId ?? null,
+          occurredAt: deps.now(), payload: { state: locked?.state ?? row.state } });
+      });
+    }
     return (await currentSession(auth, fixtureId, deps))!;
   }
   await apply(sessionId, { type: "stop" }, deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
