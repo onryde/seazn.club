@@ -20,8 +20,9 @@
 //      mismatch at ANY point of the run — an environment fault is never
 //      recorded as a product red); a failed preflight.
 //   3  aborted after the start gates, reason on stderr: the harness commit,
-//      the DB, sign-in, a planning read, or writeResults refusing a secret.
-//      Nothing is written unless the failure came after results.json.
+//      the DB, sign-in, a planning read, or writeResults refusing a secret
+//      (nothing written); or MATRIX.md failing to render (results.json kept,
+//      the PF4 summary already printed).
 // An uncaught throw would exit 1 — the "zero cases" code — and print an
 // unredacted stack, so every failure is caught here.
 //
@@ -106,14 +107,18 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary };
 }
 
-/** PF4: `vacuous` is every case that is NOT an error red and has no applied
- *  check over at least one item. An error red (decideState's only `error:`
- *  reason — a driver or product refusal) is a finding, not vacuity, so it is
- *  listed apart with the refused call. */
+/** PF4: `vacuous` is every case that is neither an error red nor deferred and
+ *  has no applied check over at least one item.
+ *  - An error red (decideState's only `error:` reason — a driver or product
+ *    refusal) is a finding, not vacuity, so it is listed apart with the
+ *    refused call.
+ *  - A deferred case (⏳ `later`: ScenarioUnsupported / RowBuildDeferred) is an
+ *    honest owner-assigned state naming its wave, not vacuity (controller
+ *    ruling, Task 9 fix round 1). */
 export function summariseRun(cases: readonly CaseResult[], refusals: ReadonlyMap<string, CallRefusal>): RunSummary {
   const isErrorRed = (c: CaseResult) => c.reason.startsWith("error:");
   return {
-    vacuous: cases.filter((c) => !isErrorRed(c) && !c.checks.some((k) => k.verdict !== "abstain" && k.checked > 0)).map((c) => c.caseId),
+    vacuous: cases.filter((c) => c.state !== "later" && !isErrorRed(c) && !c.checks.some((k) => k.verdict !== "abstain" && k.checked > 0)).map((c) => c.caseId),
     errorReds: cases.filter(isErrorRed).map((c) => ({ caseId: c.caseId, error: c.reason.replace(/^error: ?/, ""), refusal: refusals.get(c.caseId) ?? null })),
   };
 }
@@ -206,10 +211,18 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
   }
 
   const results: RunResults = { schemaVersion: 1, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), cases };
-  say(`results → ${writeResults(dir, results)}`);
+  const resultsPath = writeResults(dir, results);
+  say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);
-  writeFileSync(join(dir, "MATRIX.md"), renderMatrix(results));
+  // The summary is printed before MATRIX.md is rendered, so a render failure
+  // (renderMatrix refuses a case off the catalogue grid) cannot lose it.
   printSummary(summariseRun(cases, refusals));
+  try {
+    writeFileSync(join(dir, "MATRIX.md"), renderMatrix(results));
+  } catch (e) {
+    warn(`matrix: results.json kept at ${resultsPath}; MATRIX.md failed — ${errText(e)}`);
+    return EXIT.ABORTED;
+  }
   return cases.length === 0 ? EXIT.NO_SIGNAL : EXIT.OK;
 }
 
@@ -239,7 +252,30 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   }
 }
 
-export function realDeps(): RunDeps {
+/** Closes every handle, even when one throws, and never throws itself: a
+ *  close that threw from a `finally` would leak the other connection and
+ *  REPLACE the in-flight error — turning a DataDirMismatch (exit 2, run
+ *  refused) into an ordinary case red. Each failure is warned, redacted. */
+export async function closeHandles(...handles: readonly { dispose: () => Promise<void> }[]): Promise<void> {
+  const settled = await Promise.allSettled(handles.map(async (h) => h.dispose()));
+  for (const s of settled) if (s.status === "rejected") warn(`matrix: dispose failed — ${errText(s.reason)}`);
+}
+
+/** The two DB handle factories realDeps opens. Injectable only so the unit
+ *  suite can witness the open/close wiring without a database. */
+export interface DbFactories {
+  matrixSql(): ReturnType<typeof createRealMatrixSql>;
+  planSql(): ReturnType<typeof createRealPlanSql>;
+}
+
+const REAL_DB: DbFactories = {
+  // Task 7 M3: NO argument, so it reads the same process.env DATABASE_URL as
+  // createRealPlanSql (pinned by run-cli.test.ts).
+  matrixSql: () => createRealMatrixSql(),
+  planSql: () => createRealPlanSql(),
+};
+
+export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
   return {
     env: process.env,
     harnessCommit: async () => execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim(),
@@ -247,20 +283,19 @@ export function realDeps(): RunDeps {
       const { probes, dispose } = createRealPreflightProbes();
       try { return await runPreflight(base, probes); } finally { await dispose(); }
     },
-    // Task 7 M3: createRealMatrixSql() takes NO argument, so it reads the same
-    // process.env DATABASE_URL as createRealPlanSql (which has no data-dir gate
-    // of its own). Every plan.ts call follows a gated MatrixSql call: the
-    // plan read below waits on listPlanKeys' data_directory proof, and
-    // prepareCaseOrg's provision (the plan.ts WRITES) runs only after
-    // insertCaseOrg re-proved the DB inside its own transaction.
+    // createRealPlanSql has no data-dir gate of its own. Every plan.ts call
+    // follows a gated MatrixSql call: the plan read below waits on
+    // listPlanKeys' data_directory proof, and prepareCaseOrg's provision (the
+    // plan.ts WRITES) runs only after insertCaseOrg re-proved the DB inside
+    // its own transaction.
     openDb: async () => {
-      const m = createRealMatrixSql();
-      const p = createRealPlanSql();
+      const m = dbf.matrixSql();
+      const p = dbf.planSql();
       const db: RunDb = {
         userIdForEmail: (e) => m.sql.userIdForEmail(e),
         variantKeysInBuilderOrder: (s) => m.sql.variantKeysInBuilderOrder(s),
         chooseTopPublicPlan: async () => chooseTopPublicPlan(await p.sql.planCandidateInfo(await m.sql.listPlanKeys())),
-        dispose: async () => { await m.dispose(); await p.dispose(); },
+        dispose: () => closeHandles(m, p),
       };
       return db;
     },
@@ -268,14 +303,14 @@ export function realDeps(): RunDeps {
     // Per-case connections, opened and closed here: each case's SQL runs on a
     // fresh max:1 client, and its data_directory proof is its own.
     prepareCaseOrg: async (ctx, input) => {
-      const m = createRealMatrixSql();
-      const p = createRealPlanSql();
+      const m = dbf.matrixSql();
+      const p = dbf.planSql();
       try {
         return await prepareCaseOrg({
           sql: m.sql, transport: { raw }, base: ctx.base, session: ctx.session, userId: ctx.userId, plan: ctx.plan,
           provision: (orgId, plan) => provisionPlan({ base: ctx.base, orgId, plan, ownerSession: ctx.session, sql: p.sql }),
         }, input);
-      } finally { await m.dispose(); await p.dispose(); }
+      } finally { await closeHandles(m, p); }
     },
     driverFor: (base, session, orgId) => new HttpDriver({ base, session, expectedOrgId: orgId }),
   };

@@ -9,24 +9,36 @@ import { RefusedCall } from "../lib/driver/types.ts";
 import type { CaseResult, CheckResult } from "../lib/results.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
-import { DataDirMismatch } from "../lib/seed-org.ts";
-import { SLICE_ROWS } from "../lib/slice.ts";
-import { runSlice, summariseRun, type RunDeps } from "../run.ts";
+import type { Session } from "../../bench/lib/http.ts";
+import { resolveSportCfg } from "../lib/sport-cfg.ts";
+import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
+import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
+import { closeHandles, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RUN = join(REPO, "scripts/matrix/run.ts");
 
-type Deps = RunDeps & { order: string[]; orgs: { name: string; slug: string }[]; emails: string[] };
+type PrepareCtx = Parameters<RunDeps["prepareCaseOrg"]>[0];
+interface DriverCall { base: string; session: Session; orgId: string; driver: FakeLeagueDriver }
+type Deps = RunDeps & { order: string[]; orgs: { name: string; slug: string }[]; ctxs: PrepareCtx[]; emails: string[]; drivers: DriverCall[]; session: Session };
 
+/** Every case gets its OWN org id (`org-<slug>`), and driverFor records what it
+ *  was handed — so a stale, constant or empty org id cannot pass unseen. */
 function deps(over: Partial<RunDeps> = {}): Deps {
   const order: string[] = [];
   const orgs: { name: string; slug: string }[] = [];
+  const ctxs: PrepareCtx[] = [];
   const emails: string[] = [];
+  const drivers: DriverCall[] = [];
+  const session: Session = { cookies: {} };
   const d: Deps = {
     order,
     orgs,
+    ctxs,
     emails,
+    drivers,
+    session,
     env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg", SMOKE_BASE: "http://localhost:3999" },
     harnessCommit: async () => "abc1234",
     preflight: async () => { order.push("preflight"); return { ok: true, refusals: [] }; },
@@ -36,9 +48,9 @@ function deps(over: Partial<RunDeps> = {}): Deps {
       chooseTopPublicPlan: async () => "pro",
       dispose: async () => { order.push("dispose"); },
     }; },
-    signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return { cookies: {} }; },
-    prepareCaseOrg: async (_ctx, i) => { orgs.push(i); return { orgId: "org-fake", orgSlug: i.slug }; },
-    driverFor: () => new FakeLeagueDriver("org-fake"),
+    signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return session; },
+    prepareCaseOrg: async (ctx, i) => { orgs.push(i); ctxs.push(ctx); return { orgId: `org-${i.slug}`, orgSlug: i.slug }; },
+    driverFor: (base, s, orgId) => { const driver = new FakeLeagueDriver(orgId); drivers.push({ base, session: s, orgId, driver }); return driver; },
     ...over,
   };
   return d;
@@ -150,13 +162,13 @@ describe("runSlice — a run", () => {
   it.each([
     ["ScenarioUnsupported", () => new ScenarioUnsupported("W1b", "team rosters"), "W1b: team rosters"],
     ["RowBuildDeferred", () => new RowBuildDeferred("group_only", "W1b"), "W1b: catalogue: row 'group_only' is API-only; its stage bodies are built in W1b"],
-  ] as const)("a %s is ⏳ later with its wave — never an error red — and, having checked nothing, is listed vacuous (PF4)", async (_name, make, reason) => {
+  ] as const)("a %s is ⏳ later with its wave — neither an error red nor vacuous: an honest owner-assigned state (PF4 ruling)", async (_name, make, reason) => {
     const io = capture();
     vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw make(); });
     const dir = dirFor();
     expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t9", "--report-dir", dir])).toBe(0);
     expect(resultsIn(dir, "t9").cases[0]).toMatchObject({ state: "later", reason, checks: [] });
-    expect(io.out()).toContain("vacuous: league|generic|score|LIFECYCLE");
+    expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
   });
   it("a knockout case on the league-only fake is red with a redacted error, not a crash", async () => {
@@ -214,6 +226,46 @@ describe("runSlice — a run", () => {
     expect(d.orgs).toEqual([1, 2, 3, 4].map((n) => ({ name: `Matrix t3 ${n}`, slug: `m-t3-${n}` })));
     expect(d.emails).toEqual(["signIn delivered+matrix-t3@resend.dev", "db delivered+matrix-t3@resend.dev"]);
     expect(resultsIn(dir, "t3").cases.map((c) => c.caseId)).toEqual(["LIFECYCLE", "M1", "R4", "F1"].map((k) => `league|generic|score|${k}`));
+    // Every case's org is seeded under the one signed-in session, the owner and the chosen plan…
+    expect(d.ctxs).toEqual([1, 2, 3, 4].map(() => ({ base: "http://localhost:3999", session: d.session, userId: "u1", plan: "pro" })));
+    expect(d.ctxs.every((c) => c.session === d.session)).toBe(true);
+    // …and each case drives THE org it just switched to, over that same session.
+    expect(d.drivers.map((x) => [x.base, x.orgId])).toEqual([1, 2, 3, 4].map((n) => ["http://localhost:3999", `org-m-t3-${n}`]));
+    expect(d.drivers.every((x) => x.session === d.session)).toBe(true);
+  });
+
+  it("the scenario gets the case's own driver, org slug, spec, resolved cfg and tag", async () => {
+    capture();
+    const ctxs: ScenarioContext[] = [];
+    wrapScenario("LIFECYCLE", (out) => out, (ctx) => { ctxs.push(ctx); return ctx; });
+    const d = deps();
+    expect(await runSlice(d, ["--only", "league|badminton", "--scenario", "LIFECYCLE", "--run-id", "t11", "--report-dir", dirFor()])).toBe(0);
+    expect(ctxs).toHaveLength(1);
+    const ctx = ctxs[0]!;
+    expect(ctx.driver).toBe(d.drivers[0]!.driver);
+    expect(ctx.orgSlug).toBe("m-t11-1");
+    expect(ctx.tag).toBe("t11-1");
+    expect(ctx.spec).toEqual({ caseId: "league|badminton|bwf|LIFECYCLE", row: "league", sport: "badminton", variant: "bwf", scenario: "LIFECYCLE", canary: false });
+    expect(ctx.cfg).toEqual(resolveSportCfg("badminton", "bwf"));
+  });
+
+  it("a failed org switch reds ONLY its own case: no driver for it, and the rest of the cell still runs", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const base = deps();
+    const d = deps({
+      prepareCaseOrg: async (ctx, i) => {
+        if (i.slug === "m-t12-1") throw new OrgSwitchFailed(`org-${i.slug}`, "POST /api/orgs/active → 500: You are not a member");
+        return base.prepareCaseOrg(ctx, i);
+      },
+    });
+    expect(await runSlice(d, ["--only", "league|generic", "--run-id", "t12", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "t12").cases;
+    expect(cases.map((c) => c.state)).toEqual(["red", "works", "works", "works"]);
+    expect(cases[0]!.reason).toMatch(/^error: OrgSwitchFailed: seed-org: could not make org-m-t12-1 the active org/);
+    expect(d.drivers.map((x) => x.orgId)).toEqual(["org-m-t12-2", "org-m-t12-3", "org-m-t12-4"]);
+    expect(io.out()).toContain("error reds: 1");
+    expect(io.out()).toContain("error-red league|generic|score|LIFECYCLE: OrgSwitchFailed: seed-org: could not make org-m-t12-1 the active org");
   });
 
   it("PF8: counts carry the scenario's own event count, the driver's call count and the observed fixtures", async () => {
@@ -332,6 +384,27 @@ describe("runSlice — aborts after the start gates", () => {
     expect(resultsIn(dir, "a4").cases).toHaveLength(1);
     expect(io.err()).toMatch(/dispose failed — Error: end timed out/);
   });
+  it("MATRIX.md failing to render still prints the PF4 summary and keeps results.json (exit 3)", async () => {
+    const io = capture();
+    const dir = dirFor();
+    // A sport off the catalogue grid: the case itself errors red (unknown sport),
+    // results.json takes it, and renderMatrix then refuses the off-grid case.
+    const sports = SLICE_SPORTS as unknown as string[];
+    const saved = [...sports];
+    sports.splice(1, 1, "nosuchsport");
+    try {
+      expect(await runSlice(deps(), ["--only", "league|nosuchsport", "--scenario", "LIFECYCLE", "--run-id", "a5", "--report-dir", dir])).toBe(3);
+    } finally {
+      sports.splice(0, sports.length, ...saved);
+    }
+    expect([...SLICE_SPORTS]).toEqual(saved);
+    expect(resultsIn(dir, "a5").cases.map((c) => [c.caseId, c.state])).toEqual([["league|nosuchsport|bwf|LIFECYCLE", "red"]]);
+    expect(existsSync(join(dir, "a5", "MATRIX.md"))).toBe(false);
+    expect(io.out()).toContain("vacuous: none");
+    expect(io.out()).toContain("error reds: 1");
+    expect(io.out()).toMatch(/error-red league\|nosuchsport\|bwf\|LIFECYCLE: /);
+    expect(io.err()).toMatch(/matrix: results\.json kept at .*a5\/results\.json; MATRIX\.md failed — Error: renderMatrix: case league\|nosuchsport\|bwf\|LIFECYCLE .* is not on the catalogue grid/);
+  });
 });
 
 describe("summariseRun (PF4) — empty first", () => {
@@ -342,10 +415,11 @@ describe("summariseRun (PF4) — empty first", () => {
   it("no cases: nothing vacuous, no error reds", () => {
     expect(summariseRun([], new Map())).toEqual({ vacuous: [], errorReds: [] });
   });
-  it("vacuous = a non-error case with no applied check over at least one item; error reds are listed apart, never as vacuous", () => {
+  it("vacuous = a non-error, non-deferred case with no applied check over at least one item; error reds are listed apart; ⏳ deferrals are neither", () => {
     const cases = [
       kase("abstained", "red", "every check abstained (vacuous)", [chk("abstain", 0)]),
       kase("zero-items", "red", "checked zero items (vacuous): k", [chk("pass", 0)]),
+      // Controller ruling (fix round 1): ⏳ is an honest owner-assigned state, never vacuity.
       kase("deferred", "later", "W1b: team rosters", []),
       kase("works", "works", "1 checks, 3 items", [chk("pass", 3), chk("abstain", 0)]),
       kase("real-red", "red", "k: wrong", [chk("fail", 2)]),
@@ -356,7 +430,7 @@ describe("summariseRun (PF4) — empty first", () => {
     cases.splice(1, 0, kase("abstained-with-items", "red", "every check abstained (vacuous)", [chk("abstain", 2)]));
     const refusals = new Map([["refused", { method: "POST", path: "/x", status: 400, code: "VALIDATION" }]]);
     expect(summariseRun(cases, refusals)).toEqual({
-      vacuous: ["abstained", "abstained-with-items", "zero-items", "deferred"],
+      vacuous: ["abstained", "abstained-with-items", "zero-items"],
       errorReds: [
         { caseId: "refused", error: "RefusedCall: POST /x → HTTP 400 VALIDATION: bad", refusal: { method: "POST", path: "/x", status: 400, code: "VALIDATION" } },
         { caseId: "crashed", error: "TypeError: boom", refusal: null },
@@ -372,6 +446,51 @@ describe("realDeps wiring (Task 7 M3)", () => {
     const all = code.match(/createRealMatrixSql\(/g) ?? [];
     expect(all.length).toBeGreaterThan(0);
     expect(code.match(/createRealMatrixSql\(\)/g) ?? []).toHaveLength(all.length);
+  });
+
+  /** Fake handles for realDeps' two DB sites: what opened, what closed, and
+   *  whether a close throws. No postgres client is ever built. */
+  function fakeDb(opts: { mThrows?: boolean; pThrows?: boolean; insert?: Error } = {}) {
+    const log: string[] = [];
+    const sql: MatrixSql = {
+      userIdForEmail: async () => "u1",
+      insertCaseOrg: async () => { log.push("m.insertCaseOrg"); if (opts.insert) throw opts.insert; return { orgId: "o1", orgSlug: "s" }; },
+      listPlanKeys: async () => [],
+      variantKeysInBuilderOrder: async () => [],
+    };
+    const f: DbFactories = {
+      matrixSql: () => { log.push("m.open"); return { sql, dispose: async () => { log.push("m.dispose"); if (opts.mThrows) throw new Error("m end timed out"); } }; },
+      planSql: () => { log.push("p.open"); return { sql: {} as never, dispose: async () => { log.push("p.dispose"); if (opts.pThrows) throw new Error("p end timed out"); } }; },
+    };
+    return { f, log };
+  }
+
+  it("closeHandles closes every handle even when one throws, warns each failure, and never throws", async () => {
+    const io = capture();
+    const closed: string[] = [];
+    const h = (n: string, fail: boolean) => ({ dispose: async () => { closed.push(n); if (fail) throw new Error(`${n} failed`); } });
+    await expect(closeHandles(h("a", true), h("b", true), h("c", false))).resolves.toBeUndefined();
+    expect(closed).toEqual(["a", "b", "c"]);
+    expect(io.err()).toContain("matrix: dispose failed — Error: a failed");
+    expect(io.err()).toContain("matrix: dispose failed — Error: b failed");
+  });
+
+  it.each([["the first", { mThrows: true }], ["the second", { pThrows: true }]] as const)(
+    "openDb's dispose: %s handle throwing still closes the other, and the dispose itself does not throw", async (_n, opts) => {
+      const io = capture();
+      const { f, log } = fakeDb(opts);
+      const db = await realDeps(f).openDb();
+      await expect(db.dispose()).resolves.toBeUndefined();
+      expect(log).toEqual(["m.open", "p.open", "m.dispose", "p.dispose"]);
+      expect(io.err()).toMatch(/matrix: dispose failed — Error: [mp] end timed out/);
+    });
+
+  it("a case's org seeding: a throwing dispose neither leaks the other handle nor masks an in-flight DataDirMismatch", async () => {
+    capture();
+    const { f, log } = fakeDb({ mThrows: true, insert: new DataDirMismatch("/tmp/pg", "/var/other") });
+    const ctx = { base: "http://localhost:3999", session: { cookies: {} }, userId: "u1", plan: "pro" };
+    await expect(realDeps(f).prepareCaseOrg(ctx, { name: "Matrix r 1", slug: "m-r-1" })).rejects.toBeInstanceOf(DataDirMismatch);
+    expect(log).toEqual(["m.open", "p.open", "m.insertCaseOrg", "m.dispose", "p.dispose"]);
   });
 });
 
