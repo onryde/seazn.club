@@ -41,6 +41,12 @@
 //   m33 write the audit row on the pool's `sql` instead of `tx` → the same test's xmin assertion
 //   m34 drop `args.delta <= 0` from recordPurchase's guard → "recordPurchase refuses a delta" (0 and -1)
 //   m35 drop `!Number.isInteger(args.delta)` from it       → the same test (the fraction row)
+// Fix round 1 on Task 7A-i (review IMP-1, IMP-2). Two guards in staffRow that no test defeated —
+// both measured surviving the whole file at 23/0 before these went in:
+//   m36 drop `org_id = ${args.orgId} and` from the linked-refund cap's read
+//                                                        → "a linked refund's cap is scoped to THIS org"
+//   m37 `args.sessionId.toLowerCase()` → `args.sessionId` → "a linked refund REPLAYED with the session id
+//                                                           pasted in UPPER case"
 // The races use the registration-concurrency.test.ts idiom: REAL calls, the lock held by
 // a transaction the test controls, and every waiter observed BLOCKED before release —
 // here in pg_locks (not granted), scoped to waiters blocked BY the holder's own backend
@@ -648,6 +654,32 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
     ]);
   });
 
+  it("a linked refund's cap is scoped to THIS org: org B refunding org A's consumed session → 422 refund_exceeds_consumed with no row and no audit row in B, while A's own refund of that session applies (IMP-1, m36)", async () => {
+    const a = await rig();
+    const b = await rig();
+    await grantCredits({ orgId: a.orgId, delta: 1, createdBy: a.userId, note: "fund", idempotencyKey: key() });
+    const sid = await a.session(a.fixtureIds[0]!);
+    await sql.begin((tx) => consumeForSession(tx, { orgId: a.orgId, fixtureId: a.fixtureIds[0]!, sessionId: sid }));
+    // The cross-org call comes FIRST, while A's session reads consumed 1 / refunded 0 — the one
+    // arrangement in which an org-blind cap says yes. Read table-wide, it would see A's consume
+    // row, allow B a +1 refund, and leave B holding a ledger row whose session_id points into A:
+    // `session_id references fixture_stream_sessions(id)` carries no composite org FK (V410), and
+    // no further org check stands between the cap and the insert. The route refuses this with its
+    // own 404 today, but Tasks 10/11/12 call this writer directly — the guard that survives the
+    // second caller is the one at the single writer.
+    await expect(
+      refundCredits({ orgId: b.orgId, delta: 1, sessionId: sid, createdBy: b.userId, note: "another org's session", idempotencyKey: key() }),
+    ).rejects.toMatchObject({ status: 422, code: "refund_exceeds_consumed" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${b.orgId}`;
+    expect(n, "a refund row was minted in the WRONG org, backed by another org's consumption").toBe(0);
+    expect(await creditBalance(sql, b.orgId)).toBe(0);
+    expect(await auditRows(b.orgId)).toHaveLength(0);
+    // The positive pair: the session's OWN org may still refund it. (Asserted AFTER the refusal on
+    // purpose — this refund would itself fill an org-blind cap, masking m36 if it ran first.)
+    expect(await refundCredits({ orgId: a.orgId, delta: 1, sessionId: sid, createdBy: a.userId, note: "failed stream", idempotencyKey: key() }))
+      .toMatchObject({ balance: 1, applied: true });
+  });
+
   it("a REPLAYED session-linked refund answers applied false, not 422 — the key check runs BEFORE the cap the original call used up (m10, the ordering differential)", async () => {
     const r = await rig();
     await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "fund", idempotencyKey: key() });
@@ -657,6 +689,36 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
     const first = await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "failed stream", idempotencyKey: k });
     expect(await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "failed stream", idempotencyKey: k }))
       .toEqual({ id: first.id, balance: 1, applied: false });
+  });
+
+  it("a linked refund REPLAYED with the session id pasted in UPPER case is the SAME adjustment, not a reused key: applied false with the original id, one refund row, one audit row — while a genuinely DIFFERENT session under that key is still 409 (IMP-2, m37)", async () => {
+    const r = await rig();
+    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "fund", idempotencyKey: key() });
+    const sid = await r.session(r.fixtureIds[0]!);
+    await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sid }));
+    const k = key();
+    const first = await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "failed stream", idempotencyKey: k });
+    expect(first).toMatchObject({ balance: 1, applied: true });
+    // The retry carries the same minted key and the session id in the spelling a staffer pasted —
+    // 7A's route accepts an upper-case uuid, and `session_id` is a `uuid` column, so the STORED
+    // side is always lower-case. Compare the RAW argument and this honest retry becomes a 409
+    // idempotency_key_reused; the panel's documented answer to a 409 is to drop the key and retry,
+    // and the retry mints a NEW key — so the refund lands a second time. Exactly m27's shape, on
+    // the fourth surface of the same normalisation class (m21 lock key, m24 audit target_id,
+    // m27 the org limb of this comparison, m37 the session limb).
+    expect(await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid.toUpperCase(), createdBy: r.userId, note: "failed stream", idempotencyKey: k }))
+      .toEqual({ id: first.id, balance: 1, applied: false });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where org_id = ${r.orgId} and reason = 'refund'`;
+    expect(n).toBe(1);
+    expect((await auditRows(r.orgId)).filter((x) => x.action === "stream_credit_refund")).toHaveLength(1);
+    // The differential, so this cannot be satisfied by a comparison that ignores the session
+    // altogether: a genuinely different session under the same key is still refused. (`failed` is
+    // terminal, so the one-active-session index admits it beside `sid`.)
+    const other = await r.session(r.fixtureIds[0]!, "failed");
+    await expect(
+      refundCredits({ orgId: r.orgId, delta: 1, sessionId: other, createdBy: r.userId, note: "failed stream", idempotencyKey: k }),
+    ).rejects.toMatchObject({ status: 409, code: "idempotency_key_reused" });
   });
 
   it("recordPurchase stores the Stripe link on the purchase row (checkout, payment intent, pack, amount, currency lower-cased); a consume row carries none; a replay keeps the FIRST link", async () => {
