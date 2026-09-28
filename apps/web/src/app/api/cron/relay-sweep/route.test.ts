@@ -71,3 +71,26 @@ describe("POST /api/cron/relay-sweep", () => {
     expect(m.sweep.mock.calls[0]).toEqual([m.sentinel]);   // exactly one argument: no `orgIds`, no options
   });
 });
+
+// PR #902 CI: `next build` collects this route's config by EVALUATING its module graph in a process with no
+// DATABASE_URL. stream-sessions.ts built a `sql` fragment at module scope — which opens the pooled client — and the
+// build died "Failed to collect configuration for /api/cron/relay-sweep"; every unit shard without a database failed
+// to COLLECT the four suites that import it. The mocks above hide exactly that, so this loads the two REAL modules the
+// route imports, with no database configured and no client cached.
+describe("the route's module graph evaluates with NO database (next build collects its config without one)", () => {
+  it("stream-sessions and relay-sweep load — and the probe is live: a query built on `sql` in the same state throws", async () => {
+    vi.stubEnv("DATABASE_URL", "");
+    expect((globalThis as { _sql?: unknown })._sql, "a cached client would mask a module-scope query").toBeUndefined();
+    const loaded: string[] = [];
+    const ss = await vi.importActual<typeof import("@/server/usecases/stream-sessions")>("@/server/usecases/stream-sessions");
+    expect(typeof ss.defaultDeps).toBe("function");
+    loaded.push("stream-sessions");
+    const rs = await vi.importActual<typeof import("@/server/usecases/relay-sweep")>("@/server/usecases/relay-sweep");
+    expect(typeof rs.sweepStreamSessions).toBe("function");
+    loaded.push("relay-sweep");
+    expect(loaded).toEqual(["stream-sessions", "relay-sweep"]);
+    // The positive twin: this state DOES refuse a query built on `sql`, so the loads above prove the modules build none.
+    const { sql } = await vi.importActual<typeof import("@/lib/db")>("@/lib/db");
+    expect(() => sql`select 1`).toThrow(/DATABASE_URL is not set/);
+  });
+});

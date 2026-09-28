@@ -63,7 +63,11 @@ interface Row {
   runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
   created_by: string; created_at: string;
 }
-const COLS = sql`id, fixture_id, org_id, mode, state, desired_state, fail_reason, end_reason, theme_id, overlay_delay_ms,
+/** A FUNCTION, not a module-scope fragment: building a `sql` fragment opens the pooled client, and `next build`
+ *  evaluates this module (through the daily sweep's cron route) to collect route config in a process with no
+ *  DATABASE_URL — PR #902's build died there, and every unit shard without a database failed to collect the suites
+ *  importing it. That cron route's own test loads this module with no database to hold that. */
+const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_reason, end_reason, theme_id, overlay_delay_ms,
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
   runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at`;
@@ -85,7 +89,7 @@ function toSession(r: Row): Session {
     failReason: r.fail_reason, endReason: r.end_reason, runnerRetries: r.runner_retries, createdAt: new Date(r.created_at),
     startedAt: d(r.started_at), endedAt: d(r.ended_at), heartbeatAt: d(r.heartbeat_at), maxDurationMinutes: r.max_duration_minutes,
     // G1 (Task 2C re-review 1): the stale-beat WINDOW anchor (Task 2C I4, ruling A). `evaluate` times the beat from the LATER of
-    // heartbeatAt and this. Dropping it here (or from COLS) is silent to tsc — a missing column reads undefined → null — and it
+    // heartbeatAt and this. Dropping it here (or from cols()) is silent to tsc — a missing column reads undefined → null — and it
     // collapses the once-per-window bound to every 5 s poll; "G1: beat_window_at round-trips" is the witness.
     beatWindowAt: d(r.beat_window_at),
     // F22: when ENDING began. `evaluate` measures the ending backstop from HERE. Forgetting to map it
@@ -104,13 +108,13 @@ function toSession(r: Row): Session {
 }
 
 async function lockRow(tx: Tx, id: string): Promise<Row | null> {
-  const [row] = await tx<Row[]>`select ${COLS} from fixture_stream_sessions where id = ${id} for update`;
+  const [row] = await tx<Row[]>`select ${cols()} from fixture_stream_sessions where id = ${id} for update`;
   return row ?? null;
 }
 /** `exec` defaults to the pool. Inside a transaction pass the tx (m2): a pooled read nested in `sql.begin` holds the
  *  tx's connection AND takes a second one, the self-deadlock shape lib/db.ts warns about. */
 async function readRow(id: string, exec: Tx | typeof sql = sql): Promise<Row | null> {
-  const [row] = await exec<Row[]>`select ${COLS} from fixture_stream_sessions where id = ${id}`;
+  const [row] = await exec<Row[]>`select ${cols()} from fixture_stream_sessions where id = ${id}`;
   return row ?? null;
 }
 
@@ -613,7 +617,7 @@ export function storageUsageForColumns(u: StorageUsage): StorageUsage {
 }
 
 export async function storageHeadroomMinutes(exec: Tx | typeof sql, usage: StorageUsage, now: Date): Promise<number> {
-  const rows = await exec<Row[]>`select ${COLS} from fixture_stream_sessions where state in ${sql([...ACTIVE_STATES])}`;
+  const rows = await exec<Row[]>`select ${cols()} from fixture_stream_sessions where state in ${sql([...ACTIVE_STATES])}`;
   const reservations = rows
     .map(toSession)
     .filter((s) => { const x = evaluate(s, now).kind; return x === "none" || x === "stale_beat" || x === "grace_expired"; })   // a Machine being replaced or flushed still records
@@ -724,7 +728,7 @@ async function tearDownPriorMachines(
   // inner join drops nothing): a refusal never needs a second read that could find the row gone.
   const prior = await sql<(Row & { holder_label: string; holder_court: string | null })[]>`
     select p.*, t.label as holder_label, c.name as holder_court
-      from (select ${COLS} from fixture_stream_sessions
+      from (select ${cols()} from fixture_stream_sessions
              where org_id = ${orgId} and (fixture_id = ${fixtureId} or target_id = ${targetId})
                and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}
                and not (runner_state = 'destroyed' and runner_gone_confirmed_at is not null)) p
@@ -953,7 +957,7 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
 // Reads and the organiser's commands
 // ---------------------------------------------------------------------------
 async function latestRow(fixtureId: string): Promise<Row | null> {
-  const [row] = await sql<Row[]>`select ${COLS} from fixture_stream_sessions where fixture_id = ${fixtureId} order by created_at desc limit 1`;
+  const [row] = await sql<Row[]>`select ${cols()} from fixture_stream_sessions where fixture_id = ${fixtureId} order by created_at desc limit 1`;
   return row ?? null;
 }
 

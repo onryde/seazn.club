@@ -16,8 +16,8 @@
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): every rig rides seedOrg's `generic` division. Relay is sport-agnostic
 // because nothing in stream-sessions.ts reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
 // verbatim — and the Db test compares that copy to its source row rather than to a sport literal.
-import { describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomBytes, randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -48,6 +48,17 @@ import {
 } from "../stream-sessions";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK, and every sealed destination
+// and input would otherwise throw "RELAY_KEK is not set". The developer's is put back afterwards, or removed when there
+// was none — never assigned `undefined`, which Node stores as the string "undefined". It is never printed.
+const savedKek = process.env.RELAY_KEK;
+beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
+afterAll(() => {
+  if (savedKek === undefined) delete process.env.RELAY_KEK;
+  else process.env.RELAY_KEK = savedKek;
+});
+
 
 /** The exit an OOM-killed Machine reports (Fly's event shape, C1). Its expected fail reason is DERIVED from the
  *  domain's table (`failReasonFromExit`), never typed — and the differential below proves it is not the default. */

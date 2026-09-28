@@ -13,8 +13,8 @@
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): relay is sport-agnostic — nothing on these routes reads the sport — so
 // every rig rides `_rig`'s `generic` division. Both MODES appear below.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomBytes, randomUUID } from "node:crypto";
 
 const authState = vi.hoisted(() => ({ userId: "" }));
 
@@ -60,6 +60,17 @@ import { GET as currentRoute } from "../current/route";
 import { POST as stopRoute } from "../[sid]/stop/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK, and every sealed destination
+// and input would otherwise throw "RELAY_KEK is not set". The developer's is put back afterwards, or removed when there
+// was none — never assigned `undefined`, which Node stores as the string "undefined". It is never printed.
+const savedKek = process.env.RELAY_KEK;
+beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
+afterAll(() => {
+  if (savedKek === undefined) delete process.env.RELAY_KEK;
+  else process.env.RELAY_KEK = savedKek;
+});
+
 const BASE = "https://test.local/api/v1";
 const YT = "rtmps://a.rtmps.youtube.com/live2";
 /** A pool no plausible number of foreign reservations can exhaust — the pool is ONE account across the whole test

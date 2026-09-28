@@ -11,8 +11,8 @@
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): relay is sport-agnostic — nothing on these two routes reads the sport,
 // so every rig rides `_rig`'s `generic` division. The two MODES are what varies here, and both appear below.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomBytes, randomUUID } from "node:crypto";
 
 // The sample writer, passed through untouched — one test makes it fail ONCE, to prove a telemetry failure can never
 // cost a beat its lifecycle half (Task 11 review I1b). Every other test runs the real writer.
@@ -42,6 +42,17 @@ import { createStreamTarget } from "../stream-targets";
 import { createSession, defaultDeps, sessionFactsForJob, stopSession } from "../stream-sessions";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK, and every sealed destination
+// and input would otherwise throw "RELAY_KEK is not set". The developer's is put back afterwards, or removed when there
+// was none — never assigned `undefined`, which Node stores as the string "undefined". It is never printed.
+const savedKek = process.env.RELAY_KEK;
+beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
+afterAll(() => {
+  if (savedKek === undefined) delete process.env.RELAY_KEK;
+  else process.env.RELAY_KEK = savedKek;
+});
+
 
 /** The exit an OOM-killed Machine reports (Fly's event shape). Its fail reason is DERIVED from the domain's table. */
 const OOM_EXIT: ExitInfo = { exitCode: 137, oomKilled: true, requestedStop: false };

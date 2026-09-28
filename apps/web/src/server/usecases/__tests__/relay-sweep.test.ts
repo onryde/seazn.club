@@ -20,8 +20,8 @@
 // database's now() is judged on the rig's clock, which by then lags the database by however long the rig took to build,
 // so `sweep()` first moves a lagging rig clock forward to the real now (never backward — the retention test runs days
 // ahead on purpose). Second-scale thresholds carry a 60 s margin for the same reason.
-import { describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { StreamFailReason } from "@/server/api-v1/schemas";
@@ -48,6 +48,17 @@ const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK, and every sealed destination
+// and input would otherwise throw "RELAY_KEK is not set". The developer's is put back afterwards, or removed when there
+// was none — never assigned `undefined`, which Node stores as the string "undefined". It is never printed.
+const savedKek = process.env.RELAY_KEK;
+beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
+afterAll(() => {
+  if (savedKek === undefined) delete process.env.RELAY_KEK;
+  else process.env.RELAY_KEK = savedKek;
+});
+
 const DAY_MS = 86_400_000;
 /** A storage pool no plausible number of foreign reservations can exhaust (stream-sessions.test.ts's, int4-safe). */
 const ROOMY_STORAGE_MINUTES = 100_000_000;
