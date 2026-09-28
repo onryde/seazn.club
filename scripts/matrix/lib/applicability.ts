@@ -9,11 +9,21 @@ import { StageKind } from "@seazn/engine/core";
 import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
+import { foldStream } from "./fold.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "./scenario-catalogue.ts";
 import { drawsAllowed, entrantKindsFor, resolveSportCfg, sportModule } from "./sport-cfg.ts";
+import { ALL_OUTCOMES, START, type StreamEvent } from "./streams/types.ts";
 import { buildVariant, offlineBuilderDefault, type SportVariants } from "./variants.ts";
 
-export interface StageFact { readonly kind: string; readonly config: Readonly<Record<string, unknown>>; readonly takes: readonly string[] }
+/** One progression source, resolved to the index of the stage it takes from. */
+export interface StageSourceFact { readonly from: number; readonly take: readonly string[] }
+export interface StageFact {
+  readonly kind: string;
+  readonly config: Readonly<Record<string, unknown>>;
+  /** Every take-rule kind over all sources (flattened). */
+  readonly takes: readonly string[];
+  readonly sources: readonly StageSourceFact[];
+}
 export interface CellFacts {
   readonly row: RowKey;
   readonly sport: string;
@@ -22,6 +32,10 @@ export interface CellFacts {
   readonly stages: readonly StageFact[];
   readonly entrantKinds: readonly string[];
   readonly gate: FormatGate | null;
+  /** The MatchOutcome kind the REAL engine folds the sport's level-scores
+   *  stream to under this cfg (LEVEL_PROBES); null when the sport has no probe
+   *  or the fold is undecided. */
+  readonly levelFold: string | null;
 }
 
 export class WitnessValuesInvalid extends Error {
@@ -35,16 +49,70 @@ export class WitnessValuesInvalid extends Error {
   }
 }
 
+export class UnresolvedFeeder extends Error {
+  readonly row: string;
+  readonly stage: number;
+  constructor(row: string, stage: number, source: unknown) {
+    super(`applicability: row '${row}' stage ${stage + 1} takes from ${JSON.stringify(source)}: only "previous" after the first stage resolves offline (a { stageId } names a stage that exists only once created) — refused rather than read as the stage before it`);
+    this.name = "UnresolvedFeeder";
+    this.row = row;
+    this.stage = stage;
+  }
+}
+
+/** The wire shape of a stage body as far as applicability reads it: `stage` is
+ *  the api-v1 union ("previous" | { stageId }), typed unknown so the guard is
+ *  what decides. */
+export interface StageBodyIn {
+  readonly kind: string;
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly progression?: { readonly sources: readonly { readonly stage: unknown; readonly take: readonly { readonly kind: string }[] }[] } | null;
+}
+
+export function stageFactsOf(row: string, bodies: readonly StageBodyIn[]): readonly StageFact[] {
+  return Object.freeze(bodies.map((s, i): StageFact => {
+    const sources = (s.progression?.sources ?? []).map((src): StageSourceFact => {
+      if (src.stage !== "previous" || i === 0) throw new UnresolvedFeeder(row, i, src.stage);
+      return Object.freeze({ from: i - 1, take: Object.freeze(src.take.map((t) => t.kind)) });
+    });
+    return Object.freeze({ kind: s.kind, config: s.config, takes: Object.freeze(sources.flatMap((x) => x.take)), sources: Object.freeze(sources) });
+  }));
+}
+
 const stageFactsMemo = new Map<string, readonly StageFact[]>();
 function stageFacts(row: RowKey): readonly StageFact[] {
   let out = stageFactsMemo.get(row);
   if (out === undefined) {
-    out = Object.freeze(stagesForRow(row).map((s): StageFact => Object.freeze({
-      kind: s.kind,
-      config: s.config,
-      takes: Object.freeze((s.progression?.sources ?? []).flatMap((x) => x.take.map((t) => t.kind))),
-    })));
+    out = stageFactsOf(row, stagesForRow(row));
     stageFactsMemo.set(row, out);
+  }
+  return out;
+}
+
+/** A level-scores stream per sport whose engine can fold a TIE (MatchOutcome
+ *  kind "tie"). The capability is the real fold's answer under the cell's cfg
+ *  (CellFacts.levelFold), never a declaration. Cricket: both sides make the
+ *  same runs off the full allotment (applySummary, cricket.ts:1644); decideTie
+ *  (:935-946) lets the tie stand unless superOver sends it to a super over. At
+ *  two innings a side the stream is undecided (null) — the draw arm covers
+ *  that; with no allotment (the Test preset) there is nothing to play out.
+ *  applicability.test.ts pins that every engine source emitting `kind: "tie"`
+ *  lives under a probed sport. */
+export const LEVEL_PROBES: Readonly<Record<string, (cfg: Readonly<Record<string, unknown>>) => readonly StreamEvent[] | null>> = Object.freeze({
+  cricket: (c) => {
+    const balls = c.ballsPerInnings;
+    if (typeof balls !== "number") return null;
+    const innings: StreamEvent = { type: "cricket.innings.summary", payload: { runs: 100, wickets: 0, legalBalls: balls } };
+    return [START, innings, innings];
+  },
+});
+const levelFoldMemo = new Map<string, string | null>();
+function levelFoldOf(sport: string, cfg: Readonly<Record<string, unknown>>, key: string): string | null {
+  let out = levelFoldMemo.get(key);
+  if (out === undefined) {
+    const probe = LEVEL_PROBES[sport]?.(cfg) ?? null;
+    out = probe === null ? null : (foldStream(sportModule(sport), cfg, "H", "A", probe).outcome?.kind ?? null);
+    levelFoldMemo.set(key, out);
   }
   return out;
 }
@@ -60,12 +128,13 @@ export function cellFacts(row: RowKey, sport: string, preset: string = offlineBu
     if (!b.ok) throw new WitnessValuesInvalid(sport, preset, b.reason);
     o = b.overrides;
   }
-  const key = `${row}|${sport}|${preset}|${JSON.stringify(o)}`;
+  const cfgKey = `${sport}|${preset}|${JSON.stringify(o)}`;
+  const key = `${row}|${cfgKey}`;
   let f = factsMemo.get(key);
   if (f === undefined) {
     const cfg = resolveSportCfg(sport, preset, { ...o }) as Record<string, unknown>;
     const stages = stageFacts(row);
-    f = Object.freeze({ row, sport, preset, cfg, stages, entrantKinds: Object.freeze(entrantKindsFor(sport, cfg)), gate: expectedGate(stages) });
+    f = Object.freeze({ row, sport, preset, cfg, stages, entrantKinds: Object.freeze(entrantKindsFor(sport, cfg)), gate: expectedGate(stages), levelFold: levelFoldOf(sport, cfg, cfgKey) });
     factsMemo.set(key, f);
   }
   return f;
@@ -85,22 +154,36 @@ const entrant = (...kinds: string[]): Predicate => (f) => f.entrantKinds.some((k
  *  (apps/web/src/server/engine-db/competition.ts `TABLE_KINDS`, server-only):
  *  americano rides the league fold. Ladder is NOT one — its order is
  *  `config.ladder_order` (engine core/types.ts StageKind note), so nothing in
- *  a ladder can tie or lose points. Pinned by applicability.test.ts. */
+ *  a ladder can tie or lose points. Pinned by applicability.test.ts.
+ *  competition.ts is the authority because it is the STANDINGS WRITER, and
+ *  F5-F7/C5 ask what lands in a points table. The product has 8 such literals
+ *  and they disagree on americano: with it, competition.ts:39 and
+ *  schedule-health.ts:67; without it, withdrawal.ts:37, scoring.ts:101,
+ *  slideshow-data.ts:25, org-posts.ts:108 and d/[divSlug]/page.tsx:83. Do not
+ *  "sync" this to withdrawal.ts: R4b asks the engine (withdrawTableEntrant). */
 export const TABLE_KINDS: readonly string[] = Object.freeze(["league", "group", "swiss", "americano"]);
 const table = hasKind(...TABLE_KINDS);
 /** A finishing ORDER exists: a points table, or a ladder's positions. */
 const ranked = hasKind(...TABLE_KINDS, "ladder");
 /** The engine's own bracket-shaped kinds (competition/progression.ts). */
 const bracket = hasKind(...BRACKET_STAGE_KINDS);
-/** Some later stage takes its entrants from a points-table stage before it. */
-const tableFed: Predicate = (f) => f.stages.some((s, i) => i > 0 && s.takes.length > 0 && TABLE_KINDS.includes(f.stages[i - 1]?.kind ?? ""));
+/** Some stage takes its entrants from a points-table stage — the one each
+ *  source NAMES (StageSourceFact.from), resolved by stageFactsOf. */
+const tableFed: Predicate = (f) => f.stages.some((s) => s.sources.some((src) => src.take.length > 0 && TABLE_KINDS.includes(f.stages[src.from]?.kind ?? "")));
 const plate: Predicate = (f) => f.stages.some((s) => s.takes.includes("roundLosers"));
 const thirdPlace: Predicate = (f) => f.stages.some((s) => s.kind === "knockout" && s.config.thirdPlace === true);
 const losersContinue = or(hasKind(...TABLE_KINDS, "ladder", "double_elim", "page_playoff"), plate);
 const ALL_KINDS: readonly string[] = StageKind.options;
 const drawIn = (f: CellFacts, kind: string): boolean => drawsAllowed(f.sport, f.cfg, kind as StageKind);
-/** M5: some stage of the row refuses a level result, and the sport CAN end level somewhere under this cfg. */
-const levelRefusedHere: Predicate = (f) => f.stages.some((s) => !drawIn(f, s.kind)) && ALL_KINDS.some((k) => drawIn(f, k));
+/** M5, draw arm: some stage of the row refuses a draw the sport allows somewhere under this cfg (supportsDraws). */
+const drawRefusedHere: Predicate = (f) => f.stages.some((s) => !drawIn(f, s.kind)) && ALL_KINDS.some((k) => drawIn(f, k));
+/** The real engine folds this cfg's level scores to a TIE (LEVEL_PROBES). */
+const canTie: Predicate = (f) => f.levelFold === "tie";
+/** M5, tie arm: a tie reaches a bracket stage, which has no tied result to
+ *  place. A points table pays one (cricket points.tie, cricket.ts:3923-3928). */
+const tieInBracket = and(canTie, bracket);
+/** Whether the L3 generator can request a tie at all (streams/types.ts). */
+const GENERATES_TIE = (ALL_OUTCOMES.map((o) => o.kind) as readonly string[]).includes("tie");
 /** Scoreless: generic's win_loss mode records a winner only (match-rules.ts resultMode options). */
 const scoreless: Predicate = (f) => f.sport === "generic" && f.cfg.resultMode === "win_loss";
 /** The product's own condition for the Bo1 points editor (match-rules.ts showsOnePointsField). */
@@ -158,7 +241,12 @@ export interface Rule {
    *  applicability.test.ts). */
   readonly variantDependent: boolean;
   readonly witness: Witness | null;
+  /** Where the rule APPLIES but the harness cannot drive it yet: such a cell
+   *  or variant is not planned, and its drop names this reason instead of the
+   *  rule's own (which would then be false). */
+  readonly gap?: HarnessGap;
 }
+export interface HarnessGap { readonly when: Predicate; readonly reason: string }
 const ALWAYS: Rule = Object.freeze({ when: always, reason: "", variantDependent: false, witness: null });
 type W = string | WitnessCell;
 const cellOf = (w: W): WitnessCell => (typeof w === "string" ? { cell: w } : w);
@@ -203,7 +291,17 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   // a guard in applicability.test.ts folds it for every sport.
   M4a: ALWAYS,
   M4b: rule(abandonWithResult, "no organiser-reachable config lets an abandon yield a result here: football/hockey/icehockey need abandonPolicy \"award\", which no editor field sets (configKeysFor; false premise 10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
-  M5: rule(levelRefusedHere, "either every stage of the row accepts a level result, or the sport never ends level under this config (supportsDraws)", "knockout|football", "knockout|badminton", true),
+  M5: Object.freeze({
+    ...rule(
+      or(drawRefusedHere, tieInBracket),
+      "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (a points table pays a tie)",
+      ["knockout|football", "knockout|cricket"], "knockout|badminton", true,
+    ),
+    gap: Object.freeze({
+      when: and(not(drawRefusedHere), tieInBracket, () => !GENERATES_TIE),
+      reason: "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving",
+    }),
+  }),
   M6: rule(decider, "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, W4), or none is switched on under this config", "knockout|icehockey", "knockout|badminton", true),
   M7a: ALWAYS, M7b: ALWAYS,
   M8a: rule(not(scoreless), "generic win_loss records a winner only: there is no score to correct while keeping the winner", T, { cell: T, preset: "win_loss" }, true),
@@ -256,23 +354,33 @@ export interface Decision {
   /** Committed variants that enable the rule but the harness cannot score
    *  (VariantCase.scorable !== null): skipped, and named in the drop. */
   readonly unscorable: readonly string[];
+  /** Where the rule applied but its harness gap held: the builder default
+   *  ("<preset> (builder default)") and/or committed variant ids. */
+  readonly gapped: readonly string[];
 }
 
 /** Applies at the builder default, else (variant-dependent rules only) bound
  *  to the first committed variant case that satisfies it AND the harness can
- *  score, else dropped. */
+ *  score, else dropped. A case under the rule's harness gap is never planned. */
 export function decide(r: Rule, row: RowKey, sport: string, variants: readonly SportVariants[]): Decision {
   const def = offlineBuilderDefault(sport);
-  if (r.when(cellFacts(row, sport, def))) return { applies: true, bound: null, preset: def, unscorable: [] };
   const unscorable: string[] = [];
+  const gapped: string[] = [];
+  const atDefault = cellFacts(row, sport, def);
+  if (r.when(atDefault)) {
+    if (r.gap?.when(atDefault) !== true) return { applies: true, bound: null, preset: def, unscorable, gapped };
+    gapped.push(`${def} (builder default)`);
+  }
   if (r.variantDependent) {
     for (const vc of variants.find((v) => v.sport === sport)?.cases ?? []) {
-      if (!r.when(cellFacts(row, sport, vc.preset, vc.overrides))) continue;
+      const f = cellFacts(row, sport, vc.preset, vc.overrides);
+      if (!r.when(f)) continue;
       if (vc.scorable !== null) { unscorable.push(vc.id); continue; }
-      return { applies: true, bound: vc.id, preset: vc.preset, unscorable };
+      if (r.gap?.when(f) === true) { gapped.push(vc.id); continue; }
+      return { applies: true, bound: vc.id, preset: vc.preset, unscorable, gapped };
     }
   }
-  return { applies: false, bound: null, preset: def, unscorable };
+  return { applies: false, bound: null, preset: def, unscorable, gapped };
 }
 
 export interface PlannedCase { readonly cell: string; readonly row: RowKey; readonly sport: string; readonly scenario: string; readonly preset: string; readonly bound: string | null }
@@ -290,17 +398,24 @@ export class MissingRule extends Error {
 export class UnknownScenario extends Error {
   readonly ids: readonly string[];
   constructor(ids: readonly string[]) {
-    super(`applicability: 'only' names ids that are not L3 scenarios: ${ids.join(", ")} — a typo would plan nothing`);
+    super(ids.length === 0
+      ? "applicability: 'only' is empty (the set []) — an empty filter would plan nothing and read green"
+      : `applicability: 'only' names ids that are not L3 scenarios: ${ids.join(", ")} — a typo would plan nothing`);
     this.name = "UnknownScenario";
     this.ids = ids;
   }
 }
 
+const listed = (ids: readonly string[]): string => `${ids.length}: ${ids.slice(0, 3).join(", ")}${ids.length > 3 ? ", …" : ""}`;
 const dropReason = (r: Rule, d: Decision): string => {
+  // Gapped: the rule APPLIES, so its own reason ("why not") would be false.
+  if (r.gap !== undefined && d.gapped.length > 0) {
+    const also = d.unscorable.length > 0 ? `; the other committed variants that enable it (${listed(d.unscorable)}) cannot be scored by the harness` : "";
+    return `${r.gap.reason}; it applies at ${listed(d.gapped)}${also}`;
+  }
   if (!r.variantDependent) return r.reason;
   if (d.unscorable.length === 0) return `${r.reason} — no committed variant enables it`;
-  const shown = d.unscorable.slice(0, 3).join(", ");
-  return `${r.reason} — the committed variants that enable it (${d.unscorable.length}: ${shown}${d.unscorable.length > 3 ? ", …" : ""}) cannot be scored by the harness`;
+  return `${r.reason} — the committed variants that enable it (${listed(d.unscorable)}) cannot be scored by the harness`;
 };
 
 export function planL3(input: { rules?: Readonly<Record<string, Rule>>; variants: readonly SportVariants[]; only?: readonly string[] }): { cases: PlannedCase[]; drops: Drop[] } {
@@ -308,6 +423,7 @@ export function planL3(input: { rules?: Readonly<Record<string, Rule>>; variants
   const all = [LIFECYCLE_ID, ...l3Atomic().map((a) => a.id)];
   const only = input.only;
   if (only !== undefined) {
+    if (only.length === 0) throw new UnknownScenario([]);
     const bad = only.filter((id) => !all.includes(id));
     if (bad.length > 0) throw new UnknownScenario(bad);
   }

@@ -6,8 +6,8 @@
 // bodies, supportsDraws, entrantModel, eventSchemas, the schema.json files,
 // withdrawTableEntrant, a real fold of core.abandon, the product's table-kind
 // literal — never from applicability.ts itself.
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, StageKind } from "@seazn/engine/core";
 import { BRACKET_STAGE_KINDS, withdrawTableEntrant } from "@seazn/engine/competition";
@@ -15,14 +15,14 @@ import { describe, expect, it } from "vitest";
 import { configKeysFor } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  ABANDON_RESULTS, DECIDERS, MissingRule, RULES, TABLE_KINDS, UnknownScenario, cellFacts, decide, planL3, rowCounts, scenarioCounts,
+  ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, planL3, rowCounts, scenarioCounts, stageFactsOf,
   type CellFacts, type PlannedCase, type Rule, type WitnessCell,
 } from "../lib/applicability.ts";
 import { foldStream } from "../lib/fold.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "../lib/scenario-catalogue.ts";
 import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
-import { GeneratorUnsupported, START } from "../lib/streams/types.ts";
+import { ALL_OUTCOMES, GeneratorUnsupported, START, type StreamEvent } from "../lib/streams/types.ts";
 import { buildSportVariants, offlineBuilderDefault, type SportVariants } from "../lib/variants.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -36,6 +36,43 @@ const factsAt = (w: WitnessCell): CellFacts => {
 };
 const schemaProps = (sport: string): string[] =>
   Object.keys((JSON.parse(readFileSync(resolve(REPO, "packages/engine/src/sports", sport, `${sport}.schema.json`), "utf8")) as { configSchema: { properties: Record<string, unknown> } }).configSchema.properties);
+
+/** Engine sport directories with a non-test source that emits a `kind: "tie"`
+ *  outcome (MatchOutcome's tie). Read from the engine's source text, so a new
+ *  tie-capable sport reds the LEVEL_PROBES guard instead of hiding from M5. */
+const SPORTS_SRC = resolve(REPO, "packages/engine/src/sports");
+const TIE_SOURCE_DIRS = new Set((readdirSync(SPORTS_SRC, { recursive: true }) as string[])
+  .filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts") && !p.split(sep).includes("__tests__"))
+  .filter((p) => /kind:\s*"tie"/.test(readFileSync(resolve(SPORTS_SRC, p), "utf8")))
+  .map((p) => p.split(sep)[0]!));
+/** The pinned text of M5's harness-gap reason (applicability.ts). */
+const TIE_GAP_REASON = "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving";
+/** A level-scores stream built WITHOUT LEVEL_PROBES: the generator's own
+ *  home-win stream with the chase's runs set to the first innings' (cricket's
+ *  shape, START + one summary per innings — streams/cricket.ts), folded by the
+ *  real engine. A sport whose engine emits no tie (TIE_SOURCE_DIRS) is null
+ *  without a fold; a stream the generator or engine refuses is "refused". */
+function independentLevelFold(sport: string, cfg: Readonly<Record<string, unknown>>): string | null {
+  if (!TIE_SOURCE_DIRS.has(sport)) return null;
+  let win: StreamEvent[];
+  try {
+    win = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "H", away: "A", outcome: { kind: "win", winner: "home" } });
+  } catch (e) {
+    if (e instanceof GeneratorUnsupported) return "refused";
+    throw e;
+  }
+  const [start, first, chase, ...rest] = win;
+  if (start?.type !== "core.start" || first?.type !== "cricket.innings.summary" || chase?.type !== "cricket.innings.summary" || rest.length > 0) {
+    throw new Error(`independentLevelFold: ${sport}'s win stream is not START + two innings summaries — build its level stream here`);
+  }
+  const level = [start, first, { ...chase, payload: { ...(chase.payload as object), runs: (first.payload as { runs: number }).runs } }];
+  try {
+    return foldStream(sportModule(sport), cfg, "H", "A", level).outcome?.kind ?? null;
+  } catch (e) {
+    if (EngineError.is(e)) return "refused";
+    throw e;
+  }
+}
 
 // --- the guards, as functions: the real tests run them on RULES and expect
 // nothing; the trap-1 sweep runs them on mutants and expects a catch. -------
@@ -178,20 +215,132 @@ describe("applicability — predicates against the product's own declarations", 
     }
     expect(judged).toBe(ROW_KEYS.length * SPORT_KEYS.length);
   });
-  it("M5 applies exactly where some stage refuses a level result and the sport can end level under the cfg (supportsDraws)", () => {
+  it("M5 applies exactly where a DRAW the sport allows somewhere is refused by some stage (supportsDraws), or a TIE the engine folds reaches a bracket stage (registry sweep)", () => {
     let judged = 0;
-    let applies = 0;
+    let draw = 0;
+    let tieOnly = 0;
     for (const row of ROW_KEYS) for (const s of SPORT_KEYS) {
       const f = cellFacts(row, s);
       const m = sportModule(s);
       const draws = (k: string) => m.supportsDraws(f.cfg as never, k as never);
-      const expected = stagesForRow(row).some((st) => !draws(st.kind)) && StageKind.options.some(draws);
-      expect(RULES.M5!.when(f), `${row}|${s}`).toBe(expected);
+      const drawArm = stagesForRow(row).some((st) => !draws(st.kind)) && StageKind.options.some(draws);
+      const tieArm = stagesForRow(row).some((st) => BRACKET_STAGE_KINDS.has(st.kind)) && independentLevelFold(s, f.cfg) === "tie";
+      expect(RULES.M5!.when(f), `${row}|${s}`).toBe(drawArm || tieArm);
       judged++;
-      if (expected) applies++;
+      if (drawArm) draw++;
+      else if (tieArm) tieOnly++;
     }
     expect(judged).toBe(ROW_KEYS.length * SPORT_KEYS.length);
-    expect(applies).toBeGreaterThan(0);
+    expect(draw).toBeGreaterThan(0);
+    expect(tieOnly).toBeGreaterThan(0); // the arm supportsDraws cannot see is judged, not assumed
+  });
+});
+
+describe("M5's tie arm — a level result supportsDraws does not declare (I-1)", () => {
+  it("every engine source that emits a `kind: \"tie\"` outcome lives under a sport LEVEL_PROBES probes, and every probe has one", () => {
+    expect([...TIE_SOURCE_DIRS].length).toBeGreaterThan(0);
+    expect(new Set(Object.keys(LEVEL_PROBES))).toEqual(TIE_SOURCE_DIRS);
+  });
+  it("levelFold is the engine's answer: parity with an independently built level stream over every cricket preset and committed variant — and both answers occur", () => {
+    // single-sport: cricket is the only sport whose engine emits a tie (guard above).
+    let judged = 0;
+    let refused = 0;
+    const answers = new Set<string | null>();
+    const cfgs = [
+      ...Object.keys(sportModule("cricket").variants as Record<string, unknown>).map((p) => ({ preset: p, overrides: {} as Record<string, unknown> })),
+      ...variantsOf("cricket").cases.map((c) => ({ preset: c.preset, overrides: c.overrides as Record<string, unknown> })),
+    ];
+    for (const c of cfgs) {
+      const f = cellFacts("knockout", "cricket", c.preset, c.overrides);
+      const expected = independentLevelFold("cricket", f.cfg);
+      if (expected === "refused") { refused++; continue; }
+      expect(f.levelFold, `${c.preset} ${JSON.stringify(c.overrides)}`).toBe(expected);
+      answers.add(expected);
+      judged++;
+    }
+    expect(judged).toBeGreaterThan(0);
+    expect(answers).toEqual(new Set(["tie", null]));
+    expect(judged + refused).toBe(cfgs.length);
+  });
+  it("witness: a cricket knockout at the builder default can end TIED (fold-proven, no draw declared) and M5 SEES it; super over on, or no bracket, it does not", () => {
+    // single-sport: cricket is the only sport whose engine emits a tie.
+    const f = cellFacts("knockout", "cricket");
+    expect(f.preset).toBe(offlineBuilderDefault("cricket"));
+    expect(independentLevelFold("cricket", f.cfg)).toBe("tie");
+    expect(StageKind.options.some((k) => sportModule("cricket").supportsDraws(f.cfg as never, k))).toBe(false);
+    expect(RULES.M5!.when(f)).toBe(true);
+    const superOver = cellFacts("knockout", "cricket", undefined, { superOver: true });
+    expect(independentLevelFold("cricket", superOver.cfg)).toBe(null);
+    expect(RULES.M5!.when(superOver)).toBe(false);
+    const league = cellFacts("league", "cricket");
+    expect(league.levelFold).toBe("tie");
+    expect(RULES.M5!.when(league)).toBe(false); // a points table pays points.tie
+  });
+  it("the harness cannot drive a tie yet, so every cricket bracket cell DROPS M5 with the TRUE reason; no cricket cell says it never ends level", () => {
+    // single-sport: cricket is the only sport whose engine emits a tie.
+    expect(ALL_OUTCOMES.map((o) => o.kind as string)).not.toContain("tie"); // the gap's premise
+    let bracketRows = 0;
+    for (const row of ROW_KEYS) {
+      const d = base.drops.find((x) => x.cell === `${row}|cricket` && x.scenario === "M5");
+      expect(d, `${row}|cricket plans M5 with no tie outcome to request`).toBeDefined();
+      expect(d!.reason, row).not.toMatch(/never ends level/);
+      if (stagesForRow(row).some((st) => BRACKET_STAGE_KINDS.has(st.kind))) {
+        expect(d!.reason.startsWith(TIE_GAP_REASON), `${row}: ${d!.reason}`).toBe(true);
+        expect(d!.reason, row).toContain(`; it applies at `);
+        expect(d!.reason, row).toContain(`${offlineBuilderDefault("cricket")} (builder default)`);
+        bracketRows++;
+      } else {
+        expect(d!.reason, row).not.toContain(TIE_GAP_REASON);
+      }
+    }
+    expect(bracketRows).toBeGreaterThan(0);
+    expect(bracketRows).toBeLessThan(ROW_KEYS.length);
+    // The gap is the tie arm ALONE: where a refused draw also holds, the
+    // generator's draw request drives M5, so there is no gap. No committed cfg
+    // has both (a two-innings level stream is undecided), so the facts are
+    // synthetic: the two-innings preset's draw facts with a tie grafted on.
+    const both: CellFacts = { ...cellFacts("knockout", "cricket", "test"), levelFold: "tie" };
+    expect(RULES.M5!.when(both)).toBe(true);
+    expect(RULES.M5!.gap!.when(both)).toBe(false);
+    expect(RULES.M5!.gap!.when(cellFacts("knockout", "cricket"))).toBe(true);
+    const ko = base.drops.find((x) => x.cell === "knockout|cricket" && x.scenario === "M5")!;
+    expect(ko.reason).toMatch(/; the other committed variants that enable it \(\d+: cricket#\d+/);
+  });
+});
+
+describe("M-1/M-2 — which stage feeds which", () => {
+  const table = cellFacts("league", "generic");
+  const synthetic = (stages: CellFacts["stages"]): CellFacts => ({ ...table, stages });
+  const fact = (kind: string, sources: { from: number; take: string[] }[] = []) => ({ kind, config: {}, takes: sources.flatMap((s) => s.take), sources });
+  it("Q4b's bracket conjunct is live: a table stage fed by a table (no bracket anywhere) has no final to fall back from", () => {
+    const f = synthetic([fact("league"), fact("group", [{ from: 0, take: ["topNPerGroup"] }])]);
+    expect(RULES.P2!.when(f)).toBe(true); // it IS table-fed
+    expect(RULES.Q4b!.when(f)).toBe(false);
+    expect(RULES.Q4b!.when(synthetic([fact("league"), fact("knockout", [{ from: 0, take: ["rankRange"] }])]))).toBe(true);
+  });
+  it("a table feed is judged from the stage each source NAMES, not the stage before it", () => {
+    const feederFirst = synthetic([fact("league"), fact("knockout"), fact("knockout", [{ from: 0, take: ["rankRange"] }])]);
+    expect(RULES.P2!.when(feederFirst)).toBe(true);
+    const tableBefore = synthetic([fact("knockout"), fact("league"), fact("knockout", [{ from: 0, take: ["rankRange"] }])]);
+    expect(RULES.P2!.when(tableBefore)).toBe(false);
+  });
+  it("stageFactsOf refuses a feeder it cannot resolve offline (a { stageId }, or \"previous\" on the first stage), naming row and stage", () => {
+    const take = [{ kind: "rankRange" }];
+    const byId = () => stageFactsOf("synthetic", [{ kind: "league", config: {} }, { kind: "knockout", config: {}, progression: { sources: [{ stage: { stageId: "00000000-0000-4000-8000-000000000001" }, take }] } }]);
+    expect(byId).toThrow(UnresolvedFeeder);
+    expect(byId).toThrow(/row 'synthetic' stage 2/);
+    expect(() => stageFactsOf("synthetic", [{ kind: "knockout", config: {}, progression: { sources: [{ stage: "previous", take }] } }])).toThrow(/row 'synthetic' stage 1/);
+  });
+  it("registry sweep: every catalogue row's sources resolve to the stage before them (\"previous\")", () => {
+    let judged = 0;
+    for (const row of ROW_KEYS) {
+      const bodies = stagesForRow(row);
+      stageFactsOf(row, bodies).forEach((s, i) => {
+        expect(s.sources.length, `${row} stage ${i + 1}`).toBe(bodies[i]!.progression?.sources.length ?? 0);
+        for (const src of s.sources) { expect(src.from, `${row} stage ${i + 1}`).toBe(i - 1); judged++; }
+      });
+    }
+    expect(judged).toBeGreaterThan(0);
   });
 });
 
@@ -213,6 +362,10 @@ describe("applicability — the L3 plan", () => {
     expect(() => planL3({ variants, only: ["E3"] })).toThrow(UnknownScenario);
     expect(() => planL3({ variants, only: ["M99"] })).toThrow(UnknownScenario);
     expect(planL3({ variants, only: ["M1"] }).cases.length).toBeGreaterThan(0);
+  });
+  it("an EMPTY `only` filter is refused, naming the empty set (it would plan nothing and read green)", () => {
+    expect(() => planL3({ variants, only: [] })).toThrow(UnknownScenario);
+    expect(() => planL3({ variants, only: [] })).toThrow(/'only' is empty/);
   });
   it("every (cell, L3 id) is decided exactly once: planned or dropped, never both, never neither", () => {
     const seen = new Map<string, number>();
@@ -289,8 +442,12 @@ describe("applicability — the L3 plan", () => {
       expect(vc, `${c.cell} ${c.scenario}`).toBeDefined();
       expect(vc!.scorable, `${c.cell} ${c.scenario}`).toBeNull();
       expect(RULES[c.scenario]!.variantDependent, c.scenario).toBe(true);
-      expect(RULES[c.scenario]!.when(cellFacts(c.row, c.sport)), `${c.cell} ${c.scenario}: applies at the default, so must not bind`).toBe(false);
-      expect(RULES[c.scenario]!.when(cellFacts(c.row, c.sport, vc!.preset, vc!.overrides as Record<string, unknown>)), `${c.cell} ${c.scenario}`).toBe(true);
+      const r = RULES[c.scenario]!;
+      const at = cellFacts(c.row, c.sport);
+      expect(r.when(at) && r.gap?.when(at) !== true, `${c.cell} ${c.scenario}: applies at the default with no harness gap, so must not bind`).toBe(false);
+      const under = cellFacts(c.row, c.sport, vc!.preset, vc!.overrides as Record<string, unknown>);
+      expect(r.when(under), `${c.cell} ${c.scenario}`).toBe(true);
+      expect(r.gap?.when(under) ?? false, `${c.cell} ${c.scenario}: bound under a harness gap`).toBe(false);
     }
   });
   it("a variant that enables a rule but cannot be scored is skipped; if only such variants exist the drop says so", () => {
