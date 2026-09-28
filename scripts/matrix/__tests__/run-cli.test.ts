@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RowBuildDeferred } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import type { CaseResult, CheckResult } from "../lib/results.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
-import type { ScenarioContext, ScenarioOutput } from "../lib/scenarios/types.ts";
+import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
 import { DataDirMismatch } from "../lib/seed-org.ts";
 import { SLICE_ROWS } from "../lib/slice.ts";
 import { runSlice, summariseRun, type RunDeps } from "../run.ts";
@@ -132,7 +133,7 @@ describe("runSlice — refusals first", () => {
 
 describe("runSlice — a run", () => {
   it("one league case: guard → preflight → db → sign-in once; writes results.json + MATRIX.md; exit 0", async () => {
-    capture();
+    const io = capture();
     const dir = dirFor();
     const d = deps();
     expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t1", "--report-dir", dir])).toBe(0);
@@ -141,6 +142,22 @@ describe("runSlice — a run", () => {
     expect(results.cases).toHaveLength(1);
     expect(results.cases[0].state).toBe("works");
     expect(readFileSync(join(dir, "t1", "MATRIX.md"), "utf8")).toContain("| league |");
+    // The line Task 11's smoke reads.
+    expect(io.out()).toMatch(/^\[1\/1\] league\|generic\|score\|LIFECYCLE → works \d+ checks, \d+ items$/m);
+    expect(io.out()).toContain("vacuous: none");
+    expect(io.out()).toContain("error reds: none");
+  });
+  it.each([
+    ["ScenarioUnsupported", () => new ScenarioUnsupported("W1b", "team rosters"), "W1b: team rosters"],
+    ["RowBuildDeferred", () => new RowBuildDeferred("group_only", "W1b"), "W1b: catalogue: row 'group_only' is API-only; its stage bodies are built in W1b"],
+  ] as const)("a %s is ⏳ later with its wave — never an error red — and, having checked nothing, is listed vacuous (PF4)", async (_name, make, reason) => {
+    const io = capture();
+    vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw make(); });
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t9", "--report-dir", dir])).toBe(0);
+    expect(resultsIn(dir, "t9").cases[0]).toMatchObject({ state: "later", reason, checks: [] });
+    expect(io.out()).toContain("vacuous: league|generic|score|LIFECYCLE");
+    expect(io.out()).toContain("error reds: none");
   });
   it("a knockout case on the league-only fake is red with a redacted error, not a crash", async () => {
     capture();
@@ -151,12 +168,22 @@ describe("runSlice — a run", () => {
     expect(c.reason).toMatch(/error: .*league only/);
   });
   it("--canary M1: exit 0 only when the canary check itself is what went red; no MATRIX.md", async () => {
-    const io = capture();
-    const dir = dirFor();
+    capture();
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
     expect(await runSlice(deps(), ["--canary", "M1", "--run-id", "c1", "--report-dir", dir])).toBe(0);
     expect(existsSync(join(dir, "c1", "MATRIX.md"))).toBe(false);
-    expect(resultsIn(dir, "c1").cases.map((c) => [c.caseId, c.canary])).toEqual([["league|generic|score|M1|canary", true]]);
-    expect(io.out()).toContain("canary M1: red on m1-walkover-recorded, as designed");
+  });
+  // Each pilot's own check, read from the registry — so a verdict that looked
+  // up one fixed check would pass M1 and fail the other two.
+  it.each(["M1", "R4", "F1"] as const)("--canary %s: results.json holds the one canary case, and it went red on its own check", async (k) => {
+    const io = capture();
+    const dir = dirFor();
+    const want = SCENARIOS[k].canaryCheck!;
+    expect(await runSlice(deps(), ["--canary", k, "--run-id", "c1", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "c1").cases;
+    expect(cases.map((c) => [c.caseId, c.canary])).toEqual([[`league|generic|score|${k}|canary`, true]]);
+    expect(cases[0]!.checks.filter((c) => c.verdict === "fail").map((c) => c.id)).toContain(want);
+    expect(io.out()).toContain(`canary ${k}: red on ${want}, as designed`);
   });
   it("--canary whose case is red for an UNRELATED reason (an error, no checks): exit 1", async () => {
     const io = capture();
@@ -228,6 +255,15 @@ describe("runSlice — a run", () => {
     expect(c.reason).toMatch(/^error: Error: config \[redacted\]/);
     expect(readFileSync(join(dir, "t6", "results.json"), "utf8")).not.toContain("hunter22");
     expect(io.out()).not.toContain("hunter22");
+  });
+
+  it("stdout is redacted at the line, not only at each source: even the user's own --report-dir is printed redacted", async () => {
+    const io = capture();
+    const dir = join(dirFor(), "token=abcdefghijklmnopqrstuvwxyz0123456789ABCD");
+    expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t10", "--report-dir", dir])).toBe(0);
+    expect(existsSync(join(dir, "t10", "results.json"))).toBe(true);
+    expect(io.out()).toMatch(/^results → .*\[redacted\]/m);
+    expect(io.out()).not.toContain("abcdefghijklmnop");
   });
 
   it("PF4: a product refusal is listed as an error red with its code, method and path — and is not vacuous", async () => {
@@ -316,9 +352,11 @@ describe("summariseRun (PF4) — empty first", () => {
       kase("refused", "red", "error: RefusedCall: POST /x → HTTP 400 VALIDATION: bad", []),
       kase("crashed", "red", "error: TypeError: boom", []),
     ];
+    // decideState counts an abstain as not applied whatever its `checked` says; so does this.
+    cases.splice(1, 0, kase("abstained-with-items", "red", "every check abstained (vacuous)", [chk("abstain", 2)]));
     const refusals = new Map([["refused", { method: "POST", path: "/x", status: 400, code: "VALIDATION" }]]);
     expect(summariseRun(cases, refusals)).toEqual({
-      vacuous: ["abstained", "zero-items", "deferred"],
+      vacuous: ["abstained", "abstained-with-items", "zero-items", "deferred"],
       errorReds: [
         { caseId: "refused", error: "RefusedCall: POST /x → HTTP 400 VALIDATION: bad", refusal: { method: "POST", path: "/x", status: 400, code: "VALIDATION" } },
         { caseId: "crashed", error: "TypeError: boom", refusal: null },
@@ -329,10 +367,11 @@ describe("summariseRun (PF4) — empty first", () => {
 
 describe("realDeps wiring (Task 7 M3)", () => {
   it("createRealMatrixSql() is called with NO argument — the same process.env DATABASE_URL createRealPlanSql reads", () => {
-    const src = readFileSync(RUN, "utf8");
-    const all = src.match(/createRealMatrixSql\(/g) ?? [];
+    // Line comments out, so a comment that spells the call cannot stand in for one.
+    const code = readFileSync(RUN, "utf8").replace(/\/\/.*$/gm, "");
+    const all = code.match(/createRealMatrixSql\(/g) ?? [];
     expect(all.length).toBeGreaterThan(0);
-    expect(src.match(/createRealMatrixSql\(\)/g) ?? []).toHaveLength(all.length);
+    expect(code.match(/createRealMatrixSql\(\)/g) ?? []).toHaveLength(all.length);
   });
 });
 
