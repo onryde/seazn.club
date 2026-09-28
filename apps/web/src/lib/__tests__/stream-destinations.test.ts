@@ -16,6 +16,7 @@ import {
   DESTINATION_REFUSALS,
   STREAM_DESTINATION_HOSTS,
   checkDestination,
+  destinationIdentity,
   destinationRefusal,
   type DestinationRefusal,
 } from "../stream-destinations";
@@ -308,5 +309,76 @@ describe("everything else is refused, with the rule that refused it", () => {
     expect(reason).toBe("ip_literal");
     expect(DESTINATION_REFUSALS).toContain(reason);
     expect(String(reason)).not.toContain("SECRET");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A19b (Task 9 re-review round 2, must-fix in Task 10): ONE identity per
+// destination. checkDestination's canonical url keeps an explicit port exactly
+// as given, so `…:443/rtmp/` and `…/rtmp/` are two strings for one broadcast
+// slot — and the destination FINGERPRINT (server/relay/crypto.ts, V421) must
+// not see two. The default ports below are the PROTOCOLS' own, typed here from
+// their sources — RTMP's registered 1935 (Adobe RTMP spec; IANA
+// "macromedia-fcs") and RTMPS on 443 as every PUBLISHED rtmps literal above
+// spells it — never read back from the validator.
+// ---------------------------------------------------------------------------
+const SCHEME_DEFAULT_PORT = { rtmp: 1935, rtmps: 443 } as const;
+
+describe("destinationIdentity — one destination, one identity (A19b)", () => {
+  it("sweep: an explicit scheme-default port and no port are ONE identity, for every listed host under both schemes — and the bare form IS the identity", () => {
+    let checked = 0;
+    for (const entry of STREAM_DESTINATION_HOSTS) {
+      for (const scheme of ["rtmp", "rtmps"] as const) {
+        const bare = `${scheme}://${hostOf(entry)}/app/`;
+        const ported = `${scheme}://${hostOf(entry)}:${SCHEME_DEFAULT_PORT[scheme]}/app/`;
+        expect(destinationIdentity(ported), ported).toBe(bare);
+        expect(destinationIdentity(bare), bare).toBe(bare);
+        checked++;
+      }
+    }
+    expect(checked).toBe(STREAM_DESTINATION_HOSTS.length * 2);
+    expect(checked).toBe(26);
+  });
+
+  it("the owner's two cases by name: rtmps :443 (Facebook) and rtmp :1935 (YouTube) each equal their port-less spelling", () => {
+    expect(destinationIdentity("rtmps://live-api-s.facebook.com:443/rtmp/")).toBe(destinationIdentity("rtmps://live-api-s.facebook.com/rtmp/"));
+    expect(destinationIdentity("rtmp://a.rtmp.youtube.com:1935/live2")).toBe(destinationIdentity("rtmp://a.rtmp.youtube.com/live2"));
+    expect(destinationIdentity("rtmps://live-api-s.facebook.com:443/rtmp/")).toBe("rtmps://live-api-s.facebook.com/rtmp/");
+  });
+
+  it("it is not a constant: another host, path, query or scheme is another identity; the host folds as checkDestination folds it", () => {
+    const base = "rtmps://a.rtmps.youtube.com/live2";
+    const others = [
+      "rtmps://b.rtmps.youtube.com/live2",          // YouTube's backup ingest is a different host
+      "rtmps://a.rtmps.youtube.com/live3",
+      "rtmps://a.rtmps.youtube.com/live2?backup=1",
+      "rtmp://a.rtmp.youtube.com/live2",
+    ];
+    let checked = 0;
+    for (const other of others) {
+      expect(destinationIdentity(other), other).not.toBeNull();
+      expect(destinationIdentity(other), other).not.toBe(destinationIdentity(base));
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(destinationIdentity("rtmps://A.RTMPS.YouTube.com:443/live2")).toBe(base);
+  });
+
+  it("a refused URL has NO identity — one case per refusal rule, so nothing undialable can ever be fingerprinted", () => {
+    const refused: [string, DestinationRefusal][] = [
+      ["http://a.rtmp.youtube.com/live2", "scheme"],
+      ["rtmps://u:p@a.rtmps.youtube.com/live2", "userinfo"],
+      ["rtmps://127.0.0.1/live2", "ip_literal"],
+      ["rtmps://evil.example/live2", "host"],
+      ["rtmps://a.rtmps.youtube.com:1935/live2", "port"],
+      ["rtmps://a.rtmps.youtube.com", "path"],
+    ];
+    const rules = new Set<DestinationRefusal>();
+    for (const [url, rule] of refused) {
+      expect(destinationRefusal(url), url).toBe(rule);   // the case is refused for the rule it names…
+      expect(destinationIdentity(url), url).toBeNull();  // …and has no identity
+      rules.add(rule);
+    }
+    expect([...rules].sort()).toEqual([...DESTINATION_REFUSALS].sort());
   });
 });

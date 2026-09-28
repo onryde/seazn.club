@@ -13,10 +13,10 @@
 //     `readFirstInput` reads the LOWEST slot of THIS session, or null — never a literal slot 0.
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
-import { seal } from "../crypto";
-import { insertStreamTarget, readFirstInput, readInputBySlot, readTargetSecret, storeInputCredentials } from "../secret-columns";
+import { fingerprintDestination, seal } from "../crypto";
+import { StreamTargetVanishedError, insertStreamTarget, readFirstInput, readInputBySlot, readTargetSecret, storeInputCredentials } from "../secret-columns";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -39,7 +39,7 @@ async function rig() {
   const target = destination();
   const targetId = await sql.begin((tx) =>
     insertStreamTarget(tx, { orgId: auth.orgId, kind: "youtube", label: "x", watchUrl: null, rtmp: target }),
-  );
+  ).then((t) => t.id);
   // seedOrg's AuthCtx carries `userId: null` (_rig.ts) and created_by is NOT NULL with no FK — a fresh uuid is a creator.
   const [s] = await sql<{ id: string }[]>`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override)
@@ -95,7 +95,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     const target = destination();
     const id = await sql.begin((tx) =>
       insertStreamTarget(tx, { orgId: r.orgId, kind: "custom_rtmp", label: "Club RTMP", watchUrl: "https://kick.com/club", rtmp: target }),
-    );
+    ).then((t) => t.id);
     expect(id).not.toBe(r.targetId);
     const rows = await sql<{ org_id: string; kind: string; label: string; watch_url: string | null }[]>`
       select org_id, kind, label, watch_url from org_stream_targets where id = ${id}`;
@@ -104,6 +104,61 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     // …and the rig's own row, written with watchUrl null, stored null — not "" and not the string "null".
     const [rigRow] = await sql<{ watch_url: string | null }[]>`select watch_url from org_stream_targets where id = ${r.targetId}`;
     expect(rigRow!.watch_url).toBeNull();
+  });
+
+  // A19 + A19b (owner 2026-09-28): the writer is also the fingerprint's ONLY writer, and a repeat of one destination in
+  // one org is the FIRST row, not a second one and not a throw. The state transitions: first write (row + fingerprint),
+  // second write of the same destination spelled with its default port (no row, first id back, first row untouched),
+  // and a write of a different key (a new row).
+  it("A19: insertStreamTarget stores the destination's fingerprint; the same destination again — even spelled with its default port — returns the FIRST id and changes nothing; another key is another row", async () => {
+    const r = await rig();
+    const [first] = await sql<{ dest_fingerprint: string | null }[]>`
+      select dest_fingerprint from org_stream_targets where id = ${r.targetId}`;
+    expect(first!.dest_fingerprint).toBe(fingerprintDestination(r.target.url, r.target.streamKey));
+    const again = await sql.begin((tx) =>
+      insertStreamTarget(tx, {
+        orgId: r.orgId, kind: "custom_rtmp", label: "renamed", watchUrl: "https://youtube.com/@club",
+        rtmp: { url: "rtmps://a.rtmp.youtube.com:443/live2", streamKey: r.target.streamKey },
+      }),
+    );
+    expect(again.id).toBe(r.targetId);
+    expect(again).toMatchObject({ kind: "youtube", label: "x", watchUrl: null });   // the STORED row answers, not the arguments
+    const rows = await sql<{ id: string; kind: string; label: string; watch_url: string | null }[]>`
+      select id, kind, label, watch_url from org_stream_targets where org_id = ${r.orgId}`;
+    expect(rows).toEqual([{ id: r.targetId, kind: "youtube", label: "x", watch_url: null }]);
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);   // first spelling kept
+    const other = await sql.begin((tx) =>
+      insertStreamTarget(tx, { orgId: r.orgId, kind: "youtube", label: "x", watchUrl: null, rtmp: destination() }),
+    );
+    expect(other.id).not.toBe(r.targetId);
+  });
+
+  // The guard's reach: the insert CONFLICTED (no row returned) and the read-back found nothing — the row was deleted
+  // between the two statements. No production path deletes a target today, so a real database cannot reach this
+  // window on demand; a scripted transaction answers both statements with nothing, which is exactly that window.
+  it("A19 guard: a destination that conflicts and then cannot be read back is refused BY NAME — never an undefined row handed to the caller", async () => {
+    const statements: string[] = [];
+    const vanished = ((strings: TemplateStringsArray) => {
+      statements.push(strings.join("?").replace(/\s+/g, " ").trim());
+      return Promise.resolve([]);
+    }) as unknown as Tx;
+    const err = await insertStreamTarget(vanished, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() })
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(StreamTargetVanishedError);
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toMatch(/^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null do nothing/);
+    expect(statements[1]).toMatch(/^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \?$/);
+  });
+
+  it("A19: an undialable destination is refused BEFORE anything is written — no fingerprint means no row", async () => {
+    const r = await rig();
+    const before = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId}`;
+    await expect(sql.begin((tx) =>
+      insertStreamTarget(tx, { orgId: r.orgId, kind: "custom_rtmp", label: "x", watchUrl: null, rtmp: { url: "rtmps://127.0.0.1/app", streamKey: secret65() } }),
+    )).rejects.toThrow();
+    const after = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId}`;
+    expect(before[0]!.n).toBe(1);
+    expect(after[0]!.n).toBe(1);
   });
 
   // Whole-branch review I5 (auth). `org_stream_targets` is under FORCE RLS with ZERO policies and is reached only by

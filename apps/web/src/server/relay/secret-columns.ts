@@ -2,7 +2,7 @@
 // column (enc-boundary.test.ts). Everything crossing this file is sealed on the
 // way in and opened on the way out; nothing decrypted is ever written back.
 import type { Tx } from "@/lib/db";
-import { open, seal } from "./crypto";
+import { fingerprintDestination, open, seal } from "./crypto";
 
 export interface InputCredentials {
   srt: { url: string; streamId: string; passphrase: string };
@@ -96,16 +96,52 @@ export async function readInputBySlot(tx: Tx, sessionId: string, slot: number): 
 }
 
 /** Insert a destination with its RTMPS url + key sealed. The row's only
- *  writer: `rtmp_enc` is NOT NULL, so the insert and the seal are one call. */
+ *  writer: `rtmp_enc` is NOT NULL, so the insert and the seal are one call.
+ *
+ *  It is also the only writer of `dest_fingerprint` (V421, owner ruling A19 + A19b): one destination — its url in
+ *  identity form plus its stream key — is ONE row per org. A repeat, even spelled with the default port, or racing a
+ *  concurrent create, returns the EXISTING row's id and writes nothing: the first row's kind, label, watch link and
+ *  envelope stand. An undialable url has no fingerprint and throws before anything is written. */
 export async function insertStreamTarget(
   tx: Tx,
   args: { orgId: string; kind: string; label: string; watchUrl: string | null; rtmp: { url: string; streamKey: string } },
-): Promise<string> {
-  const [row] = await tx<{ id: string }[]>`
-    insert into org_stream_targets (org_id, kind, label, rtmp_enc, watch_url)
-    values (${args.orgId}, ${args.kind}, ${args.label}, ${seal(JSON.stringify(args.rtmp))}, ${args.watchUrl})
-    returning id`;
-  return row!.id;
+): Promise<StoredStreamTarget> {
+  const fingerprint = fingerprintDestination(args.rtmp.url, args.rtmp.streamKey);
+  // The conflict target names the partial index's predicate so Postgres INFERS
+  // org_stream_targets_org_dest_fingerprint. A concurrent insert of the same
+  // destination makes this one WAIT for it; once it commits, this is a no-op and
+  // the read below — a new statement, so a new READ COMMITTED snapshot — sees it.
+  const [row] = await tx<TargetRow[]>`
+    insert into org_stream_targets (org_id, kind, label, rtmp_enc, watch_url, dest_fingerprint)
+    values (${args.orgId}, ${args.kind}, ${args.label}, ${seal(JSON.stringify(args.rtmp))}, ${args.watchUrl}, ${fingerprint})
+    on conflict (org_id, dest_fingerprint) where dest_fingerprint is not null do nothing
+    returning id, kind, label, watch_url, created_at`;
+  if (row) return storedTarget(row);
+  const [existing] = await tx<TargetRow[]>`
+    select id, kind, label, watch_url, created_at from org_stream_targets
+     where org_id = ${args.orgId} and dest_fingerprint = ${fingerprint}`;
+  // The conflicting row was deleted between the two statements. Refused by name rather than handing back an
+  // undefined row; the caller's retry lands the insert.
+  if (!existing) throw new StreamTargetVanishedError();
+  return storedTarget(existing);
+}
+
+/** The STORED target's public fields — the row that now answers for this destination, which on a repeat is the
+ *  first create's row, not the arguments. Never the envelope. */
+export interface StoredStreamTarget { id: string; kind: string; label: string; watchUrl: string | null; createdAt: Date }
+
+type TargetRow = { id: string; kind: string; label: string; watch_url: string | null; created_at: Date };
+
+const storedTarget = (r: TargetRow): StoredStreamTarget =>
+  ({ id: r.id, kind: r.kind, label: r.label, watchUrl: r.watch_url, createdAt: new Date(r.created_at) });
+
+/** `insertStreamTarget` found the destination already saved, then could not read it back — the row was deleted in
+ *  between. Carries no org, url or key. */
+export class StreamTargetVanishedError extends Error {
+  constructor() {
+    super("stream target changed while it was being saved; try again");
+    this.name = "StreamTargetVanishedError";
+  }
 }
 
 /** The session's FIRST input (lowest slot) — the row the organiser projection

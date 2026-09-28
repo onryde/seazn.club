@@ -18,7 +18,8 @@
 // key read into a browser bundle, and this marker is what turns that into a
 // build failure rather than a shipped secret. See tokens.ts for the same note.
 import "server-only";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
+import { destinationIdentity } from "@/lib/stream-destinations";
 
 const VERSION = 0x01;
 const IV_LEN = 12;
@@ -92,4 +93,28 @@ export function seal(plain: string): Buffer {
 
 export function open(enc: Uint8Array): string {
   return openWith("RELAY_KEK", enc);
+}
+
+/** HKDF `info` for the fingerprint key. Versioned so a future change of what is fingerprinted is a new key, not a
+ *  silent collision with rows written under the old definition. */
+const FINGERPRINT_INFO = "seazn/stream-destination-fingerprint/v1";
+
+/**
+ * A destination's fingerprint (owner ruling A19 + A19b, 2026-09-28): HMAC-SHA256, 64 lower-hex, over the url's
+ * IDENTITY form (`destinationIdentity` — the scheme-default port dropped) and the stream key, under a key DERIVED from
+ * RELAY_KEK by HKDF. V421's `org_stream_targets (org_id, dest_fingerprint)` unique index compares it, so one
+ * destination is one target row per org.
+ *
+ * Keyed, because the column is plaintext: a bare hash of (url, key) would let anyone holding the table test
+ * stream-key guesses offline. Derived, not the KEK itself, so the envelope key is never used for a second purpose.
+ * The two fields are JSON-encoded as a pair, so no character can move across the url/key boundary into a collision.
+ *
+ * A refused URL has no identity and is refused here with a message that names neither the URL nor the key (either
+ * can carry the secret). Rotating RELAY_KEK changes every fingerprint — a rotation owes a re-fingerprint pass.
+ */
+export function fingerprintDestination(url: string, streamKey: string): string {
+  const identity = destinationIdentity(url);
+  if (identity === null) throw new Error("stream destination is not dialable; it has no fingerprint");
+  const key = Buffer.from(hkdfSync("sha256", kek("RELAY_KEK"), Buffer.alloc(0), FINGERPRINT_INFO, KEY_LEN));
+  return createHmac("sha256", key).update(JSON.stringify([identity, streamKey])).digest("hex");
 }

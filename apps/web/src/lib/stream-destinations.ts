@@ -120,6 +120,12 @@ export type DestinationCheck =
   | { readonly ok: true; /** The CANONICAL URL — what the caller seals and the relay dials. */ readonly url: string }
   | { readonly ok: false; readonly rule: DestinationRefusal };
 
+/** An accepted destination in pieces: `checkDestination` and
+ *  `destinationIdentity` assemble their two strings from ONE parse. */
+type ParsedDestination =
+  | { readonly ok: true; readonly scheme: "rtmp" | "rtmps"; readonly host: string; readonly port: number; readonly portPart: string; readonly path: string }
+  | { readonly ok: false; readonly rule: DestinationRefusal };
+
 /**
  * The verdict on `url`: either the canonical URL to store — the scheme and
  * path exactly as given, the host lower-cased (ASCII-only by then, so the
@@ -127,7 +133,31 @@ export type DestinationCheck =
  * refused it. Pure and total: any string in, one verdict out.
  */
 export function checkDestination(url: string): DestinationCheck {
-  const refuse = (rule: DestinationRefusal): DestinationCheck => ({ ok: false, rule });
+  const p = parseDestination(url);
+  if (!p.ok) return p;
+  return { ok: true, url: `${p.scheme}://${p.host}${p.portPart}${p.path}` };
+}
+
+/**
+ * The destination's IDENTITY (A19b, Task 9 re-review round 2): the canonical
+ * URL with an explicit scheme-default port DROPPED, or `null` when the URL is
+ * refused. `checkDestination` keeps `:443` as given — what is sealed and
+ * dialled stays byte-for-byte what the organiser typed — so
+ * `rtmps://live-api-s.facebook.com:443/rtmp/` and `…facebook.com/rtmp/` are
+ * two canonical strings for ONE broadcast slot. This is the ONLY input to the
+ * destination fingerprint (server/relay/crypto.ts, V421), so those two cannot
+ * become two target rows. A NON-default port would be kept: it names a
+ * different listener. Today none is admitted, so every identity is port-less.
+ */
+export function destinationIdentity(url: string): string | null {
+  const p = parseDestination(url);
+  if (!p.ok) return null;
+  const port = p.port === DEFAULT_PORT[p.scheme] ? "" : p.portPart;
+  return `${p.scheme}://${p.host}${port}${p.path}`;
+}
+
+function parseDestination(url: string): ParsedDestination {
+  const refuse = (rule: DestinationRefusal): ParsedDestination => ({ ok: false, rule });
   const scheme = /^(rtmps?):\/\//.exec(url);
   if (!scheme) return refuse("scheme");
   const rest = url.slice(scheme[0].length);
@@ -166,7 +196,7 @@ export function checkDestination(url: string): DestinationCheck {
   if (port !== DEFAULT_PORT[scheme[1] as "rtmp" | "rtmps"]) return refuse("port");
 
   if (!/^\/[\x21-\x7e]+$/.test(path)) return refuse("path");
-  return { ok: true, url: `${scheme[0]}${host}${portPart}${path}` };
+  return { ok: true, scheme: scheme[1] as "rtmp" | "rtmps", host, port, portPart, path };
 }
 
 /** `null` when `url` is an ingest URL the relay may dial; otherwise the rule

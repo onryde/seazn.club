@@ -14,7 +14,7 @@ import { DESTINATION_NOT_ALLOWED, checkDestination, type DestinationRefusal } fr
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamTarget, StreamTarget } from "@/server/api-v1/schemas";
-import { insertStreamTarget } from "@/server/relay/secret-columns";
+import { insertStreamTarget, type StoredStreamTarget } from "@/server/relay/secret-columns";
 
 // English API sentences, one per rule. Never the URL: its path can carry the stream key.
 const REFUSAL_MESSAGE: Record<DestinationRefusal, string> = {
@@ -49,9 +49,13 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   const watch = body.watchUrl === undefined ? null : streamUrlSchema.safeParse(body.watchUrl);
   if (watch && !watch.success) throw new HttpError(422, "invalid watch link");
   const watchUrl = watch ? watch.data : null;
-  const id = (await sql.begin((tx) =>
+  // A19: the same destination again is the EXISTING target (insertStreamTarget dedupes on the fingerprint), so the
+  // reply is the STORED row — its kind, label and watch link — never this body echoed onto an id it did not write.
+  const stored = (await sql.begin((tx) =>
     insertStreamTarget(tx, { orgId, kind: body.kind, label: body.label, watchUrl, rtmp: { url: destination.url, streamKey: body.streamKey } }),
-  )) as string;
-  const [row] = await sql<{ created_at: string }[]>`select created_at from org_stream_targets where id = ${id}`;
-  return { id, kind: body.kind, label: body.label, watchUrl, createdAt: new Date(row!.created_at).toISOString() };
+  )) as StoredStreamTarget;
+  return {
+    id: stored.id, kind: stored.kind as StreamTarget["kind"], label: stored.label, watchUrl: stored.watchUrl,
+    createdAt: stored.createdAt.toISOString(),
+  };
 }

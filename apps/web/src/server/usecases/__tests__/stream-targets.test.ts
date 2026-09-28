@@ -103,11 +103,13 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     await expect(createStreamTarget(auth, auth.orgId, { ...base, watchUrl: "https://www.youtube.com.evil.example/watch" }))
       .rejects.toMatchObject({ status: 422 });
     expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
-    const omitted = await createStreamTarget(auth, auth.orgId, { ...base, label: "omitted" });
+    // Two DIFFERENT stream keys: since A19 (V421) one url + key is ONE destination and a repeat returns the
+    // first row, so the two rows this test compares must be two destinations.
+    const omitted = await createStreamTarget(auth, auth.orgId, { ...base, label: "omitted", streamKey: "k-omitted" });
     expect(omitted.watchUrl).toBeNull();
     // "" is what the allowlist NORMALISES to null. Storing the raw "" instead would break V410's
     // `watch_url like 'https://%'` — so this case differs between the validated and the raw value.
-    const blank = await createStreamTarget(auth, auth.orgId, { ...base, label: "blank", watchUrl: "" });
+    const blank = await createStreamTarget(auth, auth.orgId, { ...base, label: "blank", watchUrl: "", streamKey: "k-blank" });
     expect(blank.watchUrl).toBeNull();
     const stored = await sql<{ id: string; watch_url: string | null }[]>`
       select id, watch_url from org_stream_targets where org_id = ${auth.orgId} order by created_at`;
@@ -218,6 +220,67 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     expect(checked, "kinds checked").toBeGreaterThan(0);
     expect(checked).toBe(StreamTargetKind.options.length);
     expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.kind)).toEqual([...StreamTargetKind.options]);
+  });
+
+  // A19 + A19b (owner 2026-09-28). One destination — one url (in its identity form) + one stream key — is ONE row
+  // per org, so V421's one-live-session-per-target index holds per DESTINATION rather than per row a user happened
+  // to add twice. The repeat is idempotent: the EXISTING target comes back and no second sealed copy is written.
+  it("A19: the SAME destination twice is ONE row — the repeat returns the stored target (its label, not the new body's) and seals nothing new; the explicit default port is the same destination on BOTH schemes (A19b)", async () => {
+    const { auth } = await seedOrg();
+    const [kFb, kYt] = [key(), key()];
+    const fb = await createStreamTarget(auth, auth.orgId, { kind: "facebook", label: "Facebook", rtmpUrl: "rtmps://live-api-s.facebook.com/rtmp/", streamKey: kFb });
+    const fbAgain = await createStreamTarget(auth, auth.orgId, { kind: "facebook", label: "Facebook again", rtmpUrl: "rtmps://live-api-s.facebook.com/rtmp/", streamKey: kFb });
+    expect(fbAgain).toEqual(fb);
+    const fb443 = await createStreamTarget(auth, auth.orgId, { kind: "facebook", label: "Facebook :443", rtmpUrl: "rtmps://live-api-s.facebook.com:443/rtmp/", streamKey: kFb });
+    expect(fb443).toEqual(fb);
+    const yt = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "YouTube", rtmpUrl: "rtmp://a.rtmp.youtube.com:1935/live2", streamKey: kYt });
+    const ytBare = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "YouTube bare", rtmpUrl: "rtmp://a.rtmp.youtube.com/live2", streamKey: kYt });
+    expect(ytBare).toEqual(yt);
+    expect(yt.id).not.toBe(fb.id);
+    // The FIRST envelope is the one kept: its url is the spelling the first create sealed.
+    expect(await sql.begin((tx) => readTargetSecret(tx, auth.orgId, fb.id))).toEqual({ url: "rtmps://live-api-s.facebook.com/rtmp/", streamKey: kFb });
+    const rows = await sql<{ id: string; fp: string | null }[]>`
+      select id, dest_fingerprint as fp from org_stream_targets where org_id = ${auth.orgId} order by created_at`;
+    expect(rows.map((r) => r.id)).toEqual([fb.id, yt.id]);
+    expect(rows.every((r) => /^[0-9a-f]{64}$/.test(r.fp ?? ""))).toBe(true);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([fb, yt]);
+  });
+
+  it("A19: a different KEY on the same url, another provider, or ANOTHER ORG with the same url + key is a new row (the dedupe never crosses an org)", async () => {
+    const a = await seedOrg();
+    const b = await seedOrg();
+    const k = key();
+    const same = { kind: "twitch" as const, label: "Twitch", rtmpUrl: "rtmps://live-jfk.twitch.tv:443/app", streamKey: k };
+    const inA = await createStreamTarget(a.auth, a.auth.orgId, same);
+    const otherKey = await createStreamTarget(a.auth, a.auth.orgId, { ...same, streamKey: key() });
+    const otherProvider = await createStreamTarget(a.auth, a.auth.orgId, { ...same, kind: "custom_rtmp", rtmpUrl: "rtmp://live.restream.io/live" });
+    const inB = await createStreamTarget(b.auth, b.auth.orgId, same);
+    expect(new Set([inA.id, otherKey.id, otherProvider.id, inB.id]).size).toBe(4);
+    expect((await listStreamTargets(a.auth, a.auth.orgId)).map((t) => t.id)).toEqual([inA.id, otherKey.id, otherProvider.id]);
+    expect((await listStreamTargets(b.auth, b.auth.orgId)).map((t) => t.id)).toEqual([inB.id]);
+    // Same destination in two orgs: the SAME fingerprint (one identity), two rows — the index is per org.
+    const fps = await sql<{ fp: string }[]>`
+      select dest_fingerprint as fp from org_stream_targets where id in ${sql([inA.id, inB.id])}`;
+    expect(fps).toHaveLength(2);
+    expect(fps[0]!.fp).toBe(fps[1]!.fp);
+  });
+
+  it("A19: a RACE — two creates of one destination at once → one row, and BOTH callers get its id (the unique index is the backstop, answered as the existing target, never a raw 23505)", async () => {
+    const { auth } = await seedOrg();
+    const body = { kind: "kick" as const, label: "Kick", rtmpUrl: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app", streamKey: key() };
+    let rounds = 0;
+    for (let i = 0; i < 3; i++) {
+      const settled = await Promise.allSettled([
+        createStreamTarget(auth, auth.orgId, body),
+        createStreamTarget(auth, auth.orgId, body),
+      ]);
+      const ids = settled.map((s) => (s.status === "fulfilled" ? s.value.id : `rejected: ${String((s as PromiseRejectedResult).reason)}`));
+      expect(ids[0]).toBe(ids[1]);
+      rounds++;
+    }
+    expect(rounds).toBe(3);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId}`;
+    expect(n).toBe(1);
   });
 });
 

@@ -468,4 +468,43 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(after.beat_window_at?.toISOString()).toBe("2026-09-16T10:02:00.000Z");
     expect(after.heartbeat_at).toBeNull(); // two facts, two columns: the anchor never writes the panel's last beat
   });
+
+  it("dest_fingerprint (V421, A19): NULLABLE text with no default, so a row that predates it holds null and nulls never collide; a non-hex value is refused (the column can never hold a plaintext url or key); one org cannot hold one fingerprint twice, another org can; the index is pinned by NAME and PREDICATE", async () => {
+    const a = await rig();
+    const b = await rig();
+    const hex64 = () => (randomUUID() + randomUUID()).replace(/-/g, "");
+    const target = (orgId: string, fp: string | null) => sql`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc, dest_fingerprint)
+      values (${orgId}, 'youtube', 'fp', ${Buffer.from("not-a-real-envelope")}, ${fp})`;
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'org_stream_targets' and column_name = 'dest_fingerprint'`;
+    expect(shape).toEqual({ data_type: "text", is_nullable: "YES", column_default: null });
+    // rig()'s target is a pre-V421-shaped raw insert: null, and a second null in the same org lands beside it.
+    await target(a.orgId, null);
+    const fp = hex64();
+    await target(a.orgId, fp);
+    await expect(target(a.orgId, fp)).rejects.toMatchObject({ code: "23505", constraint_name: "org_stream_targets_org_dest_fingerprint" });
+    await target(b.orgId, fp);   // the same destination in ANOTHER org is its own row
+    let refused = 0;
+    for (const bad of ["rtmps://a.rtmps.youtube.com/live2", fp.toUpperCase(), fp.slice(1), `${fp}0`]) {
+      await expect(target(a.orgId, bad), bad).rejects.toMatchObject({ code: "23514", constraint_name: "org_stream_targets_dest_fingerprint_shape" });
+      refused++;
+    }
+    expect(refused).toBe(4);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${a.orgId}`;
+    expect(n).toBe(3);   // rig's null, the second null, the fingerprinted row
+    // The PREDICATE keeps legacy nulls outside the index WITHOUT leaning on NULLS DISTINCT (a later "tidy" to NULLS NOT
+    // DISTINCT would otherwise make two legacy rows collide), and it is what insertStreamTarget's
+    // `on conflict (org_id, dest_fingerprint) where dest_fingerprint is not null` must match to INFER this index — a
+    // drifted predicate turns every dedupe into 42P10. Neither is reachable from a plain insert, so both are pinned as
+    // text (the idempotency_key precedent above).
+    const [idx] = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+       where schemaname = current_schema() and tablename = 'org_stream_targets'
+         and indexname = 'org_stream_targets_org_dest_fingerprint'`;
+    expect(idx?.indexdef, "org_stream_targets_org_dest_fingerprint is missing or renamed").toMatch(
+      /^CREATE UNIQUE INDEX org_stream_targets_org_dest_fingerprint ON \w+\.org_stream_targets USING btree \(org_id, dest_fingerprint\) WHERE \(dest_fingerprint IS NOT NULL\)$/,
+    );
+  });
 });
