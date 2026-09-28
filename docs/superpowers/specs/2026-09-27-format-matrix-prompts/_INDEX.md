@@ -10,7 +10,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **plan approved** (ruling 22; `docs/superpowers/plans/2026-09-27-format-matrix-w1a.md`, 11 tasks); executing subagent-driven in worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a` |
+| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28: ready to merge (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251).** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | not started |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | not started |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
@@ -23,6 +23,107 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W8 | Scorer sheets (lane) | not started |
 | W9 | Operational [O] (lane) | not started |
 | W10 | Sweep lane: ST-G22 youth-name privacy FIRST, #878 browser Sentry, shadow invariants, #858 #853 #843 | not started |
+
+## W1a session status
+
+**2026-09-28 — final review fix batch, live re-run** (`seazn-local-env` label
+`fm-w1a-fix`: fresh Postgres at v419, `db:apply` + `sync:sports` (11 sports,
+31 system variants), standalone prod server (build newer than every
+`apps/web` and engine source file) with `AUTH_DEV_LINKS=1`, no `REDIS_URL`,
+PostHog and Sentry keys blanked in the launching env, no non-loopback TCP
+from the server PID; `show data_directory` equal to
+`BENCH_EXPECTED_DATA_DIR`; the LISTEN PID equal to `server.pid`).
+
+- **Committed evidence (supersedes `fm-w1a-a2`):** `truth-runs/w1a-slice/results.json`
+  is run `fm-w1a-fix-b` at harness `e96a51ff1` (a clean tree: `harnessCommit`
+  now says `-dirty` otherwise), schema v2. v2 cases carry `notes`, and the file
+  carries the catalogue `grid` MATRIX.md renders from, so the render no longer
+  reads the live catalogue. `committed-matrix.test.ts` now also checks that each
+  case's state is `decideState` of its own checks, that the 24 caseIds are
+  distinct, that the commit is clean and that no raw string is secret-shaped.
+  Seven data mutants of the evidence are each red.
+- **Smoke** `fm-w1a-fix-smoke`: `league|generic|score|LIFECYCLE` → ✅, 13
+  checks, 194 items.
+- **Slice** `fm-w1a-fix-a` / `fm-w1a-fix-b`:
+  `{"cases":24,"counts":{"works":24},"differ":[]}`. The two runs agree check by
+  check, notes included. Vacuous: none. Error reds: none.
+- **The batch's new checks, live, in all 24 cases:**
+  - `life-built-as-posted` (I-2): pass, 20–23 items.
+  - `life-results-as-posted` (I-1): pass, 7–28 items.
+  - `life-fold-parity`: pass, 6–28 items.
+  - `r4-cascade-consistent` now includes `skipped_finalized`. It passed in all
+    six R4 cases.
+- **Notes (m-5) seen live:** only the stage status after start (`active` in
+  all 24) and the config-lock answers (`409 FORMAT_LOCKED` / `200`). There was
+  no SEQ_CONFLICT retry, no foreign event and no loop cap.
+- **Canaries** (each EXIT=0, red on its own check only, every failing evidence
+  line canary-marked):
+  - `canary M1: red on m1-walkover-recorded, as designed`
+  - `canary R4: red on r4-cascade-consistent, as designed`
+  - `canary F1: red on f1-round-size, as designed`
+- **Findings:** none. The live re-run found no product red.
+
+**2026-09-28 — Task 11, the first live truth run** (`seazn-local-env` label
+`fm-w1a`: fresh Postgres, `db:apply` + `sync:sports` (11 sports, 31 system
+variants), standalone prod server with `AUTH_DEV_LINKS=1`, no `REDIS_URL`,
+PostHog and Sentry keys blanked; `show data_directory` equal to
+`BENCH_EXPECTED_DATA_DIR`).
+
+- **Committed evidence (then; superseded by `fm-w1a-fix-b` above):**
+  `truth-runs/w1a-slice/results.json` was run `fm-w1a-a2` at harness
+  `f013af525`; `MATRIX.md` is its render, and
+  `scripts/matrix/__tests__/committed-matrix.test.ts` keeps the two equal (R10).
+- **Smoke** `fm-w1a-smoke` (harness `22ac77387`): `league|generic|score|LIFECYCLE`
+  → ✅, 11 applied checks, 143 items.
+- **Baseline slice** `fm-w1a-a` / `fm-w1a-b` (harness `22ac77387`):
+  `{"cases":24,"counts":{"works":23,"red":1},"notRun":0,"vacuous":[],"differ":[]}`,
+  and the two runs agree check by check.
+  - ❌ `league|generic|score|R4` — `I3-table-points-equal-declared: checked 0
+    items (vacuous, R25)`, evidence `skipped 8 entrant(s) with undeclared or
+    changed results`. **Harness defect, fixed in `f013af525`** with its unit
+    tests. Generic folds `core.abandon` to `{"kind":"no_result"}` (badminton
+    folds it to null), so the expunge cascade leaves the withdrawn entrant's
+    fixtures abandoned with an outcome. I3 keyed "struck" on a null outcome and
+    skipped every entrant. The product's table was right: the other seven at P6,
+    the withdrawn entrant at P0 and 0 points.
+- **Final slice** `fm-w1a-a2` / `fm-w1a-b2` (harness `f013af525`):
+  `{"cases":24,"counts":{"works":24},"notRun":0,"vacuous":[],"differ":[]}`,
+  and the two runs agree check by check. No error reds.
+- **Canaries** (harness `f013af525`, each EXIT=0 and red on its own check only):
+  - `canary M1: red on m1-walkover-recorded, as designed`
+  - `canary R4: red on r4-cascade-consistent, as designed`
+  - `canary F1: red on f1-round-size, as designed` (3 seated, expected 4)
+
+  At `22ac77387` the R4 canary was also red on I3, the same vacuity as its
+  twin. None of the non-canary twins fails its canary's check.
+- **Live-only checks** (what the product did):
+  - Builder variant order (plan open question 3), read from the DB: generic
+    `score,win_loss`, badminton `bwf,short`. The slice variants are `score` and
+    `bwf`, as the plan read.
+  - The fixture `outcome` on the fixtures list arrives as an object.
+    `life-draw-path-exercised` counts `kind:"draw"` rows off that list.
+  - The config lock, in all six LIFECYCLE cases: a format edit gets
+    `409 FORMAT_LOCKED`, and the entrants-only save gets `200`.
+  - Knockout standings are NOT `[]`. The product returns all 8 rows, and the
+    public table equals the org one (`life-public-standings-match` 8 items).
+  - No stage is left with an open or one-sided scheduled fixture (Task 5 M-5).
+    `life-loop-bounded` passes in all 24 cases.
+  - None of these occurred: `VisibilityDegraded` (one org per case), "owner has
+    no users row", or a parity row the harness could not judge (no foreign
+    events on any fixture).
+  - A35 / `realDeps`: the runner exits 124 ms after `finishedAt`, although its
+    clients are `max: 1` with no idle timeout. After the runs, the only open DB
+    sessions belong to the server's PID.
+  - The org-switch proof is the `seazn_org` cookie. It held for all 104 case
+    orgs. `GET /api/orgs` is no longer read at all.
+- **Findings:**
+  - **F-TRIPLE (CONFIRMED, W5).** The builder's `triple_rr` builds a
+    one-meeting league. The legs picker is hidden
+    (`division-builder.tsx:816-819`), `buildTemplateStages` overwrites `legs`
+    with the knob, and the division reads back "league". Reported by the W1a
+    controller as owner-verified by driving the product, 2026-09-28. The slice
+    does not cover it.
+  - The live slice found no product red.
 
 ## Session prompts
 
@@ -181,6 +282,33 @@ a peer session as the other.
   product look).
 - **2026-09-27** — stale memory corrected: per-stage match rules #804 merged
   2026-09-20 (D7 went option A, `7d5433faf`); bench B07a merged (#792).
+- **2026-09-28** — W1a live truth run done (see "W1a session status"). These
+  items are carried to later waves; they are recommendations, not rulings.
+  - **W1b:** I1's `field` is division-wide, so second-stage groups need
+    per-stage entrants. The double_elim denied state goes through an
+    entitlement-override deny (ruling 24).
+  - **W1b / W2:** I3 now judges an expunge cascade's struck fixtures as 0
+    (`f013af525`). Any other abandon keeps its outcome and is left unjudged:
+    generic's `no_result` shares draw points in `standingsDelta`, and what an
+    abandon is worth is W2's rulebook (ST-G1).
+  - **W10:** never build shadow-invariant runs for divisions with zero
+    stages, because I4 and I5 fail on zero stages.
+  - **Bench owner:** the bench preflight runs its catalog queries and
+    `GET /api/health` concurrently with `show data_directory`
+    (`scripts/bench/lib/env.ts:244-252`). The matrix runs its own guard first,
+    so the matrix makes no foreign write, but the bench on its own is exposed.
+  - **The wave that adds the weekly schedule** must delete or invert
+    `ci-wiring.test.ts`'s "no scheduled matrix workflow" test.
+  - **From the final review fix batch (harness hygiene, W1b):**
+    - The fake's event refusal answers 409 for every engine code
+      (`fake-driver.ts` postStream). The product maps them via
+      `ENGINE_HTTP` (`api-v1/http.ts`): 422 for INVALID_EVENT, WRONG_PHASE
+      and ALREADY_DECIDED. No harness logic keys on that status today; it is
+      the class of the STAGE_NOT_READY fix (Task 8 m-7).
+    - `run-cli.test.ts`'s zero-cases test still empties the exported
+      `SLICE_ROWS` in place. It already restores it in a `finally` and asserts
+      the restore; a valid filter always plans cases, so avoiding the in-place
+      edit needs a planner seam.
 
 ## False premises found
 
@@ -215,3 +343,39 @@ Record each audit gap that fails to hold, with who found it.
   goals/boards rulebook draft (`4da1804e1`).
 - **ST-G1 (scope)** — wider than filed: football/hockey abandonments and
   carrom/generic abandonment points are also dropped from the table.
+
+### Found during W1a (tasks 1–11)
+
+- **"A level full-time knockout fixture becomes a bracket draw" — FALSE.**
+  For football, hockey and ice hockey, the engine folds a level full-time
+  knockout fixture to `draw`, and `supportsDraws` keys on the stage kind only.
+  But the product blocks that fixture ("cannot end in a draw — decide by extra
+  time and shootout"). The W1a controller reports this as owner-verified by
+  driving the product. What remains is engine hygiene, routed to W2 at low
+  priority.
+- **`public_quota_degraded === true` (plan Task 6) — FALSE shape.** The field
+  is an object (`schemas.ts:223-253`), so the check was inert. The driver now
+  reads the applied `visibility`.
+- **"Generic draw refusal is not strict-gated" (Task 2 candidate) — not a
+  finding.** Config is frozen on a fixture's first event
+  (`append-event.ts:280`, `fixture-cfg.ts:44`).
+- **Carrom `tieBoard:"draw"` generator gap (plan deviation text) — FALSE.** No
+  carrom variant enables draws (`carrom.ts:69`). `KNOWN_UNSUPPORTED` covers
+  only cricket two-innings.
+- **RF4 via the org listing — tautological.** A successful switch already
+  implies the listing, so the proof is the `seazn_org` cookie instead. It held
+  live for all 104 case orgs.
+- **"An expunged fixture has no outcome" (I3, Task 5) — FALSE for generic.**
+  Found by the live run (Task 11). Generic folds `core.abandon` to
+  `{kind:"no_result"}`; badminton folds it to null. I3 skipped every entrant
+  of `league|generic|score|R4` and read vacuous. This was a harness defect,
+  fixed in `f013af525`.
+- **Plan premises re-checked live in Task 11:**
+  - CONFIRMED: builder variant order (generic `score`, badminton `bwf`).
+  - CONFIRMED: division config locks once fixtures exist (`409
+    FORMAT_LOCKED`), and the entrants-only save passes (`200`).
+  - CONFIRMED: fixture `outcome` is an object on the fixtures list.
+  - CONFIRMED: the builder variant query returns rows under a
+    `rolbypassrls` role.
+  - REFUTED: the worry that knockout standings come back `[]`. They return
+    all 8 rows, equal to the public table.

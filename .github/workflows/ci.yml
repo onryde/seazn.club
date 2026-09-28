@@ -194,6 +194,40 @@ jobs:
       - name: Bench lib unit tests (DB-free)
         run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-bench.json --testTimeout=30000 scripts/bench
 
+      # Format × sport matrix harness (W1a, scripts/matrix/**) — catalogue,
+      # stream generators folded through the real engine for all 11 sports,
+      # invariants, results/renderer, driver on a fake transport. DB-free by
+      # design (every DB/HTTP seam is injected), so it runs here beside the
+      # bench step with the same explicit-binary + explicit-path convention.
+      # The live L3 run is local-only in W1a (no scheduled workflow).
+      #
+      # Judged by the JSON report, not by vitest's exit code alone: a file that
+      # fails to COLLECT reads 0 passed / 0 total and shows up only in
+      # numFailedTestSuites, and the `scripts/matrix` positional is a substring
+      # filter, not a path. So the step is red on zero tests, on any failed
+      # suite, on passed != total (a skip or todo included), and on any
+      # executed file outside ./scripts/matrix/. scripts/matrix/__tests__/
+      # ci-wiring.test.ts runs this block for real against a stand-in vitest.
+      - name: Matrix harness unit tests (DB-free)
+        run: |
+          set -euo pipefail
+          rm -f vitest-results-matrix.json
+          ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-matrix.json --testTimeout=30000 scripts/matrix
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const r = JSON.parse(fs.readFileSync("vitest-results-matrix.json", "utf8"));
+            const root = path.join(process.cwd(), "scripts", "matrix") + path.sep;
+            const files = (r.testResults || []).map((t) => t.name);
+            console.log(`matrix harness: ${r.numPassedTests}/${r.numTotalTests} tests passed in ${files.length} files, ${r.numFailedTestSuites} failed suite(s)`);
+            const fail = (msg) => { console.error(`::error::${msg}`); process.exit(1); };
+            if (!(r.numTotalTests > 0)) fail("the matrix step ran ZERO tests. A suite that fails to collect reads 0/0, so this is a red, not a pass.");
+            if (r.numFailedTestSuites !== 0) fail(`${r.numFailedTestSuites} matrix suite(s) failed (a file that fails to COLLECT counts here, not in numFailedTests).`);
+            if (r.numPassedTests !== r.numTotalTests) fail(`only ${r.numPassedTests} of ${r.numTotalTests} matrix tests passed (failed, skipped and todo all count against it).`);
+            const stray = files.filter((f) => !f.startsWith(root));
+            if (stray.length > 0) fail(`the scripts/matrix filter also ran files outside scripts/matrix/: ${stray.join(", ")}`);
+          '
+
   # -------------------------------------------------------------------------
   # The apps/web unit / property / grid suite, in FOUR shards. It was 216s — 182s
   # of it this one step — and second only to smoke-e2e once #600 landed, so it
