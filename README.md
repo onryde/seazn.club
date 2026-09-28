@@ -161,8 +161,8 @@ destination. None of it is wired yet — the tree currently references no Cloudf
 var at all — so an account and a scoped token are a prerequisite for any R0/R1/R2 work,
 including the U1 spike:
 
-- `CF_ACCOUNT_ID` — the account live inputs are created under
-- `CF_API_TOKEN` — scoped to Stream; server-side only, never reaches the browser
+- `CLOUDFLARE_ACCOUNT_ID` — the account live inputs are created under
+- `CLOUDFLARE_STREAM_TOKEN` — scoped to Stream; server-side only, never a `NEXT_PUBLIC_*` var, never reaches the browser
 
 Two facts worth knowing before reading the design:
 

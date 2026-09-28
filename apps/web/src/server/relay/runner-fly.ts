@@ -24,16 +24,23 @@
 // Machine or start a second one — the 409 adopt (T5-c), the unestablished
 // create (T5-g), and the untouched pass-through of the client's `retryable`,
 // which is the domain's licence to create attempt + 1 (T5-b).
-import { FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, type Machine } from "./fly-client";
+import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, type Machine } from "./fly-client";
+import { liveRunnerIdentity } from "./config";
 import { machineNameFor, type ObservedRunnerState, type RunnerTrigger } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
 import { NOOP_RECORDER } from "./ports";
 
-export const FLY_RELAY_APP_DEFAULT = "seazn-relay";
 /** Defined in fly-client.ts, beside the metadata lookup that uses it — two
  *  spellings of an idempotency key is two keys. Re-exported so every consumer
  *  and test keeps importing it from one place. */
 export { SESSION_METADATA_KEY };
+/** I1: the Machine metadata key carrying `RunnerSpec.environment` — the deployment that created it. Only this adapter
+ *  reads or writes it (the client's lookup filters on the session key alone), so it lives here. */
+export const ENV_METADATA_KEY = "seazn_env";
+/** m1: Fly's list-consistency window is undocumented (see `adoptNamed` below: "the only handle that works inside Fly's
+ *  undocumented list-consistency window"). The house already settles it once, for the create lookup's confirming
+ *  re-list (fly-client.ts FLY_CLIENT_DEFAULTS.lookupSettleMs) — the same window, so the same number, not a second one. */
+export const FLY_LIST_SETTLE_MS = FLY_CLIENT_DEFAULTS.lookupSettleMs;
 
 /** The `error_code` a `stream_provider_calls` row carries when a create's
  *  OUTCOME was never established (T5-g). Its own value, not an HTTP status:
@@ -158,6 +165,7 @@ function listingOf(m: Machine): RunnerListing {
     runnerId: m.id,
     sessionId: m.config?.metadata?.[SESSION_METADATA_KEY] ?? null,
     name: m.name || null, // T5-a: `machineNameFor(sessionId, attempt)` for ours — the attempt identity Task 10 matches on
+    environment: m.config?.metadata?.[ENV_METADATA_KEY] ?? null,   // I1: null = a Machine that proves no ownership
     state: listStateOf(m),
   };
 }
@@ -170,6 +178,7 @@ function machineIdNamedIn(message: string): string | null {
 }
 
 export class FlyRunner implements RunnerProvider {
+  readonly listSettleMs = FLY_LIST_SETTLE_MS;
   private readonly client: FlyClient;
   private readonly image: string;
   private readonly app: string;
@@ -178,19 +187,23 @@ export class FlyRunner implements RunnerProvider {
    *  than an attempt). A caller-supplied client keeps its own for per-attempt rows. */
   private readonly rec: ProviderCallRecorder;
 
-  constructor(opts: { client?: FlyClient; token?: string; app?: string; image?: string; recorder?: ProviderCallRecorder } = {}) {
+  /** A runner that builds its OWN client talks to the real account, so it is live by definition: it needs the token,
+   *  the image, and (I1(b)) its deployment's own app and environment — `liveRunnerIdentity` refuses an unset
+   *  FLY_RELAY_APP, the retired shared default, and an unset ENV_NAME. An injected client (tests) brings its app with it. */
+  constructor(opts: { client?: FlyClient; token?: string; image?: string; recorder?: ProviderCallRecorder } = {}) {
     const image = opts.image ?? process.env.RELAY_IMAGE;
-    this.app = opts.app ?? process.env.FLY_RELAY_APP ?? FLY_RELAY_APP_DEFAULT;
     this.rec = opts.recorder ?? NOOP_RECORDER;
     if (!opts.client) {
       const token = opts.token ?? process.env.FLY_API_TOKEN;
       if (!token) throw new Error("FLY_API_TOKEN is not set (RELAY_DRIVERS=live needs it)");
       if (!image) throw new Error("RELAY_IMAGE is not set (the seazn-relay image R2 builds; RELAY_DRIVERS=live needs it)");
+      this.app = liveRunnerIdentity().app;
       // Ruling 13: the recorder goes to the client it BUILDS.
       this.client = new FlyClient({ token, app: this.app, recorder: opts.recorder });
     } else {
       if (!image) throw new Error("RELAY_IMAGE is not set (the seazn-relay image R2 builds; RELAY_DRIVERS=live needs it)");
       this.client = opts.client;
+      this.app = opts.client.app;
     }
     this.image = image;
   }
@@ -207,7 +220,7 @@ export class FlyRunner implements RunnerProvider {
           auto_destroy: true,
           restart: { policy: "no" },
           env: { SESSION_ID: spec.sessionId, JOB_TOKEN: spec.jobToken, APP_URL: spec.appUrl, RELAY_DEADLINE_AT: spec.deadlineAt.toISOString() },
-          metadata: { [SESSION_METADATA_KEY]: spec.sessionId },
+          metadata: { [SESSION_METADATA_KEY]: spec.sessionId, [ENV_METADATA_KEY]: spec.environment },
         },
       });
       return { runnerId: m.id };

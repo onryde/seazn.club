@@ -222,13 +222,18 @@ export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
   readonly stops: { runnerId: string; signal: string; timeoutSeconds: number }[] = [];
   readonly destroyed: string[] = [];
-  private readonly alive = new Map<string, { sessionId: string | null; name: string | null }>(); // runnerId → who it was created for
+  private readonly alive = new Map<string, { sessionId: string | null; name: string | null; environment: string | null }>(); // runnerId → who (and which deployment) it was created for
   private readonly observed = new Map<string, RunnerObservation>();
   private nextCreateFailure: { retryable: boolean; proof: { status: number | null; retryable: boolean } | null } | null = null;
   private n = 0;
   private readonly rec: ProviderCallRecorder;
+  /** m1: a fake lists consistently, so 0 by default; a test that models Fly's lag passes its own window. */
+  readonly listSettleMs: number;
 
-  constructor(opts: { recorder?: ProviderCallRecorder } = {}) { this.rec = opts.recorder ?? NOOP_RECORDER; }
+  constructor(opts: { recorder?: ProviderCallRecorder; listSettleMs?: number } = {}) {
+    this.rec = opts.recorder ?? NOOP_RECORDER;
+    this.listSettleMs = opts.listSettleMs ?? 0;
+  }
 
   private record(operation: string, method: ProviderCallRecord["method"], path: string, subjectId: string | null, sessionId: string | null = null, status = 200): void {
     void Promise.resolve()
@@ -262,7 +267,7 @@ export class FakeRunner implements RunnerProvider {
     }
     this.n += 1;
     const runnerId = `fake-machine-${this.n}-${randomBytes(3).toString("hex")}`;
-    this.alive.set(runnerId, { sessionId: spec.sessionId, name });
+    this.alive.set(runnerId, { sessionId: spec.sessionId, name, environment: spec.environment });
     this.observed.set(runnerId, { state: "running", exit: null });
     return { runnerId };
   }
@@ -297,7 +302,7 @@ export class FakeRunner implements RunnerProvider {
 
   async list(): Promise<RunnerListing[]> {
     this.record("listMachines", "GET", "/machines", null);
-    return [...this.alive].map(([runnerId, { sessionId, name }]) => ({ runnerId, sessionId, name, state: "running" as const }));
+    return [...this.alive].map(([runnerId, { sessionId, name, environment }]) => ({ runnerId, sessionId, name, environment, state: "running" as const }));
   }
 
   /** Test controls. */
@@ -314,9 +319,10 @@ export class FakeRunner implements RunnerProvider {
   failNextCreate(proof: boolean | { status: number | null; retryable: boolean }): void {
     this.nextCreateFailure = typeof proof === "boolean" ? { retryable: proof, proof: null } : { retryable: proof.retryable, proof };
   }
-  /** A Machine the provider holds that no session row explains. */
-  addOrphan(runnerId: string, sessionId: string | null): void {
-    this.alive.set(runnerId, { sessionId, name: null });
+  /** A Machine the provider holds that no session row explains. `environment` is REQUIRED (I1): which deployment's
+   *  Machine it is decides whether the sweep may touch it, so a test must say — null plants an untagged one. */
+  addOrphan(runnerId: string, sessionId: string | null, environment: string | null): void {
+    this.alive.set(runnerId, { sessionId, name: null, environment });
     this.observed.set(runnerId, { state: "running", exit: null });
   }
 }

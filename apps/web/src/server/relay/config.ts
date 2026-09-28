@@ -222,9 +222,46 @@ export const FLY_BILLING_SECONDS_PER_MONTH = 30 * 24 * 3600;
 
 /** `RELAY_DRIVERS=fake|live`. Unset is `fake`: a process that has not been
  *  told it may spend money does not. A production deploy sets `live`. */
-export function relayDriverMode(): "fake" | "live" {
-  const v = process.env.RELAY_DRIVERS;
+export function relayDriverMode(env: Record<string, string | undefined> = process.env): "fake" | "live" {
+  const v = env.RELAY_DRIVERS;
   if (v === "live") return "live";
   if (v === "fake" || v === undefined || v === "") return "fake";
   throw new Error(`RELAY_DRIVERS must be "fake" or "live", got ${JSON.stringify(v)}`);
+}
+
+/** I1 (Task 12 fix round 1, owner decision 2026-09-28): the deploy environment's IDENTITY — `ENV_NAME`, "stg" or
+ *  "prod", set as a Fly secret on each deployment. No house variable carried it: Sentry's `environment` is NODE_ENV,
+ *  which reads "production" on both. Every runner this process creates is stamped with it (RunnerSpec.environment), and
+ *  it is the daily sweep's ONLY licence to destroy a listed runner — staging and production can list one provider
+ *  account, so "no row in my database" is never ownership. Read HERE and nowhere else (`envNameOf`).
+ *
+ *  A live process that cannot name its environment REFUSES rather than guess; a fake process needs neither variable and
+ *  answers LOCAL_ENV_NAME — its FakeRunner holds only what it created itself. */
+export const LOCAL_ENV_NAME = "local";
+function envNameOf(env: Record<string, string | undefined>): string | null {
+  const v = env.ENV_NAME?.trim();
+  return v ? v : null;
+}
+const ENV_NAME_MISSING = "ENV_NAME is not set (RELAY_DRIVERS=live needs it — \"stg\" or \"prod\", a Fly secret per deployment: every Machine this deployment creates carries it, and the daily sweep destroys only Machines that do)";
+export function relayEnvironment(env: Record<string, string | undefined> = process.env): string {
+  const name = envNameOf(env);
+  if (name) return name;
+  if (relayDriverMode(env) === "live") throw new Error(ENV_NAME_MISSING);
+  return LOCAL_ENV_NAME;
+}
+
+/** The ONE Fly app every deployment used to default to (runner-fly.ts, before I1) — so staging's sweep listed
+ *  production's Machines. Refused by name: each deployment names its own app (e.g. seazn-relay-stg / seazn-relay-prod). */
+export const FLY_RELAY_APP_RETIRED_DEFAULT = "seazn-relay";
+/** I1(b): what a runner that builds its OWN Fly client must know — its deployment's app and environment. A runner that
+ *  talks to the real account is live by definition, whatever RELAY_DRIVERS says, so this refuses instead of defaulting. */
+export function liveRunnerIdentity(env: Record<string, string | undefined> = process.env): { app: string; environment: string } {
+  const app = env.FLY_RELAY_APP?.trim();
+  if (!app) throw new Error("FLY_RELAY_APP is not set (RELAY_DRIVERS=live needs it — one Fly app PER deployment, e.g. seazn-relay-stg / seazn-relay-prod)");
+  if (app === FLY_RELAY_APP_RETIRED_DEFAULT) {
+    throw new Error(`FLY_RELAY_APP is the retired shared default "${FLY_RELAY_APP_RETIRED_DEFAULT}" — one app shared by two deployments lets each one's sweep see the other's Machines; name this deployment's own app`);
+  }
+  const environment = envNameOf(env);
+  if (!environment) throw new Error(ENV_NAME_MISSING);
+  return { app, environment };
 }

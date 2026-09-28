@@ -7,7 +7,7 @@ import { relayDriverMode } from "./config";
 import { FakeIngest, FakeRunner } from "./fakes";
 import { CloudflareIngest } from "./ingest-cf";
 import type { IngestProvider, ProviderCallRecorder, RunnerProvider } from "./ports";
-import { FlyRunner } from "./runner-fly";
+import { FLY_LIST_SETTLE_MS, FlyRunner } from "./runner-fly";
 import { recordProviderCall } from "./telemetry";
 
 export interface RelayDrivers {
@@ -56,6 +56,7 @@ function lazyRunner(): RunnerProvider {
     observe: async (id) => get().observe(id),
     destroy: async (id) => get().destroy(id),
     list: async () => get().list(),
+    listSettleMs: FLY_LIST_SETTLE_MS,   // m1: a constant, so reading it never constructs (and never refuses) the runner
   };
 }
 

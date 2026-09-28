@@ -179,7 +179,7 @@ describe("FakeRunner", () => {
   it("create records the spec and destroy is idempotent", async () => {
     const runner = new FakeRunner();
     const spec = {
-      sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app",
+      sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app",
       guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0),
     };
     const h = await runner.create(spec);
@@ -206,7 +206,7 @@ describe("FakeRunner", () => {
   it("I6: create is idempotent per (sessionId, attempt) — a repeat returns the SAME runnerId and leaves ONE live Machine under that name; a real retry (attempt + 1) still gets its own, and a different session's never collides", async () => {
     const runner = new FakeRunner();
     const spec = {
-      sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app",
+      sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app",
       guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0),
     };
     const first = await runner.create(spec);
@@ -233,7 +233,7 @@ describe("FakeRunner", () => {
 
   it("the stop sequence on the fake: stop records SIGINT + grace, observe reads stopped with exit 0 / requestedStop, then auto-destroyed; a lost Machine reads its exit", async () => {
     const runner = new FakeRunner();
-    const spec = { sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const h = await runner.create(spec);
     expect(await runner.observe(h.runnerId)).toEqual({ state: "running", exit: null });
     await runner.stop(h.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
@@ -270,7 +270,7 @@ describe("FakeRunner", () => {
 
   it("A3: failNextCreate chooses the PROOF — a status throws a real FlyApiError that the REAL createFailedFrom reads as made-nothing (a refusal status, or retryable) or unknown (anything else); a boolean throws a plain error, always unknown; no failure leaves a Machine listed", async () => {
     const runner = new FakeRunner();
-    const spec = { sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const classify = async (proof: Parameters<FakeRunner["failNextCreate"]>[0]) => {
       runner.failNextCreate(proof);
       const err = await runner.create(spec).then(() => null, (e: unknown) => e);
@@ -297,12 +297,16 @@ describe("FakeRunner", () => {
 
   it("list shows what still exists, with the session AND the attempt-carrying name each was created with; destroyed ones drop out; an orphan can be planted, nameless", async () => {
     const runner = new FakeRunner();
-    const spec = { sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const spec = { sessionId: "s1", attempt: 1, environment: "stg", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const a = await runner.create(spec);
-    const b = await runner.create({ ...spec, sessionId: "s2", attempt: 2 });
-    runner.addOrphan("fake-machine-orphan", null);
+    const b = await runner.create({ ...spec, sessionId: "s2", attempt: 2, environment: "prod" });
+    runner.addOrphan("fake-machine-orphan", null, null);
     // T5-a: the NAME is the attempt identity Task 10 matches on — pinned by value (a fake that named every Machine r1 would pass a presence check).
-    expect((await runner.list()).map((r) => [r.runnerId, r.sessionId, r.name])).toEqual([[a.runnerId, "s1", "relay-s1-r1"], [b.runnerId, "s2", "relay-s2-r2"], ["fake-machine-orphan", null, null]]);
+    // I1: the ENVIRONMENT each was created with comes back as it went in (the real adapter's metadata round trip); a planted
+    // orphan carries whatever the test says, here none.
+    expect((await runner.list()).map((r) => [r.runnerId, r.sessionId, r.name, r.environment])).toEqual([[a.runnerId, "s1", "relay-s1-r1", "stg"], [b.runnerId, "s2", "relay-s2-r2", "prod"], ["fake-machine-orphan", null, null, null]]);
+    expect(runner.listSettleMs).toBe(0);                                          // a fake lists consistently…
+    expect(new FakeRunner({ listSettleMs: 25 }).listSettleMs).toBe(25);           // …unless a test asks it not to
     await runner.destroy(a.runnerId);
     expect((await runner.list()).map((r) => r.runnerId)).toEqual([b.runnerId, "fake-machine-orphan"]);
   });
@@ -315,7 +319,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
     const runner = new FakeRunner({ recorder: rec });
     const creds = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
     await ingest.inputStatus(creds.inputId);
-    const h = await runner.create({ sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
+    const h = await runner.create({ sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
     await runner.stop(h.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
     await new Promise((r) => setImmediate(r));   // the record is a microtask behind the call
     expect(rec.calls.map((c) => [c.provider, c.operation, c.method])).toEqual([
@@ -361,7 +365,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
     await ingest.listVideos({ createdBefore: new Date(1) });
     await ingest.deleteVideo("vid-a");
     await ingest.deleteInput(inputId);
-    const { runnerId } = await runner.create({ sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
+    const { runnerId } = await runner.create({ sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
     await runner.observe(runnerId);
     await runner.list();
     await runner.stop(runnerId, { signal: "SIGINT", timeoutSeconds: 10 });

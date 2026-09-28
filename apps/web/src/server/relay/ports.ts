@@ -70,6 +70,11 @@ export interface IngestProvider {
 }
 export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)
+  /** I1 (Task 12 fix round 1): the deploy environment creating this runner — config.ts `relayEnvironment()`. The adapter
+   *  stamps it on the runner, and `list()` hands it back as `RunnerListing.environment`: it is the daily sweep's ONLY
+   *  licence to destroy a listed runner. Two deployments can list one provider account, so "no row in my database" is
+   *  never ownership. */
+  environment: string;
   guest: { cpus: number; memoryMb: number; cpuClass: "shared" | "dedicated" };
   region: string;
   /** Recommendation B: the Machine exits on its own at this instant (env RELAY_DEADLINE_AT); auto_destroy removes it.
@@ -86,11 +91,18 @@ export type RunnerSpec = {
 export type RunnerHandle = { runnerId: string };
 /** `name` is the Machine's own name — `machineNameFor(sessionId, attempt)` for ours, so it carries the ATTEMPT (post-2C plan sync,
  *  T5-a: Task 10 adopts and force-destroys by session AND name, so an earlier attempt's Machine is never taken for the current
- *  one). null when the provider holds a Machine with no name. */
-export interface RunnerListing { runnerId: string; sessionId: string | null; name: string | null; state: "running" | "stopped" | "other" }
+ *  one). null when the provider holds a Machine with no name.
+ *  `environment` is the `RunnerSpec.environment` the runner was created with (I1); null when it carries none — a runner
+ *  that proves no ownership, which the sweep counts and never destroys. */
+export interface RunnerListing { runnerId: string; sessionId: string | null; name: string | null; environment: string | null; state: "running" | "stopped" | "other" }
 /** The lifecycle's observed input (plan §"Fly machine lifecycle"): the adapter's fromFlyState mapping, never Fly's spelling. */
 export interface RunnerObservation { state: ObservedRunnerState; exit: ExitInfo | null }   // both types from domain/runner.ts
 export interface RunnerProvider {
+  /** m1 (Task 12 fix round 1): how long a runner created just before a `list()` may still be MISSING from it — the
+   *  provider's list-consistency window (Fly's is undocumented: runner-fly.ts's adoption notes, and fly-client.ts settles
+   *  its own create lookup for the same reason). A caller that acts on a runner's ABSENCE lists again after this long
+   *  and acts only on what BOTH listings lack. */
+  readonly listSettleMs: number;
   create(spec: RunnerSpec): Promise<RunnerHandle>;   // idempotent per (sessionId, attempt): a retry after an ambiguous failure returns the SAME runner
   stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void>;   // the stop sequence; idempotent (already stopped / absent = success)
   /** GET + events → { state, exit }. "Absent" is TWO cases and they answer

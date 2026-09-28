@@ -23,6 +23,7 @@ import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_RAM_MICROS_PER_GB_MONTH,
   MAX_DURATION_MINUTES, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, SRT_LATENCY_MS,
+  relayEnvironment,
 } from "@/server/relay/config";
 import {
   ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, isTerminal,
@@ -107,8 +108,10 @@ async function lockRow(tx: Tx, id: string): Promise<Row | null> {
   const [row] = await tx<Row[]>`select ${COLS} from fixture_stream_sessions where id = ${id} for update`;
   return row ?? null;
 }
-async function readRow(id: string): Promise<Row | null> {
-  const [row] = await sql<Row[]>`select ${COLS} from fixture_stream_sessions where id = ${id}`;
+/** `exec` defaults to the pool. Inside a transaction pass the tx (m2): a pooled read nested in `sql.begin` holds the
+ *  tx's connection AND takes a second one, the self-deadlock shape lib/db.ts warns about. */
+async function readRow(id: string, exec: Tx | typeof sql = sql): Promise<Row | null> {
+  const [row] = await exec<Row[]>`select ${COLS} from fixture_stream_sessions where id = ${id}`;
   return row ?? null;
 }
 
@@ -445,7 +448,7 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
       case "add_output": {
         const { inputId, target } = (await sql.begin(async (tx) => {
           const input = await readFirstInput(tx, current.id);
-          return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, current.orgId, (await readRow(current.id))!.target_id) };
+          return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, current.orgId, (await readRow(current.id, tx))!.target_id) };
         })) as { inputId: string | null; target: { url: string; streamKey: string } };
         if (inputId) {
           const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target), { inputUid: inputId });   // C9: exactly one, passthrough only
@@ -582,7 +585,9 @@ async function createRunner(s: Session, deps: SessionDeps) {
   // A2 (lane-b carry 1): the Machine's hard stop is `runnerDeadlineOf` — the session's wall clock PLUS
   // MAX_ANCHOR_DRIFT_SECONDS (whole-branch review I1). `deadlineOf` would let the Machine's own clock, which can run
   // ahead of ours, cut the broadcast before the session's wall-clock expiry ends it cleanly. Witness: "A2: …".
-  return deps.drivers.runner.create({ sessionId: s.id, attempt: s.runner.attempt, jobToken, appUrl: deps.appUrl, guest: RUNNER_DEFAULT_GUEST, region: RUNNER_DEFAULT_REGION, deadlineAt: runnerDeadlineOf(s) });
+  // I1: the deployment's identity rides on the Machine — the daily sweep's only licence to destroy it later. In live
+  // mode `relayEnvironment` REFUSES an unset ENV_NAME, so an untagged Machine is never created.
+  return deps.drivers.runner.create({ sessionId: s.id, attempt: s.runner.attempt, environment: relayEnvironment(), jobToken, appUrl: deps.appUrl, guest: RUNNER_DEFAULT_GUEST, region: RUNNER_DEFAULT_REGION, deadlineAt: runnerDeadlineOf(s) });
 }
 
 // ---------------------------------------------------------------------------
@@ -618,8 +623,8 @@ async function fixtureContext(fixtureId: string): Promise<{ orgId: string; compe
   return { orgId: row.org_id, competitionId: row.competition_id };
 }
 
-async function activeSessionIdFor(fixtureId: string): Promise<string | null> {
-  const [row] = await sql<{ id: string }[]>`
+async function activeSessionIdFor(fixtureId: string, exec: Tx | typeof sql = sql): Promise<string | null> {
+  const [row] = await exec<{ id: string }[]>`
     select id from fixture_stream_sessions where fixture_id = ${fixtureId} and state in ${sql([...ACTIVE_STATES])} limit 1`;
   return row?.id ?? null;
 }
@@ -832,7 +837,7 @@ export async function createSession(
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
       overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: target.length === 1, headroomMinutes: headroom,
-      maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId)) ?? priorMachineSessionId,
+      maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId, tx)) ?? priorMachineSessionId,   // m2: on the tx, never a 2nd pooled connection
     });
     if (!verdict.ok) {
       await recordStorageSnapshot(sql, { ...snapshot, sessionId: null });   // the ROOT client: this transaction is about to roll back with the refusal, the measurement must not (ruling 13)

@@ -18,8 +18,8 @@
 // own tests; what is proved here is that `FlyRunner` routes through them.
 import { describe, expect, it, vi } from "vitest";
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "../fly-client";
-import { ENDING_TIMEOUT_SECONDS, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
-import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, createFailedFrom, fromFlyState, isUnestablishedCreate } from "../runner-fly";
+import { ENDING_TIMEOUT_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
+import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, ENV_METADATA_KEY, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, createFailedFrom, fromFlyState, isUnestablishedCreate } from "../runner-fly";
 import { OBSERVED_STATES, machineNameFor, stepRunner } from "../domain/runner";
 import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
 import { log } from "@/server/logger";
@@ -150,7 +150,7 @@ function scripted(reply: (url: string, init: RequestInit) => { status: number; b
 }
 
 const SPEC: RunnerSpec = {
-  sessionId: "11111111-2222-4333-8444-555555555555", attempt: 1, jobToken: "jwt-SECRET", appUrl: "https://seazn.club",
+  sessionId: "11111111-2222-4333-8444-555555555555", attempt: 1, environment: "stg", jobToken: "jwt-SECRET", appUrl: "https://seazn.club",
   guest: RUNNER_DEFAULT_GUEST, region: RUNNER_DEFAULT_REGION, deadlineAt: new Date("2026-09-14T15:00:00Z"),
 };
 const NAME = machineNameFor(SPEC.sessionId, SPEC.attempt);
@@ -173,9 +173,11 @@ describe("FlyRunner", () => {
         auto_destroy: true,
         restart: { policy: "no" },
         env: { SESSION_ID: SPEC.sessionId, JOB_TOKEN: "jwt-SECRET", APP_URL: "https://seazn.club", RELAY_DEADLINE_AT: "2026-09-14T15:00:00.000Z" },
-        metadata: { [SESSION_METADATA_KEY]: SPEC.sessionId },
+        // I1: the environment that created it rides in the metadata — the sweep's only licence to destroy it later
+        metadata: { [SESSION_METADATA_KEY]: SPEC.sessionId, [ENV_METADATA_KEY]: "stg" },
       },
     });
+    expect(ENV_METADATA_KEY).not.toBe(SESSION_METADATA_KEY);
     // The defaults themselves are the ruled values — a mutant editing config.ts dies here.
     expect(RUNNER_DEFAULT_GUEST).toEqual({ cpus: 4, memoryMb: 8192, cpuClass: "dedicated" });
     expect(RUNNER_DEFAULT_REGION).toBe("lhr");
@@ -510,18 +512,26 @@ describe("FlyRunner", () => {
     await expect(runner.destroy("m_bad")).rejects.toThrow(/503/);
   });
 
-  it("list maps the app's Machines to the port's vocabulary: session id from metadata, the name (T5-a), state started→running", async () => {
+  it("list maps the app's Machines to the port's vocabulary: session id and ENVIRONMENT from metadata (I1), the name (T5-a), state started→running — an untagged Machine lists environment null", async () => {
     const s = scripted(() => ({ status: 200, body: [
-      { id: "m_a", name: "relay-x", state: "started", config: { metadata: { [SESSION_METADATA_KEY]: "x" } } },
-      { id: "m_b", name: "relay-y", state: "stopped", config: { metadata: { [SESSION_METADATA_KEY]: "y" } } },
+      { id: "m_a", name: "relay-x", state: "started", config: { metadata: { [SESSION_METADATA_KEY]: "x", [ENV_METADATA_KEY]: "stg" } } },
+      { id: "m_b", name: "relay-y", state: "stopped", config: { metadata: { [SESSION_METADATA_KEY]: "y", [ENV_METADATA_KEY]: "prod" } } },
       { id: "m_c", name: "something-else", state: "started", config: {} },
+      { id: "m_d", name: "relay-legacy", state: "started", config: { metadata: { [SESSION_METADATA_KEY]: "z" } } },
     ] }));
     const runner = new FlyRunner({ client: s.client, image: "img" });
     expect(await runner.list()).toEqual([
-      { runnerId: "m_a", sessionId: "x", name: "relay-x", state: "running" },
-      { runnerId: "m_b", sessionId: "y", name: "relay-y", state: "stopped" },
-      { runnerId: "m_c", sessionId: null, name: "something-else", state: "running" },
+      { runnerId: "m_a", sessionId: "x", name: "relay-x", environment: "stg", state: "running" },
+      { runnerId: "m_b", sessionId: "y", name: "relay-y", environment: "prod", state: "stopped" },
+      { runnerId: "m_c", sessionId: null, name: "something-else", environment: null, state: "running" },
+      { runnerId: "m_d", sessionId: "z", name: "relay-legacy", environment: null, state: "running" },
     ]);
+  });
+
+  it("m1: the port's list-consistency window is the house's Fly settle (fly-client's lookup settle), not a second number", () => {
+    const s = scripted(() => ({ status: 200, body: [] }));
+    expect(new FlyRunner({ client: s.client, image: "img" }).listSettleMs).toBe(FLY_CLIENT_DEFAULTS.lookupSettleMs);
+    expect(FLY_CLIENT_DEFAULTS.lookupSettleMs).toBeGreaterThan(0);
   });
 
   it("I3: list() and observe() read ONE vocabulary — every documented Fly state summarises the same way in both, and a booting Machine is 'other', never absent", async () => {
@@ -566,6 +576,37 @@ describe("FlyRunner", () => {
       process.env.FLY_API_TOKEN = "t";
       expect(() => new FlyRunner()).toThrow(/RELAY_IMAGE/);
     } finally {
+      restoreEnv(keep);
+    }
+  });
+
+  it("I1(b): a runner that builds its OWN client refuses an unset FLY_RELAY_APP, the retired shared default, and an unset ENV_NAME — and builds against the named app once both are set", async () => {
+    const keep = { FLY_API_TOKEN: process.env.FLY_API_TOKEN, RELAY_IMAGE: process.env.RELAY_IMAGE, FLY_RELAY_APP: process.env.FLY_RELAY_APP, ENV_NAME: process.env.ENV_NAME };
+    try {
+      process.env.FLY_API_TOKEN = "t";
+      process.env.RELAY_IMAGE = "img";
+      const cases: [string | undefined, string | undefined, RegExp][] = [
+        [undefined, "stg", /FLY_RELAY_APP is not set/],
+        [FLY_RELAY_APP_RETIRED_DEFAULT, "stg", /retired shared default/],
+        ["seazn-relay-stg", undefined, /ENV_NAME is not set/],
+      ];
+      let refused = 0;
+      for (const [app, env, why] of cases) {
+        if (app === undefined) delete process.env.FLY_RELAY_APP; else process.env.FLY_RELAY_APP = app;
+        if (env === undefined) delete process.env.ENV_NAME; else process.env.ENV_NAME = env;
+        expect(() => new FlyRunner(), `${app}/${env}`).toThrow(why);
+        refused++;
+      }
+      expect(refused).toBe(3);   // anti-vacuity: every refusal case really ran
+      // the positive pair: both set → it constructs, and its calls go to THAT app
+      process.env.FLY_RELAY_APP = "seazn-relay-stg";
+      process.env.ENV_NAME = "stg";
+      const urls: string[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => { urls.push(String(url)); return new Response("[]", { status: 200, headers: { "content-type": "application/json" } }); }));
+      await new FlyRunner().list();
+      expect(urls).toEqual([`${FLY_MACHINES_BASE}/apps/seazn-relay-stg/machines`]);
+    } finally {
+      vi.unstubAllGlobals();
       restoreEnv(keep);
     }
   });
@@ -639,6 +680,40 @@ describe("relayDrivers()", () => {
     }
   });
 
+  it("I1(b) through the lazy runner: live with token and image but no ENV_NAME — reading listSettleMs never constructs, and the first list REJECTS naming ENV_NAME (the sweep's catch then destroys nothing)", async () => {
+    const keep = {
+      RELAY_DRIVERS: process.env.RELAY_DRIVERS, FLY_API_TOKEN: process.env.FLY_API_TOKEN, RELAY_IMAGE: process.env.RELAY_IMAGE,
+      CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_STREAM_TOKEN: process.env.CLOUDFLARE_STREAM_TOKEN,
+      FLY_RELAY_APP: process.env.FLY_RELAY_APP, ENV_NAME: process.env.ENV_NAME,
+    };
+    try {
+      process.env.RELAY_DRIVERS = "live";
+      process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
+      process.env.CLOUDFLARE_STREAM_TOKEN = "tok";
+      process.env.FLY_API_TOKEN = "fly-tok";
+      process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:abc";
+      process.env.FLY_RELAY_APP = "seazn-relay-stg";
+      delete process.env.ENV_NAME;
+      const fetchSpy = vi.fn(async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
+      vi.stubGlobal("fetch", fetchSpy);
+      setRelayDriversForTest(null);
+      const d = relayDrivers();
+      expect(d.runner.listSettleMs).toBe(FLY_CLIENT_DEFAULTS.lookupSettleMs);
+      await expect(d.runner.list()).rejects.toThrow(/ENV_NAME is not set/);
+      expect(fetchSpy).not.toHaveBeenCalled();   // refused BEFORE any call reached Fly
+      // …and the old shared default is refused the same way, with ENV_NAME present.
+      process.env.ENV_NAME = "stg";
+      process.env.FLY_RELAY_APP = FLY_RELAY_APP_RETIRED_DEFAULT;
+      setRelayDriversForTest(null);
+      await expect(relayDrivers().runner.list()).rejects.toThrow(/retired shared default/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      setRelayDriversForTest(null);
+      restoreEnv(keep);
+    }
+  });
+
   it("binds the production recorder into the adapters it builds — a call through relayDrivers().ingest reaches recordProviderCall (ruling 13)", async () => {
     const keep = { RELAY_DRIVERS: process.env.RELAY_DRIVERS };
     try {
@@ -677,6 +752,7 @@ describe("relayDrivers()", () => {
     const keep = {
       RELAY_DRIVERS: process.env.RELAY_DRIVERS, FLY_API_TOKEN: process.env.FLY_API_TOKEN, RELAY_IMAGE: process.env.RELAY_IMAGE,
       CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_STREAM_TOKEN: process.env.CLOUDFLARE_STREAM_TOKEN,
+      FLY_RELAY_APP: process.env.FLY_RELAY_APP, ENV_NAME: process.env.ENV_NAME,
     };
     try {
       process.env.RELAY_DRIVERS = "live";
@@ -684,6 +760,8 @@ describe("relayDrivers()", () => {
       process.env.CLOUDFLARE_STREAM_TOKEN = "tok";
       process.env.FLY_API_TOKEN = "fly-tok";
       process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:abc";
+      process.env.FLY_RELAY_APP = "seazn-relay-stg";   // I1(b): live refuses without its own app and environment
+      process.env.ENV_NAME = "stg";
       vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) =>
         String(url).includes("api.machines.dev")
           ? new Response("[]", { status: 200, headers: { "content-type": "application/json" } })

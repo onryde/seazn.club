@@ -101,7 +101,7 @@ describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", 
   it("a real duplicate create 409s, and FlyRunner ADOPTS the Machine the refusal names — same runnerId, no second Machine", async () => {
     const session = `${tag}-a`;
     const spec: RunnerSpec = {
-      sessionId: session, attempt: 1, jobToken: "live-not-a-real-token", appUrl: "https://seazn.club",
+      sessionId: session, attempt: 1, environment: "live-test", jobToken: "live-not-a-real-token", appUrl: "https://seazn.club",
       guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region,
       deadlineAt: new Date(Date.now() + 10 * 60_000),
     };
@@ -146,7 +146,7 @@ describe.skipIf(!ENABLED)("FlyRunner — live 409 adopt (org seazn-club, lhr)", 
     // assertion: seconds after its own successful create the Machine is up or coming
     // up, and `"stopped"` would mean it died on the way.
     const { state: listedState, ...identity } = listed[0]!;
-    expect(identity).toEqual({ runnerId: first.runnerId, sessionId: session, name: `relay-${session}-r1` });
+    expect(identity).toEqual({ runnerId: first.runnerId, sessionId: session, name: `relay-${session}-r1`, environment: "live-test" });   // I1: the metadata round trip, on the real API
     expect(["running", "other"], "a Machine seconds after a successful create is running or coming up — `stopped` means it died").toContain(listedState);
 
     // Teardown through the adapter, then CONFIRMED by re-read: 200 `destroyed`

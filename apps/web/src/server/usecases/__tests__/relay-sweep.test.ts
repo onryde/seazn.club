@@ -9,6 +9,9 @@
 // sessions (and fail their warming rows under them) and judge their Machines through THIS file's FakeRunner. Scoping is
 // what makes every counter below exact rather than `>= 1` (the brief's floors could be met by a leftover row). Headroom is
 // the one number that stays global — recording storage is ONE account-wide pool — so it is bracketed, never equated.
+// The ONE exception is the m3 test, which drives the unscoped production call: it moves its own rows decades back and
+// runs the sweep on a clock there, and the sweep's rule that it judges only rows existing at its clock keeps it off
+// every other file's.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): every rig rides seedOrg's `generic` division. Relay is sport-agnostic —
 // nothing in relay-sweep.ts or the stream-sessions.ts paths it drives reads the sport.
@@ -27,8 +30,9 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestProvider, RunnerProvider } from "@/server/relay/ports";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import {
-  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS, REQUESTED_TIMEOUT_SECONDS,
-  RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
+  CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
+  REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
+  relayEnvironment,
 } from "@/server/relay/config";
 import { LIST_VIDEOS_PAGE_LIMIT } from "@/server/relay/ingest-cf";
 import { machineNameFor } from "@/server/relay/domain/runner";
@@ -51,6 +55,10 @@ const ROOMY_STORAGE_MINUTES = 100_000_000;
 const PAST_GRACE_SECONDS = RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 60;
 /** A beat older than the stale threshold, with the same margin. */
 const STALE_BEAT_SECONDS = STALE_HEARTBEAT_SECONDS + 60;
+/** I1: the identity this process stamps on every Machine it creates — read from the one authority, never typed here. */
+const OWN = relayEnvironment();
+/** Another deployment's identity: provably not this one's, whatever this one is called. */
+const FOREIGN = `${OWN}-elsewhere`;
 
 async function rig(mode: "passthrough" | "composed" = "passthrough") {
   const seeded = await seedOrg();
@@ -126,6 +134,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(counters.reduce((a, b) => a + b, 0)).toBe(0);
     expect(res).toMatchObject({
       runnerListing: "not_needed", machinesListed: 0, orphansDestroyed: 0, orphanDestroysFailed: 0, runnerGoneConfirmed: 0,
+      foreignRunnersSkipped: 0, runnerGoneDeferred: 0, foreignVideosSkipped: 0,
       videosListed: 0, listingTruncated: false, videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0,
       videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0,
     });
@@ -190,12 +199,12 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
   it("ORPHANS: a Machine with no session, one whose metadata names no session at all, and one whose session is terminal are destroyed — the terminal one through the shared forceDestroy, on EVERY pass (A22(a)); a live session's Machine is kept", async () => {
     const live = await rig("composed");
     const liveMachine = await goLive(live);
-    live.runner.addOrphan("fake-machine-nobody", null);
-    live.runner.addOrphan("fake-machine-junk-meta", "not-a-session-uuid");   // a malformed id must not abort the pass (22P02 on `id in (…)`)
+    live.runner.addOrphan("fake-machine-nobody", null, OWN);
+    live.runner.addOrphan("fake-machine-junk-meta", "not-a-session-uuid", OWN);   // a malformed id must not abort the pass (22P02 on `id in (…)`)
     const dead = await rig("composed");
     await sql`update fixture_stream_sessions set state = 'completed', ended_at = now() where id = ${dead.sessionId}`;
     const deadMachine = (await dead.state()).machine_id!;
-    live.runner.addOrphan(deadMachine, dead.sessionId);   // separate FakeRunners: plant the dead one's Machine in the runner the sweep reads
+    live.runner.addOrphan(deadMachine, dead.sessionId, OWN);   // separate FakeRunners: plant the dead one's Machine in the runner the sweep reads
     const scope = [live.orgId, dead.orgId];
     const res = await sweep(live, { orgIds: scope });
     expect(res.runnerListing).toBe("listed");
@@ -215,7 +224,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(fx[0]).toMatchObject({ source: "sweep", result: "ok", payload: { machineId: deadMachine, reason: "sweep" } });
 
     // A22(a) — EVERY pass: a second Machine for the same terminal session (a late create's) is destroyed by the next pass too.
-    live.runner.addOrphan("fake-machine-dead-again", dead.sessionId);
+    live.runner.addOrphan("fake-machine-dead-again", dead.sessionId, OWN);
     const again = await sweep(live, { orgIds: scope });
     expect(again.machinesListed).toBe(2);
     expect(again.orphansDestroyed).toBe(1);
@@ -259,7 +268,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     // Invariant 4's order: `runner_state = 'creating'` is persisted BEFORE the create call, so machine_id is still null while
     // a Machine already exists. The first list is empty (the create in flight), so the backstop cannot adopt it first.
     await sql`update fixture_stream_sessions set runner_state = 'creating', machine_id = null where id = ${creating.sessionId}`;
-    creating.runner.addOrphan("machine-nobody-owns", null);
+    creating.runner.addOrphan("machine-nobody-owns", null, OWN);
     const res = await sweep(creating, { runner: createInFlight(creating.runner) });
     expect(creating.runner.destroyed).toContain("machine-nobody-owns");   // the positive pair: the pass still destroys
     expect(creating.runner.destroyed).not.toContain(mine);
@@ -327,7 +336,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     await sql`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', end_reason = 'stopped', ended_at = now(), runner_state = 'destroyed' where id = ${r.sessionId}`;
     r.runner.setObserved(m, "destroyed");
     expect((await sweep(r)).runnerGoneConfirmed).toBe(1);
-    r.runner.addOrphan("fake-machine-late-create", r.sessionId);   // a late create's Machine the row never learned
+    r.runner.addOrphan("fake-machine-late-create", r.sessionId, OWN);   // a late create's Machine the row never learned
     const failing = Object.assign(Object.create(r.runner) as FakeRunner, { async destroy(): Promise<never> { throw new Error("fly 500"); } });
     const res = await sweep(r, { runner: failing });
     expect(res).toMatchObject({ machinesListed: 1, orphansDestroyed: 0, orphanDestroysFailed: 1, runnerGoneConfirmed: 0 });
@@ -335,6 +344,94 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     const down = Object.assign(Object.create(r.runner) as FakeRunner, { async list(): Promise<never> { throw new Error("fly is down"); } });
     await expect(createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: r.targetId }, { ...r.deps, drivers: { ingest: r.ingest, runner: down } }))
       .rejects.toThrow("fly is down");
+  });
+
+  it("I1(a): an orphan-shaped Machine this environment did not stamp — untagged, another environment's, even one naming OUR terminal session — is never destroyed; counted, reported ONCE per pass, and the session it names is not marked gone (mutant: drop the environment predicate → red)", async () => {
+    const r = await rig("composed");
+    const m = await goLive(r);
+    await sql`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', end_reason = 'stopped', ended_at = now(), runner_state = 'destroyed' where id = ${r.sessionId}`;
+    r.runner.setObserved(m, "destroyed");   // our own Machine is really gone
+    r.runner.addOrphan("m-mine-sessionless", null, OWN);             // the positive pair: stamped with this environment
+    r.runner.addOrphan("m-untagged", null, null);                    // created before I1, or by hand: proves nothing
+    r.runner.addOrphan("m-foreign-sessionless", null, FOREIGN);
+    r.runner.addOrphan("m-foreign-our-session", r.sessionId, FOREIGN);   // a cloned database's twin: our session id, THEIR Machine
+    const planted = ["m-mine-sessionless", "m-untagged", "m-foreign-sessionless", "m-foreign-our-session"];
+    const foreignReports = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.sweep.foreign_runners");
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res).toMatchObject({ runnerListing: "listed", machinesListed: 4, orphansDestroyed: 1, orphanDestroysFailed: 0, foreignRunnersSkipped: 3, runnerGoneConfirmed: 0, runnerGoneDeferred: 0 });
+    expect(r.runner.destroyed.filter((id) => planted.includes(id))).toEqual(["m-mine-sessionless"]);
+    expect((await r.runner.list()).map((x) => x.runnerId).sort()).toEqual(["m-foreign-our-session", "m-foreign-sessionless", "m-untagged"]);
+    expect(foreignReports()).toHaveLength(1);   // once per PASS, not once per Machine
+    expect(foreignReports()[0]![1]).toMatchObject({ extra: { count: 3, environment: OWN } });
+    expect((await r.state()).runner_gone_confirmed_at).toBeNull();   // a Machine still names it — not confirmed gone
+    // The next day: the same three are still there, still untouched, reported once more.
+    const again = await sweep(r);
+    expect(again).toMatchObject({ machinesListed: 3, orphansDestroyed: 0, foreignRunnersSkipped: 3, runnerGoneConfirmed: 0 });
+    expect(foreignReports()).toHaveLength(2);
+    expect(r.runner.destroyed.filter((id) => planted.includes(id))).toEqual(["m-mine-sessionless"]);
+  });
+
+  it("I1(a), the seam from the REAL producer: createSession stamps this environment on the Machine it creates, and that is what lets the sweep destroy it once its session has ended (mutant: drop `environment` from createRunner → red)", async () => {
+    const r = await rig("composed");
+    expect(r.runner.created).toHaveLength(1);
+    expect(r.runner.created[0]!.environment).toBe(OWN);
+    const m = await goLive(r);
+    expect((await r.runner.list()).map((x) => [x.runnerId, x.sessionId, x.environment])).toEqual([[m, r.sessionId, OWN]]);
+    // The row ends and forgets its Machine while the Machine lives on — exactly the orphan the pass exists for.
+    await sql`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', end_reason = 'stopped', ended_at = now(), runner_state = 'destroyed' where id = ${r.sessionId}`;
+    const res = await sweep(r);
+    expect(res).toMatchObject({ machinesListed: 1, orphansDestroyed: 1, foreignRunnersSkipped: 0 });
+    expect(r.runner.destroyed).toContain(m);
+  });
+
+  it("m4: a `creating` row whose runner_name is NULL keeps its in-flight Machine — ownership is read from the Machine's own session + attempt name, never from a column that can be empty (mutant: key the rule on runner_name → red)", async () => {
+    const r = await rig("composed");
+    const mine = (await r.state()).machine_id!;
+    const [{ runner_attempts }] = await sql<{ runner_attempts: number }[]>`select runner_attempts from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(runner_attempts).toBe(1);
+    expect((await r.runner.list()).map((x) => x.name)).toEqual([machineNameFor(r.sessionId, 1)]);
+    await sql`update fixture_stream_sessions set runner_state = 'creating', runner_name = null, machine_id = null where id = ${r.sessionId}`;
+    const res = await sweep(r, { runner: createInFlight(r.runner) });
+    expect(res).toMatchObject({ machinesListed: 1, orphansDestroyed: 0, orphanDestroysFailed: 0, foreignRunnersSkipped: 0 });
+    expect(r.runner.destroyed).not.toContain(mine);
+    expect(await effects(r.sessionId, "force_destroy")).toEqual([]);
+  });
+
+  it("m1: a Machine absent from the FIRST listing but present again after the provider's settle window is NOT marked gone — the row is deferred, and the next pass that sees it absent twice marks it (mutant: skip the confirming listing → red)", async () => {
+    const r = await rig("composed");
+    const m = await goLive(r);
+    await sql`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', end_reason = 'stopped', ended_at = now(), runner_state = 'destroyed' where id = ${r.sessionId}`;
+    r.runner.setObserved(m, "destroyed");
+    const SETTLE_MS = 40;
+    const stamps: number[] = [];
+    // Fly's eventually consistent list: the first answer misses a Machine the second one carries.
+    const lagging = Object.assign(Object.create(r.runner) as FakeRunner, {
+      listSettleMs: SETTLE_MS,
+      async list() {
+        stamps.push(performance.now());
+        return stamps.length === 1 ? [] : [{ runnerId: "m-late", sessionId: r.sessionId, name: machineNameFor(r.sessionId, 1), environment: OWN, state: "running" as const }];
+      },
+    });
+    const res = await sweep(r, { runner: lagging });
+    expect(res).toMatchObject({ runnerListing: "listed", machinesListed: 0, runnerGoneConfirmed: 0, runnerGoneDeferred: 1 });
+    expect(stamps).toHaveLength(2);
+    expect(stamps[1]! - stamps[0]!).toBeGreaterThanOrEqual(SETTLE_MS - 1);   // the settle really separated them (timer granularity: 1 ms)
+    expect((await r.state()).runner_gone_confirmed_at).toBeNull();
+    // A confirming listing that FAILS confirms nothing either, and is reported.
+    let relists = 0;
+    const failing = Object.assign(Object.create(r.runner) as FakeRunner, {
+      async list() { relists += 1; if (relists === 2) throw new Error("fly 503 on the re-list"); return []; },
+    });
+    sentry.captureError.mockClear();
+    const flaky = await sweep(r, { runner: failing });
+    expect(flaky).toMatchObject({ runnerGoneConfirmed: 0, runnerGoneDeferred: 1 });
+    expect(sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.sweep.runner_list_confirm")).toHaveLength(1);
+    expect((await r.state()).runner_gone_confirmed_at).toBeNull();
+    // The positive pair: absent from both listings → marked.
+    const plain = await sweep(r);
+    expect(plain).toMatchObject({ runnerGoneConfirmed: 1, runnerGoneDeferred: 0 });
+    expect((await r.state()).runner_gone_confirmed_at).toBeInstanceOf(Date);
   });
 
   it("headroom below one retained match → warned with the number; reservations are included; a roomy pool is NOT warned (the differential pair)", async () => {
@@ -408,21 +505,28 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     await sql`update fixture_stream_sessions set ended_at = now() - make_interval(days => ${RECORDING_RETENTION_DAYS + 1}) where id = ${r.sessionId}`;
     const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId}`;
     const old = new Date(r.deps.now().getTime() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS).toISOString();
-    r.ingest.addVideo({ videoId: "v-bad", inputId: null, createdAt: old, inProgress: false });
-    r.ingest.addVideo({ videoId: "v-good", inputId: null, createdAt: old, inProgress: false });
+    // I1(c): recordings on this session's OWN input — only an owned recording is ever deleted. A failed video delete
+    // therefore also defers the input its recording still names, so the two failures take two passes to reach.
+    r.ingest.addVideo({ videoId: "v-bad", inputId: inp!.ingest_input_id, createdAt: old, inProgress: false });
+    r.ingest.addVideo({ videoId: "v-good", inputId: inp!.ingest_input_id, createdAt: old, inProgress: false });
     const failure = new Error("cloudflare 500");
-    const flaky = Object.assign(Object.create(r.ingest) as FakeIngest, {
+    const badVideo = Object.assign(Object.create(r.ingest) as FakeIngest, {
       async deleteVideo(id: string) { if (id === "v-bad") throw failure; return r.ingest.deleteVideo(id); },
-      async deleteInput(): Promise<never> { throw failure; },
     });
-    const res = await sweep(r, { ingest: flaky });
-    expect(res).toMatchObject({ videosListed: 2, videosDeleted: 1, retentionFailed: 2, inputsDeleted: 0 });
+    const res = await sweep(r, { ingest: badVideo });
+    expect(res).toMatchObject({ videosListed: 2, videosDeleted: 1, retentionFailed: 1, inputsDeleted: 0, inputsDeferred: 1 });
     expect(r.ingest.deletedVideos).toEqual(["v-good"]);
-    const kept = await sql<{ ingest_input_id: string | null }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId}`;
-    expect(kept).toEqual([{ ingest_input_id: inp!.ingest_input_id }]);   // never nulled for a delete that did not happen
+    const idOf = async () => sql<{ ingest_input_id: string | null }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId}`;
+    expect(await idOf()).toEqual([{ ingest_input_id: inp!.ingest_input_id }]);
+
+    const badInput = Object.assign(Object.create(r.ingest) as FakeIngest, { async deleteInput(): Promise<never> { throw failure; } });
+    const second = await sweep(r, { ingest: badInput });
+    expect(second).toMatchObject({ videosListed: 1, videosDeleted: 1, retentionFailed: 1, inputsDeleted: 0 });
+    expect(r.ingest.deletedVideos).toEqual(["v-good", "v-bad"]);
+    expect(await idOf()).toEqual([{ ingest_input_id: inp!.ingest_input_id }]);   // never nulled for a delete that did not happen
 
     const next = await sweep(r);
-    expect(next).toMatchObject({ videosDeleted: 1, inputsDeleted: 1, retentionFailed: 0 });
+    expect(next).toMatchObject({ videosDeleted: 0, inputsDeleted: 1, retentionFailed: 0 });
     expect(r.ingest.deletedInputs).toEqual([inp!.ingest_input_id]);
   });
 
@@ -498,7 +602,9 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     const m = await goLive(r);
     await sql`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', end_reason = 'stopped', ended_at = now(), runner_state = 'destroyed' where id = ${r.sessionId}`;
     r.runner.setObserved(m, "destroyed");
-    r.ingest.addVideo({ videoId: "old-1", inputId: null, createdAt: new Date(r.deps.now().getTime() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS).toISOString(), inProgress: false });
+    const [{ ingest_input_uid }] = await sql<{ ingest_input_uid: string }[]>`select ingest_input_uid from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(ingest_input_uid).toEqual(expect.any(String));   // an OWNED recording (I1(c)), or retention would skip it
+    r.ingest.addVideo({ videoId: "old-1", inputId: ingest_input_uid, createdAt: new Date(r.deps.now().getTime() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS).toISOString(), inProgress: false });
     const down = new Error("fly is down");
     const outage = Object.assign(Object.create(r.runner) as FakeRunner, { async list(): Promise<never> { throw down; } });
     sentry.captureError.mockClear();
@@ -701,7 +807,8 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
 
   it("ONE storage snapshot per run, carrying the run's deletion counts and the same headroom the result reports — a second run is a second row, never a rewrite", async () => {
     const r = await rig();
-    r.ingest.addVideo({ videoId: "old-1", inputId: null, createdAt: new Date(r.deps.now().getTime() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS).toISOString(), inProgress: false, durationSeconds: 100 });
+    const [{ ingest_input_uid }] = await sql<{ ingest_input_uid: string }[]>`select ingest_input_uid from fixture_stream_sessions where id = ${r.sessionId}`;
+    r.ingest.addVideo({ videoId: "old-1", inputId: ingest_input_uid, createdAt: new Date(r.deps.now().getTime() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS).toISOString(), inProgress: false, durationSeconds: 100 });
     const res = await sweep(r);
     const at = r.deps.now();
     const snaps = async () => sql<{ id: number; source: string; headroom_minutes: number; videos_deleted: number; deferred: number }[]>`
@@ -714,6 +821,71 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(two).toHaveLength(2);
     expect(two[0]!.id).toBe(one[0]!.id);
     expect(two[1]).toMatchObject({ headroom_minutes: again.headroomMinutes, videos_deleted: 0 });
+  });
+
+  it("I1(c): retention deletes ONLY recordings that trace to an input this database owns — through an inputs row, or through the session's own uid — and leaves a foreign or input-less recording past retention untouched, counted and warned (mutant: drop either half of the ownership join → red)", async () => {
+    const r = await rig();
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await sql`update fixture_stream_sessions set ended_at = now() - make_interval(days => ${RECORDING_RETENTION_DAYS + 1}) where id = ${r.sessionId}`;
+    const [{ ingest_input_uid: sessionUid }] = await sql<{ ingest_input_uid: string }[]>`select ingest_input_uid from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(sessionUid).toEqual(expect.any(String));
+    // Owned through the SESSION only: its inputs row has already let go of the id (what a deleted input leaves behind).
+    await sql`update fixture_stream_inputs set ingest_input_id = null where session_id = ${r.sessionId}`;
+    // Owned through an INPUTS row only: a second slot, whose uid no session column carries.
+    const slotUid = `in-${randomUUID()}`;
+    await sql`insert into fixture_stream_inputs (session_id, slot, ingest_input_id) values (${r.sessionId}, 1, ${slotUid})`;
+    const [{ n: slotOnSession }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where ingest_input_uid = ${slotUid}`;
+    expect(slotOnSession).toBe(0);
+    const foreignUid = `in-${randomUUID()}`;   // no row in this database names it
+    const T = r.deps.now().getTime();
+    const old = new Date(T - (RECORDING_RETENTION_DAYS + 1) * DAY_MS).toISOString();
+    const young = new Date(T - 3600_000).toISOString();
+    r.ingest.addVideo({ videoId: "v-own-session", inputId: sessionUid, createdAt: old, inProgress: false });
+    r.ingest.addVideo({ videoId: "v-own-slot", inputId: slotUid, createdAt: old, inProgress: false });
+    r.ingest.addVideo({ videoId: "v-foreign-old", inputId: foreignUid, createdAt: old, inProgress: false });
+    r.ingest.addVideo({ videoId: "v-no-input-old", inputId: null, createdAt: old, inProgress: false });
+    r.ingest.addVideo({ videoId: "v-foreign-young", inputId: foreignUid, createdAt: young, inProgress: false });   // not past retention: not counted either
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const res = await sweep(r);
+      expect(res).toMatchObject({ videosListed: 5, videosDeleted: 2, foreignVideosSkipped: 2, videosDeferred: 0, retentionFailed: 0 });
+      expect([...r.ingest.deletedVideos].sort()).toEqual(["v-own-session", "v-own-slot"]);
+      expect((await r.ingest.listVideos({ createdBefore: r.deps.now() })).map((v) => v.videoId).sort()).toEqual(["v-foreign-old", "v-foreign-young", "v-no-input-old"]);
+      const skipped = warn.mock.calls.filter(([, msg]) => typeof msg === "string" && /trace to no input this database owns/.test(msg));
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]![0]).toMatchObject({ count: 2 });
+      // The owned slot's input goes in the same pass once no remaining recording names it; the foreign ones name nothing of ours.
+      expect(res.inputsDeleted).toBe(1);
+      expect(r.ingest.deletedInputs).toEqual([slotUid]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("I2 / Df, the second half: the sweep RE-ESTIMATES an ended session's cost from the recording seconds it learns — the expected value derived from the imported storage rate — and never estimates a session still running (mutant: delete the re-estimate → red)", async () => {
+    const RECORDED_SECONDS = 3600;
+    // Passthrough runs no Machine, so stored minutes are the whole estimate: seconds → minutes × the per-minute rate in
+    // micro-dollars, and micros → cents (1 cent = 10 000 micros).
+    const want = Math.round(((RECORDED_SECONDS / 60) * CLOUDFLARE_STORED_MICROS_PER_MINUTE) / 10_000);
+    expect(want).toBeGreaterThan(0);
+    const cost = async (sid: string) => (await sql<{ est_cost_minor: number | null; est_cost_currency: string | null; recording_seconds: number }[]>`
+      select est_cost_minor, est_cost_currency, recording_seconds from fixture_stream_sessions where id = ${sid}`)[0]!;
+    const uidOf = async (sid: string) => (await sql<{ u: string }[]>`select ingest_input_uid as u from fixture_stream_sessions where id = ${sid}`)[0]!.u;
+
+    const ended = await rig();
+    await stopSession(ended.auth, ended.fixtureId, ended.sessionId, ended.deps);
+    const before = await cost(ended.sessionId);
+    expect(before.recording_seconds).toBe(0);
+    expect(before.est_cost_minor).not.toBe(want);   // the differential: the terminal transition estimated before anything was recorded
+    ended.ingest.addVideo({ videoId: "v-ended", inputId: await uidOf(ended.sessionId), createdAt: justBefore(), inProgress: false, durationSeconds: RECORDED_SECONDS });
+    expect((await sweep(ended)).videosSeen).toBe(1);
+    expect(await cost(ended.sessionId)).toEqual({ est_cost_minor: want, est_cost_currency: EST_COST_CURRENCY, recording_seconds: RECORDED_SECONDS });
+
+    const running = await rig();
+    expect((await cost(running.sessionId)).est_cost_minor).toBeNull();
+    running.ingest.addVideo({ videoId: "v-running", inputId: await uidOf(running.sessionId), createdAt: justBefore(), inProgress: false, durationSeconds: RECORDED_SECONDS });
+    expect((await sweep(running)).videosSeen).toBe(1);
+    expect(await cost(running.sessionId)).toEqual({ est_cost_minor: null, est_cost_currency: null, recording_seconds: RECORDED_SECONDS });   // the fact lands; no estimate for a match still on
   });
 
   it("summary ONCE, retention behind the constant: null deletes nothing; 1 day deletes the raw samples of a session ended 2 days ago and keeps its summary", async () => {
@@ -749,6 +921,69 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     await sweep(r);                                                                                  // idempotent: no duplicate uid, same seconds
     const [g] = await sql<{ video_uids: string[]; recording_seconds: number }[]>`select video_uids, recording_seconds from fixture_stream_sessions where id = ${r.sessionId}`;
     expect(g).toEqual(f);
+  });
+
+  it("m3: the UNSCOPED production path — no orgIds, the cron route's own call — over a seeded database runs every phase with exact counts; the sweep's clock, set before every other file's rows, is what confines it to this test's two", async () => {
+    // Every other test here is scoped (header). This one is not, so it cannot share the present with other files: its two
+    // rows are moved 30 years back (every timestamptz column, so their relations hold), the sweep runs on a clock there,
+    // and the sweep's own rule — it judges only rows that existed at its clock — keeps every other file's rows out.
+    const a = await rig();                 // passthrough, warming past its timeout: the backstop's
+    const b = await rig("composed");       // composed and long ended: marking, retention, facts, summary, sample pruning
+    await goLive(b);
+    await sql`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', end_reason = 'stopped', runner_state = 'destroyed',
+                  ended_at = now() - make_interval(days => ${SAMPLE_RETENTION_DAYS + 1}) where id = ${b.sessionId}`;
+    const cols = (await sql<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and data_type = 'timestamp with time zone'`).map((c) => c.column_name);
+    expect(cols).toEqual(expect.arrayContaining(["created_at", "ended_at", "heartbeat_at", "runner_gone_confirmed_at"]));
+    const moved = (sign: "-" | "+") => cols.map((c) => `${c} = ${c} ${sign} interval '30 years'`).join(", ");
+    const shift = (sign: "-" | "+") => sql.unsafe(`update fixture_stream_sessions set ${moved(sign)} where id in ($1, $2)`, [a.sessionId, b.sessionId]);
+    // A run killed before its `finally` leaves its rows decades back, where they would sit under the next run's clock. No
+    // other code writes a session that old, so a row there is this test's debris: brought home first, not swept.
+    await sql.unsafe(`update fixture_stream_sessions set ${moved("+")} where created_at < now() - interval '20 years'`);
+    await shift("-");
+    let clock: Date | null = null;
+    try {
+      const [{ t }] = await sql<{ t: Date }[]>`select created_at as t from fixture_stream_sessions where id = ${a.sessionId}`;
+      clock = new Date(t.getTime() + (WARMING_TIMEOUT_MINUTES + 1) * 60_000);
+      const [{ others }] = await sql<{ others: number }[]>`
+        select count(*)::int as others from fixture_stream_sessions where created_at <= ${clock} and id not in (${a.sessionId}, ${b.sessionId})`;
+      expect(others).toBe(0);   // the isolation premise, checked rather than assumed
+
+      a.runner.addOrphan("m3-mine", null, OWN);          // the runner the sweep lists: one of ours…
+      a.runner.addOrphan("m3-foreign", null, FOREIGN);   // …and one of another environment's
+      const [{ u: bUid }] = await sql<{ u: string }[]>`select ingest_input_uid as u from fixture_stream_sessions where id = ${b.sessionId}`;
+      const old = new Date(clock.getTime() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS).toISOString();
+      a.ingest.addVideo({ videoId: "m3-owned", inputId: bUid, createdAt: old, inProgress: false, durationSeconds: 120 });
+      a.ingest.addVideo({ videoId: "m3-foreign", inputId: `in-${randomUUID()}`, createdAt: old, inProgress: false });
+      const samplesOf = async (sid: string) => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_samples where session_id = ${sid}`)[0]!.n;
+      const bSamples = await samplesOf(b.sessionId);
+      const aSamples = await samplesOf(a.sessionId);
+      expect(bSamples).toBeGreaterThan(0);
+      const [{ bInputs }] = await sql<{ bInputs: number }[]>`select count(*)::int as "bInputs" from fixture_stream_inputs where session_id = ${b.sessionId} and ingest_input_id is not null`;
+      expect(bInputs).toBeGreaterThan(0);
+
+      const at = clock;
+      const res = await sweepStreamSessions({ ...a.deps, now: () => at });   // NO options
+      expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, skippedLocked: 0, errored: 0, warmingTimedOut: 1 });
+      expect(res).toMatchObject({
+        runnerListing: "listed", machinesListed: 2, orphansDestroyed: 1, orphanDestroysFailed: 0, foreignRunnersSkipped: 1,
+        runnerGoneConfirmed: 1, runnerGoneDeferred: 0,
+        videosListed: 2, listingTruncated: false, videosDeleted: 1, videosDeferred: 0, foreignVideosSkipped: 1, retentionFailed: 0,
+        inputsDeleted: bInputs, videosSeen: 1, recordingsFinalised: 1,
+        // a fails at the clock with whatever samples it has; b has some and ended past SAMPLE_RETENTION_DAYS
+        summariesWritten: 1 + (aSamples > 0 ? 1 : 0), samplesDeleted: bSamples,
+      });
+      expect(a.runner.destroyed).toEqual(["m3-mine"]);
+      expect(a.ingest.deletedVideos).toEqual(["m3-owned"]);
+      const rows = await sql<{ id: string; state: string; fail_reason: string | null; gone: Date | null }[]>`
+        select id, state, fail_reason, runner_gone_confirmed_at as gone from fixture_stream_sessions where id in (${a.sessionId}, ${b.sessionId})`;
+      expect(rows.find((x) => x.id === a.sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+      expect(rows.find((x) => x.id === b.sessionId)!.gone?.getTime()).toBe(at.getTime());
+    } finally {
+      await shift("+");
+      if (clock) await sql`delete from stream_storage_snapshots where source = 'sweep' and taken_at = ${clock}`;
+    }
   });
 });
 
@@ -802,28 +1037,37 @@ describe("relay sweep — pure parts", () => {
     expect(checked).toBe(cases.length);
   });
 
-  it("the ownership rule for one listed Machine: no row, a terminal row, a creating row by NAME, any other row by ID — and a row that names no Machine owns none", () => {
-    const m = { runnerId: "m-1", name: "relay-s-r1" };
-    const row = (state: "live" | "completed" | "failed" | "warming", runner_state: "creating" | "booting" | "playing" | "lost" | "none" | "destroyed", runner_name: string | null, machine_id: string | null) =>
-      ({ state, runner_state, runner_name, machine_id });
-    const cases: [string, Parameters<typeof isOrphan>[1], boolean][] = [
-      ["no session row", null, true],
-      ["terminal, even naming this very Machine (A22(a))", row("completed", "playing", "relay-s-r1", "m-1"), true],
-      ["failed, runner destroyed", row("failed", "destroyed", "relay-s-r1", null), true],
-      ["creating, this attempt's name (C6)", row("live", "creating", "relay-s-r1", null), false],
-      ["creating, another attempt's name", row("live", "creating", "relay-s-r2", null), true],
-      ["booting, its id", row("warming", "booting", "relay-s-r1", "m-1"), false],
-      ["playing, another id (a stale Machine, A22(b))", row("live", "playing", "relay-s-r2", "m-2"), true],
-      ["lost with no id learned", row("live", "lost", "relay-s-r1", null), true],
-      ["passthrough: no runner at all", row("live", "none", null, null), true],
+  it("the ownership rule for one listed Machine: no row, a terminal row, a creating row by the Machine's own session + attempt NAME, any other row by ID — and a row that names no Machine owns none", () => {
+    // Names come from the one authority (`machineNameFor`), so a change to the naming scheme moves the table with it.
+    const SID = "s";
+    const m = { runnerId: "m-1", name: machineNameFor(SID, 1) };
+    const named = (name: string | null) => ({ runnerId: "m-x", name });
+    const row = (state: "live" | "completed" | "failed" | "warming", runner_state: "creating" | "booting" | "playing" | "lost" | "none" | "destroyed", runner_attempts: number, runner_name: string | null, machine_id: string | null) =>
+      ({ id: SID, state, runner_state, runner_attempts, runner_name, machine_id });
+    const cases: [string, Parameters<typeof isOrphan>[0], Parameters<typeof isOrphan>[1], boolean][] = [
+      ["no session row", m, null, true],
+      ["terminal, even naming this very Machine (A22(a))", m, row("completed", "playing", 1, machineNameFor(SID, 1), "m-1"), true],
+      ["failed, runner destroyed", m, row("failed", "destroyed", 1, machineNameFor(SID, 1), null), true],
+      ["creating, this attempt's name (C6)", m, row("live", "creating", 1, machineNameFor(SID, 1), null), false],
+      ["creating attempt 2: attempt 1's Machine is an orphan", m, row("live", "creating", 2, machineNameFor(SID, 2), null), true],
+      ["creating attempt 3: attempt 2's Machine too", named(machineNameFor(SID, 2)), row("live", "creating", 3, machineNameFor(SID, 3), null), true],
+      ["creating attempt 2: its OWN Machine is kept", named(machineNameFor(SID, 2)), row("live", "creating", 2, machineNameFor(SID, 2), null), false],
+      ["m4: creating with runner_name NULL keeps the current attempt's Machine", m, row("live", "creating", 1, null, null), false],
+      ["m4: …and still proves an EARLIER attempt's an orphan by its own name", m, row("live", "creating", 2, null, null), true],
+      ["creating: an unnamed Machine proves nothing — kept", named(null), row("live", "creating", 2, machineNameFor(SID, 2), null), false],
+      ["creating: another session's name proves nothing — kept", named(machineNameFor("other", 1)), row("live", "creating", 2, machineNameFor(SID, 2), null), false],
+      ["booting, its id", m, row("warming", "booting", 1, machineNameFor(SID, 1), "m-1"), false],
+      ["playing, another id (a stale Machine, A22(b))", m, row("live", "playing", 2, machineNameFor(SID, 2), "m-2"), true],
+      ["lost with no id learned", m, row("live", "lost", 1, machineNameFor(SID, 1), null), true],
+      ["passthrough: no runner at all", m, row("live", "none", 0, null, null), true],
     ];
     let checked = 0;
-    for (const [name, r, want] of cases) {
-      expect(isOrphan(m, r), name).toBe(want);
+    for (const [name, listing, r, want] of cases) {
+      expect(isOrphan(listing, r), name).toBe(want);
       checked++;
     }
     expect(checked).toBe(cases.length);
-    expect(cases.filter(([, , w]) => w).length * cases.filter(([, , w]) => !w).length).toBeGreaterThan(0);   // both verdicts reached
+    expect(cases.filter(([, , , w]) => w).length * cases.filter(([, , , w]) => !w).length).toBeGreaterThan(0);   // both verdicts reached
   });
 
   it("an EMPTY scope is refused by name — `org_id in ()` is not a query, and an empty list must never read as 'everything'", async () => {
