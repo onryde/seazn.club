@@ -4614,7 +4614,7 @@ Recorded per R5 and class 5. Each was checked by reading the cited code. The one
 - **Multi-stage rows and team sports are deferred to W1b.** Multi-stage rows need seed-proposal confirm; team sports need rosters.
 - **Single worker.** One sign-in per run and cases in sequence. Parallel workers (one sign-in each) are a W1b speed concern.
 - **Abandon is recorded, not asserted.** Its per-sport meaning (no_result vs undecided vs draw) is W2's rulebook.
-- **Generator gaps are committed in `KNOWN_UNSUPPORTED`.** These are cricket two-innings (win and draw) and carrom's `tieBoard:"draw"` shape, both owned by W2.
+- **Generator gaps are committed in `KNOWN_UNSUPPORTED`.** The list holds cricket two-innings only (`test`: win on every stage kind, draw on league and swiss), owned by W2's cricket rulebook. Carrom is NOT on it (corrected in the W1a final fix batch): no declared carrom variant can draw. `tieBoard` defaults to `"extra"` (engine `carrom.ts:69`), neither `icf` nor `club-29` sets `"draw"` (`carrom.ts:817-823`), and `supportsDraws` needs `tieBoard: "draw"` (`carrom.ts:983`). So a carrom draw is `OutcomeUnreachable` before the generator runs, not a gap. The `tieBoard:"draw"` house rule is still W2's carrom rulebook.
 - **R4 asserts consistency with the policy the engine chose, not which policy should apply.** The latter is the rulebook's call (R6).
 - **I2's "permutation" means each entrant exactly once in `finalRanks`.** Only knockout's champion check (one unbeaten entrant) is asserted. Double-elim, stepladder and page-playoff champion rules arrive with their rows in W1b.
 - **Not planned (ruling 21):** fast-check (W1b), Stryker (W1d), `forEachSport` (W1b+), shadow invariants (W10). The invariant interface is shaped for them (Task 5 Interfaces).
@@ -4649,6 +4649,7 @@ Recorded per R5 and class 5. Each was checked by reading the cited code. The one
   - `CaseSpec` and `ScenarioKey` come from `scenarios/types.ts`, used by slice and run.
 - **Known survivors (recorded):**
   - Football's ET/shootout draw guard: no declared variant reaches it.
+  - Carrom's draw guard in `streams/carrom.ts` (the `GeneratorUnsupported` throw on a draw): no declared variant reaches it, because `supportsDraws` needs `tieBoard: "draw"` and no variant sets it, so `generateStream` throws `OutcomeUnreachable` first.
   - The `'owner'` role in `insertCaseOrg`: covered live only.
   - The swiss `pairRounds.push`: covered live only.
 - **Where the plan trusts a read over a run** (the executor verifies each one, class 5):

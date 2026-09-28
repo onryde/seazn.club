@@ -82,8 +82,8 @@ PostHog and Sentry keys blanked; `show data_directory` equal to
   - **F-TRIPLE (CONFIRMED, W5).** The builder's `triple_rr` builds a
     one-meeting league. The legs picker is hidden
     (`division-builder.tsx:816-819`), `buildTemplateStages` overwrites `legs`
-    with the knob, and the division reads back "league". Confirmed by driving
-    the product on 2026-09-28, as reported by the W1a controller. The slice
+    with the knob, and the division reads back "league". Reported by the W1a
+    controller as owner-verified by driving the product, 2026-09-28. The slice
     does not cover it.
   - The live slice found no product red.
 
