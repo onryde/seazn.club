@@ -5,15 +5,36 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { STAGE_TEMPLATES } from "../../../apps/web/src/components/v2/format-templates.ts";
+import { STAGE_TEMPLATES, buildTemplateStages } from "../../../apps/web/src/components/v2/format-templates.ts";
 import { builtinModules } from "@seazn/engine/sports";
 import {
-  API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred,
+  API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_KNOB_BOUNDS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred,
   SPORT_KEYS, TEMPLATE_ROW_KEYS, UnknownRow, builderDefaultVariant, cellId, stagesForRow,
 } from "../lib/catalogue.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const BUILDER = readFileSync(resolve(REPO, "apps/web/src/components/v2/division-builder.tsx"), "utf8");
+
+/** Parses the builder's PREFERRED_VARIANT literal. Fails LOUDLY when an entry
+ *  cannot be parsed (a computed key, a duplicate, an unquoted value) instead of
+ *  dropping it — a dropped entry would let the builder drift while the pin
+ *  stays green. The entry count comes from splitting the literal on commas,
+ *  independently of the entry regex. */
+function preferredVariantPin(src: string): Record<string, string> {
+  const block = /const PREFERRED_VARIANT: Record<string, string> = \{([^}]*)\}/.exec(src)?.[1];
+  if (block === undefined) throw new Error("PREFERRED_VARIANT literal not found in division-builder.tsx");
+  const entries = block.split(",").map((s) => s.replace(/\/\/.*$/gm, "").trim()).filter((s) => s.length > 0);
+  const parsed = Object.fromEntries(
+    [...block.matchAll(/["']?([\w-]+)["']?\s*:\s*["']([^"']+)["']/g)].map((m) => [m[1]!, m[2]!]),
+  );
+  if (Object.keys(parsed).length !== entries.length) {
+    throw new Error(`PREFERRED_VARIANT: parsed ${Object.keys(parsed).length} of ${entries.length} entries: ${JSON.stringify(entries)}`);
+  }
+  return parsed;
+}
+
+/** The KO stage's take rule — where the `qualified` knob lands. */
+const takeOf = (stages: { progression: { sources: { take: unknown[] }[] } | null }[]) => stages[1]!.progression!.sources[0]!.take;
 
 describe("catalogue — empty case first", () => {
   it("is never empty: 16 template rows + 5 API-only rows, 11 sports", () => {
@@ -78,6 +99,16 @@ describe("catalogue — rows", () => {
     expect(stagesForRow("league").map((s) => s.kind)).toEqual(["league"]);
   });
 
+  it("every template row builds its OWN template's stage graph (kind and name, derived from STAGE_TEMPLATES)", () => {
+    let checked = 0;
+    for (const row of TEMPLATE_ROW_KEYS) {
+      const own = STAGE_TEMPLATES.find((t) => t.key === row)!.build(BUILDER_DEFAULT_KNOBS);
+      expect(stagesForRow(row).map((s) => [s.kind, s.name]), row).toEqual(own.map((s) => [s.kind, s.name]));
+      checked++;
+    }
+    expect(checked).toBe(16);
+  });
+
   it("stamps seq 1..n and the builder's knob defaults (swiss rounds, legs)", () => {
     const ko = stagesForRow("league_ko");
     expect(ko.map((s) => s.seq)).toEqual([1, 2]);
@@ -91,9 +122,26 @@ describe("catalogue — rows", () => {
     expect(stagesForRow("triple_rr")[0]!.config.legs).toBe(BUILDER_DEFAULT_KNOBS.legs);
   });
 
-  it("clamps qualified and poolCount exactly like the builder", () => {
+  it("clamps qualified and poolCount exactly like the builder — below the floor and above the ceiling", () => {
+    const B = BUILDER_KNOB_BOUNDS; // text-pinned against division-builder.tsx below
+    const at = (row: string, qualified: number, poolCount: number) =>
+      buildTemplateStages(row, { ...BUILDER_DEFAULT_KNOBS, qualified, poolCount });
+
+    // Below the floor: qualified 0 unclamped gives groups_ko's KO an EMPTY take
+    // (n = 0, r = 0); clamped it is the product's own take at the floor.
     const low = stagesForRow("groups_ko", { ...BUILDER_DEFAULT_KNOBS, qualified: 0, poolCount: 0 });
-    expect(low[0]!.config.pools).toEqual({ count: 2 });
+    expect(low[0]!.config.pools).toEqual({ count: B.poolCount.min });
+    expect(takeOf(low)).toEqual(takeOf(at("groups_ko", B.qualified.min, B.poolCount.min)));
+    expect(takeOf(low)).not.toEqual(takeOf(at("groups_ko", 0, B.poolCount.min))); // the wrong answer differs
+    expect(takeOf(stagesForRow("league_ko", { ...BUILDER_DEFAULT_KNOBS, qualified: 0 })))
+      .toEqual([{ kind: "rankRange", from: 1, to: B.qualified.min }]);
+
+    // Above the ceiling.
+    const high = stagesForRow("groups_ko", { ...BUILDER_DEFAULT_KNOBS, qualified: 99, poolCount: 99 });
+    expect(high[0]!.config.pools).toEqual({ count: B.poolCount.max });
+    expect(takeOf(high)).toEqual(takeOf(at("groups_ko", B.qualified.max, B.poolCount.max)));
+    expect(takeOf(stagesForRow("league_ko", { ...BUILDER_DEFAULT_KNOBS, qualified: 99 })))
+      .toEqual([{ kind: "rankRange", from: 1, to: B.qualified.max }]);
   });
 
   it("cellId is row|sport", () => { expect(cellId("league", "generic")).toBe("league|generic"); });
@@ -106,15 +154,31 @@ describe("catalogue — builder parity (text pins; a builder change reds here)",
       .toEqual(BUILDER_DEFAULT_KNOBS);
   });
 
+  it("clamp bounds match division-builder.tsx's clampKnob calls", () => {
+    const bounds = (name: string) => {
+      const m = new RegExp(`clampKnob\\(${name}, (\\d+), (\\d+)\\)`).exec(BUILDER);
+      return { min: Number(m?.[1]), max: Number(m?.[2]) };
+    };
+    expect({ qualified: bounds("qualified"), poolCount: bounds("poolCount") }).toEqual(BUILDER_KNOB_BOUNDS);
+  });
+
   it("the standings carry defaults to 'none' (what stagesForRow applies)", () => {
     expect(BUILDER).toMatch(/useState<StandingsCarry>\("none"\)/);
   });
 
   it("PREFERRED_VARIANT matches the builder's literal", () => {
-    const block = /const PREFERRED_VARIANT: Record<string, string> = \{([^}]*)\}/.exec(BUILDER)?.[1] ?? "";
-    const parsed = Object.fromEntries([...block.matchAll(/(\w+):\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
+    const parsed = preferredVariantPin(BUILDER);
     expect(Object.keys(parsed).length).toBeGreaterThan(0);
     expect(parsed).toEqual(BUILDER_PREFERRED_VARIANT);
+  });
+
+  it("the PREFERRED_VARIANT pin reads either quote style, and refuses an entry it cannot parse", () => {
+    const quoted = BUILDER.replace(`hockey: "fih-outdoor"`, `"hockey": 'fih-outdoor'`);
+    expect(quoted).not.toBe(BUILDER);
+    expect(preferredVariantPin(quoted)).toEqual(BUILDER_PREFERRED_VARIANT);
+    const computed = BUILDER.replace(`hockey: "fih-outdoor"`, `[HOCKEY]: "fih-outdoor"`);
+    expect(computed).not.toBe(BUILDER);
+    expect(() => preferredVariantPin(computed)).toThrow(/parsed 3 of 4 entries/);
   });
 
   it("builderDefaultVariant: preferred when offered, else the first in builder order; empty refuses", () => {

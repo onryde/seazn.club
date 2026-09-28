@@ -2,13 +2,15 @@
 // bench's small helpers, only one apps/web file, and the invariant layer is
 // type-only so W1b's fast-check model and W10's shadow checks can reuse it.
 import { readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(MATRIX, "..", "..");
-const ALLOWED_BENCH = new Set(["http.ts", "plan.ts", "env.ts"]);
+// Full repo-relative paths, never basenames: scripts/bench/lib/drivers/http.ts
+// is a different module that a basename check would wave through as "http.ts".
+const ALLOWED_BENCH = new Set(["scripts/bench/lib/http.ts", "scripts/bench/lib/plan.ts", "scripts/bench/lib/env.ts"]);
 const ALLOWED_WEB = new Set(["apps/web/src/components/v2/format-templates.ts"]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
@@ -22,12 +24,18 @@ function shipped(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-// Three import shapes: `import|export … from "x"`, dynamic `import("x")`, and
-// the bare side-effect `import "x";`. The third has no `from`, so the first
-// alternative cannot see it — and a side-effect import of seed.ts is exactly
-// what this gate exists to stop (found by mutation: without the third
-// alternative, `import "../../bench/lib/seed.ts";` stayed green).
-const SPEC = /(?:^|\n)\s*(import|export)\s+(type\s+)?[^;]*?from\s+["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|(?:^|\n)\s*import\s+["']([^"']+)["']/g;
+// Three import shapes: `import|export … from "x"`, dynamic `import("x")` (any
+// quote, backtick included), and the bare side-effect `import "x";`. The third
+// has no `from`, so the first alternative cannot see it — and a side-effect
+// import of seed.ts is exactly what this gate exists to stop (found by
+// mutation: without the third alternative, `import "../../bench/lib/seed.ts";`
+// stayed green; without the backtick, `` import(`…/seed.ts`) `` did).
+//
+// ASSUMES SEMICOLON-TERMINATED STATEMENTS (the repo style; not enforced by a
+// formatter). `[^;]*?` is the statement boundary, so in semicolon-less source
+// a bare import followed by another import is swallowed, and `export type X =
+// Y` followed by a value import marks that import type-only. Known, not fixed.
+const SPEC = /(?:^|\n)\s*(import|export)\s+(type\s+)?[^;]*?from\s+["']([^"']+)["']|import\(\s*["'`]([^"'`]+)["'`]\s*\)|(?:^|\n)\s*import\s+["']([^"']+)["']/g;
 
 function importsOf(file: string): { spec: string; typeOnly: boolean }[] {
   const src = readFileSync(file, "utf8");
@@ -47,7 +55,7 @@ describe("scripts/matrix import boundary", () => {
       expect(FORBIDDEN.some((bad) => spec.includes(bad)), `${spec}`).toBe(false);
       if (!spec.startsWith(".")) continue;
       const target = relative(REPO, resolve(dirname(file), spec));
-      if (target.startsWith("scripts/bench/")) expect(ALLOWED_BENCH.has(basename(target)), target).toBe(true);
+      if (target.startsWith("scripts/bench/")) expect(ALLOWED_BENCH.has(target), target).toBe(true);
       if (target.startsWith("apps/web/")) expect(ALLOWED_WEB.has(target), target).toBe(true);
     }
   });

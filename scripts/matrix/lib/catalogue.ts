@@ -47,6 +47,13 @@ export const BUILDER_DEFAULT_KNOBS: Readonly<TemplateKnobs> = Object.freeze({
   legs: 1,
 });
 
+/** The builder's clampKnob bounds (division-builder.tsx:386, 388) — pinned by
+ *  catalogue.test.ts. */
+export const BUILDER_KNOB_BOUNDS: Readonly<Record<"qualified" | "poolCount", Readonly<{ min: number; max: number }>>> = Object.freeze({
+  qualified: Object.freeze({ min: 2, max: 32 }),
+  poolCount: Object.freeze({ min: 2, max: 8 }),
+});
+
 /** division-builder.tsx:56-61 — pinned by catalogue.test.ts. */
 export const BUILDER_PREFERRED_VARIANT: Readonly<Record<string, string>> = Object.freeze({
   cricket: "t20",
@@ -98,8 +105,8 @@ export function stagesForRow(row: string, knobs: TemplateKnobs = BUILDER_DEFAULT
   if (!STAGE_TEMPLATES.some((t) => t.key === row)) throw new UnknownRow(row);
   const clamped: TemplateKnobs = {
     ...knobs,
-    qualified: clampKnob(knobs.qualified, 2, 32),
-    poolCount: clampKnob(knobs.poolCount, 2, 8),
+    qualified: clampKnob(knobs.qualified, BUILDER_KNOB_BOUNDS.qualified.min, BUILDER_KNOB_BOUNDS.qualified.max),
+    poolCount: clampKnob(knobs.poolCount, BUILDER_KNOB_BOUNDS.poolCount.min, BUILDER_KNOB_BOUNDS.poolCount.max),
   };
   return applyStandingsCarry(buildTemplateStages(row, clamped), "none").map((s, i) => ({ ...s, seq: i + 1 }));
 }
