@@ -84,6 +84,22 @@ export function isTerminal(status: string): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
+/** The generic codes api-v1's `statusCode()` stamps on an error that carried
+ *  no code of its own (apps/web/src/server/api-v1/http.ts). Pinned against that
+ *  function's text by invariants.test.ts. */
+export const GENERIC_ERROR_CODES: readonly string[] = Object.freeze([
+  "VALIDATION", "UNAUTHENTICATED", "PAYMENT_REQUIRED", "FORBIDDEN", "NOT_FOUND", "CONFLICT", "RATE_LIMITED", "INTERNAL", "ERROR",
+]);
+
+/** A refusal NAMES its reason: a 4xx carrying a domain code (FORMAT_LOCKED,
+ *  STAGE_NOT_READY, …), not a generic one. Every api-v1 error carries SOME
+ *  code, so "has a code" proves nothing. A 5xx is a crash whatever it carries:
+ *  api-v1 answers any unhandled throw with 500 "INTERNAL", and maps a few
+ *  engine codes to 500 too. */
+export function isNamedRefusal(status: number, code: string | null): boolean {
+  return status >= 400 && status < 500 && code !== null && !GENERIC_ERROR_CODES.includes(code);
+}
+
 export function twoSided(f: ObservedFixture): boolean {
   return f.home !== null && f.away !== null;
 }

@@ -8,7 +8,7 @@
 // helpers have one authority instead of a copy here.
 import type { CheckResult } from "./results.ts";
 import type { CaseFact, InvariantResult, ObservedFixture, ObservedRun, ObservedStage } from "./observed.ts";
-import { isTerminal, sameOutcome, sameResult, twoSided, winnerOf } from "./observed.ts";
+import { isNamedRefusal, isTerminal, sameOutcome, sameResult, twoSided, winnerOf } from "./observed.ts";
 
 export interface InvariantSpec {
   readonly id: string;
@@ -37,33 +37,52 @@ const I1: InvariantSpec = {
     let checked = 0;
     for (const s of stages) {
       const legs = typeof s.config.legs === "number" ? s.config.legs : 1;
-      const pools = new Map<string, Set<string>>();
       const met = new Map<string, number>();
       for (const f of s.fixtures.filter(twoSided)) {
         if (f.home === f.away) fails.push(`${f.id}: self-play ${f.home}`);
-        const pool = pools.get(f.poolId ?? "") ?? new Set<string>();
-        pool.add(f.home!).add(f.away!);
-        pools.set(f.poolId ?? "", pool);
         met.set(pairKey(f.home!, f.away!), (met.get(pairKey(f.home!, f.away!)) ?? 0) + 1);
       }
-      // A league has one pool: its members are the whole field, so an entrant
-      // with NO fixture is still counted (it would otherwise escape).
-      if (s.kind === "league") pools.set("", new Set(s.field));
-      const pooled = new Set([...pools.values()].flatMap((p) => [...p]));
-      for (const e of s.field) if (!pooled.has(e)) fails.push(`${e} in no pool`);
+      const pools = poolsOf(s);
+      const field = new Set(s.field);
+      for (const e of s.field) {
+        const n = [...pools.values()].filter((p) => p.has(e)).length;
+        if (n === 0) fails.push(`${e} in no pool`);
+        else if (n > 1) fails.push(`${e} in ${n} pools`);
+      }
+      for (const [id, members] of pools) for (const e of members) if (!field.has(e)) fails.push(`${e} in pool ${id || "(none)"} but not in the field`);
+      const owed = new Set<string>();
       for (const members of pools.values()) {
         const m = [...members].sort();
         for (let i = 0; i < m.length; i++) for (let j = i + 1; j < m.length; j++) {
           checked++;
           const k = pairKey(m[i]!, m[j]!);
+          owed.add(k);
           const times = met.get(k) ?? 0;
           if (times !== legs) fails.push(`${k} met ${times}, expected ${legs}`);
         }
       }
+      // A meeting nobody owed (an opponent outside the field, a cross-pool
+      // pairing) is a defect too, not an extra to ignore (M-1).
+      for (const [k, times] of met) if (!owed.has(k)) fails.push(`${k} met ${times}, not owed`);
     }
     return result(fails, checked);
   },
 };
+
+/** I1's pool membership. A league is one pool: the whole field, so an entrant
+ *  with NO fixture is still owed its pairs. A group uses the product's own
+ *  table (standings[].poolId with its rows) when one was observed — that sees a
+ *  fixtureless member and a partition the fixtures got wrong — and otherwise
+ *  falls back to the pools the fixtures name. */
+function poolsOf(s: ObservedStage): Map<string, Set<string>> {
+  if (s.kind === "league") return new Map([["", new Set(s.field)]]);
+  const pools = new Map<string, Set<string>>();
+  const add = (id: string | null, e: string) => pools.set(id ?? "", (pools.get(id ?? "") ?? new Set<string>()).add(e));
+  const table = s.standings.filter((p) => p.rows.length > 0);
+  if (table.length > 0) for (const p of table) for (const r of p.rows) add(p.poolId, r.entrantId);
+  else for (const f of s.fixtures.filter(twoSided)) { add(f.poolId, f.home!); add(f.poolId, f.away!); }
+  return pools;
+}
 
 const I2: InvariantSpec = {
   id: "I2-bracket-one-champion-ranks-permutation",
@@ -116,8 +135,12 @@ const I3: InvariantSpec = {
     for (const s of stages) {
       const rows = new Map(s.standings.flatMap((p) => p.rows).map((r) => [r.entrantId, r]));
       const byEntrant = new Map<string, ObservedFixture[]>();
-      for (const f of s.fixtures.filter((x) => twoSided(x) && isTerminal(x.status))) {
-        for (const e of [f.home!, f.away!]) byEntrant.set(e, [...(byEntrant.get(e) ?? []), f]);
+      // Every SEATED side of a finished fixture, one-sided rows included: the
+      // engine's odd-field Swiss bye is its own forfeited award row with the
+      // other seat null, and the fold credits it as a win (I-2). Dropping it
+      // here would compare the bye credit against a Σ that omits it.
+      for (const f of s.fixtures.filter((x) => isTerminal(x.status))) {
+        for (const e of [f.home, f.away]) if (e !== null) byEntrant.set(e, [...(byEntrant.get(e) ?? []), f]);
       }
       for (const [e, fx] of byEntrant) if (!rows.has(e) && fx.some((f) => f.outcome !== null)) fails.push(`${e} has results but no row`);
       for (const [e, row] of rows) {
@@ -152,7 +175,7 @@ const I4: InvariantSpec = {
         checked++;
         const ok2xx = g.status >= 200 && g.status < 300;
         if (ok2xx && g.total === 0) fails.push(`stage ${s.seq}: empty generate (R13)`);
-        if (!ok2xx && g.code === null) fails.push(`stage ${s.seq}: generate refused ${g.status} with no code`);
+        if (!ok2xx && !isNamedRefusal(g.status, g.code)) fails.push(`stage ${s.seq}: generate answered ${g.status} ${g.code ?? "(no code)"} — not a named refusal`);
       }
       for (const p of s.pairRounds) {
         checked++;
@@ -160,8 +183,9 @@ const I4: InvariantSpec = {
       }
       if (s.complete === null) { fails.push(`stage ${s.seq}: never asked to complete`); continue; }
       checked++;
-      const refusedNamed = s.complete.status >= 400 && s.complete.code !== null;
-      if (!s.complete.completed && !refusedNamed) fails.push(`stage ${s.seq}: did not complete and named no reason`);
+      if (!s.complete.completed && !isNamedRefusal(s.complete.status, s.complete.code)) {
+        fails.push(`stage ${s.seq}: did not complete (${s.complete.status} ${s.complete.code ?? "(no code)"}) and named no reason`);
+      }
       if (s.complete.completed) {
         for (const f of s.fixtures.filter(twoSided)) {
           checked++;
@@ -209,6 +233,7 @@ const I6: InvariantSpec = {
       const seen = new Map<string, number>();
       for (const f of s.fixtures.filter(twoSided)) {
         checked++;
+        if (f.home === f.away) fails.push(`${f.id}: ${f.home} paired with itself`);
         const k = pairKey(f.home!, f.away!);
         if (seen.has(k)) fails.push(`${k} rematched in rounds ${seen.get(k)} and ${f.roundNo}`);
         else seen.set(k, f.roundNo ?? 0);
@@ -223,8 +248,12 @@ export const INVARIANTS: readonly InvariantSpec[] = Object.freeze([I1, I2, I3, I
 export function evaluateInvariant(spec: InvariantSpec, run: ObservedRun): InvariantResult {
   const blocking = spec.abstainOn.filter((f) => run.facts.includes(f));
   if (blocking.length > 0) return ABSTAIN(`case fact ${blocking.join(", ")}`);
+  // "any" is not a data precondition: with no stages there is nothing to
+  // abstain ON, only nothing checked (M-3, R25).
+  if (spec.stageKinds === "any" && run.stages.length === 0) return { verdict: "fail", checked: 0, evidence: ["no stages observed (vacuous, R25)"] };
   let stages = spec.stageKinds === "any" ? run.stages : run.stages.filter((s) => (spec.stageKinds as readonly string[]).includes(s.kind));
-  stages = stages.filter((s) => !spec.abstainOnStageConfig.some((k) => k in s.config));
+  // A key present but null is absent, as the product reads it (M-6).
+  stages = stages.filter((s) => !spec.abstainOnStageConfig.some((k) => s.config[k] != null));
   if (spec.requiresCompletedStage) stages = stages.filter((s) => s.complete?.completed === true);
   if (stages.length === 0) return ABSTAIN(`no applicable stage (${spec.stageKinds === "any" ? "any" : spec.stageKinds.join("/")})`);
   const r = spec.check(stages, run);

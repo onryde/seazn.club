@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { INVARIANTS, evaluateInvariant, evaluateInvariants, type InvariantSpec } from "../lib/invariants.ts";
 import type { CaseFact, ObservedFixture, ObservedOutcome, ObservedRun, ObservedStage } from "../lib/observed.ts";
-import { TERMINAL_STATUSES, isTerminal, sameResult, toObservedOutcome } from "../lib/observed.ts";
+import { GENERIC_ERROR_CODES, TERMINAL_STATUSES, isNamedRefusal, isTerminal, sameResult, toObservedOutcome } from "../lib/observed.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -45,6 +45,36 @@ describe("R25: the anti-vacuity guard every spec inherits", () => {
     expect(r).toMatchObject({ verdict: "fail", checked: 0 });
     expect(r.evidence[0]).toMatch(/vacuous, R25/);
   });
+  // M-3: "any" is not a data precondition, so an empty run has nothing to
+  // abstain on — it is a zero-item check. Kind-bound specs still abstain.
+  it("a run with NO stages fails every 'any'-kind spec and abstains the kind-bound ones", () => {
+    const anyKind = INVARIANTS.filter((s) => s.stageKinds === "any");
+    expect(anyKind.map((s) => s.id)).toEqual(["I4-nothing-ends-stuck", "I5-config-edit-never-rescores"]); // the loop below is not vacuous
+    for (const s of INVARIANTS) {
+      const r = evaluateInvariant(s, run([]));
+      if (s.stageKinds === "any") {
+        expect(r, s.id).toMatchObject({ verdict: "fail", checked: 0 });
+        expect(r.evidence[0], s.id).toMatch(/no stages observed \(vacuous, R25\)/);
+      } else expect(r.verdict, s.id).toBe("abstain");
+    }
+    // A case fact still abstains first: a deliberately cut-short run owes nothing.
+    expect(evaluateInvariant(spec("I4-nothing-ends-stuck"), run([], { facts: facts("cut_short") })).verdict).toBe("abstain");
+  });
+});
+
+// M-6: a config key that is present but null is ABSENT, as the product reads
+// it (competition.ts applies carry_deltas/rank_overrides only when an array,
+// points only when truthy). JSON cannot carry undefined, so null is the case.
+describe("abstainOnStageConfig treats a null key as absent", () => {
+  it("I3 checks (does not abstain) a stage whose points/carry_deltas/rank_overrides are null", () => {
+    const I3 = spec("I3-table-points-equal-declared");
+    expect(I3.abstainOnStageConfig.length).toBeGreaterThan(0);
+    const decided = fx({ home: "a", away: "b", outcome: win("a"), declared: { home: 3, away: 0, forOutcome: win("a") } });
+    for (const k of I3.abstainOnStageConfig) {
+      const s = stage({ config: { [k]: null }, field: ["a", "b"], fixtures: [decided], standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "b", rank: 2, points: 0 }] }] });
+      expect(evaluateInvariant(I3, run([s])), k).toMatchObject({ verdict: "pass", checked: 2 });
+    }
+  });
 });
 
 describe("I1 rr-pair-once-per-leg", () => {
@@ -70,12 +100,46 @@ describe("I1 rr-pair-once-per-leg", () => {
     expect(r).toMatchObject({ verdict: "fail", checked: 3 });
     expect(r.evidence.join(" ")).toMatch(/a~c met 0/);
   });
-  it("group: pairs are owed within a pool, never across; a field entrant in no pool fails", () => {
+  it("a meeting that is NOT owed fails (M-1): an opponent outside a league's field", () => {
+    const r = evaluateInvariant(I1, run([stage({ field: ["a", "b"], fixtures: [...rr(["a", "b"]), fx({ home: "a", away: "x", outcome: win("a") })] })]));
+    expect(r.verdict).toBe("fail");
+    expect(r.evidence.join(" ")).toMatch(/a~x met 1, not owed/);
+  });
+  it("group, no table observed (pools inferred from fixtures): owed within a pool; in no pool, in two pools, or outside the field fails", () => {
     const pooled = [fx({ poolId: "A", home: "a", away: "b", outcome: win("a") }), fx({ poolId: "B", home: "c", away: "d", outcome: win("c") })];
     expect(evaluateInvariant(I1, run([stage({ kind: "group", field: ["a", "b", "c", "d"], fixtures: pooled })]))).toMatchObject({ verdict: "pass", checked: 2 });
     const orphan = evaluateInvariant(I1, run([stage({ kind: "group", field: ["a", "b", "c", "d", "e"], fixtures: pooled })]));
     expect(orphan.verdict).toBe("fail");
     expect(orphan.evidence.join(" ")).toMatch(/e in no pool/);
+    // A cross-pool fixture with a null pool forms its own pool {a,c}: every
+    // count is 1, so only the two-pools check can see it.
+    const nullPool = evaluateInvariant(I1, run([stage({ kind: "group", field: ["a", "b", "c", "d"], fixtures: [...pooled, fx({ poolId: null, home: "a", away: "c", outcome: win("a") })] })]));
+    expect(nullPool.verdict).toBe("fail");
+    expect(nullPool.evidence.join(" ")).toMatch(/a in 2 pools/);
+    // The same meeting labelled with a different pool drags c into pool A.
+    const relabelled = evaluateInvariant(I1, run([stage({ kind: "group", field: ["a", "b", "c", "d"], fixtures: [...pooled, fx({ poolId: "A", home: "a", away: "c", outcome: win("a") })] })]));
+    expect(relabelled.evidence.join(" ")).toMatch(/c in 2 pools/);
+    const outsider = evaluateInvariant(I1, run([stage({ kind: "group", field: ["a", "b", "c", "d"], fixtures: [...pooled, fx({ poolId: "A", home: "a", away: "x", outcome: win("a") })] })]));
+    expect(outsider.evidence.join(" ")).toMatch(/x in pool A but not in the field/);
+  });
+  it("group WITH a table: the product's standings pools are the membership (M-2) — a fixtureless member is owed its pairs; a wrong partition and a cross-pool meeting fail", () => {
+    const table = (pools: Record<string, string[]>) => Object.entries(pools).map(([poolId, ids]) => ({ poolId, rows: ids.map((entrantId, i) => ({ entrantId, rank: i + 1, points: 0 })) }));
+    const pooled = [fx({ poolId: "A", home: "a", away: "b", outcome: win("a") }), fx({ poolId: "B", home: "c", away: "d", outcome: win("c") })];
+    const grp = (field: string[], fixtures: ObservedFixture[], pools: Record<string, string[]>) => stage({ kind: "group", field, fixtures, standings: table(pools) });
+    expect(evaluateInvariant(I1, run([grp(["a", "b", "c", "d"], pooled, { A: ["a", "b"], B: ["c", "d"] })]))).toMatchObject({ verdict: "pass", checked: 2 });
+    // e sits in pool A's table with no fixture: owed a~e and b~e (fixture inference would only say "in no pool", checked 2).
+    const fixtureless = evaluateInvariant(I1, run([grp(["a", "b", "c", "d", "e"], pooled, { A: ["a", "b", "e"], B: ["c", "d"] })]));
+    expect(fixtureless).toMatchObject({ verdict: "fail", checked: 4 });
+    expect(fixtureless.evidence.join(" ")).toMatch(/a~e met 0/);
+    // The fixtures pair a~c and b~d (and label them consistently), the table says {a,b} {c,d}: inference alone would pass this.
+    const wrong = [fx({ poolId: "A", home: "a", away: "c", outcome: win("a") }), fx({ poolId: "B", home: "b", away: "d", outcome: win("b") })];
+    const w = evaluateInvariant(I1, run([grp(["a", "b", "c", "d"], wrong, { A: ["a", "b"], B: ["c", "d"] })]));
+    expect(w.evidence.join(" ")).toMatch(/a~b met 0/);
+    expect(w.evidence.join(" ")).toMatch(/a~c met 1, not owed/);
+    // Every owed pair met once; the extra cross-pool meeting (null pool) is the only defect.
+    const cross = evaluateInvariant(I1, run([grp(["a", "b", "c", "d"], [...pooled, fx({ poolId: null, home: "a", away: "c", outcome: win("a") })], { A: ["a", "b"], B: ["c", "d"] })]));
+    expect(cross.verdict).toBe("fail");
+    expect(cross.evidence.join(" ")).toMatch(/a~c met 1, not owed/);
   });
   it("legs: 2 legs expects every pair twice", () => {
     const f = [...rr(["a", "b"]), ...rr(["a", "b"])];
@@ -171,6 +235,22 @@ describe("I3 table-points-equal-declared", () => {
     const s = stage({ field: ["a", "b"], fixtures: [live], standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 0 }, { entrantId: "b", rank: 2, points: 0 }] }] });
     expect(evaluateInvariant(I3, run([s]))).toMatchObject({ verdict: "pass", checked: 2 });
   });
+  // I-2: the engine's odd-field Swiss bye is its own row — forfeited, an award,
+  // the other seat null (engine competition/stage.ts TableFixture.awardDelta) —
+  // and the fold credits it as a win. The harness did not post it, so it is a
+  // server-written result: the recipient is skipped and counted, never judged
+  // against a Σ that omits the bye.
+  it("an odd-field Swiss bye row (forfeited award, other seat null) reaches the skip — no false red on the bye credit", () => {
+    const bye = fx({ home: "c", away: null, status: "forfeited", outcome: { kind: "award", winner: "c" }, declared: null });
+    const table = (c: number) => [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "c", rank: 2, points: c }, { entrantId: "b", rank: 3, points: 0 }] }];
+    const r = evaluateInvariant(I3, run([stage({ kind: "swiss", field: ["a", "b", "c"], fixtures: [decided, bye], standings: table(3) })]));
+    expect(r).toMatchObject({ verdict: "pass", checked: 2 });
+    expect(r.evidence.join(" ")).toMatch(/skipped 1/);
+    // If the harness DOES declare the bye's award, the recipient is judged against it.
+    const declaredBye = { ...bye, declared: { home: 3, away: 0, forOutcome: { kind: "award" as const, winner: "c" } } };
+    expect(evaluateInvariant(I3, run([stage({ kind: "swiss", field: ["a", "b", "c"], fixtures: [decided, declaredBye], standings: table(3) })]))).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(evaluateInvariant(I3, run([stage({ kind: "swiss", field: ["a", "b", "c"], fixtures: [decided, declaredBye], standings: table(0) })])).evidence.join(" ")).toMatch(/c: table 0, declared Σ 3/);
+  });
   it("abstain: a stage with its own points rule", () => {
     expect(evaluateInvariant(I3, run([stage({ ...withRows(3, 0), config: { points: { base: { win: 2, draw: 1, loss: 0 } } } })])).verdict).toBe("abstain");
   });
@@ -202,6 +282,38 @@ describe("I4 nothing-ends-stuck", () => {
     expect(evaluateInvariant(I4, run([named])).verdict).toBe("pass");
     const unnamed = stage({ generates: [{ status: 500, code: null, total: 0, created: 0 }], complete: done });
     expect(evaluateInvariant(I4, run([unnamed])).verdict).toBe("fail");
+    const locked = stage({ generates: [{ status: 409, code: "FORMAT_LOCKED", total: 0, created: 0 }], complete: { status: 409, code: "FORMAT_LOCKED", completed: false, finalRanks: null } });
+    expect(evaluateInvariant(I4, run([locked])).verdict).toBe("pass");
+  });
+  // I-1: api-v1 puts a code on EVERY error (http.ts statusCode(), and 500
+  // "INTERNAL" for any unhandled throw), so "has a code" is not "named".
+  it("a crash is never a named refusal: any 5xx fails whatever its code — the real shapes 500 INTERNAL and 500 MODULE_DUPLICATE", () => {
+    const gen = { status: 201, code: null, total: 1, created: 1 };
+    for (const code of ["INTERNAL", "MODULE_DUPLICATE"]) {
+      // MODULE_DUPLICATE is a domain code the product maps to 500: only the 5xx rule can fail it.
+      expect(evaluateInvariant(I4, run([stage({ generates: [gen], complete: { status: 500, code, completed: false, finalRanks: null } })])).verdict, `complete ${code}`).toBe("fail");
+      expect(evaluateInvariant(I4, run([stage({ generates: [{ status: 500, code, total: 0, created: 0 }], complete: done })])).verdict, `generate ${code}`).toBe("fail");
+    }
+  });
+  it("a generic statusCode() code is not a named reason: 404 NOT_FOUND, 409 CONFLICT, 400 VALIDATION fail", () => {
+    const gen = { status: 201, code: null, total: 1, created: 1 };
+    // [404, null]: a 4xx with no code at all (a body outside the api-v1 envelope, e.g. a framework 404 page).
+    for (const [status, code] of [[404, "NOT_FOUND"], [409, "CONFLICT"], [400, "VALIDATION"], [404, null]] as const) {
+      expect(evaluateInvariant(I4, run([stage({ generates: [gen], complete: { status, code, completed: false, finalRanks: null } })])).verdict, `complete ${code}`).toBe("fail");
+      expect(evaluateInvariant(I4, run([stage({ generates: [{ status, code, total: 0, created: 0 }], complete: done })])).verdict, `generate ${code}`).toBe("fail");
+    }
+  });
+  it("GENERIC_ERROR_CODES is exactly what api-v1's statusCode() emits (derived from http.ts, not typed)", () => {
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/http.ts"), "utf8");
+    const fns = [...src.matchAll(/\nfunction statusCode\(status: number\): string \{\n([\s\S]*?)\n\}\n/g)];
+    expect(fns).toHaveLength(1);
+    const body = fns[0]![1]!;
+    const codes = [...body.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]!);
+    expect(codes).toHaveLength((body.split('"').length - 1) / 2); // a literal the regex cannot read is not silently dropped
+    expect(codes).toContain("INTERNAL");
+    expect([...GENERIC_ERROR_CODES].sort()).toEqual([...new Set(codes)].sort());
+    for (const c of codes) expect(isNamedRefusal(422, c), c).toBe(false);
+    expect(isNamedRefusal(422, "STAGE_NOT_READY")).toBe(true);
   });
   it("abstain: a case deliberately cut short", () => {
     expect(evaluateInvariant(I4, run([stage({})], { facts: facts("cut_short") })).verdict).toBe("abstain");
@@ -242,6 +354,11 @@ describe("I6 swiss-no-rematch", () => {
   it("negative: a rematch with sides reversed is still a rematch", () => {
     const f = [fx({ home: "a", away: "b" }), fx({ roundNo: 2, home: "b", away: "a" })];
     expect(evaluateInvariant(I6, run([sw(f)])).evidence.join(" ")).toMatch(/a~b/);
+  });
+  it("negative (M-4): an entrant paired with itself fails", () => {
+    const r = evaluateInvariant(I6, run([sw([fx({ home: "a", away: "b" }), fx({ roundNo: 2, home: "c", away: "c" })])]));
+    expect(r.verdict).toBe("fail");
+    expect(r.evidence.join(" ")).toMatch(/c paired with itself/);
   });
   it("abstain: no swiss stage", () => {
     expect(evaluateInvariant(I6, run([stage({})])).verdict).toBe("abstain");
