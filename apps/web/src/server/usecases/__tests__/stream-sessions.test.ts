@@ -1610,12 +1610,13 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     expect(n).toBe(1);                                               // one live session per destination, still true
   });
 
-  // I1 (fix round 1): the index and `targetHolderFor` see ACTIVE sessions only, and the prior-Machine teardown saw only
-  // THIS fixture. A composed session on ANOTHER fixture that completed at grace + slack with its forced destroy
-  // UNCONFIRMED (the 2C-post m5 state) keeps a Machine pushing to the destination's key — invisible to both. The
-  // orchestrator's ruling: this fixture's create REFUSES `target_in_use` naming the holder's court and never destroys
-  // another fixture's Machine; once that destroy is confirmed at the provider, the start is admitted. Both modes of the
-  // NEW session, because a passthrough output lands on the same key as a Machine does.
+  // I1 (fix round 1 + addendum): the index and `targetHolderFor` see ACTIVE sessions only, and the prior-Machine teardown
+  // saw only THIS fixture. A composed session on ANOTHER fixture that completed at grace + slack with its forced destroy
+  // UNCONFIRMED (the 2C-post m5 state) keeps a Machine pushing to the destination's key — invisible to both. That Machine
+  // is an orphan (its session is terminal), so the next fixture's admission DESTROYS it, recorded on the ended session's
+  // own ledger; only while that destroy keeps failing is the start refused `target_in_use`, naming the court. A LIVE
+  // session's Machine is never destroyed from an admission. Both modes of the NEW session, because a passthrough output
+  // lands on the same key as a Machine does.
   async function zombieOnTarget() {
     const { r, a, b } = await twoFixturesOneTarget();
     const [v] = await sql<{ id: string }[]>`insert into venues (org_id, name, address) values (${r.auth.orgId}, 'Main Arena', '12 Court Road') returning id`;
@@ -1638,8 +1639,13 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     return { r, a, b, old, machine, flaky, destroyCalls };
   }
 
-  it.each(["composed", "passthrough"] as const)("I1 (%s B): another fixture's terminal session whose Machine is still LISTED holds the destination — B is refused 409 target_in_use naming that court, nothing is created and A's Machine is not touched from B's create; once A's destroy is confirmed at the provider, B is admitted (mutant: the prior-Machine query scoped to this fixture only → 201 at the refusal)", async (mode) => {
-    const { r, b, machine, flaky, destroyCalls } = await zombieOnTarget();
+  /** The ended session's force_destroy history: result and the payload facts that say who forced it and why. */
+  const forceDestroysOf = async (sid: string) => (await sql<{ result: string; payload: Record<string, unknown> }[]>`
+    select result, payload from fixture_stream_events where session_id = ${sid} and kind = 'effect' and type = 'force_destroy' order by seq`)
+    .map((e) => ({ result: e.result, reason: e.payload.reason ?? null, fixtureId: e.payload.fixtureId ?? null, machineId: e.payload.machineId ?? null }));
+
+  it.each(["composed", "passthrough"] as const)("I1 (%s B), the destroy keeps FAILING: another fixture's ended session whose Machine is still listed holds the destination — B's admission TRIES the destroy (recorded on A's ledger: reason admission, B's fixture), it fails, and B is refused 409 target_in_use naming that court with nothing created (mutant: the prior-Machine query scoped to this fixture only → 201)", async (mode) => {
+    const { r, b, old, machine, flaky, destroyCalls } = await zombieOnTarget();
     const callsBefore = destroyCalls.length;
     const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
     try {
@@ -1650,16 +1656,55 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     } finally {
       ingestSpy.mockRestore();
     }
-    expect(destroyCalls.length, "B's create must not destroy ANOTHER fixture's Machine").toBe(callsBefore);
+    expect(destroyCalls.slice(callsBefore), "B's admission tried A's orphan exactly once").toEqual([machine]);
     expect(r.runner.created).toHaveLength(1);                                                   // A's, and nothing for B
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${b}`;
     expect(n).toBe(0);
+    expect((await forceDestroysOf(old)).at(-1)).toEqual({ result: "failed", reason: "admission", fixtureId: b, machineId: machine });
+  });
 
-    // The provider confirms A's destroy (Task 12's orphan pass, or Fly's own) — the destination is free again.
-    await r.runner.destroy(machine);
-    expect((await r.runner.list()).map((m) => m.runnerId)).not.toContain(machine);
-    const made = await createSession(r.auth, b, body(r.target.id, mode), r.deps);
+  it.each(["composed", "passthrough"] as const)("I1 (%s B), the destroy SUCCEEDS: B's admission destroys A's orphan Machine BEFORE any provider call for B, records it on A's ledger (reason admission, B's fixture), leaves A's row as it was, and B is admitted (mutant: restore the refuse-without-trying early return → 409)", async (mode) => {
+    const { r, b, old, machine } = await zombieOnTarget();
+    const aBefore = await r.row(old);
+    // ONE call log across both providers, so "before" is an order and not two separate facts.
+    const order: string[] = [];
+    const logging = Object.assign(Object.create(r.runner) as FakeRunner, {
+      async destroy(id: string) { order.push(`destroy:${id}`); return r.runner.destroy(id); },
+      async create(spec: RunnerSpec) { order.push(`create:${spec.sessionId}`); return r.runner.create(spec); },
+    });
+    const real = r.ingest.createLiveInput.bind(r.ingest);
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput").mockImplementation(async (args) => { order.push(`input:${args.sessionId}`); return real(args); });
+    let made: { sessionId: string };
+    try {
+      made = await createSession(r.auth, b, body(r.target.id, mode), { ...r.deps, drivers: { ...r.deps.drivers, runner: logging } });
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    const expected = mode === "composed"
+      ? [`destroy:${machine}`, `input:${made.sessionId}`, `create:${made.sessionId}`]
+      : [`destroy:${machine}`, `input:${made.sessionId}`];
+    expect(order).toEqual(expected);
     expect((await r.row(made.sessionId)).state).not.toBe("failed");
+    expect((await r.runner.list()).map((m) => m.runnerId)).not.toContain(machine);
+    expect((await forceDestroysOf(old)).at(-1)).toEqual({ result: "ok", reason: "admission", fixtureId: b, machineId: machine });
+    const aAfter = await r.row(old);
+    expect({ state: aAfter.state, end_reason: aAfter.end_reason, runner_state: aAfter.runner_state })
+      .toEqual({ state: aBefore.state, end_reason: aBefore.end_reason, runner_state: aBefore.runner_state });   // fed nothing to decide (T12-a)
+  });
+
+  it("I1 guard: a LIVE session's Machine is never destroyed from an admission — another fixture starting on its destination is refused 409 target_in_use, and a second start on its OWN fixture 409 active_session; the Machine stays listed and the session stays live (mutant: the prior-Machine query admits ACTIVE sessions → the live Machine destroyed)", async () => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const { sessionId: live } = await createSession(r.auth, a, body(r.target.id, "composed"), r.deps);
+    await heartbeat(live, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    const machine = (await r.row(live)).machine_id!;
+    expect((await r.row(live)).state).toBe("live");
+
+    await expect(createSession(r.auth, b, body(r.target.id, "composed"), r.deps)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+    await expect(createSession(r.auth, a, body(r.target.id, "composed"), r.deps)).rejects.toMatchObject({ status: 409, code: "active_session" });
+    expect(r.runner.destroyed).toEqual([]);
+    expect((await r.runner.list()).map((m) => m.runnerId)).toContain(machine);
+    expect((await r.row(live)).state).toBe("live");
+    expect(await forceDestroysOf(live)).toEqual([]);
   });
 
   it("G-T5 the index is what survives a second writer: two non-terminal rows on ONE target_id (two fixtures, so the FIXTURE index cannot be what refuses) → 23505 NAMING fixture_stream_sessions_one_active_target; terminal rows never collide; and the name and predicate are pinned as text, derived from ACTIVE_STATES / TERMINAL_STATES", async () => {

@@ -610,13 +610,18 @@ async function targetHolderFor(
  *  ever held a runner, so a start while composed is off (and FLY_API_TOKEN may be absent) never calls it. It destroys
  *  directly and feeds nothing to `decide` (T12-a's rule): a terminal row's runner converges on its next reconcile or the backstop.
  *
- *  I1 (Task 10 fix round 1). The DESTINATION is the unit of exclusivity (V421), and the Machine pushes to the destination's
- *  key whichever fixture it was made for — so the query also covers every terminal composed session on THIS target
- *  (`fixture_id = $f OR target_id = $t`, inside the caller's org). A still-listed Machine of ANOTHER fixture's session is
- *  never destroyed from here (orchestrator ruling 2026-09-28): it is answered as `otherFixture`, which admission refuses
- *  `target_in_use` naming that session's court — the refusal `targetHolderFor` gives an ACTIVE holder, because to the
- *  organiser it is the same fact. It is checked BEFORE any destroy, so a refused start destroys nothing. A fixture-less
- *  session (its fixture deleted: `on delete set null`) is another fixture's. */
+ *  I1 (Task 10 fix round 1 + addendum). The DESTINATION is the unit of exclusivity (V421), and a Machine pushes to the
+ *  destination's key whichever fixture it was made for — so the query also covers every terminal composed session on THIS
+ *  target (`fixture_id = $f OR target_id = $t`, inside the caller's org). A TERMINAL session's still-listed Machine is an
+ *  orphan by Task 12's rule whichever fixture it belongs to, so admission destroys it now rather than waiting for the daily
+ *  sweep — refusing without trying would brick the destination for the next match on that court until then (failure class
+ *  13; orchestrator ruling reversed 2026-09-28 on that reasoning). Each attempt is the SAME force_destroy effect row on the
+ *  ended session either way, carrying `reason: "admission"` and the ADMITTING fixture, so its ledger says who destroyed it
+ *  and why. Only a destroy that FAILS decides the refusal: this fixture's → `active_session` naming it (2C-post m5), another
+ *  fixture's → `target_in_use` naming its court (`otherFixture`; a fixture-less session, its fixture deleted, is another
+ *  fixture's). An ACTIVE session is never in this query: an active holder on another fixture was already refused, untouched,
+ *  by `targetHolderFor`, and this fixture's own active session is refused `active_session` by `admit` — a live Machine is
+ *  never destroyed from an admission. */
 async function tearDownPriorMachines(
   fixtureId: string, targetId: string, orgId: string, deps: SessionDeps,
 ): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
@@ -639,15 +644,14 @@ async function tearDownPriorMachines(
     const hit = m.sessionId ? bySession.get(m.sessionId) : undefined;
     return hit ? [{ m, ...hit }] : [];
   });
-  const foreign = listed.find((x) => x.s.fixtureId !== fixtureId);
-  if (foreign) {
-    log.warn({ sid: foreign.s.id, fixtureId, holderFixtureId: foreign.s.fixtureId, targetId, machineId: foreign.m.runnerId }, "stream session: another fixture's ended session still has a Machine on this destination — start refused");
-    return { sameFixture: null, otherFixture: foreign.holder };
-  }
-  for (const { m, s } of listed) {
+  for (const { m, s, holder } of listed) {
     try {
-      await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(m.runnerId), { machineId: m.runnerId, machineName: m.name, reason: "admission" });
+      await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(m.runnerId), { machineId: m.runnerId, machineName: m.name, reason: "admission", fixtureId });
     } catch (err) {
+      if (s.fixtureId !== fixtureId) {
+        log.warn({ sid: s.id, fixtureId, holderFixtureId: s.fixtureId, targetId, machineId: m.runnerId, err: String(err) }, "stream session: another fixture's ended session still has a Machine on this destination and its destroy failed — start refused");
+        return { sameFixture: null, otherFixture: holder };
+      }
       log.warn({ sid: s.id, fixtureId, machineId: m.runnerId, err: String(err) }, "stream session: a previous session's Machine is still listed and its destroy failed — start refused");
       return { sameFixture: s.id, otherFixture: null };
     }
@@ -656,8 +660,8 @@ async function tearDownPriorMachines(
 }
 
 /** The `target_in_use` refusal, ONE shape for both holders — an active session (`targetHolderFor`) and another fixture's
- *  ended session whose Machine is still listed (I1). `code` is what the client acts on (Task 13's `CreateErrorCode`, Task
- *  14's dictionary key). The MESSAGE names the holder — the court when the fixture has one, else the fixture id — because
+ *  ended session whose still-listed Machine admission could not destroy (I1). `code` is what the client acts on (Task
+ *  13's `CreateErrorCode`, Task 14's dictionary key). The MESSAGE names the holder — the court when the fixture has one, else the fixture id — because
  *  "in use" alone sends an organiser hunting; it is the operator's line in the log and in Sentry. The client renders the
  *  DICTIONARY string keyed by `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal). */
 interface Holder { sessionId: string; label: string; courtName: string | null; holderFixtureId: string | null }
@@ -710,8 +714,8 @@ export async function createSession(
   }
   // 2C-post m5: a PREVIOUS session's Machine the provider still lists is destroyed before this one may start; while that
   // destroy fails, admission answers `active_session` naming its session (outside the transaction: it calls the provider).
-  // I1: ANOTHER fixture's ended session whose Machine is still listed on this destination is `target_in_use`, like an
-  // active holder, and is not destroyed from here.
+  // I1: ANOTHER fixture's ended session with a Machine still listed on this destination is destroyed the same way; only
+  // when that destroy fails is the start `target_in_use`, naming its court, like an active holder.
   const prior = await tearDownPriorMachines(fixtureId, body.targetId, orgId, deps);
   if (prior.otherFixture) throw targetInUse(prior.otherFixture);
   const priorMachineSessionId = prior.sameFixture;
