@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS } from "../lib/catalogue.ts";
+import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
@@ -14,7 +14,7 @@ import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "
 import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
-import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
+import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
 import { NOTES_CAP, closeHandles, describeCommit, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 
@@ -61,13 +61,19 @@ function deps(over: Partial<RunDeps> = {}): Deps {
 
 /** Records every sport whose builder variant order the run reads from the DB,
  *  in call order; `deps(over)` builds a Deps whose openDb reports into it. */
-function readsOf(base: Deps): { sports: string[]; deps: (over?: Partial<RunDeps>) => Deps } {
+function readsOf(base: Deps): { sports: string[]; lists: Map<string, string[]>; deps: (over?: Partial<RunDeps>) => Deps } {
   const sports: string[] = [];
+  const lists = new Map<string, string[]>();
   const openDb: RunDeps["openDb"] = async () => {
     const db = await base.openDb();
-    return { ...db, variantKeysInBuilderOrder: async (s: string) => { sports.push(s); return db.variantKeysInBuilderOrder(s); } };
+    return { ...db, variantKeysInBuilderOrder: async (s: string) => {
+      sports.push(s);
+      const list = await db.variantKeysInBuilderOrder(s);
+      lists.set(s, list);
+      return list;
+    } };
   };
-  return { sports, deps: (over = {}) => deps({ openDb, ...over }) };
+  return { sports, lists, deps: (over = {}) => deps({ openDb, ...over }) };
 }
 
 const dirFor = () => mkdtempSync(join(tmpdir(), "fm-"));
@@ -439,18 +445,39 @@ describe("runSlice — a run", () => {
     expect(resultsIn(dir, "t8").cases).toEqual([]);
     expect(readFileSync(join(dir, "t8", "MATRIX.md"), "utf8")).toContain("No cases run");
     expect(reads.sports).toEqual([]); // the planner's sports are what is read — none here
-    expect([...SLICE_ROWS]).toEqual(["league", "knockout", "swiss"]); // untouched
   });
 
-  it("the default planner is the slice: 24 cases over the slice sports, variants read once per slice sport", async () => {
+  it("the default planner is the slice: rows × sports × scenarios, in that declared order, variants read once per slice sport", async () => {
     capture();
     const dir = dirFor();
     const reads = readsOf(deps());
     expect(await runSlice(reads.deps(), ["--run-id", "t8b", "--report-dir", dir])).toBe(0);
-    const cases = resultsIn(dir, "t8b").cases;
-    expect(cases.length).toBe(SLICE_ROWS.length * 2 * 4);
-    expect(new Set(cases.map((c) => c.sport))).toEqual(new Set(["generic", "badminton"]));
     expect(reads.sports).toEqual([...SLICE_SPORTS]); // once each, in the slice's own order
+    // The builder default for a slice sport is the first variant the DB lists:
+    // neither slice sport has a BUILDER_PREFERRED_VARIANT entry (guarded here).
+    const variantOf = (sport: string): string => {
+      expect(BUILDER_PREFERRED_VARIANT[sport], sport).toBeUndefined();
+      const first = reads.lists.get(sport)?.[0];
+      if (first === undefined) throw new Error(`test: no variant list was read for '${sport}'`);
+      return first;
+    };
+    // Expected ids from the slice's DECLARED rows, sports and scenarios — not from planSliceCases.
+    const expected = SLICE_ROWS.flatMap((row) => SLICE_SPORTS.flatMap((sport) => SCENARIO_KEYS.map((sc) => `${row}|${sport}|${variantOf(sport)}|${sc}`)));
+    expect(expected.length).toBe(SLICE_ROWS.length * SLICE_SPORTS.length * SCENARIO_KEYS.length);
+    expect(expected.length).toBeGreaterThan(0); // anti-vacuity
+    expect(resultsIn(dir, "t8b").cases.map((c) => c.caseId)).toEqual(expected);
+  });
+
+  it("a sport the planner did not declare is refused by name (exit 3), never blamed on the catalogue", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const reads = readsOf(deps());
+    const planCases = () => ({ sports: [] as string[], plan: (variantFor: (s: string) => string) => planSliceCases(variantFor, { only: "league|generic", scenario: "LIFECYCLE" }) });
+    expect(await runSlice(reads.deps({ planCases }), ["--run-id", "t8c", "--report-dir", dir])).toBe(3);
+    expect(io.err()).toMatch(/UndeclaredPlannerSport: .*'generic'/);
+    expect(io.err()).not.toMatch(/has no system variants/);
+    expect(reads.sports).toEqual([]);
+    expect(existsSync(join(dir, "t8c"))).toBe(false);
   });
 });
 

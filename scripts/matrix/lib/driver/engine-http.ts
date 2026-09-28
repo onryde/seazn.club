@@ -31,8 +31,14 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   SEEDING_MAP_SOURCE_AMBIGUOUS: 422,
 });
 
-/** http.ts:158 answers `ENGINE_HTTP[err.code] ?? 422`. */
-export function engineHttpStatus(code: string | null): number {
-  if (code !== null && Object.hasOwn(ENGINE_HTTP_STATUS, code)) return ENGINE_HTTP_STATUS[code as EngineErrorCode];
-  return 422;
+/** The `?? 422` of http.ts:158 — what the product answers an EngineError whose
+ *  code its map lacks. engine-http.test.ts pins it against that text. */
+export const ENGINE_HTTP_FALLBACK = 422;
+
+/** An EngineError's status, as http.ts:157-158 computes it:
+ *  `ENGINE_HTTP[err.code] ?? 422`. For an EngineError ONLY — the product answers
+ *  any other throw 500 INTERNAL (http.ts:244-247), so a caller must never pass
+ *  a code read off something that is not an EngineError. */
+export function engineHttpStatus(code: string): number {
+  return Object.hasOwn(ENGINE_HTTP_STATUS, code) ? ENGINE_HTTP_STATUS[code as EngineErrorCode] : ENGINE_HTTP_FALLBACK;
 }

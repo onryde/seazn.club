@@ -93,6 +93,18 @@ export interface CasePlanner {
 }
 export type PlanCases = (cli: PlannerCli) => CasePlanner;
 
+/** A planner asked `variantFor` about a sport it did not declare in `sports`,
+ *  so its variant order was never read. Named, so the abort blames the planner
+ *  and not the catalogue or the DB (which were never asked). */
+export class UndeclaredPlannerSport extends Error {
+  readonly sport: string;
+  constructor(sport: string, declared: readonly string[]) {
+    super(`planner: sport '${sport}' was planned but is not in the planner's sports (declared: ${declared.length === 0 ? "none" : declared.join(", ")}), so its variant order was never read`);
+    this.name = "UndeclaredPlannerSport";
+    this.sport = sport;
+  }
+}
+
 export const slicePlanner: PlanCases = (cli) => ({
   sports: SLICE_SPORTS,
   plan: (variantFor) => (cli.canary !== undefined
@@ -260,7 +272,11 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
     const planner = (deps.planCases ?? slicePlanner)({ only: cli.only, scenario: cli.scenario, canary: cli.canary });
     const order = new Map<string, string[]>();
     for (const s of planner.sports) order.set(s, await db.variantKeysInBuilderOrder(s));
-    const variantFor = (s: string) => builderDefaultVariant(s, order.get(s) ?? []);
+    const variantFor = (s: string) => {
+      const keys = order.get(s);
+      if (keys === undefined) throw new UndeclaredPlannerSport(s, planner.sports);
+      return builderDefaultVariant(s, keys);
+    };
     const specs = planner.plan(variantFor);
     for (const [i, spec] of specs.entries()) {
       const { result, refusal } = await runCase(deps, { base, session, userId, plan, runId: cli.runId }, spec, i);

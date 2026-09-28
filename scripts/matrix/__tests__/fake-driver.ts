@@ -9,7 +9,7 @@
 // playStage (per-round generate, pair rounds, byes) is witnessed DB-free, and
 // FakeKnockoutDriver does the same for a bracket (M1's progression, F1's
 // first-round-only rule).
-import type { MatchOutcome, StageKind } from "@seazn/engine/core";
+import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
@@ -163,9 +163,11 @@ export class FakeLeagueDriver implements OrganiserDriver {
         try {
           folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
         } catch (e) {
-          const code = (e as { code?: unknown }).code;
-          const c = typeof code === "string" ? code : null;
-          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, engineHttpStatus(c), c, (e as Error).message);
+          // The product turns ONLY an EngineError into a status (http.ts:157-158);
+          // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
+          // harness fault, so it surfaces as itself, never as an engine refusal.
+          if (!EngineError.is(e)) throw e;
+          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, engineHttpStatus(e.code), e.code, e.message);
         }
         f.events = next;
         f.outcome = folded.outcome;
