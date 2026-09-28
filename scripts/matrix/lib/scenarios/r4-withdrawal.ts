@@ -3,7 +3,7 @@
 // the rulebook's call (W2+). Canary: judge the cascade against the opposite
 // policy.
 import { isTerminal, sameResult, snap, toObservedOutcome, winnerOf, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
-import { assertion, foldParity, loopBounded, type Item } from "./assertions.ts";
+import { assertion, foldParity, loopBounded, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -78,7 +78,7 @@ export const r4Withdrawal: Scenario = {
       return {
         observed,
         events: rec.events,
-        assertions: [foldParity(rec), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), loopBounded(rec, observed)],
+        assertions: [foldParity(rec), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
       };
     }
     const mine = observed.stages[0]!.fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
@@ -95,6 +95,7 @@ export const r4Withdrawal: Scenario = {
         assertion("r4-not-paired-later",
           later.map((f) => ({ ok: f.home !== w.entrantId && f.away !== w.entrantId, note: `${f.id} (round ${f.roundNo}) seats the withdrawn entrant` })),
           setup.stage.kind === "swiss" ? null : "not a swiss stage"),
+        stageCompleted(observed),
         loopBounded(rec, observed),
       ],
     };

@@ -5,7 +5,7 @@ import { isTerminal, type ObservedFixture, type ObservedRun } from "../lib/obser
 import { decideState } from "../lib/results.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
-  assertion, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch,
+  assertion, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
   MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type DivisionSetup,
@@ -94,6 +94,27 @@ describe("shared assertions — empty case first, then each way to go red", () =
     // An org table with no rows beside a public one that has them: the public rows are extras.
     expect(publicStandingsMatch(run([{ poolId: null, rows: [] }]), { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: same }] }))
       .toMatchObject({ verdict: "fail", checked: 2, evidence: ["a: public row (stage 1 pool null) with no org row", "b: public row (stage 1 pool null) with no org row"] });
+  });
+
+  it("stageCompleted (1b): counts only stages whose fixtures are ALL finished, and each must have completed", () => {
+    const withComplete = (fixtures: ObservedFixture[], complete: ObservedRun["stages"][number]["complete"]): ObservedRun => {
+      const r = run([], fixtures);
+      return { ...r, stages: [{ ...r.stages[0]!, complete }] };
+    };
+    const done = [fx({}), fx({ id: "f2", status: "abandoned", outcome: null })];
+    const ok = { status: 200, code: null, completed: true, finalRanks: null };
+    // Empty case first: a stage with no fixtures is not "all finished" (the empty set would say yes).
+    expect(stageCompleted(withComplete([], ok))).toMatchObject({ id: "life-stage-completed", verdict: "abstain", checked: 0 });
+    // An open fixture: not counted — life-loop-bounded owns that case.
+    expect(stageCompleted(withComplete([fx({}), fx({ id: "f3", status: "scheduled", outcome: null })], { status: 409, code: "STAGE_INCOMPLETE", completed: false, finalRanks: null })))
+      .toMatchObject({ verdict: "abstain", checked: 0 });
+    expect(stageCompleted(withComplete(done, ok))).toMatchObject({ verdict: "pass", checked: 1 });
+    // All finished, and the product would not finish it: named or not, and a 200 that says completed:false.
+    expect(stageCompleted(withComplete(done, { status: 409, code: "STAGE_INCOMPLETE", completed: false, finalRanks: null })))
+      .toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 1: all 2 fixtures finished, complete → 409 STAGE_INCOMPLETE completed=false"] });
+    expect(stageCompleted(withComplete(done, { status: 500, code: null, completed: false, finalRanks: null }))).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(stageCompleted(withComplete(done, { status: 200, code: null, completed: false, finalRanks: null }))).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(stageCompleted(withComplete(done, null))).toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 1: all 2 fixtures finished, complete → never asked"] });
   });
 
   it("entrantsEditAccepted (I-2): the entrants-only save must be a 2xx; none attempted is vacuous", () => {
@@ -242,10 +263,10 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
-    ["LIFECYCLE", ["life-fold-parity", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-loop-bounded"]],
-    ["M1", ["life-fold-parity", "m1-walkover-recorded", "m1-winner-progresses", "life-loop-bounded"]],
-    ["R4", ["life-fold-parity", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-loop-bounded"]],
-    ["F1", ["life-fold-parity", "f1-everyone-drawn", "f1-round-size", "life-loop-bounded"]],
+    ["LIFECYCLE", ["life-fold-parity", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded"]],
+    ["M1", ["life-fold-parity", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded"]],
+    ["R4", ["life-fold-parity", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded"]],
+    ["F1", ["life-fold-parity", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded"]],
   ] as const)("%s", async (k, ids) => {
     expect((await runFake(k)).out.assertions.map((a) => a.id)).toEqual(ids);
   });
@@ -401,6 +422,8 @@ describe("I-1: a stage the loop left unfinished is red in EVERY scenario, even w
       .toEqual(["play loop exited refused_generate", expect.stringMatching(new RegExp(`^${open.length} fixture\\(s\\) left unfinished: ${open[0]!.id} scheduled`))]);
     // I4 is satisfied by the named refusals — life-loop-bounded is what reds it.
     expect(r.checks.find((c) => c.id === "I4-nothing-ends-stuck")).toMatchObject({ verdict: "pass" });
+    // Open fixtures: the stage is not "all finished", so life-stage-completed does not count it.
+    expect(r.checks.find((c) => c.id === "life-stage-completed")).toMatchObject({ verdict: "abstain", checked: 0 });
     expect(r.out.observed.stages[0]!.complete).toMatchObject({ status: 409, code: "STAGE_INCOMPLETE", completed: false });
   });
   it("a generate that answers 200 but stops LISTING open fixtures runs 'dry' and is still red (open fixtures)", async () => {
@@ -412,6 +435,44 @@ describe("I-1: a stage the loop left unfinished is red in EVERY scenario, even w
     const open = driver.fixtures.filter((f) => !isTerminal(f.status)).length;
     expect(open).toBe(24); // 28 fixtures, round 1's four played
     expect(r.checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "fail", checked: 2, evidence: [expect.stringMatching(/^24 fixture\(s\) left unfinished: /)] });
+  });
+});
+
+describe("1b: a stage whose fixtures are ALL finished must complete — in EVERY scenario", () => {
+  class RefusesComplete extends FakeLeagueDriver {
+    override async completeStage(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "open fixtures"); }
+  }
+  class CompletesFalse extends FakeLeagueDriver {
+    override async completeStage() { return { completed: false, events: [] }; }
+  }
+  it.each(["LIFECYCLE", "M1", "R4", "F1"] as const)("%s: completed → pass; a NAMED refusal → red on exactly life-stage-completed", async (k) => {
+    const good = await runFake(k);
+    expect(good.checks.find((c) => c.id === "life-stage-completed")).toMatchObject({ verdict: "pass", checked: 1 });
+    const driver = new RefusesComplete();
+    const r = await runOn(driver, k);
+    expect(driver.fixtures.every((f) => isTerminal(f.status))).toBe(true);
+    expect(r.state.state).toBe("red");
+    expect(failed(r.checks)).toEqual(["life-stage-completed"]);
+    // I4 judges only that the refusal is named — it passes.
+    expect(r.checks.find((c) => c.id === "I4-nothing-ends-stuck")).toMatchObject({ verdict: "pass" });
+  });
+  it("a 200 that answers completed:false is red here too (and I4 names it unnamed)", async () => {
+    const r = await runOn(new CompletesFalse(), "LIFECYCLE");
+    expect(failed(r.checks)).toEqual(["I4-nothing-ends-stuck", "life-stage-completed"]);
+    expect(r.checks.find((c) => c.id === "life-stage-completed")!.evidence).toEqual(["stage 1: all 28 fixtures finished, complete → 200 (no code) completed=false"]);
+  });
+  it("on the swiss and knockout fakes too", async () => {
+    class SwissRefuses extends FakeSwissDriver {
+      override async completeStage(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "x"); }
+    }
+    class KnockoutRefuses extends FakeKnockoutDriver {
+      override async completeStage(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "x"); }
+    }
+    const s = await runOn(new SwissRefuses(), "R4", { row: "swiss" });
+    expect(failed(s.checks)).toEqual(["life-stage-completed"]);
+    const k = await runOn(new KnockoutRefuses(), "F1", { row: "knockout" });
+    // I2 needs a completed bracket, so it abstains; the stage check is what reds.
+    expect(failed(k.checks)).toEqual(["life-stage-completed"]);
   });
 });
 

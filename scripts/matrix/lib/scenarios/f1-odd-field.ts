@@ -1,7 +1,7 @@
 // F1: an odd field of 7. Everyone is drawn, and each inspected round seats
 // floor(7/2) pairs with one sit-out. Canary: expect ceil — the answer that
 // differs from the right one.
-import { assertion, foldParity, loopBounded } from "./assertions.ts";
+import { assertion, foldParity, loopBounded, stageCompleted } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -32,6 +32,7 @@ export const f1OddField: Scenario = {
         foldParity(rec),
         assertion("f1-everyone-drawn", s.field.map((e) => ({ ok: s.fixtures.some((f) => f.home === e || f.away === e), note: `${e} appears in no fixture` }))),
         assertion("f1-round-size", inspected.map((r) => ({ ok: seatedIn(r) === expectedPerRound, note: `round ${r}: ${seatedIn(r)} seated, expected ${expectedPerRound}` }))),
+        stageCompleted(observed),
         loopBounded(rec, observed),
       ],
     };

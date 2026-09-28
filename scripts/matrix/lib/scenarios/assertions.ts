@@ -82,6 +82,20 @@ export function entrantsEditAccepted(edit: ConfigEditObs): CheckResult {
     .map((a) => ({ ok: a.status >= 200 && a.status < 300, note: `entrants-only save → ${a.status} ${a.code ?? "(no code)"}` })));
 }
 
+/** Controller ruling (fix round 1b): a stage whose fixtures are ALL finished
+ *  must complete. A refused /complete, named or not, or an answer of
+ *  `completed: false` is then a product failure to finish. I4 stays as it is,
+ *  since it judges only whether a refusal is NAMED. A stage with an open
+ *  fixture is not counted, because life-loop-bounded owns that case. So is a
+ *  stage with no fixtures: the empty set would pass "all finished". */
+export function stageCompleted(observed: ObservedRun): CheckResult {
+  const finished = observed.stages.filter((s) => s.fixtures.length > 0 && s.fixtures.every((f) => isTerminal(f.status)));
+  return assertion("life-stage-completed", finished.map((s) => ({
+    ok: s.complete?.completed === true,
+    note: `stage ${s.seq}: all ${s.fixtures.length} fixtures finished, complete → ${s.complete === null ? "never asked" : `${s.complete.status} ${s.complete.code ?? "(no code)"} completed=${s.complete.completed}`}`,
+  })), finished.length === 0 ? "no stage has every fixture finished (life-loop-bounded judges an unfinished one)" : null);
+}
+
 /** PF5 + I-1: red in EVERY scenario unless the play loop ran to its end —
  *  exit "drained" — AND left no fixture of the stage open. A cap, a refused
  *  generate (named or not) or an empty pair round each stop the loop early;
