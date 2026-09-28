@@ -139,6 +139,9 @@ describe("off-catalogue cfgs — the right answer differs from the catalogue's s
       ["tour", set(2, 2)], // 2-0: the nil floor binds
       ["doubles-noad-mtb10", { bestOf: 1 }], // the only set is an MTB, scored in points to matchTiebreakTo
       ["doubles-noad-mtb10", { bestOf: 1, tiebreak: { winBy: 6 } }], // MTB loser follows tiebreak.winBy (10-1, not 10-5)
+      // Parked Task 3 T5: winBy ≥ target — 11-0 is the only terminal score, so a
+      // loser computed from any other winBy (7 gives 11-1) is not terminal.
+      ["doubles-noad-mtb10", { bestOf: 1, finalSet: { matchTiebreakTo: 11 }, tiebreak: { winBy: 11 } }],
       ["grand-slam", { bestOf: 1 }], // finalSet {tiebreakTo} is still a GAMES set
     ];
     for (const [variant, overrides] of cases) {
