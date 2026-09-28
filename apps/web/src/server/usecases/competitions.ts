@@ -725,8 +725,10 @@ export async function patchCompetition(
   // reads its competitions through `sitemap-cache.ts`'s cache, so a publish or
   // an unpublish shows in the sitemap within that window
   // (SITEMAP_REVALIDATE_SECONDS, an hour). The lag is owner-accepted
-  // (2026-09-28): the page itself refuses at once, and only the slug lingers
-  // in the sitemap until the window turns. Discovery is covered above
+  // (2026-09-28): the page itself turns noindex (back to draft — still
+  // readable by link, `lib/competition-listing.ts`) or 404s (made private) at
+  // once, and only the slug lingers in the sitemap until the window turns.
+  // Discovery is covered above
   // (`discoveryTouched` includes a status change of a discoverable
   // competition). Outside the tx — invalidation never rolls back a write — and
   // best-effort like the grants below: the write has committed, so a failed
