@@ -24,7 +24,30 @@ export interface StandingsRowWire { entrantId: string; rank: number; points?: nu
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
 export interface FixtureStateOut { status: string; last_seq: number; outcome: unknown }
-export interface PostedEvent { seq: number; status: string; outcome: unknown; event_id: string }
+export interface PostedEvent {
+  seq: number; status: string; outcome: unknown; event_id: string;
+  /** Parked Task 6 (b): set (true) only when this event landed on the one
+   *  SEQ_CONFLICT retry, so a parity trace can say which posts raced. */
+  retried?: boolean;
+}
+
+/** Final review m-2: the product keeps a durable unique index on
+ *  (fixture_id, idempotency_key) and REPLAYS the first answer on a duplicate
+ *  (usecases/scoring.ts, engine-db/append-event.ts). A key that restarts at
+ *  `:0` on every call replays an earlier event on the second post to the same
+ *  fixture. Keyed on the expected seq instead — strictly increasing per
+ *  fixture, and the prefix carries the run and case — a key names exactly one
+ *  (fixture, event) across calls and runs. Shared by HttpDriver and the fake. */
+export function idempotencyKey(prefix: string, expectedSeq: number): string {
+  return `${prefix}:s${expectedSeq}`;
+}
+/** The one SEQ_CONFLICT retry posts under a FRESH key: the refused attempt
+ *  never reached the insert (the seq check precedes it), so reusing its key
+ *  would be harmless today, but a fresh one names no ledger row whatever the
+ *  product's order of checks. */
+export function retryKey(key: string): string {
+  return `${key}:retry`;
+}
 export interface ProbeOutcome { status: number; code: string | null }
 
 export interface OrganiserDriver {

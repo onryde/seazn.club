@@ -15,7 +15,7 @@ import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  RefusedCall,
+  RefusedCall, idempotencyKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
@@ -141,12 +141,22 @@ export class FakeLeagueDriver implements OrganiserDriver {
   /** One event at a time, like HttpDriver's POST per event: each answer
    *  carries the fixture's status and outcome AFTER that event, and a refused
    *  event leaves the ones before it appended. */
-  postStream(id: string, events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
+  /** fixture id → idempotency key → the answer it was first given. The
+   *  product's unique (fixture_id, idempotency_key) index REPLAYS that answer
+   *  on a duplicate and appends nothing (scoring.ts, append-event.ts). */
+  readonly keys = new Map<string, Map<string, PostedEvent>>();
+  postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     return settle(() => {
       this.log("postStream");
       const f = this.#f(id);
+      const seen = this.keys.get(id) ?? new Map<string, PostedEvent>();
+      this.keys.set(id, seen);
       const out: PostedEvent[] = [];
       for (const ev of events) {
+        // HttpDriver's key for this event: the same shared function, at the seq it expects.
+        const key = idempotencyKey(prefix, f.events.length);
+        const replay = seen.get(key);
+        if (replay !== undefined) { out.push(replay); continue; }
         const next = [...f.events, ev];
         let folded: ReturnType<typeof foldStream>;
         try {
@@ -158,7 +168,9 @@ export class FakeLeagueDriver implements OrganiserDriver {
         f.events = next;
         f.outcome = folded.outcome;
         f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
-        out.push({ seq: f.events.length, status: f.status, outcome: f.outcome, event_id: `${id}-${f.events.length}` });
+        const posted: PostedEvent = { seq: f.events.length, status: f.status, outcome: f.outcome, event_id: `${id}-${f.events.length}` };
+        seen.set(key, posted);
+        out.push(posted);
       }
       return out;
     });

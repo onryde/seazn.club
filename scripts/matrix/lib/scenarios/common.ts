@@ -169,6 +169,9 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     : await ctx.driver.postStream(f.id, now, `${ctx.tag}:${f.id}`);
   const whole = [...prior, ...now];
   rec.streams.set(f.id, whole);
+  // Parked Task 6 (b): a post that raced another writer is traced, not silent.
+  const retried = posted.filter((p) => p.retried === true).length;
+  if (retried > 0) rec.notes.push(`${f.id}: ${retried} event(s) landed on a SEQ_CONFLICT retry`);
   const productOutcome = toObservedOutcome(posted.at(-1)?.outcome ?? null);
   rec.events += now.length;
   rec.decided++;

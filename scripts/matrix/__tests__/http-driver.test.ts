@@ -66,7 +66,9 @@ describe("HttpDriver — postStream (Review Focus 5)", () => {
     expect(out.map((e) => e.seq)).toEqual([3, 4]);
     const bodies = posts(calls).map((c) => c.body as { expected_seq: number; idempotency_key: string });
     expect(bodies.map((p) => p.expected_seq)).toEqual([2, 3]);
-    expect(bodies.map((p) => p.idempotency_key)).toEqual(["run:f1:0", "run:f1:1"]);
+    // m-2: keyed on the expected seq, so the key names this (fixture, event) — not the index in this call.
+    expect(bodies.map((p) => p.idempotency_key)).toEqual(["run:f1:s2", "run:f1:s3"]);
+    expect(out.every((e) => e.retried === undefined)).toBe(true);
   });
   it("retries a SEQ_CONFLICT exactly once from current_seq with a fresh key", async () => {
     let n = 0;
@@ -77,7 +79,21 @@ describe("HttpDriver — postStream (Review Focus 5)", () => {
     const out = await drv(t).postStream("f1", [START], "k");
     expect(out[0]!.seq).toBe(2);
     const bodies = posts(calls).map((c) => c.body as { expected_seq: number; idempotency_key: string });
-    expect(bodies).toEqual([expect.objectContaining({ expected_seq: 0, idempotency_key: "k:0" }), expect.objectContaining({ expected_seq: 1, idempotency_key: "k:0:retry" })]);
+    expect(bodies).toEqual([expect.objectContaining({ expected_seq: 0, idempotency_key: "k:s0" }), expect.objectContaining({ expected_seq: 1, idempotency_key: "k:s0:retry" })]);
+    expect(out[0]!.retried).toBe(true); // parked Task 6 (b): the retry is visible to a parity trace
+  });
+  it("m-2: a second call to the same fixture under the same prefix sends NEW keys (the product would replay a repeated one)", async () => {
+    let seq = 0;
+    const { t, calls } = fake([
+      (c) => (c.path.endsWith("/state") ? ok({ status: seq === 0 ? "scheduled" : "in_play", last_seq: seq, outcome: null }) : undefined),
+      () => ok({ seq: ++seq, status: "in_play", outcome: null, event_id: `e${seq}` }, 201),
+    ]);
+    const d = drv(t);
+    await d.postStream("f1", [START], "run-1:f1");
+    await d.forfeit("f1", "ent-b", "retired hurt", "run-1:f1");
+    const keys = posts(calls).map((c) => (c.body as { idempotency_key: string }).idempotency_key);
+    expect(keys).toEqual(["run-1:f1:s0", "run-1:f1:s1"]);
+    expect(new Set(keys).size).toBe(keys.length);
   });
   it("a SEQ_CONFLICT that carries no current_seq re-reads /state for the retry", async () => {
     const tips = [0, 5];
@@ -125,7 +141,7 @@ describe("HttpDriver — postStream (Review Focus 5)", () => {
       () => ok({ seq: 5, status: "forfeited", outcome: null, event_id: "e5" }, 201),
     ]);
     await drv(t).forfeit("f1", "ent-a", "retired hurt", "k");
-    expect(posts(calls).map((c) => c.body)).toEqual([{ expected_seq: 4, type: "core.forfeit", payload: { by: "ent-a", reason: "retired hurt" }, idempotency_key: "k:0" }]);
+    expect(posts(calls).map((c) => c.body)).toEqual([{ expected_seq: 4, type: "core.forfeit", payload: { by: "ent-a", reason: "retired hurt" }, idempotency_key: "k:s4" }]);
   });
 });
 

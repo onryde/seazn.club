@@ -11,7 +11,7 @@ import { newSession, raw as benchRaw, type RawResult, type Session } from "../..
 import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import {
-  DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded,
+  DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded, idempotencyKey, retryKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
@@ -149,21 +149,20 @@ export class HttpDriver implements OrganiserDriver {
     // may already have written to this fixture.
     let seq = (await this.fixtureState(fixtureId)).last_seq;
     const out: PostedEvent[] = [];
-    for (const [i, ev] of events.entries()) {
-      const body = { expected_seq: seq, type: ev.type, payload: ev.payload, idempotency_key: `${idempotencyPrefix}:${i}` };
+    for (const ev of events) {
+      const body = { expected_seq: seq, type: ev.type, payload: ev.payload, idempotency_key: idempotencyKey(idempotencyPrefix, seq) };
       let r = await this.#send(path, "POST", body);
       const e = errorOf(r);
-      if (r.status === 409 && e.code === "SEQ_CONFLICT") {
+      const retried = r.status === 409 && e.code === "SEQ_CONFLICT";
+      if (retried) {
         // Retry ONCE from the server's tip: current_seq when the 409 carries it
-        // (api-v1/http.ts), else a fresh /state read. Under a fresh key — the
-        // refused attempt never reached the insert (the seq check precedes it,
-        // engine-db/append-event.ts), so its key names no ledger row.
+        // (api-v1/http.ts), else a fresh /state read. Under a fresh key (retryKey).
         const tip = typeof e.current_seq === "number" ? e.current_seq : (await this.fixtureState(fixtureId)).last_seq;
-        r = await this.#send(path, "POST", { ...body, expected_seq: tip, idempotency_key: `${body.idempotency_key}:retry` });
+        r = await this.#send(path, "POST", { ...body, expected_seq: tip, idempotency_key: retryKey(body.idempotency_key) });
       }
       const posted = this.#unwrap<PostedEvent>("POST", path, r);
       seq = posted.seq;
-      out.push(posted);
+      out.push(retried ? { ...posted, retried: true } : posted);
     }
     return out;
   }

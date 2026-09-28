@@ -855,6 +855,34 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
       expect(rec.parity, JSON.stringify(outcome)).toEqual([expect.objectContaining({ foreign: 0, request: want })]);
     }
   });
+  it("m-2: a forfeit on a fixture the harness started UNDER THE SAME PREFIX is written, not replayed as the earlier START", async () => {
+    const { driver, ctx, rec, setup, f } = await onBadminton();
+    const prefix = `${ctx.tag}:${f.id}`; // decideFixture's own prefix
+    await driver.postStream(f.id, [START], prefix);
+    rec.streams.set(f.id, [START]);
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired hurt" });
+    expect(driver.fixtures.find((x) => x.id === f.id)!.events.map((e) => e.type)).toEqual(["core.start", "core.forfeit"]);
+    expect([...driver.keys.get(f.id)!.keys()]).toEqual([`${prefix}:s0`, `${prefix}:s1`]);
+    expect(foldParity(rec)).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+  it("parked Task 6 (b): events that landed on a SEQ_CONFLICT retry are noted for the parity trace; none, no note", async () => {
+    const { driver, ctx, rec, setup, f } = await onBadminton();
+    await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
+    expect(rec.notes.filter((n) => n.includes("SEQ_CONFLICT"))).toEqual([]);
+    const g = driver.fixtures.find((x) => x.id !== f.id && x.status === "scheduled")!;
+    const orig = driver.postStream.bind(driver);
+    driver.postStream = async (id, evs, p) => (await orig(id, evs, p)).map((e, i) => (i === 0 ? { ...e, retried: true } : e));
+    await decideFixture(ctx, rec, setup, g, { kind: "win", winner: "home" });
+    expect(rec.notes.filter((n) => n.includes("SEQ_CONFLICT"))).toEqual([`${g.id}: 1 event(s) landed on a SEQ_CONFLICT retry`]);
+  });
+  it("m-2: the fake replays a repeated (fixture, key) like the product: the first answer, nothing appended", async () => {
+    const { driver, f } = await onBadminton();
+    const first = await driver.postStream(f.id, [START], "p");
+    driver.fixtures.find((x) => x.id === f.id)!.events = []; // rewind the ledger so the same seq — and key — comes round again
+    const again = await driver.postStream(f.id, [START], "p");
+    expect(again).toEqual(first);
+    expect(driver.fixtures.find((x) => x.id === f.id)!.events).toEqual([]);
+  });
   it("events on the fixture the harness never posted make parity unjudgeable, not a silent pass", async () => {
     const { driver, ctx, rec, setup, f } = await onBadminton();
     await driver.postStream(f.id, [START], "t"); // not recorded: a foreign write
