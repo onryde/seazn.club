@@ -1,7 +1,8 @@
 // --set w1b-probe: the smallest live set that drives W1b's new L3 paths
 // against the real product —
 //  - the single-stage API-only rows, gated or not (LIFECYCLE on generic, in an
-//    org denied nothing: the top public plan holds every format gate);
+//    org denied nothing; run.ts refuses the run, PlanLacksGate, when the case
+//    orgs' plan does not grant the row's gate);
 //  - one DENIED case per gated row (⛔, ruling 24), each org denied its gate;
 //  - one committed variant case per slice sport, its override on the wire.
 // Every part is derived: the rows from the catalogue registry, the gates from

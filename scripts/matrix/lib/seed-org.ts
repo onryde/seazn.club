@@ -36,6 +36,12 @@ export interface MatrixSql {
   variantKeysInBuilderOrder(sportKey: string): Promise<string[]>;
   /** ⛔ (ruling 24): a live `org_entitlement_overrides` deny for one feature. */
   denyFeature(input: { orgId: string; featureKey: string; reason: string }): Promise<void>;
+  /** RR-1 (W1b T10 fix round 2): the feature keys a plan grants — its
+   *  `plan_entitlements` rows whose bool is exactly true, read as the product's
+   *  resolver reads a plan (lib/entitlements.ts resolveFromDb + hasFeature;
+   *  pinned by seed-org.test.ts). An org on the plan with no pass and no
+   *  override holds exactly these. */
+  planGrants(planKey: string): Promise<string[]>;
 }
 
 export class DataDirUnset extends Error {
@@ -74,6 +80,7 @@ export function gateOnOwnDataDir(inner: MatrixSql, readDataDir: () => Promise<st
     async listPlanKeys() { await proven(); return inner.listPlanKeys(); },
     async variantKeysInBuilderOrder(sportKey) { await proven(); return inner.variantKeysInBuilderOrder(sportKey); },
     async denyFeature(input) { await proven(); return inner.denyFeature(input); },
+    async planGrants(planKey) { await proven(); return inner.planGrants(planKey); },
   };
 }
 
@@ -225,6 +232,11 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
     },
     async listPlanKeys() {
       return (await db<{ key: string }[]>`select key from plans order by key`).map((r) => r.key);
+    },
+    async planGrants(planKey) {
+      return (await db<{ feature_key: string }[]>`
+        select feature_key from plan_entitlements where plan_key = ${planKey} and bool_value = true
+        order by feature_key`).map((r) => r.feature_key);
     },
     async variantKeysInBuilderOrder(sportKey) {
       // The division builder (app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx)

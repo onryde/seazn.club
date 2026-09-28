@@ -33,7 +33,10 @@ const committedVariants = (): VariantCase[] =>
 type PrepareCtx = Parameters<RunDeps["prepareCaseOrg"]>[0];
 interface DriverCall { base: string; session: Session; orgId: string; driver: FakeLeagueDriver }
 type PrepareInput = Parameters<RunDeps["prepareCaseOrg"]>[1];
-type Deps = RunDeps & { order: string[]; orgs: PrepareInput[]; ctxs: PrepareCtx[]; emails: string[]; drivers: DriverCall[]; session: Session };
+type Deps = RunDeps & { order: string[]; orgs: PrepareInput[]; ctxs: PrepareCtx[]; emails: string[]; drivers: DriverCall[]; session: Session; planReads: string[] };
+/** Every format gate the product declares, derived from the catalogue through the
+ *  text-pinned gate map: the fake plan grants all of them unless a test says otherwise. */
+const ALL_GATES: readonly string[] = [...new Set(ROW_KEYS.flatMap((r) => { const g = expectedGate(stagesForRow(r)); return g === null ? [] : [g]; }))];
 
 /** Every case gets its OWN org id (`org-<slug>`), and driverFor records what it
  *  was handed — so a stale, constant or empty org id cannot pass unseen. */
@@ -44,6 +47,7 @@ function deps(over: Partial<RunDeps> = {}): Deps {
   const emails: string[] = [];
   const drivers: DriverCall[] = [];
   const session: Session = { cookies: {} };
+  const planReads: string[] = [];
   const d: Deps = {
     order,
     orgs,
@@ -51,6 +55,7 @@ function deps(over: Partial<RunDeps> = {}): Deps {
     emails,
     drivers,
     session,
+    planReads,
     env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg", SMOKE_BASE: "http://localhost:3999" },
     harnessCommit: async () => "abc1234",
     preflight: async () => { order.push("preflight"); return { ok: true, refusals: [] }; },
@@ -58,6 +63,7 @@ function deps(over: Partial<RunDeps> = {}): Deps {
       userIdForEmail: async (e: string) => { emails.push(`db ${e}`); return "u1"; },
       variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : ["bwf", "short"]),
       chooseTopPublicPlan: async () => "pro",
+      planGrants: async (k: string) => { planReads.push(k); return [...ALL_GATES]; },
       dispose: async () => { order.push("dispose"); },
     }; },
     signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return session; },
@@ -758,6 +764,7 @@ describe("runSlice — aborts after the start gates", () => {
     userIdForEmail: async () => "u1",
     variantKeysInBuilderOrder: async (s: string) => lists(s),
     chooseTopPublicPlan: async () => "pro",
+    planGrants: async () => [...ALL_GATES],
     dispose: async () => {},
   }) });
   it("Review Focus 5: a live builder default that differs from the offline one refuses (exit 2) naming both keys, before any case", async () => {
@@ -790,6 +797,101 @@ describe("runSlice — aborts after the start gates", () => {
       expect(d.orgs.length).toBeGreaterThan(0);
       vi.restoreAllMocks();
     }
+  });
+});
+
+// Fix round 2, RR-1. The case orgs' plan is chosen by privilege COUNT, not for
+// any gate. Gates are derived from the rows through the text-pinned gate map.
+describe("RR-1: the case orgs' plan must grant every gate a planned case touches — refused before any case", () => {
+  const gateOf = (row: string): string => {
+    const g = expectedGate(stagesForRow(row));
+    if (g === null) throw new Error(`test: row '${row}' is not gated`);
+    return g;
+  };
+  const one = (spec: Record<string, unknown>) => () => ({ sports: ["generic"], deniesFeatures: spec.deny !== undefined, plan: (v: (s: string) => string) => [
+    { sport: "generic", variant: v("generic"), canary: false, ...spec },
+  ] as never });
+  const allowed = one({ caseId: "page_playoff_only|generic|score|LIFECYCLE", row: "page_playoff_only", scenario: "LIFECYCLE" });
+  const denied = one({ caseId: "double_elim|generic|score|DENIED", row: "double_elim", scenario: "DENIED", deny: [gateOf("double_elim")] });
+  const grantsOnly = (grants: readonly string[]) => (d: Deps): Partial<RunDeps> => ({ openDb: async () => ({ ...(await deps().openDb()), planGrants: async (k: string) => { d.planReads.push(k); return [...grants]; } }) });
+  const run = async (planCases: () => unknown, grants: readonly string[], id: string) => {
+    const base = deps({ planCases: planCases as never });
+    const d: Deps = { ...base, ...grantsOnly(grants)(base) };
+    const io = capture();
+    const dir = dirFor();
+    const code = await runSlice(d, ["--run-id", id, "--report-dir", dir]);
+    return { code, d, io, dir };
+  };
+
+  it("the fake plan's full grant list is non-empty (else every 'grants' case below proves nothing)", () => {
+    expect(ALL_GATES.length).toBeGreaterThanOrEqual(2);
+  });
+  it("an ALLOWED case on a gated row, the plan lacking its gate: PlanLacksGate (exit 2), naming plan, case and gate; no org, nothing written", async () => {
+    const gate = gateOf("page_playoff_only");
+    const { code, d, io, dir } = await run(allowed, ALL_GATES.filter((g) => g !== gate), "rr1a");
+    expect(code).toBe(2);
+    expect(io.err()).toContain(`matrix: refused — PlanLacksGate: matrix: the case orgs' plan 'pro' does not grant ${gate}`);
+    expect(io.err()).toContain(`page_playoff_only|generic|score|LIFECYCLE (allowed path: the plan's 402 would read as a product red)`);
+    expect(d.planReads).toEqual(["pro"]);
+    expect(d.orgs).toEqual([]);
+    expect(existsSync(join(dir, "rr1a"))).toBe(false);
+  });
+  it("…the plan granting it: the allowed case runs, in an org denied nothing", async () => {
+    const { code, d } = await run(allowed, [gateOf("page_playoff_only")], "rr1b");
+    expect(code).toBe(0);
+    expect(d.planReads).toEqual(["pro"]);
+    expect(d.orgs.map((o) => o.deny)).toEqual([undefined]);
+  });
+  it("a DENIED case whose gate the plan lacks: PlanLacksGate (exit 2) — its ⛔ would come from the plan, not the planted deny", async () => {
+    const gate = gateOf("double_elim");
+    const { code, d, io } = await run(denied, ALL_GATES.filter((g) => g !== gate), "rr1c");
+    expect(code).toBe(2);
+    expect(io.err()).toContain(`double_elim|generic|score|DENIED (denied path: its refusal would come from the plan, not the deny under test)`);
+    expect(d.orgs).toEqual([]);
+  });
+  it("…the plan granting it: the DENIED case runs and its org carries the deny", async () => {
+    const { code, d } = await run(denied, [gateOf("double_elim")], "rr1d");
+    expect(code).toBe(0);
+    expect(d.orgs.map((o) => o.deny)).toEqual([[gateOf("double_elim")]]);
+  });
+  it("the probe set on a plan without formats.advanced refuses naming exactly the rows that gate needs, and no other", async () => {
+    const lacking = gateOf("americano");
+    const base = deps();
+    const d: Deps = { ...base, ...grantsOnly(ALL_GATES.filter((g) => g !== lacking))(base) };
+    const io = capture();
+    expect(await runSlice(d, ["--set", PROBE_SET, "--run-id", "rr1e", "--report-dir", dirFor()])).toBe(2);
+    const named = [...io.err().matchAll(/([a-z_]+)\|generic\|score\|(LIFECYCLE|DENIED) \(/g)].map((m) => `${m[1]}|${m[2]}`);
+    const want = ROW_KEYS.filter((r) => expectedGate(stagesForRow(r)) === lacking).map((r) => `${r}|DENIED`);
+    expect(want.length).toBeGreaterThan(0);
+    expect(named).toEqual(want);
+    expect(d.orgs).toEqual([]);
+  });
+  it("a run whose cases touch no gate (the slice) never reads the plan's grants", async () => {
+    const d = deps();
+    capture();
+    expect(await runSlice(d, ["--run-id", "rr1f", "--report-dir", dirFor(), "--only", "league|generic", "--scenario", "LIFECYCLE"])).toBe(0);
+    expect(d.planReads).toEqual([]);
+  });
+  it("an allowed case whose row cannot be derived is not aborted by the gate check: it runs, and reds on its own derivation", async () => {
+    // The render is stubbed: renderMatrix refuses a row off the grid, which is not what this pins.
+    const d = deps({ planCases: one({ caseId: "nope|generic|score|LIFECYCLE", row: "nope", scenario: "LIFECYCLE" }) as never, render: () => "" });
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(d, ["--run-id", "rr1g", "--report-dir", dir])).toBe(0);
+    expect(d.orgs).toHaveLength(1);
+    const [c] = resultsIn(dir, "rr1g").cases;
+    expect(c!.state).toBe("red");
+    expect(c!.reason).toMatch(/UnknownRow/);
+  });
+  it("realDeps wires planGrants to the gated MatrixSql (the seam is not inert)", async () => {
+    const log: string[] = [];
+    const sql = { planGrants: async (k: string) => { log.push(`m.planGrants ${k}`); return ["formats.double_elim"]; } };
+    const f: DbFactories = {
+      matrixSql: () => ({ sql: sql as never, dispose: async () => {} }),
+      planSql: () => ({ sql: {} as never, dispose: async () => {} }),
+    };
+    expect(await (await realDeps(f).openDb()).planGrants("pro")).toEqual(["formats.double_elim"]);
+    expect(log).toEqual(["m.planGrants pro"]);
   });
 });
 
@@ -844,6 +946,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
       listPlanKeys: async () => [],
       variantKeysInBuilderOrder: async () => [],
       denyFeature: async () => { log.push("m.denyFeature"); },
+      planGrants: async () => { log.push("m.planGrants"); return ["formats.double_elim"]; },
     };
     const f: DbFactories = {
       matrixSql: () => { log.push("m.open"); return { sql, dispose: async () => { log.push("m.dispose"); if (opts.mThrows) throw new Error("m end timed out"); } }; },
@@ -902,6 +1005,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
         listPlanKeys: async () => [],
         variantKeysInBuilderOrder: async () => [],
         denyFeature: async (i) => { log.push(`m.deny ${i.orgId} ${i.featureKey}`); },
+        planGrants: async () => [],
       };
       const p = {
         getOrgSubscriptionId: async (o: string) => { log.push(`p.subscription? ${o}`); return "sub1"; },

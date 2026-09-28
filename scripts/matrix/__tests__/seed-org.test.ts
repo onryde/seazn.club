@@ -43,6 +43,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
       async listPlanKeys() { calls.push("listPlanKeys"); return ["pro"]; },
       async variantKeysInBuilderOrder() { calls.push("variantKeysInBuilderOrder"); return ["bwf"]; },
       async denyFeature() { calls.push("denyFeature"); },
+      async planGrants() { calls.push("planGrants"); return ["formats.double_elim"]; },
     };
     return { calls, inner };
   };
@@ -52,6 +53,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     () => sql.listPlanKeys(),
     () => sql.variantKeysInBuilderOrder("badminton"),
     () => sql.denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" }),
+    () => sql.planGrants("pro"),
   ];
 
   it("a blank expected dir refuses at construction", () => {
@@ -75,7 +77,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     let reads = 0;
     const sql = gateOnOwnDataDir(inner, async () => { reads++; return "/tmp/pg-fm"; }, "/tmp/pg-fm");
     for (const call of everyMethod(sql)) await call();
-    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder", "denyFeature"]);
+    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder", "denyFeature", "planGrants"]);
     expect(reads).toBe(1);
     expect(await sql.insertCaseOrg({ userId: "u1", name: "n", slug: "m-r-1" })).toEqual({ orgId: "o1", orgSlug: "m-r-1" });
   });
@@ -140,6 +142,7 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
     await expect(sql.userIdForEmail("a@b.c")).rejects.toBeInstanceOf(DataDirMismatch);
     await expect(sql.listPlanKeys()).rejects.toBeInstanceOf(DataDirMismatch);
     await expect(sql.variantKeysInBuilderOrder("badminton")).rejects.toBeInstanceOf(DataDirMismatch);
+    await expect(sql.planGrants("pro")).rejects.toBeInstanceOf(DataDirMismatch);
     expect(seen).toEqual([PROBE]);
   });
 
@@ -198,6 +201,34 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
   it("listPlanKeys reads the whole plans catalogue", async () => {
     const { db } = fakeClient("/tmp/pg-fm", (text) => (text === "select key from plans order by key" ? [{ key: "community" }, { key: "pro" }] : []));
     expect(await matrixSqlOver(db, "/tmp/pg-fm").listPlanKeys()).toEqual(["community", "pro"]);
+  });
+
+  // Fix round 2, RR-1: the plan's grants, read as the product's resolver reads
+  // a plan. Every name below is lifted from lib/entitlements.ts, never typed.
+  const ENT = readFileSync(resolve(REPO, "apps/web/src/lib/entitlements.ts"), "utf8");
+  const fold = (s: string) => s.replace(/\s+/g, " ").trim();
+  const planRead = fold(/const \[planRow\] = await sql<Resolved\[\]>`([^`]*)`/.exec(ENT)?.[1] ?? "");
+  const parts = /^select (\w+), \w+ from (\w+) where (\w+) = \$\{planKey\} and (\w+) = \$\{featureKey\}$/.exec(planRead);
+  const hasFeature = /export async function hasFeature\([\s\S]*?\n}\n/.exec(ENT)?.[0] ?? "";
+  const grantTest = /return row\?\.(\w+) === (true);/.exec(hasFeature);
+  it("text pin: the product resolves a plan's bool from ONE plan_entitlements row, granted only when exactly true, and that row is the base", () => {
+    expect(parts, `resolveFromDb's plan read changed shape: ${planRead}`).not.toBeNull();
+    expect(grantTest, "hasFeature no longer grants on `row?.<col> === true`").not.toBeNull();
+    // The column hasFeature tests is the one the plan read selects.
+    expect(grantTest![1]).toBe(parts![1]);
+    // No pass and no override on a case org (only its own deny): the plan row IS the answer.
+    expect(ENT).toMatch(/let base: Resolved \| null = planRow \?\? null;/);
+  });
+  it("planGrants selects the plan's feature keys whose grant column is exactly true — the resolver's own table, columns and predicate", async () => {
+    const [, grantCol, table, planCol, featureCol] = parts ?? [];
+    const want = `select ${featureCol} from ${table} where ${planCol} = $ and ${grantCol} = ${grantTest?.[2]} order by ${featureCol}`;
+    const { db, seen } = fakeClient("/tmp/pg-fm", (text) => (text === want ? [{ feature_key: "formats.advanced" }, { feature_key: "formats.double_elim" }] : []));
+    expect(await matrixSqlOver(db, "/tmp/pg-fm").planGrants("pro")).toEqual(["formats.advanced", "formats.double_elim"]);
+    expect(seen[1]).toEqual({ via: "db", text: want, values: ["pro"] });
+  });
+  it("…a plan with no granted key reads as an empty list (the guard then refuses every gate), not an error", async () => {
+    const { db } = fakeClient("/tmp/pg-fm", () => []);
+    expect(await matrixSqlOver(db, "/tmp/pg-fm").planGrants("community")).toEqual([]);
   });
 });
 
@@ -439,6 +470,7 @@ describe("prepareCaseOrg", () => {
     async listPlanKeys() { return []; },
     async variantKeysInBuilderOrder() { return []; },
     async denyFeature(i) { order.push(`deny ${i.orgId} ${i.featureKey}`); },
+    async planGrants() { return []; },
   });
 
   it("inserts, switches, then provisions — in that order", async () => {

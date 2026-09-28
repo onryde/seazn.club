@@ -26,7 +26,9 @@
 //      product red); a failed preflight; a live builder default that differs
 //      from the offline one the committed catalogue assumes
 //      (BuilderDefaultDrift, Review Focus 5 — found after sign-in, before any
-//      case). BuilderDefaultDrift is an environment refusal, not catalogue
+//      case); a case orgs' plan that does not grant a gate a planned case
+//      touches (PlanLacksGate, RR-1 — after the plan read, before any case).
+//      BuilderDefaultDrift is an environment refusal, not catalogue
 //      drift (gen-catalogue's exit 1): the codes are per CLI, so a wrapper
 //      switches on the CLI, never on the code alone.
 //   3  aborted after the start gates, reason on stderr: the harness commit,
@@ -46,7 +48,8 @@ import { parseArgs } from "node:util";
 import { newSession, raw, signIn, type Session } from "../bench/lib/http.ts";
 import { createRealPlanSql, provisionPlan } from "../bench/lib/plan.ts";
 import { createRealPreflightProbes, runPreflight } from "../bench/lib/env.ts";
-import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant } from "./lib/catalogue.ts";
+import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "./lib/catalogue.ts";
+import { expectedGate } from "./lib/format-gates-copy.ts";
 import { HttpDriver } from "./lib/driver/http-driver.ts";
 import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
@@ -76,6 +79,8 @@ export interface RunDb {
   userIdForEmail(email: string): Promise<string>;
   variantKeysInBuilderOrder(sport: string): Promise<string[]>;
   chooseTopPublicPlan(): Promise<string>;
+  /** The feature keys `planKey` grants (seed-org.ts MatrixSql.planGrants). */
+  planGrants(planKey: string): Promise<readonly string[]>;
   dispose(): Promise<void>;
 }
 
@@ -166,6 +171,49 @@ export class BuilderDefaultDrift extends Error {
     this.name = "BuilderDefaultDrift";
     this.sport = sport;
   }
+}
+
+/** One planned case whose gate the case orgs' plan does not grant. */
+export interface GateGap { caseId: string; gate: string; path: "allowed" | "denied" }
+
+/** RR-1 (W1b Task 10 fix round 2): the case orgs' plan is chosen by privilege
+ *  COUNT (chooseTopPublicPlan), not for holding any gate. An allowed case on a
+ *  gated row would read the plan's 402 as a product red; a DENIED case whose
+ *  gate the plan lacks would read ⛔ on the plan's 402, not the planted deny's —
+ *  a denied case is evidence only when the deny is the sole cause. */
+export class PlanLacksGate extends Error {
+  readonly plan: string;
+  readonly gaps: readonly GateGap[];
+  constructor(plan: string, gaps: readonly GateGap[]) {
+    const gates = [...new Set(gaps.map((g) => g.gate))].join(", ");
+    const why = (g: GateGap) => (g.path === "allowed"
+      ? "allowed path: the plan's 402 would read as a product red"
+      : "denied path: its refusal would come from the plan, not the deny under test");
+    super(`matrix: the case orgs' plan '${plan}' does not grant ${gates} — ${gaps.map((g) => `${g.caseId} (${why(g)})`).join("; ")}`);
+    this.name = "PlanLacksGate";
+    this.plan = plan;
+    this.gaps = gaps;
+  }
+}
+
+/** Every gate a planned case needs its org's plan to grant: a DENIED case, the
+ *  keys its deny removes; any other case, its row's gate (the text-pinned
+ *  product gate map). */
+function gatesNeeded(specs: readonly CaseSpec[]): GateGap[] {
+  const out: GateGap[] = [];
+  for (const s of specs) {
+    const deny = s.deny ?? [];
+    if (deny.length > 0) {
+      for (const gate of deny) out.push({ caseId: s.caseId, gate, path: "denied" });
+      continue;
+    }
+    let gate: string | null = null;
+    // A row that cannot be derived is not this guard's to judge: the case
+    // derives it again in setUpDivision and reds on its own error there.
+    try { gate = expectedGate(stagesForRow(s.row)); } catch { gate = null; }
+    if (gate !== null) out.push({ caseId: s.caseId, gate, path: "allowed" });
+  }
+  return out;
 }
 
 /** A planner planned a deny it did not declare: the Redis guard (which reads
@@ -361,6 +409,13 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     const specs = planner.plan(variantFor);
     const undeclared = planner.deniesFeatures ? [] : specs.filter((s) => (s.deny ?? []).length > 0).map((s) => s.caseId);
     if (undeclared.length > 0) throw new UndeclaredDeny(undeclared);
+    // RR-1: before any case's DB work, the plan must grant every gate a case touches.
+    const needed = gatesNeeded(specs);
+    if (needed.length > 0) {
+      const grants = new Set(await db.planGrants(plan));
+      const gaps = needed.filter((n) => !grants.has(n.gate));
+      if (gaps.length > 0) throw new PlanLacksGate(plan, gaps);
+    }
     for (const [i, spec] of specs.entries()) {
       const { result, refusal } = await runCase(deps, { base, session, userId, plan, runId: cli.runId }, spec, i);
       cases.push(result);
@@ -426,7 +481,7 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   try {
     return await execute(deps, cli, base, planner);
   } catch (e) {
-    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift;
+    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanLacksGate;
     warn(`matrix: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
@@ -491,6 +546,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
         userIdForEmail: (e) => m.sql.userIdForEmail(e),
         variantKeysInBuilderOrder: (s) => m.sql.variantKeysInBuilderOrder(s),
         chooseTopPublicPlan: async () => chooseTopPublicPlan(await p.sql.planCandidateInfo(await m.sql.listPlanKeys())),
+        planGrants: (k) => m.sql.planGrants(k),
         dispose: () => closeHandles(m, p),
       };
       resolve(db);
