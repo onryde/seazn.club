@@ -1,6 +1,6 @@
 # Cloudflare Cron Triggers for the scheduled ops jobs — design
 
-**Status:** design approved in conversation 2026-09-28; written spec awaiting owner review.
+**Status:** approved by owner 2026-09-28. Plan: `docs/superpowers/plans/2026-09-28-cloudflare-cron-triggers.md`. Amendments made while planning are in §12.
 **Scope:** Phase 1 only. Phases 2 and 3 of the wider "Cloudflare as the async layer" direction are parked (see §10).
 
 ## 1. Problem
@@ -172,3 +172,14 @@ Recorded so the findings are not lost. Owner ruling 2026-09-28: Phase 1 only for
 - "The Stripe webhook needs a queue for reliability": false. See §2.
 - "Cron routes are scheduled by in-repo workflows": false since #757. Route docstrings still say so (for example `news-digest/route.ts:17` cites `.github/workflows/news-digest-stg.yml`).
 - "The scheduled jobs run hourly": false in practice. See §1.
+
+## 12. Plan-time amendments (2026-09-28)
+
+These were found while writing the plan. Each keeps the approved intent.
+
+1. **`ACTIVE` gate plus a reachability probe.** Each Worker env carries `ACTIVE: "false"` until its cutover. While it is inactive, the hourly firing only sends `GET {BASE_URL}/api/health` and logs the status. That answers §9 R1 (does the zone challenge a Worker?) from real Cloudflare infrastructure for days before any job moves, and makes cutover a one-line reviewed PR (`ACTIVE: "true"`) instead of an out-of-band deploy.
+2. **Manual run endpoint** (`POST /run?job=<id>` on the Worker's workers.dev host, `x-cron-secret` required). This keeps the `workflow_dispatch` manual rerun the GitHub workflows offer today, and it is how the post-deploy smoke in §8 runs; wrangler cannot trigger a deployed Worker's cron on demand. `news-digest` refuses a manual run (403): a manual digest is the console button's job.
+3. **Run deadline.** Stop starting new attempts 12 min into an invocation (cron wall limit 15 min). A job skipped this way reports an `error` check-in with reason `deadline`, never silence.
+4. **Worker tests run in plain Node vitest**, not `@cloudflare/vitest-pool-workers`. The Worker's logic is pure functions over injected `fetch`/`sleep`/`now`; `scheduled()` and `fetch()` are thin wrappers. Runtime parity is covered by the local E2E through `wrangler dev --test-scheduled` (§8), which runs the real workerd runtime.
+5. **Digest guard mechanism** (§5 left it to the plan). The cron path stamps `auto_source.origin = "cron"` and `auto_source.cron_week = "<ISO week, UTC>"` (for example `2026-W40`). A new partial unique index `org_posts_digest_cron_once (org_id, auto_source->>'cron_week') where trigger = 'weekly_digest' and auto_source ? 'cron_week'` blocks a second cron digest in the same week, and the insert names that index as its `on conflict` arbiter. Console presses carry no `cron_week` key, so the index never sees them. `digestWindow` is a rolling `[now-7d, now)` window, so `window_start` could not serve as the weekly key.
+6. **CI:** `ci.yml` never collects a new workspace's tests. The `gates` job gains a `pnpm --filter @seazn/cron-worker test` step. Typecheck is already covered because `npx turbo run typecheck` picks up any workspace with a `typecheck` script.
