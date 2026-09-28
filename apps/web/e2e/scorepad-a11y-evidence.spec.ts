@@ -69,8 +69,8 @@ import {
  * than assuming it. The Tab walk comes last and CHANGES ANSWER when the dock
  * has closed, so it gets a dock of its own (`openFreshAmendDock`), must find
  * that dock open on both sides of the walk, and is redone in a new hold a
- * bounded number of times when it does not; see `recordEvidence` for the two
- * ways the dock closes under it.
+ * bounded number of times when it does not; see `recordEvidence` for what
+ * closes the dock, and which of those can land during a walk.
  *
  * The horizontal-scroll number is measured with the SAME clip-lifting
  * technique `expectNoHorizontalScroll` (helpers.ts) uses, not a naive
@@ -181,11 +181,17 @@ async function openDeviceLink(page: Page, secret: string): Promise<void> {
  *  render order (scorebug.tsx: `spec.halves.map`) — every half tap site in
  *  this suite relies on the same order. */
 async function openAmendDock(scope: Locator): Promise<void> {
-  await scope.locator('[data-role="v3-scorebug-half"]').nth(0).click();
+  await scope.locator('[data-role="v3-scorebug-half"]').nth(0).click({ timeout: DOCK_OPEN_WAIT_MS });
   await expect(scope.locator('[data-role="v3-dock"]'), "a tally tap must open the amend dock").toBeVisible({
-    timeout: 20_000,
+    timeout: DOCK_OPEN_WAIT_MS,
   });
 }
+
+/** How long `openAmendDock` gives the half's tap, and then the dock, to
+ *  happen. The tap needs a bound of its own: playwright.config.ts sets no
+ *  `actionTimeout`, so an unbounded click would wait out the whole test
+ *  instead of failing inside the walk's budget (`TAB_WALK_ATTEMPT_MS`). */
+const DOCK_OPEN_WAIT_MS = 20_000;
 
 /** How many complete Tab walks `recordEvidence` tries before it reports
  *  every attempt as a failure. Each attempt runs in a fresh hold of its own,
@@ -220,14 +226,32 @@ async function openFreshAmendDock(scope: Locator): Promise<void> {
   if (await dock.isVisible()) {
     await dock
       .getByTestId("pad-send-now")
-      .click({ timeout: 2_000 })
+      .click({ timeout: SEND_NOW_CLICK_MS })
       .catch(() => {});
   }
   await expect(dock, "the previous hold must end before a fresh dock can be told apart from it").toBeHidden({
-    timeout: HOLD_MS + 5_000,
+    timeout: DOCK_CLOSE_WAIT_MS,
   });
   await openAmendDock(scope);
 }
+
+const SEND_NOW_CLICK_MS = 2_000;
+const DOCK_CLOSE_WAIT_MS = HOLD_MS + 5_000;
+
+/** One walk attempt at its worst, summed from the waits it is made of: the
+ *  "Send now" click, the old dock's close, `openAmendDock`'s tap and then its
+ *  dock, and an allowance for the walk itself (0.1–1.4s measured, even under
+ *  a 4× CPU throttle). */
+const TAB_WALK_ATTEMPT_MS = SEND_NOW_CLICK_MS + DOCK_CLOSE_WAIT_MS + 2 * DOCK_OPEN_WAIT_MS + 10_000;
+
+/** Each evidence test's clock. 90s is the budget these tests had before the
+ *  walk could be redone, and it still covers everything outside the walk
+ *  loop. The loop gets its own worst case on top, derived from `HOLD_MS`
+ *  through `TAB_WALK_ATTEMPT_MS`, so every attempt can run out and the
+ *  per-attempt report still prints before the test's own timeout. A flat
+ *  number would let a blown budget report whatever was in flight instead
+ *  (AGENTS.md rule 20). */
+const EVIDENCE_TEST_TIMEOUT_MS = 90_000 + TAB_WALK_ATTEMPTS * TAB_WALK_ATTEMPT_MS;
 
 interface FocusStep {
   name: string;
@@ -416,11 +440,15 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
   // BELOW the pad, and the walk records zero pad controls (PR #888's
   // dispatched run 36337877584).
   //
-  // The dock closes for exactly two reasons, and neither is focus or blur —
-  // nothing in pad-host.tsx or detail-dock.tsx listens for either, and no
-  // interaction extends a hold: (1) the hold tick, one plain `setTimeout` of
-  // `HOLD_MS` armed in queue.ts's `enqueueHeld` and never pushed back; (2) the
-  // NEXT tap, which flushes the held one before holding its own — see
+  // What closes the dock: the hold tick (one plain `setTimeout` of `HOLD_MS`,
+  // armed in queue.ts's `enqueueHeld` and never pushed back); "Send now"
+  // (`releaseHeld`); the NEXT tap, which flushes the held one before holding
+  // its own; and Take back (pad-host's `handleUndo` → `dropHeldSubmission` →
+  // `setHeld(null)`). Focus and blur are not on the list — nothing in
+  // pad-host.tsx or detail-dock.tsx listens for either — and no interaction
+  // extends a hold. Only the tick can land DURING a walk: Tab moves focus and
+  // presses nothing, so there is no Send now, tap or Take back mid-walk. The
+  // tick is what the walk races. The tap is what the re-arm raced — see
   // `openFreshAmendDock` for why a bare re-tap here sampled the gap between
   // the two docks on CI (run 36358901720).
   //
@@ -431,7 +459,10 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
   // walk the hold tick cut short is thrown away and redone in a whole new
   // window, up to `TAB_WALK_ATTEMPTS` times. When every attempt loses, the
   // assertion fails with each attempt's timings — the signal that a walk has
-  // become slower than `HOLD_MS` itself, not a flake to retry past.
+  // become slower than `HOLD_MS` itself, not a flake to retry past. A re-arm
+  // that FAILS is a separate red, even when a later attempt holds: the retry
+  // is for walks the tick cut short, not for a dock that outlived its hold or
+  // a tap that opened none.
   //
   // Not "walk first": that pushes the hit-target sweep into the dock's
   // closing, where `measureHitTargets`' `nth(i)` outlives the element it
@@ -457,7 +488,15 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
     attempts.push({ attempt, dockOpenBeforeWalk, dockOpenAfterWalk, steps: focus.order.length, walkMs: Date.now() - walkStart });
     if (dockOpenBeforeWalk && dockOpenAfterWalk) break;
   }
-  console.log(`[a11y-walk ${comboName}] HOLD_MS=${HOLD_MS} ${JSON.stringify(attempts)}`);
+  // Printed only when a walk was redone; the JSON record below keeps every
+  // run's attempts either way.
+  if (attempts.length > 1) console.log(`[a11y-walk ${comboName}] HOLD_MS=${HOLD_MS} ${JSON.stringify(attempts)}`);
+  expect
+    .soft(
+      attempts.filter((a) => "rearmFailed" in a),
+      `a fresh amend dock could not be opened for the Tab walk — ${attempts.length} attempt(s) at HOLD_MS ${HOLD_MS}: ${JSON.stringify(attempts)}`,
+    )
+    .toEqual([]);
   const jumps = backwardJumps(focus.order);
   expect
     .soft(
@@ -542,7 +581,7 @@ for (const width of WIDTHS) {
     page,
     request,
   }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(EVIDENCE_TEST_TIMEOUT_MS);
     const fx = await seedRosteredFixture(request, {
       label: `A11y Console ${width} ${TAG}`,
       sportKey: "generic",
@@ -563,7 +602,7 @@ for (const width of WIDTHS) {
     browser,
     request,
   }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(EVIDENCE_TEST_TIMEOUT_MS);
     const fx = await seedRosteredFixture(request, {
       label: `A11y Device ${width} ${TAG}`,
       sportKey: "generic",
