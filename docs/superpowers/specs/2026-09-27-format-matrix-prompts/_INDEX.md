@@ -216,6 +216,17 @@ a peer session as the other.
     "default config" = the builder's own default (`pickVariant`). Volleyball
     defaulting to beach and chess to blitz are flagged for a product look, not
     changed in W1a.
+25. **W1b plan approved, executed subagent-driven** (2026-09-28):
+    `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`. The owner
+    applied the controller's recommendations on 26–29 as written.
+26. **O9 — entry path E is its own scenarios, not an axis** (E1, E2, E3,
+    E4a, E4b; only E2 in L3). M and C are not multiplied by E.
+27. **O10 — `packages/reference` imports engine types by statement-form
+    `import type` from `@seazn/engine/core` only**; inline `{ type X }` is
+    refused (strip-types keeps it as a runtime load). No leaf types package.
+28. **Q-A — W1a's deferred driving work becomes a "W1-driving" wave before
+    W1d**, so no ⏳ row points at a closed wave.
+29. **Q-B — variant cases run LIFECYCLE only**, not × every scenario.
 
 ## Recommendations (mine — not rulings)
 
