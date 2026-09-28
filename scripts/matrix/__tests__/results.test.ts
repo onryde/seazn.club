@@ -200,6 +200,10 @@ const SECRETS: readonly [string, string, string][] = [
   // Review M3: a quoted value is redacted whole, spaces included.
   ["single-quoted password with a space", "password: 'hunter 22'", " 22"],
   ["double-quoted password with a space", '{"password": "hunter 22"}', " 22"],
+  // Parked Task 4: an UNCLOSED quote (a truncated message) must not leave the tail.
+  ["unclosed single-quoted password with a space", "password: 'hunter 22", " 22"],
+  ["unclosed double-quoted password with a space", 'password: "hunter 22', " 22"],
+  ["unclosed quoted password, text after it on the line", "refused: password: 'hunter 22 at login", " 22"],
   // Review M4's positive pairs: the word test must not cost these.
   ["plain-word password", "PGPASSWORD=hunter", "hunter"],
   ["short numeric token", "token=123456", "123456"],
@@ -228,6 +232,9 @@ const EVIDENCE: readonly [string, string][] = [
   ["cookie consent", "cookie_consent=granted; cookie_consent=accepted"],
   ["quoted consent flag", '{"cookie_consent": "granted"}'],
   ["single-quoted authorization word", "authorization: 'none'"],
+  // …and the unclosed form keeps the word test: a truncated `'none` is still a word.
+  ["unclosed single-quoted authorization word", "authorization: 'none"],
+  ["unclosed double-quoted consent flag", 'cookie_consent: "granted'],
 ];
 
 const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };

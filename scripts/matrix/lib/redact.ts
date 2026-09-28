@@ -39,15 +39,21 @@ const VALUE_CHAR = String.raw`[^"'\s&,;}]`;
  * prefix (access_token, PGPASSWORD, sb-x-auth-token, seazn_session) and may
  * carry up to three `_x` / `-x` / `.N` parts (token_hash, session_id, a chunked
  * sb-x-auth-token.0). A quoted value is taken whole, spaces included
- * (`password: 'hunter 22'`). An auth scheme word is consumed with its value, so
+ * (`password: 'hunter 22'`), and an unclosed one to the end of its line. An
+ * auth scheme word is consumed with its value, so
  * `Authorization: Basic <creds>` loses <creds> — and the word test is skipped
  * there, because base64 credentials can be all letters.
  */
 function keyValue(keys: string, wordsAreSecrets: boolean): RegExp {
   const notWord = (end: string) => (wordsAreSecrets ? "" : `(?![A-Za-z]{1,15}${end})`);
+  // The closing quote is optional (parked Task 4): a truncated message can cut
+  // it off, and the value then runs to the end of its line — never leaving a
+  // tail after a space (`password: 'hunter 22` lost only `hunter`). The word
+  // test treats the end of the line as a closing quote, so `authorization:
+  // 'none` stays a word.
   const value = [
-    `"${notWord('"')}[^"\\r\\n]{3,}"`,
-    `'${notWord("'")}[^'\\r\\n]{3,}'`,
+    `"${notWord('(?:"|(?![^"\\r\\n]))')}[^"\\r\\n]{3,}"?`,
+    `'${notWord("(?:'|(?![^'\\r\\n]))")}[^'\\r\\n]{3,}'?`,
     `["']?(?:(?:bearer|basic)\\s+${VALUE_CHAR}{3,}|${notWord(`(?!${VALUE_CHAR})`)}${VALUE_CHAR}{3,})`,
   ].join("|");
   return new RegExp(`(?<![\\w-])[\\w-]*?(?:${keys})(?:[_.-][A-Za-z0-9]+){0,3}["']?\\s*[:=]\\s*(?:${value})`, "gi");
