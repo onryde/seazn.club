@@ -11,7 +11,8 @@ import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS
 import { pathTemplate } from "../sanitise";
 import { machineNameFor } from "../domain/runner";
 import { FlyApiError } from "../fly-client";
-import { CREATE_REFUSED_STATUSES, createFailedFrom } from "../runner-fly";
+import { CREATE_REFUSED_STATUSES } from "../runner-fly";
+import { RunnerCreateError, createFailureOf } from "../ports";
 
 describe("FakeIngest", () => {
   it("createLiveInput returns both credential shapes and no webRTC (C1/R-A, C10)", async () => {
@@ -268,14 +269,18 @@ describe("FakeRunner", () => {
     expect((await runner.create({ ...spec, sessionId: "s4" })).runnerId).toMatch(/^fake-machine-/);   // ONE create fails, not every one after
   });
 
-  it("A3: failNextCreate chooses the PROOF — a status throws a real FlyApiError that the REAL createFailedFrom reads as made-nothing (a refusal status, or retryable) or unknown (anything else); a boolean throws a plain error, always unknown; no failure leaves a Machine listed", async () => {
+  // A23 (lane C, OWNER 2026-09-28): the fake throws the PORT's failure, exactly as FlyRunner does — a real FlyApiError
+  // passed through the REAL adapter mapping (`runnerCreateErrorFrom`), so the A3 proofs are still decided by the code
+  // production runs, and the usecase reads them through the port alone (`createFailureOf`).
+  it("A3/A23: failNextCreate chooses the PROOF — a status throws the port's RunnerCreateError, mapped from a real FlyApiError by the REAL adapter mapping: made-nothing (a refusal status, or retryable) or unknown (anything else); a boolean throws a plain error, which the port reads as unknown; no failure leaves a Machine listed", async () => {
     const runner = new FakeRunner();
     const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const classify = async (proof: Parameters<FakeRunner["failNextCreate"]>[0]) => {
       runner.failNextCreate(proof);
       const err = await runner.create(spec).then(() => null, (e: unknown) => e);
       expect(err, JSON.stringify(proof)).not.toBeNull();
-      return { isFly: err instanceof FlyApiError, trigger: createFailedFrom(err) };
+      const isFly = err instanceof RunnerCreateError && err.cause instanceof FlyApiError;
+      return { isFly, trigger: { type: "create_failed", ...createFailureOf(err) } };
     };
     // The expectations are the A3 ruling's words (refused outright / retryable-with-absence ⇒ made nothing; no provider
     // answer ⇒ unknown), swept over the adapter's own refusal list rather than one sample status.

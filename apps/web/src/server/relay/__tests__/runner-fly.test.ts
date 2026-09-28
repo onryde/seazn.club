@@ -19,14 +19,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient } from "../fly-client";
 import { ENDING_TIMEOUT_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, PROVISION_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "../config";
-import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, ENV_METADATA_KEY, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, createFailedFrom, fromFlyState, isUnestablishedCreate } from "../runner-fly";
+import { CREATE_OUTCOME_UNKNOWN, CREATE_REFUSED_STATUSES, ENV_METADATA_KEY, FLY_STATE_MAP, FlyRunner, SESSION_METADATA_KEY, cpuKindFor, fromFlyState, isUnestablishedCreate, runnerCreateErrorFrom } from "../runner-fly";
 import { OBSERVED_STATES, machineNameFor, stepRunner } from "../domain/runner";
 import { dbRecorder, relayDrivers, setRelayDriversForTest } from "../drivers";
 import { log } from "@/server/logger";
 import { FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
 import { CloudflareIngest } from "../ingest-cf";
 import { pathTemplate } from "../sanitise";
-import type { ProviderCallRecord, ProviderCallRecorder, RunnerSpec } from "../ports";
+import { RunnerCreateError, createFailureOf, type ProviderCallRecord, type ProviderCallRecorder, type RunnerSpec } from "../ports";
 
 // Ruling 13: `drivers.ts` binds the PRODUCTION recorder into every adapter it
 // builds, fake branch included. Mocking the telemetry module lets the last `it`
@@ -52,6 +52,18 @@ function restoreEnv(entries: Record<string, string | undefined>): void {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
+}
+
+/** A23 (lane C, OWNER 2026-09-28): `create` rejects with the PORT's failure, never Fly's — the application layer no
+ *  longer imports this adapter to classify it. The adapter's own FlyApiError rides as the `cause`, and the Fly facts the
+ *  tests below pin (status, message, the telemetry predicate) are read off it; the port's `retryable` is asserted to be
+ *  the adapter's, untouched (T5-b), so every create-failure test here also witnesses the mapping. */
+function flyCauseOf(e: unknown): FlyApiError {
+  expect(e).toBeInstanceOf(RunnerCreateError);
+  const cause = (e as RunnerCreateError).cause;
+  expect(cause).toBeInstanceOf(FlyApiError);
+  expect((e as RunnerCreateError).retryable, "the port's retryable is the client's, untouched (T5-b)").toBe((cause as FlyApiError).retryable);
+  return cause as FlyApiError;
 }
 
 /** The value `PROVISION_TIMEOUT_SECONDS` held until 2026-09-20, when the composed
@@ -289,7 +301,7 @@ describe("FlyRunner", () => {
       if (url.endsWith("/machines/m_stranger")) return { status: 200, body: { id: "m_stranger", name: "someone-elses", state: "started" } };
       return { status: 200, body: [] };
     });
-    const err = await new FlyRunner({ client: stranger.client, image: "img" }).create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    const err = await new FlyRunner({ client: stranger.client, image: "img" }).create(SPEC).then(() => null, flyCauseOf);
     expect(err).toBeInstanceOf(FlyApiError);
     expect(err!.status).toBe(409);
     expect(err!.retryable).toBe(false);
@@ -308,7 +320,7 @@ describe("FlyRunner", () => {
       if (url.includes("/machines/m_held")) return { status: 503, body: { error: "unavailable" } };
       return { status: 200, body: [] }; // the session lookup answers, and finds nothing
     });
-    const err = await new FlyRunner({ client: s.client, image: "img" }).create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    const err = await new FlyRunner({ client: s.client, image: "img" }).create(SPEC).then(() => null, flyCauseOf);
     expect(err).toBeInstanceOf(FlyApiError);
     expect(err!.status).toBe(409);
     expect(err!.retryable).toBe(false);
@@ -337,7 +349,7 @@ describe("FlyRunner", () => {
       if (init.method === "POST") return { status: 409, body: { error: "already_exists: unique machine name violation" } };
       return { status: 503, body: { error: "unavailable" } };
     });
-    const err = await new FlyRunner({ client: s.client, image: "img" }).create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    const err = await new FlyRunner({ client: s.client, image: "img" }).create(SPEC).then(() => null, flyCauseOf);
     expect(err).toBeInstanceOf(FlyApiError);
     expect(err!.status).toBe(409);
     expect(err!.retryable).toBe(false);
@@ -380,7 +392,7 @@ describe("FlyRunner", () => {
     // operation verdict), so "no mark" is distinguishable from "nothing recorded".
     const s = scripted(() => ({ status: 400, body: { error: "invalid guest" } }), rec);
     const runner = new FlyRunner({ client: s.client, image: "img", recorder: rec });
-    const err = await runner.create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    const err = await runner.create(SPEC).then(() => null, flyCauseOf);
     expect(err!.status).toBe(400);
     expect(err!.retryable).toBe(false);
     expect(isUnestablishedCreate(err)).toBe(false);
@@ -398,7 +410,7 @@ describe("FlyRunner", () => {
     const rec = new FakeRecorder();
     const s = scripted((_url, init) => (init.method === "POST" ? { status: 503, body: { error: "unavailable" } } : { status: 500, body: { error: "list down" } }));
     const runner = new FlyRunner({ client: s.client, image: "img", recorder: rec });
-    const err = await runner.create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    const err = await runner.create(SPEC).then(() => null, flyCauseOf);
     expect(err!.retryable).toBe(false);
     expect(isUnestablishedCreate(err)).toBe(true);
     await Promise.resolve();
@@ -413,7 +425,7 @@ describe("FlyRunner", () => {
     const rec = new FakeRecorder();
     const s = scripted((_url, init) => (init.method === "POST" ? { status: 503, body: { error: "unavailable" } } : { status: 200, body: [] }));
     const runner = new FlyRunner({ client: s.client, image: "img", recorder: rec });
-    const err = await runner.create(SPEC).then(() => null, (e: unknown) => e as FlyApiError);
+    const err = await runner.create(SPEC).then(() => null, flyCauseOf);
     expect(err!.status).toBe(503);
     expect(err!.retryable).toBe(true);
     expect(isUnestablishedCreate(err)).toBe(false);
@@ -426,17 +438,19 @@ describe("FlyRunner", () => {
   // trigger had no field to carry it, so `creating × create_failed` landed on `destroyed` — CONFIRMED gone — with no
   // teardown for a Machine nobody had established the absence of. A fixture on both ends would prove the fixture, so
   // every row below drives the REAL adapter's own throw through the REAL producer and the REAL runner table.
-  it("I2: the create's outcome crosses into the domain — FlyRunner's own throw, through createFailedFrom, through stepRunner: an unestablished create reaches `lost` WITH force_destroy; a knowable refusal and a confirmed-absent retryable one still reach `destroyed` with none", async () => {
+  it("I2: the create's outcome crosses into the domain — FlyRunner's own throw, through the PORT (A23: runnerCreateErrorFrom → RunnerCreateError → createFailureOf), through stepRunner: an unestablished create reaches `lost` WITH force_destroy; a knowable refusal and a confirmed-absent retryable one still reach `destroyed` with none", async () => {
     const creating = { state: "creating" as const, attempt: 1, name: NAME, machineId: null, stopRequestedAt: null, lastExit: null };
     const at = new Date("2026-09-14T10:00:00Z");
     const throwOf = async (reply: Parameters<typeof scripted>[0]) => {
       const runner = new FlyRunner({ client: scripted(reply).client, image: "img" });
       return runner.create(SPEC).then(() => null, (e: unknown) => e);
     };
+    // The usecase's ONE reading of a create rejection (stream-sessions.ts), built here exactly as it builds it.
+    const triggerOf = (e: unknown) => ({ type: "create_failed" as const, ...createFailureOf(e) });
 
     // 1. UNESTABLISHED: the POST could not be settled by the lookup. Fly may hold `NAME`.
     const unsettled = await throwOf((_url, init) => (init.method === "POST" ? { status: 503, body: { error: "unavailable" } } : { status: 500, body: { error: "list down" } }));
-    const unsettledTrigger = createFailedFrom(unsettled);
+    const unsettledTrigger = triggerOf(unsettled);
     expect(unsettledTrigger).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
     const lost = stepRunner(creating, unsettledTrigger, at);
     expect(lost.next.state).toBe("lost");
@@ -444,7 +458,7 @@ describe("FlyRunner", () => {
     expect(lost.signal).toBeNull();                                  // and NO retry until the destroy is confirmed
 
     // 2. A KNOWABLE refusal (400 invalid guest): Fly made nothing, and the session fails as it always did.
-    const refused = createFailedFrom(await throwOf(() => ({ status: 400, body: { error: "invalid guest" } })));
+    const refused = triggerOf(await throwOf(() => ({ status: 400, body: { error: "invalid guest" } })));
     expect(refused).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: false });
     const failed = stepRunner(creating, refused, at);
     expect(failed.next.state).toBe("destroyed");
@@ -452,24 +466,24 @@ describe("FlyRunner", () => {
     expect(failed.signal).toEqual({ type: "failed", reason: "machine_create_failed" });
 
     // 3. A retryable failure after a CONFIRMED absence (T5-b): the domain's licence to retry, untouched.
-    const absent = createFailedFrom(await throwOf((_url, init) => (init.method === "POST" ? { status: 503, body: { error: "unavailable" } } : { status: 200, body: [] })));
+    const absent = triggerOf(await throwOf((_url, init) => (init.method === "POST" ? { status: 503, body: { error: "unavailable" } } : { status: 200, body: [] })));
     expect(absent).toEqual({ type: "create_failed", retryable: true, outcomeUnknown: false });
     expect(stepRunner(creating, absent, at)).toMatchObject({ next: { state: "destroyed" }, effects: [], signal: { type: "retry" } });
 
     // 4. An error this adapter does not recognise at all is UNKNOWN, not assumed-clean — the safe direction, because
     //    a needless force_destroy by name costs one idempotent call and the other way costs up to five hours of a
     //    Machine nobody is watching.
-    expect(createFailedFrom(new Error("something else entirely"))).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
-    expect(createFailedFrom(undefined)).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
+    expect(triggerOf(new Error("something else entirely"))).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
+    expect(triggerOf(undefined)).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
     // 5. N1 (money). A 409 the adapter could NOT adopt. This is the ONE status that PROVES a Machine is holding this
     //    name: `adoptNamed` rethrows it as a non-retryable http 409 whose own message ends "do NOT create another
     //    under this name". Nothing may read that sentence as "the create made nothing".
     const collided = await throwOf((_url, init) =>
       init.method === "POST" ? { status: 409, body: { error: "already_exists: unique machine name violation" } } : { status: 200, body: [] });
-    expect(collided).toBeInstanceOf(FlyApiError);
-    expect((collided as FlyApiError).status).toBe(409);
-    expect((collided as FlyApiError).message).toContain("do NOT create another under this name");
-    const collision = createFailedFrom(collided);
+    expect(flyCauseOf(collided).status).toBe(409);
+    expect(flyCauseOf(collided).message).toContain("do NOT create another under this name");
+    expect((collided as RunnerCreateError).message, "the port's message is the adapter's, so the log still says why").toContain("do NOT create another under this name");
+    const collision = triggerOf(collided);
     expect(collision).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
     const heldByName = stepRunner(creating, collision, at);
     expect(heldByName.next.state).toBe("lost");
@@ -480,9 +494,9 @@ describe("FlyRunner", () => {
     //    `if (!err.retryable)` line BEFORE `onAmbiguous` ever runs: no lookup happened, nothing established absence,
     //    and a 500 is exactly the case where Fly may have made a Machine and then failed to tell us about it.
     const server500 = await throwOf(() => ({ status: 500, body: { error: "internal" } }));
-    expect((server500 as FlyApiError).status).toBe(500);
-    expect((server500 as FlyApiError).retryable).toBe(false);
-    const unclear = createFailedFrom(server500);
+    expect(flyCauseOf(server500).status).toBe(500);
+    expect(flyCauseOf(server500).retryable).toBe(false);
+    const unclear = triggerOf(server500);
     expect(unclear).toEqual({ type: "create_failed", retryable: false, outcomeUnknown: true });
     expect(stepRunner(creating, unclear, at)).toMatchObject({ next: { state: "lost" }, effects: [{ type: "force_destroy" }], signal: null });
 
@@ -490,16 +504,17 @@ describe("FlyRunner", () => {
     expect(CREATE_REFUSED_STATUSES).not.toContain(409);
     expect(CREATE_REFUSED_STATUSES).not.toContain(500);
     // …and every status that IS in it reports "made nothing", which row 2 spot-checks through the real adapter.
+    expect(CREATE_REFUSED_STATUSES.length, "the refusal sweep checks nothing").toBeGreaterThan(0);
     for (const status of CREATE_REFUSED_STATUSES) {
-      expect(createFailedFrom(new FlyApiError(`fly POST /machines: HTTP ${status}`, "http", status, false, null, 1)).outcomeUnknown).toBe(false);
+      expect(runnerCreateErrorFrom(new FlyApiError(`fly POST /machines: HTTP ${status}`, "http", status, false, null, 1)).outcomeUnknown).toBe(false);
     }
 
     // …and the fact is still read off the FIELDS. `isUnestablishedCreate` stays the TELEMETRY predicate (the client's
     // downgrade signature) and the domain's `outcomeUnknown` is now strictly WIDER than it: a 409 and a 500 are
     // unknown WITHOUT being "unestablished", so `markUnestablished` writes no CREATE_OUTCOME_UNKNOWN row for either.
     // Pinned as a divergence rather than left as a surprise; carried to Task 10 (ops sees the client's own attempt row).
-    expect(isUnestablishedCreate(unsettled)).toBe(true);
-    expect([collided, server500].map((e) => isUnestablishedCreate(e))).toEqual([false, false]);
+    expect(isUnestablishedCreate(flyCauseOf(unsettled))).toBe(true);
+    expect([collided, server500].map((e) => isUnestablishedCreate(flyCauseOf(e)))).toEqual([false, false]);
     expect([collision, unclear].map((t) => t.outcomeUnknown)).toEqual([true, true]);
   });
 
@@ -712,6 +727,54 @@ describe("relayDrivers()", () => {
       setRelayDriversForTest(null);
       restoreEnv(keep);
     }
+  });
+
+  // Task 12 n1 (lane-close sweep). Every refusal the lazy runner can raise on FIRST USE is a configuration fact read before
+  // any request is built, so it provably made nothing. Before, it left `create` as a plain Error, which the usecase reads —
+  // correctly, for an error it cannot classify — as outcome UNKNOWN: a misconfigured deployment ran lost → force_destroy →
+  // retry, with an alarm on each attempt, on every composed start. It now rejects through the PORT's own failure, made
+  // nothing and not retryable (the same refusal would answer attempt + 1). Swept over every refusal the constructor and
+  // `liveRunnerIdentity` declare; the other four methods keep their plain rejection (nothing classifies them).
+  it("n1: every live-config refusal of the lazy runner rejects `create` as a MADE-NOTHING, non-retryable RunnerCreateError — and nothing reaches Fly", async () => {
+    const keys = ["RELAY_DRIVERS", "FLY_API_TOKEN", "RELAY_IMAGE", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_STREAM_TOKEN", "FLY_RELAY_APP", "ENV_NAME"] as const;
+    const keep = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const complete = { RELAY_DRIVERS: "live", CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok", FLY_API_TOKEN: "fly-tok", RELAY_IMAGE: "registry.fly.io/seazn-relay:abc", FLY_RELAY_APP: "seazn-relay-stg", ENV_NAME: "stg" };
+    // Each row: one variable wrong, and the words the refusal carries (the config's own message, surfaced through the port).
+    const refusals: { what: string; env: Partial<Record<(typeof keys)[number], string | undefined>>; says: RegExp }[] = [
+      { what: "no token", env: { FLY_API_TOKEN: undefined }, says: /FLY_API_TOKEN/ },
+      { what: "no image", env: { RELAY_IMAGE: undefined }, says: /RELAY_IMAGE/ },
+      { what: "no app", env: { FLY_RELAY_APP: undefined }, says: /FLY_RELAY_APP is not set/ },
+      { what: "the retired shared app", env: { FLY_RELAY_APP: FLY_RELAY_APP_RETIRED_DEFAULT }, says: /retired shared default/ },
+      { what: "no ENV_NAME", env: { ENV_NAME: undefined }, says: /ENV_NAME is not set/ },
+    ];
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    const fetchSpy = vi.fn(async (_url: string, init?: RequestInit) => (init?.method === "POST" ? json({ id: "m_n1", name: NAME, state: "created" }) : json([])));
+    vi.stubGlobal("fetch", fetchSpy);
+    let checked = 0;
+    try {
+      for (const row of refusals) {
+        restoreEnv({ ...complete, ...row.env });
+        setRelayDriversForTest(null);
+        const err = await relayDrivers().runner.create(SPEC).then(() => null, (e: unknown) => e);
+        expect(err, row.what).toBeInstanceOf(RunnerCreateError);
+        expect(createFailureOf(err), row.what).toEqual({ retryable: false, outcomeUnknown: false });
+        expect((err as RunnerCreateError).message, row.what).toMatch(row.says);
+        expect((err as RunnerCreateError).cause, row.what).toBeInstanceOf(Error);
+        checked++;
+      }
+      expect(fetchSpy, "a refused configuration sent a request").not.toHaveBeenCalled();
+      // The positive twin: the COMPLETE configuration constructs, reaches Fly, and creates — so every refusal above is the
+      // one variable its row changed, not a runner that could never have been built.
+      restoreEnv(complete);
+      setRelayDriversForTest(null);
+      expect(await relayDrivers().runner.create(SPEC)).toEqual({ runnerId: "m_n1" });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      setRelayDriversForTest(null);
+      restoreEnv(keep);
+    }
+    expect(checked, "the refusal sweep checked nothing").toBe(refusals.length);
   });
 
   it("binds the production recorder into the adapters it builds — a call through relayDrivers().ingest reaches recordProviderCall (ruling 13)", async () => {

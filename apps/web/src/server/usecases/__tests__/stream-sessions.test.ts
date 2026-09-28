@@ -28,13 +28,14 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { inputEnvelopesHex, resealTargetDestination, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
-  CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
+  CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
   PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
   RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS, STALE_HEARTBEAT_SECONDS,
   TOKEN_GRACE_MINUTES, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
-import { failReasonFromExit, machineNameFor, type ExitInfo } from "@/server/relay/domain/runner";
+import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
+import { relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
@@ -680,6 +681,66 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(r.runner.created.map((c) => c.attempt)).toEqual(Array.from({ length: RUNNER_MAX_ATTEMPTS }, (_, i) => i + 1));
     expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: failReasonFromExit(null), runner_state: "destroyed" });
     expect(await r.runner.list()).toEqual([]);
+  });
+
+  // Task 12 n1 (lane-close sweep). A create refused by the deployment's own configuration — before any provider call —
+  // PROVABLY made nothing. Read as outcome-unknown (a plain Error), it ran lost → force_destroy → the one retry → the same
+  // refusal → the last attempt's `machine_crash`, alarming on every attempt of every composed start. It now surfaces as the
+  // port's made-nothing failure (A23), so the session fails at once with the reason the DOMAIN declares for a create that
+  // made nothing — derived from the table, never typed — which differs from the unknown path's reason (the differential).
+  const madeNothingReason = () => {
+    const creating = { state: "creating" as const, attempt: 1, name: "n1", machineId: null, stopRequestedAt: null, lastExit: null };
+    const out = stepRunner(creating, { type: "create_failed", retryable: false, outcomeUnknown: false }, new Date(0));
+    expect(out.signal?.type).toBe("failed");
+    return (out.signal as { reason: string }).reason;
+  };
+  const runnerHistory = async (sid: string) => (await sql<{ type: string; from_state: string; to_state: string }[]>`
+    select type, from_state, to_state from fixture_stream_events where session_id = ${sid} and kind = 'runner_transition' order by seq`)
+    .map((x) => `${x.from_state}-${x.type}->${x.to_state}`);
+  const effectRows = async (sid: string, type: string) => (await sql<{ result: string }[]>`
+    select result from fixture_stream_events where session_id = ${sid} and kind = 'effect' and type = ${type} order by seq`).map((x) => x.result);
+
+  it("n1 (a): a LIVE deployment that cannot name its environment (no ENV_NAME) refuses the create before the port is called — made nothing: the session fails with the domain's made-nothing reason at once; no create call, no force_destroy, no retry", async () => {
+    const r = await rig({ credits: 1 });
+    const keep = { RELAY_DRIVERS: process.env.RELAY_DRIVERS, ENV_NAME: process.env.ENV_NAME };
+    try {
+      process.env.RELAY_DRIVERS = "live";          // only relayEnvironment() reads it here: the rig injects its own drivers
+      delete process.env.ENV_NAME;
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+      expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: madeNothingReason(), runner_state: "destroyed", runner_retries: 0, machine_id: null });
+      expect(madeNothingReason(), "the differential: the unknown path's last-attempt reason").not.toBe(failReasonFromExit(null));
+      expect(r.runner.created).toEqual([]);                      // refused BEFORE the port: nothing was ever asked for
+      expect(r.runner.destroyed).toEqual([]);
+      expect(await runnerHistory(sessionId)).toEqual(["none-create_started->creating", "creating-create_failed->destroyed"]);
+      expect(await effectRows(sessionId, "create_machine")).toEqual(["failed"]);   // the attempt is still on the ledger
+      expect(await effectRows(sessionId, "force_destroy")).toEqual([]);
+      expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
+    } finally {
+      for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+
+  it("n1 (b): the REAL lazy runner on the retired shared Fly app refuses on first use — through drivers.ts, the port, and the usecase: made nothing, not one request to Fly, the session fails with the domain's made-nothing reason", async () => {
+    const r = await rig({ credits: 1 });
+    const keys = ["RELAY_DRIVERS", "FLY_API_TOKEN", "RELAY_IMAGE", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_STREAM_TOKEN", "FLY_RELAY_APP", "ENV_NAME"];
+    const keep = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const fetchSpy = vi.fn(async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
+    try {
+      Object.assign(process.env, { RELAY_DRIVERS: "live", FLY_API_TOKEN: "fly-tok", RELAY_IMAGE: "registry.fly.io/seazn-relay:abc", CLOUDFLARE_ACCOUNT_ID: "acct",
+        CLOUDFLARE_STREAM_TOKEN: "tok", FLY_RELAY_APP: FLY_RELAY_APP_RETIRED_DEFAULT, ENV_NAME: "stg" });
+      vi.stubGlobal("fetch", fetchSpy);
+      setRelayDriversForTest(null);
+      const deps: SessionDeps = { ...r.deps, drivers: { ingest: r.ingest, runner: relayDrivers().runner } };   // the production runner binding
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), deps);
+      expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: madeNothingReason(), runner_state: "destroyed", runner_retries: 0, machine_id: null });
+      expect(fetchSpy, "a refused configuration reached Fly").not.toHaveBeenCalled();
+      expect(await runnerHistory(sessionId)).toEqual(["none-create_started->creating", "creating-create_failed->destroyed"]);
+      expect(await effectRows(sessionId, "force_destroy")).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      setRelayDriversForTest(null);
+      for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
   });
 
   it("T10-b: a beat reporting `playing` from a runner that is NOT booting/playing (here: lost) is recorded and answered — never fed to the table as callback_playing, which `lost` refuses (mutant: drop the `booting || playing` guard in heartbeat → InvalidRunnerTransition → red)", async () => {

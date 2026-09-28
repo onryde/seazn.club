@@ -89,6 +89,41 @@ export type RunnerSpec = {
   deadlineAt: Date;
 };
 export type RunnerHandle = { runnerId: string };
+
+/** A23 (lane C, OWNER 2026-09-28): the ONE create failure this port declares — provider-neutral, so the application layer
+ *  classifies a failed `create` without importing any adapter (the guard is `__tests__/port-boundary.test.ts`). The two
+ *  facts are the domain's `create_failed` trigger fields (domain/runner.ts), and each adapter owes them from its own
+ *  evidence (FlyRunner: `runner-fly.ts` `runnerCreateErrorFrom`, whole-branch review I2's proof rules):
+ *   - `outcomeUnknown`: the provider MAY hold a runner under the requested name. true unless something positively proves
+ *     nothing was made — the domain then tears down by name before any retry.
+ *   - `retryable`: the licence to create attempt + 1 under a DIFFERENT name. Only a CONFIRMED absence may earn it.
+ *  The provider's own error rides as `cause` (ids, statuses, request ids stay on the adapter's side of the port). A
+ *  `create` rejection that is NOT this type is read as outcome UNKNOWN (`createFailureOf`) — the safe direction. */
+export class RunnerCreateError extends Error {
+  readonly retryable: boolean;
+  readonly outcomeUnknown: boolean;
+  constructor(message: string, facts: { retryable: boolean; outcomeUnknown: boolean; cause?: unknown }) {
+    super(message, facts.cause === undefined ? undefined : { cause: facts.cause });
+    this.name = "RunnerCreateError";
+    this.retryable = facts.retryable;
+    this.outcomeUnknown = facts.outcomeUnknown;
+  }
+}
+/** Task 12 n1: a create refused BEFORE any provider call — the runner could not be configured (a live deployment missing
+ *  FLY_RELAY_APP / ENV_NAME / its token, or still on the retired shared app), or the create's own inputs could not be
+ *  built. Nothing was sent, so nothing can exist under the name: made nothing, and not retryable — the same refusal would
+ *  answer attempt + 1. The session fails `machine_create_failed` at once instead of running lost → force_destroy → retry
+ *  with an alarm on every attempt. */
+export function createRefusedBeforeCall(cause: unknown): RunnerCreateError {
+  const why = cause instanceof Error ? cause.message : String(cause);
+  return new RunnerCreateError(`runner create refused before any provider call: ${why}`, { retryable: false, outcomeUnknown: false, cause });
+}
+/** The ONE reading of whatever a `create` threw. The port's own failure carries its proof; anything else — an adapter bug,
+ *  a failure the adapter did not map — is outcome UNKNOWN and not retryable: one extra teardown by name, which the
+ *  provider answers as success when nothing is there, against a runner nobody is watching. */
+export function createFailureOf(e: unknown): { retryable: boolean; outcomeUnknown: boolean } {
+  return e instanceof RunnerCreateError ? { retryable: e.retryable, outcomeUnknown: e.outcomeUnknown } : { retryable: false, outcomeUnknown: true };
+}
 /** `name` is the Machine's own name — `machineNameFor(sessionId, attempt)` for ours, so it carries the ATTEMPT (post-2C plan sync,
  *  T5-a: Task 10 adopts and force-destroys by session AND name, so an earlier attempt's Machine is never taken for the current
  *  one). null when the provider holds a Machine with no name.
@@ -103,7 +138,7 @@ export interface RunnerProvider {
    *  its own create lookup for the same reason). A caller that acts on a runner's ABSENCE lists again after this long
    *  and acts only on what BOTH listings lack. */
   readonly listSettleMs: number;
-  create(spec: RunnerSpec): Promise<RunnerHandle>;   // idempotent per (sessionId, attempt): a retry after an ambiguous failure returns the SAME runner
+  create(spec: RunnerSpec): Promise<RunnerHandle>;   // idempotent per (sessionId, attempt): a retry after an ambiguous failure returns the SAME runner. Rejects with RunnerCreateError (A23)
   stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void>;   // the stop sequence; idempotent (already stopped / absent = success)
   /** GET + events → { state, exit }. "Absent" is TWO cases and they answer
    *  differently (lane-A minors, Task 3 review m1 — this line said only

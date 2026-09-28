@@ -26,9 +26,9 @@
 // which is the domain's licence to create attempt + 1 (T5-b).
 import { FLY_CLIENT_DEFAULTS, FLY_MACHINES_BASE, FlyApiError, FlyClient, SESSION_METADATA_KEY, exitInfoFrom, isRetryable, type Machine } from "./fly-client";
 import { liveRunnerIdentity } from "./config";
-import { machineNameFor, type ObservedRunnerState, type RunnerTrigger } from "./domain/runner";
+import { machineNameFor, type ObservedRunnerState } from "./domain/runner";
 import type { ProviderCallRecorder, RunnerHandle, RunnerListing, RunnerObservation, RunnerProvider, RunnerSpec } from "./ports";
-import { NOOP_RECORDER } from "./ports";
+import { NOOP_RECORDER, RunnerCreateError } from "./ports";
 
 /** Defined in fly-client.ts, beside the metadata lookup that uses it — two
  *  spellings of an idempotency key is two keys. Re-exported so every consumer
@@ -99,7 +99,8 @@ export function isUnestablishedCreate(e: unknown): e is FlyApiError {
  *  destination, until the daily orphan sweep.
  *
  *  Lane A owes the CONTRACT and this helper; Task 10's create call site is not ours to write. It catches the throw
- *  from `create` and feeds the result straight to `stepRunner` / `decide`.
+ *  from `create` and feeds the result straight to `stepRunner` / `decide` — since A23 through the port's
+ *  `RunnerCreateError` (`runnerCreateErrorFrom` below), never by importing this file.
  *
  *  Read off the FIELDS, never the message (T5-g). An error that is not a `FlyApiError` at all is the safe-direction
  *  default — unknown, not assumed-clean: the cost of being wrong that way is one extra force_destroy by name, which
@@ -142,9 +143,14 @@ export function createMadeNothing(e: FlyApiError): boolean {
   return e.retryable || refusedOutright(e);
 }
 
-export function createFailedFrom(e: unknown): Extract<RunnerTrigger, { type: "create_failed" }> {
-  if (!(e instanceof FlyApiError)) return { type: "create_failed", retryable: false, outcomeUnknown: true };
-  return { type: "create_failed", retryable: e.retryable, outcomeUnknown: !createMadeNothing(e) };
+/** A23 (lane C, OWNER 2026-09-28): Fly's create failure → the PORT's `RunnerCreateError`, with EXACTLY the semantics this
+ *  file's proofs define — `retryable` untouched (T5-b's licence), `outcomeUnknown` unless `createMadeNothing`. This used
+ *  to be `createFailedFrom`, imported by the application layer to build the domain trigger itself; the classification now
+ *  crosses the port as a provider-neutral type, and the FlyApiError rides as `cause` for the adapter's own diagnostics.
+ *  The message is the client's, already redacted. An error that is not a FlyApiError is not mapped here: `create`
+ *  rethrows it as it came, and the port reads anything that is not a RunnerCreateError as outcome UNKNOWN. */
+export function runnerCreateErrorFrom(e: FlyApiError): RunnerCreateError {
+  return new RunnerCreateError(e.message, { retryable: e.retryable, outcomeUnknown: !createMadeNothing(e), cause: e });
 }
 
 /** The port's three-value summary of a Machine the provider still holds.
@@ -208,7 +214,17 @@ export class FlyRunner implements RunnerProvider {
     this.image = image;
   }
 
+  /** Rejects with the port's `RunnerCreateError` for every failure Fly answered or the client classified (A23) — the
+   *  mapping is the LAST step, after the 409 adopt and the unestablished mark, so neither sees anything but Fly's error. */
   async create(spec: RunnerSpec): Promise<RunnerHandle> {
+    try {
+      return await this.createOrAdopt(spec);
+    } catch (e) {
+      throw e instanceof FlyApiError ? runnerCreateErrorFrom(e) : e;
+    }
+  }
+
+  private async createOrAdopt(spec: RunnerSpec): Promise<RunnerHandle> {
     const name = machineNameFor(spec.sessionId, spec.attempt);
     try {
       const m = await this.client.createMachine({

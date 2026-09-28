@@ -6,7 +6,7 @@ import { log } from "@/server/logger";
 import { relayDriverMode } from "./config";
 import { FakeIngest, FakeRunner } from "./fakes";
 import { CloudflareIngest } from "./ingest-cf";
-import type { IngestProvider, ProviderCallRecorder, RunnerProvider } from "./ports";
+import { createRefusedBeforeCall, type IngestProvider, type ProviderCallRecorder, type RunnerProvider } from "./ports";
 import { FLY_LIST_SETTLE_MS, FlyRunner } from "./runner-fly";
 import { recordProviderCall } from "./telemetry";
 
@@ -51,7 +51,19 @@ function lazyRunner(): RunnerProvider {
   let real: FlyRunner | null = null;
   const get = () => (real ??= new FlyRunner({ recorder: dbRecorder }));
   return {
-    create: async (spec) => get().create(spec),
+    // Task 12 n1: a construction refusal (no token or image, no FLY_RELAY_APP / ENV_NAME, the retired shared app) is a
+    // configuration fact read before any request exists — it provably made nothing, and says so through the PORT's own
+    // failure. A plain Error here read as outcome UNKNOWN: lost → force_destroy → retry → the same refusal, alarming on
+    // every attempt. Only construction is caught; the adapter's own `create` maps its failures itself (A23).
+    create: async (spec) => {
+      let runner: FlyRunner;
+      try {
+        runner = get();
+      } catch (e) {
+        throw createRefusedBeforeCall(e);
+      }
+      return runner.create(spec);
+    },
     stop: async (id, opts) => get().stop(id, opts),
     observe: async (id) => get().observe(id),
     destroy: async (id) => get().destroy(id),

@@ -33,8 +33,7 @@ import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffe
 import { evaluate, runnerDeadlineOf } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
-import type { StorageUsage } from "@/server/relay/ports";
-import { createFailedFrom } from "@/server/relay/runner-fly";
+import { createFailureOf, createRefusedBeforeCall, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import { readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
@@ -517,11 +516,11 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
       try {
         handle = await recordEffect(s, "create_machine", "runner", () => createRunner(s, deps), { attempt: s.runner.attempt, machineName: s.runner.name });
       } catch (err) {
-        // A3 (lane-b carry 2, owner-confirmed 2026-09-28): the PROOF is read off the error by the adapter's own classifier.
-        // A plain `retryable` flag cannot say whether Fly holds a Machine under our name; `createFailedFrom` can — a
-        // refusal status or a retryable error proves nothing was made, anything else (a timeout, a 5xx, an error shape it
-        // does not know) is `outcomeUnknown`, which the table answers with a by-name teardown before any retry.
-        const trigger = createFailedFrom(err);
+        // A3 (lane-b carry 2, owner-confirmed 2026-09-28) + A23: the PROOF is decided by the adapter, which alone knows
+        // its provider's evidence, and crosses the PORT as a provider-neutral `RunnerCreateError` — this layer imports no
+        // adapter. Made nothing (a refusal, a confirmed absence, a create refused before any call) or unknown; anything
+        // that is not a RunnerCreateError is unknown, which the table answers with a by-name teardown before any retry.
+        const trigger = { type: "create_failed" as const, ...createFailureOf(err) };
         log.error({ sid: s.id, attempt: s.runner.attempt, retryable: trigger.retryable, outcomeUnknown: trigger.outcomeUnknown, err: String(err) }, "stream session: Machine create failed");
         // A stale attempt's failure is not the current attempt's: dropped.
         return (await apply(s.id, (cur) => (stillOurs(cur) ? { type: "runner", trigger } : null), deps)) ?? s;
@@ -581,13 +580,22 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
 
 /** The job token is minted here and travels ONLY in the create call's env (invariant 5). */
 async function createRunner(s: Session, deps: SessionDeps) {
-  const jobToken = await mintRelayToken({ sid: s.id, scope: "relay-job", expiresAt: relayTokenExpiry(s) });
-  // A2 (lane-b carry 1): the Machine's hard stop is `runnerDeadlineOf` — the session's wall clock PLUS
-  // MAX_ANCHOR_DRIFT_SECONDS (whole-branch review I1). `deadlineOf` would let the Machine's own clock, which can run
-  // ahead of ours, cut the broadcast before the session's wall-clock expiry ends it cleanly. Witness: "A2: …".
-  // I1: the deployment's identity rides on the Machine — the daily sweep's only licence to destroy it later. In live
-  // mode `relayEnvironment` REFUSES an unset ENV_NAME, so an untagged Machine is never created.
-  return deps.drivers.runner.create({ sessionId: s.id, attempt: s.runner.attempt, environment: relayEnvironment(), jobToken, appUrl: deps.appUrl, guest: RUNNER_DEFAULT_GUEST, region: RUNNER_DEFAULT_REGION, deadlineAt: runnerDeadlineOf(s) });
+  // Task 12 n1: everything the port call needs is built FIRST, and a throw while building it provably sent nothing — so it
+  // is the port's made-nothing failure (`createRefusedBeforeCall`), never a plain Error the create catch must read as
+  // outcome UNKNOWN (which ran lost → force_destroy → retry → the same refusal, alarming on every attempt).
+  let spec: RunnerSpec;
+  try {
+    const jobToken = await mintRelayToken({ sid: s.id, scope: "relay-job", expiresAt: relayTokenExpiry(s) });
+    // A2 (lane-b carry 1): the Machine's hard stop is `runnerDeadlineOf` — the session's wall clock PLUS
+    // MAX_ANCHOR_DRIFT_SECONDS (whole-branch review I1). `deadlineOf` would let the Machine's own clock, which can run
+    // ahead of ours, cut the broadcast before the session's wall-clock expiry ends it cleanly. Witness: "A2: …".
+    // I1: the deployment's identity rides on the Machine — the daily sweep's only licence to destroy it later. In live
+    // mode `relayEnvironment` REFUSES an unset ENV_NAME, so an untagged Machine is never created.
+    spec = { sessionId: s.id, attempt: s.runner.attempt, environment: relayEnvironment(), jobToken, appUrl: deps.appUrl, guest: RUNNER_DEFAULT_GUEST, region: RUNNER_DEFAULT_REGION, deadlineAt: runnerDeadlineOf(s) };
+  } catch (err) {
+    throw createRefusedBeforeCall(err);
+  }
+  return deps.drivers.runner.create(spec);
 }
 
 // ---------------------------------------------------------------------------
