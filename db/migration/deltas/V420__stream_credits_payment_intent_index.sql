@@ -1,0 +1,42 @@
+-- V420 — index the claw-back's lookup column on org_stream_credits.
+--
+-- PR #900 gave match credits a Stripe refund and lost-dispute claw-back. Its
+-- first act, for every refunded charge and every closed dispute in the system,
+-- is to ask whether that charge was a match-credit pack:
+--
+--   select org_id, delta, created_at from org_stream_credits
+--    where reason = 'purchase' and stripe_payment_intent_id = $1
+--    order by created_at limit 1
+--
+-- There is NO org in that predicate, and that is not an oversight: finding out
+-- whose org it is IS the query's purpose. The webhook holds a Stripe object and
+-- nothing else. So V410's `(org_id, created_at)` cannot serve it, and the
+-- lookup degrades with TOTAL platform volume rather than with one club's
+-- activity — it is a sequential scan of every row of every org, run on a path
+-- that is entered by refunds and disputes belonging to other products too
+-- (registration, sponsor, Event Pass, AI credit packs all reach the same
+-- `charge.refunded` arm). PR #900 recorded this in a comment and deferred the
+-- index to "whichever wave next opens a migration"; this is that delta, and it
+-- carries nothing else.
+--
+-- PARTIAL on `is not null`, which is what makes it cheap. The column is
+-- populated on the purchase row only (V410: "consume rows leave them null"),
+-- and consumes are the bulk of this table — one row per stream session against
+-- one row per pack bought. The index therefore covers a small minority of rows
+-- and stays small as the ledger grows.
+--
+-- The predicate is the null test alone, NOT `reason = 'purchase'`. A claw-back
+-- row deliberately carries the same payment intent so a human can walk the
+-- ledger back to the Stripe object, and an index narrowed to purchases could
+-- not serve that walk. `reason` stays a filter on top; one intent yields at
+-- most a handful of rows, so the extra predicate costs nothing once the scan
+-- is index-driven.
+--
+-- Not CONCURRENTLY: Flyway runs each migration in a transaction and
+-- `create index concurrently` cannot run inside one. The lock this takes is
+-- proportional to the table, and the table is small today — which is precisely
+-- the argument for doing it now rather than when it is not.
+
+create index org_stream_credits_payment_intent
+    on org_stream_credits (stripe_payment_intent_id)
+ where stripe_payment_intent_id is not null;

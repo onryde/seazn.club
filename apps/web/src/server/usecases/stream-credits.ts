@@ -175,15 +175,16 @@ export interface StreamPurchaseMatch {
  *  already stores the intent, so this is a real COLUMN to match on and the
  *  matched path needs no Stripe round trip at all.
  *
- *  It is NOT indexed: V410 creates exactly three indexes on this table —
- *  `(org_id, created_at)` (:279), `(stripe_checkout_session_id) where … is not
- *  null` (:280) and the partial unique on `idempotency_key` (:284-285). This
- *  lookup is therefore a seq scan, and it runs once per refunded charge, once
- *  per partial refund and once per dispute carrying an intent. Harmless at
- *  today's row count; the forward delta
- *  `create index on org_stream_credits (stripe_payment_intent_id) where
- *  stripe_payment_intent_id is not null` is owed to whichever wave next opens a
- *  migration (V420+ — V419 is taken). Do NOT amend V410, which is merged.
+ *  Indexed by V420 — `org_stream_credits_payment_intent`, partial on
+ *  `stripe_payment_intent_id is not null`. It has to be its own index: there is
+ *  no org in the predicate (finding out whose org it is IS the point), so
+ *  V410's `(org_id, created_at)` cannot serve this, and without V420 the lookup
+ *  is a seq scan of every row of every org — on a path that refunds and
+ *  disputes belonging to other products reach too. The partial predicate is the
+ *  null test ALONE and deliberately not `reason = 'purchase'`: a claw-back row
+ *  carries the same intent so a human can walk the ledger back to the Stripe
+ *  object, and an index narrowed to purchases could not serve that walk.
+ *  Do NOT amend V410, which is merged.
  *
  *  `reason = 'purchase'` scopes it to the BOUGHT row. A claw-back row carries
  *  the same intent (so a human can walk the ledger back to the Stripe object),
