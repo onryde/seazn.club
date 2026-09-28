@@ -60,6 +60,37 @@ async function seedRig(role: "support" | "superadmin" | null): Promise<Rig> {
   });
 }
 
+/** A real stream session in `rig`'s org that CONSUMED one credit, plus the purchase that funded
+ *  it — the precondition a LINKED refund needs (review M4).
+ *
+ *  By SQL, because it cannot be anything else here: the vitest rig
+ *  (server/relay/__tests__/_session-rig.ts) and Task 7's own `consumeForSession` both sit behind
+ *  `import "server-only"`, which only vitest aliases away (vitest.config.ts:178-179) — a Playwright
+ *  spec that imports such a module collects ZERO tests (e2e/price-kit.ts:160-177).
+ *
+ *  The consume row is what makes the refund legal at all: stream-credits.ts:265-272 caps a linked
+ *  refund at what THAT session consumed, so without it the modal's submit is a 422
+ *  refund_exceeds_consumed rather than the 200 this case exists to drive. `fixture_id` is null and
+ *  the admission snapshot columns (sport_key / competition_id / division_id, V410:199-201) carry no
+ *  FKs, so no fixture, division or competition is needed to make a session row legal. */
+async function consumedSession(rig: Rig): Promise<string> {
+  return withDb(async (sql) => {
+    const [{ id: targetId }] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc)
+      values (${rig.orgId}, 'youtube', 'Walkthrough rig', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    const [{ id: sessionId }] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (org_id, mode, state, target_id, created_by,
+                                           sport_key, competition_id, division_id, entitlement_via_override)
+      values (${rig.orgId}, 'passthrough', 'completed', ${targetId}, ${rig.userId},
+              'badminton', gen_random_uuid(), gen_random_uuid(), false) returning id`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, note)
+              values (${rig.orgId}, 1, 'purchase', 1, 'walkthrough: the pack that funded it')`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, session_id, balance_after, note)
+              values (${rig.orgId}, -1, 'consume', ${sessionId}, 0, 'walkthrough: the stream that failed')`;
+    return sessionId;
+  });
+}
+
 type LedgerRow = { reason: string; delta: number; balance_after: number; note: string | null; created_by: string | null; session_id: string | null };
 const ledgerSql = (orgId: string) =>
   withDb(async (sql) => [
@@ -347,6 +378,57 @@ for (const width of [320, 768, 1280] as const) {
     await shot(page, `stream-credits-${width}-modal.png`);
   });
 }
+
+test("a LINKED refund driven through the real modal: the session field carries a real session id into the route's refund member, and Task 7's ledger row is STAMPED with that session — the linked-refund path's only producer→consumer proof (review M4)", async ({ page }) => {
+  test.setTimeout(120_000);
+  const rig = await seedRig("support");
+  const sessionId = await consumedSession(rig);
+  const posts: Record<string, unknown>[] = [];
+  await page.route(`**/api/admin/orgs/${rig.orgId}/stream-credits`, async (route) => {
+    const req = route.request();
+    if (req.method() === "POST") posts.push(JSON.parse(req.postData() ?? "null") as Record<string, unknown>);
+    return route.continue();
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await signInAs(page, rig.userEmail);
+  await page.goto(`/admin/orgs/${rig.orgId}`);
+
+  const panel = page.getByTestId("stream-credits-panel");
+  const balance = panel.getByTestId("stream-credits-balance");
+  const rows = panel.getByTestId("stream-credits-row");
+  // The seeded pair is ON SCREEN first: a purchase of 1 spent by a consume of 1, balance 0. The
+  // session column is what a staff member copies the id OUT of, so the rail has to be showing it
+  // before the refund is typed — this is the read the panel exists to serve.
+  await expect(balance).toHaveText("0", { timeout: 30_000 });
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toHaveAttribute("data-reason", "consume");
+  await expect(panel.getByText(sessionId, { exact: true })).toBeVisible();
+
+  await openAdjust(page);
+  await page.getByTestId("stream-credits-kind").selectOption("refund");
+  await page.getByTestId("stream-credits-session").fill(sessionId);
+  await page.getByTestId("stream-credits-note").fill("e2e: refund the session that failed");
+  await page.getByTestId("stream-credits-submit").click();
+  await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("stream-credits-error")).toHaveCount(0);
+  await expect(balance).toHaveText("1", { timeout: 30_000 });
+  await expect(rows).toHaveCount(3);
+  await expect(rows.first()).toHaveAttribute("data-reason", "refund");
+
+  // The claim: the row the UI wrote carries THAT session id — not null (the goodwill path the main
+  // flow test already covers) and not some other session.
+  expect(await ledgerSql(rig.orgId)).toEqual([
+    { reason: "purchase", delta: 1, balance_after: 1, note: "walkthrough: the pack that funded it", created_by: null, session_id: null },
+    { reason: "consume", delta: -1, balance_after: 0, note: "walkthrough: the stream that failed", created_by: null, session_id: sessionId },
+    { reason: "refund", delta: 1, balance_after: 1, note: "e2e: refund the session that failed", created_by: rig.userId, session_id: sessionId },
+  ]);
+  expect(await auditSql(rig.orgId)).toEqual([{ actor_id: rig.userId, action: "stream_credit_refund" }]);
+  // The BODY that carried it: the id typed into the field is what reached the route, untouched.
+  expect(posts.map((b) => ({ ...b, idempotency_key: undefined }))).toEqual([
+    { kind: "refund", delta: 1, session_id: sessionId, note: "e2e: refund the session that failed" },
+  ]);
+  await shot(page, "stream-credits-linked-refund-1280.png");
+});
 
 test("a signed-in NON-staff user gets neither the route (401, no row) nor the page (redirected away) — the positive pair of the staff test", async ({ page }) => {
   test.setTimeout(60_000);

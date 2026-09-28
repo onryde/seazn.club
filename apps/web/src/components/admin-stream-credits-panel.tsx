@@ -81,6 +81,7 @@ export function AdminStreamCreditsPanel({
   rows,
   maxDelta,
   ledgerLimit,
+  noteMax,
 }: {
   orgId: string;
   /** creditBalance() on the server — the ONE balance. */
@@ -89,6 +90,8 @@ export function AdminStreamCreditsPanel({
   /** STREAM_CREDIT_ADJUST_MAX, passed down so the input and the route share one number. */
   maxDelta: number;
   ledgerLimit: number;
+  /** STAFF_NOTE_MAX, same reason (review M1 + S10): the ceiling is imported, never retyped here. */
+  noteMax: number;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -104,6 +107,17 @@ export function AdminStreamCreditsPanel({
   const [form, setForm] = useState<Form>(EMPTY);
   const edit = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
 
+  // Review fix round 1, I1 — the amount's CLIENT gate, the donor's `deltaValid` (:57) with this
+  // route's bounds. `<input type="number">`'s min/max/step are a browser HINT, not a gate: a pasted
+  // "1.5", a cleared field (`Number("") === 0`) and an amount past the cap all reach `submit` and the
+  // route answers 400 with a zod message, which is not what a staff member should be told by a form
+  // that could have said it first. Derived from the `maxDelta` PROP and never a typed 50, so moving
+  // STREAM_CREDIT_ADJUST_MAX moves this gate with it (S10). One expression, used by BOTH the button's
+  // `disabled` and `submit`'s early return — a disabled button is not a guard (Enter, a programmatic
+  // click, a stale render), and a guard behind a disabled button is never exercised.
+  const amount = Number(form.amount);
+  const amountValid = Number.isInteger(amount) && amount >= 1 && amount <= maxDelta;
+
   /** The donor's openModal (:60-73): rotate the key FIRST, then reset every field. Every open is a
    *  new submission, so a modal reopened after a success or a 409 can never inherit either. */
   function openModal() {
@@ -116,7 +130,7 @@ export function AdminStreamCreditsPanel({
   }
 
   async function submit() {
-    if (inFlight.current || !form.note.trim()) return;
+    if (inFlight.current || !form.note.trim() || !amountValid) return;
     inFlight.current = true;
     const key = (idemKey.current ??= mintKey());
     setBusy(true);
@@ -263,7 +277,7 @@ export function AdminStreamCreditsPanel({
                 data-testid="stream-credits-submit"
                 type="button"
                 onClick={submit}
-                disabled={!form.note.trim() || busy}
+                disabled={!form.note.trim() || !amountValid || busy}
                 className="btn btn-primary disabled:opacity-40"
               >
                 {busy ? "Applying…" : "Apply"}
@@ -300,6 +314,11 @@ export function AdminStreamCreditsPanel({
                 onChange={(e) => edit({ amount: e.target.value })}
                 className="input w-full"
               />
+              {/* The donor's inline reason (admin-credits-panel.tsx:178-181): say WHY Apply is
+                  dead rather than leaving a disabled button with no explanation. */}
+              <p data-testid="stream-credits-amount-hint" className={`mt-1 text-xs ${amountValid ? "text-slate-500" : "text-red-600"}`}>
+                A whole number of credits from 1 to {maxDelta}.
+              </p>
             </div>
 
             {/* A session caps a REFUND, so the field exists only for a refund — the route's body is
@@ -327,7 +346,7 @@ export function AdminStreamCreditsPanel({
                 id="sc-note"
                 data-testid="stream-credits-note"
                 type="text"
-                maxLength={500}
+                maxLength={noteMax}
                 value={form.note}
                 onChange={(e) => edit({ note: e.target.value })}
                 placeholder="Context for the audit log"

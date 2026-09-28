@@ -28,12 +28,22 @@
 //   C3  amount ceiling    `max={maxDelta}` → `max={50}`                                        → "the modal OPENS AT" (`max`)
 //   C4  footer walked     delete the Cancel button from `footer`                               → "the modal OPENS AT" (cancel)
 //   R5  the rail          delete `tabIndex={0}`                                                → "a keyboard-reachable scroll rail"
+// Fix round 1 (review I1, I2, M1):
+//   A1  amount gate       drop `|| !amountValid` from the button's `disabled`                  → "the submit gate"
+//   A2  amount guard      drop `|| !amountValid` from submit()'s early return                  → "is a GUARD, not only a disabled button"
+//   A3  amount bound      `amount <= maxDelta` → `amount <= 50`                                → "the submit gate" (over-cap)
+//   N1  note ceiling      `maxLength={noteMax}` → `maxLength={500}`                            → "the modal OPENS AT" (maxLength)
+//   W1  mount swap        swap `maxDelta={…}` and `ledgerLimit={…}` on page.tsx's mount        → "which CONSTANT reaches which prop"
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
-import type { StreamCreditLedgerRow } from "@/server/usecases/admin-stream-credits";
+import { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, type StreamCreditLedgerRow } from "@/server/usecases/admin-stream-credits";
+import { STAFF_NOTE_MAX } from "@/server/usecases/stream-credits";
 import { AdminStreamCreditsPanel } from "../admin-stream-credits-panel";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
@@ -43,7 +53,9 @@ const row = (over: Partial<StreamCreditLedgerRow>): StreamCreditLedgerRow => ({
   createdByEmail: "staff@example.test", sessionId: null, createdAt: "2026-09-16T10:20:30.000Z", ...over,
 });
 
-const PROPS = { orgId: "org-1", balance: 0, rows: [] as StreamCreditLedgerRow[], maxDelta: 7, ledgerLimit: 20 };
+// Every numeric ceiling here is DELIBERATELY not the route's (50 / 20 / 500): a panel that retyped
+// its own constant instead of reading the prop passes with the real numbers and fails with these.
+const PROPS = { orgId: "org-1", balance: 0, rows: [] as StreamCreditLedgerRow[], maxDelta: 7, ledgerLimit: 9, noteMax: 123 };
 
 function render(props: Partial<typeof PROPS> = {}): string {
   return renderToStaticMarkup(<AdminStreamCreditsPanel {...PROPS} {...props} />);
@@ -149,7 +161,10 @@ describe("AdminStreamCreditsPanel — the Adjust-credits modal, opened by its ow
     expect(propsOf(amount).value).toBe("1");
     expect(propsOf(amount).min).toBe(1);
     expect(propsOf(amount).max).toBe(7);
-    expect(propsOf(must(is, "stream-credits-note")).value).toBe("");
+    const note = must(is, "stream-credits-note");
+    expect(propsOf(note).value).toBe("");
+    // M1 (review): the note ceiling is STAFF_NOTE_MAX passed down, not a retyped 500 (N1).
+    expect(propsOf(note).maxLength).toBe(123);
     // A session caps a refund, so a modal that opens at `grant` has no session field at all.
     expect(at(is, "stream-credits-session"), "the session field is present at grant").toBeUndefined();
     expect(propsOf(must(is, "stream-credits-submit")).disabled).toBe(true);
@@ -160,7 +175,7 @@ describe("AdminStreamCreditsPanel — the Adjust-credits modal, opened by its ow
     expect(at(is, "stream-credits-replayed")).toBeUndefined();
   });
 
-  it("the submit gate: DISABLED with an empty note and with whitespace only, ENABLED once a real note is typed — the negative assertion with its positive pair (C1)", () => {
+  it("the submit gate: DISABLED with an empty note and with whitespace only, ENABLED once a real note is typed; then with that note in hand, DISABLED for a blank, zero, negative, fractional, non-numeric or over-cap amount and ENABLED again at 1 and at the maxDelta PROP — every negative assertion with its positive pair (C1, A1, A3)", () => {
     const is = island();
     click(is, "stream-credits-adjust");
     expect(propsOf(must(is, "stream-credits-submit")).disabled).toBe(true);
@@ -169,6 +184,49 @@ describe("AdminStreamCreditsPanel — the Adjust-credits modal, opened by its ow
     change(is, "stream-credits-note", "pilot league");
     expect(propsOf(must(is, "stream-credits-note")).value).toBe("pilot league");
     expect(propsOf(must(is, "stream-credits-submit")).disabled).toBe(false);
+
+    // I1 (review, fix round 1). The note is valid from here on, so nothing but the AMOUNT can be
+    // doing the work. `<input type="number">`'s min/max/step are a browser hint — every string
+    // below is one a staff member can put in that field, and `Number("")` is 0, not NaN.
+    // The ceiling case uses the PROP (7), so a guard that retyped 50 survives this list (A3) only
+    // if it also passes at 8 — which it does not, because 8 > 7 is the case being asserted.
+    for (const bad of ["", "   ", "0", "-1", "1.5", "abc", String(PROPS.maxDelta + 1)]) {
+      change(is, "stream-credits-amount", bad);
+      expect(propsOf(must(is, "stream-credits-submit")).disabled, `amount ${JSON.stringify(bad)}`).toBe(true);
+      expect(propsOf(must(is, "stream-credits-amount-hint")).className, `hint for ${JSON.stringify(bad)}`).toContain("text-red-600");
+    }
+    for (const good of ["1", String(PROPS.maxDelta)]) {
+      change(is, "stream-credits-amount", good);
+      expect(propsOf(must(is, "stream-credits-submit")).disabled, `amount ${good}`).toBe(false);
+      expect(propsOf(must(is, "stream-credits-amount-hint")).className, `hint for ${good}`).toContain("text-slate-500");
+    }
+  });
+
+  it("the amount gate is a GUARD, not only a disabled button: the submit handler CALLED with an over-cap amount sends nothing, and the same handler at the cap POSTs that delta (A2 — `disabled` is markup, and Enter, a stale render or a programmatic click all reach the handler anyway)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: { id: "r", balance: 7, applied: true } }) });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const is = island();
+      click(is, "stream-credits-adjust");
+      change(is, "stream-credits-note", "pilot league");
+      change(is, "stream-credits-amount", String(PROPS.maxDelta + 1));
+      const submit = () => (propsOf(must(is, "stream-credits-submit")).onClick as () => Promise<void>)();
+      await submit();
+      expect(fetchMock, "an over-cap amount reached the network").not.toHaveBeenCalled();
+      change(is, "stream-credits-amount", "0");
+      await submit();
+      expect(fetchMock, "a zero amount reached the network").not.toHaveBeenCalled();
+      // The positive pair: the SAME handler, one legal edit later, does post — so the assertions
+      // above are the guard refusing, never a handler that never worked.
+      change(is, "stream-credits-amount", String(PROPS.maxDelta));
+      await submit();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as { body: string }).body)) as { delta: number; kind: string };
+      expect(body.delta).toBe(PROPS.maxDelta);
+      expect(body.kind).toBe("grant");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("the kind switch: choosing refund adds the session field EMPTY, choosing grant or revoke takes it away again, and the amount and note survive the switch (C1', C1\")", () => {
@@ -185,5 +243,46 @@ describe("AdminStreamCreditsPanel — the Adjust-credits modal, opened by its ow
     // The fields the switch must NOT reset — only the 409 path and a fresh open reset the form.
     expect(propsOf(must(is, "stream-credits-amount")).value).toBe("1");
     expect(propsOf(must(is, "stream-credits-note")).value).toBe("failed stream");
+  });
+});
+
+describe("the /admin/orgs/[id] mount — which CONSTANT reaches which prop", () => {
+  // I2 (review, fix round 1). `maxDelta`, `ledgerLimit` and `noteMax` are three `number` props fed
+  // by three exported ceilings: swapping any two of them is tsc-clean and leaves every other test
+  // in this file green, because the panel's own tests pass their own numbers and never see the
+  // page. Nothing pinned the wiring, so the panel could have offered 20 credits per adjustment and
+  // promised the latest 50 ledger rows with a full suite behind it.
+  //
+  // The oracle is the IMPORTED constant, never a typed 50 / 20 / 500 (S10): moving a ceiling moves
+  // this assertion with it instead of leaving it asserting yesterday's number.
+  //
+  // It is a SOURCE assertion because it cannot be anything else here. page.tsx is an async server
+  // component that awaits requireStaff and four usecases, so it cannot be rendered by this harness;
+  // and the three constants live behind `import "server-only"`, which ONLY vitest aliases away
+  // (vitest.config.ts:178-179) — the walkthrough and scripts/smoke.ts cannot name them at all
+  // (e2e/price-kit.ts:160-177: a spec that imports a server-only module collects ZERO tests).
+  const PAGE = join(fileURLToPath(new URL(".", import.meta.url)), "../../app/admin/orgs/[id]/page.tsx");
+
+  it("page.tsx passes STREAM_CREDIT_ADJUST_MAX → maxDelta, STREAM_CREDIT_LEDGER_LIMIT → ledgerLimit and STAFF_NOTE_MAX → noteMax, resolved by VALUE from the constants themselves — and the three are distinct numbers, so a swap is visible (W1)", () => {
+    const src = readFileSync(PAGE, "utf8");
+    const block = src.match(/<AdminStreamCreditsPanel\b[\s\S]*?\/>/);
+    expect(block, "AdminStreamCreditsPanel is not mounted on /admin/orgs/[id]").not.toBeNull();
+    // prop name → the bare identifier the JSX hands it (`rows={streamCredits.rows}` lands here too
+    // and is simply not one of the three looked up below).
+    const wired = Object.fromEntries(
+      [...block![0].matchAll(/(\w+)=\{([A-Za-z_$][\w.$]*)\}/g)].map((m) => [m[1]!, m[2]!]),
+    ) as Record<string, string | undefined>;
+    const constants: Record<string, number> = { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, STAFF_NOTE_MAX };
+    // Without this, a swap between two ceilings that happened to be EQUAL would pass: the check
+    // below compares values, so the values have to differ for it to witness anything.
+    expect(new Set(Object.values(constants)).size, "two ceilings share a value — the swap check below is vacuous").toBe(3);
+    for (const [prop, name] of [
+      ["maxDelta", "STREAM_CREDIT_ADJUST_MAX"],
+      ["ledgerLimit", "STREAM_CREDIT_LEDGER_LIMIT"],
+      ["noteMax", "STAFF_NOTE_MAX"],
+    ] as const) {
+      expect(wired[prop], `${prop} is not wired to a bare identifier on the mount`).toBeTruthy();
+      expect(constants[wired[prop]!], `${prop} is fed by ${wired[prop]}`).toBe(constants[name]);
+    }
   });
 });

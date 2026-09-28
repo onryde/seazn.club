@@ -13,6 +13,7 @@ import { requireStaff } from "@/lib/admin";
 import { walletIdFor, balance as walletBalance } from "@/lib/credits";
 import { adjustmentsForOrg } from "@/server/usecases/admin-adjustments-log";
 import { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, streamCreditsForOrg } from "@/server/usecases/admin-stream-credits";
+import { STAFF_NOTE_MAX } from "@/server/usecases/stream-credits";
 import { slotConsumingDivisions } from "@/server/usecases/admin-divisions";
 import { SlotWaiverButton } from "./slot-waiver-button";
 import { ADJUSTMENT_LABELS } from "./adjustment-labels";
@@ -145,6 +146,7 @@ export default async function AdminOrgPage({
         rows={streamCredits.rows}
         maxDelta={STREAM_CREDIT_ADJUST_MAX}
         ledgerLimit={STREAM_CREDIT_LEDGER_LIMIT}
+        noteMax={STAFF_NOTE_MAX}
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
