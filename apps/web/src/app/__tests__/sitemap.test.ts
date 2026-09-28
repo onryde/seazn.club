@@ -11,9 +11,10 @@
 // Pinned here, each against the thing that decides it rather than a retyped
 // literal: the route's `dynamic` export, the read's cache window (the exported
 // shipped default, and its env override for e2e/smoke), that sitemap() really
-// reads THROUGH the cache, the static fallback on a DB error, and — against a
-// real database — that a public published competition and its division are
-// listed while an unlisted one is not.
+// reads THROUGH the cache, that no entry carries a lastmod, the static
+// fallback on a DB error, and — against a real database — that a public
+// published competition and its division are listed while an unlisted one is
+// not.
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -119,33 +120,35 @@ describe("sitemap.xml: reads and fallback", () => {
     expect(out).toContain(`${BASE}/shared/acme-club/summer-cup/open`);
   });
 
-  it("lastmod: none on static pages; a competition's hub and divisions carry ITS timestamp, as the cache serves it", async () => {
-    // What sitemap.ts receives is the cached, JSON round-tripped shape (the
-    // double above round-trips exactly as the real cache does): `updated` is
-    // a string there, on a hit as on a miss.
+  it("no entry carries lastmod: not the static pages, the sport landings, a competition hub or a division", async () => {
+    // Owner ruling 2026-09-28: the sitemap states no lastmod at all. The only
+    // timestamp a competition has is created_at (there is no updated_at), which
+    // is not a modification time, and a lastmod stamped with the request time
+    // moves on every fetch. Either one misleads a crawler; none states nothing.
+    // The source still hands `updated` over, so the premise below makes sure a
+    // competition value was there to leak.
     vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([
       { orgSlug: "acme-club", compSlug: "summer-cup", divisionSlugs: ["open"], updated: "2026-09-01T10:00:00.000Z" },
       { orgSlug: "acme-club", compSlug: "winter-cup", divisionSlugs: [], updated: "2026-02-03T04:05:06.000Z" },
     ]);
     vi.mocked(listDiscoverySports).mockResolvedValueOnce([{ key: "badminton", name: "Badminton" }]);
     const entries = await sitemap();
-    const at = (url: string) => entries.find((e) => e.url === url);
+    const out = urls(entries);
 
-    expect(at(`${BASE}/shared/acme-club/summer-cup`)?.lastModified).toBe("2026-09-01T10:00:00.000Z");
-    expect(at(`${BASE}/shared/acme-club/summer-cup/open`)?.lastModified).toBe("2026-09-01T10:00:00.000Z");
-    expect(at(`${BASE}/shared/acme-club/winter-cup`)?.lastModified).toBe("2026-02-03T04:05:06.000Z");
-    const undated = entries.filter((e) => !e.url.includes("/shared/"));
-    expect(undated.length, "premise: static and sport entries exist").toBeGreaterThan(10);
-    expect(undated.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);
+    // Premise: every KIND of entry is present, so a lastmod on any one kind
+    // has somewhere to show.
+    expect(out).toContain(`${BASE}/pricing`);
+    expect(out).toContain(`${BASE}/discover/badminton`);
+    expect(out).toContain(`${BASE}/shared/acme-club/summer-cup`);
+    expect(out).toContain(`${BASE}/shared/acme-club/summer-cup/open`);
+    expect(out).toContain(`${BASE}/shared/acme-club/winter-cup`);
 
-    // Through the serialiser the route itself uses: one <lastmod> per
-    // competition URL, each the competition's own, and nothing else dated.
+    expect(entries.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);
+    // Through the serialiser the route itself uses, so a key spelled any other
+    // way that still reaches the XML is caught too.
     const xml = resolveRouteData(entries, "sitemap");
-    expect(xml.match(/<lastmod>[^<]*<\/lastmod>/g)).toEqual([
-      "<lastmod>2026-09-01T10:00:00.000Z</lastmod>",
-      "<lastmod>2026-09-01T10:00:00.000Z</lastmod>",
-      "<lastmod>2026-02-03T04:05:06.000Z</lastmod>",
-    ]);
+    expect(xml).toContain(`<loc>${BASE}/shared/acme-club/summer-cup/open</loc>`);
+    expect(xml).not.toContain("<lastmod>");
   });
 
   it("a database error at request time serves the static routes, not a 500", async () => {
@@ -246,28 +249,13 @@ describe.skipIf(!HAS_DB)("sitemap.xml: a seeded database", () => {
       status: "published",
     });
 
-    const out = urls(await sitemap());
+    const entries = await sitemap();
+    const out = urls(entries);
     expect(out).toContain(`${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}`);
     expect(out).toContain(`${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}/${scene.listed.divisionSlug}`);
     expect(out.filter((u) => u.includes(`/shared/${scene.orgSlug}/${scene.unlisted.slug}`))).toEqual([]);
-  });
-
-  it("the source returns `updated` as an ISO string — the same shape the cache hands back on a hit — and it reaches lastmod", async () => {
-    const [{ created_at: createdAt }] = await sql<{ created_at: Date }[]>`
-      select c.created_at from competitions c join organizations o on o.id = c.org_id
-       where o.slug = ${scene.orgSlug} and c.slug = ${scene.listed.slug}`;
-    // The mock above wraps the REAL function, so this is the query's own value.
-    const miss = (await listPublicSitemapEntries()).find(
-      (e) => e.orgSlug === scene.orgSlug && e.compSlug === scene.listed.slug,
-    );
-    expect(miss, "premise: the listed competition is in the source").toBeDefined();
-    expect(typeof miss!.updated).toBe("string");
-    expect(miss!.updated).toBe(new Date(createdAt).toISOString());
-    // A hit is the miss after a JSON round trip; with `updated` a string the
-    // two are the same value, so the sitemap cannot differ between them.
-    expect(JSON.parse(JSON.stringify(miss))).toEqual(miss);
-
-    const hub = (await sitemap()).find((e) => e.url === `${BASE}/shared/${scene.orgSlug}/${scene.listed.slug}`);
-    expect(hub?.lastModified).toBe(miss!.updated);
+    // And from real rows too — the query's own `updated`, not a fixture's —
+    // nothing is dated.
+    expect(entries.filter((e) => e.lastModified !== undefined).map((e) => e.url)).toEqual([]);
   });
 });

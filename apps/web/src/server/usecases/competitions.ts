@@ -721,10 +721,12 @@ export async function patchCompetition(
   // why the expiry acts as stale here is an open finding (smoke pins the
   // bound). Expiring the whole org tag is affordable here because
   // this is a rare, deliberate write — never a scoring path. The sitemap is NOT
-  // refreshed here: `app/sitemap.ts` declares no `revalidate`, so Next renders
-  // it statically at build and it changes only at the next deploy — its draft
-  // filter decides what a BUILD lists, not when a publish shows up (out of
-  // scope for this change; review 2026-09-27 M1). Discovery is covered above
+  // refreshed here, by design: `app/sitemap.ts` renders at request time and
+  // reads its competitions through `sitemap-cache.ts`'s cache, so a publish or
+  // an unpublish shows in the sitemap within that window
+  // (SITEMAP_REVALIDATE_SECONDS, an hour). The lag is owner-accepted
+  // (2026-09-28): the page itself refuses at once, and only the slug lingers
+  // in the sitemap until the window turns. Discovery is covered above
   // (`discoveryTouched` includes a status change of a discoverable
   // competition). Outside the tx — invalidation never rolls back a write — and
   // best-effort like the grants below: the write has committed, so a failed

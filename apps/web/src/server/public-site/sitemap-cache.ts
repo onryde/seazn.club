@@ -23,9 +23,11 @@ import { listPublicSitemapEntries } from "./data";
 export const SITEMAP_ENTRIES_CACHE_KEY = ["public-sitemap-entries-v1"];
 
 /** `listPublicSitemapEntries`, cached. The cache JSON-serialises its value, so
- *  everything in it must already be JSON: slugs, the slug array, and `updated`,
- *  which the source returns as an ISO string for exactly this reason — the
- *  same shape on a miss (fresh from the query) as on a hit (from the cache). */
+ *  a reader sees a hit and a miss alike only for fields that are already JSON:
+ *  the slugs and the slug array, which are all sitemap.ts reads. `updated`
+ *  rides along unread (the sitemap states no lastmod): it is the driver's Date
+ *  on a miss and a string on a hit, so a reader that ever wants it must first
+ *  make the source return a string. */
 export const cachedPublicSitemapEntries = unstable_cache(
   () => listPublicSitemapEntries(),
   SITEMAP_ENTRIES_CACHE_KEY,

@@ -1845,9 +1845,7 @@ export async function listPublicSitemapEntries(): Promise<
       orgSlug: r.org_slug,
       compSlug: r.comp_slug,
       divisionSlugs: [],
-      // ISO string, whatever the driver hands back (a Date for timestamptz):
-      // the sitemap caches this value as JSON, so a hit and a miss must match.
-      updated: new Date(r.created_at).toISOString(),
+      updated: r.created_at,
     };
     if (r.div_slug) entry.divisionSlugs.push(r.div_slug);
     map.set(key, entry);

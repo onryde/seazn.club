@@ -42,24 +42,21 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // unreachable: fall back to the static set rather than a 500. A failed read
   // is not cached, so the next request tries again.
   //
-  // `lastModified` is the competition's own timestamp, on its hub and its
-  // divisions alike, never the request time: a lastmod that moves on every
-  // fetch tells a crawler nothing, and teaches it to ignore the field. Static
-  // pages carry none at all. (`updated` is the competition's created_at —
-  // competitions have no updated_at column — as an ISO string.)
+  // No entry carries `lastModified` (owner ruling 2026-09-28). A competition's
+  // only timestamp is created_at — there is no updated_at column — which is
+  // not a modification time, and the request time moves on every fetch; either
+  // would mislead a crawler. So `updated` from the source is not read here.
   let publicEntries: MetadataRoute.Sitemap = [];
   try {
     const competitions = await cachedPublicSitemapEntries();
     publicEntries = competitions.flatMap((c) => [
       {
         url: `${BASE}/shared/${c.orgSlug}/${c.compSlug}`,
-        lastModified: c.updated,
         changeFrequency: "hourly" as const,
         priority: 0.7,
       },
       ...c.divisionSlugs.map((div) => ({
         url: `${BASE}/shared/${c.orgSlug}/${c.compSlug}/${div}`,
-        lastModified: c.updated,
         changeFrequency: "hourly" as const,
         priority: 0.6,
       })),
