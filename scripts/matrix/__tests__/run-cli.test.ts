@@ -6,9 +6,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS } from "../lib/catalogue.ts";
+import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
+import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
+import { PROBE_API_ROWS, PROBE_SET, makeProbePlanner } from "../lib/probe-set.ts";
+import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
@@ -23,6 +26,9 @@ import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RUN = join(REPO, "scripts/matrix/run.ts");
+/** Every case of the COMMITTED variant set (Task 8), read as a file. */
+const committedVariants = (): VariantCase[] =>
+  (JSON.parse(readFileSync(join(REPO, "scripts/matrix/catalogue/variants.json"), "utf8")) as { sports: { cases: VariantCase[] }[] }).sports.flatMap((s) => s.cases);
 
 type PrepareCtx = Parameters<RunDeps["prepareCaseOrg"]>[0];
 interface DriverCall { base: string; session: Session; orgId: string; driver: FakeLeagueDriver }
@@ -164,6 +170,54 @@ describe("runSlice — refusals first", () => {
     expect(d.order).toEqual([]);
     expect(io.err()).toMatch(why);
     expect(io.err()).toMatch(/usage: run\.ts/);
+  });
+
+  // W1b Task 10: --set names a planner. A name that is not a set — a typo, the
+  // empty string, or a key every object inherits — is refused before the DB.
+  it.each(["nope", "", "toString", "__proto__", "constructor"])("an unknown --set '%s' is refused (UnknownSet, exit 2) before the DB", async (name) => {
+    const d = deps();
+    const io = capture();
+    expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET})`);
+  });
+  it("--set with --only/--scenario/--canary is a usage refusal", async () => {
+    for (const extra of [["--only", "league|generic"], ["--scenario", "M1"], ["--canary", "M1"]]) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--set", PROBE_SET, ...extra])).toBe(2);
+      expect(d.order).toEqual([]);
+      expect(io.err()).toMatch(/--set runs a named set; it takes no --only, --scenario or --canary/);
+      vi.restoreAllMocks();
+    }
+  });
+  it("Review Focus 4: a planner that denies features refuses when REDIS_URL is set, naming it, before the DB", async () => {
+    const d = deps({ env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg", SMOKE_BASE: "http://localhost:3999", REDIS_URL: "redis://localhost:6379" } });
+    const io = capture();
+    expect(await runSlice(d, ["--set", PROBE_SET, "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toMatch(/RedisHidesDeny: .*REDIS_URL/);
+    expect(io.err()).not.toContain("redis://localhost:6379");
+    expect(d.order).toEqual([]);
+  });
+  it("…and the slice (which denies nothing) still runs with REDIS_URL set", async () => {
+    const d = deps({ env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg", SMOKE_BASE: "http://localhost:3999", REDIS_URL: "redis://x" } });
+    capture();
+    expect(await runSlice(d, ["--run-id", "rs", "--report-dir", dirFor(), "--only", "league|generic", "--scenario", "LIFECYCLE"])).toBe(0);
+    expect(d.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+  });
+  it.each([["absent", undefined], ["empty", ""], ["blank", "  "]])("…and the probe set runs when REDIS_URL is %s", async (_n, redis) => {
+    const d = deps({ env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg", SMOKE_BASE: "http://localhost:3999", ...(redis === undefined ? {} : { REDIS_URL: redis }) } });
+    const io = capture();
+    expect(await runSlice(d, ["--set", PROBE_SET, "--run-id", "rz", "--report-dir", dirFor()])).toBe(0);
+    expect(d.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+    expect(io.err()).not.toMatch(/RedisHidesDeny/);
+  });
+  it("a set whose bound variant the engine now refuses is refused before the DB (BoundVariantUnscorable, exit 2)", async () => {
+    const d = deps({ planCases: makeProbePlanner({ rescore: () => "win-home: EngineError: refused now" }) });
+    const io = capture();
+    expect(await runSlice(d, ["--set", PROBE_SET, "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toMatch(/BoundVariantUnscorable: .*win-home: EngineError: refused now/);
+    expect(d.order).toEqual([]);
   });
 });
 
@@ -462,7 +516,7 @@ describe("runSlice — a run", () => {
   it("zero cases: results.json and the 'No cases run' banner are written, exit 1 (planner seam, no shared-state edit)", async () => {
     capture();
     const dir = dirFor();
-    const planCases = () => ({ sports: [] as string[], plan: () => [] });
+    const planCases = () => ({ sports: [] as string[], deniesFeatures: false, plan: () => [] });
     const reads = readsOf(deps());
     expect(await runSlice(reads.deps({ planCases }), ["--run-id", "t8", "--report-dir", dir])).toBe(1);
     expect(resultsIn(dir, "t8").cases).toEqual([]);
@@ -495,7 +549,7 @@ describe("runSlice — a run", () => {
     const io = capture();
     const dir = dirFor();
     const reads = readsOf(deps());
-    const planCases = () => ({ sports: [] as string[], plan: (variantFor: (s: string) => string) => planSliceCases(variantFor, { only: "league|generic", scenario: "LIFECYCLE" }) });
+    const planCases = () => ({ sports: [] as string[], deniesFeatures: false, plan: (variantFor: (s: string) => string) => planSliceCases(variantFor, { only: "league|generic", scenario: "LIFECYCLE" }) });
     expect(await runSlice(reads.deps({ planCases }), ["--run-id", "t8c", "--report-dir", dir])).toBe(3);
     expect(io.err()).toMatch(/UndeclaredPlannerSport: .*'generic'/);
     expect(io.err()).not.toMatch(/has no system variants/);
@@ -503,8 +557,7 @@ describe("runSlice — a run", () => {
     expect(existsSync(join(dir, "t8c"))).toBe(false);
   });
 
-  // ⛔ (Task 9). `deniesFeatures` belongs to CasePlanner from Task 10; here it
-  // is an extra, harmless property of the injected planner.
+  // ⛔ (Task 9). A planner that plants a deny declares it (CasePlanner.deniesFeatures, Task 10).
   const deniedPlan = () => ({ sports: ["generic"], deniesFeatures: true, plan: (v: (s: string) => string) => [
     { caseId: "double_elim|generic|score|DENIED", row: "double_elim", sport: "generic", variant: v("generic"), scenario: "DENIED", canary: false, deny: ["formats.double_elim"] },
   ] as never });
@@ -556,6 +609,67 @@ describe("runSlice — a run", () => {
     await runSlice(d, ["--run-id", "den3", "--report-dir", dir, "--only", "league|generic", "--scenario", "LIFECYCLE"]);
     expect(d.orgs).toHaveLength(1);
     expect(d.orgs[0]?.deny).toBeUndefined();
+  });
+
+  // W1b Task 10.
+  it("runCase resolves the case cfg WITH its overrides (the scenario scores under what the division stores)", async () => {
+    const cfgs: unknown[] = [];
+    wrapScenario("LIFECYCLE", (out) => out, (ctx) => { cfgs.push(ctx.cfg); return ctx; });
+    const planCases = () => ({ sports: ["generic"], deniesFeatures: false, plan: (v: (s: string) => string) => [
+      { caseId: "league|generic|score|LIFECYCLE|v", row: "league", sport: "generic", variant: v("generic"), scenario: "LIFECYCLE", canary: false, overrides: { allowDraws: false } },
+    ] as never });
+    capture();
+    expect(await runSlice(deps({ planCases }), ["--run-id", "ov", "--report-dir", dirFor()])).toBe(0);
+    expect(cfgs.length).toBe(1);
+    // The preset allows draws, so the override is what turns it off.
+    expect((resolveSportCfg("generic", "score") as { allowDraws?: unknown }).allowDraws).toBe(true);
+    expect((cfgs[0] as { allowDraws?: unknown }).allowDraws).toBe(false);
+    expect(cfgs[0]).toEqual(resolveSportCfg("generic", "score", { allowDraws: false }));
+  });
+  it("--set w1b-probe through the REAL runSlice: every case runs in the planned order, DENIED orgs carry their gate and read ⛔, variant cases score under their override", async () => {
+    const dir = dirFor();
+    const cfgs = new Map<string, unknown>();
+    wrapScenario("LIFECYCLE", (out) => out, (ctx) => { cfgs.set(ctx.spec.caseId, ctx.cfg); return ctx; });
+    // The product's gate order (createStages: double-elim first, then advanced), from the text-pinned copy.
+    const gates = new Map<string, string>([...DOUBLE_ELIM_KINDS.map((k) => [k, "formats.double_elim"] as const), ...ADVANCED_KINDS.map((k) => [k, "formats.advanced"] as const)]);
+    const d: Deps = deps({
+      driverFor: (_b, _s, orgId) => ((d.orgs.at(-1)?.deny ?? []).length > 0 ? new FakeDeniedDriver(gates, { deleteFirst: false }, orgId) : new FakeLeagueDriver(orgId)),
+    });
+    capture();
+    expect(await runSlice(d, ["--set", PROBE_SET, "--run-id", "pr", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "pr").cases;
+    expect(cases.length).toBe(PROBE_API_ROWS.length + 7 + 2);
+    // Every case got its own org, and exactly the gated rows' orgs were denied their own gate.
+    expect(d.orgs.length).toBe(cases.length);
+    const deniedRows = ROW_KEYS.filter((r) => expectedGate(stagesForRow(r)) !== null);
+    expect(cases.filter((c) => c.scenario === "DENIED").map((c) => c.row)).toEqual(deniedRows);
+    cases.forEach((c, i) => {
+      expect(d.orgs[i]?.deny, c.caseId).toEqual(c.scenario === "DENIED" ? [expectedGate(stagesForRow(c.row))] : undefined);
+    });
+    expect(cases.filter((c) => c.scenario === "DENIED").map((c) => c.state)).toEqual(deniedRows.map(() => "refused"));
+    // The two variant cases: generic and badminton, each scored under preset + its committed override.
+    const bound = cases.filter((c) => /\|[a-z]+#\d{3}$/.test(c.caseId));
+    expect(bound.map((c) => c.sport)).toEqual([...SLICE_SPORTS]);
+    for (const c of bound) {
+      const id = c.caseId.split("|").at(-1)!;
+      const vc = committedVariants().find((x) => x.id === id)!;
+      expect(vc, id).toBeDefined();
+      expect(cfgs.get(c.caseId), c.caseId).toEqual(resolveSportCfg(vc.sport, vc.preset, { ...vc.overrides }));
+      expect(cfgs.get(c.caseId), c.caseId).not.toEqual(resolveSportCfg(vc.sport, vc.preset));
+      expect(c.state, `${c.caseId}: ${c.reason}`).toBe("works");
+    }
+  });
+  it("a planner that plans a deny while declaring deniesFeatures false is aborted by name (exit 3) before any case — the Redis guard cannot be bypassed", async () => {
+    const planCases = () => ({ sports: ["generic"], deniesFeatures: false, plan: (v: (s: string) => string) => [
+      { caseId: "double_elim|generic|score|DENIED", row: "double_elim", sport: "generic", variant: v("generic"), scenario: "DENIED", canary: false, deny: ["formats.double_elim"] },
+    ] as never });
+    const d = deps({ planCases });
+    const io = capture();
+    const dir = dirFor();
+    expect(await runSlice(d, ["--run-id", "ud", "--report-dir", dir])).toBe(3);
+    expect(io.err()).toMatch(/UndeclaredDeny: .*double_elim\|generic\|score\|DENIED/);
+    expect(d.orgs).toEqual([]);
+    expect(existsSync(join(dir, "ud"))).toBe(false);
   });
 });
 
@@ -615,6 +729,49 @@ describe("runSlice — aborts after the start gates", () => {
   });
   it("realDeps renders MATRIX.md with renderMatrix (the seam is wired, not inert)", () => {
     expect(realDeps().render).toBe(renderMatrix);
+  });
+
+  // Review Focus 5 (W1b Task 10). The live lists are derived from the offline
+  // order (engine variants, codepoint-sorted titles), never typed: reversed,
+  // the builder's first pick changes for any sport with no preferred variant.
+  const reversedDefault = (sport: string): string[] => {
+    const live = [...offlineVariantOrder(sport)].reverse();
+    expect(BUILDER_PREFERRED_VARIANT[sport], sport).toBeUndefined();
+    expect(builderDefaultVariant(sport, live), `${sport}: reversing did not move the default`).not.toBe(offlineBuilderDefault(sport));
+    return live;
+  };
+  const dbWith = (lists: (s: string) => string[]): Partial<RunDeps> => ({ openDb: async () => ({
+    userIdForEmail: async () => "u1",
+    variantKeysInBuilderOrder: async (s: string) => lists(s),
+    chooseTopPublicPlan: async () => "pro",
+    dispose: async () => {},
+  }) });
+  it("Review Focus 5: a live builder default that differs from the offline one refuses (exit 2) naming both keys, before any case", async () => {
+    const drift = reversedDefault("generic");
+    const d = deps(dbWith((s) => (s === "generic" ? drift : offlineVariantOrder(s))));
+    const io = capture();
+    const dir = dirFor();
+    expect(await runSlice(d, ["--run-id", "drift", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toContain(`BuilderDefaultDrift: matrix: generic: the live builder default is '${builderDefaultVariant("generic", drift)}' but the committed catalogue assumes '${offlineBuilderDefault("generic")}'`);
+    expect(d.orgs).toEqual([]);
+    expect(existsSync(join(dir, "drift"))).toBe(false);
+  });
+  it("…a drift on the planner's SECOND sport is caught too (every declared sport is compared, not the first)", async () => {
+    const drift = reversedDefault("badminton");
+    const d = deps(dbWith((s) => (s === "badminton" ? drift : offlineVariantOrder(s))));
+    const io = capture();
+    expect(await runSlice(d, ["--set", PROBE_SET, "--run-id", "drift2", "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toMatch(/BuilderDefaultDrift: matrix: badminton: /);
+    expect(d.orgs).toEqual([]);
+  });
+  it("…and live lists whose default IS the offline one run, for the slice and for the probe set", async () => {
+    for (const argv of [[], ["--set", PROBE_SET]]) {
+      const d = deps(dbWith((s) => offlineVariantOrder(s)));
+      capture();
+      expect(await runSlice(d, [...argv, "--run-id", "nodrift", "--report-dir", dirFor()])).toBe(0);
+      expect(d.orgs.length).toBeGreaterThan(0);
+      vi.restoreAllMocks();
+    }
   });
 });
 

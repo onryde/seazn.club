@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
-import { stagesForRow } from "../lib/catalogue.ts";
+import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
+import { SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
@@ -18,7 +20,8 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
+import type { VariantCase } from "../lib/variants.ts";
+import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** Task 8 m-7: the status api-v1 answers STAGE_NOT_READY with, read from the
@@ -102,7 +105,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
 
   it("builtAsPosted (final review I-2): each item is derived from the POSTED bodies; every way the build can differ fails", () => {
     const body = { kind: "swiss", name: "Swiss", config: { rounds: 5, tiebreak: { a: 1, b: 2 } }, progression: null, seq: 1 };
-    const posted = { sport: "generic", variant: "score", stages: [body], entrants: [{ displayName: "Matrix Player 1", seed: 1 }, { displayName: "Matrix Player 2", seed: 2 }] };
+    const posted = { sport: "generic", variant: "score", stages: [body], entrants: [{ displayName: "Matrix Player 1", seed: 1 }, { displayName: "Matrix Player 2", seed: 2 }], config: {} };
     const rows = [{ id: "a", display_name: "Matrix Player 1", seed: 1, status: "active" }, { id: "b", display_name: "Matrix Player 2", seed: 2, status: "active" }];
     const good: BuiltReadback = {
       posted,
@@ -489,6 +492,158 @@ describe("final review I-2 on the fakes: a product that builds something other t
       expect(c, r.out.observed.caseId).toMatchObject({ verdict: "pass" });
       expect(c.checked, r.out.observed.caseId).toBeGreaterThanOrEqual(3 + 1 + 2 + 2 * 7);
     }
+  });
+});
+
+describe("LIFECYCLE with a variant override (Task 10)", () => {
+  // single-sport: the editor-built override path on the fake; the registry-wide sweep of the item is the next block.
+  const inherited = sportModule("generic").variants.score as Record<string, unknown>;
+  const overrides = buildRuleOverride("generic", { allowDraws: "off" }, inherited);
+  const key = Object.keys(overrides)[0]!;
+  const spec = (o?: Record<string, unknown>) => ({ caseId: "league|generic|score|LIFECYCLE|v", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, ...(o === undefined ? {} : { overrides: o }) }) as CaseSpec;
+  const run = (driver: FakeLeagueDriver, o?: Record<string, unknown>) =>
+    SCENARIOS.LIFECYCLE.run({ driver, spec: spec(o), orgSlug: "o", cfg: resolveSportCfg("generic", "score", o ?? {}), tag: "t", denied: [] });
+  it("the override is non-empty and changes the preset (else this block proves nothing)", () => {
+    expect(Object.keys(overrides).length).toBeGreaterThan(0);
+    expect(resolveSportCfg("generic", "score", overrides)).not.toEqual(resolveSportCfg("generic", "score"));
+  });
+  it("the division is CREATED with the override, and life-built-as-posted judges one more item per overridden key, and passes", async () => {
+    const posted: unknown[] = [];
+    class Records extends FakeLeagueDriver {
+      override createDivision(c: string, i: Parameters<FakeLeagueDriver["createDivision"]>[1]) { posted.push(i.config); return super.createDivision(c, i); }
+    }
+    const plain = (await run(new Records())).assertions.find((a) => a.id === "life-built-as-posted")!;
+    const withO = (await run(new Records(), overrides)).assertions.find((a) => a.id === "life-built-as-posted")!;
+    expect(posted).toEqual([{}, overrides]);
+    expect(plain.verdict).toBe("pass");
+    expect(withO.verdict).toBe("pass");
+    expect(withO.checked).toBe(plain.checked + Object.keys(overrides).length);
+  });
+  it("the fake scores under the override, as the product's config_snapshot does", async () => {
+    const d = new FakeLeagueDriver();
+    await run(d, overrides);
+    expect(d.cfg).toEqual(resolveSportCfg("generic", "score", overrides));
+    expect(d.cfg).not.toEqual(resolveSportCfg("generic", "score"));
+  });
+  it("a product that stores something else under the key reds it, naming config.<key>", async () => {
+    class Tampered extends FakeLeagueDriver {
+      override getDivision() { return super.getDivision().then((d) => ({ ...d, config: { ...d.config, [key]: !(d.config[key] as boolean) } })); }
+    }
+    const a = (await run(new Tampered(), overrides)).assertions.find((x) => x.id === "life-built-as-posted")!;
+    expect(a.verdict).toBe("fail");
+    expect(a.evidence.join(" ")).toContain(`config.${key}`);
+  });
+  it("a product that DROPS the override (stores the bare preset) reds it too", async () => {
+    class Drops extends FakeLeagueDriver {
+      override createDivision(c: string, i: Parameters<FakeLeagueDriver["createDivision"]>[1]) { return super.createDivision(c, { ...i, config: {} }); }
+    }
+    const a = (await run(new Drops(), overrides)).assertions.find((x) => x.id === "life-built-as-posted")!;
+    expect(a.verdict).toBe("fail");
+    expect(a.evidence).toEqual([`division config.${key}: built ${JSON.stringify(inherited[key])}, the engine resolves ${JSON.stringify(overrides[key])}`]);
+  });
+});
+
+describe("builtAsPosted's override items, swept over the sport registry (Task 10)", () => {
+  const committed = (JSON.parse(readFileSync(resolve(REPO, "scripts/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: VariantCase[] }[] }).sports;
+  const readback = (sport: string, variant: string, config: Record<string, unknown>, stored: Record<string, unknown>): BuiltReadback => ({
+    posted: { sport, variant, stages: [], entrants: [], config },
+    division: { id: "d1", slug: "d", sportKey: sport, variantKey: variant, config: stored },
+    stages: [], entrants: [], echo: [],
+  });
+  const none: ObservedRun = { caseId: "c", facts: [], withdrawal: null, configEdit: null, stages: [] };
+  it("every registry sport: its first committed override is one item per key, passing on the engine's parse and failing, by key, on any other stored value", () => {
+    let keys = 0;
+    for (const sport of SPORT_KEYS) {
+      const vc = committed.find((s) => s.sport === sport)?.cases.find((c) => Object.keys(c.overrides).length > 0);
+      expect(vc, `${sport}: no committed case carries an override`).toBeDefined();
+      const cfg = resolveSportCfg(sport, vc!.preset, { ...vc!.overrides }) as Record<string, unknown>;
+      const base = builtAsPosted(readback(sport, vc!.preset, {}, cfg), none);
+      const ok = builtAsPosted(readback(sport, vc!.preset, { ...vc!.overrides }, cfg), none);
+      expect(ok.verdict, `${sport}: ${ok.reason}`).toBe("pass");
+      expect(ok.checked, sport).toBe(base.checked + Object.keys(vc!.overrides).length);
+      for (const k of Object.keys(vc!.overrides)) {
+        const bad = builtAsPosted(readback(sport, vc!.preset, { ...vc!.overrides }, { ...cfg, [k]: { tampered: k } }), none);
+        expect(bad.verdict, `${sport}.${k}`).toBe("fail");
+        expect(bad.evidence.length, `${sport}.${k}`).toBe(1);
+        expect(bad.evidence[0], `${sport}.${k}`).toMatch(new RegExp(`^division config\\.${k}: built \\{"tampered":"${k}"\\}, the engine resolves `));
+        keys++;
+      }
+    }
+    expect(keys).toBeGreaterThanOrEqual(SPORT_KEYS.length);
+  });
+  it("the expected value is the engine's PARSE of preset + override, never the raw override (a product storing the raw one reds)", () => {
+    // A committed override whose parse differs from what was sent: the schema
+    // fills the rest of a partly-overridden nested object.
+    let found: { vc: VariantCase; k: string; cfg: Record<string, unknown> } | null = null;
+    for (const vc of committed.flatMap((s) => s.cases)) {
+      let cfg: Record<string, unknown>;
+      try { cfg = resolveSportCfg(vc.sport, vc.preset, { ...vc.overrides }) as Record<string, unknown>; } catch { continue; }
+      const k = Object.keys(vc.overrides).find((x) => !isDeepStrictEqual(cfg[x], vc.overrides[x]));
+      if (k !== undefined) { found = { vc, k, cfg }; break; }
+    }
+    expect(found, "no committed override parses to something other than what was sent").not.toBeNull();
+    const { vc, k, cfg } = found!;
+    expect(builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, cfg), none).verdict).toBe("pass");
+    const raw = builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, { ...cfg, [k]: vc.overrides[k] }), none);
+    expect(raw.verdict).toBe("fail");
+    expect(raw.evidence[0]).toMatch(new RegExp(`^division config\\.${k}: `));
+    // Key order inside a stored nested value is not a difference.
+    const reordered = Object.fromEntries(Object.entries(cfg[k] as Record<string, unknown>).reverse());
+    expect(builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, { ...cfg, [k]: reordered }), none).verdict).toBe("pass");
+  });
+});
+
+describe("knockout_third_place: the third-place match is BUILT, not only stored (T3 review G1)", () => {
+  const tp = stagesForRow("knockout_third_place")[0]!;
+  const ko = stagesForRow("knockout")[0]!;
+  const fx = (over: Partial<ObservedFixture>): ObservedFixture =>
+    ({ id: "f1", stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status: "decided", outcome: { kind: "win", winner: "a" }, declared: null, ...over });
+  const readback = (body: typeof tp): BuiltReadback => ({
+    posted: { sport: "generic", variant: "score", stages: [body], entrants: [], config: {} },
+    division: { id: "d1", slug: "d", sportKey: "generic", variantKey: "score", config: {} },
+    stages: [{ id: "s1", seq: 1, kind: body.kind, config: { ...body.config }, status: "active" }],
+    entrants: [], echo: [],
+  });
+  const observed = (fixtures: ObservedFixture[]): ObservedRun => ({
+    caseId: "c", facts: [], withdrawal: null, configEdit: null,
+    stages: [{ id: "s1", seq: 1, kind: "knockout", config: {}, field: [], fieldSource: "division", fixtures, standings: [], generates: [], pairRounds: [], complete: null }],
+  });
+  it("the row posts a knockout with config.thirdPlace true; the plain knockout does not", () => {
+    expect(tp.kind).toBe("knockout");
+    expect(tp.config.thirdPlace).toBe(true);
+    expect(ko.config.thirdPlace).toBeUndefined();
+  });
+  it("exactly one fixture flagged third place passes; none or two fail, naming the count", () => {
+    const one = builtAsPosted(readback(tp), observed([fx({}), fx({ id: "f2", thirdPlace: true })]));
+    expect(one).toMatchObject({ verdict: "pass" });
+    expect(builtAsPosted(readback(tp), observed([fx({})]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 0 third-place fixture(s)"] });
+    expect(builtAsPosted(readback(tp), observed([fx({ thirdPlace: true }), fx({ id: "f2", thirdPlace: true })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 2 third-place fixture(s)"] });
+    // A plain knockout judges no third-place item at all.
+    const plain = builtAsPosted(readback(ko), observed([fx({})]));
+    expect(plain.verdict).toBe("pass");
+    expect(plain.checked).toBe(one.checked - 1 - (Object.keys(tp.config).length - Object.keys(ko.config).length));
+  });
+  it("the flag reaches the check from the product's row (`third_place`) through the real scenario's snapshot", async () => {
+    /** A knockout product that also mints its third-place match, flagged as the product's row flags it. */
+    class ThirdPlaceKo extends FakeKnockoutDriver {
+      override async start() {
+        const out = await super.start();
+        if (this.stage!.config.thirdPlace === true) this.seat(Math.max(...this.fixtures.map((f) => f.round_no ?? 0)), null, null, { third_place: true } satisfies Partial<FakeFixture>);
+        return out;
+      }
+    }
+    const built = async (d: FakeKnockoutDriver, row: Row) => (await runOn(d, "M1", { row })).checks.find((c) => c.id === "life-built-as-posted")!;
+    expect(await built(new ThirdPlaceKo(), "knockout_third_place")).toMatchObject({ verdict: "pass" });
+    expect(await built(new FakeKnockoutDriver(), "knockout_third_place")).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 0 third-place fixture(s)"] });
+    expect(await built(new ThirdPlaceKo(), "knockout")).toMatchObject({ verdict: "pass" });
+  });
+  it("text pin: the org fixtures list the driver reads selects `f.third_place` and the route does not strip it", () => {
+    const usecase = readFileSync(resolve(REPO, "apps/web/src/server/usecases/fixtures.ts"), "utf8");
+    const body = /export async function listDivisionFixtures\([\s\S]*?\n}\n/.exec(usecase)?.[0] ?? "";
+    expect(body).toMatch(/\bf\.third_place\b/);
+    const route = readFileSync(resolve(REPO, "apps/web/src/app/api/v1/divisions/[id]/fixtures/route.ts"), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+    expect(route).toMatch(/listDivisionFixtures\(auth, id\)/);
+    expect(route).not.toMatch(/third_place/);
   });
 });
 

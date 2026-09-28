@@ -24,6 +24,8 @@ export interface ObservedFixture {
   outcome: ObservedOutcome | null;
   /** Σ-points the sport declares for the stream the HARNESS posted; null when the harness did not post it. */
   declared: ObservedDeclared | null;
+  /** The product flagged this row a knockout's third-place match (W1b Task 10). Absent otherwise. */
+  thirdPlace?: boolean;
 }
 
 export interface StandingsRowObs { entrantId: string; rank: number; points: number | null }

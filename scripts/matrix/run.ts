@@ -4,7 +4,7 @@
 //
 //   node --experimental-strip-types scripts/matrix/run.ts
 //     [--base URL] [--run-id ID] [--report-dir DIR]
-//     [--only row|sport] [--scenario KEY]   |   [--canary KEY]
+//     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
 //
 // Exit codes, each with one meaning:
 //   0  results written — reds are DATA, not a crash. In canary mode: the
@@ -13,14 +13,22 @@
 //      or a canary that did NOT go red on its own check: a harness that
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
-//      flag, a positional, --canary with --only/--scenario, a run id that is
-//      empty or too long once slugged); an unknown filter value
-//      (UnknownFilter — checked before anything else, PF13); no base URL; no
-//      own-DB proof (BENCH_EXPECTED_DATA_DIR unset, or a data_directory
-//      mismatch at ANY point of the run — an environment fault is never
-//      recorded as a product red); a failed preflight.
+//      flag, a positional, --canary with --only/--scenario, --set with any
+//      filter, a run id that is empty or too long once slugged); an unknown
+//      filter value (UnknownFilter — checked before anything else, PF13); an
+//      unknown --set (UnknownSet) or a planner that refuses to be built (a
+//      bound variant case the engine cannot score, BoundVariantUnscorable);
+//      a planner that plants entitlement denies while REDIS_URL is set
+//      (RedisHidesDeny, Review Focus 4); no base URL; no own-DB proof
+//      (BENCH_EXPECTED_DATA_DIR unset, or a data_directory mismatch at ANY
+//      point of the run — an environment fault is never recorded as a
+//      product red); a failed preflight; a live builder default that differs
+//      from the offline one the committed catalogue assumes
+//      (BuilderDefaultDrift, Review Focus 5 — found after sign-in, before any
+//      case).
 //   3  aborted after the start gates, reason on stderr: the harness commit,
-//      the DB, sign-in, a planning read, or writeResults refusing a secret
+//      the DB, sign-in, a planning read, a planner that plans a deny it did
+//      not declare (UndeclaredDeny), or writeResults refusing a secret
 //      (nothing written); or MATRIX.md failing to render (results.json kept,
 //      the PF4 summary already printed).
 // An uncaught throw would exit 1 — the "zero cases" code — and print an
@@ -40,6 +48,7 @@ import { HttpDriver } from "./lib/driver/http-driver.ts";
 import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
+import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
 import { redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { decideState, writeResults, type CaseResult, type CheckResult, type RunResults } from "./lib/results.ts";
@@ -51,6 +60,7 @@ import {
 } from "./lib/seed-org.ts";
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
 import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
+import { offlineBuilderDefault } from "./lib/variants.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -79,7 +89,7 @@ export interface RunDeps {
   /** MATRIX.md from the results just written (realDeps: renderMatrix). A seam
    *  so the render-failure path is testable without bending shared state. */
   render(results: RunResults): string;
-  /** Defaults to `slicePlanner`. */
+  /** Defaults to `slicePlanner`, or to `SETS[--set]`. */
   planCases?: PlanCases;
 }
 
@@ -88,9 +98,12 @@ export interface PlannerCli { only?: string; scenario?: string; canary?: string;
 
 /** A case list and the sports whose builder variant order it needs from the DB
  *  (read once each, before planning). W1a carry 4: tests inject one instead of
- *  editing SLICE_ROWS in place. */
+ *  editing SLICE_ROWS in place. `deniesFeatures` (W1b Task 10): whether any
+ *  case it plans carries a `deny` — declared up front, because the Redis
+ *  guard must refuse before the DB, and a spec needs the DB's variant order. */
 export interface CasePlanner {
   readonly sports: readonly string[];
+  readonly deniesFeatures: boolean;
   plan(variantFor: (sport: string) => string): CaseSpec[];
 }
 export type PlanCases = (cli: PlannerCli) => CasePlanner;
@@ -109,33 +122,79 @@ export class UndeclaredPlannerSport extends Error {
 
 export const slicePlanner: PlanCases = (cli) => ({
   sports: SLICE_SPORTS,
+  deniesFeatures: false,
   plan: (variantFor) => (cli.canary !== undefined
     ? [planCanaryCase(variantFor, cli.canary)]
     : planSliceCases(variantFor, { only: cli.only, scenario: cli.scenario })),
 });
+
+/** The named sets `--set` chooses from. */
+export const SETS: Readonly<Record<string, PlanCases>> = Object.freeze({ [PROBE_SET]: probePlanner });
+
+export class UnknownSet extends Error {
+  constructor(v: string) {
+    super(`matrix: unknown --set '${v}' (allowed: ${Object.keys(SETS).join(", ")})`);
+    this.name = "UnknownSet";
+  }
+}
+
+/** Review Focus 4: lib/entitlements.ts caches through @/lib/cache, which is a
+ *  no-op without REDIS_URL. With Redis on, a cached allow (`ent:<org>:*`,
+ *  300 s) can hide the SQL deny, and the ⛔ case would read the Pro plan. */
+export class RedisHidesDeny extends Error {
+  constructor() {
+    super("matrix: this run plants entitlement denies, and REDIS_URL is set — lib/entitlements.ts caches through Redis, so a cached allow can hide the deny. Unset REDIS_URL (seazn-local-env: no Redis) and rerun.");
+    this.name = "RedisHidesDeny";
+  }
+}
+
+/** Review Focus 5: the committed catalogue (drop list, variant bindings)
+ *  assumes the OFFLINE builder default (codepoint order of the titled names);
+ *  the live builder orders by the DB collation. Where they differ, every
+ *  default-config decision is about the wrong variant. */
+export class BuilderDefaultDrift extends Error {
+  readonly sport: string;
+  constructor(sport: string, live: string, offline: string) {
+    super(`matrix: ${sport}: the live builder default is '${live}' but the committed catalogue assumes '${offline}' (DB collation vs codepoint order) — regenerate or fix the ordering before trusting any case`);
+    this.name = "BuilderDefaultDrift";
+    this.sport = sport;
+  }
+}
+
+/** A planner planned a deny it did not declare: the Redis guard (which reads
+ *  only the declaration, before the DB) would have been bypassed. */
+export class UndeclaredDeny extends Error {
+  constructor(caseIds: readonly string[]) {
+    super(`planner: ${caseIds.join(", ")} carr${caseIds.length === 1 ? "ies" : "y"} a deny, but the planner declared deniesFeatures false — the REDIS_URL guard never ran`);
+    this.name = "UndeclaredDeny";
+  }
+}
 
 /** The product refusal behind an error red (PF4): what a reader needs to find the call. */
 export interface CallRefusal { method: string; path: string; status: number; code: string | null }
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = "usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--only row|sport] [--scenario KEY] | [--canary KEY]";
+const USAGE = "usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]";
 
 const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined }
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined }
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string };
   try {
     ({ values } = parseArgs({ args: argv, options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
-      only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" },
+      only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
     } }));
   } catch (e) {
     return { usage: e instanceof Error ? e.message : String(e) };
+  }
+  if (values.set !== undefined && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
+    return { usage: "--set runs a named set; it takes no --only, --scenario or --canary" };
   }
   if (values.canary !== undefined && (values.only !== undefined || values.scenario !== undefined)) {
     return { usage: "--canary runs league|generic alone; it takes no --only or --scenario" };
@@ -143,7 +202,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const slugged = (values["run-id"] ?? `w1a-${Date.now().toString(36)}`).toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -204,7 +263,10 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
     );
     driver = deps.driverFor(run.base, run.session, org.orgId);
     const scenario = SCENARIOS[spec.scenario];
-    const out = await scenario.run({ driver, spec, orgSlug: org.orgSlug, cfg: resolveSportCfg(spec.sport, spec.variant), tag: `${run.runId}-${i + 1}`, denied: org.denied });
+    // W1b Task 10: a variant case scores under preset + its override, as the
+    // division it creates stores it (setUpDivision posts the override).
+    const cfg = resolveSportCfg(spec.sport, spec.variant, { ...(spec.overrides ?? {}) });
+    const out = await scenario.run({ driver, spec, orgSlug: org.orgSlug, cfg, tag: `${run.runId}-${i + 1}`, denied: org.denied });
     // ⛔ (Task 9): a scenario that builds no stage opts out of the fixture
     // invariants, and one whose expected state is a refusal says so.
     checks = [...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions].map(redactCheck);
@@ -252,7 +314,7 @@ export function canaryVerdict(key: string, c: CaseResult | undefined): number {
   return ok ? EXIT.OK : EXIT.NO_SIGNAL;
 }
 
-async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
+async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlanner): Promise<number> {
   const harnessCommit = await deps.harnessCommit(); // before the DB: a failure here costs nothing
   const dir = join(cli.reportDir, cli.runId);
   const owner = ownerEmail(cli.runId);
@@ -276,15 +338,22 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
     const session = await deps.signIn(base, owner); // ONE sign-in per run (single worker)
     const userId = await db.userIdForEmail(owner);
     const plan = await db.chooseTopPublicPlan();
-    const planner = (deps.planCases ?? slicePlanner)({ only: cli.only, scenario: cli.scenario, canary: cli.canary });
     const order = new Map<string, string[]>();
     for (const s of planner.sports) order.set(s, await db.variantKeysInBuilderOrder(s));
+    // Review Focus 5: every declared sport, before any case.
+    for (const s of planner.sports) {
+      const live = builderDefaultVariant(s, order.get(s) ?? []);
+      const offline = offlineBuilderDefault(s);
+      if (live !== offline) throw new BuilderDefaultDrift(s, live, offline);
+    }
     const variantFor = (s: string) => {
       const keys = order.get(s);
       if (keys === undefined) throw new UndeclaredPlannerSport(s, planner.sports);
       return builderDefaultVariant(s, keys);
     };
     const specs = planner.plan(variantFor);
+    const undeclared = planner.deniesFeatures ? [] : specs.filter((s) => (s.deny ?? []).length > 0).map((s) => s.caseId);
+    if (undeclared.length > 0) throw new UndeclaredDeny(undeclared);
     for (const [i, spec] of specs.entries()) {
       const { result, refusal } = await runCase(deps, { base, session, userId, plan, runId: cli.runId }, spec, i);
       cases.push(result);
@@ -326,6 +395,20 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     warn(`matrix: ${errText(e)}`);
     return EXIT.REFUSED;
   }
+  // W1b Task 10: the planner is chosen — and built — before anything touches
+  // the DB or the server: an unknown set and a set that cannot be built are
+  // refusals, and whether the run plants denies must be known for the next guard.
+  let planner: CasePlanner;
+  try {
+    // Own keys only: `toString` or `__proto__` would otherwise name a "set".
+    if (cli.set !== undefined && !Object.prototype.hasOwnProperty.call(SETS, cli.set)) throw new UnknownSet(cli.set);
+    const choose = deps.planCases ?? (cli.set === undefined ? slicePlanner : SETS[cli.set]);
+    planner = choose({ only: cli.only, scenario: cli.scenario, canary: cli.canary, set: cli.set });
+  } catch (e) {
+    warn(`matrix: ${errText(e)}`);
+    return EXIT.REFUSED;
+  }
+  if (planner.deniesFeatures && (deps.env.REDIS_URL ?? "").trim() !== "") { warn(errText(new RedisHidesDeny())); return EXIT.REFUSED; }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("matrix: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }
   // RF3: the own-DB proof is mandatory, and comes before the preflight.
@@ -334,10 +417,10 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   try { pf = await deps.preflight(base); } catch (e) { warn(`matrix: preflight: ${errText(e)}`); return EXIT.REFUSED; }
   if (!pf.ok) { for (const r of pf.refusals) warn(`preflight refused: ${r.reason} — ${r.detail}`); return EXIT.REFUSED; }
   try {
-    return await execute(deps, cli, base);
+    return await execute(deps, cli, base, planner);
   } catch (e) {
     warn(`matrix: aborted — ${errText(e)}`);
-    return e instanceof DataDirMismatch || e instanceof DataDirUnset ? EXIT.REFUSED : EXIT.ABORTED;
+    return e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift ? EXIT.REFUSED : EXIT.ABORTED;
   }
 }
 

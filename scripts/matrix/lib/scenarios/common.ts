@@ -20,7 +20,9 @@ import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
  *  built, read back after start rather than taken from the create/add
  *  answers. life-built-as-posted compares the two. */
 export interface BuiltReadback {
-  posted: { sport: string; variant: string; stages: readonly StagePostBody[]; entrants: readonly { displayName: string; seed: number }[] };
+  /** `config`: the rule override the division was created with (W1b Task 10;
+   *  `{}` for a default case). */
+  posted: { sport: string; variant: string; stages: readonly StagePostBody[]; entrants: readonly { displayName: string; seed: number }[]; config: Readonly<Record<string, unknown>> };
   division: DivisionRef;
   stages: StageRef[];
   entrants: EntrantRow[];
@@ -99,7 +101,9 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   if (kind === "team") throw new ScenarioUnsupported(DRIVING_WAVE, "team rosters");
   const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
   const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
-  const division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant });
+  // The override crosses the wire as the division's config, as the editor sends it.
+  const config: Record<string, unknown> = { ...(ctx.spec.overrides ?? {}) };
+  const division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config });
   await ctx.driver.postStages(division.id, bodies);
   const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
   const entrants = await ctx.driver.addEntrants(division.id, inputs.map((e) => ({ ...e, kind })));
@@ -108,7 +112,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   const stage = stages[0];
   if (stage === undefined) throw new Error(`scenario: division ${division.id} has no stage after start`);
   const built: BuiltReadback = {
-    posted: { sport: ctx.spec.sport, variant: ctx.spec.variant, stages: bodies, entrants: inputs },
+    posted: { sport: ctx.spec.sport, variant: ctx.spec.variant, stages: bodies, entrants: inputs, config },
     division: await ctx.driver.getDivision(division.id),
     stages,
     entrants: await ctx.driver.listEntrants(division.id),
@@ -238,7 +242,11 @@ export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: Divi
 }
 
 function toFixture(f: FixtureRow): Omit<ObservedFixture, "declared"> {
-  return { id: f.id, stageId: f.stage_id, poolId: f.pool_id, roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: toObservedOutcome(f.outcome) };
+  return {
+    id: f.id, stageId: f.stage_id, poolId: f.pool_id, roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: toObservedOutcome(f.outcome),
+    // T3 review G1: only a row the product flags carries it.
+    ...(f.third_place === true ? { thirdPlace: true } : {}),
+  };
 }
 
 export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup): Promise<ConfigEditObs> {

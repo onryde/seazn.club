@@ -74,8 +74,9 @@ export class FakeLeagueDriver implements OrganiserDriver {
       this.log("createDivision");
       this.sport = i.sportKey;
       this.variant = i.variantKey;
-      this.cfg = resolveSportCfg(i.sportKey, i.variantKey);
-      // divisions.ts createDivision stores the PARSED preset+overrides.
+      // divisions.ts createDivision stores the PARSED preset+overrides, and the
+      // fixtures are scored under it (config_snapshot) — overrides included.
+      this.cfg = resolveSportCfg(i.sportKey, i.variantKey, i.config ?? {});
       this.divisionConfig = { ...(resolveSportCfg(i.sportKey, i.variantKey, i.config ?? {}) as Record<string, unknown>) };
       return { id: "d1", slug: i.slug, sportKey: i.sportKey, variantKey: i.variantKey, config: { ...this.divisionConfig } };
     });

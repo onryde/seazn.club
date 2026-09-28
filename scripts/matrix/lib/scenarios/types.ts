@@ -10,8 +10,14 @@ export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED";
 
 /** `row` is any catalogue row, API-only ones included (W1b Task 3 carry):
  *  stagesForRow builds every one. `deny` (ruling 24) lists the feature keys
- *  the case org is denied through `org_entitlement_overrides`. */
-export interface CaseSpec { caseId: string; row: RowKey; sport: string; variant: string; scenario: ScenarioKey; canary: boolean; deny?: readonly string[] }
+ *  the case org is denied through `org_entitlement_overrides`. `overrides`
+ *  (W1b Task 10) is a committed variant case's rule override: the division is
+ *  created with it as `config`, and the case scores under preset + override. */
+export interface CaseSpec {
+  caseId: string; row: RowKey; sport: string; variant: string; scenario: ScenarioKey; canary: boolean;
+  deny?: readonly string[];
+  overrides?: Readonly<Record<string, unknown>>;
+}
 
 /** `denied`: the feature keys prepareCaseOrg actually denied the case org
  *  (each one's read-back held) — what the org IS, where `spec.deny` is only

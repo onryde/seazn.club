@@ -4,6 +4,7 @@
 import type { PublicStandingsOut } from "../driver/types.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
+import { resolveSportCfg } from "../sport-cfg.ts";
 import type { BuiltReadback, Recorder } from "./common.ts";
 
 export interface Item { ok: boolean; note: string }
@@ -48,14 +49,33 @@ export function builtAsPosted(built: BuiltReadback, observed: ObservedRun): Chec
   const items: Item[] = [
     { ok: division.sportKey === posted.sport, note: `division sport ${division.sportKey}, posted ${posted.sport}` },
     { ok: division.variantKey === posted.variant, note: `division variant ${division.variantKey}, posted ${posted.variant}` },
-    { ok: built.stages.length === posted.stages.length, note: `${built.stages.length} stage(s) built, ${posted.stages.length} posted` },
   ];
+  // W1b Task 10: one item per overridden key. The product stores the PARSED
+  // preset + override (divisions.ts createDivision), so the expected value is
+  // the engine's own parse of it, never the raw override — a partly overridden
+  // nested object comes back filled by the schema.
+  const overridden = Object.keys(posted.config);
+  if (overridden.length > 0) {
+    const expected = resolveSportCfg(posted.sport, posted.variant, { ...posted.config }) as Record<string, unknown>;
+    for (const k of overridden) {
+      items.push({ ok: canonical(division.config[k]) === canonical(expected[k]), note: `division config.${k}: built ${canonical(division.config[k])}, the engine resolves ${canonical(expected[k])}` });
+    }
+  }
+  items.push({ ok: built.stages.length === posted.stages.length, note: `${built.stages.length} stage(s) built, ${posted.stages.length} posted` });
   for (const body of posted.stages) {
     const s = built.stages.find((x) => x.seq === body.seq);
     items.push({ ok: s?.kind === body.kind, note: `stage ${body.seq}: built ${s?.kind ?? "nothing"}, posted ${body.kind}` });
     for (const [k, v] of Object.entries(body.config)) {
       const got = s === undefined ? undefined : s.config[k];
       items.push({ ok: s !== undefined && canonical(got) === canonical(v), note: `stage ${body.seq} config.${k}: built ${canonical(got)}, posted ${canonical(v)}` });
+    }
+    // T3 review G1: the stored config.thirdPlace (judged just above) says
+    // nothing about the bracket. A knockout posted with it must BUILD exactly
+    // one third-place match, or knockout_third_place reads as a plain knockout.
+    if (body.kind === "knockout" && body.config.thirdPlace === true) {
+      const fixtures = observed.stages.find((o) => s !== undefined && o.id === s.id)?.fixtures ?? [];
+      const n = fixtures.filter((f) => f.thirdPlace === true).length;
+      items.push({ ok: n === 1, note: `stage ${body.seq}: posted thirdPlace, built ${n} third-place fixture(s)` });
     }
   }
   items.push({ ok: built.entrants.length === posted.entrants.length, note: `${built.entrants.length} entrant(s) stored, ${posted.entrants.length} posted` });
