@@ -389,6 +389,37 @@ do not improve the surrounding admin page in passing. **The six screenshots stay
 and the standing "verify visually, always" rule is unaffected. Every other surface in this programme keeps
 full polish; this exemption is `/admin` only.
 
+**OWNER ANSWERS 2026-09-28 (owner's words in quotes).** Put as a numbered list; answers arrived as
+"1 Ok, 2 ok ... 6 Yes".
+- **(1) Deviation (f) ACCEPTED as built** — after a 409 the modal resets to its opening state and the
+  action returns to `grant`; a staff member mid-refund re-picks it. The implementer recommended
+  preserving `kind`; the owner did not take that. **Closed — do not re-raise, and do not "fix" it.**
+- **(2) The ledger rail stays at the latest 20 with NO pager**, stated in the copy ("Latest 20 ledger
+  entries"). An org past 20 adjustments reads its older rows from the Adjustments log, not this panel.
+- **(6) The S1-S10 test-strategy rules DO carry to R2 and R3**, not just R1.
+- **(3) device app, (4) revocation, (5) broadcast visibility: the owner asked for the best option
+  rather than ruling.** Recommendations on file, NOT yet ruled: (3) the PWA stand-in for the pilot,
+  with the browser-WHIP-to-Cloudflare ingest path flagged as UNVERIFIED (R0 killed browser-as-
+  COMPOSITOR, which is a different claim) and a third-party RTMP app as the zero-cost fallback;
+  (4) a device-status check on the heartbeat and on every mutating request, giving ~20 s worst-case
+  revocation without refresh-token plumbing, in place of the 5 h 30 m token life; (5) UNLISTED by
+  default with a per-competition switch to public — the argument is safeguarding, not reach, since an
+  accidental public broadcast of a junior event cannot be taken back and YouTube's copy outlives ours.
+- **`RELAY_KEK` as a Fly secret: DONE** (owner). Struck from the owed list.
+- **Sentry DSN — the owner believes it is in `.env.local`; it is NOT.** Key-name check 2026-09-28 (names
+  only, never values): neither the root nor `apps/web/.env.local` contains ANY Sentry key.
+  `.env.example` declares `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`,
+  and the code reads `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN`. Most likely it is set in the deploy
+  environment only, which may well be all Task 17 needs — but a local run has no DSN, so do not build a
+  step that assumes one without checking.
+- **Google OAuth: ask for the YouTube scope SEPARATELY, not at login** (owner's direction). Incremental
+  authorization — login keeps `openid email profile`, and "Connect YouTube" triggers its own consent for
+  only the orgs that use it. **This does NOT avoid Google's verification**: review is per OAuth client
+  and per requested scope, so asking later still asks. What it buys is that the unverified-app warning
+  and the user cap hit only the connect flow. To insulate login completely, a SEPARATE Cloud project and
+  client for the YouTube integration is the clean move, at the cost of a second brand review and its own
+  quota. Either way the submission is the long pole and should start when the wave is scheduled.
+
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
