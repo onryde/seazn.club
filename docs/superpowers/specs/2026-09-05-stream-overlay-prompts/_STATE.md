@@ -359,6 +359,26 @@ data".
 review, and the owner's per-screen sign-off. R2's plan follows PR-R1's merge; R3 lives in the
 capture repo.
 
+
+**Lane B progress, 2026-09-28.** **Task 7 is CLOSED and committed** — `f02816779` (the ledger usecases,
+5 files, +884) plus `353e78f3e` (fix round 2, test-only, +44). Verdict Approved-with-minors, **0 Critical**.
+The last fix closed a MONEY regression that two review rounds and eighteen tests had missed: the staff
+prior-row comparison and the purchase read-back both compare a stored lower-case org id, and comparing
+either against the RAW argument turns an org's own replay (a hand-typed `/admin/orgs/<ID>` URL) into a 409
+`idempotency_key_reused` — whose documented panel response is to drop the key and retry, which mints a new
+key and grants a SECOND time. The orchestrator re-applied both mutants itself rather than taking the
+implementer's word; each kills exactly the one test named for it.
+
+**Task 7A is SPLIT in two.** Its plan section is 1820 lines and 20 steps ending in a browser walkthrough
+with six screenshots; one dispatch would blow its budget and would review the money half alongside pixels.
+**7A-i** (dispatched 2026-09-28) is Steps 1-9 — the read usecase, the admin write route, both tests — plus
+the four carries the Task 7 re-review routed here: `note` validated at the WRITER (not only in the route's
+zod) against an exported length bound, the zod IMPORTING `STAFF_CREDIT_MAX` rather than typing 50, the
+audit/ledger atomicity probe (the `created_by` no-FK vs `actor_id` FK asymmetry makes a real 23503 without
+a mock), and `recordPurchase`'s codeless 422. M1 — the replay branch echoes the CURRENT balance, not the
+original row's `balance_after` — is carried into the route's response CONTRACT rather than changed, because
+the panel is what echoes it. **7A-ii** is Steps 10-20 (the Option B panel, its component test, the
+walkthrough, the mount, the six screenshots, the smoke wiring) and reads 7A-i's report first.
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
