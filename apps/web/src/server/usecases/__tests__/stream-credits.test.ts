@@ -32,6 +32,15 @@
 //   m27 `prior.org_id === orgId` → `=== args.orgId`      → "a staff REPLAY made through an UPPER-CASE org id"
 //   m28 `existing!.org_id !== args.orgId.toLowerCase()` → `!== args.orgId`
 //                                                        → "a purchase replay made through an UPPER-CASE org id"
+// Fix round 3 (Task 7 re-review, carried into Task 7A: I5, I3, N6). Each is a guard the writer
+// owns because the route is not its only caller — Tasks 10/11/12 call these functions directly:
+//   m29 drop `note.length < 1 ||` from the note guard   → "a staff write needs a REASON" (the empty row)
+//   m30 drop `|| note.length > STAFF_NOTE_MAX`          → the same test (the one-past-the-max row)
+//   m31 `const note = args.note.trim()` → `args.note`   → the same test (the whitespace row AND the stored/audited note)
+//   m32 move the staff_audit_log insert AFTER sql.begin → "the ledger row and its audit row are ONE transaction"
+//   m33 write the audit row on the pool's `sql` instead of `tx` → the same test's xmin assertion
+//   m34 drop `args.delta <= 0` from recordPurchase's guard → "recordPurchase refuses a delta" (0 and -1)
+//   m35 drop `!Number.isInteger(args.delta)` from it       → the same test (the fraction row)
 // The races use the registration-concurrency.test.ts idiom: REAL calls, the lock held by
 // a transaction the test controls, and every waiter observed BLOCKED before release —
 // here in pg_locks (not granted), scoped to waiters blocked BY the holder's own backend
@@ -50,7 +59,7 @@ import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { adjustmentsForOrg } from "../admin-adjustments-log";
 import {
-  NoCreditsError, STAFF_CREDIT_MAX, consumeForSession, creditBalance, grantCredits, lockOrg, orgMoneyLockKey, recordPurchase, refundCredits, revokeCredits,
+  NoCreditsError, STAFF_CREDIT_MAX, STAFF_NOTE_MAX, consumeForSession, creditBalance, grantCredits, lockOrg, orgMoneyLockKey, recordPurchase, refundCredits, revokeCredits,
 } from "../stream-credits";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -319,6 +328,107 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
       select delta from org_stream_credits where org_id = ${r.orgId} order by created_at`;
     expect(rows.map((x) => x.delta)).toEqual([1, STAFF_CREDIT_MAX]);
     expect(await auditRows(r.orgId)).toHaveLength(2);
+  });
+
+  it("a staff write needs a REASON: '', a whitespace-only note and one past STAFF_NOTE_MAX are refused 422 note_invalid with no row, while 'x' and a note of exactly STAFF_NOTE_MAX apply — and the STORED note, in the ledger row AND in the audit detail, is the TRIMMED one (I5: m29, m30, m31)", async () => {
+    const r = await rig();
+    // The accepted boundaries FIRST, so the refusals below cannot be read as a writer that refuses
+    // everything. STAFF_NOTE_MAX is IMPORTED — never a 500 typed here (S10). The bound is not
+    // cosmetic: the note lands in staff_audit_log.detail, which V111 canonicalises into a hash
+    // chain, so an unbounded note is a real column hazard.
+    expect(await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "x", idempotencyKey: key() }))
+      .toMatchObject({ balance: 1, applied: true });
+    expect(await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "y".repeat(STAFF_NOTE_MAX), idempotencyKey: key() }))
+      .toMatchObject({ balance: 2, applied: true });
+    // Settled rather than `.rejects`-ed, so each bound's mutant names ITSELF: a deleted bound
+    // RESOLVES, and that is exactly the path whose custom label vitest drops (measured above).
+    const refusals: [string, string][] = [
+      ["empty (m29)", ""],
+      ["whitespace only (m31)", "   "],
+      ["one past STAFF_NOTE_MAX (m30)", "z".repeat(STAFF_NOTE_MAX + 1)],
+    ];
+    const outcomes: [string, { refused: boolean; status?: number; code?: string }][] = [];
+    for (const [label, note] of refusals) {
+      outcomes.push([
+        label,
+        await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note, idempotencyKey: key() }).then(
+          () => ({ refused: false }),
+          (e: unknown) => ({ refused: true, status: (e as { status?: number }).status, code: (e as { code?: string }).code }),
+        ),
+      ]);
+    }
+    expect(outcomes, "all three note bounds must be exercised").toHaveLength(3);
+    const notRefused = outcomes
+      .filter(([, o]) => !(o.refused && o.status === 422 && o.code === "note_invalid"))
+      .map(([label]) => label)
+      .join(" | ");
+    expect(notRefused, "a note outside 1..STAFF_NOTE_MAX after trimming must be refused 422 note_invalid").toBe("");
+    // The stored note is the trimmed one, in BOTH places an operator reads it. A reason of pure
+    // whitespace is what admin-adjustments-log.ts's text() turns into null — a money movement
+    // rendered in the Adjustments log with no reason at all, which is the defect I5 names.
+    const padded = await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "  pilot league  ", idempotencyKey: key() });
+    const [stored] = await sql<{ note: string }[]>`select note from org_stream_credits where id = ${padded.id}`;
+    expect(stored!.note).toBe("pilot league");
+    expect((await auditRows(r.orgId)).map((a) => a.detail.reason)).toEqual(["x", "y".repeat(STAFF_NOTE_MAX), "pilot league"]);
+    // Not one of the three refusals wrote a row: only the three accepted notes are on the ledger.
+    const rows = await sql<{ note: string }[]>`
+      select note from org_stream_credits where org_id = ${r.orgId} order by created_at`;
+    expect(rows.map((x) => x.note)).toEqual(["x", "y".repeat(STAFF_NOTE_MAX), "pilot league"]);
+  });
+
+  it("the ledger row and its staff_audit_log row are ONE transaction: both carry the same xmin, and an audit insert that FAILS leaves NO ledger row behind (I3: m32, m33)", async () => {
+    const r = await rig();
+    // POSITIVE, and the part an audit COUNT cannot see: xmin is the xid that inserted a row, so
+    // equal xmins ARE the shared transaction. m11 (delete the audit insert) is killed by a count;
+    // an audit write moved onto its own connection, or after sql.begin, is not — it leaves the row
+    // present and the count green while the money and its trail can now commit apart.
+    const g = await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "atomic", idempotencyKey: key() });
+    const [led] = await sql<{ x: string }[]>`select xmin::text as x from org_stream_credits where id = ${g.id}`;
+    const [aud] = await sql<{ x: string }[]>`
+      select xmin::text as x from staff_audit_log where detail->>'ledger_id' = ${g.id}`;
+    expect(aud, "the grant wrote no audit row naming its ledger id").toBeTruthy();
+    expect(aud!.x, "the audit row was written by a DIFFERENT transaction from its ledger row").toBe(led!.x);
+    // NEGATIVE, and cheap because the schema already disagrees with itself here:
+    // org_stream_credits.created_by is `uuid null` with NO foreign key (V410), while
+    // staff_audit_log.actor_id is `not null references users(id)` (V103). An author who is not a
+    // users row therefore inserts the ledger row and then fails the audit insert on 23503 — and
+    // only a shared transaction takes the money back with it.
+    const ghost = randomUUID();
+    const before = await creditBalance(sql, r.orgId);
+    await expect(
+      grantCredits({ orgId: r.orgId, delta: 5, createdBy: ghost, note: "an author who is not a user", idempotencyKey: key() }),
+    ).rejects.toMatchObject({ code: "23503" });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where org_id = ${r.orgId} and created_by = ${ghost}`;
+    expect(n, "a ledger row survived an audit insert that failed — the two are not one transaction").toBe(0);
+    expect(await creditBalance(sql, r.orgId)).toBe(before);
+  });
+
+  it("recordPurchase refuses a delta that is not a positive integer: 0, -1 and 1.5 → 422 delta_invalid with no row; 1 applies (N6: m34, m35)", async () => {
+    const r = await rig();
+    // The refusal had no `code` until now, so `handler` forwarded a bare 422 and no client could
+    // tell it from the ledger's own refusals. Settled, for the same labelling reason as above.
+    const refusals: [string, number][] = [["zero (m34)", 0], ["negative (m34)", -1], ["a fraction (m35)", 1.5]];
+    const outcomes: [string, { refused: boolean; status?: number; code?: string }][] = [];
+    for (const [label, delta] of refusals) {
+      outcomes.push([
+        label,
+        await recordPurchase({ orgId: r.orgId, delta, stripeEventId: `evt_bad_${delta}_${r.orgId}` }).then(
+          () => ({ refused: false }),
+          (e: unknown) => ({ refused: true, status: (e as { status?: number }).status, code: (e as { code?: string }).code }),
+        ),
+      ]);
+    }
+    expect(outcomes, "every non-positive-integer purchase delta must be exercised").toHaveLength(3);
+    const notRefused = outcomes
+      .filter(([, o]) => !(o.refused && o.status === 422 && o.code === "delta_invalid"))
+      .map(([label]) => label)
+      .join(" | ");
+    expect(notRefused, "a purchase delta outside the positive integers must be refused 422 delta_invalid").toBe("");
+    expect(await creditBalance(sql, r.orgId)).toBe(0);
+    // The positive pair: the smallest legal purchase still applies.
+    expect(await recordPurchase({ orgId: r.orgId, delta: 1, stripeEventId: `evt_ok_${r.orgId}` }))
+      .toMatchObject({ applied: true, balance: 1 });
   });
 
   it("a replayed grant (same key, same values) writes no second ledger row and no second audit row — the ORIGINAL id, applied false, balance unchanged; a NEW key applies (m6, m11, m12)", async () => {

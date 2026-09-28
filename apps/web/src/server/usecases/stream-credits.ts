@@ -116,7 +116,10 @@ export interface PurchaseLink {
 export async function recordPurchase(args: {
   orgId: string; delta: number; stripeEventId: string; note?: string; link?: PurchaseLink;
 }): Promise<{ id: string; applied: boolean; balance: number }> {
-  if (!Number.isInteger(args.delta) || args.delta <= 0) throw new HttpError(422, "purchase delta must be a positive integer");
+  // `delta_invalid` (re-review N6): `handler` forwards a code and drops `extra`, so a refusal with
+  // no code reaches the webhook's caller as a bare 422 — indistinguishable from the ledger's own
+  // refusals, which every other throw in this file names.
+  if (!Number.isInteger(args.delta) || args.delta <= 0) throw new HttpError(422, "purchase delta must be a positive integer", "delta_invalid");
   const link = args.link ?? { checkoutSessionId: null, paymentIntentId: null, pack: null, amountMinor: null, currency: null };
   return sql.begin(async (tx) => {
     await lockOrg(tx, args.orgId);
@@ -170,6 +173,16 @@ const AUDIT_ACTION: Record<StaffKind, AdjustmentAction> = {
  *  argument that put V410's `max_duration_minutes <= 300` in the DDL rather than only in a usecase. */
 export const STAFF_CREDIT_MAX = 50;
 
+/** The longest note a staff adjustment may carry, enforced on the TRIMMED value. Here for the same
+ *  reason the ceiling above is: a route is not the only caller, and `note: string` accepts `""` —
+ *  which `admin-adjustments-log.ts`'s `text()` turns into `null`, so the Adjustments log renders a
+ *  money movement with no reason at all (re-review I5). 500 is the donor's own note bound
+ *  (api/admin/orgs/[id]/credits/route.ts's `z.string().max(500)`), so staff meet one length on one
+ *  page. It is not cosmetic: the note lands in `staff_audit_log.detail`, which V111 canonicalises
+ *  into a hash chain, so an unbounded note is a column hazard. 7A's zod IMPORTS this rather than
+ *  retyping 500, so the two cannot drift. */
+export const STAFF_NOTE_MAX = 500;
+
 export interface StaffCreditArgs {
   orgId: string;
   /** A positive integer for all three kinds; a revoke writes its negation. */
@@ -188,6 +201,16 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
   // comparisons so each end can be mutated on its own rather than covering for the other.
   if (!Number.isInteger(args.delta) || args.delta < 1 || args.delta > STAFF_CREDIT_MAX) {
     throw new HttpError(422, `A ${kind} must move between 1 and ${STAFF_CREDIT_MAX} match credits; got ${args.delta}`, "delta_out_of_range");
+  }
+  // The REASON, validated here and not only in 7A's zod (re-review I5) — same argument as the cap
+  // above: `note: string` accepts `""` and `"   "`, and an empty reason is a money movement the
+  // Adjustments log shows with no reason at all (its `text()` maps '' to null). The TRIMMED value
+  // is what is checked AND what is stored, in the ledger row and in the audit detail, so the
+  // value that was judged is the value an operator later reads. Two comparisons, so each end can
+  // be mutated on its own rather than covering for the other.
+  const note = args.note.trim();
+  if (note.length < 1 || note.length > STAFF_NOTE_MAX) {
+    throw new HttpError(422, `A ${kind} needs a reason of 1 to ${STAFF_NOTE_MAX} characters; got ${note.length}`, "note_invalid");
   }
   // Lower-cased: Postgres returns uuids lower-case, and z.uuid() accepts upper-case, so an exact
   // replay of a pasted upper-case id must still compare equal below. `orgId` is the NORMALISED
@@ -253,7 +276,7 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
 
     const [row] = await tx<{ id: string }[]>`
       insert into org_stream_credits (org_id, delta, reason, session_id, balance_after, note, created_by, idempotency_key)
-      values (${args.orgId}, ${delta}, ${kind}, ${sessionId}, ${balanceAfter}, ${args.note}, ${args.createdBy}, ${args.idempotencyKey})
+      values (${args.orgId}, ${delta}, ${kind}, ${sessionId}, ${balanceAfter}, ${note}, ${args.createdBy}, ${args.idempotencyKey})
       returning id`;
     // The unified staff audit, IN this transaction — adminAdjust's auditApplied statement
     // (lib/credits.ts): target 'org', balance_after in the detail, and `reason` = the note
@@ -261,7 +284,7 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
     await tx`
       insert into staff_audit_log (actor_id, action, target_type, target_id, detail)
       values (${args.createdBy}, ${AUDIT_ACTION[kind]}, 'org', ${orgId},
-              ${tx.json({ delta, reason: args.note, session_id: sessionId, ledger_id: row!.id, balance_after: balanceAfter } as never)})`;
+              ${tx.json({ delta, reason: note, session_id: sessionId, ledger_id: row!.id, balance_after: balanceAfter } as never)})`;
     return { id: row!.id, balance: balanceAfter, applied: true };
   }).catch((err: unknown) => {
     // N3: one key on two DIFFERENT orgs at once holds two different money locks, so both writers
