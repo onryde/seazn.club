@@ -77,7 +77,28 @@ export interface RunDeps {
   /** MATRIX.md from the results just written (realDeps: renderMatrix). A seam
    *  so the render-failure path is testable without bending shared state. */
   render(results: RunResults): string;
+  /** Defaults to `slicePlanner`. */
+  planCases?: PlanCases;
 }
+
+/** What a planner may read from the command line. */
+export interface PlannerCli { only?: string; scenario?: string; canary?: string; set?: string }
+
+/** A case list and the sports whose builder variant order it needs from the DB
+ *  (read once each, before planning). W1a carry 4: tests inject one instead of
+ *  editing SLICE_ROWS in place. */
+export interface CasePlanner {
+  readonly sports: readonly string[];
+  plan(variantFor: (sport: string) => string): CaseSpec[];
+}
+export type PlanCases = (cli: PlannerCli) => CasePlanner;
+
+export const slicePlanner: PlanCases = (cli) => ({
+  sports: SLICE_SPORTS,
+  plan: (variantFor) => (cli.canary !== undefined
+    ? [planCanaryCase(variantFor, cli.canary)]
+    : planSliceCases(variantFor, { only: cli.only, scenario: cli.scenario })),
+});
 
 /** The product refusal behind an error red (PF4): what a reader needs to find the call. */
 export interface CallRefusal { method: string; path: string; status: number; code: string | null }
@@ -236,10 +257,11 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
     const session = await deps.signIn(base, owner); // ONE sign-in per run (single worker)
     const userId = await db.userIdForEmail(owner);
     const plan = await db.chooseTopPublicPlan();
+    const planner = (deps.planCases ?? slicePlanner)({ only: cli.only, scenario: cli.scenario, canary: cli.canary });
     const order = new Map<string, string[]>();
-    for (const s of SLICE_SPORTS) order.set(s, await db.variantKeysInBuilderOrder(s));
+    for (const s of planner.sports) order.set(s, await db.variantKeysInBuilderOrder(s));
     const variantFor = (s: string) => builderDefaultVariant(s, order.get(s) ?? []);
-    const specs = cli.canary !== undefined ? [planCanaryCase(variantFor, cli.canary)] : planSliceCases(variantFor, { only: cli.only, scenario: cli.scenario });
+    const specs = planner.plan(variantFor);
     for (const [i, spec] of specs.entries()) {
       const { result, refusal } = await runCase(deps, { base, session, userId, plan, runId: cli.runId }, spec, i);
       cases.push(result);

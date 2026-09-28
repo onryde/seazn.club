@@ -14,7 +14,7 @@ import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "
 import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
-import { SLICE_ROWS } from "../lib/slice.ts";
+import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
 import { NOTES_CAP, closeHandles, describeCommit, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 
@@ -57,6 +57,17 @@ function deps(over: Partial<RunDeps> = {}): Deps {
     ...over,
   };
   return d;
+}
+
+/** Records every sport whose builder variant order the run reads from the DB,
+ *  in call order; `deps(over)` builds a Deps whose openDb reports into it. */
+function readsOf(base: Deps): { sports: string[]; deps: (over?: Partial<RunDeps>) => Deps } {
+  const sports: string[] = [];
+  const openDb: RunDeps["openDb"] = async () => {
+    const db = await base.openDb();
+    return { ...db, variantKeysInBuilderOrder: async (s: string) => { sports.push(s); return db.variantKeysInBuilderOrder(s); } };
+  };
+  return { sports, deps: (over = {}) => deps({ openDb, ...over }) };
 }
 
 const dirFor = () => mkdtempSync(join(tmpdir(), "fm-"));
@@ -419,20 +430,27 @@ describe("runSlice — a run", () => {
     expect(io.out()).toContain("error-red league|generic|score|LIFECYCLE: POST /api/v1/divisions/d1/stages → 400 VALIDATION");
   });
 
-  it("zero cases: results.json and the 'No cases run' banner are written, exit 1", async () => {
+  it("zero cases: results.json and the 'No cases run' banner are written, exit 1 (planner seam, no shared-state edit)", async () => {
     capture();
-    const saved = [...SLICE_ROWS];
-    const rows = SLICE_ROWS as unknown as string[];
-    rows.splice(0);
-    try {
-      const dir = dirFor();
-      expect(await runSlice(deps(), ["--run-id", "t8", "--report-dir", dir])).toBe(1);
-      expect(resultsIn(dir, "t8").cases).toEqual([]);
-      expect(readFileSync(join(dir, "t8", "MATRIX.md"), "utf8")).toContain("No cases run");
-    } finally {
-      rows.splice(0, rows.length, ...saved);
-    }
-    expect([...SLICE_ROWS]).toEqual(saved);
+    const dir = dirFor();
+    const planCases = () => ({ sports: [] as string[], plan: () => [] });
+    const reads = readsOf(deps());
+    expect(await runSlice(reads.deps({ planCases }), ["--run-id", "t8", "--report-dir", dir])).toBe(1);
+    expect(resultsIn(dir, "t8").cases).toEqual([]);
+    expect(readFileSync(join(dir, "t8", "MATRIX.md"), "utf8")).toContain("No cases run");
+    expect(reads.sports).toEqual([]); // the planner's sports are what is read — none here
+    expect([...SLICE_ROWS]).toEqual(["league", "knockout", "swiss"]); // untouched
+  });
+
+  it("the default planner is the slice: 24 cases over the slice sports, variants read once per slice sport", async () => {
+    capture();
+    const dir = dirFor();
+    const reads = readsOf(deps());
+    expect(await runSlice(reads.deps(), ["--run-id", "t8b", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "t8b").cases;
+    expect(cases.length).toBe(SLICE_ROWS.length * 2 * 4);
+    expect(new Set(cases.map((c) => c.sport))).toEqual(new Set(["generic", "badminton"]));
+    expect(reads.sports).toEqual([...SLICE_SPORTS]); // once each, in the slice's own order
   });
 });
 

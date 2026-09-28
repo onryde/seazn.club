@@ -11,6 +11,7 @@
 // first-round-only rule).
 import type { MatchOutcome, StageKind } from "@seazn/engine/core";
 import type { StagePostBody } from "../lib/catalogue.ts";
+import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -163,7 +164,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
           folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
         } catch (e) {
           const code = (e as { code?: unknown }).code;
-          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, typeof code === "string" ? code : null, (e as Error).message);
+          const c = typeof code === "string" ? code : null;
+          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, engineHttpStatus(c), c, (e as Error).message);
         }
         f.events = next;
         f.outcome = folded.outcome;
