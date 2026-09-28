@@ -16,6 +16,7 @@
     "bench:build-packs": "node --experimental-strip-types scripts/bench/packs/build-packs/_tiny.ts",
     "matrix:l3": "node --experimental-strip-types scripts/matrix/run.ts",
     "matrix:render": "node --experimental-strip-types scripts/matrix/render.ts",
+    "matrix:catalogue": "node --experimental-strip-types scripts/matrix/gen-catalogue.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",

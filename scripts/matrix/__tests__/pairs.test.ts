@@ -252,13 +252,16 @@ describe("L2 pair file", () => {
     expect(checked).toBe(L2_IDS.length);
   });
 
-  it("widths spread per format and per sport (controller ruling, fix round 1): every row and every sport with ≥ 7 runs runs at every width — counted", () => {
+  it("widths spread per format and per sport (controller ruling, fix round 1): every row and every sport runs at every width — all (row, width) and (sport, width) pairs checked, none skipped", () => {
     const spread = (axis: string, keys: readonly string[], key: (x: L2Run) => string) => {
       let checked = 0;
       let min = Infinity;
+      const skipped: string[] = [];
       for (const k of keys) {
         const runs = plan.runs.filter((x) => key(x) === k);
-        if (runs.length < L2_WIDTHS.length) continue;
+        // A key with fewer runs than widths cannot meet every width: it is
+        // listed, and the exact-count assertion below reds on it (R-M1).
+        if (runs.length < L2_WIDTHS.length) { skipped.push(`${k} (${runs.length} runs)`); continue; }
         for (const w of L2_WIDTHS) {
           const c = runs.filter((x) => x.width === w).length;
           expect(c, `${axis} ${k} never runs at ${w}`).toBeGreaterThan(0);
@@ -266,10 +269,16 @@ describe("L2 pair file", () => {
           checked++;
         }
       }
-      return { checked, min };
+      return { checked, min, skipped };
     };
     const rows = spread("row", ROW_KEYS, (x) => x.row);
     const sports = spread("sport", SPORT_KEYS, (x) => x.sport);
+    // R-M1 (T7 re-review): the ruling is every row and every sport, so the
+    // counts are exact — ROW_KEYS × widths and SPORT_KEYS × widths.
+    expect(rows.skipped, "rows with fewer runs than widths").toEqual([]);
+    expect(sports.skipped, "sports with fewer runs than widths").toEqual([]);
+    expect(rows.checked).toBe(ROW_KEYS.length * L2_WIDTHS.length);
+    expect(sports.checked).toBe(SPORT_KEYS.length * L2_WIDTHS.length);
     expect(rows.checked).toBeGreaterThan(0);
     expect(sports.checked).toBeGreaterThan(0);
     console.info(`pairs: (row, width) ${rows.checked} checked, min ${rows.min}; (sport, width) ${sports.checked} checked, min ${sports.min}`);

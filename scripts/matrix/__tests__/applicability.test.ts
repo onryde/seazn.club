@@ -276,6 +276,27 @@ describe("M5's tie arm — a level result supportsDraws does not declare (I-1)",
     expect(league.levelFold).toBe("tie");
     expect(RULES.M5!.when(league)).toBe(false); // a points table pays points.tie
   });
+  it("M5's drop reason is true in every non-bracket stage kind the engine declares: a points table pays a tie, and a ladder is not a points table (T8 carry)", () => {
+    // Every stage kind that is not bracket-shaped (engine StageKind minus
+    // BRACKET_STAGE_KINDS) is where "meets no bracket stage" lands a tie, so
+    // the reason must say why each one takes it.
+    const nonBracket = StageKind.options.filter((k) => !BRACKET_STAGE_KINDS.has(k));
+    let checked = 0;
+    for (const k of nonBracket) {
+      if (TABLE_KINDS.includes(k)) expect(RULES.M5!.reason, k).toContain("a points table pays a tie");
+      else expect(RULES.M5!.reason, k).toContain(`a ${k}'s order moves only on a winner`);
+      checked++;
+    }
+    expect(checked).toBe(nonBracket.length);
+    expect(nonBracket.filter((k) => !TABLE_KINDS.includes(k))).toContain("ladder");
+    // The ladder premise, text-pinned: the product reorders a ladder only when the match has a winner.
+    const scoring = readFileSync(resolve(REPO, "apps/web/src/server/usecases/scoring.ts"), "utf8");
+    expect(scoring).toContain('if (fixture.kind === "ladder" && winner !== undefined && loser !== undefined) {');
+    // And it reaches the drops: the ladder row's M5 drops carry it.
+    const ladder = base.drops.filter((d) => d.row === "ladder" && d.scenario === "M5");
+    expect(ladder.length).toBeGreaterThan(0);
+    for (const d of ladder) expect(d.reason, d.cell).toContain("a ladder's order moves only on a winner");
+  });
   it("the harness cannot drive a tie yet, so every cricket bracket cell DROPS M5 with the TRUE reason; no cricket cell says it never ends level", () => {
     // single-sport: cricket is the only sport whose engine emits a tie.
     expect(ALL_OUTCOMES.map((o) => o.kind as string)).not.toContain("tie"); // the gap's premise
@@ -295,6 +316,18 @@ describe("M5's tie arm — a level result supportsDraws does not declare (I-1)",
     }
     expect(bracketRows).toBeGreaterThan(0);
     expect(bracketRows).toBeLessThan(ROW_KEYS.length);
+    // The drop records the gap apart from a real inapplicability (T8: the
+    // committed drop list). M5 is the only rule with a harness gap today, so
+    // the gap drops are exactly the cricket bracket rows.
+    expect(Object.entries(RULES).filter(([, r]) => r.gap !== undefined).map(([id]) => id)).toEqual(["M5"]);
+    let flagged = 0;
+    for (const row of ROW_KEYS) {
+      const d = base.drops.find((x) => x.cell === `${row}|cricket` && x.scenario === "M5")!;
+      expect(d.harnessGap, row).toBe(stagesForRow(row).some((st) => BRACKET_STAGE_KINDS.has(st.kind)));
+      flagged++;
+    }
+    expect(flagged).toBe(ROW_KEYS.length);
+    expect(base.drops.filter((x) => x.harnessGap).length).toBe(bracketRows);
     // The gap is the tie arm ALONE: where a refused draw also holds, the
     // generator's draw request drives M5, so there is no gap. No committed cfg
     // has both (a two-innings level stream is undecided), so the facts are

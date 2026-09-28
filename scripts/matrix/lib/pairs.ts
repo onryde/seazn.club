@@ -1,12 +1,13 @@
-// L2 (design §6.2): every applicable (row, scenario) and (sport, scenario)
-// pair runs at least once in the browser, widths rotating across the seven —
+// L2 (design §6.2): every OWED (row, scenario) and (sport, scenario) pair —
+// applicable, or dropped only for the L3 harness gap (below) — runs at least
+// once in the browser, widths rotating across the seven —
 // per scenario, per format and per sport (controller ruling, T7 fix round 1).
 // Greedy and deterministic: per scenario in catalogue order, rows in registry
 // order take the first sport that still needs covering, then leftover sports
-// take the first applicable row. Registry order, never the caller's: the
+// take the first owed row. Registry order, never the caller's: the
 // variants are looked up by sport. Committed by gen-catalogue.ts (R11).
 //
-// "Applicable" for L2 includes a pair whose ONLY drop is the rule's L3
+// "Owed" by L2 includes a pair whose ONLY drop is the rule's L3
 // harness gap (Rule.gap: the rule applies, the L3 generator cannot drive it):
 // a browser scorer can, so L2 plans it and marks the run `l3Gap` for W1c to
 // record, as it records knownNoPath / l2NoPath (controller ruling, T7
@@ -37,6 +38,11 @@ export interface L2Run {
 
 export interface L2Plan {
   runs: L2Run[];
+  /** The pairs the plan OWES — not the "applicable" ones: per scenario, every
+   *  row and every sport with at least one owed cell, where a cell is owed when
+   *  the scenario applies there (L3 plans it too) OR its only drop is the L3
+   *  harness gap (the run is marked `l3Gap`). Each is covered by exactly one
+   *  run's `covers`. counts.json reports their sum as `pairTargets`. */
   targets: { rowScenario: number; sportScenario: number };
   perScenario: Record<string, number>;
 }

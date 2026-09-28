@@ -294,7 +294,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   M5: Object.freeze({
     ...rule(
       or(drawRefusedHere, tieInBracket),
-      "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (a points table pays a tie)",
+      "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
       ["knockout|football", "knockout|cricket"], "knockout|badminton", true,
     ),
     gap: Object.freeze({
@@ -384,7 +384,10 @@ export function decide(r: Rule, row: RowKey, sport: string, variants: readonly S
 }
 
 export interface PlannedCase { readonly cell: string; readonly row: RowKey; readonly sport: string; readonly scenario: string; readonly preset: string; readonly bound: string | null }
-export interface Drop { readonly cell: string; readonly row: RowKey; readonly sport: string; readonly scenario: string; readonly reason: string }
+/** `harnessGap`: the rule APPLIES here but its L3 harness gap held (Rule.gap),
+ *  so the drop is a generator limitation, not an inapplicability — the
+ *  committed drop list records the two apart. */
+export interface Drop { readonly cell: string; readonly row: RowKey; readonly sport: string; readonly scenario: string; readonly reason: string; readonly harnessGap: boolean }
 
 export class MissingRule extends Error {
   readonly id: string;
@@ -407,9 +410,11 @@ export class UnknownScenario extends Error {
 }
 
 const listed = (ids: readonly string[]): string => `${ids.length}: ${ids.slice(0, 3).join(", ")}${ids.length > 3 ? ", …" : ""}`;
+/** The rule applied somewhere here but its harness gap held there. */
+const isHarnessGap = (r: Rule, d: Decision): boolean => r.gap !== undefined && d.gapped.length > 0;
 const dropReason = (r: Rule, d: Decision): string => {
   // Gapped: the rule APPLIES, so its own reason ("why not") would be false.
-  if (r.gap !== undefined && d.gapped.length > 0) {
+  if (r.gap !== undefined && isHarnessGap(r, d)) {
     const also = d.unscorable.length > 0 ? `; the other committed variants that enable it (${listed(d.unscorable)}) cannot be scored by the harness` : "";
     return `${r.gap.reason}; it applies at ${listed(d.gapped)}${also}`;
   }
@@ -437,7 +442,7 @@ export function planL3(input: { rules?: Readonly<Record<string, Rule>>; variants
       if (r === undefined) throw new MissingRule(id);
       const d = decide(r, row, sport, input.variants);
       if (d.applies) cases.push({ cell, row, sport, scenario: id, preset: d.preset, bound: d.bound });
-      else drops.push({ cell, row, sport, scenario: id, reason: dropReason(r, d) });
+      else drops.push({ cell, row, sport, scenario: id, reason: dropReason(r, d), harnessGap: isHarnessGap(r, d) });
     }
   }
   return { cases, drops };
