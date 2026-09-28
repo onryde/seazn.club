@@ -90,8 +90,9 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
 ## Global Constraints
 
 - **Worktree and branch.**
-  - Work in `/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b`. Every shell command starts `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && …`, because cwd resets between calls.
-  - Wait until W1a PR #896 is merged. Then run `git fetch origin && git switch -c feat/format-matrix-w1b origin/main && git cherry-pick <this plan's commit>`.
+  - **Prerequisite met.** #891 (the docs) and #896 (W1a) are merged to `main` at `a5f813404`, and main's e2e is green. Execution gets its own worktree off `origin/main`: `/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec` on branch `feat/format-matrix-w1b` (Task 1 Step 0). The planning worktree `format-matrix-w1b` (branch `docs/format-matrix-w1b-plan`) is not used for execution.
+  - The anchors were re-pinned at W1a head `b92ef16dd`. `git diff b92ef16dd origin/main` is empty for every anchor file (checked at `64e009f2d`: `scripts/matrix/**`, `match-rules.ts`, `format-gates.ts`, `stages.ts`, `sports/index.ts`, `testkit/index.ts`, `Dockerfile`, `ci.yml`, `package.json`). Step 0 still re-pins them (class 5).
+  - Every shell command starts `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && …`, because cwd resets between calls.
   - Use cherry-pick, never rebase. A squash merge breaks ancestry, so a rebase would replay W1a.
   - Never edit the main checkout. Never `git stash`: the stash stack is shared.
   - No heredocs. Write commit messages with the editor tool into `$TMPDIR/w1b-msg.txt`, then `git commit -F "$TMPDIR/w1b-msg.txt" -- <paths>`.
@@ -101,8 +102,8 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
 - **Local verification = ONLY the tests, specs and walkthroughs that cover the files you changed** (owner, 2026-09-28; `AGENTS.md`). Never the full gate, the full vitest suite or the full e2e suite.
   - The template, with `<N>` = the task number and `<files>` = the exact test paths:
     ```bash
-    cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && rm -f "$TMPDIR/w1b-t<N>.json" && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1b-t<N>.json" --testTimeout=30000 <files>; echo EXIT=$?
-    cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const files=r.testResults.map(t=>t.name);const bad=files.filter(f=>!f.startsWith(process.argv[2]));console.log(JSON.stringify({total:r.numTotalTests,passed:r.numPassedTests,failed:r.numFailedTests,failedSuites:r.numFailedTestSuites,files:files.length,stray:bad}))' "$TMPDIR/w1b-t<N>.json" "$PWD/"
+    cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && rm -f "$TMPDIR/w1b-t<N>.json" && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1b-t<N>.json" --testTimeout=30000 <files>; echo EXIT=$?
+    cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const files=r.testResults.map(t=>t.name);const bad=files.filter(f=>!f.startsWith(process.argv[2]));console.log(JSON.stringify({total:r.numTotalTests,passed:r.numPassedTests,failed:r.numFailedTests,failedSuites:r.numFailedTestSuites,files:files.length,stray:bad}))' "$TMPDIR/w1b-t<N>.json" "$PWD/"
     ```
   - Green means all of:
     - `failed == 0`;
@@ -115,7 +116,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
 - **tsc and eslint on changed files only.**
   - Scoped tsc. With the Write tool, create `$TMPDIR/w1b-tsc-<N>.json`:
     ```json
-    {"extends":"/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b/tsconfig.scripts.json","include":[],"files":[<absolute changed .ts paths>],"compilerOptions":{"incremental":false,"typeRoots":["/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b/node_modules/@types"]}}
+    {"extends":"/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec/tsconfig.scripts.json","include":[],"files":[<absolute changed .ts paths>],"compilerOptions":{"incremental":false,"typeRoots":["/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec/node_modules/@types"]}}
     ```
     Then run `cd <worktree> && rtk proxy node node_modules/typescript-native/bin/tsc -p "$TMPDIR/w1b-tsc-<N>.json"; echo EXIT=$?`. For `packages/*` files, `extends` is that package's `tsconfig.json`.
   - eslint: `cd <worktree> && rtk proxy ./node_modules/.bin/eslint <changed scripts/ files>; echo EXIT=$?`. For a package, run `cd <worktree>/packages/<pkg> && rtk proxy ./node_modules/.bin/eslint <files>`.
@@ -312,10 +313,16 @@ W1a carries 3 and 4. The fake must answer engine refusals with the product's own
 - [ ] **Step 0: Set up the worktree** (once, for the whole plan)
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && gh pr view 896 --json state,mergeCommit --jq '.state+" "+.mergeCommit.oid'
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git fetch origin && git switch -c feat/format-matrix-w1b origin/main && git cherry-pick <plan commit sha from docs/format-matrix-w1b-plan> && pnpm install --frozen-lockfile; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git fetch origin && git merge-base --is-ancestor a5f813404 origin/main && echo W1A-ON-MAIN
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git worktree add /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec -b feat/format-matrix-w1b origin/main; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git cherry-pick "$(git log -1 --format=%H docs/format-matrix-w1b-plan -- docs/superpowers/plans/2026-09-28-format-matrix-w1b.md)" && pnpm install --frozen-lockfile; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git diff --stat b92ef16dd HEAD -- scripts/matrix apps/web/src/lib/match-rules.ts apps/web/src/server/usecases/format-gates.ts apps/web/src/server/usecases/stages.ts packages/engine/src/sports/index.ts
 ```
-Expected: `MERGED <sha>`, then EXIT=0. If #896 is not merged, stop and report. W1b's prerequisite is W1a merged (R1).
+The first command runs from the planning worktree only because the exec worktree does not exist yet. Expected results:
+- `W1A-ON-MAIN`, then EXIT=0 twice.
+- An empty diff stat. The last command re-pins the plan's anchors: if it lists a file, re-read that file's anchors in the Step 0 table before building on them (class 5).
+
+`docs/format-matrix-w1b-plan` is a local branch, so it is visible from every worktree.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -536,7 +543,7 @@ place (W1a carry 4).
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ```
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git commit -F "$TMPDIR/w1b-msg.txt" -- scripts/matrix/lib/driver/engine-http.ts scripts/matrix/__tests__/engine-http.test.ts scripts/matrix/__tests__/fake-driver.ts scripts/matrix/run.ts scripts/matrix/__tests__/run-cli.test.ts scripts/matrix/__tests__/strip-types-loadable.test.ts
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git commit -F "$TMPDIR/w1b-msg.txt" -- scripts/matrix/lib/driver/engine-http.ts scripts/matrix/__tests__/engine-http.test.ts scripts/matrix/__tests__/fake-driver.ts scripts/matrix/run.ts scripts/matrix/__tests__/run-cli.test.ts scripts/matrix/__tests__/strip-types-loadable.test.ts
 ```
 (`git add` new files first.)
 
@@ -2672,8 +2679,8 @@ Add `"matrix:catalogue": "node --experimental-strip-types scripts/matrix/gen-cat
 - [ ] **Step 4: Generate the committed files and review them**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node --experimental-strip-types scripts/matrix/gen-catalogue.ts --write; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node -e 'const c=require("./scripts/matrix/catalogue/counts.json");console.log(JSON.stringify({l1:c.l1.value,l2:c.l2.value,l3:c.l3,drops:c.drops.total,catalogue:c.catalogue,variants:c.variants}))'
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types scripts/matrix/gen-catalogue.ts --write; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node -e 'const c=require("./scripts/matrix/catalogue/counts.json");console.log(JSON.stringify({l1:c.l1.value,l2:c.l2.value,l3:c.l3,drops:c.drops.total,catalogue:c.catalogue,variants:c.variants}))'
 ```
 
 Expected: EXIT=0, followed by one JSON line. Review `drop-list.json` by hand (R11, "show it"):
@@ -3622,7 +3629,7 @@ describe("single-sport scanner (R26)", () => {
 - The engine test runs from the engine package:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b/packages/engine && rm -f "$TMPDIR/w1b-t11e.json" && ./node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1b-t11e.json" src/testkit/for-each-sport.test.ts; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec/packages/engine && rm -f "$TMPDIR/w1b-t11e.json" && ./node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1b-t11e.json" src/testkit/for-each-sport.test.ts; echo EXIT=$?
 ```
 
 Judge it with the template's node one-liner. The prefix argument is `$PWD/` of the engine package, so any test outside `packages/engine/` shows as stray. Expected: both FAIL TO COLLECT, and the ci-wiring addition fails.
@@ -3753,8 +3760,8 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
 Generate the baseline, then review it:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node --experimental-strip-types scripts/matrix/single-sport.ts --write-baseline; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node --experimental-strip-types scripts/matrix/single-sport.ts --check; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types scripts/matrix/single-sport.ts --write-baseline; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types scripts/matrix/single-sport.ts --check; echo EXIT=$?
 ```
 
 Expected: EXIT=0 twice. The planning scan found 5 files with double-quoted sport keys in scope:
@@ -4188,21 +4195,21 @@ Root `package.json`:
 Install and update the lockfile:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && pnpm install; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git diff --stat pnpm-lock.yaml
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && pnpm install; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git diff --stat pnpm-lock.yaml
 ```
 
 Expected: EXIT=0, and a `pnpm-lock.yaml` diff that adds only the `packages/reference` importer block. If the diff touches other importers, stop and report it: an unrelated lock drift must not ride in this commit.
 
 - [ ] **Step 4: Run and see them pass**
   - Scripts: same command as Step 2. Expected green, `files` = 2.
-  - Package: from the package, `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b/packages/reference && rm -f "$TMPDIR/w1b-t12r.json" && ../engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1b-t12r.json" src/index.test.ts test/boundary-gate.test.ts; echo EXIT=$?`, judged with prefix `$PWD/`. Expected green, `files` = 2.
+  - Package: from the package, `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec/packages/reference && rm -f "$TMPDIR/w1b-t12r.json" && ../engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1b-t12r.json" src/index.test.ts test/boundary-gate.test.ts; echo EXIT=$?`, judged with prefix `$PWD/`. Expected green, `files` = 2.
   - Gate CLI: `cd <worktree> && npm run reference:boundary; echo EXIT=$?` → `1 files, 0 violation(s)`, EXIT=0.
 
 - [ ] **Step 5: Deliberate violation proof (the "Done when" wording)**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && cp packages/reference/src/index.ts "$TMPDIR/ref-index.bak" && printf '\nimport { buildStandings } from "@seazn/engine/core";\n' >> packages/reference/src/index.ts && npm run reference:boundary; echo EXIT=$?; cp "$TMPDIR/ref-index.bak" packages/reference/src/index.ts && npm run reference:boundary; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && cp packages/reference/src/index.ts "$TMPDIR/ref-index.bak" && printf '\nimport { buildStandings } from "@seazn/engine/core";\n' >> packages/reference/src/index.ts && npm run reference:boundary; echo EXIT=$?; cp "$TMPDIR/ref-index.bak" packages/reference/src/index.ts && npm run reference:boundary; echo EXIT=$?
 ```
 
 Expected: first `FAIL index.ts:<n> @seazn/engine/core — engine imports must be …` with EXIT=1, then EXIT=0. Paste both lines into the report and into the commit body.
@@ -4248,7 +4255,7 @@ The commands are the ten organiser actions named in §7.5. Every product refusal
   - `START` (streams/types.ts)
   - `lineupsFor`, `FOLD_OPTIONS`, `OFFLINE_RECORDED_AT` (fold.ts)
   - `sportModule`, `entrantKindFor` (sport-cfg.ts)
-  - `RefusedCall`, `OrganiserDriver`, `GenerateObs`
+  - `RefusedCall`, `OrganiserDriver` (driver/types.ts); `GenerateObs` (observed.ts)
 - Produces:
   - `OrganiserDriver.rebuild(stageId: string): Promise<void>`, which throws `RefusedCall` on a refusal.
   - `interface LedgerEntry { id: string; seq: number; type: string; payload: unknown; voids?: string }`, `ledgerEnvelopes(fixtureId, entries)`, `liveEntries(entries)`, `foldLedger(sport, cfg, home, away, entries): MatchOutcome | null`
@@ -4264,8 +4271,8 @@ The commands are the ten organiser actions named in §7.5. Every product refusal
 - [ ] **Step 1: Add the dependency and write the resolution test**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && pnpm add -D -w fast-check@^3; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git diff --stat package.json pnpm-lock.yaml
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && pnpm add -D -w fast-check@^3; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git diff --stat package.json pnpm-lock.yaml
 ```
 
 Expected: EXIT=0. `package.json` gains one `devDependencies` line, and the lock gains a root importer entry, deduplicated to the engine's resolved `fast-check` 3.x.
@@ -4530,9 +4537,9 @@ export function fenceBlocking(m: ModelState, kind: CommandKind, enabled: boolean
 // every command: the step-safe invariants over what the product shows now,
 // fold parity for every fixture whose whole ledger the model knows, and — in
 // the commands — every refusal named.
-import type { FixtureRow, OrganiserDriver, GenerateObs } from "../driver/types.ts";
+import type { FixtureRow, OrganiserDriver } from "../driver/types.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
-import { sameOutcome, toObservedOutcome, type ObservedFixture, type ObservedRun } from "../observed.ts";
+import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedRun } from "../observed.ts";
 import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
 import { stagesForRow, type RowKey } from "../catalogue.ts";
 import { foldLedger, type LedgerEntry } from "./ledger-fold.ts";
@@ -5358,7 +5365,7 @@ The regression stub prints `"MB-NNN"`, `"YYYY-MM-DD"` and an empty title **on pu
 
 ## Task 15: The live walkthrough — the slice re-run, the probe set, the model, the first regression
 
-Before anything else, confirm that #896 has merged and that this branch is rebased on it (Task 1 Step 0). The worktree holds only W1b commits on top of `origin/main`.
+The execution worktree `format-matrix-w1b-exec` was made off `origin/main` in Task 1 Step 0, after #896 merged (`a5f813404`). Confirm it holds only W1b commits on top of `origin/main`: `git log --oneline origin/main..HEAD`.
 
 **Files:**
 - Create: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe/{results.json,MATRIX.md}` and `truth-runs/w1b-model/model-report.json`
@@ -5382,8 +5389,8 @@ Record the port, the data directory, the harness SHA and the server build SHA in
 - [ ] **Step 2: The slice re-run (no regression)**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && npm run matrix:l3 -- --run-id w1b-slice-0928a --report-dir matrix-report; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node -e 'const r=require("./matrix-report/w1b-slice-0928a/results.json");const by={};for(const c of r.cases)by[c.state]=(by[c.state]||0)+1;console.log(JSON.stringify({harness:r.harnessCommit,cases:r.cases.length,by}))'
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:l3 -- --run-id w1b-slice-0928a --report-dir matrix-report; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node -e 'const r=require("./matrix-report/w1b-slice-0928a/results.json");const by={};for(const c of r.cases)by[c.state]=(by[c.state]||0)+1;console.log(JSON.stringify({harness:r.harnessCommit,cases:r.cases.length,by}))'
 ```
 
 Expected: EXIT=0 and `{"cases":24,"by":{"works":24}}`, matching W1a's committed `truth-runs/w1a-slice/results.json`. Any case that differs is a finding. Diff its checks against W1a's evidence, then decide whether it is environment (AGENTS.md class 14) or a regression from Tasks 1–14. Never re-run a red away.
@@ -5391,8 +5398,8 @@ Expected: EXIT=0 and `{"cases":24,"by":{"works":24}}`, matching W1a's committed 
 - [ ] **Step 3: The probe set**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && npm run matrix:l3 -- --set w1b-probe --run-id w1b-probe-0928a --report-dir matrix-report; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node -e 'const r=require("./matrix-report/w1b-probe-0928a/results.json");for(const c of r.cases)console.log(c.state.padEnd(8),c.caseId,"|",c.reason.slice(0,140))'
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:l3 -- --set w1b-probe --run-id w1b-probe-0928a --report-dir matrix-report; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node -e 'const r=require("./matrix-report/w1b-probe-0928a/results.json");for(const c of r.cases)console.log(c.state.padEnd(8),c.caseId,"|",c.reason.slice(0,140))'
 ```
 
 Expected: 13 lines, 4 + 7 + 2. Record each case's state and reason in the report. Each one reads differently:
@@ -5404,13 +5411,13 @@ Expected: 13 lines, 4 + 7 + 2. Record each case's state and reason in the report
 Copy the evidence:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && mkdir -p docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe && cp matrix-report/w1b-probe-0928a/results.json matrix-report/w1b-probe-0928a/MATRIX.md docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe/
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && mkdir -p docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe && cp matrix-report/w1b-probe-0928a/results.json matrix-report/w1b-probe-0928a/MATRIX.md docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe/
 ```
 
 - [ ] **Step 4: The model on the slice, fences on**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && npm run matrix:model -- --run-id w1b-model-0928a --report-dir matrix-report; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:model -- --run-id w1b-model-0928a --report-dir matrix-report; echo EXIT=$?
 ```
 
 Expected: six `[i/6]` lines, each with its `seed=`, then `ok — N runs, parity P, fenced {…}` with P > 0. A `VACUOUS` line is a failure of this task, not of the product: raise `--runs` or `--max-commands` for that cell and record why. A `FAILURE … (NEW)` line is a finding. Keep its printed stub for Step 6.
@@ -5418,7 +5425,7 @@ Expected: six `[i/6]` lines, each with its `seed=`, then `ok — N runs, parity 
 - [ ] **Step 5: The model with fences off on the #879 cell**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && npm run matrix:model -- --run-id w1b-model-0928b --report-dir matrix-report --cell 'league|generic' --no-fences; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:model -- --run-id w1b-model-0928b --report-dir matrix-report --cell 'league|generic' --no-fences; echo EXIT=$?
 ```
 
 Expected: EXIT=1 and `FAILURE I7-rr-no-pair-over-legs (NEW)`, with a shrunk path of `Start → … AddEntrant → … Generate`. That is #879 reproduced by the model. If it does **not** fail, record that as a finding (#879 may already be fixed on main; check the issue), and commit no regression.
@@ -5433,7 +5440,7 @@ With the Write tool, fill `scripts/matrix/catalogue/regressions.json` from the s
 Replay it:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && npm run matrix:model -- --run-id w1b-model-0928c --report-dir matrix-report --regressions; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:model -- --run-id w1b-model-0928c --report-dir matrix-report --regressions; echo EXIT=$?
 ```
 
 Expected: `FAILURE I7-rr-no-pair-over-legs (known MB-001)` and EXIT=0. A known failure does not fail the run.
@@ -5441,8 +5448,8 @@ Expected: `FAILURE I7-rr-no-pair-over-legs (known MB-001)` and EXIT=0. A known f
 Regenerate the catalogue, because the regression count moves L3 (§6.2 formula):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node --experimental-strip-types scripts/matrix/gen-catalogue.ts --write; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git diff --stat scripts/matrix/catalogue/
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types scripts/matrix/gen-catalogue.ts --write; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git diff --stat scripts/matrix/catalogue/
 ```
 
 Expected: only `counts.json` changes, with `l3.regressions` going from 0 to 1 and `l3.value` rising by 1.
@@ -5450,7 +5457,7 @@ Expected: only `counts.json` changes, with `l3.regressions` going from 0 to 1 an
 Copy the model evidence:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && mkdir -p docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model && cp matrix-report/w1b-model-0928a/model-report.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model/model-report.json && cp matrix-report/w1b-model-0928b/model-report.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model/model-report-no-fences.json
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && mkdir -p docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model && cp matrix-report/w1b-model-0928a/model-report.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model/model-report.json && cp matrix-report/w1b-model-0928b/model-report.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model/model-report-no-fences.json
 ```
 
 - [ ] **Step 7: Run the tests the regenerated files feed**
@@ -5464,7 +5471,7 @@ Follow the skill's teardown, which requires a positive ownership check before ki
 - [ ] **Step 9: Commit, push, open the PR, watch CI**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && git add scripts/matrix/catalogue/regressions.json scripts/matrix/catalogue/counts.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model && git commit -F "$TMPDIR/w1b-t15-msg.txt"; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git add scripts/matrix/catalogue/regressions.json scripts/matrix/catalogue/counts.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model && git commit -F "$TMPDIR/w1b-t15-msg.txt"; echo EXIT=$?
 ```
 
 The message file, written with the Write tool, reads `test(matrix): W1b live evidence — slice 24/24, probe set, model on the slice, MB-001 (#879)`, followed by a body that pastes the Step 2 and Step 3 summaries and the Step 4–6 outcomes, and then the `Co-Authored-By` trailer.
@@ -5488,7 +5495,7 @@ Next:
 - [ ] **Step 1: Read the counts and the live outcomes from their files, not from memory**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && node -e 'const c=require("./scripts/matrix/catalogue/counts.json");console.log(JSON.stringify({grid:c.grid,catalogue:c.catalogue,l1:c.l1,l2:c.l2,l3:c.l3,drops:c.drops.total,variants:{uncoverable:c.variants.uncoverablePairs,unscorable:c.variants.unscorable,perSport:c.variants.perSport}},null,1))'
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node -e 'const c=require("./scripts/matrix/catalogue/counts.json");console.log(JSON.stringify({grid:c.grid,catalogue:c.catalogue,l1:c.l1,l2:c.l2,l3:c.l3,drops:c.drops.total,variants:{uncoverable:c.variants.uncoverablePairs,unscorable:c.variants.unscorable,perSport:c.variants.perSport}},null,1))'
 ```
 
 - [ ] **Step 2: Edit `_INDEX.md`**
@@ -5512,8 +5519,8 @@ These are Edit-tool changes, each anchored on the existing text:
 - [ ] **Step 3: Verify the edit reads true against the files**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && grep -an "W1b counts\|MB-001\|Found during W1b\|awaiting owner" docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b && grep -anE "<[a-z|/ ]+>" docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md | grep -a "W1b" ; echo "unfilled=$?"
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && grep -an "W1b counts\|MB-001\|Found during W1b\|awaiting owner" docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && grep -anE "<[a-z|/ ]+>" docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md | grep -a "W1b" ; echo "unfilled=$?"
 ```
 
 Expected: the four anchors print, and `unfilled=1`, meaning grep found no leftover `<…>` on a W1b line.
@@ -5549,8 +5556,7 @@ Run 2026-09-28 against the W1b prompt (`W1b-catalogues-reference.md`), design §
 
 No gap is left open. One scope note: the design's weekly L3 workflow and PR row declaration (R27) are later waves' work (W1c), not W1b's, so they are absent by design.
 
-**2. Placeholder scan.** `grep -anE "TBD|TODO|implement later|fill in|similar to Task"` over the plan finds nothing. Four kinds of intentional template text remain, each explained where it appears:
-- `<plan commit sha>` (Task 1 Step 0). It cannot be known before this plan is committed.
+**2. Placeholder scan.** `grep -anE "TBD|TODO|implement later|fill in|similar to Task"` over the plan finds nothing. Three kinds of intentional template text remain, each explained where it appears:
 - `<N>` and `<files>` in the verify template (Global Constraints). They are substituted per task.
 - The runtime regression stub's `MB-NNN` and `YYYY-MM-DD` (Task 14). They are a paste template that `parseRegressions` refuses until a human completes it.
 - The `<…>` fields in Task 16's status row. They are filled from recorded outputs, and Step 3 checks that none remain.
@@ -5586,4 +5592,4 @@ The plan is complete and saved to `docs/superpowers/plans/2026-09-28-format-matr
 
 **Recommended execution: subagent-driven** (superpowers:subagent-driven-development), with one implementer and one reviewer per task, then a whole-branch review. The tasks chain through named interfaces (5→6→7→8, 1→9→10, 2→13→14). A wrong shape in an early catalogue task silently changes the committed floors that every later wave measures against, and 16 tasks is past the point where one session holds the context well. Tasks 11 and 12 are file-disjoint from 5–10 and could run in parallel worktrees. Keep them sequential anyway: both edit `package.json` and `ci.yml`, and AGENTS.md's parallel rule forbids overlapping file sets.
 
-Before Task 1: W1a PR #896 must be merged (Task 1 Step 0 checks it). O9 and O10 can be answered at any point before Task 16, and the plan's defaults let work proceed meanwhile. An owner answer that differs from the default touches only the tasks named in the Decisions section.
+Prerequisite met: #891 and #896 are merged to `main` (`a5f813404`, main e2e green). Execution runs in its own worktree off `origin/main`, made by Task 1 Step 0. O9 and O10 can be answered at any point before Task 16, and the plan's defaults let work proceed meanwhile. An owner answer that differs from the default touches only the tasks named in the Decisions section.
