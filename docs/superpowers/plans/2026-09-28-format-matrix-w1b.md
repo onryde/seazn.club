@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** W1b fixes what the programme will test and how big that is. It commits these files, each generated deterministically:
-- the 70 design scenarios split into atomic cases (ruling 30 added M12 and split M4);
+- the design §4 scenarios split into atomic cases (ruling 30 added M12 and split M4);
 - an applicability drop list with a reason per drop;
 - a floor per row;
 - a pair-covering variant set;
@@ -151,7 +151,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
   - `SMOKE_BASE=http://localhost:<port>` (never 127.0.0.1);
   - a fresh run id;
   - a clean tree before evidence runs (the harness commit must not end `-dirty`).
-- **Owner decisions are recommendations.** O9 and O10 are written below as recommendations, never as rulings. Tasks that depend on them say so and state the default they assume.
+- **Owner rulings 26–30 (2026-09-28) are binding:** O9 (26), O10 (27), Q-A (28), Q-B (29), and M12 plus the M4 split (30). The Decisions section records 26–29 with their reasoning, and Tasks 4, 6, 7, 15 and 16 apply 30. An agent's own recommendation is never labelled a ruling (AGENTS.md class 17).
 
 ### The four test types, as they apply here
 
@@ -198,7 +198,7 @@ Each has file:line evidence. They are to be recorded in `_INDEX.md` "False premi
    - `:94` (team rosters);
    - `scripts/matrix/lib/catalogue.ts:101` (API-only row bodies).
 
-   Only the last is in W1b's scope list, and this plan closes it (Task 3). The other three are driving work that the scope list does not name. This plan re-routes them through recommendation Q-A below and a guard test (Task 4), rather than silently absorbing or dropping them.
+   Only the last is in W1b's scope list, and this plan closes it (Task 3). The other three are driving work that the scope list does not name. This plan re-routes them through ruling 28 (Q-A) below and a guard test (Task 4), rather than silently absorbing or dropping them.
 5. **A "⛔ refused" state exists in the harness.** `CASE_STATES` lists it (`results.ts:16`), but `decideState` can never return it (`results.ts:126-137`). Ruling 24's denied state needs a producer (Task 9).
 6. **"Order is not significant"** (`packages/engine/src/sports/index.ts:22`). This contradicts `AGENTS.md` class 18 and trap 4: `builtinModules` order is the grid's column order and wave order. W1b does not edit the engine's runtime comment. `forEachSport` pins the order by test (Task 11), and the correction is routed to the next engine-touching wave as a one-line comment fix.
 7. **"The double_elim denied state" is one case** (ruling 24's wording). The product gates `formats.double_elim` on `double_elim` AND `page_playoff` (`format-gates.ts:39`), and `formats.advanced` on `americano` and `ladder` (`:46-47`). Seven offered rows are therefore gated:
@@ -218,29 +218,31 @@ Each has file:line evidence. They are to be recorded in `_INDEX.md` "False premi
 
 ---
 
-## Decisions owed — recommendations, NOT rulings
+## Decisions — owner rulings 26–29 (2026-09-28)
+
+The owner ruled on each of these as the plan recommended (`_INDEX.md` "Owner rulings" 26–29). Each ruling keeps its reasoning, so a later reader can see why. Ruling 30 (M12, M4 split) came after and is applied in Tasks 4, 6, 7, 15 and 16.
 
 **O9 — entry path E: its own scenarios, or an axis multiplying M and C.**
-- **Recommendation:** E stays four scenarios of its own. E4 splits into E4a (device link) and E4b (printed-sheet scan), giving E1, E2, E3, E4a and E4b. Only E2 (single-event result over the API) is in L3. E1 and E3 are browser-only and E4a/E4b need times, so those four are L2.
-- **Owner value:** each entry path is proven at least once per applicable format and sport, and the M and C families stay about 4× smaller. M has 18 atomic cases after ruling 30 and C has 9; as an axis over 5 paths they would be 90 and 45, and ~60 % of them could not run in L3 anyway. The M count was 14 before ruling 30; this line first said 13, which was a miscount.
-- **Alternative:** E as an axis. Every M and C atomic case is repeated per entry path. Delta: Task 4 drops the E parents and adds a `path` field to M/C atoms; Tasks 6, 7 and 8 multiply M/C counts by 5 in L2 and by 1 in L3 (only E2 runs there). L3 is unchanged, L2 grows by roughly (18+9)×4×21 pair targets.
-- **Plan default:** the recommendation. Tasks 4, 6, 7 and 8 depend on it; each marks the lines that change.
+- **Ruled (26):** E stays four scenarios of its own. E4 splits into E4a (device link) and E4b (printed-sheet scan), giving E1, E2, E3, E4a and E4b. Only E2 (single-event result over the API) is in L3. E1 and E3 are browser-only and E4a/E4b need times, so those four are L2.
+- **Owner value:** each entry path is proven at least once per applicable format and sport, and the M and C families are not multiplied by 5, one copy per entry path. Most of those copies could not run in L3 anyway, because only E2 does.
+- **Rejected alternative:** E as an axis, with every M and C atomic case repeated per entry path. L3 would be unchanged. L2 would grow by four extra copies of every applicable M and C pair target.
+- **Plan:** follows ruling 26 in Tasks 4, 6, 7 and 8.
 
 **O10 — reference import mode.**
-- **Recommendation:** `import type` only, from `@seazn/engine/core`. It must be the statement form `import type {…} from`. Inline `import { type X }` is refused, because strip-types keeps `import {} from "…"` as a runtime load.
+- **Ruled (27):** `import type` only, from `@seazn/engine/core`. It must be the statement form `import type {…} from`. Inline `import { type X }` is refused, because strip-types keeps `import {} from "…"` as a runtime load.
 - **Owner value:** one authority for domain types (EntrantId, StageKind, MatchOutcome), with zero runtime coupling. The reference model cannot call the engine it is judging (R7), and a type rename in the engine reds the reference package at typecheck instead of drifting.
-- **Alternative:** a leaf types package (`packages/types`). It needs either an engine refactor to import from it (a runtime change, out of W1b scope) or duplicated types that drift. Revisit only if a family needs a type that core does not export.
-- **Plan default:** the recommendation. Task 12 depends on it; the allowlist is the one line that changes.
+- **Rejected alternative:** a leaf types package (`packages/types`). It needs either an engine refactor to import from it (a runtime change, out of W1b scope) or duplicated types that drift. Revisit only if a family needs a type that core does not export.
+- **Plan:** follows ruling 27 in Task 12.
 
-**Q-A (new) — who drives what W1a deferred to "W1b".**
-- **Recommendation:** multi-stage seeding, team rosters, ladder, americano and mexicano driving, parallel workers, and I2's DE, stepladder and page-playoff champion rules become their own driving wave (or a W1b.5 plan) before W1d's truth run.
+**Q-A — who drives what W1a deferred to "W1b".**
+- **Ruled (28):** multi-stage seeding, team rosters, ladder, americano and mexicano driving, parallel workers, and I2's DE, stepladder and page-playoff champion rules become their own driving wave, "W1-driving", before W1d's truth run.
 - **Owner value:** W1d's first full run would otherwise show those rows as ⏳ "W1b" after W1b has shipped, a routing that points at a closed wave.
 - **Plan behaviour:** W1b keeps the ⏳ deferrals but renames their wave to `"W1-driving"`. `scenario-catalogue.test.ts` fails if any `ScenarioUnsupported`/`RowBuildDeferred` in `scripts/matrix/**` names a wave whose `_INDEX.md` status row says "done" (Task 4).
 
-**Q-B (new) — what a variant case runs.**
-- **Recommendation:** LIFECYCLE only.
+**Q-B — what a variant case runs.**
+- **Ruled (29):** LIFECYCLE only.
 - **Owner value:** a variant is about the sport's config reaching the ledger and the table correctly. LIFECYCLE exercises every fixture's stream through the variant's cfg and the table, while every scenario × variant would multiply L3 by ~5.
-- **Plan default:** the recommendation (Tasks 8, 10).
+- **Plan:** follows ruling 29 in Tasks 8 and 10.
 
 ---
 
@@ -253,7 +255,7 @@ scripts/matrix/
   lib/observed.ts                  (T2)  + ObservedStage.fieldSource
   lib/scenarios/common.ts          (T2,T10) export recordGenerate; fieldSource; division config from spec.overrides
   lib/catalogue.ts                 (T3)  builderStages(); API-only row bodies
-  lib/scenario-catalogue.ts        (T4)  70 parents → 94 atomic cases (87 in L3), layers, harness map, regression loader
+  lib/scenario-catalogue.ts        (T4)  design parents → atomic cases (counts derived, T4), layers, harness map, regression loader
   lib/variants.ts                  (T5)  titleCase copy, offline builder default, boundary classes, pairwise cover, scorability
   lib/applicability.ts             (T6)  CellFacts, combinators, RULES (one per atomic id), planL3, floors
   lib/pairs.ts                     (T7)  L2 greedy pair cover, width rotation
@@ -939,7 +941,7 @@ The `!` on an array index is flagged by scripts lint (no `noUncheckedIndexedAcce
 `common.ts`: add `export const DRIVING_WAVE = "W1-driving";` with this comment:
 
 ```ts
-/** Recommendation Q-A (W1b plan): driving breadth W1a deferred — ladder /
+/** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
  *  americano / mexicano, multi-stage seeding, team rosters — is its own wave.
  *  A deferral names a wave that is not done (scenario-catalogue.test.ts). */
 ```
@@ -964,11 +966,11 @@ Use the template with `<files>` = `scripts/matrix/__tests__/catalogue.test.ts sc
 
 ---
 
-## Task 4: The atomic scenario catalogue (depends on O9 — default: E stays its own scenarios)
+## Task 4: The atomic scenario catalogue (ruling 26: E stays its own scenarios; ruling 30: M12, M4 split)
 
 The design §4 catalogue becomes data:
-- 70 parents;
-- 21 of them split, giving **94 atomic cases** (87 in L3, 93 in L2);
+- the design's parents, whose count the design declares ("Catalogue (N scenario IDs") and the test reads;
+- the atomic cases they split into;
 - a layer per atom;
 - the W1a harness mapping;
 - the design's known 🚫 list, and its UI-only 🚫 list (ruling 30);
@@ -983,6 +985,14 @@ Ruling 30 (owner, 2026-09-28) set four of these atoms:
 - M12b is 🚫 in L2 only. `core.lineup.retirement` has an HTTP route, but no pad or console control sends it. The atom stays in both layers, and its `l2NoPath` names W2.
 
 It also carries the Q-A guard.
+
+**Counts are derived, never typed** (pre-flight ruling R-PF2). They are stated only here, as a plan-time expectation. No test, commit message or later task restates them:
+- `PARENTS.length`: the design declares 70.
+- `ATOMIC.length`: 94 at plan time, after ruling 30. It is Σ max(1, atoms) over the parents.
+- `l3Atomic().length`: 87.
+- `l2Atomic().length`: 93.
+
+Record all four from Step 4's output. If the output differs from these, the output wins, and the difference is a finding to explain rather than a number to edit.
 
 **Split rule:**
 - Split when the parent's text names alternative organiser inputs, conditions or choices.
@@ -1006,7 +1016,7 @@ It also carries the Q-A guard.
   - `l3Atomic(): AtomicScenario[]`
   - `l2Atomic(): AtomicScenario[]`
   - `HARNESS_SCENARIO: Readonly<Record<string, ScenarioKey>>`
-  - `interface RegressionCase { id; title; issue; cell; variant; check; seed; path; fence; status; found; runId }`
+  - `interface RegressionCase { id; title; issue; cell; variant; check; seed; path; replayPath; fence; status; found; runId }` (`replayPath`: pre-flight ruling R-PF9)
   - `parseRegressions(json: unknown): RegressionCase[]`
   - `REGRESSIONS_PATH`
 
@@ -1081,7 +1091,7 @@ describe("atomic cases", () => {
       expect(atoms.some((a) => a.l3Excluded !== null), p).toBe(true);
     }
   });
-  it("O9 default: E2 is the only entry-path atom in L3", () => {
+  it("ruling 26: E2 is the only entry-path atom in L3", () => {
     expect(l3Atomic().filter((a) => a.family === "E").map((a) => a.id)).toEqual(["E2"]);
   });
   it("every atom is on at least one layer; L2 excludes only the API-only E2", () => {
@@ -1123,7 +1133,7 @@ describe("atomic cases", () => {
 });
 
 describe("regression cases (R29)", () => {
-  const base = { id: "MB-001", title: "t", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 42, path: "0:1", fence: null, status: "open", found: "2026-09-28", runId: "fm-w1b-model" };
+  const base = { id: "MB-001", title: "t", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 42, path: "0:1", replayPath: "CC:B", fence: null, status: "open", found: "2026-09-28", runId: "fm-w1b-model" };
   it("empty case first: the committed file parses to a list (empty until a shrunk failure is committed)", () => {
     const rs = parseRegressions(JSON.parse(readFileSync(resolve(REPO, REGRESSIONS_PATH), "utf8")));
     expect(Array.isArray(rs)).toBe(true);
@@ -1135,6 +1145,12 @@ describe("regression cases (R29)", () => {
     expect(() => parseRegressions({ schemaVersion: 1, regressions: [{ ...base, id: "X-1" }] })).toThrow();
     const { seed: _s, ...noSeed } = base;
     expect(() => parseRegressions({ schemaVersion: 1, regressions: [noSeed] })).toThrow();
+  });
+  it("replayPath (R-PF9): a null one parses, a missing or empty one is refused", () => {
+    expect(parseRegressions({ schemaVersion: 1, regressions: [{ ...base, replayPath: null }] })[0]!.replayPath).toBeNull();
+    const { replayPath: _r, ...noReplay } = base;
+    expect(() => parseRegressions({ schemaVersion: 1, regressions: [noReplay] })).toThrow();
+    expect(() => parseRegressions({ schemaVersion: 1, regressions: [{ ...base, replayPath: "" }] })).toThrow();
   });
 });
 
@@ -1159,7 +1175,7 @@ describe("Q-A guard — a deferral never names a finished wave", () => {
 });
 ```
 
-The Q-A guard fails until Task 16 adds the `W1-driving` status row. So Step 3 adds that row to `_INDEX.md` now, with the status `awaiting owner (recommendation Q-A)`. Task 16 re-edits it.
+The Q-A guard fails until Task 16 adds the `W1-driving` status row. So Step 3 adds that row to `_INDEX.md` now, with the status `not started (ruling 28)`. Task 16 re-confirms it.
 
 - [ ] **Step 2: Run and watch it fail**
 
@@ -1169,10 +1185,10 @@ Use the template with `<N>`=4 and `<files>` = `scripts/matrix/__tests__/scenario
 
 ```ts
 // Design §4's scenario catalogue as data (R11: a reviewed file, never a draw).
-// 70 parents in design order; 21 split into atoms by the rule in the W1b plan
+// The design's parents in design order, split into atoms by the rule in the W1b plan
 // Task 4: split on alternative organiser INPUTS or CONDITIONS, never on an
 // outcome the product/rulebook decides, never on a sport's own mechanism.
-// O9 (recommendation, default): E stays four scenarios; only E2 runs in L3.
+// Ruling 26 (O9): E stays four scenarios; only E2 runs in L3.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1338,6 +1354,10 @@ const RegressionSchema = z.strictObject({
   check: z.string().min(1),
   seed: z.number().int(),
   path: z.string().min(1),
+  /** fast-check's commands replay hint (`fc.commands(…, { replayPath })`): with
+   *  seed + path alone the shrunk command list may not reproduce (R-PF9).
+   *  null only when the counterexample carried none. */
+  replayPath: z.string().min(1).nullable(),
   fence: z.string().min(1).nullable(),
   status: z.enum(["open", "fixed"]),
   found: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -1371,16 +1391,16 @@ export function loadRegressions(repoRoot: string = resolve(dirname(fileURLToPath
 ```
 
 In `_INDEX.md`'s status table, add a row after W1d:
-`| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | awaiting owner (recommendation Q-A, W1b plan) |`.
+`| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | not started (ruling 28) |`.
 
-- [ ] **Step 4: Run and see it pass** — same command as Step 2, plus `scripts/matrix/__tests__/strip-types-loadable.test.ts`. Expected: green, `files` = 2. Record `ATOMIC.length` (94), `l3Atomic().length` (87) and `l2Atomic().length` (93) in the task report. Both come from the test output: add a `console.log` in a one-off run, never an assertion on a typed number.
+- [ ] **Step 4: Run and see it pass** — same command as Step 2, plus `scripts/matrix/__tests__/strip-types-loadable.test.ts`. Expected: green, `files` = 2. Record `PARENTS.length`, `ATOMIC.length`, `l3Atomic().length` and `l2Atomic().length` in the task report. Both come from the test output: add a `console.log` in a one-off run, never an assertion on a typed number.
 
 - [ ] **Step 5: Mutation check**
 
 - Delete the X4 atoms → killed by "every compound the design names is split".
 - Delete R16's `noSplit` → killed by "alternative wording".
 - Remove `E2` from `L2_EXCLUDED` → killed by "L2 excludes only the API-only E2".
-- Add `E3` to L3 (delete its `L3_EXCLUDED` line) → killed by "O9 default".
+- Add `E3` to L3 (delete its `L3_EXCLUDED` line) → killed by "ruling 26".
 - Drop `C5` from `KNOWN_NO_PATH` → killed by "known 🚫".
 - Ruling 30: restore M4's `noSplit` with no atoms → killed by "every compound the design names is split" (the design now names M4).
 - Ruling 30: delete `M12b` from `KNOWN_UI_NO_PATH`, or key it `M12` → killed by "UI-only 🚫" (the list comes back empty, or names the parent).
@@ -1389,7 +1409,7 @@ In `_INDEX.md`'s status table, add a row after W1d:
 
 - [ ] **Step 6: Scoped tsc + eslint** on `scripts/matrix/lib/scenario-catalogue.ts`.
 
-- [ ] **Step 7: Commit** — `feat(matrix): the atomic scenario catalogue — 70 design parents, 94 atomic cases, layers, R29 regression file`. Include `_INDEX.md` (the W1-driving row only).
+- [ ] **Step 7: Commit** — `feat(matrix): the atomic scenario catalogue — design parents split into atomic cases, layers, R29 regression file`. Include `_INDEX.md` (the W1-driving row only).
 
 ---
 ## Task 5: The variant set — builder default, boundary classes, a pair-wise cover, scorability
@@ -1538,10 +1558,50 @@ describe("the pair-wise cover", () => {
   it("deterministic: a second generation is identical", () => {
     expect(SPORT_KEYS.map((s) => buildSportVariants(s))).toEqual(ALL);
   });
-  it("a completion with no valid level is a named refusal, not a silent skip", () => {
-    const validate = (_s: string, _p: string, values: Record<string, string>) =>
-      Object.keys(values).length <= 1 ? buildVariant("generic", "score", {}) : ({ ok: false, reason: "nope" } as const);
-    expect(() => buildSportVariants("generic", { validate })).toThrow(VariantGenerationStuck);
+  // Pre-flight ruling R-PF3. For a PURE validate both refusals are unreachable:
+  // every field factor has a blank level and the preset factor has the default,
+  // so each fill can re-choose the value the pair was already validated with.
+  // The refusals guard a validate that is NOT a pure function of its inputs.
+  // Reaching them therefore takes a stateful validate — one that answers ok for
+  // a budget of calls and then refuses — and the budgets come from the
+  // generator's call shape, not from its output:
+  //   - pass 1 calls validate once per pair (P = Σ over factor pairs |Li|·|Lj|);
+  //   - when all P pairs pass, the first uncovered pair is (row level 0,
+  //     preset level 0), so the first completion tries every level of every
+  //     field factor once (T1 = Σ over fields |Lk|) and then re-checks the
+  //     complete case (call P + T1 + 1).
+  // A wrong budget lands on the OTHER site, whose message differs, so the test
+  // fails loudly rather than passing vacuously.
+  const budgeted = (budget: number) => {
+    let calls = 0;
+    return (_s: string, _p: string, _v: Record<string, string>) =>
+      ++calls <= budget ? ({ ok: true, overrides: {}, cfg: {} } as const) : ({ ok: false, reason: `refused call ${calls}` } as const);
+  };
+  const callShape = (sport: string) => {
+    const L = factorsFor(sport).map((f) => f.levels.length);
+    let P = 0;
+    for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) P += L[i]! * L[j]!;
+    return { fields: factorsFor(sport).slice(2), P, T1: L.slice(2).reduce((a, b) => a + b, 0) };
+  };
+  it("a fill with no valid level is a named refusal naming the factor (registry sweep)", () => {
+    let judged = 0;
+    for (const s of SPORT_KEYS) {
+      const { fields, P } = callShape(s);
+      if (fields.length === 0) continue; // no field factor to fill: the complete-case test below covers this sport
+      expect(() => buildSportVariants(s, { validate: budgeted(P) }), s).toThrow(VariantGenerationStuck);
+      expect(() => buildSportVariants(s, { validate: budgeted(P) }), s).toThrow(`no valid level for '${fields[0]!.name}'`);
+      judged++;
+    }
+    expect(judged).toBeGreaterThan(0);
+  });
+  it("a complete case that fails its re-check is a named refusal (registry sweep)", () => {
+    let judged = 0;
+    for (const s of SPORT_KEYS) {
+      const { P, T1 } = callShape(s);
+      expect(() => buildSportVariants(s, { validate: budgeted(P + T1) }), s).toThrow("'(complete case)'");
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
   });
   it("covers every row: each sport has a case on each of the 21 rows", () => {
     for (const v of ALL) expect(new Set(v.cases.map((c) => c.row)).size, v.sport).toBe(ROW_KEYS.length);
@@ -1804,6 +1864,8 @@ Performance note: `ALL` generates about 1,000 cases. Measure the test file's dur
 - `byCodepoint` reversed → killed by "ruling 24's recorded defaults".
 - Drop the interior level → killed by the pair-cover test (pair counts change, and the committed file changes in Task 8). The cover test itself still passes, so name the second killer: Task 8 drift.
 - Remove the visibility check in `buildVariant` → killed by "a value for a field the editor hides".
+- Replace the per-fill `if (best < 0) throw …` with `if (best < 0) best = 0;` → killed by "a fill with no valid level is a named refusal" (R-PF3).
+- Delete the complete-case re-check (`const built = check(asg); if (!built.ok) throw …`, keeping `overrides: {}`) → killed by "a complete case that fails its re-check" (R-PF3).
 - `if (gain > bestGain)` → `>=` → still a valid cover (an equivalent mutant for coverage). Record it as equivalent, killed only by Task 8 drift.
 - `scorable` returns `null` always → killed by nothing here. Record it as a survivor of this file, killed by Task 8's committed `scorable` fields (drift) only if some case is unscorable. If every case is scorable, record it as equivalent on today's registry.
 
@@ -1813,7 +1875,7 @@ Performance note: `ALL` generates about 1,000 cases. Measure the test file's dur
 
 ---
 
-## Task 6: Applicability — predicates, the format gate, variant binding, per-row and per-scenario floors (E predicates depend on O9)
+## Task 6: Applicability — predicates, the format gate, variant binding, per-row and per-scenario floors (E predicates follow ruling 26)
 
 Each atomic case gets a predicate over the facts of one cell: the row's real stage bodies, the sport's resolved config, its entrant kinds and the row's format gate. Its **drop reason** is written next to it.
 
@@ -2317,7 +2379,10 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   R4c: ALWAYS, R5: ALWAYS,
   R6: rule(multiStage, "single-stage row: there is no later bracket or playoff slot to be drawn into", "league_ko|generic", T),
   R7: ALWAYS, R8: ALWAYS,
-  R9a: rule(entrant("pair", "team"), "the sport's entrant model allows neither pairs nor teams: nothing to rename as a pair/team", "league|football", T),
+  // Drop witness is boardgame, NOT T: generic has no entrantModel, so
+  // effectiveEntrantModel gives it every kind and R9a applies there (R-PF4;
+  // boardgame is individual-only under all three presets, checked offline).
+  R9a: rule(entrant("pair", "team"), "the sport's entrant model allows neither pairs nor teams: nothing to rename as a pair/team", "league|football", "league|boardgame"),
   R9b: rule(entrant("team"), "no team entrants in this sport's model: there is no lineup to change", "league|football", "league|badminton"),
   R10: ALWAYS,
   R11a: ALWAYS,
@@ -2373,7 +2438,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   C4: rule(ranked, "bracket-only row: there is no table for retroactive forfeits to rewrite", T, KO),
   C5: rule(ranked, "bracket-only row: there is no table to deduct points from", T, KO),
   C6a: ALWAYS, C6b: ALWAYS, C7: ALWAYS,
-  // O9 (recommendation, default): E stays its own scenarios.
+  // Ruling 26 (O9): E stays its own scenarios.
   E1: ALWAYS, E2: ALWAYS,
   E3: rule(bestOfOneEditor, "not best of 1 under this config and no committed variant makes it best of 1 (showsOnePointsField)", { cell: "league|badminton", values: { bestOf: "1" } }, "league|badminton", true),
   E4a: ALWAYS, E4b: ALWAYS,
@@ -2450,7 +2515,7 @@ Two notes on this code:
 
 ---
 
-## Task 7: The L2 pair file (depends on O9 through which E atoms are L2)
+## Task 7: The L2 pair file (ruling 26 decides which E atoms are L2)
 
 The rule for L2 (design §6.2): every applicable (row, scenario) and (sport, scenario) pair runs at least once in the browser, with widths rotating across the seven. The cover is greedy and deterministic, and it is written to a committed file in Task 8. W1c runs it, and confirms the width list (O3).
 
@@ -2939,6 +3004,7 @@ The third item tests false premise 8's hypothesis. `replaceStages` deletes the s
 - Modify: `scripts/matrix/lib/seed-org.ts` (`MatrixSql.denyFeature`, the gate, `matrixSqlOver`, `prepareCaseOrg` input `deny`)
 - Create: `scripts/matrix/lib/scenarios/denied.ts`
 - Modify: `scripts/matrix/lib/scenarios/types.ts` (`ScenarioKey` gains `"DENIED"`; `Scenario.mandatedRefusal?`, `Scenario.evaluatesInvariants?`; `CaseSpec.deny?`), `scripts/matrix/lib/scenarios/index.ts`
+- Modify: `scripts/matrix/lib/slice.ts` (`SliceScenarioKey`; the `SCENARIO_KEYS`/`CANARY_CHECK` retype and its three casts — R-PF5)
 - Modify: `scripts/matrix/run.ts` (`runCase` passes `deny`, honours `evaluatesInvariants` and `mandatedRefusal`; `RunDeps.prepareCaseOrg` input gains `deny?`; `realDeps` forwards it)
 - Modify: `scripts/matrix/__tests__/fake-driver.ts` (`FakeDeniedDriver`)
 - Test: `results.test.ts`, `http-driver.test.ts`, `seed-org.test.ts`, `run-cli.test.ts` (extend); `scripts/matrix/__tests__/denied.test.ts` (new)
@@ -3226,7 +3292,12 @@ export interface StagesProbe { status: number; code: string | null; featureKey: 
   evaluatesInvariants?: boolean;
 ```
 
-- `slice.ts`: `SCENARIO_KEYS` stays the four slice keys. Type it `readonly Exclude<ScenarioKey, "DENIED">[]`, and type `CANARY_CHECK` as `Readonly<Record<Exclude<ScenarioKey, "DENIED">, string | null>>`, so the slice plan cannot grow a DENIED case by accident.
+- `slice.ts`: `SCENARIO_KEYS` stays the four slice keys. Declare `type SliceScenarioKey = Exclude<ScenarioKey, "DENIED">`, type `SCENARIO_KEYS` as `readonly SliceScenarioKey[]` and `CANARY_CHECK` as `Readonly<Record<SliceScenarioKey, string | null>>`, so the slice plan cannot grow a DENIED case by accident. The retype breaks the casts that feed `includes` (pre-flight ruling R-PF5): an argument cast to the wider `ScenarioKey` is not assignable to the narrowed array's element type. So change them in this same task:
+  - `slice.ts:18` — the `Object.fromEntries(…) as Record<ScenarioKey, …>` cast → `as Record<SliceScenarioKey, string | null>`;
+  - `slice.ts:39` — `SCENARIO_KEYS.includes(filter.scenario as ScenarioKey)` → `as SliceScenarioKey`;
+  - `slice.ts:46` — `withCanary.includes(scenario as ScenarioKey)` → `as SliceScenarioKey`, and the `return scenario as ScenarioKey` on the next line → `as SliceScenarioKey` (still assignable to `checkCanary`'s declared `ScenarioKey` return).
+
+  Re-pin the three line numbers with `grep -an "as ScenarioKey" scripts/matrix/lib/slice.ts` before editing; after the edit that grep prints nothing. This task's scoped tsc must list `scripts/matrix/lib/slice.ts`.
 
 `scripts/matrix/lib/scenarios/denied.ts`:
 
@@ -4006,17 +4077,17 @@ Single and backtick quotes may add more. Paste the file count and the entry coun
 
 - [ ] **Step 6: Scoped tsc + eslint**
   - scripts: on `scripts/matrix/single-sport.ts`;
-  - engine: `cd packages/engine && rtk proxy node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json; echo EXIT=$?` (the engine's own typecheck is package-scoped) and `rtk proxy ./node_modules/.bin/eslint src/testkit/for-each-sport.ts src/testkit/for-each-sport.test.ts src/testkit/index.ts`.
+  - engine: the changed testkit files only, never the whole package (pre-flight ruling R-PF7; the owner's changed-files rule). Use the Global Constraints template with `extends` set to `/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec/packages/engine/tsconfig.json` and `files` set to the three absolute paths `…/packages/engine/src/testkit/for-each-sport.ts`, `…/packages/engine/src/testkit/for-each-sport.test.ts` and `…/packages/engine/src/testkit/index.ts`, written to `$TMPDIR/w1b-tsc-11-engine.json`. Run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && rtk proxy node node_modules/typescript-native/bin/tsc -p "$TMPDIR/w1b-tsc-11-engine.json"; echo EXIT=$?`. tsc still follows those files' imports into the engine, so an error it prints under another path is one these files caused or exposed; record it rather than widen the scope. Then eslint: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec/packages/engine && rtk proxy ./node_modules/.bin/eslint src/testkit/for-each-sport.ts src/testkit/for-each-sport.test.ts src/testkit/index.ts; echo EXIT=$?`.
 
 - [ ] **Step 7: Commit** — `feat(engine,matrix): forEachSport in the testkit, and a CI ratchet over unreasoned single-sport tests (R26)`.
 
 ---
 
-## Task 12: `packages/reference` skeleton, its import boundary, its CI step and its Dockerfile line (O10 recommendation assumed)
+## Task 12: `packages/reference` skeleton, its import boundary, its CI step and its Dockerfile line (ruling 27)
 
 The package ships empty of families (design §7.2): each wave adds the families its signed rulebooks cover.
 
-**O10 default this task assumes (a recommendation; the owner decides):** the reference may import from `@seazn/engine` only in the statement form `import type { … } from "@seazn/engine/core"` or `export type { … } from "@seazn/engine/core"`. The inline form `import { type X } from …` is refused, because Node's strip-types keeps an inline-type import as a side-effect `import {} from "…"`, which loads the engine at runtime. If the owner picks the leaf-types-package alternative, this task changes only `ALLOWED_ENGINE` and the gate test's allowed fixture. Everything else holds.
+**Ruling 27 (O10), which this task implements:** the reference may import from `@seazn/engine` only in the statement form `import type { … } from "@seazn/engine/core"` or `export type { … } from "@seazn/engine/core"`. The inline form `import { type X } from …` is refused, because Node's strip-types keeps an inline-type import as a side-effect `import {} from "…"`, which loads the engine at runtime. The leaf-types-package alternative was rejected; if it is ever revisited, only `ALLOWED_ENGINE` and the gate test's allowed fixture change.
 
 Trap 2 is that the package is invisible to the root chains, so the test named below checks each root chain. Trap 3 is the bench pack types (`pack-schema.ts:144-145`): the gate refuses any relative import that leaves `packages/reference/src`.
 
@@ -4083,7 +4154,7 @@ function src(files: Record<string, string>): string {
 }
 const reasons = (root: string) => { try { return checkReferenceBoundary(root).violations.map((v) => `${v.specifier}: ${v.reason}`); } finally { rmSync(root, { recursive: true, force: true }); } };
 
-describe("reference boundary gate (O10 recommendation: statement-form import type from @seazn/engine/core only)", () => {
+describe("reference boundary gate (ruling 27: statement-form import type from @seazn/engine/core only)", () => {
   it("empty case first: a src dir with no .ts files scans zero — the CLI refuses that", () => {
     const root = src({ "README.md": "x" });
     try { expect(checkReferenceBoundary(root).scanned).toBe(0); } finally { rmSync(root, { recursive: true, force: true }); }
@@ -4271,7 +4342,7 @@ Copy the version ranges exactly from `packages/engine/package.json`'s `devDepend
 // engine in that wave. W1b ships it EMPTY of families; each wave adds the
 // families its signed rulebooks cover, before fixing anything. Imports:
 // relative within src, and `import type { … } from "@seazn/engine/core"`
-// statements only (O10 recommendation) — scripts/reference-boundary.ts.
+// statements only (ruling 27) — scripts/reference-boundary.ts.
 import type { StageKind } from "@seazn/engine/core";
 
 export type StageKindName = StageKind;
@@ -4309,7 +4380,7 @@ export function requireFamily(stageKind: StageKindName, sport: string): Referenc
 `scripts/reference-boundary.ts`:
 
 ```ts
-// The reference package's import boundary (design §7.2, O10 recommendation):
+// The reference package's import boundary (design §7.2, ruling 27):
 // relative imports that stay inside packages/reference/src, and statement-form
 // `import type` / `export type` from @seazn/engine/core. Everything else —
 // engine values, inline `{ type X }` (strip-types keeps it as a runtime
@@ -4443,7 +4514,7 @@ Expected: first `FAIL index.ts:<n> @seazn/engine/core — engine imports must be
   - The package's own `npm run typecheck --workspace packages/reference` and `npm run lint --workspace packages/reference`, via `rtk proxy`; read `✖ N problems`.
   - Scripts: `scripts/reference-boundary.ts`.
 
-- [ ] **Step 8: Commit** — `feat(reference): the empty reference package, its import boundary gate, CI step and Dockerfile line`. The body names O10 as a recommendation with its default, and pastes the violation proof.
+- [ ] **Step 8: Commit** — `feat(reference): the empty reference package, its import boundary gate, CI step and Dockerfile line`. The body names ruling 27 as the rule the gate enforces, and pastes the violation proof.
 
 ---
 ## Task 13: The fast-check model core — dependency, ledger fold, model state, commands, the model fake
@@ -4605,6 +4676,12 @@ describe("model commands — each fault is caught at the step that causes it", (
     const e = await play(m, d, [["Generate", 0]], false).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(ModelViolation);
     expect((e as ModelViolation).check).toBe("I7-rr-no-pair-over-legs");
+  });
+  it("#879 needs a late entrant: with fault879 on, Start then Generate (no AddEntrant) duplicates nothing (R-PF8)", async () => {
+    const { m, d } = await fresh({ fault879: true });
+    await play(m, d, [["Start", 0], ["Generate", 0]], false);
+    expect(m.counts.Generate.ran).toBe(1);
+    expect(m.stepChecks.get("I7-rr-no-pair-over-legs") ?? 0).toBeGreaterThan(0);
   });
   it("…and with fences ON, Generate is not offered after a late entry on a league stage, and the fence is counted", async () => {
     const { m, d } = await fresh({ fault879: true });
@@ -5068,9 +5145,13 @@ export function modelCommands(opts: { fences: boolean }): fc.Arbitrary<fc.AsyncC
 
 ```ts
 // A league-only product for the model's unit tests: appends late entrants,
-// generates only missing pairs (or, with fault879, every pair again — issue
-// #879), folds each fixture's ledger with voids through the engine, refuses a
-// rebuild once any fixture has a result (stages.ts: 409 STAGE_HAS_RESULTS).
+// generates only missing pairs, folds each fixture's ledger with voids through
+// the engine, refuses a rebuild once any fixture has a result (stages.ts: 409
+// STAGE_HAS_RESULTS). With fault879 it reproduces issue #879's SHAPE, not a
+// blanket fault: only once an entrant has been added AFTER the stage started
+// does Generate seat every pair again (pre-flight ruling R-PF8). Before that,
+// fault879 generates exactly as the correct product does, so the fenced run
+// sees no failure and the shrunk path must contain the late AddEntrant.
 import { RefusedCall, type EntrantKind, type EntrantRow, type FixtureStateOut, type GenerateOut, type PostedEvent } from "../lib/driver/types.ts";
 import { foldLedger, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -5082,6 +5163,8 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   readonly opts: Opts;
   readonly ledgers = new Map<string, LedgerEntry[]>();
   #eventNo = 0;
+  /** An entrant was added after the stage started (#879's trigger). Reset per division. */
+  #lateEntrant = false;
   constructor(opts: Opts = {}) { super("org-model"); this.opts = opts; }
   /** One driver serves every property run of a cell (model.ts), as HttpDriver
    *  does: a new division starts empty. Fixture ids keep counting (minted). */
@@ -5091,11 +5174,14 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     this.ledgers.clear();
     this.stage = null;
     this.completed = false;
+    this.#lateEntrant = false;
     return super.createDivision(c, i);
   }
   override addEntrants(_d: string, es: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
     return Promise.resolve().then(() => {
       this.log("addEntrants");
+      // FakeLeagueDriver.start() flips the stage from "pending" to "active".
+      if (es.length > 0 && this.stage !== null && this.stage.status !== "pending") this.#lateEntrant = true;
       const made = es.map((e, i) => ({ id: `e${this.entrants.length + i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered" }));
       this.entrants = [...this.entrants, ...made];
       return made.map((e) => ({ ...e }));
@@ -5106,10 +5192,11 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       this.log("generate");
       const key = (a: string, b: string) => (a < b ? `${a}~${b}` : `${b}~${a}`);
       const have = new Set(this.fixtures.map((f) => key(f.home_entrant_id!, f.away_entrant_id!)));
+      const duplicates = this.opts.fault879 === true && this.#lateEntrant; // #879 needs roster growth after start
       let created = 0;
       for (const [r, pairs] of this.circle().entries()) for (const [h, a] of pairs) {
         if (h === "BYE" || a === "BYE") continue;
-        if (!this.opts.fault879 && have.has(key(h, a))) continue;
+        if (!duplicates && have.has(key(h, a))) continue;
         this.seat(100 + r, h, a);
         created++;
       }
@@ -5174,8 +5261,9 @@ Before relying on it, confirm that `FakeLeagueDriver.withdraw` exists and cascad
 - `fenceBlocking` ignores `enabled` → killed by the fence test (`fenceBlocking(m, "Generate", false)` must be null).
 - `open(m)` without `ledger.length === 0` → killed by the Walkover composition test (a second START is posted onto a decided fixture, and the fake refuses it by name, which leaves the Walkover composition assertion false).
 - `liveEntries` ignores voids → killed by the ledger-fold void test.
+- `ModelFakeDriver.generate`'s `duplicates` without `&& this.#lateEntrant` (the blanket fault) → killed by "#879 needs a late entrant" (R-PF8). The inverse, `#lateEntrant` never set in `addEntrants` → killed by "#879: a late entrant then Generate duplicates pairs".
 
-- [ ] **Step 7: Scoped tsc + eslint** on `scripts/matrix/lib/model/*.ts scripts/matrix/lib/driver/types.ts scripts/matrix/lib/driver/http-driver.ts`.
+- [ ] **Step 7: Scoped tsc + eslint** on `scripts/matrix/lib/model/*.ts scripts/matrix/lib/driver/types.ts scripts/matrix/lib/driver/http-driver.ts scripts/matrix/__tests__/model-fake-driver.ts`.
 
 - [ ] **Step 8: Commit** — `feat(matrix): the fast-check model core — void-aware ledger fold, ten organiser commands, step checks and the #879 fence`.
 
@@ -5206,10 +5294,10 @@ Each cell runs `fc.check` over `fc.commands`, and each run of the property build
   - `offlineBuilderDefault` (variants.ts)
 - Produces:
   - `seedFor(runId: string, cell: string): number` (FNV-1a 32-bit, as a signed int for fast-check)
-  - `interface CellFailure { check: string; seed: number; path: string; commands: string[]; evidence: string[]; known: string | null }`
+  - `interface CellFailure { check: string; seed: number; path: string; replayPath: string | null; commands: string[]; evidence: string[]; known: string | null }` — `commands` lists only the commands that RAN (`CommandWrapper.hasRan`), and `replayPath` is the counterexample's `metadataForReplay()` hint (R-PF9)
   - `interface CellReport { cell: string; variant: string; seed: number; runs: number; numRuns: number; interrupted: boolean; counts: ModelState["counts"] (summed); stepChecks: Record<string, number>; foldParity: number; fenced: Record<string, number>; vacuous: string[]; failure: CellFailure | null }`
   - `runCell(input: RunCellInput): Promise<CellReport>`
-  - `interface RunCellInput { cell: string; row: RowKey; sport: string; variant: string; newDriverState: (n: number) => Promise<{ model: ModelState; real: OrganiserDriver }>; runs: number; maxCommands: number; seed: number; path?: string; fences: boolean; timeLimitMs: number; regressions: readonly RegressionCase[] }`
+  - `interface RunCellInput { cell: string; row: RowKey; sport: string; variant: string; newDriverState: (n: number) => Promise<{ model: ModelState; real: OrganiserDriver }>; runs: number; maxCommands: number; seed: number; path?: string; replayPath?: string; fences: boolean; timeLimitMs: number; regressions: readonly RegressionCase[] }`
   - `model.ts`: `fnv1a32(text): number`, `runModel(deps: ModelDeps, argv: string[]): Promise<number>`, `interface ModelDeps extends Pick<RunDeps, "env" | "harnessCommit" | "preflight" | "openDb" | "signIn" | "prepareCaseOrg" | "driverFor"> {}`, `MODEL_USAGE`
 
 - [ ] **Step 1: Write the failing tests**
@@ -5264,17 +5352,21 @@ describe("runCell", () => {
     expect(cmds.indexOf("Start")).toBeGreaterThan(-1);
     expect(cmds.indexOf("AddEntrant")).toBeGreaterThan(cmds.indexOf("Start"));
     expect(cmds.lastIndexOf("Generate")).toBeGreaterThan(cmds.indexOf("AddEntrant"));
+    // Only commands that RAN are listed (R-PF9): the step that threw is the last one.
+    expect(cmds.at(-1)).toBe("Generate");
     expect(r.failure!.path.length).toBeGreaterThan(0);
+    expect(r.failure!.replayPath).toMatch(/\S/);
     expect(r.failure!.known).toBeNull();
   });
-  it("replay: the reported seed + path reproduce the same failure and the same shrunk commands (R29)", async () => {
+  it("replay: the reported seed + path + replayPath reproduce the same failure and the same shrunk commands (R29, R-PF9)", async () => {
     const first = await runCell(input({ fault879: true, fences: false }));
-    const again = await runCell(input({ fault879: true, fences: false, seed: first.failure!.seed, path: first.failure!.path, runs: 1 }));
+    const again = await runCell(input({ fault879: true, fences: false, seed: first.failure!.seed, path: first.failure!.path, replayPath: first.failure!.replayPath ?? undefined, runs: 1 }));
     expect(again.failure?.check).toBe(first.failure!.check);
     expect(again.failure?.commands).toEqual(first.failure!.commands);
+    expect(again.failure?.replayPath).toBe(first.failure!.replayPath);
   });
   it("a failure matching an OPEN committed regression on the same cell and check is known, by id", async () => {
-    const reg = { id: "MB-001", title: "#879", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 1, path: "0", fence: "late-entry-then-generate", status: "open" as const, found: "2026-09-28", runId: "t" };
+    const reg = { id: "MB-001", title: "#879", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 1, path: "0", replayPath: null, fence: "late-entry-then-generate", status: "open" as const, found: "2026-09-28", runId: "t" };
     const r = await runCell(input({ fault879: true, fences: false, regressions: [reg] }));
     expect(r.failure?.known).toBe("MB-001");
     const fixed = await runCell(input({ fault879: true, fences: false, regressions: [{ ...reg, status: "fixed" }] }));
@@ -5318,13 +5410,15 @@ describe("model.ts", () => {
     expect(seedFor("a", "league|generic")).toBe(fnv1a32("a|league|generic"));
     expect(seedFor("a", "league|generic")).not.toBe(seedFor("b", "league|generic"));
   });
-  it("usage refusals exit 2 before any DB work: unknown cell, bad --runs, --path without --seed", async () => {
+  it("usage refusals exit 2 before any DB work: unknown cell, bad --runs, --path without --seed, --replay-path without --path", async () => {
     quiet();
     const d = deps({ openDb: async () => { throw new Error("must not open"); } });
     expect(await runModel(d, ["--cell", "nope|generic"])).toBe(2);
     expect(await runModel(d, ["--runs", "0"])).toBe(2);
     expect(await runModel(d, ["--path", "0:1"])).toBe(2);
+    expect(await runModel(d, ["--seed", "1", "--replay-path", "CC:B"])).toBe(2);
     expect(MODEL_USAGE).toMatch(/--no-fences/);
+    expect(MODEL_USAGE).toMatch(/--replay-path/);
   });
   it("a fenced run over one cell exits 0 and writes model-report.json with the logged seed", async () => {
     quiet();
@@ -5372,10 +5466,19 @@ import { COMMAND_KINDS, ModelViolation, modelCommands, type ModelState } from ".
 export interface RunCellInput {
   cell: string; row: RowKey; sport: string; variant: string;
   newDriverState: (n: number) => Promise<{ model: ModelState; real: OrganiserDriver }>;
-  runs: number; maxCommands: number; seed: number; path?: string; fences: boolean; timeLimitMs: number;
+  runs: number; maxCommands: number; seed: number; path?: string; replayPath?: string; fences: boolean; timeLimitMs: number;
   regressions: readonly RegressionCase[];
 }
-export interface CellFailure { check: string; seed: number; path: string; commands: string[]; evidence: string[]; known: string | null }
+export interface CellFailure { check: string; seed: number; path: string; replayPath: string | null; commands: string[]; evidence: string[]; known: string | null }
+
+/** The shape fast-check 3.23 hands back as `counterexample[0]` for
+ *  `fc.commands` (CommandsIterable; re-pinned in node_modules/fast-check/lib/types). */
+type RanCommands = { commands: readonly { hasRan: boolean; toString(): string }[]; metadataForReplay(): string };
+/** `metadataForReplay()` is `replayPath="<json string>"`, or "" when the log is disabled. */
+const replayPathOf = (shrunk: RanCommands): string | null => {
+  const m = /^replayPath=(".*")$/.exec(shrunk.metadataForReplay());
+  return m === null ? null : (JSON.parse(m[1]!) as string);
+};
 export interface CellReport {
   cell: string; variant: string; seed: number; runs: number; numRuns: number; interrupted: boolean;
   counts: ModelState["counts"]; stepChecks: Record<string, number>; foldParity: number; fenced: Record<string, number>;
@@ -5395,7 +5498,8 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     for (const [id, c] of m.fenced) fenced[id] = (fenced[id] ?? 0) + c;
     foldParity += m.foldParity;
   };
-  const prop = fc.asyncProperty(fc.commands(modelCommands({ fences: input.fences }), { maxCommands: input.maxCommands }), async (cmds) => {
+  const constraints = { maxCommands: input.maxCommands, ...(input.replayPath === undefined ? {} : { replayPath: input.replayPath }) };
+  const prop = fc.asyncProperty(fc.commands(modelCommands({ fences: input.fences }), constraints), async (cmds) => {
     const setup = await input.newDriverState(++n);
     last = setup.model;
     try {
@@ -5413,10 +5517,12 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     const err: unknown = (details as { errorInstance?: unknown }).errorInstance ?? details.error;
     const check = err instanceof ModelViolation ? err.check : "model-error";
     const evidence = err instanceof ModelViolation ? err.evidence : [err instanceof Error ? `${err.name}: ${err.message}` : String(err)];
-    const shrunk = details.counterexample?.[0] as { toString(): string } | undefined;
-    const commands = shrunk === undefined ? [] : [...(shrunk as unknown as Iterable<{ toString(): string }>)].map((c) => c.toString());
+    const shrunk = details.counterexample?.[0] as RanCommands | undefined;
+    // Only the commands that ran: the shrunk iterable also holds generated
+    // commands the failing run never reached (R-PF9).
+    const commands = shrunk === undefined ? [] : shrunk.commands.filter((c) => c.hasRan).map((c) => c.toString());
     const reg = input.regressions.find((r) => r.status === "open" && r.cell === input.cell && r.check === check);
-    failure = { check, seed: details.seed, path: details.counterexamplePath ?? "", commands, evidence, known: reg?.id ?? null };
+    failure = { check, seed: details.seed, path: details.counterexamplePath ?? "", replayPath: shrunk === undefined ? null : replayPathOf(shrunk), commands, evidence, known: reg?.id ?? null };
   }
   const vacuous: string[] = [];
   if (failure === null) {
@@ -5434,14 +5540,14 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
 }
 ```
 
-Re-pin these fast-check v3 names in `node_modules/fast-check/lib/types` before typing the code: `fc.check`'s `RunDetails` fields (`failed`, `interrupted`, `numRuns`, `seed`, `counterexample`, `counterexamplePath`, `error`, `errorInstance`) and the `fc.commands` constraint `maxCommands`. Keep only the names that exist. For `counterexample[0]`, the commands value is iterable over its commands; check with `grep -a "Symbol.iterator" node_modules/fast-check/lib/types/check/model/commands/CommandsIterable.d.ts`.
+Re-pin these fast-check v3 names in `node_modules/fast-check/lib/types` before typing the code: `fc.check`'s `RunDetails` fields (`failed`, `interrupted`, `numRuns`, `seed`, `counterexample`, `counterexamplePath`, `error`, `errorInstance`) and the `fc.commands` constraints `maxCommands` and `replayPath`. Keep only the names that exist. For `counterexample[0]` (R-PF9), `CommandsIterable` exposes `commands: CommandWrapper[]` and `metadataForReplay(): string`, and each `CommandWrapper` carries `hasRan: boolean`: check with `grep -a "commands:\|metadataForReplay\|hasRan" node_modules/fast-check/lib/types/check/model/commands/CommandsIterable.d.ts node_modules/fast-check/lib/types/check/model/commands/CommandWrapper.d.ts`. Checked at plan time on fast-check 3.23.2: a 6-command counterexample of which 3 ran printed `replayPath="CC:B"`, and `fc.check` with `{ seed, path, numRuns: 1 }` plus `fc.commands(…, { replayPath: "CC:B" })` reproduced the same three commands. Listing the whole iterable, as the first draft did, listed all six.
 
 `scripts/matrix/model.ts`:
 
 ```ts
 // The fast-check model over W1a's slice, run live (design §7.5, R29):
 //   npm run matrix:model -- [--run-id ID] [--report-dir DIR] [--cell row|sport]...
-//     [--runs 20] [--max-commands 10] [--seed N --path P] [--no-fences]
+//     [--runs 20] [--max-commands 10] [--seed N --path P [--replay-path R]] [--no-fences]
 //     [--regressions] [--time-limit MS] [--base URL]
 // Seeds are derived from (run id, cell) and logged; nothing reads a clock for
 // them. Exit 0: no new failure and nothing vacuous. 1: a new failure or a
@@ -5461,7 +5567,7 @@ import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { EXIT, RUN_ID_MAX, realDeps, type RunDeps } from "./run.ts";
 
 export type ModelDeps = Pick<RunDeps, "env" | "harnessCommit" | "preflight" | "openDb" | "signIn" | "prepareCaseOrg" | "driverFor">;
-export const MODEL_USAGE = "usage: model.ts [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N] [--max-commands N] [--seed N --path P] [--no-fences] [--regressions] [--time-limit MS] [--base URL]";
+export const MODEL_USAGE = "usage: model.ts [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N] [--max-commands N] [--seed N --path P [--replay-path R]] [--no-fences] [--regressions] [--time-limit MS] [--base URL]";
 const SLICE_CELLS = SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s)));
 
 /** FNV-1a, 32-bit, over UTF-8 bytes, as a signed int (fast-check seeds are ints). */
@@ -5483,7 +5589,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   try {
     v = parseArgs({ args: argv, options: {
       "run-id": { type: "string" }, "report-dir": { type: "string" }, cell: { type: "string", multiple: true },
-      runs: { type: "string" }, "max-commands": { type: "string" }, seed: { type: "string" }, path: { type: "string" },
+      runs: { type: "string" }, "max-commands": { type: "string" }, seed: { type: "string" }, path: { type: "string" }, "replay-path": { type: "string" },
       "no-fences": { type: "boolean" }, regressions: { type: "boolean" }, "time-limit": { type: "string" }, base: { type: "string" },
     } }).values;
   } catch (e) { warn(`model: ${(e as Error).message}\n${MODEL_USAGE}`); return EXIT.REFUSED; }
@@ -5493,7 +5599,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   const timeLimitMs = int("time-limit", 120_000, 1_000);
   const cells = (v.cell as string[] | undefined) ?? SLICE_CELLS;
   const bad = cells.find((c) => !SLICE_CELLS.includes(c));
-  if (runs === null || maxCommands === null || timeLimitMs === null || bad !== undefined || (v.path !== undefined && v.seed === undefined) || (v.seed !== undefined && !/^-?\d+$/.test(v.seed as string))) {
+  if (runs === null || maxCommands === null || timeLimitMs === null || bad !== undefined || (v.path !== undefined && v.seed === undefined) || (v["replay-path"] !== undefined && v.path === undefined) || (v.seed !== undefined && !/^-?\d+$/.test(v.seed as string))) {
     warn(`model: ${bad !== undefined ? `unknown cell '${bad}' (the model runs W1a's slice: ${SLICE_CELLS.join(", ")})` : "bad arguments"}\n${MODEL_USAGE}`);
     return EXIT.REFUSED;
   }
@@ -5517,8 +5623,8 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
     const plan = await db.chooseTopPublicPlan();
     const replays = v.regressions === true ? regressions.filter((r) => cells.includes(r.cell)) : [];
     const jobs = v.regressions === true
-      ? replays.map((r) => ({ cell: r.cell, seed: r.seed, path: r.path, runs: 1, fences: false, variantOverride: r.variant }))
-      : cells.map((c) => ({ cell: c, seed: v.seed !== undefined ? Number(v.seed) : seedFor(slugged, c), path: v.path as string | undefined, runs, fences: v["no-fences"] !== true, variantOverride: undefined as string | undefined }));
+      ? replays.map((r) => ({ cell: r.cell, seed: r.seed, path: r.path, replayPath: r.replayPath ?? undefined, runs: 1, fences: false, variantOverride: r.variant }))
+      : cells.map((c) => ({ cell: c, seed: v.seed !== undefined ? Number(v.seed) : seedFor(slugged, c), path: v.path as string | undefined, replayPath: v["replay-path"] as string | undefined, runs, fences: v["no-fences"] !== true, variantOverride: undefined as string | undefined }));
     if (jobs.length === 0) { warn("model: nothing to run (no cells, or --regressions with no committed case on these cells)"); return EXIT.NO_SIGNAL; }
     for (const [i, job] of jobs.entries()) {
       const [row, sport] = job.cell.split("|") as [RowKey, string];
@@ -5526,9 +5632,9 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
       const org = await deps.prepareCaseOrg({ base, session, userId, plan }, { name: `Matrix model ${slugged} ${i + 1}`, slug: `mm-${slugged}-${i + 1}` });
       const real = deps.driverFor(base, session, org.orgId);
       const comp = await real.createCompetition({ name: `Matrix model ${job.cell}`, slug: `mm-${slugged}-${i + 1}` });
-      say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`} fences=${job.fences ? "on" : "off"}`);
+      say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} fences=${job.fences ? "on" : "off"}`);
       const rep = await runCell({
-        cell: job.cell, row, sport, variant, runs: job.runs, maxCommands: maxCommands, seed: job.seed, path: job.path, fences: job.fences, timeLimitMs, regressions,
+        cell: job.cell, row, sport, variant, runs: job.runs, maxCommands: maxCommands, seed: job.seed, path: job.path, replayPath: job.replayPath, fences: job.fences, timeLimitMs, regressions,
         newDriverState: async (n) => ({ real, model: await newModelState({ driver: real, row, sport, variant, entrants: 4, tag: `${slugged}-${i + 1}-${n}`, competitionId: comp.id }) }),
       });
       reports.push(rep);
@@ -5550,7 +5656,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   say(`model report → ${join(dir, "model-report.json")}`);
   const fresh = reports.filter((r) => r.failure !== null && r.failure.known === null);
   for (const r of fresh) {
-    say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: r.cell, variant: r.variant, check: r.failure!.check, seed: r.failure!.seed, path: r.failure!.path, fence: null, status: "open", found: "YYYY-MM-DD", runId: slugged }, null, 2)}`);
+    say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: r.cell, variant: r.variant, check: r.failure!.check, seed: r.failure!.seed, path: r.failure!.path, replayPath: r.failure!.replayPath, fence: null, status: "open", found: "YYYY-MM-DD", runId: slugged }, null, 2)}`);
   }
   return fresh.length > 0 || reports.some((r) => r.failure === null && r.vacuous.length > 0) ? EXIT.NO_SIGNAL : EXIT.OK;
 }
@@ -5572,6 +5678,9 @@ The regression stub prints `"MB-NNN"`, `"YYYY-MM-DD"` and an empty title **on pu
 - `fences: true` hard-coded → killed by "fences OFF → #879 found".
 - `markInterruptAsFailure: true` → survives on the fake, which never hits the limit. Record it as a survivor: the time box is exercised only in the live run.
 - `model.ts` exits 0 on a new failure → killed by "a NEW failure exits 1".
+- `commands` lists the whole shrunk iterable (the `.filter((c) => c.hasRan)` removed) → killed by "the step that threw is the last one" in "fences OFF → #879 found", provided the shrunk counterexample still holds a command that never ran. If it does not on the fake, record the mutant as a survivor of this file, not a kill (R-PF9).
+- `replayPath` dropped from the `fc.commands` constraints → run it. A red on the replay test is the kill. A green means seed + path alone reproduced the fake's counterexample: record it as a survivor on the fake, judged live only by Task 15 Step 6's replay.
+- The `--replay-path` without `--path` refusal removed → killed by the usage-refusal test.
 
 - [ ] **Step 6: Scoped tsc + eslint** on `scripts/matrix/lib/model/run-cell.ts scripts/matrix/model.ts`.
 
@@ -5618,10 +5727,16 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec &
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node -e 'const r=require("./matrix-report/w1b-probe-0928a/results.json");for(const c of r.cases)console.log(c.state.padEnd(8),c.caseId,"|",c.reason.slice(0,140))'
 ```
 
-Expected: 13 lines, 4 + 7 + 2. Record each case's state and reason in the report. Each one reads differently:
+Expected: `PROBE_API_ROWS.length + 7 + 2` lines, the same sum Task 10's "the probe set" test pins (pre-flight ruling R-PF6; 12 at plan time, 3 + 7 + 2). Read the length from the code rather than typing it:
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types -e 'const { PROBE_API_ROWS } = await import("./scripts/matrix/lib/probe-set.ts"); console.log(JSON.stringify({ apiRows: PROBE_API_ROWS, expected: PROBE_API_ROWS.length + 7 + 2 }))'
+```
+
+The printed `expected` must equal the line count above; a mismatch is a finding before any state is read. Record each case's state and reason in the report. Each one reads differently:
 
 - **DENIED ×7.** ⛔ `refused` means all three checks held. A ❌ on `denied-put-keeps-stages` confirms false premise 8 live: `replaceStages` deletes before it gates. Record it as a finding **routed to W9**, with the case id and evidence, and change no product code. A ❌ on `denied-refused-named` means the deny did not reach the gate. Check `REDIS_URL` and the read-back first (environment before defect).
-- **API-only LIFECYCLE ×4.** Each state is data, whatever it is. A ❌ is a finding for the row's owning wave, per the design's wave table. A ⏳ must name `W1-driving`.
+- **API-only LIFECYCLE ×`PROBE_API_ROWS.length`.** Each state is data, whatever it is. A ❌ is a finding for the row's owning wave, per the design's wave table. A ⏳ must name `W1-driving`.
 - **Variant ×2.** These are expected to be ✅. A ❌ on `life-built-as-posted` naming `config.<key>` means the product stores the override differently from the engine's parse: a finding.
 
 Copy the evidence:
@@ -5804,7 +5919,7 @@ Expected: EXIT=1 and `FAILURE I7-rr-no-pair-over-legs (NEW)`, with a shrunk path
 With the Write tool, fill `scripts/matrix/catalogue/regressions.json` from the stub Step 5 printed:
 - `id` `MB-001`, `title` "late entrant then Generate duplicates round-robin pairs", `issue` `#879`;
 - `fence` `late-entry-then-generate`, `status` `open`, `found` `2026-09-28`, `runId` `w1b-model-0928b`;
-- `cell`, `variant`, `check`, `seed` and `path` exactly as printed.
+- `cell`, `variant`, `check`, `seed`, `path` and `replayPath` exactly as printed (R-PF9: `replayPath` is what makes the shrunk command list reproduce; `null` only if the stub printed `null`).
 
 Replay it:
 
@@ -5812,7 +5927,7 @@ Replay it:
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:model -- --run-id w1b-model-0928c --report-dir matrix-report --regressions; echo EXIT=$?
 ```
 
-Expected: `FAILURE I7-rr-no-pair-over-legs (known MB-001)` and EXIT=0. A known failure does not fail the run.
+Expected: `FAILURE I7-rr-no-pair-over-legs (known MB-001)` and EXIT=0. A known failure does not fail the run. The replay's printed command list (only commands that ran) must equal Step 5's; a different list means the replay did not reproduce, which is a finding against R-PF9's replay, not a pass.
 
 Regenerate the catalogue, because the regression count moves L3 (§6.2 formula):
 
@@ -5837,7 +5952,7 @@ Use the template with `<N>`=15 and `<files>` = `scripts/matrix/__tests__/committ
 
 Follow the skill's teardown, which requires a positive ownership check before killing anything: stop only the server and the Postgres you started, identified by the PID and data directory you recorded in Step 1.
 
-- [ ] **Step 9: Commit, push, open the PR, watch CI**
+- [ ] **Step 9: Commit locally — no push, no PR (pre-flight ruling R-PF10)**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git add scripts/matrix/catalogue/regressions.json scripts/matrix/catalogue/counts.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-abandon docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model && git commit -F "$TMPDIR/w1b-t15-msg.txt"; echo EXIT=$?
@@ -5845,18 +5960,17 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec &
 
 The message file, written with the Write tool, reads `test(matrix): W1b live evidence — slice 24/24, probe set, abandon check, model on the slice, MB-001 (#879)`, followed by a body that pastes the Step 2, 3 and 3b summaries (the 3b line is `ST-G1 <verdict> — judged N/4, control …`) and the Step 4–6 outcomes, and then the `Co-Authored-By` trailer.
 
-Next:
-- `git push -u origin feat/format-matrix-w1b`.
-- `gh pr create` with a body that carries four things:
-  - the matrix rows touched (R27): none of the product's rows, since this is a harness wave;
-  - the counts line from `counts.json`;
-  - O9/O10 as recommendations;
-  - the findings routed.
-- Watch every CI job to completion with `gh pr checks <n> --watch`, including the **container** job, which proves the Dockerfile line, and the gates job's three new steps. A `cancelled` job is not a pass. E2e does not run on a PR (AGENTS.md); nothing in W1b touches a browser path.
+Stop at the local commit. This task does not run `git push`, `gh pr create` or a CI watch: the controller pushes the branch and opens the PR. Hand the controller, in the task report, the four things its PR body carries:
+- the matrix rows touched (R27): none of the product's rows, since this is a harness wave;
+- the counts line from `counts.json`;
+- rulings 26–30, cited as the owner's rulings they are;
+- the findings routed, with their evidence paths.
+
+When the controller has opened the PR, CI owes every job to completion, including the **container** job, which proves the Dockerfile line, and the gates job's three new steps. A `cancelled` job is not a pass. E2e does not run on a PR (AGENTS.md); nothing in W1b touches a browser path.
 
 ---
 
-## Task 16: `_INDEX.md` — real §6.2 counts, the W1b row, recommendations, false premises, routed findings
+## Task 16: `_INDEX.md` — real §6.2 counts, the W1b row, the rulings applied, false premises, routed findings
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md`
@@ -5871,16 +5985,17 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec &
 
 These are Edit-tool changes, each anchored on the existing text:
 
-1. The status table row `| W1b | … | not started |` becomes `| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done; PR #<n>, CI <green|state> at <sha>.** Live: slice 24/24 ✅ (run w1b-slice-0928a); probe <tally> (w1b-probe-0928a, truth-runs/w1b-probe/); abandon check (ruling 30): ST-G1 <CONFIRMED|REFUTED|UNRESOLVED>, judged <N>/4 (w1b-abandon-0928a, truth-runs/w1b-abandon/); model on 6 slice cells, fences on: <ok/finding> (w1b-model-0928a); MB-001 = #879 (seed <s>, path <p>). |`. Fill each `<…>` from Steps 1–9 of Task 15 and Step 1 here. Every one is a value read from a file or a command's output, so none stays unfilled.
+1. The status table row `| W1b | … | not started |` becomes `| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done at <sha>; PR and CI: controller's (R-PF10).** Live: slice 24/24 ✅ (run w1b-slice-0928a); probe <tally> (w1b-probe-0928a, truth-runs/w1b-probe/); abandon check (ruling 30): ST-G1 <CONFIRMED|REFUTED|UNRESOLVED>, judged <N>/4 (w1b-abandon-0928a, truth-runs/w1b-abandon/); model on 6 slice cells, fences on: <ok/finding> (w1b-model-0928a); MB-001 = #879 (seed <s>, path <p>). |`. Fill each `<…>` from Steps 1–9 of Task 15 and Step 1 here. Every one is a value read from a file or a command's output, so none stays unfilled.
 2. A new section `## W1b counts (design §6.2)` after "W1a session status". It holds a table of formula and value for L1, L2 (runs and pair targets), L3 (lifecycle + applicable atomic, with bound shown, + variant cases + denied + regressions = total), drops, and the variants per sport. Each value is quoted from `counts.json` and the formulas verbatim.
-3. Under "Recommendations (mine — not rulings)", add O9 and O10 exactly as the plan's Decisions section words them: the recommendation, the owner value, the alternative, and "the plan assumed this default in Tasks 4, 6, 7 (O9) and 12 (O10)". Add Q-A (the W1-driving wave) and Q-B (variant cases run LIFECYCLE only) the same way. **Nothing goes under "Owner rulings".** This file must not call a recommendation a ruling.
+3. Rulings 26–30 are already under "Owner rulings" (O9, O10, Q-A, Q-B and ruling 30), so add nothing there and nothing under "Recommendations (mine — not rulings)". Confirm the five are present with `grep -anE "^(26|27|28|29|30)\. " _INDEX.md` (five lines). A new recommendation found while executing goes under "Recommendations", never under "Owner rulings".
 4. Under "Decision log", add one dated line per W1b decision that was actually made in code, each with its commit SHA:
    - fake engine statuses aligned (carry 3);
    - planner seam (carry 4);
    - I1 multi-stage guard (carry 1);
    - denied via override (ruling 24 applied);
-   - `import type` default (O10 recommendation, pending);
-   - E as own scenarios (O9 recommendation, pending);
+   - the statement-form `import type` boundary gate (ruling 27, the Task 12 SHA);
+   - E as its own scenarios (ruling 26, the Task 4 SHA);
+   - the W1-driving row and its guard (ruling 28), and variant cases running LIFECYCLE only (ruling 29);
    - ruling 30 applied: M4a/M4b and M12a/b/c in the catalogue, with M12b's `l2NoPath` (the Task 4 SHA). Their predicates and `ABANDON_RESULTS` are the Task 6 SHA.
 5. Under "False premises found", add a `### Found during W1b planning and execution` list. It holds the plan's eleven false premises and hypotheses, each with its file:line, plus any found while executing. Premises 8 and 11 are hypotheses; record each as confirmed or refuted by its live check.
 6. Add a "Findings routed" list. Give each finding its case or leg id, evidence path and owning wave. It holds each live ❌ and each confirmed hypothesis:
@@ -5893,12 +6008,12 @@ These are Edit-tool changes, each anchored on the existing text:
    - **No organiser control for `abandonPolicy` (false premise 10)** → W2. It is joined by Step 3b's `football-award` outcome, if that leg was refused.
 
    If there are no other findings, write "none", and say which runs were checked.
-7. Confirm that the `W1-driving` row Task 4 added still reads `awaiting owner (recommendation Q-A, W1b plan)`.
+7. Confirm that the `W1-driving` row Task 4 added still reads `not started (ruling 28)`.
 
 - [ ] **Step 3: Verify the edit reads true against the files**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && grep -an "W1b counts\|MB-001\|Found during W1b\|awaiting owner" docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && grep -an "W1b counts\|MB-001\|Found during W1b\|W1-driving" docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && grep -anE "<[a-z|/ ]+>" docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md | grep -a "W1b" ; echo "unfilled=$?"
 ```
 
@@ -5906,7 +6021,7 @@ Expected: the four anchors print, and `unfilled=1`, meaning grep found no leftov
 
 Next, run the one test that reads `_INDEX.md`, the Q-A guard from Task 4: the template with `<N>`=16 and `<files>` = `scripts/matrix/__tests__/scenario-catalogue.test.ts`. Expected: green.
 
-- [ ] **Step 4: Commit and push** — `docs(format-matrix): W1b status — §6.2 counts, recommendations O9/O10/Q-A/Q-B, false premises, routed findings`. Push to the PR branch and watch CI to completion again.
+- [ ] **Step 4: Commit locally — no push (pre-flight ruling R-PF10)** — `docs(format-matrix): W1b status — §6.2 counts, rulings 26–30 applied, false premises, routed findings`, committed with an explicit pathspec (`-- docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md`). Stop there: the controller pushes to the PR branch and watches CI to completion.
 
 ---
 
@@ -5921,16 +6036,16 @@ Run 2026-09-28 against the W1b prompt (`W1b-catalogues-reference.md`), design §
 | fast-check command model over organiser actions, run in L3 over HttpDriver, seeds logged (§7.5 item 1) | 13, 14, 15 (live) |
 | A shrunk failure becomes a named regression case with its seed (R29) | 4 (schema), 14 (stub, known/new), 15 (MB-001) |
 | `forEachSport` helper + CI listing of unreasoned single-sport tests (R26) | 11 |
-| 70 scenarios split into atomic cases (ruling 30: M12 added, M4 split) | 4, 6 |
+| The design §4 scenarios split into atomic cases (ruling 30: M12 added, M4 split) | 4, 6 |
 | Ruling 30: M12b is UI-only 🚫 (`l2NoPath`); the abandon-void check (ST-G1) is confirmed or refuted by driving the product | 4, 7 (note), 15 (Step 3b), 16 |
 | Applicability over (format, sport, variant); committed drop list with reasons; per-row floors; `return false` mutation reds (R13, R17) | 6, 8 |
 | Variant set with boundary classes; L2 pair file; both committed (R11) | 5, 7, 8 |
 | `packages/reference` skeleton, boundary gate, Dockerfile line, explicit CI step, deliberate violation proof | 12 |
 | Formulas and real counts for §6.2 in `_INDEX.md` | 8 (formulas), 16 (real numbers) |
-| O9 and O10 as recommendations with owner value | Decisions section; 16 |
+| O9, O10, Q-A and Q-B carried as owner rulings 26–29, with owner value | Decisions section; 16 |
 | Traps 1–5 | 1: Task 6 (the mutation sweep, witnesses, floors), Task 8 (zero-floor refusal). 2: Task 12 (workspace-wiring). 3: Task 12 (the gate refuses relative imports leaving src, pack-schema fixture). 4: Tasks 5, 6, 8, 11 (registry-order asserts). 5: Task 8 (no clock or randomness scan, drift gate). |
 | W1a carries 1–4 | 1: Task 2. 2: Task 9 (ruling 24). 3: Task 1. 4: Task 1. |
-| "No previously green check red" | Task 15 Step 2 (slice 24/24), Steps 7 and 9 (CI) |
+| "No previously green check red" | Task 15 Step 2 (slice 24/24), Step 7 (the scoped tests); CI on the controller's PR (R-PF10) |
 | Live walkthrough per the env recipe | 15 |
 | Scoped verification only (no full gate) | Global Constraints; every task's verify names its files |
 
@@ -5973,4 +6088,4 @@ The plan is complete and saved to `docs/superpowers/plans/2026-09-28-format-matr
 
 **Recommended execution: subagent-driven** (superpowers:subagent-driven-development), with one implementer and one reviewer per task, then a whole-branch review. The tasks chain through named interfaces (5→6→7→8, 1→9→10, 2→13→14). A wrong shape in an early catalogue task silently changes the committed floors that every later wave measures against, and 16 tasks is past the point where one session holds the context well. Tasks 11 and 12 are file-disjoint from 5–10 and could run in parallel worktrees. Keep them sequential anyway: both edit `package.json` and `ci.yml`, and AGENTS.md's parallel rule forbids overlapping file sets.
 
-Prerequisite met: #891 and #896 are merged to `main` (`a5f813404`, main e2e green). Execution runs in its own worktree off `origin/main`, made by Task 1 Step 0. O9 and O10 can be answered at any point before Task 16, and the plan's defaults let work proceed meanwhile. An owner answer that differs from the default touches only the tasks named in the Decisions section.
+Prerequisite met: #891 and #896 are merged to `main` (`a5f813404`, main e2e green). Execution runs in its own worktree off `origin/main`, made by Task 1 Step 0. The owner ruled O9 and O10 (rulings 26 and 27) as the plan assumed, and Q-A and Q-B as rulings 28 and 29, so no task waits on an answer. Ruling 30 is applied in Tasks 4, 6, 7, 15 and 16.
