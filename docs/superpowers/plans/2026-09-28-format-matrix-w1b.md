@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** W1b fixes what the programme will test and how big that is. It commits these files, each generated deterministically:
-- the 69 design scenarios split into atomic cases;
+- the 70 design scenarios split into atomic cases (ruling 30 added M12 and split M4);
 - an applicability drop list with a reason per drop;
 - a floor per row;
 - a pair-covering variant set;
@@ -208,6 +208,13 @@ Each has file:line evidence. They are to be recorded in `_INDEX.md` "False premi
    Task 9 builds all seven.
 8. **Hypothesis to confirm live, not yet a fact:** "a refused format change leaves the format as it was." `replaceStages` deletes every stage in its own committed transaction (`stages.ts:543`) and only then calls `createStages`, which gates (`:546`, `:373-382`). A 402 PUT therefore likely leaves the division with NO stages. The check `denied-put-keeps-stages` (Task 9) settles it live in Task 15. If red, it is a product finding routed to W9 (operational).
 9. **Design §4 names "chess tiebreak" as an M6 decider.** boardgame declares no decider in `configSchema` (`boardgame.schema.json`: byeScore, clock, colors, scoring, variant), and `supportsDraws` is true for every kind (`boardgame.ts:767-771`, "KO chess resolves ties via multi-game mini-matches, modelled at the fixture layer"). M6 has no config switch on boardgame. Task 6 records the drop with this reason, and the question is routed to W4 (knockout family).
+10. **Ruling 30 cites "a football award-policy abandon" as an M4b example.** The engine has one: `abandonPolicy` is `replay|award` with default `replay` in football, hockey and icehockey (`football.ts:173`, `period/kernel.ts:219`, the three `*.schema.json`), and `award` decides the match (`football.ts:1657`, `period/kernel.ts:1450`). But no organiser screen can choose it: `SPORT_RULES` has no `abandonPolicy` field (`match-rules.ts`, 0 hits), so `configKeysFor` never emits it. The API's division `config` is a free record (`api-v1/schemas.ts:391`), so an HTTP caller may set it; Task 15 Step 3b tests that.
+    - W1b drops football, hockey and icehockey M4b with this reason (Task 6).
+    - Routed to W2 with M12b's missing control.
+    - Found by reading, not by running.
+11. **Hypothesis to confirm live (ruling 30; audit ST-G1, rulebook CR-2 and F-18), not yet a fact:** "an abandon that the engine scores reaches the table." Any `core.abandon` in a fixture's stream sets its status to `abandoned` (`apps/web/src/server/engine-db/append-event.ts:146`). `abandoned` maps to the engine's `void` (`apps/web/src/lib/fixture-engine-status.ts:17-19`), and `void` is outside `COUNTS_FOR_STANDINGS` (`packages/engine/src/competition/stage.ts:24`).
+    - So a cricket no-result (1 point each by ICC 16.10.3 and `points.noResult`), a two-innings abandon (a draw) and a football award would all be dropped from the table.
+    - Task 15 Step 3b drives the product to confirm or refute this. If confirmed, it is a finding routed to W5 (standings) and W2 (what an abandon is worth). No check is ever loosened to pass.
 
 ---
 
@@ -215,8 +222,8 @@ Each has file:line evidence. They are to be recorded in `_INDEX.md` "False premi
 
 **O9 — entry path E: its own scenarios, or an axis multiplying M and C.**
 - **Recommendation:** E stays four scenarios of its own. E4 splits into E4a (device link) and E4b (printed-sheet scan), giving E1, E2, E3, E4a and E4b. Only E2 (single-event result over the API) is in L3. E1 and E3 are browser-only and E4a/E4b need times, so those four are L2.
-- **Owner value:** each entry path is proven at least once per applicable format and sport, and the M and C families stay about 4× smaller. M has 13 atomic cases and C has 9; as an axis over 5 paths they would be 65 and 45, and ~60 % of them could not run in L3 anyway.
-- **Alternative:** E as an axis. Every M and C atomic case is repeated per entry path. Delta: Task 4 drops the E parents and adds a `path` field to M/C atoms; Tasks 6, 7 and 8 multiply M/C counts by 5 in L2 and by 1 in L3 (only E2 runs there). L3 is unchanged, L2 grows by roughly (13+9)×4×21 pair targets.
+- **Owner value:** each entry path is proven at least once per applicable format and sport, and the M and C families stay about 4× smaller. M has 18 atomic cases after ruling 30 and C has 9; as an axis over 5 paths they would be 90 and 45, and ~60 % of them could not run in L3 anyway. The M count was 14 before ruling 30; this line first said 13, which was a miscount.
+- **Alternative:** E as an axis. Every M and C atomic case is repeated per entry path. Delta: Task 4 drops the E parents and adds a `path` field to M/C atoms; Tasks 6, 7 and 8 multiply M/C counts by 5 in L2 and by 1 in L3 (only E2 runs there). L3 is unchanged, L2 grows by roughly (18+9)×4×21 pair targets.
 - **Plan default:** the recommendation. Tasks 4, 6, 7 and 8 depend on it; each marks the lines that change.
 
 **O10 — reference import mode.**
@@ -246,7 +253,7 @@ scripts/matrix/
   lib/observed.ts                  (T2)  + ObservedStage.fieldSource
   lib/scenarios/common.ts          (T2,T10) export recordGenerate; fieldSource; division config from spec.overrides
   lib/catalogue.ts                 (T3)  builderStages(); API-only row bodies
-  lib/scenario-catalogue.ts        (T4)  69 parents → 88 atomic cases, layers, harness map, regression loader
+  lib/scenario-catalogue.ts        (T4)  70 parents → 94 atomic cases (87 in L3), layers, harness map, regression loader
   lib/variants.ts                  (T5)  titleCase copy, offline builder default, boundary classes, pairwise cover, scorability
   lib/applicability.ts             (T6)  CellFacts, combinators, RULES (one per atomic id), planL3, floors
   lib/pairs.ts                     (T7)  L2 greedy pair cover, width rotation
@@ -960,12 +967,20 @@ Use the template with `<files>` = `scripts/matrix/__tests__/catalogue.test.ts sc
 ## Task 4: The atomic scenario catalogue (depends on O9 — default: E stays its own scenarios)
 
 The design §4 catalogue becomes data:
-- 69 parents;
-- 19 of them split, giving **90 atomic cases**;
+- 70 parents;
+- 21 of them split, giving **94 atomic cases** (87 in L3, 93 in L2);
 - a layer per atom;
 - the W1a harness mapping;
-- the design's known 🚫 list;
+- the design's known 🚫 list, and its UI-only 🚫 list (ruling 30);
 - a regression-case loader (R29).
+
+Ruling 30 (owner, 2026-09-28) set four of these atoms:
+- M4 splits into M4a, "abandoned, no result", and M4b, "abandoned with a result".
+- M12, "player injured mid-match (team sport)", is new, with three atoms:
+  - M12a: a substitute comes on and the match continues.
+  - M12b: there is no replacement, so the team plays short.
+  - M12c: a cricket batter retires hurt, then resumes.
+- M12b is 🚫 in L2 only. `core.lineup.retirement` has an HTTP route, but no pad or console control sends it. The atom stays in both layers, and its `l2NoPath` names W2.
 
 It also carries the Q-A guard.
 
@@ -984,7 +999,7 @@ It also carries the Q-A guard.
 - Produces:
   - `type Family = "R"|"M"|"F"|"D"|"P"|"Q"|"X"|"C"|"E"`
   - `type Layer = "L2"|"L3"`
-  - `interface AtomicScenario { id; parent; family; title; layers: readonly Layer[]; l3Excluded: string | null; knownNoPath: string | null }`
+  - `interface AtomicScenario { id; parent; family; title; layers: readonly Layer[]; l3Excluded: string | null; knownNoPath: string | null; l2NoPath: string | null }`. `knownNoPath` is the owning wave of a design 🚫 with no route in any layer. `l2NoPath` is the owning wave of a UI-only 🚫 (ruling 30), which has an HTTP route but no screen.
   - `PARENTS`
   - `ATOMIC: readonly AtomicScenario[]` (catalogue order)
   - `LIFECYCLE_ID = "LIFECYCLE"`
@@ -1082,6 +1097,21 @@ describe("atomic cases", () => {
     expect(listed.size).toBeGreaterThan(0);
     expect(marked).toEqual(listed);
   });
+  it("ruling 30: the design's UI-only 🚫 atoms carry l2NoPath with the named wave, and stay in both layers", () => {
+    const from = design.slice(design.indexOf("**Known UI-only 🚫"));
+    const para = from.slice(0, from.indexOf("\n\n"));
+    const listed = [...para.matchAll(/\b([RMFDPQXCE]\d{1,2}[a-c])\b/g)].map((m) => m[1]!);
+    const wave = /owed to (W\d+)/.exec(para)?.[1];
+    expect(listed.length).toBeGreaterThan(0); // M12b as of 2026-09-28
+    expect(wave).toBeDefined();
+    expect(ATOMIC.filter((a) => a.l2NoPath !== null).map((a) => a.id)).toEqual(listed);
+    for (const id of listed) {
+      const a = ATOMIC.find((x) => x.id === id)!;
+      expect(a.l2NoPath, id).toBe(wave);
+      expect(a.layers, id).toEqual(["L2", "L3"]); // L3 runs over HTTP; the L2 run records the 🚫
+      expect(a.knownNoPath, id).toBeNull(); // not a design-wide 🚫: the API route exists
+    }
+  });
   it("the W1a harness map points at real atoms and real W1a scenarios", () => {
     const ids = new Set([LIFECYCLE_ID, ...ATOMIC.map((a) => a.id)]);
     expect(Object.keys(HARNESS_SCENARIO).length).toBe(4);
@@ -1139,7 +1169,7 @@ Use the template with `<N>`=4 and `<files>` = `scripts/matrix/__tests__/scenario
 
 ```ts
 // Design §4's scenario catalogue as data (R11: a reviewed file, never a draw).
-// 69 parents in design order; 19 split into atoms by the rule in the W1b plan
+// 70 parents in design order; 21 split into atoms by the rule in the W1b plan
 // Task 4: split on alternative organiser INPUTS or CONDITIONS, never on an
 // outcome the product/rulebook decides, never on a sport's own mechanism.
 // O9 (recommendation, default): E stays four scenarios; only E2 runs in L3.
@@ -1185,7 +1215,11 @@ export const PARENTS: readonly ParentScenario[] = Object.freeze([
   P("M1", "walkover in only one match"),
   P("M2", "double walkover"),
   P("M3", "retirement mid-match (partial score)"),
-  P("M4", "abandoned / no-result", [], "one input (abandon); whether it reads as no-result is the sport's outcome (W2 rulebook)"),
+  // Ruling 30: split on whether the abandon carries a result.
+  P("M4", "abandoned", [
+    A("a", "with no result"),
+    A("b", "with a result (a cricket DLS decision, a football award-policy abandon)"),
+  ]),
   P("M5", "draw in a stage that cannot end level"),
   P("M6", "tie after regulation → decider", [], "the decider is the sport's mechanism (variant axis), not an organiser input"),
   P("M7", "void a decided result", [A("a", "before the next match started"), A("b", "after the next match started")]),
@@ -1193,6 +1227,12 @@ export const PARENTS: readonly ParentScenario[] = Object.freeze([
   P("M9", "forfeit/award by the organiser", [A("a", "forfeit (core.forfeit)"), A("b", "award (core.award)")]),
   P("M10", "disqualification mid-match"),
   P("M11", "a rules change attempted mid-match — must refuse (ruling 12)"),
+  // Ruling 30.
+  P("M12", "player injured mid-match (team sport)", [
+    A("a", "a substitute comes on and the match continues"),
+    A("b", "no replacement: the team plays short"),
+    A("c", "a cricket batter retires hurt, then resumes"),
+  ]),
   P("F1", "odd field (byes)"),
   P("F2", "field below the format's minimum"),
   P("F3", "non-power-of-two bracket"),
@@ -1252,6 +1292,11 @@ const L2_EXCLUDED = new Set(["E2"]);
 
 /** Design §4 "Known 🚫 at design time" with the wave that owes each a build-or-refuse ruling. */
 const KNOWN_NO_PATH: Readonly<Record<string, string>> = Object.freeze({ D1: "W9", D2: "W9", R13: "W9", D4: "W4", Q4: "W4", C5: "W5" });
+/** Design §4 "Known UI-only 🚫" (ruling 30), keyed by ATOM: an HTTP route
+ *  exists (L3 runs), but no screen sends it (the L2 run records 🚫). M12b's
+ *  `core.lineup.retirement` has no pad or console control, and no
+ *  minimum-players rule exists; both are owed to W2. */
+const KNOWN_UI_NO_PATH: Readonly<Record<string, string>> = Object.freeze({ M12b: "W2" });
 
 export interface AtomicScenario {
   readonly id: string;
@@ -1261,6 +1306,7 @@ export interface AtomicScenario {
   readonly layers: readonly Layer[];
   readonly l3Excluded: string | null;
   readonly knownNoPath: string | null;
+  readonly l2NoPath: string | null;
 }
 
 export const ATOMIC: readonly AtomicScenario[] = Object.freeze(PARENTS.flatMap((p) => {
@@ -1268,7 +1314,7 @@ export const ATOMIC: readonly AtomicScenario[] = Object.freeze(PARENTS.flatMap((
   return atoms.map((a) => {
     const l3Excluded = L3_EXCLUDED[a.id] ?? null;
     const layers: Layer[] = [...(L2_EXCLUDED.has(a.id) ? [] : ["L2" as const]), ...(l3Excluded === null ? ["L3" as const] : [])];
-    return Object.freeze({ id: a.id, parent: p.id, family: p.id[0] as Family, title: a.title, layers, l3Excluded, knownNoPath: KNOWN_NO_PATH[p.id] ?? null });
+    return Object.freeze({ id: a.id, parent: p.id, family: p.id[0] as Family, title: a.title, layers, l3Excluded, knownNoPath: KNOWN_NO_PATH[p.id] ?? null, l2NoPath: KNOWN_UI_NO_PATH[a.id] ?? null });
   });
 }));
 
@@ -1327,7 +1373,7 @@ export function loadRegressions(repoRoot: string = resolve(dirname(fileURLToPath
 In `_INDEX.md`'s status table, add a row after W1d:
 `| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | awaiting owner (recommendation Q-A, W1b plan) |`.
 
-- [ ] **Step 4: Run and see it pass** — same command as Step 2, plus `scripts/matrix/__tests__/strip-types-loadable.test.ts`. Expected: green, `files` = 2. Record `ATOMIC.length` (90) and `l3Atomic().length` (83) in the task report. Both come from the test output: add a `console.log` in a one-off run, never an assertion on a typed number.
+- [ ] **Step 4: Run and see it pass** — same command as Step 2, plus `scripts/matrix/__tests__/strip-types-loadable.test.ts`. Expected: green, `files` = 2. Record `ATOMIC.length` (94), `l3Atomic().length` (87) and `l2Atomic().length` (93) in the task report. Both come from the test output: add a `console.log` in a one-off run, never an assertion on a typed number.
 
 - [ ] **Step 5: Mutation check**
 
@@ -1336,11 +1382,14 @@ In `_INDEX.md`'s status table, add a row after W1d:
 - Remove `E2` from `L2_EXCLUDED` → killed by "L2 excludes only the API-only E2".
 - Add `E3` to L3 (delete its `L3_EXCLUDED` line) → killed by "O9 default".
 - Drop `C5` from `KNOWN_NO_PATH` → killed by "known 🚫".
+- Ruling 30: restore M4's `noSplit` with no atoms → killed by "every compound the design names is split" (the design now names M4).
+- Ruling 30: delete `M12b` from `KNOWN_UI_NO_PATH`, or key it `M12` → killed by "UI-only 🚫" (the list comes back empty, or names the parent).
+- Ruling 30: add `M12: "W2"` to `KNOWN_NO_PATH` (`KNOWN_NO_PATH` is keyed by parent, so this makes the whole parent a design-wide 🚫) → killed by "known 🚫", because the design does not list M12, and by "UI-only 🚫", because `knownNoPath` must be null.
 - Revert common.ts to `"W1b"` with the `_INDEX` W1b row edited to "done" in a scratch copy → killed by the Q-A guard. Use the backup/restore rule on `_INDEX.md`.
 
 - [ ] **Step 6: Scoped tsc + eslint** on `scripts/matrix/lib/scenario-catalogue.ts`.
 
-- [ ] **Step 7: Commit** — `feat(matrix): the atomic scenario catalogue — 69 design parents, 90 atomic cases, layers, R29 regression file`. Include `_INDEX.md` (the W1-driving row only).
+- [ ] **Step 7: Commit** — `feat(matrix): the atomic scenario catalogue — 70 design parents, 94 atomic cases, layers, R29 regression file`. Include `_INDEX.md` (the W1-driving row only).
 
 ---
 ## Task 5: The variant set — builder default, boundary classes, a pair-wise cover, scorability
@@ -1768,7 +1817,7 @@ Performance note: `ALL` generates about 1,000 cases. Measure the test file's dur
 
 Each atomic case gets a predicate over the facts of one cell: the row's real stage bodies, the sport's resolved config, its entrant kinds and the row's format gate. Its **drop reason** is written next to it.
 
-A variant-dependent predicate is handled differently. M5, M6, M8a, C1 and E3 read the config. If one of them fails at the builder default, it **binds** to the first committed variant case that enables it, rather than dropping the cell (design §4: "E3 needs best-of-1, M5/M6 need a decider switched on").
+A variant-dependent predicate is handled differently. M4b, M5, M6, M8a, C1 and E3 read the config. If one of them fails at the builder default, it **binds** to the first committed variant case that enables it, rather than dropping the cell (design §4: "E3 needs best-of-1, M5/M6 need a decider switched on").
 
 Trap 1 has three guards:
 - Every predicate mutated to `return false` must lower some row's count.
@@ -1798,6 +1847,7 @@ Trap 1 has three guards:
   - `interface Rule { when: Predicate; reason: string; variantDependent: boolean; witness: { keep: WitnessCell; drop: WitnessCell } | null }`
   - `RULES: Readonly<Record<string, Rule>>` (keys = `LIFECYCLE` + every atomic id)
   - `DECIDERS`
+  - `ABANDON_RESULTS` (ruling 30, M4b)
   - `decide(rule, row, sport, variants): { applies: boolean; bound: string | null }`
   - `interface PlannedCase { cell; row; sport; scenario; preset; bound: string | null }`
   - `interface Drop { cell; row; sport; scenario; reason }`
@@ -1859,7 +1909,8 @@ import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "../lib/catalogue.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "../lib/scenario-catalogue.ts";
 import { buildSportVariants } from "../lib/variants.ts";
-import { DECIDERS, RULES, cellFacts, planL3, rowCounts, scenarioCounts, type Rule, type WitnessCell } from "../lib/applicability.ts";
+import { ABANDON_RESULTS, DECIDERS, RULES, cellFacts, planL3, rowCounts, scenarioCounts, type Rule, type WitnessCell } from "../lib/applicability.ts";
+import { sportModule } from "../lib/sport-cfg.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const variants = SPORT_KEYS.map((s) => buildSportVariants(s));
@@ -1956,7 +2007,141 @@ describe("DECIDERS — every key read is declared by the sport's configSchema", 
     }
   });
 });
+
+describe("ruling 30 — M4b: ABANDON_RESULTS agrees with the real engine's abandon", () => {
+  const SCHEMA: Record<string, string> = {
+    football: "football/football.schema.json", hockey: "hockey/hockey.schema.json",
+    icehockey: "icehockey/icehockey.schema.json", cricket: "cricket/cricket.schema.json",
+  };
+  const ABANDON = { type: "core.abandon", payload: { reason: "matrix: witness" } };
+  type Ev = { type: string; payload: unknown };
+  /** Streams an abandon may follow: every prefix of a decided home-win stream,
+   *  plus one cricket-only candidate. Cricket's generator is coarse, one
+   *  closed summary per innings, so no prefix is a chase in progress; the
+   *  extra candidate is a partial chase at exactly the cfg's own minimum for
+   *  a result (minOversForResult × ballsPerOver, cricket.ts:1152). */
+  const candidates = (sport: string, cfg: Readonly<Record<string, unknown>>): Ev[][] => {
+    let stream: Ev[];
+    try {
+      stream = generateStream({ sportKey: sport, cfg, stageKind: "league", home: "H", away: "A", outcome: { kind: "win", winner: "home" } });
+    } catch (e) {
+      if (!(e instanceof GeneratorUnsupported)) throw e;
+      stream = [START]; // cricket two-innings has no generator (KNOWN_UNSUPPORTED); START alone opens the match
+    }
+    const out = stream.map((_, i) => stream.slice(0, i + 1));
+    if (sport === "cricket" && stream.length > 1) {
+      const c = cfg as { minOversForResult: number; ballsPerOver: number };
+      out.push([...stream.slice(0, 2), { type: "cricket.innings.summary", payload: { runs: 1, wickets: 0, legalBalls: c.minOversForResult * c.ballsPerOver, partial: true } }]);
+    }
+    return out;
+  };
+  /** Does an abandon, after SOME undecided candidate, fold to a RESULT (not
+   *  null, not no_result)? Folded through the real engine (fold.ts), never
+   *  judged from the table. */
+  const resultOnAbandon = (sport: string, cfg: Readonly<Record<string, unknown>>): boolean => {
+    const m = sportModule(sport);
+    for (const prefix of candidates(sport, cfg)) {
+      if (foldStream(m, cfg, "H", "A", prefix).outcome !== null) continue; // decided: an abandon now is refused
+      try {
+        const o = foldStream(m, cfg, "H", "A", [...prefix, ABANDON]).outcome;
+        if (o !== null && o.kind !== "no_result") return true;
+      } catch { /* WRONG_PHASE: this candidate cannot be abandoned; try the next */ }
+    }
+    return false;
+  };
+  it("each key ABANDON_RESULTS reads is declared by the sport's configSchema", () => {
+    const reads: Record<string, string[]> = { football: ["abandonPolicy"], hockey: ["abandonPolicy"], icehockey: ["abandonPolicy"], cricket: ["dls", "inningsPerSide"] };
+    expect(Object.keys(ABANDON_RESULTS)).toEqual(Object.keys(reads));
+    for (const [sport, keys] of Object.entries(reads)) {
+      const props = (JSON.parse(readFileSync(resolve(REPO, "packages/engine/src/sports", SCHEMA[sport]!), "utf8")) as { configSchema: { properties: Record<string, unknown> } }).configSchema.properties;
+      for (const k of keys) expect(Object.keys(props), `${sport}.${k}`).toContain(k);
+    }
+  });
+  it("registry sweep: at the builder default, ABANDON_RESULTS answers what the engine folds (anti-vacuity: every sport judged)", () => {
+    let judged = 0;
+    for (const s of SPORT_KEYS) {
+      const cfg = cellFacts("league", s).cfg;
+      expect(ABANDON_RESULTS[s]?.(cfg) ?? false, s).toBe(resultOnAbandon(s, cfg));
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+  });
+  it("every ABANDON_RESULTS arm has a config under which the engine really yields a result (no inert arm)", () => {
+    // Engine-declared switches, not organiser reachability: abandonPolicy is an
+    // API-only key (false premise 10), so it is passed as a raw override here.
+    const on: Record<string, { preset?: string; overrides?: Record<string, unknown>; values?: Record<string, string> }[]> = {
+      football: [{ overrides: { abandonPolicy: "award" } }],
+      hockey: [{ overrides: { abandonPolicy: "award" } }],
+      icehockey: [{ overrides: { abandonPolicy: "award" } }],
+      cricket: [{ values: { dls: "on" } }, { preset: "test" }],
+    };
+    let judged = 0;
+    for (const [s, cfgs] of Object.entries(on)) for (const c of cfgs) {
+      const cfg = cellFacts("league", s, c.preset, c.overrides ?? {}, c.values).cfg;
+      expect(ABANDON_RESULTS[s]!(cfg), `${s} ${JSON.stringify(c)}`).toBe(true);
+      expect(resultOnAbandon(s, cfg), `${s} ${JSON.stringify(c)}`).toBe(true);
+      judged++;
+    }
+    expect(judged).toBe(5);
+  });
+  it("M4b binds only through a committed variant, and drops every sport the organiser cannot reach (configKeysFor, the editor's own key set)", () => {
+    let judged = 0;
+    for (const s of Object.keys(ABANDON_RESULTS)) {
+      const planned = base.cases.filter((c) => c.scenario === "M4b" && c.sport === s);
+      const editorKeys = configKeysFor(s);
+      if (!editorKeys.has("abandonPolicy") && !editorKeys.has("dls") && !variants.find((v) => v.sport === s)!.cases.some((x) => x.preset === "test")) {
+        expect(planned, `${s}: no organiser path to an abandon with a result`).toEqual([]);
+        expect(base.drops.some((d) => d.scenario === "M4b" && d.sport === s), s).toBe(true);
+      } else {
+        expect(planned.length, s).toBeGreaterThan(0);
+        for (const c of planned) expect(c.bound, `${s} ${c.cell}: never applies at the builder default`).not.toBeNull();
+      }
+      judged++;
+    }
+    expect(judged).toBe(Object.keys(ABANDON_RESULTS).length);
+  });
+});
+
+describe("ruling 30 — M12", () => {
+  it("M12a/M12b apply exactly where R16 does (team entrants), and M12c exactly where the module declares cricket.retire", () => {
+    let judged = 0;
+    for (const row of ROW_KEYS) for (const s of SPORT_KEYS) {
+      const f = cellFacts(row, s);
+      expect(RULES.M12a!.when(f), `M12a ${row}|${s}`).toBe(RULES.R16!.when(f));
+      expect(RULES.M12b!.when(f), `M12b ${row}|${s}`).toBe(RULES.R16!.when(f));
+      expect(RULES.M12c!.when(f), `M12c ${row}|${s}`).toBe(Object.hasOwn(sportModule(s).eventSchemas ?? {}, "cricket.retire"));
+      judged++;
+    }
+    expect(judged).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+  });
+});
 ```
+
+The M4b binding test needs these imports added to `applicability.test.ts`:
+
+```ts
+import { configKeysFor } from "../../../apps/web/src/lib/match-rules.ts";
+import { foldStream } from "../lib/fold.ts";
+import { generateStream } from "../lib/streams/index.ts";
+import { GeneratorUnsupported, START } from "../lib/streams/types.ts";
+```
+
+Before relying on these, re-pin three names. Confirm that `GeneratorUnsupported` is exported from `streams/types.ts`: `streams/index.ts` imports it from there. Confirm that `configKeysFor` is exported at `match-rules.ts:989`. Confirm that the cricket preset key is `"test"` at `cricket.ts:3559`.
+
+A plan-time offline fold was run on 2026-09-28 in the exec worktree, with W1a's `fold.ts` and stream generators. It read, not ran, the product. What it showed:
+- At every sport's builder default, `resultOnAbandon` is false.
+- Each of the five "on" configs is true:
+  - football, hockey and icehockey `award` after the first goal;
+  - cricket DLS through the partial chase;
+  - cricket `test` at `[START]`, which folds to a draw.
+- Without the cricket partial-chase candidate, the DLS arm reads false, because the coarse summaries never leave a chase open. So the candidate is load-bearing; never drop it to "simplify".
+
+The M4b branch condition names only three routes by which an organiser can reach an abandon with a result:
+- an `abandonPolicy` editor key;
+- the `dls` editor key;
+- the cricket `test` preset.
+
+On 2026-09-28 only cricket has a route, so the planned cases are cricket's. Football, hockey and icehockey drop (false premise 10).
 
 `cellFacts` takes the fifth argument `values` (raw editor values). When `values` is given, `overrides` comes from `buildVariant(sport, preset, values)`. This lets a witness say "badminton at best-of-1" the way an organiser types it.
 
@@ -2013,7 +2198,7 @@ import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/l
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "./scenario-catalogue.ts";
-import { drawsAllowed, entrantKindsFor, resolveSportCfg } from "./sport-cfg.ts";
+import { drawsAllowed, entrantKindsFor, resolveSportCfg, sportModule } from "./sport-cfg.ts";
 import { buildVariant, offlineBuilderDefault, type SportVariants } from "./variants.ts";
 
 export interface StageFact { readonly kind: string; readonly config: Readonly<Record<string, unknown>>; readonly takes: readonly string[] }
@@ -2090,6 +2275,24 @@ export const DECIDERS: Readonly<Record<string, (cfg: Readonly<Record<string, unk
 });
 const decider: Predicate = (f) => DECIDERS[f.sport]?.(f.cfg) ?? false;
 
+/** Ruling 30, M4b: the cfg lets an abandon YIELD A RESULT (engine applyAbandon).
+ *  football/hockey/icehockey only under abandonPolicy "award" (football.ts:1657,
+ *  period/kernel.ts:1450; every schema defaults to "replay"). Cricket when DLS
+ *  is on (a chase past minOversForResult, cricket.ts:1152-1161) or at two
+ *  innings a side (a draw, cricket.ts:1143). Every other sport's abandon
+ *  replays (null) or records no_result. Keys pinned against each schema.json,
+ *  and each arm witnessed by a real fold (applicability.test.ts). */
+export const ABANDON_RESULTS: Readonly<Record<string, (cfg: Readonly<Record<string, unknown>>) => boolean>> = Object.freeze({
+  football: (c) => c.abandonPolicy === "award",
+  hockey: (c) => c.abandonPolicy === "award",
+  icehockey: (c) => c.abandonPolicy === "award",
+  cricket: (c) => (c.dls as { enabled?: unknown } | undefined)?.enabled === true || c.inningsPerSide === 2,
+});
+const abandonWithResult: Predicate = (f) => ABANDON_RESULTS[f.sport]?.(f.cfg) ?? false;
+/** Ruling 30, M12c: read from the module's own event declarations
+ *  (module.ts `eventSchemas`), not a typed sport list. */
+const declaresEvent = (type: string): Predicate => (f) => Object.hasOwn(sportModule(f.sport).eventSchemas ?? {}, type);
+
 // --- rules -------------------------------------------------------------------
 export interface WitnessCell { readonly cell: string; readonly preset?: string; readonly values?: Readonly<Record<string, string>> }
 export interface Rule {
@@ -2125,12 +2328,20 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   R14: rule(losersContinue, "every stage is single-loss elimination: a retirement ends the entrant's event", T, KO),
   R15: rule(hasKind("swiss", "americano"), "the whole schedule is generated at once: nobody is paired 'next round' after leaving", "swiss|generic", T),
   R16: rule(entrant("team"), "no team entrants in this sport's model: no team lineup to substitute into", "league|football", "league|badminton"),
-  M1: ALWAYS, M2: ALWAYS, M3: ALWAYS, M4: ALWAYS,
+  M1: ALWAYS, M2: ALWAYS, M3: ALWAYS,
+  // Ruling 30. M4a: every sport can abandon with no result at its builder
+  // default (replay → null, or no_result below cricket's minimum overs).
+  M4a: ALWAYS,
+  M4b: rule(abandonWithResult, "no organiser-reachable config lets an abandon yield a result here: football/hockey/icehockey need abandonPolicy \"award\", which no editor field sets (configKeysFor; false premise 10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
   M5: rule(levelRefusedHere, "either every stage of the row accepts a level result, or the sport never ends level under this config (supportsDraws)", "knockout|football", "knockout|badminton", true),
   M6: rule(decider, "no decider is switched on in this config and no committed variant switches one on (DECIDERS; boardgame declares none)", "knockout|icehockey", "knockout|badminton", true),
   M7a: ALWAYS, M7b: ALWAYS,
   M8a: rule(not(scoreless), "generic win_loss records a winner only: there is no score to correct while keeping the winner", T, { cell: T, preset: "win_loss" }, true),
   M8b: ALWAYS, M9a: ALWAYS, M9b: ALWAYS, M10: ALWAYS, M11: ALWAYS,
+  // Ruling 30. M12a/M12b follow R16's rule (team entrants). M12c is cricket's retired hurt.
+  M12a: rule(entrant("team"), "no team entrants in this sport's model: no substitute can come on for an injured player", "league|football", "league|badminton"),
+  M12b: rule(entrant("team"), "no team entrants in this sport's model: there is no team to play short", "league|football", "league|badminton"),
+  M12c: rule(declaresEvent("cricket.retire"), "the sport declares no retired-hurt event (module eventSchemas has no cricket.retire; ruling 30: cricket only)", "league|cricket", "league|football"),
   F1: ALWAYS, F2: ALWAYS,
   F3: rule(hasKind("knockout", "double_elim"), "no knockout or double-elimination bracket in this row: nothing to size to a power of two", KO, T),
   F4: rule(hasKind("group"), "no pooled (group) stage in this row", "groups_ko|generic", T),
@@ -2223,8 +2434,11 @@ Two notes on this code:
 
 - [ ] **Step 5: Mutation check**
 
-- The `return false` sweep is in the test itself: each of the 84 L3 ids is mutated in-process.
-- `return true` on each narrowing rule: apply it to R4b, M5, E3 and Q3 by hand, one at a time. Each is killed by its drop witness.
+- The `return false` sweep is in the test itself: each L3 id is mutated in-process (LIFECYCLE plus every `l3Atomic()` id; the test asserts the count).
+- `return true` on each narrowing rule: apply it to R4b, M4b, M5, M12c, E3 and Q3 by hand, one at a time. Each is killed by its drop witness.
+- Ruling 30: `ABANDON_RESULTS.cricket` without its `inningsPerSide === 2` arm → killed by "every ABANDON_RESULTS arm has a config…" (the `test` preset case). `ABANDON_RESULTS.football` → `c.abandonPolicy !== "replay"` survives, because the enum has only two members. Record it as an equivalent mutant.
+- Ruling 30: `resultOnAbandon` returns `false` without folding → killed by the same test, since every arm must fold to a result. This is the positive half of the builder-default sweep, which such a helper would otherwise pass vacuously.
+- Ruling 30: M12a's predicate → `entrant("pair", "team")` → killed by the M12 sweep: badminton allows pairs, and R16 says no.
 - `levelRefusedHere` without the `ALL_KINDS.some` clause → killed by M5's drop witness (badminton never ends level).
 - `DECIDERS.carrom` → `c.tieBoard === "draw"` → killed by "M6 … binds" only if carrom is involved. Name the real killer: the carrom schema default `tieBoard: "extra"` makes M6 apply at the default, so the mutant moves carrom cells to bound or dropped. That is a drift in Task 8's committed drop list.
 - `expectedGate` without `page_playoff` → killed by "the seven gated rows".
@@ -2239,6 +2453,8 @@ Two notes on this code:
 ## Task 7: The L2 pair file (depends on O9 through which E atoms are L2)
 
 The rule for L2 (design §6.2): every applicable (row, scenario) and (sport, scenario) pair runs at least once in the browser, with widths rotating across the seven. The cover is greedy and deterministic, and it is written to a committed file in Task 8. W1c runs it, and confirms the width list (O3).
+
+Ruling 30 leaves the planner unchanged. Atoms with a known path gap still get their L2 runs: the design's 🚫 parents (D1, D2, R13 and the rest) and the UI-only M12b. W1c reads `knownNoPath` / `l2NoPath` from the catalogue and records 🚫 for those runs rather than dropping them, so the gap stays visible in `MATRIX.md`.
 
 **Files:**
 - Create: `scripts/matrix/lib/pairs.ts`
@@ -5368,7 +5584,7 @@ The regression stub prints `"MB-NNN"`, `"YYYY-MM-DD"` and an empty title **on pu
 The execution worktree `format-matrix-w1b-exec` was made off `origin/main` in Task 1 Step 0, after #896 merged (`a5f813404`). Confirm it holds only W1b commits on top of `origin/main`: `git log --oneline origin/main..HEAD`.
 
 **Files:**
-- Create: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe/{results.json,MATRIX.md}` and `truth-runs/w1b-model/model-report.json`
+- Create: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe/{results.json,MATRIX.md}`, `truth-runs/w1b-abandon/abandon-probe.json` (ruling 30, Step 3b) and `truth-runs/w1b-model/model-report.json`
 - Modify: `scripts/matrix/catalogue/regressions.json` (the first MB case, if the model finds one), and the regenerated `scripts/matrix/catalogue/counts.json` (a regression moves the L3 count)
 - Test: `committed-catalogue.test.ts` (the drift gate re-run), `scenario-catalogue.test.ts` (the regression file parses)
 
@@ -5412,6 +5628,159 @@ Copy the evidence:
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && mkdir -p docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe && cp matrix-report/w1b-probe-0928a/results.json matrix-report/w1b-probe-0928a/MATRIX.md docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe/
+```
+
+- [ ] **Step 3b: The abandon check (ruling 30; false premise 11, audit ST-G1)**
+
+This step answers one question by driving the product: does an abandon that the ENGINE scores reach the product's table? The reading is that it does not. Any `core.abandon` makes the fixture `abandoned` (`append-event.ts:146`), which becomes `void` (`fixture-engine-status.ts:17-19`), which is not counted (`stage.ts:24`).
+
+There are four legs. Each gets its own case org, a one-stage league division, two entrants and one fixture. Each leg's expected table worth is the sport's own `standingsDelta` over the exact stream posted (`fold.ts` `declaredPoints`), never a typed number. The badminton leg is the control. Its abandon folds to `null`, so it must NOT count, and a probe that cannot tell counting from voiding proves nothing.
+
+With the Write tool, write this to `$TMPDIR/w1b-abandon-probe.mts`. That is your scratchpad: never write it inside the worktree, and never commit it. The plan is its record.
+
+```ts
+// W1b Task 15 Step 3b — ruling 30 / ST-G1: does an engine-scored abandon reach the table?
+// Synthetic identities only (ownerEmail); writes no secret.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const W = "/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec/scripts/matrix";
+const { realDeps } = await import(`${W}/run.ts`);
+const { ownerEmail, requireOwnDataDir } = await import(`${W}/lib/seed-org.ts`);
+const { builderDefaultVariant, stagesForRow } = await import(`${W}/lib/catalogue.ts`);
+const { entrantKindFor, resolveSportCfg, sportModule } = await import(`${W}/lib/sport-cfg.ts`);
+const { declaredPoints, foldStream } = await import(`${W}/lib/fold.ts`);
+const { START } = await import(`${W}/lib/streams/types.ts`);
+const { RefusedCall } = await import(`${W}/lib/driver/types.ts`);
+
+const [runId = "w1b-abandon-0928a", reportDir = "matrix-report"] = process.argv.slice(2);
+type Ev = { type: string; payload: unknown };
+const ABANDON: Ev = { type: "core.abandon", payload: { reason: "matrix: abandoned (ruling 30 probe)" } };
+interface Leg { id: string; atom: "M4a" | "M4b"; sport: string; variant: string | null; config: Record<string, unknown>; stream: (home: string) => Ev[]; engineKind: string | null }
+// engineKind is a GUARD, not the verdict: the leg is only evidence if the real
+// engine folds its stream to that kind (checked below before anything is posted).
+const LEGS: Leg[] = [
+  { id: "badminton-control", atom: "M4a", sport: "badminton", variant: null, config: {}, stream: () => [START, ABANDON], engineKind: null },
+  { id: "cricket-no-result", atom: "M4a", sport: "cricket", variant: null, config: {}, stream: () => [START, ABANDON], engineKind: "no_result" },
+  { id: "cricket-test-draw", atom: "M4b", sport: "cricket", variant: "test", config: {}, stream: () => [START, ABANDON], engineKind: "draw" },
+  // abandonPolicy is API-only config (false premise 10): the editor cannot set it.
+  { id: "football-award", atom: "M4b", sport: "football", variant: null, config: { abandonPolicy: "award" }, stream: (home) => [START, { type: "football.goal", payload: { by: home, minute: 10 } }, ABANDON], engineKind: "award" },
+];
+
+async function runLeg(deps: any, ctx: any, db: any, leg: Leg, i: number): Promise<Record<string, unknown>> {
+  const base = { leg: leg.id, atom: leg.atom, sport: leg.sport };
+  try {
+    const org = await deps.prepareCaseOrg(ctx, { name: `Matrix ${runId} ab ${i + 1}`, slug: `m-${runId}-ab-${i + 1}` });
+    const driver = deps.driverFor(ctx.base, ctx.session, org.orgId);
+    const variant = leg.variant ?? builderDefaultVariant(leg.sport, await db.variantKeysInBuilderOrder(leg.sport));
+    const cfg = resolveSportCfg(leg.sport, variant, leg.config);
+    const comp = await driver.createCompetition({ name: `Matrix abandon ${leg.id}`, slug: `m-${runId}-ab-${i + 1}` });
+    const div = await driver.createDivision(comp.id, { name: `Matrix ${leg.sport}`, slug: "d", sportKey: leg.sport, variantKey: variant, config: leg.config });
+    await driver.postStages(div.id, stagesForRow("league"));
+    await driver.addEntrants(div.id, [1, 2].map((n) => ({ displayName: `Matrix Side ${n}`, seed: n, kind: entrantKindFor(leg.sport, cfg) })));
+    await driver.start(div.id);
+    const stage = (await driver.listStages(div.id))[0];
+    const seated = (rows: any[]) => rows.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
+    let fixtures = seated(await driver.listFixtures(div.id));
+    if (fixtures.length === 0) fixtures = seated((await driver.generate(stage.id)).fixtures);
+    const f = fixtures[0];
+    if (f === undefined) throw new Error("no seated fixture after start and generate");
+    const home: string = f.home_entrant_id;
+    const away: string = f.away_entrant_id;
+    const events = leg.stream(home);
+    const m = sportModule(leg.sport);
+    const folded = foldStream(m, cfg, home, away, events).outcome;
+    if ((folded?.kind ?? null) !== leg.engineKind) {
+      return { ...base, variant, verdict: "invalid", why: `the engine folds this stream to ${folded?.kind ?? "null"}, the leg assumes ${leg.engineKind ?? "null"}` };
+    }
+    const ctxStage = { kind: stage.kind, ...(f.pool_id ? { poolId: f.pool_id } : {}), ...(f.round_no ? { roundNo: f.round_no } : {}) };
+    const dp = declaredPoints(m, cfg, ctxStage, home, away, events);
+    const declared = dp === null ? null : { home: dp.home, away: dp.away };
+    await driver.postStream(f.id, events, `${runId}-ab-${i + 1}:${f.id}`);
+    const state = await driver.fixtureState(f.id);
+    const table = await driver.standings(stage.id, f.pool_id);
+    const row = (id: string) => table.rows.find((r: any) => r.entrantId === id) ?? null;
+    const h = row(home);
+    const a = row(away);
+    const product = { fixtureStatus: state.status, outcome: state.outcome, home: h, away: a };
+    if (h === null || a === null || h.played === undefined || a.played === undefined || h.points === undefined || a.points === undefined) {
+      return { ...base, variant, declared, product, verdict: "unjudgeable", why: "a table row, or its played/points, is missing on the wire" };
+    }
+    let verdict: string;
+    if (declared === null) verdict = h.played === 0 && a.played === 0 ? "void-correct" : "counted-nothing";
+    else if (h.played === 1 && a.played === 1 && h.points === declared.home && a.points === declared.away) verdict = "counts";
+    else if (h.played === 0 && a.played === 0) verdict = "voided";
+    else verdict = "differs";
+    return { ...base, variant, engineOutcome: folded, declared, product, verdict };
+  } catch (e) {
+    if (e instanceof RefusedCall) return { ...base, verdict: "refused", refusal: { method: e.method, path: e.path, status: e.status, code: e.code } };
+    return { ...base, verdict: "error", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function main(): Promise<number> {
+  const env = process.env;
+  const base = env.SMOKE_BASE;
+  if (!base) { console.error("abandon-probe: SMOKE_BASE is unset (Step 1)"); return 2; }
+  requireOwnDataDir(env); // the RF3 own-DB proof, before any write
+  const deps = realDeps();
+  const pf = await deps.preflight(base);
+  if (!pf.ok) { for (const r of pf.refusals) console.error(`preflight refused: ${r.reason} — ${r.detail}`); return 2; }
+  const db = await deps.openDb();
+  try {
+    const owner = ownerEmail(runId);
+    const session = await deps.signIn(base, owner);
+    const ctx = { base, session, userId: await db.userIdForEmail(owner), plan: await db.chooseTopPublicPlan() };
+    const legs: Record<string, unknown>[] = [];
+    for (const [i, leg] of LEGS.entries()) {
+      const r = await runLeg(deps, ctx, db, leg, i);
+      legs.push(r);
+      console.log(`${String(r.verdict).padEnd(15)} ${leg.id}${r.why ? ` — ${r.why}` : ""}`);
+    }
+    const judged = legs.filter((r) => ["counts", "voided", "differs", "void-correct", "counted-nothing"].includes(String(r.verdict)));
+    const control = legs.find((r) => r.leg === "badminton-control")?.verdict ?? "missing";
+    const scored = judged.filter((r) => r.leg !== "badminton-control");
+    const stG1 = control !== "void-correct" ? "PROBE-BROKEN"
+      : scored.some((r) => r.verdict === "voided") ? "CONFIRMED"
+      : scored.length > 0 && scored.every((r) => r.verdict === "counts") ? "REFUTED" : "UNRESOLVED";
+    const report = { runId, judged: judged.length, control, stG1, legs };
+    mkdirSync(join(reportDir, runId), { recursive: true });
+    writeFileSync(join(reportDir, runId, "abandon-probe.json"), `${JSON.stringify(report, null, 2)}\n`);
+    console.log(`ST-G1 ${stG1} — judged ${judged.length}/${LEGS.length}, control ${control}`);
+    return judged.length === 0 ? 1 : 0; // zero judged is a failure (anti-vacuity), never a pass
+  } finally {
+    await db.dispose();
+  }
+}
+process.exitCode = await main();
+```
+
+Before running, re-pin the calls against `run.ts`, which Task 1 changed (`realDeps`, `RunDeps.preflight`/`openDb`/`signIn`/`prepareCaseOrg`/`driverFor`), and against `lib/driver/types.ts`. If one moved, fix the probe, not the product. The legs were folded offline at plan time (2026-09-28), with this result:
+- badminton `bwf` → `null`;
+- cricket `t20` → `no_result`, worth 1/1;
+- cricket `test` → `draw`, worth 1/1;
+- football award → `award` to the home side, worth 3/0.
+
+Run it in the same shell environment as Step 3 (Step 1's exports):
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && node --experimental-strip-types "$TMPDIR/w1b-abandon-probe.mts" w1b-abandon-0928a matrix-report; echo EXIT=$?
+```
+
+Expected: EXIT=0, four verdict lines, then `ST-G1 <verdict> — judged N/4, control void-correct`. Read each outcome as follows:
+- **`control` is not `void-correct`.** The run is `PROBE-BROKEN`. Stop, fix the probe, and re-run under a new run id. The other legs mean nothing until the control holds.
+- **`CONFIRMED`: at least one scored leg is `voided`.** The fixture reads `abandoned`, and both rows read `played 0` against a declared worth (1/1, 1/1 or 3/0). This is the reading, and it is a finding. Record it with the leg ids and the evidence path, **routed to W5 (standings) and W2 (what an abandon is worth)**. Change no product code, and never loosen a verdict to pass.
+- **`REFUTED`: every scored leg `counts`.** False premise 11 is wrong. Record it as a refuted hypothesis in `_INDEX.md` "False premises found", naming ST-G1 and the run.
+- **A `refused` leg is data.** Two cases need their own reading:
+  - `football-award` refused at `createDivision` on `config` means `abandonPolicy` is not even API-settable. Record it with false premise 10: M4b football then has no path at all, routed to W2.
+  - A team-entrant refusal at `addEntrants` or on the first post, with a named code such as a roster or lineup requirement, is the `team rosters` deferral (`W1-driving`) showing up live. Record it, and do not build rosters here.
+- **`UNRESOLVED` with no leg `voided`.** Say exactly which legs were judged. Never re-run a red away (AGENTS.md class 14 applies only to an environment signature).
+
+Copy the evidence:
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && mkdir -p docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-abandon && cp matrix-report/w1b-abandon-0928a/abandon-probe.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-abandon/
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && grep -acE 'seazn_org|sb-|@|Bearer|postgres://' docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-abandon/abandon-probe.json; echo "secret-shaped lines above (expect 0)"
 ```
 
 - [ ] **Step 4: The model on the slice, fences on**
@@ -5471,10 +5840,10 @@ Follow the skill's teardown, which requires a positive ownership check before ki
 - [ ] **Step 9: Commit, push, open the PR, watch CI**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git add scripts/matrix/catalogue/regressions.json scripts/matrix/catalogue/counts.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model && git commit -F "$TMPDIR/w1b-t15-msg.txt"; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && git add scripts/matrix/catalogue/regressions.json scripts/matrix/catalogue/counts.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-probe docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-abandon docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model && git commit -F "$TMPDIR/w1b-t15-msg.txt"; echo EXIT=$?
 ```
 
-The message file, written with the Write tool, reads `test(matrix): W1b live evidence — slice 24/24, probe set, model on the slice, MB-001 (#879)`, followed by a body that pastes the Step 2 and Step 3 summaries and the Step 4–6 outcomes, and then the `Co-Authored-By` trailer.
+The message file, written with the Write tool, reads `test(matrix): W1b live evidence — slice 24/24, probe set, abandon check, model on the slice, MB-001 (#879)`, followed by a body that pastes the Step 2, 3 and 3b summaries (the 3b line is `ST-G1 <verdict> — judged N/4, control …`) and the Step 4–6 outcomes, and then the `Co-Authored-By` trailer.
 
 Next:
 - `git push -u origin feat/format-matrix-w1b`.
@@ -5502,7 +5871,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec &
 
 These are Edit-tool changes, each anchored on the existing text:
 
-1. The status table row `| W1b | … | not started |` becomes `| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done; PR #<n>, CI <green|state> at <sha>.** Live: slice 24/24 ✅ (run w1b-slice-0928a); probe <tally> (w1b-probe-0928a, truth-runs/w1b-probe/); model on 6 slice cells, fences on: <ok/finding> (w1b-model-0928a); MB-001 = #879 (seed <s>, path <p>). |`. Fill each `<…>` from Steps 1–9 of Task 15 and Step 1 here. Every one is a value read from a file or a command's output, so none stays unfilled.
+1. The status table row `| W1b | … | not started |` becomes `| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done; PR #<n>, CI <green|state> at <sha>.** Live: slice 24/24 ✅ (run w1b-slice-0928a); probe <tally> (w1b-probe-0928a, truth-runs/w1b-probe/); abandon check (ruling 30): ST-G1 <CONFIRMED|REFUTED|UNRESOLVED>, judged <N>/4 (w1b-abandon-0928a, truth-runs/w1b-abandon/); model on 6 slice cells, fences on: <ok/finding> (w1b-model-0928a); MB-001 = #879 (seed <s>, path <p>). |`. Fill each `<…>` from Steps 1–9 of Task 15 and Step 1 here. Every one is a value read from a file or a command's output, so none stays unfilled.
 2. A new section `## W1b counts (design §6.2)` after "W1a session status". It holds a table of formula and value for L1, L2 (runs and pair targets), L3 (lifecycle + applicable atomic, with bound shown, + variant cases + denied + regressions = total), drops, and the variants per sport. Each value is quoted from `counts.json` and the formulas verbatim.
 3. Under "Recommendations (mine — not rulings)", add O9 and O10 exactly as the plan's Decisions section words them: the recommendation, the owner value, the alternative, and "the plan assumed this default in Tasks 4, 6, 7 (O9) and 12 (O10)". Add Q-A (the W1-driving wave) and Q-B (variant cases run LIFECYCLE only) the same way. **Nothing goes under "Owner rulings".** This file must not call a recommendation a ruling.
 4. Under "Decision log", add one dated line per W1b decision that was actually made in code, each with its commit SHA:
@@ -5511,9 +5880,19 @@ These are Edit-tool changes, each anchored on the existing text:
    - I1 multi-stage guard (carry 1);
    - denied via override (ruling 24 applied);
    - `import type` default (O10 recommendation, pending);
-   - E as own scenarios (O9 recommendation, pending).
-5. Under "False premises found", add a `### Found during W1b planning and execution` list. It holds the plan's nine false premises, each with its file:line, plus any found while executing.
-6. Add a "Findings routed" list: each live ❌ and each confirmed hypothesis (false premise 8 → W9, premise 9 → W4) with case id, evidence path and owning wave. If none were found, write "none", and say which runs were checked.
+   - E as own scenarios (O9 recommendation, pending);
+   - ruling 30 applied: M4a/M4b and M12a/b/c in the catalogue, with M12b's `l2NoPath` (the Task 4 SHA). Their predicates and `ABANDON_RESULTS` are the Task 6 SHA.
+5. Under "False premises found", add a `### Found during W1b planning and execution` list. It holds the plan's eleven false premises and hypotheses, each with its file:line, plus any found while executing. Premises 8 and 11 are hypotheses; record each as confirmed or refuted by its live check.
+6. Add a "Findings routed" list. Give each finding its case or leg id, evidence path and owning wave. It holds each live ❌ and each confirmed hypothesis:
+   - false premise 8 → W9;
+   - false premise 9 → W4.
+
+   Ruling 30 adds three rows, which are always written:
+   - **ST-G1 (false premise 11).** Record Step 3b's verdict. `CONFIRMED` routes to **W5 (standings) + W2 (what an abandon is worth)**, citing the `voided` leg ids and `truth-runs/w1b-abandon/abandon-probe.json`. `REFUTED` goes under false premises instead. `UNRESOLVED` names the judged legs.
+   - **M12b's missing play-short control, and the absent minimum-players rule** → W2. The source is the design's "Known UI-only 🚫" and the catalogue's `l2NoPath`.
+   - **No organiser control for `abandonPolicy` (false premise 10)** → W2. It is joined by Step 3b's `football-award` outcome, if that leg was refused.
+
+   If there are no other findings, write "none", and say which runs were checked.
 7. Confirm that the `W1-driving` row Task 4 added still reads `awaiting owner (recommendation Q-A, W1b plan)`.
 
 - [ ] **Step 3: Verify the edit reads true against the files**
@@ -5542,7 +5921,8 @@ Run 2026-09-28 against the W1b prompt (`W1b-catalogues-reference.md`), design §
 | fast-check command model over organiser actions, run in L3 over HttpDriver, seeds logged (§7.5 item 1) | 13, 14, 15 (live) |
 | A shrunk failure becomes a named regression case with its seed (R29) | 4 (schema), 14 (stub, known/new), 15 (MB-001) |
 | `forEachSport` helper + CI listing of unreasoned single-sport tests (R26) | 11 |
-| 69 scenarios split into atomic cases | 4 |
+| 70 scenarios split into atomic cases (ruling 30: M12 added, M4 split) | 4, 6 |
+| Ruling 30: M12b is UI-only 🚫 (`l2NoPath`); the abandon-void check (ST-G1) is confirmed or refuted by driving the product | 4, 7 (note), 15 (Step 3b), 16 |
 | Applicability over (format, sport, variant); committed drop list with reasons; per-row floors; `return false` mutation reds (R13, R17) | 6, 8 |
 | Variant set with boundary classes; L2 pair file; both committed (R11) | 5, 7, 8 |
 | `packages/reference` skeleton, boundary gate, Dockerfile line, explicit CI step, deliberate violation proof | 12 |
@@ -5564,7 +5944,8 @@ No gap is left open. One scope note: the design's weekly L3 workflow and PR row 
 **3. Type consistency**, checked by name across tasks:
 - `RowKey`, `stagesForRow`, `ROW_KEYS`, `SPORT_KEYS`, `cellId`, `builderDefaultVariant`, `BUILDER_PREFERRED_VARIANT` (catalogue.ts)
 - `offlineBuilderDefault`, `offlineVariantOrder`, `buildSportVariants`, `VariantCase`, `SportVariants` (Task 5 → 6, 7, 8, 10)
-- `cellFacts`, `RULES`, `decide`, `planL3`, `rowCounts`, `scenarioCounts`, `DECIDERS` (Task 6 → 7, 8)
+- `cellFacts`, `RULES`, `decide`, `planL3`, `rowCounts`, `scenarioCounts`, `DECIDERS`, `ABANDON_RESULTS` (Task 6 → 7, 8)
+- `AtomicScenario.l2NoPath` (Task 4 → W1c; Task 7's note)
 - `expectedGate` (Task 6 → 9, 10, 8)
 - `planL2`, `L2_WIDTHS` (Task 7 → 8)
 - `CasePlanner`, `PlanCases`, `slicePlanner` (Task 1 → 9, 10), with `deniesFeatures` added in Task 10. Task 9's test passes it early, and a note covers that ordering.

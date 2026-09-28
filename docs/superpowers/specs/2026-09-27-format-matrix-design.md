@@ -113,16 +113,17 @@ predicate is mutated once (`return false`) to prove a red — an over-broad
 predicate must not reach "zero ❌" by testing nothing (R13).
 
 **Compound scenarios split into atomic cases** in W1b ("A vs B" items such as
-R4, M7, M8, X1, X4, C3, F5, Q1, Q4 become `R4a`/`R4b`…), and W1b decides
+R4, M4, M7, M8, M12, X1, X4, C3, F5, Q1, Q4 become `R4a`/`R4b`…), and W1b decides
 whether **E (entry path)** multiplies the M and C scenarios or stays a
-scenario of its own.
+scenario of its own. Ruling 30 (2026-09-28) split M4 by whether the abandon
+carries a result, and added M12, the injured player, as three atomic cases.
 
 **Outcomes the product chooses are expected values, not inputs.** Withdrawal
 expunge-vs-keep is decided by the engine (a 50% threshold; Swiss never
 expunges) — the scenario asserts which one the rulebook requires, it does not
 pick it.
 
-Catalogue (69 scenario IDs, more atomic cases):
+Catalogue (70 scenario IDs, more atomic cases):
 
 **R — roster**
 - R1 late entry before Start · R2 late entry after Start
@@ -132,10 +133,11 @@ Catalogue (69 scenario IDs, more atomic cases):
 - R14 retires from one match, continues in the next · R15 entrant leaves after their last match and is still paired next round · R16 substitute / different lineup in a team match (stats attribution)
 
 **M — single match**
-- M1 walkover in only one match · M2 double walkover · M3 retirement mid-match (partial score) · M4 abandoned / no-result
+- M1 walkover in only one match · M2 double walkover · M3 retirement mid-match (partial score) · M4 abandoned: with no result (M4a) vs with a result, e.g. a cricket DLS decision or a football award-policy abandon (M4b) — ruling 30
 - M5 draw in a stage that cannot end level · M6 tie after regulation → decider (shoot-out, super over, extra time, chess tiebreak)
 - M7 void a decided result, before and after the next match started · M8 correct a finalized score (winner stays / winner flips) · M9 forfeit/award by the organiser
 - M10 disqualification mid-match · M11 a rules change attempted mid-match — **must refuse** (ruling 12)
+- M12 player injured mid-match (team sport): a substitute comes on and the match continues (M12a) / no replacement, the team plays short (M12b) / a cricket batter retires hurt, then resumes (M12c) — ruling 30
 
 **F — field shape**
 - F1 odd field (byes) · F2 field below the format's minimum · F3 non-power-of-two bracket · F4 unequal pools
@@ -172,6 +174,11 @@ wave per §8 — division-level D1, D2, R13 in W9; D4 in W4; Q4 in W4; C5 in W5.
 
 **Cases that need times** (E4, the printed-sheet surface, X1, D5) are excluded
 from L3 by predicate — L3 skips scheduling — and covered in L1/L2.
+
+**Known UI-only 🚫** (ruling 30): an API route exists but no screen can send
+it, so the atom is 🚫 in L2 and still runs over HTTP in L3. M12b — the team
+plays short (`core.lineup.retirement`): no pad or console control sends it,
+and no minimum-players rule exists; both are owed to W2.
 
 **Surfaces asserted after every scenario:** desk, public table, embed (HTML —
 there is no JSON embed; the public standings route is read), slideshow,
@@ -256,8 +263,8 @@ same `POST /stages/:id/generate`.
 | Layer | What | Size (derived in W1b from the committed files) |
 |---|---|---|
 | **L1** | every cell × full lifecycle **in the browser**, at 1280 and 320 | 231 × 2 = **462** runs |
-| **L2** | scenarios in the browser: every applicable (format, scenario) and (sport, scenario) pair at least once, widths rotating across the seven | ≥ number of applicable (format, scenario) pairs — up to 21 × 69 = 1,449 before drops |
-| **L3** | **every applicable (cell × scenario) at default config** (full cartesian, ruling 7) **+ config variants pair-covered across (format, sport)**, through the real server, no browser | ≤ 231 × 69 = 15,939 before drops, plus the variant set |
+| **L2** | scenarios in the browser: every applicable (format, scenario) and (sport, scenario) pair at least once, widths rotating across the seven | ≥ number of applicable (format, scenario) pairs — up to 21 × 70 = 1,470 before drops |
+| **L3** | **every applicable (cell × scenario) at default config** (full cartesian, ruling 7) **+ config variants pair-covered across (format, sport)**, through the real server, no browser | ≤ 231 × 70 = 16,170 before drops, plus the variant set |
 
 **Mixed-driver lifecycle (ruling 15).** An L1/L2 run drives **every distinct
 action type** through the browser at least once — generate, one match on the
@@ -403,7 +410,7 @@ rulebook is silent, the case is ⬜ and goes to the owner as a recommendation.
 
 ### 7.5 Finding the holes nobody listed (ruling 21)
 
-The 69 scenarios are the cases someone thought of. Three mechanisms look for the
+The 70 scenarios are the cases someone thought of. Three mechanisms look for the
 rest:
 
 1. **Model-based sequence testing (W1b).** A `fast-check` command model
@@ -435,7 +442,7 @@ format/sport; **every audit ID must be closed or ruled by programme end**.
 | Wave | Scope | Carries |
 |---|---|---|
 | **W1a — L3 core** | Lean HTTP runner reusing the bench's helpers; `HttpDriver`; org/plan seeding; **stream generators for all 11 sports**; per-round generation for swiss/mexicano/ladder; invariants **with anti-vacuity counts (§7.3a)**; JSON results; `MATRIX.md` generator | Proven on a vertical slice: league, knockout, swiss × generic, badminton |
-| **W1b — catalogues + reference skeleton** | fast-check command model over the organiser actions (§7.5); `forEachSport` test helper (R26); 69 scenarios split into atomic cases; applicability over (format, sport, variant) with the committed drop list and floors; variant set with boundary classes; L2 pair file; `packages/reference/` skeleton, boundary gate, Dockerfile line | Formulas and real counts for §6.2; E-axis decision; reference import mode |
+| **W1b — catalogues + reference skeleton** | fast-check command model over the organiser actions (§7.5); `forEachSport` test helper (R26); 70 scenarios split into atomic cases; applicability over (format, sport, variant) with the committed drop list and floors; variant set with boundary classes; L2 pair file; `packages/reference/` skeleton, boundary gate, Dockerfile line | Formulas and real counts for §6.2; E-axis decision; reference import mode |
 | **W1c — browser layers** | `BrowserDriver`: organiser page objects + **11 pad adapters**; L1/L2 frameworks; width rotation | API-only rows created over HTTP, then driven in the browser |
 | **W1d — CI + truth run** | Shards, fresh DB per shard, weekly + dispatch workflow with the visibility guard, per-PR sample, three green dispatches before the schedule, per-case timing, weekly Stryker mutation run with a score floor (§7.5), **the first full truth run** and triage of its reds into waves | The ❌ list (a floor) becomes each wave's starting backlog |
 | **W2 — sport scoring fidelity** (a sport-family wave: one rulebook per sport family, reference families for its exact-oracle items) | The input layer every format consumes | SC-X1 (knockout tie/no-result stall), SC-X2 (stage deciders with a screen), SC-X3 (no event to settle an abandoned knockout by lot), SC-X4 (auto-advance blocked by `abandoned`), SC-P1, SC-P2 (level knockout without a decider), SC-P4 (no points fields when hockey shoot-outs are on — FIH 2/1 is Pro League only), SC-P11 (futsal preset — **not a matrix row**; W2 rules build or refuse, and only a built preset adds a column), SC-S* (walkover/retirement set and point credit, tennis impossible sets, tennis Bo1 match tie-break, double walkover SC-S6), SC-C3 (DLS NRR), **SC-O1/SC-O2 (boardgame/generic draws in brackets — the `supportsDraws` root cause, owned here)**, ST-G1, ST-G2, ST-G16, ST-G10 (tiebreak validation against the sport + stage tiebreak UI); **stage-level match format for every sport** (ruling 12, FX-G23, SC-O8); fixture-level format override through every `resolveFixtureCfg` caller (§5); division-level lock of points/tiebreakers per started stage (O8) |

@@ -227,6 +227,24 @@ a peer session as the other.
 28. **Q-A — W1a's deferred driving work becomes a "W1-driving" wave before
     W1d**, so no ⏳ row points at a closed wave.
 29. **Q-B — variant cases run LIFECYCLE only**, not × every scenario.
+30. **M12 injured player; M4 split into no-result / with-result** (2026-09-28).
+    The owner said "yes" to the controller's recommendation; it is recorded
+    here as the owner's ruling on that recommendation.
+    - **M12 "player injured mid-match (team sport)"** has three atoms:
+      - M12a: a substitute comes on and the match continues.
+      - M12b: there is no replacement, so the team plays short.
+      - M12c: a cricket batter retires hurt, then resumes.
+    - **Where M12 applies.** M12a and M12b apply to team-entrant sports only
+      (R16's rule). M12c applies to cricket only.
+    - **M12b's paths.** It runs in L3 over HTTP (`core.lineup.retirement`).
+      In L2 it is a known no-path, because no pad or console control sends
+      it.
+    - **M4 splits** into M4a "abandoned, no result" and M4b "abandoned with a
+      result", for example a cricket DLS decision or a football award-policy
+      abandon.
+    - **The suspected abandon→void defect** (ST-G1) is confirmed or refuted
+      live in W1b Task 15.
+    - Applied in the W1b plan (Tasks 4, 6, 7, 15 and 16) and in design §4.
 
 ## Recommendations (mine — not rulings)
 
@@ -320,6 +338,20 @@ a peer session as the other.
       `SLICE_ROWS` in place. It already restores it in a `finally` and asserts
       the restore; a valid filter always plans cases, so avoiding the in-place
       edit needs a planner seam.
+- **2026-09-28** — ruling 30 applied to design §4 (70 scenario IDs) and the
+  W1b plan. How each part is routed:
+  - **Catalogue.** W1b's catalogue carries M4a/M4b and M12a/b/c. M12b is
+    marked UI-only 🚫 (`l2NoPath` = W2).
+  - **Routed to W2.** M12b's missing play-short control and the absent
+    minimum-players rule. Also the missing organiser control for football,
+    hockey and icehockey `abandonPolicy`. That control is API-only config,
+    so W1b drops their M4b (plan false premise 10; read, not run).
+  - **Routed to W5 (standings) + W2, if confirmed.** The abandon→void chain
+    (ST-G1): `append-event.ts:146` → `fixture-engine-status.ts:17-19` →
+    `stage.ts:24`. W1b Task 15 Step 3b drives four legs (a badminton
+    control, a cricket no-result, a cricket two-innings draw, a football
+    award) and records CONFIRMED, REFUTED or UNRESOLVED. No check is loosened
+    to pass.
 
 ## False premises found
 
