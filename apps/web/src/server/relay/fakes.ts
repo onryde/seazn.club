@@ -21,6 +21,7 @@ import {
   DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
 } from "./config";
 import { machineNameFor } from "./domain/runner";   // T5-a: the fake names a Machine exactly as FlyRunner does
+import { FlyApiError } from "./fly-client";           // A3: a create failure's PROOF is the adapter's own error type
 import { NOOP_RECORDER } from "./ports";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
@@ -223,7 +224,7 @@ export class FakeRunner implements RunnerProvider {
   readonly destroyed: string[] = [];
   private readonly alive = new Map<string, { sessionId: string | null; name: string | null }>(); // runnerId → who it was created for
   private readonly observed = new Map<string, RunnerObservation>();
-  private nextCreateFailure: { retryable: boolean } | null = null;
+  private nextCreateFailure: { retryable: boolean; proof: { status: number | null; retryable: boolean } | null } | null = null;
   private n = 0;
   private readonly rec: ProviderCallRecorder;
 
@@ -241,6 +242,9 @@ export class FakeRunner implements RunnerProvider {
     if (this.nextCreateFailure) {
       const f = this.nextCreateFailure;
       this.nextCreateFailure = null;
+      // A proof (lane C A3): a REAL FlyApiError, so `createFailedFrom` classifies it exactly as it classifies the
+      // adapter's — a transport failure carries no status (`network`), a provider answer carries one (`http`).
+      if (f.proof) throw new FlyApiError("fake create failed", f.proof.status === null ? "network" : "http", f.proof.status, f.proof.retryable, null, 1);
       throw Object.assign(new Error(`fake create failed (${f.retryable ? "retryable" : "not retryable"})`), { retryable: f.retryable });
     }
     // Whole-branch review I6: `create` is IDEMPOTENT PER (sessionId, attempt) — ports.ts says so and
@@ -301,7 +305,15 @@ export class FakeRunner implements RunnerProvider {
     this.observed.set(runnerId, { state, exit });
     if (state === "destroyed") this.alive.delete(runnerId);
   }
-  failNextCreate(retryable: boolean): void { this.nextCreateFailure = { retryable }; }
+  /** Fail the next `create`. The ARGUMENT is the proof the failure carries, which is what `createFailedFrom` reads
+   *  (lane C A3, owner-confirmed 2026-09-28):
+   *   - a boolean — the legacy shape — throws a PLAIN error: no provider answered, so the outcome is UNKNOWN whatever
+   *     the flag says (Fly may hold a Machine), and the session tears down by name before any retry;
+   *   - `{ status, retryable }` throws a real `FlyApiError`: a refusal status (4xx in CREATE_REFUSED_STATUSES) or a
+   *     retryable one is a proof that NOTHING was made; any other status is still unknown. */
+  failNextCreate(proof: boolean | { status: number | null; retryable: boolean }): void {
+    this.nextCreateFailure = typeof proof === "boolean" ? { retryable: proof, proof: null } : { retryable: proof.retryable, proof };
+  }
   /** A Machine the provider holds that no session row explains. */
   addOrphan(runnerId: string, sessionId: string | null): void {
     this.alive.set(runnerId, { sessionId, name: null });

@@ -10,6 +10,8 @@ import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, FakeRecorder, FakeRunner } f
 import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS } from "../config";
 import { pathTemplate } from "../sanitise";
 import { machineNameFor } from "../domain/runner";
+import { FlyApiError } from "../fly-client";
+import { CREATE_REFUSED_STATUSES, createFailedFrom } from "../runner-fly";
 
 describe("FakeIngest", () => {
   it("createLiveInput returns both credential shapes and no webRTC (C1/R-A, C10)", async () => {
@@ -264,6 +266,33 @@ describe("FakeRunner", () => {
     runner.failNextCreate(true);
     await expect(runner.create({ ...spec, sessionId: "s3" })).rejects.toMatchObject({ retryable: true });
     expect((await runner.create({ ...spec, sessionId: "s4" })).runnerId).toMatch(/^fake-machine-/);   // ONE create fails, not every one after
+  });
+
+  it("A3: failNextCreate chooses the PROOF — a status throws a real FlyApiError that the REAL createFailedFrom reads as made-nothing (a refusal status, or retryable) or unknown (anything else); a boolean throws a plain error, always unknown; no failure leaves a Machine listed", async () => {
+    const runner = new FakeRunner();
+    const spec = { sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const classify = async (proof: Parameters<FakeRunner["failNextCreate"]>[0]) => {
+      runner.failNextCreate(proof);
+      const err = await runner.create(spec).then(() => null, (e: unknown) => e);
+      expect(err, JSON.stringify(proof)).not.toBeNull();
+      return { isFly: err instanceof FlyApiError, trigger: createFailedFrom(err) };
+    };
+    // The expectations are the A3 ruling's words (refused outright / retryable-with-absence ⇒ made nothing; no provider
+    // answer ⇒ unknown), swept over the adapter's own refusal list rather than one sample status.
+    let refusals = 0;
+    for (const status of CREATE_REFUSED_STATUSES) {
+      expect(await classify({ status, retryable: false }), String(status)).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: false, outcomeUnknown: false } });
+      refusals++;
+    }
+    expect(refusals, "the refusal sweep checked nothing").toBeGreaterThan(0);
+    expect(await classify({ status: 503, retryable: true })).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: true, outcomeUnknown: false } });
+    expect(await classify({ status: 500, retryable: false })).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: false, outcomeUnknown: true } });
+    expect(await classify({ status: null, retryable: false })).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: false, outcomeUnknown: true } });
+    for (const legacy of [true, false]) {
+      expect(await classify(legacy), String(legacy)).toEqual({ isFly: false, trigger: { type: "create_failed", retryable: false, outcomeUnknown: true } });
+    }
+    expect(await runner.list()).toEqual([]);                                   // a failed create made nothing in the fake either
+    expect((await runner.create(spec)).runnerId).toMatch(/^fake-machine-/);  // …and the proof is spent: the next create lands
   });
 
   it("list shows what still exists, with the session AND the attempt-carrying name each was created with; destroyed ones drop out; an orphan can be planted, nameless", async () => {
