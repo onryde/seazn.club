@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { RefusedCall } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import type { ObservedFixture, ObservedRun } from "../lib/observed.ts";
+import { isTerminal, type ObservedFixture, type ObservedRun } from "../lib/observed.ts";
 import { decideState } from "../lib/results.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
   assertion, drawPathExercised, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch,
 } from "../lib/scenarios/assertions.ts";
-import { Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type DivisionSetup } from "../lib/scenarios/common.ts";
+import {
+  MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type DivisionSetup,
+} from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems } from "../lib/scenarios/r4-withdrawal.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type ScenarioKey } from "../lib/scenarios/types.ts";
@@ -115,6 +118,36 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
+  it("R15: a product outcome that differs from the engine's own fold fails life-fold-parity on every fixture", async () => {
+    class ReportsNoResult extends FakeLeagueDriver {
+      override async postStream(id: string, events: Parameters<FakeLeagueDriver["postStream"]>[1], p = "") {
+        return (await super.postStream(id, events, p)).map((x) => (x.outcome === null ? x : { ...x, outcome: { kind: "no_result" } }));
+      }
+    }
+    const r = await runOn(new ReportsNoResult(), "LIFECYCLE");
+    const parity = r.checks.find((c) => c.id === "life-fold-parity")!;
+    expect(parity).toMatchObject({ verdict: "fail", checked: 28 });
+    expect(parity.evidence[0]).toMatch(/^f\d+: engine \{"kind":"(win|draw)".*\} vs product \{"kind":"no_result"\}$/);
+  });
+
+  it("every generate is recorded with the fixtures it answered (I4's population)", async () => {
+    const { driver, out } = await runFake("LIFECYCLE");
+    const g = out.observed.stages[0]!.generates;
+    expect(g).toHaveLength(driver.calls.filter((c) => c === "generate").length);
+    expect(g.every((x) => x.status === 200 && x.code === null && x.total === driver.fixtures.length)).toBe(true);
+  });
+
+  it("a fixture with a TBD seat is never decided; the rest of the stage still plays", async () => {
+    class WithTbd extends FakeLeagueDriver {
+      override async start() { const out = await super.start(); this.seat(99, this.entrants[0]!.id, null); return out; }
+    }
+    const driver = new WithTbd();
+    await runOn(driver, "LIFECYCLE");
+    const tbd = driver.fixtures.find((f) => f.away_entrant_id === null)!;
+    expect(tbd).toMatchObject({ status: "scheduled", events: [] });
+    expect(driver.fixtures.filter((f) => f !== tbd).every((f) => isTerminal(f.status))).toBe(true);
+  });
+
   it("the config probe: format edit refused FORMAT_LOCKED, entrants-only save accepted (Task 6 ruling)", async () => {
     const { out, checks } = await runFake("LIFECYCLE");
     expect(out.observed.configEdit!.attempts).toEqual([
@@ -137,17 +170,29 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(out.observed.configEdit!.attempts.find((a) => a.kind === "entrants_only")).toEqual({ kind: "entrants_only", status: 200, code: null });
   });
 
-  it("PF8: events counts every event the harness posted, derived from what the product holds", async () => {
-    const { driver, out } = await runFake("LIFECYCLE");
+  it.each(["LIFECYCLE", "M1", "R4", "F1"] as const)("PF8: %s counts every event the harness posted, derived from what the product holds", async (k) => {
+    const { driver, out } = await runFake(k);
     const held = driver.fixtures.reduce((n, f) => n + f.events.length, 0);
     expect(held).toBeGreaterThan(0);
     expect(out.events).toBe(held);
   });
 
-  it.each([["generic", "win_loss"], ["badminton", "bwf"]])("%s/%s: a sport with no draws still works; the draw check abstains", async (sport, variant) => {
-    const { state, checks } = await runFake("LIFECYCLE", { sport, variant });
+  it.each([["generic", "win_loss"], ["badminton", "bwf"]])("%s/%s: a sport with no draws still works; the draw check abstains; its format field is probed", async (sport, variant) => {
+    const { state, checks, out } = await runFake("LIFECYCLE", { sport, variant });
     expect(state, JSON.stringify(checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
     expect(checks.find((c) => c.id === "life-draw-path-exercised")).toMatchObject({ verdict: "abstain" });
+    expect(out.observed.configEdit!.attempts[0]).toEqual({ kind: "format", status: 409, code: "FORMAT_LOCKED" });
+  });
+});
+
+describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
+  it.each([
+    ["LIFECYCLE", ["life-fold-parity", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-loop-bounded"]],
+    ["M1", ["life-fold-parity", "m1-walkover-recorded", "m1-winner-progresses", "life-loop-bounded"]],
+    ["R4", ["life-fold-parity", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-loop-bounded"]],
+    ["F1", ["life-fold-parity", "f1-everyone-drawn", "f1-round-size", "life-loop-bounded"]],
+  ] as const)("%s", async (k, ids) => {
+    expect((await runFake(k)).out.assertions.map((a) => a.id)).toEqual(ids);
   });
 });
 
@@ -171,6 +216,66 @@ describe("pilots on the fake league", () => {
     const canary = await runFake("F1", { canary: true });
     expect(failed(canary.checks)).toEqual(["f1-round-size"]);
   });
+  it("M1: exactly ONE walkover — seed 1's first fixture — and the bracket-only check abstains on a league", async () => {
+    const r = await runFake("M1");
+    const seed1 = r.driver.entrants.find((e) => e.seed === 1)!.id;
+    const fixtures = r.out.observed.stages[0]!.fixtures;
+    const firstRound = Math.min(...fixtures.filter((f) => f.home === seed1 || f.away === seed1).map((f) => f.roundNo ?? 0));
+    const forfeited = fixtures.filter((f) => f.status === "forfeited");
+    expect(forfeited).toHaveLength(1);
+    expect(forfeited[0]).toMatchObject({ roundNo: firstRound });
+    expect([forfeited[0]!.home, forfeited[0]!.away]).toContain(seed1);
+    expect(r.checks.find((c) => c.id === "m1-winner-progresses")).toMatchObject({ verdict: "abstain", checked: 0 });
+    // Through the driver's forfeit door, which re-reads the fixture before composing (http-driver.ts).
+    expect(r.driver.calls.filter((c) => c === "forfeit")).toHaveLength(1);
+  });
+  it("M1: a walkover the product reads back as plain 'decided' fails m1-walkover-recorded on its status", async () => {
+    class ForfeitReadsDecided extends FakeLeagueDriver {
+      override async listFixtures() { return (await super.listFixtures()).map((f) => (f.status === "forfeited" ? { ...f, status: "decided" } : f)); }
+    }
+    const r = await runOn(new ForfeitReadsDecided(), "M1");
+    expect(failed(r.checks)).toEqual(["m1-walkover-recorded"]);
+    expect(r.checks.find((c) => c.id === "m1-walkover-recorded")!.evidence).toEqual(["status decided, expected forfeited"]);
+  });
+  it("R4 on the league fake: 1 of 7 played at the withdrawal, so the engine's policy is expunge; the case works", async () => {
+    const r = await runFake("R4");
+    expect(r.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
+    const w = r.out.observed.withdrawal!;
+    const played = w.before.filter((b) => isTerminal(b.status)).length;
+    expect([played, w.before.length]).toEqual([1, 7]);
+    expect(w).toMatchObject({ afterRound: 1, policy: played / w.before.length < 0.5 ? "expunge" : "walkover" });
+    expect(r.out.observed.facts).toEqual(expect.arrayContaining(["withdrawn", "expunged"]));
+  });
+  it("R4: a withdrawal the product reports as policy 'none' fails r4-policy-reported", async () => {
+    class NoPolicy extends FakeLeagueDriver {
+      override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "none" as const }; }
+    }
+    const r = await runOn(new NoPolicy(), "R4");
+    expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none on a started division"] });
+  });
+  it("R4: nothing to play means nobody withdrew — r4-policy-reported fails, never a vacuous green", async () => {
+    class NothingOpen extends FakeLeagueDriver {
+      override async generate() { return { ...(await super.generate()), fixtures: [] }; }
+    }
+    const r = await runOn(new NothingOpen(), "R4");
+    expect(r.out.observed.withdrawal).toBeNull();
+    expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["round 1 never finished; nobody withdrew"] });
+    // …and the empty generate itself is what I4 names (R13).
+    expect(r.checks.find((c) => c.id === "I4-nothing-ends-stuck")!.evidence).toContain("stage 1: empty generate (R13)");
+  });
+  it("F1: an entrant the product never draws fails f1-everyone-drawn, naming it", async () => {
+    class LeavesOneOut extends FakeLeagueDriver {
+      override async start() {
+        const out = await super.start();
+        const last = this.entrants.at(-1)!.id;
+        this.fixtures = this.fixtures.filter((f) => f.home_entrant_id !== last && f.away_entrant_id !== last);
+        return out;
+      }
+    }
+    const driver = new LeavesOneOut();
+    const r = await runOn(driver, "F1");
+    expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
+  });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
     for (const k of SCENARIO_KEYS) expect(SCENARIOS[k].key).toBe(k);
@@ -189,10 +294,21 @@ describe("PF5: a cut_short run is red in EVERY scenario, through life-loop-bound
     }
   }
   it.each(["LIFECYCLE", "M1", "R4", "F1"] as const)("%s", async (k) => {
-    const r = await runOn(new Stuck(), k);
+    const driver = new Stuck();
+    const r = await runOn(driver, k);
     expect(r.out.observed.facts).toContain("cut_short");
     expect(r.state.state).toBe("red");
     expect(failed(r.checks)).toEqual(["life-loop-bounded"]);
+    // The cap is what stopped it: exactly MAX_ITERATIONS generates.
+    expect(driver.calls.filter((c) => c === "generate")).toHaveLength(MAX_ITERATIONS);
+  });
+  it("the config probe reads FINISHED fixtures only, before and after (I5's population)", async () => {
+    const driver = new Stuck();
+    const r = await runOn(driver, "LIFECYCLE");
+    const before = r.out.observed.configEdit!.before;
+    expect(before.length).toBe(driver.fixtures.filter((f) => isTerminal(f.status)).length);
+    expect(before.length).toBeLessThan(driver.fixtures.length);
+    expect(before.every((b) => isTerminal(b.status))).toBe(true);
   });
 });
 
@@ -213,6 +329,37 @@ describe("deferrals are named", () => {
     const football = Object.keys(sportModule("football").variants as object)[0]!;
     await expect(runOn(driver, "LIFECYCLE", { sport: "football", variant: football })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: "W1b", message: "team rosters" });
     expect(driver.calls).toEqual([]);
+  });
+});
+
+describe("setup, generate and complete — refusals are recorded, crashes propagate, gaps are named", () => {
+  it("a division with no stage after start, or a seed nobody holds, is a named error", async () => {
+    class NoStage extends FakeLeagueDriver { override async listStages() { return []; } }
+    await expect(runOn(new NoStage(), "LIFECYCLE")).rejects.toThrow(/has no stage after start/);
+    const driver = new FakeLeagueDriver();
+    const setup = await setUpDivision(ctxFor(driver, "LIFECYCLE"), new Recorder(), 2);
+    expect(setup.idOfSeed(2)).toBe(driver.entrants[1]!.id);
+    expect(() => setup.idOfSeed(3)).toThrow("scenario: no entrant holds seed 3");
+  });
+  it("a generate refused with a code is recorded for I4 (a named refusal passes it); a crash is not swallowed", async () => {
+    class Refuses extends FakeLeagueDriver {
+      override async generate(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "not ready"); }
+    }
+    const r = await runOn(new Refuses(), "F1");
+    expect(r.out.observed.stages[0]!.generates).toEqual([{ status: 409, code: "STAGE_NOT_READY", total: 0, created: 0 }]);
+    class Crashes extends FakeLeagueDriver { override async generate(): Promise<never> { throw new TypeError("boom"); } }
+    await expect(runOn(new Crashes(), "F1")).rejects.toThrow("boom");
+  });
+  it("finishStage: a refused complete is recorded with its code, finalRanks come from stage_completed, a crash propagates", async () => {
+    const driver = new FakeLeagueDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE");
+    const setup = await setUpDivision(ctx, new Recorder(), 2);
+    driver.completeStage = async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "open fixtures"); };
+    expect(await finishStage(ctx, new Recorder(), setup)).toEqual({ status: 409, code: "STAGE_INCOMPLETE", completed: false, finalRanks: null });
+    driver.completeStage = async () => ({ completed: true, events: [{ type: "stage_opened" }, { type: "stage_completed", finalRanks: ["e2", "e1"] }] });
+    expect(await finishStage(ctx, new Recorder(), setup)).toEqual({ status: 200, code: null, completed: true, finalRanks: ["e2", "e1"] });
+    driver.completeStage = async () => { throw new TypeError("boom"); };
+    await expect(finishStage(ctx, new Recorder(), setup)).rejects.toThrow("boom");
   });
 });
 
@@ -275,6 +422,9 @@ describe("snapshot — byes are declared, pools stay separate (Task 5 carries)",
     expect(byeDeclared("generic", cfg, "swiss", bye("a", "c"))).toBeNull();
     expect(byeDeclared("generic", cfg, "swiss", { ...bye("a", null), outcome: { kind: "draw" } })).toBeNull();
     expect(byeDeclared("generic", cfg, "swiss", { ...bye("a", null), outcome: null })).toBeNull();
+    // The engine's only legitimate one-sided finished shape is an AWARD to the seated side.
+    expect(byeDeclared("generic", cfg, "swiss", { ...bye("a", null), outcome: { kind: "win", winner: "a" } })).toBeNull();
+    expect(byeDeclared("generic", cfg, "swiss", bye("x", null))).toBeNull();
   });
 
   it("a 5-entrant 5-round swiss gives everyone a bye and I3 still checks all 5 (not vacuous)", async () => {
@@ -326,6 +476,26 @@ describe("the swiss branch of playStage on the swiss fake", () => {
     const r = await runOn(new FakeSwissDriver(), "F1", { row: "swiss" });
     expect(r.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ verdict: "pass", checked: Number(r.out.observed.stages[0]!.config.rounds) });
   });
+  it("R4 on swiss: a product that keeps pairing the withdrawn entrant fails r4-not-paired-later", async () => {
+    class KeepsPairing extends FakeSwissDriver { override sittingOut() { return new Set<string>(); } }
+    const r = await runOn(new KeepsPairing(), "R4", { row: "swiss" });
+    expect(r.checks.find((c) => c.id === "r4-not-paired-later")).toMatchObject({ verdict: "fail" });
+  });
+  it("an empty pair round stops the swiss loop there, and I4 names it", async () => {
+    class StopsPairing extends FakeSwissDriver { override pairNext() { return this.paired === 0 ? super.pairNext() : 0; } }
+    const r = await runOn(new StopsPairing(), "LIFECYCLE", { row: "swiss" });
+    const n = r.out.observed.stages[0]!.field.length;
+    expect(r.out.observed.stages[0]!.pairRounds).toEqual([{ roundNo: 1, seated: Math.floor(n / 2) }, { roundNo: 2, seated: 0 }]);
+    expect(r.checks.find((c) => c.id === "I4-nothing-ends-stuck")!.evidence).toContain("stage 1: round 2 paired nobody (SW-H1)");
+  });
+  it("a swiss batch is round r only, even when the stage already lists a later round", async () => {
+    class PairsAhead extends FakeSwissDriver {
+      override async start() { const out = await super.start(); this.pairNext(); return out; }
+    }
+    const r = await runOn(new PairsAhead(), "LIFECYCLE", { row: "swiss" });
+    const n = r.out.observed.stages[0]!.field.length;
+    expect(r.out.observed.stages[0]!.pairRounds.map((p) => p.seated)).toEqual(r.out.observed.stages[0]!.pairRounds.map(() => Math.floor(n / 2)));
+  });
 });
 
 describe("cascadeItems — consistency with the policy the engine CHOSE", () => {
@@ -357,6 +527,8 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     expect(ok(cascadeItems("walkover", "w", before, good, 2))).toEqual([true, true, true, false]);
     const toW = [good[0]!, after("b", "forfeited", { kind: "award", winner: "w" }), good[2]!];
     expect(ok(cascadeItems("walkover", "w", before, toW, 0))).toEqual([true, false, true, true]);
+    const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z" }), good[2]!];
+    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0))).toEqual([true, false, true, true]);
     expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1))).toEqual([true, true, false, true]);
   });
 });

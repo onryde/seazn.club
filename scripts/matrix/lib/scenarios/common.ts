@@ -50,7 +50,8 @@ export class Recorder {
 }
 
 const FORMAT_LATER = new Set(["ladder", "americano", "mexicano"]);
-const MAX_ITERATIONS = 64;
+/** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */
+export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
 const BYE_PHANTOM = "__bye__";
 

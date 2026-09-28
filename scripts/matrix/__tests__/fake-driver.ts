@@ -110,22 +110,28 @@ export class FakeLeagueDriver implements OrganiserDriver {
   async generate(): Promise<GenerateOut> { this.log("generate"); return { created: 0, existing: this.fixtures.length, fixtures: this.rows() }; }
   async listFixtures(): Promise<FixtureRow[]> { this.log("listFixtures"); return this.rows(); }
   async fixtureState(id: string): Promise<FixtureStateOut> { this.log("fixtureState"); const f = this.#f(id); return { status: f.status, last_seq: f.events.length, outcome: f.outcome }; }
+  /** One event at a time, like HttpDriver's POST per event: each answer
+   *  carries the fixture's status and outcome AFTER that event, and a refused
+   *  event leaves the ones before it appended. */
   async postStream(id: string, events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
     this.log("postStream");
     const f = this.#f(id);
-    const next = [...f.events, ...events];
-    let folded: ReturnType<typeof foldStream>;
-    try {
-      folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
-    } catch (e) {
-      // The product refuses the event and appends nothing.
-      const code = (e as { code?: unknown }).code;
-      throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, typeof code === "string" ? code : null, (e as Error).message);
+    const out: PostedEvent[] = [];
+    for (const ev of events) {
+      const next = [...f.events, ev];
+      let folded: ReturnType<typeof foldStream>;
+      try {
+        folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
+      } catch (e) {
+        const code = (e as { code?: unknown }).code;
+        throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, typeof code === "string" ? code : null, (e as Error).message);
+      }
+      f.events = next;
+      f.outcome = folded.outcome;
+      f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
+      out.push({ seq: f.events.length, status: f.status, outcome: f.outcome, event_id: `${id}-${f.events.length}` });
     }
-    f.events = next;
-    f.outcome = folded.outcome;
-    f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
-    return events.map((_, i) => ({ seq: f.events.length - events.length + i + 1, status: f.status, outcome: f.outcome, event_id: `${id}-${i}` }));
+    return out;
   }
   async forfeit(id: string, by: string, reason: "walkover" | "retired hurt", prefix = ""): Promise<PostedEvent[]> {
     this.log("forfeit");
@@ -228,11 +234,13 @@ export class FakeSwissDriver extends FakeLeagueDriver {
   override refuseStages(): never { throw new Error("fake: swiss only"); }
   override expungesEarly(): boolean { return false; }
   get budget(): number { return Number(this.stage!.config.rounds); }
+  /** Who no longer gets paired (the withdrawn). */
+  sittingOut(): Set<string> { return new Set(this.entrants.filter((e) => e.status === "withdrawn").map((e) => e.id)); }
   pairNext(): number {
     const r = this.paired + 1;
     const pairs = this.schedule[r - 1];
     if (pairs === undefined || r > this.budget) return 0;
-    const out = new Set(this.entrants.filter((e) => e.status === "withdrawn").map((e) => e.id));
+    const out = this.sittingOut();
     const before = this.fixtures.length;
     for (const [h, a] of pairs) {
       const hOut = h === "BYE" || out.has(h);
