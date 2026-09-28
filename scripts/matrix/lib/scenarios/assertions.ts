@@ -29,7 +29,14 @@ export function foldParity(rec: Recorder): CheckResult {
         ? `${p.fixtureId}: ${p.foreign} event(s) on the fixture the harness did not post — parity unjudgeable`
         : `${p.fixtureId}: the product holds ${-p.foreign} fewer event(s) than the harness posted — parity unjudgeable`,
     }
-    : { ok: JSON.stringify(p.local) === JSON.stringify(p.product), note: `${p.fixtureId}: engine ${JSON.stringify(p.local)} vs product ${JSON.stringify(p.product)}` })));
+    : {
+      // m-4: two nulls are not parity. A fold with no outcome passes only for
+      // a request whose outcome is recorded, not asserted (an abandon), and a
+      // fold that is not what the harness asked for fails even when the
+      // product agrees with it.
+      ok: (p.local !== null || p.request === "unasserted") && p.request !== "mismatch" && JSON.stringify(p.local) === JSON.stringify(p.product),
+      note: `${p.fixtureId}: engine ${JSON.stringify(p.local)} vs product ${JSON.stringify(p.product)}${p.request === "mismatch" ? " — not the outcome the harness asked for" : ""}`,
+    })));
 }
 
 const text = (o: ObservedOutcome | null): string => JSON.stringify(o);

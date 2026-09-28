@@ -12,7 +12,7 @@ import {
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
 import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
-import { generateStream } from "../streams/index.ts";
+import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
 import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
 
@@ -36,6 +36,9 @@ export interface ParityObs {
    *  came to decide it — finished by a write the harness never made, on a
    *  fixture that seats no recorded withdrawn entrant. null: it posted. */
   finishedBefore: string | null;
+  /** m-4: whether the local fold is the outcome the harness ASKED for
+   *  (streams matchesRequest); null when nothing was folded. */
+  request: RequestMatch | null;
 }
 
 /** Why playStage stopped (I-1). Only "drained" — generate answered and no
@@ -129,7 +132,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     // result nobody the harness can name wrote — a failing parity item, never
     // a silent return.
     if (rec.streams.has(f.id) || rec.withdrawn.has(home) || rec.withdrawn.has(away)) return;
-    rec.parity.push({ fixtureId: f.id, local: null, product: toObservedOutcome(state.outcome), foreign: state.last_seq, finishedBefore: state.status });
+    rec.parity.push({ fixtureId: f.id, local: null, product: toObservedOutcome(state.outcome), foreign: state.last_seq, finishedBefore: state.status, request: null });
     rec.notes.push(`${f.id}: already ${state.status} before the harness posted`);
     return;
   }
@@ -150,12 +153,14 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   if (outcome.kind === "draw") rec.drawsPosted++;
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {
-    rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null });
+    rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null, request: null });
     rec.notes.push(`${f.id}: product held ${state.last_seq} event(s), the harness had posted ${prior.length}`);
     return;
   }
   const m = sportModule(ctx.spec.sport);
-  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(foldStream(m, ctx.cfg, home, away, whole).outcome), product: productOutcome, foreign: 0, finishedBefore: null });
+  const folded = foldStream(m, ctx.cfg, home, away, whole).outcome;
+  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: setup.stage.kind as StageKind, home, away, outcome }, folded);
+  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded), product: productOutcome, foreign: 0, finishedBefore: null, request });
   const dp = declaredPoints(m, ctx.cfg, stageCtx(setup.stage.kind, f), home, away, whole);
   if (dp !== null) rec.declared.set(f.id, { home: dp.home, away: dp.away, forOutcome: toObservedOutcome(dp.forOutcome)! });
 }

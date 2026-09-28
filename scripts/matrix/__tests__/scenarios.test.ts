@@ -56,24 +56,40 @@ describe("shared assertions — empty case first, then each way to go red", () =
   it("foldParity: nothing posted is vacuous; a differing product outcome fails; foreign events are unjudgeable", () => {
     expect(foldParity(new Recorder())).toMatchObject({ id: "life-fold-parity", verdict: "fail", checked: 0 });
     const rec = new Recorder();
-    rec.parity.push({ fixtureId: "f1", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0, finishedBefore: null });
+    rec.parity.push({ fixtureId: "f1", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0, finishedBefore: null, request: "match" });
     expect(foldParity(rec)).toMatchObject({ verdict: "pass", checked: 1 });
-    rec.parity.push({ fixtureId: "f2", local: { kind: "win", winner: "a" }, product: { kind: "draw" }, foreign: 0, finishedBefore: null });
+    rec.parity.push({ fixtureId: "f2", local: { kind: "win", winner: "a" }, product: { kind: "draw" }, foreign: 0, finishedBefore: null, request: "match" });
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 2, evidence: [expect.stringMatching(/^f2: engine/)] });
     const rec2 = new Recorder();
-    rec2.parity.push({ fixtureId: "f3", local: null, product: { kind: "win", winner: "a" }, foreign: 1, finishedBefore: null });
+    rec2.parity.push({ fixtureId: "f3", local: null, product: { kind: "win", winner: "a" }, foreign: 1, finishedBefore: null, request: "match" });
     expect(foldParity(rec2)).toMatchObject({ verdict: "fail", checked: 1, evidence: [expect.stringMatching(/f3: 1 event\(s\) .*did not post/)] });
     // I-1: a fixture already finished before the harness posted fails even when
     // its event count reads 0 (a status written with no events).
     const rec3 = new Recorder();
-    rec3.parity.push({ fixtureId: "f4", local: null, product: null, foreign: 0, finishedBefore: "decided" });
+    rec3.parity.push({ fixtureId: "f4", local: null, product: null, foreign: 0, finishedBefore: "decided", request: null });
     expect(foldParity(rec3)).toMatchObject({ verdict: "fail", checked: 1, evidence: ["f4: already decided before the harness posted — a result it never wrote, and no recorded withdrawal explains it"] });
+  });
+
+  it("foldParity (m-4): two nulls are not parity, and a fold that is not what the harness asked for fails even when the product agrees", () => {
+    const one = (local: ObservedOutcome | null, product: ObservedOutcome | null, request: ParityObs["request"]) => {
+      const rec = new Recorder();
+      rec.parity.push({ fixtureId: "f1", local, product, foreign: 0, finishedBefore: null, request });
+      return foldParity(rec);
+    };
+    const a = { kind: "win" as const, winner: "a" };
+    expect(one(a, a, "match")).toMatchObject({ verdict: "pass", checked: 1 });
+    // Shape drift that nulls both sides: the raw fold may still match the request, but nothing was compared.
+    expect(one(null, null, "match")).toMatchObject({ verdict: "fail", checked: 1, evidence: ["f1: engine null vs product null"] });
+    expect(one(null, null, "mismatch")).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(one(a, a, "mismatch")).toMatchObject({ verdict: "fail", checked: 1, evidence: ['f1: engine {"kind":"win","winner":"a"} vs product {"kind":"win","winner":"a"} — not the outcome the harness asked for'] });
+    // An abandon is recorded, not asserted: a fold with no outcome is its answer.
+    expect(one(null, null, "unasserted")).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
   it("resultsAsPosted (final review I-1): the STORED result of every finished fixture is the harness's fold, a bye, or the recorded cascade's — else it fails", () => {
     const win = (w: string) => ({ kind: "win" as const, winner: w });
     const posted = (rec: Recorder, id: string, local: ObservedOutcome | null, over: Partial<ParityObs> = {}) =>
-      rec.parity.push({ fixtureId: id, local, product: local, foreign: 0, finishedBefore: null, ...over });
+      rec.parity.push({ fixtureId: id, local, product: local, foreign: 0, finishedBefore: null, request: "match", ...over });
     // Empty first: nothing finished is vacuous, and so is a stage whose only finished rows seat nobody.
     expect(resultsAsPosted(new Recorder(), run([]))).toMatchObject({ id: "life-results-as-posted", verdict: "fail", checked: 0 });
     expect(resultsAsPosted(new Recorder(), run([], [fx({ home: null, away: null, status: "abandoned", outcome: null }), fx({ id: "f2", status: "scheduled", outcome: null })])))
@@ -115,7 +131,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(resultsAsPosted(new Recorder(), run([], [wo]))).toMatchObject({ verdict: "fail" });
     // An expunge strikes a result the harness posted: the stored void differs from the fold and is still accounted for...
     const rec = new Recorder();
-    rec.parity.push({ fixtureId: "x", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0, finishedBefore: null });
+    rec.parity.push({ fixtureId: "x", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0, finishedBefore: null, request: "match" });
     const struck = fx({ id: "x", status: "abandoned", outcome: null });
     expect(resultsAsPosted(rec, withW([struck], "expunge", [{ id: "x", status: "decided" }]))).toMatchObject({ verdict: "pass", checked: 1 });
     // ...but not when the fixture was locked before it, nor under a walkover (which leaves played results standing).
@@ -697,6 +713,18 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     expect(rec.events).toBe(1);
     expect(foldParity(rec)).toMatchObject({ verdict: "pass", checked: 1 });
     expect(rec.declared.get(f.id)).toMatchObject({ forOutcome: { kind: "award", winner: f.home_entrant_id } });
+    expect(rec.parity[0]!.request).toBe("match"); // m-4: the fold is the award to the side that did NOT forfeit
+  });
+  it("m-4: decideFixture records whether the fold is what it asked for, per requested outcome (an abandon is recorded, not asserted)", async () => {
+    const cases = [
+      [{ kind: "win", winner: "home" }, "match"], [{ kind: "win", winner: "away" }, "match"],
+      [{ kind: "forfeit", by: "home", reason: "walkover" }, "match"], [{ kind: "abandon" }, "unasserted"],
+    ] as const;
+    for (const [outcome, want] of cases) {
+      const { ctx, rec, setup, f } = await onBadminton();
+      await decideFixture(ctx, rec, setup, f, outcome);
+      expect(rec.parity, JSON.stringify(outcome)).toEqual([expect.objectContaining({ foreign: 0, request: want })]);
+    }
   });
   it("events on the fixture the harness never posted make parity unjudgeable, not a silent pass", async () => {
     const { driver, ctx, rec, setup, f } = await onBadminton();
@@ -716,7 +744,7 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     const before = driver.calls.length;
     await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
     expect(driver.calls.slice(before)).toEqual(["fixtureState"]); // still posts nothing over it
-    expect(rec.parity).toEqual([{ fixtureId: f.id, local: null, product: { kind: "award", winner: f.home_entrant_id, method: "walkover" }, foreign: 2, finishedBefore: "forfeited" }]);
+    expect(rec.parity).toEqual([{ fixtureId: f.id, local: null, product: { kind: "award", winner: f.home_entrant_id, method: "walkover" }, foreign: 2, finishedBefore: "forfeited", request: null }]);
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1, evidence: [`${f.id}: already forfeited before the harness posted — a result it never wrote, and no recorded withdrawal explains it`] });
     expect(rec.declared.has(f.id)).toBe(false);
   });
