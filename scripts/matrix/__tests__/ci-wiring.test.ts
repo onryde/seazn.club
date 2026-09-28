@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,30 @@ function matrixStep(text: string): { keys: string[]; body: string; script: strin
   return { keys, body: body.join("\n"), script: script.join("\n").trimEnd() + "\n" };
 }
 
+/** A job-level (4-space) block of a job's YAML: its key line and every deeper
+ *  line after it, or "" when the job has no such key. */
+function jobBlock(lines: string[], key: string): string {
+  const at = lines.indexOf(`    ${key}:`);
+  if (at === -1) return "";
+  let end = at + 1;
+  while (end < lines.length && (lines[end]!.trim() === "" || indentOf(lines[end]!) > 4)) end++;
+  return lines.slice(at, end).join("\n");
+}
+
+/** What in a job's YAML (comments dropped) could hand the matrix step a
+ *  database (Task 10 review Minor 1): any `services:` block, a job-level `env:`
+ *  that names postgres, or DATABASE_URL anywhere. Another step merely NAMED
+ *  for postgres cannot reach this one. */
+function dbLeaks(job: string): string[] {
+  const lines = job.split("\n").filter((l) => !l.trimStart().startsWith("#"));
+  const yaml = lines.join("\n");
+  const out: string[] = [];
+  if (/^\s+services:/m.test(yaml)) out.push("services");
+  if (/postgres/i.test(jobBlock(lines, "env"))) out.push("env: postgres");
+  if (/DATABASE_URL/.test(yaml)) out.push("DATABASE_URL");
+  return out;
+}
+
 // A synthetic vitest JSON report, shaped like vitest 4's (only the fields the
 // step's judge reads).
 function report(root: string, o: { total: number; passed: number; failedSuites?: number; files?: string[] }) {
@@ -59,33 +83,38 @@ function runStep(o: { json: ReturnType<typeof report> | ((root: string) => Retur
   const { script } = matrixStep(ci);
   if (script === null) throw new Error("the matrix step has no `run: |` block");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-ci-")));
-  const bin = join(root, "packages/engine/node_modules/.bin");
-  mkdirSync(bin, { recursive: true });
-  writeFileSync(
-    join(bin, "vitest"),
-    [
-      "#!/bin/sh",
-      'out=""',
-      'for a in "$@"; do case "$a" in --outputFile=*) out="${a#--outputFile=}";; esac; done',
-      'if [ -n "$FAKE_JSON" ]; then cp "$FAKE_JSON" "$out"; fi',
-      'exit "$FAKE_EXIT"',
-      "",
-    ].join("\n"),
-  );
-  chmodSync(join(bin, "vitest"), 0o755);
-  let fakeJson = "";
-  if (o.json !== null) {
-    fakeJson = join(root, "fake-report.json");
-    writeFileSync(fakeJson, JSON.stringify(typeof o.json === "function" ? o.json(root) : o.json));
+  try {
+    const bin = join(root, "packages/engine/node_modules/.bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      join(bin, "vitest"),
+      [
+        "#!/bin/sh",
+        'out=""',
+        'for a in "$@"; do case "$a" in --outputFile=*) out="${a#--outputFile=}";; esac; done',
+        'if [ -n "$FAKE_JSON" ]; then cp "$FAKE_JSON" "$out"; fi',
+        'exit "$FAKE_EXIT"',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(bin, "vitest"), 0o755);
+    let fakeJson = "";
+    if (o.json !== null) {
+      fakeJson = join(root, "fake-report.json");
+      writeFileSync(fakeJson, JSON.stringify(typeof o.json === "function" ? o.json(root) : o.json));
+    }
+    writeFileSync(join(root, "step.sh"), script);
+    const r = spawnSync("bash", ["step.sh"], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "", FAKE_JSON: fakeJson, FAKE_EXIT: String(o.exit) },
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  } finally {
+    // Task 10 review Minor 2: one scratch checkout per call, never left behind.
+    rmSync(root, { recursive: true, force: true });
   }
-  writeFileSync(join(root, "step.sh"), script);
-  const r = spawnSync("bash", ["step.sh"], {
-    cwd: root,
-    env: { PATH: process.env.PATH ?? "", FAKE_JSON: fakeJson, FAKE_EXIT: String(o.exit) },
-    encoding: "utf8",
-    timeout: 20_000,
-  });
-  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
 describe("matrix CI wiring", () => {
@@ -117,14 +146,31 @@ describe("matrix CI wiring", () => {
     expect(jobStart).toBeGreaterThan(0);
     const job = ci.slice(jobStart, jobEnd);
     expect(job).toContain(STEP_HEAD);
-    // Comments may say "no live Postgres"; only the YAML itself is judged.
-    const yaml = job.split("\n").filter((l) => !l.trimStart().startsWith("#")).join("\n");
-    expect(yaml).toContain(STEP_HEAD);
-    expect(yaml).not.toMatch(/^\s+services:/m);
-    expect(yaml).not.toMatch(/DATABASE_URL|postgres/i);
+    expect(dbLeaks(job)).toEqual([]);
+  });
+
+  // Task 10 review Minor 1: judge only what can reach the step — a job-level
+  // `services:` or `env:` block, and DATABASE_URL anywhere — so an unrelated
+  // gates step that merely says "postgres" does not red the matrix wiring.
+  it.each<[string, string, string[]]>([
+    ["a clean job", "  gates:\n    steps:\n      - name: a\n        run: echo ok\n", []],
+    ["another step NAMED for postgres (a drift gate over an enum snapshot)", "  gates:\n    steps:\n      - name: postgres enum drift\n        run: node check-postgres-enums.mjs\n", []],
+    ["a comment that says postgres", "  gates:\n    # no live Postgres here\n    steps:\n      - run: echo ok\n", []],
+    ["a job-level services block", "  gates:\n    services:\n      db:\n        image: redis\n    steps:\n      - run: echo ok\n", ["services"]],
+    ["a job-level env pointing at postgres", "  gates:\n    env:\n      PGHOST: postgres\n    steps:\n      - run: echo ok\n", ["env: postgres"]],
+    ["DATABASE_URL in any step", "  gates:\n    steps:\n      - name: other\n        env:\n          DATABASE_URL: x\n", ["DATABASE_URL"]],
+  ])("dbLeaks: %s", (_name, job, leaks) => {
+    expect(dbLeaks(job)).toEqual(leaks);
   });
 
   describe("the step judges vitest by its JSON report, not by its exit code alone", () => {
+    it("runStep leaves no scratch checkout behind (Task 10 review Minor 2)", () => {
+      const scratch = () => readdirSync(tmpdir()).filter((d) => d.startsWith("fm-ci-")).sort();
+      const before = scratch();
+      runStep({ json: (root) => report(root, { total: 1, passed: 1 }), exit: 0 });
+      runStep({ json: null, exit: 1 });
+      expect(scratch()).toEqual(before);
+    });
     it("a real pass is green, and says what it counted", () => {
       const r = runStep({ json: (root) => report(root, { total: 3, passed: 3 }), exit: 0 });
       expect(r.stderr).toBe("");
