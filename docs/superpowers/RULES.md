@@ -64,6 +64,13 @@ Implementer → Reviewer loops per task.
 
 ## Testing — required for every task, all four, stated explicitly in acceptance criteria
 
+**House test rules live in `docs/superpowers/TEST-STRATEGY.md`** (owner
+ruling 2026-09-28, binding on every agent in every wave). Read it before
+writing tests. It records why ~150 gaps sat behind green suites, the ten
+rules in force today, the reviewer's four mandatory questions, and the
+three pieces of machinery adopted but NOT yet built — which no agent may
+report as running.
+
 - Unit tests
 - E2E tests (Playwright)
 - Smoke tests (this repo's `scripts/smoke.ts` pattern)
@@ -77,6 +84,15 @@ real user-facing flow that eventually exercises it, don't skip it as N/A.
 current task didn't touch — skip it, note it clearly, let CI surface it
 separately. Don't silently absorb scope.
 
+**NEVER run the full gate, the full vitest suite or the full e2e suite
+locally** (owner, 2026-09-28). All four test types are still owed and
+still have to pass — but locally you run ONLY the ones covering the
+files you CHANGED: the scoped vitest paths, the specific e2e spec, the
+specific walkthrough. Everything else is CI's job. A full local run
+costs an hour, saturates the machine (which itself reds unrelated
+suites), and answers a question CI answers for free. This binds the
+orchestrator as much as any subagent. `AGENTS.md` is the authority.
+
 ## UI/UX
 
 Every interface works on both desktop AND mobile — responsive layouts,
@@ -86,8 +102,18 @@ Screenshot-verify every UI change at desktop (1280), 320px, and 768px —
 no horizontal page scroll at any of them. Wide tables scroll inside their
 own `overflow-x-auto` container, never the page. The seven-width e2e
 matrix (`apps/web/e2e/mobile.spec.ts` viewport projects: 320/360/375/390/
-430/768/834) is the enforcement backstop. `/admin` stays functional-bar
-only.
+430/768/834) is the enforcement backstop.
+
+`/admin` is **exempt from all of it** (owner, 2026-09-28: "we don't
+need to worry about /admin mobile responsive design"). Staff-only, and
+always viewed on a desktop — so an `/admin` change is verified at
+**1280 only**: no 320, no 768, no phone widths, no design polish, and
+an existing `/admin` overflow at a narrow width is a NON-ISSUE rather
+than a deferred defect. Never weaken a test that proves real behaviour
+just because it runs at a narrow width. This supersedes the older
+"`/admin` stays functional-bar only" wording that older wave plans and
+specs still carry; `AGENTS.md` is the authority. Every other surface
+keeps the full bar, mobile-first, all three widths.
 
 ## Pre-commit
 

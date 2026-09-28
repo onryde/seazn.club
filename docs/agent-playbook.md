@@ -157,12 +157,19 @@ deletes the implementation the sweep was verifying.
 2. scout     locate touch points → file:line list (no fixes)
 3. implementer   one task, tight brief, verify command   ← sequential
 4. reviewer      the diff, before commit
-5. inline    fix findings, run the full gate yourself, commit
+5. inline    fix findings, re-run the SCOPED gate yourself, commit
 6. memory    write the decision + any new gotcha
 ```
 
 Steps 3 and 4 repeat per task. Step 5 is not delegable — the number you
 report to the user is the number you ran.
+
+**Scoped, never full** (owner, 2026-09-28; `AGENTS.md` is the
+authority): step 5 re-runs only the tests, specs and walkthroughs
+covering the CHANGED files. Never the full gate, the full vitest suite
+or the full e2e suite locally — that is CI's job, and a full local run
+saturates the machine badly enough to red unrelated suites. The rule
+binds the orchestrator exactly as it binds a subagent.
 
 Write memory at decision points, not at session end. Compaction keeps
 task state and test results; it does not reliably keep *why* a decision

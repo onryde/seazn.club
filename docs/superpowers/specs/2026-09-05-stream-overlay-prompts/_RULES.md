@@ -1,5 +1,14 @@
 # Stream overlay — standing rules
 
+**House test rules apply to every R1 wave and lane** — orchestrator and
+subagents alike: `docs/superpowers/TEST-STRATEGY.md` (owner ruling
+2026-09-28, "make it generic rules to follow by all agents"). Anti-vacuity,
+no expected value derived from the code under test, assumptions as guards
+rather than comments, mutate the guard you added, sweep the registry rather
+than one sample, and the reviewer's four questions answered in writing. That
+file also lists what is adopted but NOT yet built — no R1 dispatch may
+report Stryker, `forEachSport` or the shadow invariants as running.
+
 Read this before touching anything under `apps/web/src/app/overlay/**`,
 `apps/web/src/components/overlay/**`, `apps/web/src/lib/overlay-model.ts`,
 `apps/web/src/lib/stream-url.ts`, `apps/web/src/components/public-site/use-live-fixture.ts`,

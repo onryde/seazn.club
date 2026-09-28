@@ -29,6 +29,17 @@ invocation and complete it end to end.
    inventing a parallel one — search before you build.
 
 ## While working
+- **`docs/superpowers/TEST-STRATEGY.md` is the house test authority**
+  (owner ruling 2026-09-28). Before writing tests, list the change's
+  state transitions and its empty case, and test both — a second call,
+  an empty input, after a withdrawal or void, and another sport.
+  Anti-vacuity is mandatory: every invariant, property and sweep
+  reports how many items it checked, and zero checked is a FAILURE.
+  Never derive an expected value from the code under test — take it
+  from the rulebook or the engine's own declarations. Assumptions are
+  guards, not comments: "cannot happen" owes an assertion or a named
+  refusal plus a test that reaches it. Sweep the sport registry by
+  default; a single-sport test carries a one-line reason.
 - TDD is mandatory: write the failing test first, RUN it and watch it
   fail for the right reason, then write minimal code to green. When a
   true red is impossible (audit/coverage-shaped tests), substitute a
@@ -42,6 +53,12 @@ invocation and complete it end to end.
 - Commit in cohesive red→green steps with conventional messages.
 
 ## Verification (before claiming done)
+- **NEVER run the full gate, the full vitest suite or the full e2e suite
+  locally** (owner, 2026-09-28; `AGENTS.md` is the authority). Run ONLY
+  the tests, specs and walkthroughs that cover the files you CHANGED —
+  the scoped vitest paths, the specific e2e spec, the specific
+  walkthrough. Everything else is CI's job. A full local run costs an
+  hour and saturates the machine, which itself reds unrelated suites.
 - Run relevant test suites with a RAW reporter and read real pass/fail
   counts and exit codes. Never trust wrapper/proxy summaries — `rtk`
   prints `PASS(0) FAIL(0)` for a suite that FAILED TO COLLECT, and
@@ -57,8 +74,14 @@ invocation and complete it end to end.
   hide the lines, so a bare grep will tell you a call site does not
   exist when it does.
 - tsc --noEmit and lint on touched files.
-- UI work: screenshot-verify desktop AND 375px with Playwright before
-  claiming done; no horizontal page scroll at 375px.
+- UI work: screenshot-verify with Playwright at **1280, 320 and 768**
+  before claiming done — no horizontal page scroll at any of them.
+  **`/admin` is the one exemption**: staff-only and always viewed on a
+  desktop, so an `/admin` change is verified at **1280 only** — no 320,
+  no 768, no design polish, and an existing `/admin` overflow at a
+  narrow width is a NON-ISSUE, not a deferred defect (owner,
+  2026-09-28). Never weaken a test that proves real behaviour just
+  because it runs at a narrow width. `AGENTS.md` is the authority.
 
 ## Report back
 - If the dispatch names a report file, write full detail there: what
