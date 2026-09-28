@@ -8,6 +8,20 @@ import type { BuiltReadback, Recorder } from "./common.ts";
 
 export interface Item { ok: boolean; note: string }
 
+/** m-1: the prefix on a canary's deliberately WRONG expectation. */
+export const CANARY_MARK = "canary (deliberately wrong): ";
+
+/** m-1: a scenario's own check in a canary run carries its right-answer items
+ *  FIRST and then the deliberately wrong ones, each note marked. run.ts
+ *  (canaryVerdict) accepts the canary only when that check is the one failure
+ *  and every failing line is marked: the right answer held, and only the
+ *  wrong expectation failed. Right items first also means an unmarked failure
+ *  is never pushed past the evidence cap by marked ones. Outside a canary run
+ *  only the right items are asserted. */
+export function withCanary(right: readonly Item[], wrong: readonly Item[], canary: boolean): Item[] {
+  return canary ? [...right, ...wrong.map((i) => ({ ok: i.ok, note: `${CANARY_MARK}${i.note}` }))] : [...right];
+}
+
 export function assertion(id: string, items: readonly Item[], abstainReason: string | null = null): CheckResult {
   if (abstainReason !== null) return { id, kind: "assertion", verdict: "abstain", checked: 0, reason: abstainReason, evidence: [] };
   if (items.length === 0) return { id, kind: "assertion", verdict: "fail", checked: 0, reason: "checked 0 items (vacuous, R25)", evidence: [] };

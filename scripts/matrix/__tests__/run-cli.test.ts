@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RowBuildDeferred } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import type { CaseResult, CheckResult } from "../lib/results.ts";
+import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
 import type { Session } from "../../bench/lib/http.ts";
@@ -194,8 +195,50 @@ describe("runSlice — a run", () => {
     expect(await runSlice(deps(), ["--canary", k, "--run-id", "c1", "--report-dir", dir])).toBe(0);
     const cases = resultsIn(dir, "c1").cases;
     expect(cases.map((c) => [c.caseId, c.canary])).toEqual([[`league|generic|score|${k}|canary`, true]]);
-    expect(cases[0]!.checks.filter((c) => c.verdict === "fail").map((c) => c.id)).toContain(want);
+    expect(cases[0]!.checks.filter((c) => c.verdict === "fail").map((c) => c.id)).toEqual([want]);
+    // m-1: red for the deliberately wrong expectation only — every failing line is marked.
+    const own = cases[0]!.checks.find((c) => c.id === want)!;
+    expect(own.evidence.length).toBeGreaterThan(0);
+    expect(own.evidence.every((l) => l.startsWith(CANARY_MARK)), own.evidence.join(" | ")).toBe(true);
     expect(io.out()).toContain(`canary ${k}: red on ${want}, as designed`);
+  });
+  it("m-1 (the review's kill test): --canary M1 over a product that never seats seed 1 exits 1 — its own check is red for want of a target, not the wrong winner", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const driverFor = (_b: string, _s: Session, orgId: string) => new (class extends FakeLeagueDriver {
+      override circle() {
+        const all = this.entrants;
+        this.entrants = all.filter((e) => e.seed !== 1);
+        try { return super.circle(); } finally { this.entrants = all; }
+      }
+    })(orgId);
+    expect(await runSlice(deps({ driverFor }), ["--canary", "M1", "--run-id", "k1", "--report-dir", dir])).toBe(1);
+    expect(io.out()).toContain("m1-walkover-recorded failed for another reason: no round fixture seated seed 1");
+  });
+  it.each([
+    ["an unmarked reason alone", ["no round fixture seated seed 1"], /failed for another reason: no round fixture seated seed 1/],
+    ["the right answer failing beside the marked wrong one", ["winner e2, expected e1", `${CANARY_MARK}winner e2, expected e2`], /failed for another reason: winner e2, expected e1/],
+    ["no evidence at all (vacuous)", [], /failed with no evidence: checked 0 items/],
+  ] as const)("m-1: --canary M1 whose own check is the ONLY failure but with %s exits 1", async (_what, evidence, message) => {
+    const io = capture();
+    wrapScenario("M1", (out) => ({
+      ...out,
+      assertions: out.assertions.map((a) => (a.id === "m1-walkover-recorded"
+        ? { ...a, verdict: "fail" as const, checked: evidence.length, reason: evidence[0] ?? "checked 0 items (vacuous, R25)", evidence: [...evidence] }
+        : a)),
+    }));
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--canary", "M1", "--run-id", "k2", "--report-dir", dir])).toBe(1);
+    expect(resultsIn(dir, "k2").cases[0]!.checks.filter((c) => c.verdict === "fail").map((c) => c.id)).toEqual(["m1-walkover-recorded"]);
+    expect(io.out()).toMatch(message);
+  });
+  it("m-1: --canary red on its own check (marked) AND another check exits 1 — exactly its own check", async () => {
+    const io = capture();
+    const other: CheckResult = { id: "other-check", kind: "assertion", verdict: "fail", checked: 1, reason: "unrelated", evidence: ["unrelated"] };
+    wrapScenario("M1", (out) => ({ ...out, assertions: [...out.assertions, other] }));
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--canary", "M1", "--run-id", "k3", "--report-dir", dir])).toBe(1);
+    expect(io.out()).toMatch(/did NOT go red on m1-walkover-recorded \(failed: m1-walkover-recorded, other-check; state red\)$/m);
   });
   it("--canary whose case is red for an UNRELATED reason (an error, no checks): exit 1", async () => {
     const io = capture();

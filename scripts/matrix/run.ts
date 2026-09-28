@@ -43,6 +43,7 @@ import { evaluateInvariants } from "./lib/invariants.ts";
 import { redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { decideState, writeResults, type CaseResult, type CheckResult, type RunResults } from "./lib/results.ts";
+import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
 import {
@@ -173,13 +174,25 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   return { result, refusal };
 }
 
-function canaryVerdict(key: string, c: CaseResult | undefined): number {
+/** m-1: a canary is green only when its case is red on EXACTLY its own check,
+ *  and for the deliberately wrong expectation: every failing line of that
+ *  check carries CANARY_MARK (withCanary puts the right-answer items first,
+ *  so an unmarked failure — the right answer not holding, or nothing to judge
+ *  — is never hidden behind the evidence cap). A red on another check, an
+ *  error, a vacuous own check, or an own check red for another reason exits 1. */
+export function canaryVerdict(key: string, c: CaseResult | undefined): number {
   const want = CANARY_CHECK[checkCanary(key)];
   const failed = (c?.checks ?? []).filter((k) => k.verdict === "fail").map((k) => k.id);
-  const ok = c?.state === "red" && want !== null && failed.includes(want);
+  const own = c?.checks.find((k) => k.id === want);
+  const unmarked = own === undefined ? [] : own.evidence.filter((l) => !l.startsWith(CANARY_MARK));
+  const ownReason = own === undefined || own.verdict !== "fail" ? null
+    : own.evidence.length === 0 ? `; ${want} failed with no evidence: ${own.reason}`
+    : unmarked.length > 0 ? `; ${want} failed for another reason: ${unmarked[0]}`
+    : null;
+  const ok = c?.state === "red" && want !== null && failed.length === 1 && failed[0] === want && own !== undefined && own.evidence.length > 0 && unmarked.length === 0;
   say(ok
     ? `canary ${key}: red on ${want}, as designed`
-    : `canary ${key}: did NOT go red on ${want} (failed: ${failed.join(", ") || "none"}; state ${c?.state ?? "none"})`);
+    : `canary ${key}: did NOT go red on ${want} (failed: ${failed.join(", ") || "none"}; state ${c?.state ?? "none"})${ownReason ?? ""}`);
   return ok ? EXIT.OK : EXIT.NO_SIGNAL;
 }
 

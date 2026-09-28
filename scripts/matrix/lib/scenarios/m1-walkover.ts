@@ -1,7 +1,7 @@
 // M1: seed 1's first opponent does not turn up. The walkover is recorded for
-// seed 1 and, in a bracket, seed 1 goes on. Canary: expect the ABSENT side.
+// seed 1 and, in a bracket, seed 1 goes on. Canary: ALSO expect the ABSENT side.
 import { winnerOf } from "../observed.ts";
-import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted } from "./assertions.ts";
+import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, decideFixture, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -35,8 +35,6 @@ export const m1Walkover: Scenario = {
     const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
     const t = target as Target | null;
     const fx = t === null ? undefined : observed.stages[0].fixtures.find((f) => f.id === t.id);
-    // The canary asserts the deliberately WRONG winner (the absent side).
-    const expected = ctx.spec.canary && t !== null ? t.absent : seed1;
     return {
       observed,
       events: rec.events,
@@ -44,10 +42,11 @@ export const m1Walkover: Scenario = {
         builtAsPosted(setup.built, observed),
         foldParity(rec),
         resultsAsPosted(rec, observed),
-        assertion("m1-walkover-recorded", fx === undefined ? [{ ok: false, note: "no round fixture seated seed 1" }] : [
+        // The canary adds the deliberately WRONG winner (the absent side) after the right one (m-1).
+        assertion("m1-walkover-recorded", fx === undefined || t === null ? [{ ok: false, note: "no round fixture seated seed 1" }] : withCanary([
           { ok: fx.status === "forfeited", note: `status ${fx.status}, expected forfeited` },
-          { ok: winnerOf(fx.outcome) === expected, note: `winner ${winnerOf(fx.outcome)}, expected ${expected}` },
-        ]),
+          { ok: winnerOf(fx.outcome) === seed1, note: `winner ${winnerOf(fx.outcome)}, expected ${seed1}` },
+        ], [{ ok: winnerOf(fx.outcome) === t.absent, note: `winner ${winnerOf(fx.outcome)}, expected ${t.absent}` }], ctx.spec.canary)),
         assertion("m1-winner-progresses",
           [{ ok: t !== null && observed.stages[0].fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),

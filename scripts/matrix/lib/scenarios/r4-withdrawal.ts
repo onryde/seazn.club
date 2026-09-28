@@ -1,9 +1,9 @@
 // R4: seed 3 withdraws after round 1. W1a asserts only that the cascade is
 // CONSISTENT with the policy the engine reported; which policy SHOULD apply is
-// the rulebook's call (W2+). Canary: judge the cascade against the opposite
-// policy.
+// the rulebook's call (W2+). Canary: also judge the cascade against the
+// opposite policy.
 import { isTerminal, sameResult, snap, toObservedOutcome, winnerOf, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
-import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
+import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -83,8 +83,8 @@ export const r4Withdrawal: Scenario = {
       };
     }
     const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
-    // Canary: judge the cascade against the OPPOSITE policy.
-    const judged = ctx.spec.canary ? (w.policy === "walkover" ? "expunge" : "walkover") : w.policy;
+    // Canary: ALSO judge the cascade against the OPPOSITE policy (m-1).
+    const opposite = w.policy === "walkover" ? "expunge" : "walkover";
     const later = observed.stages[0].fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
     return {
       observed,
@@ -94,7 +94,11 @@ export const r4Withdrawal: Scenario = {
         foldParity(rec),
         resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }]),
-        assertion("r4-cascade-consistent", cascadeItems(judged, w.entrantId, w.before, mine, w.walkovers, w.voided)),
+        assertion("r4-cascade-consistent", withCanary(
+          cascadeItems(w.policy, w.entrantId, w.before, mine, w.walkovers, w.voided),
+          cascadeItems(opposite, w.entrantId, w.before, mine, w.walkovers, w.voided),
+          ctx.spec.canary,
+        )),
         assertion("r4-not-paired-later",
           later.map((f) => ({ ok: f.home !== w.entrantId && f.away !== w.entrantId, note: `${f.id} (round ${f.roundNo}) seats the withdrawn entrant` })),
           setup.stage.kind === "swiss" ? null : "not a swiss stage"),

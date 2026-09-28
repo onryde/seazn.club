@@ -5,7 +5,7 @@ import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRu
 import { decideState } from "../lib/results.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
-  assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
+  CANARY_MARK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
   MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
@@ -554,11 +554,22 @@ describe("final review I-1 on the fakes: a result the harness did not post, or o
 });
 
 describe("pilots on the fake league", () => {
-  it("M1: walkover recorded for seed 1; the canary expects the absent side and goes red on that check", async () => {
-    expect((await runFake("M1")).state.state).toBe("works");
+  /** m-1: the canary's own check keeps its right-answer items (they pass) and adds the marked wrong ones (they fail). */
+  const differential = (r: Awaited<ReturnType<typeof runFake>>, id: string, right: number) => {
+    const c = r.checks.find((x) => x.id === id)!;
+    expect(c.evidence.length).toBeGreaterThan(0);
+    expect(c.evidence.every((l) => l.startsWith(CANARY_MARK)), c.evidence.join(" | ")).toBe(true);
+    expect(c.checked).toBeGreaterThan(right); // the right items are still there, beside the wrong ones
+  };
+  it("M1: walkover recorded for seed 1; the canary ALSO expects the absent side and goes red on that check, for that reason only", async () => {
+    const r = await runFake("M1");
+    expect(r.state.state).toBe("works");
+    const own = r.checks.find((c) => c.id === "m1-walkover-recorded")!;
+    expect(own.checked).toBe(2);
     const canary = await runFake("M1", { canary: true });
     expect(canary.state.state).toBe("red");
     expect(failed(canary.checks)).toEqual(["m1-walkover-recorded"]);
+    differential(canary, "m1-walkover-recorded", own.checked);
   });
   it("R4: policy reported and cascade consistent; the canary evaluates the opposite policy", async () => {
     const r = await runFake("R4");
@@ -566,12 +577,15 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "r4-cascade-consistent")).toMatchObject({ verdict: "pass" });
     const canary = await runFake("R4", { canary: true });
     expect(failed(canary.checks)).toEqual(["r4-cascade-consistent"]);
+    differential(canary, "r4-cascade-consistent", r.checks.find((c) => c.id === "r4-cascade-consistent")!.checked);
   });
   it("F1: 7 entrants, every round seats floor(7/2)=3; the canary's ceil goes red", async () => {
     const r = await runFake("F1");
     expect(r.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ verdict: "pass", checked: 7 });
     const canary = await runFake("F1", { canary: true });
     expect(failed(canary.checks)).toEqual(["f1-round-size"]);
+    differential(canary, "f1-round-size", 7);
+    expect(canary.checks.find((c) => c.id === "f1-round-size")!.checked).toBe(14);
   });
   it("M1: exactly ONE walkover — seed 1's first fixture — and the bracket-only check abstains on a league", async () => {
     const r = await runFake("M1");

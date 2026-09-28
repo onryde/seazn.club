@@ -1,7 +1,7 @@
 // F1: an odd field of 7. Everyone is drawn, and each inspected round seats
-// floor(7/2) pairs with one sit-out. Canary: expect ceil — the answer that
-// differs from the right one.
-import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted } from "./assertions.ts";
+// floor(7/2) pairs with one sit-out. Canary: also expect ceil — the answer
+// that differs from the right one.
+import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -19,8 +19,9 @@ export const f1OddField: Scenario = {
     const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
     const s = observed.stages[0];
     const n = s.field.length;
-    // floor(n/2) seated pairs per round, one bye; the canary expects ceil.
-    const expectedPerRound = ctx.spec.canary ? Math.ceil(n / 2) : Math.floor(n / 2);
+    // floor(n/2) seated pairs per round, one bye; the canary ALSO expects ceil (m-1).
+    const right = Math.floor(n / 2);
+    const wrong = Math.ceil(n / 2);
     const rounds = [...new Set(s.fixtures.map((f) => f.roundNo ?? 0))].sort((a, b) => a - b);
     // A knockout's later rounds hold winners only, so just its first round.
     const inspected = setup.stage.kind === "knockout" ? rounds.slice(0, 1) : rounds;
@@ -33,7 +34,11 @@ export const f1OddField: Scenario = {
         foldParity(rec),
         resultsAsPosted(rec, observed),
         assertion("f1-everyone-drawn", s.field.map((e) => ({ ok: s.fixtures.some((f) => f.home === e || f.away === e), note: `${e} appears in no fixture` }))),
-        assertion("f1-round-size", inspected.map((r) => ({ ok: seatedIn(r) === expectedPerRound, note: `round ${r}: ${seatedIn(r)} seated, expected ${expectedPerRound}` }))),
+        assertion("f1-round-size", withCanary(
+          inspected.map((r) => ({ ok: seatedIn(r) === right, note: `round ${r}: ${seatedIn(r)} seated, expected ${right}` })),
+          inspected.map((r) => ({ ok: seatedIn(r) === wrong, note: `round ${r}: ${seatedIn(r)} seated, expected ${wrong}` })),
+          ctx.spec.canary,
+        )),
         stageCompleted(observed),
         loopBounded(rec, observed),
       ],
