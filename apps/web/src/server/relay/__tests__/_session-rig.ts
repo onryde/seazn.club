@@ -1,6 +1,7 @@
 // server/relay/__tests__/_session-rig.ts — a REAL org, a REAL users row and REAL stream
 // sessions for DB-backed tests OUTSIDE server/relay/** (Task 7's stream-credits.test.ts,
-// Task 7A's admin read and route tests). NOT a test file (the _stream-migration.ts
+// Task 7A's admin read and route tests, Task 9's stream-targets.test.ts via
+// `targetEnvelope`). NOT a test file (the _stream-migration.ts
 // precedent: importing a .test file re-registers its tests, C20).
 // Why it lives INSIDE the boundary: a session needs a target, org_stream_targets.rtmp_enc is
 // NOT NULL, and enc-boundary.test.ts claim 2 refuses that column's NAME in any file outside
@@ -18,6 +19,17 @@ export async function rigUser(): Promise<string> {
     values (${`stream-rig-${randomUUID().slice(0, 8)}@test.local`}, 'Stream Rig', true)
     returning id`;
   return id;
+}
+
+/** The RAW sealed destination envelope as stored — for at-rest assertions in tests OUTSIDE
+ *  server/relay/** (Task 9's stream-targets.test.ts), which may not name the column (lane C
+ *  ruling A9: enc-boundary.test.ts keeps NO `__tests__` exemption). Throws on a missing row:
+ *  an absent envelope must never read as "holds no plaintext". */
+export async function targetEnvelope(targetId: string): Promise<Buffer> {
+  const [row] = await sql<{ env: Uint8Array }[]>`
+    select rtmp_enc as env from org_stream_targets where id = ${targetId}`;
+  if (!row) throw new Error(`no org_stream_targets row ${targetId}`);
+  return Buffer.from(row.env);
 }
 
 export interface StreamRig {

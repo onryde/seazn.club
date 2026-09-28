@@ -35,6 +35,10 @@ import { MatchCentreDoc } from "../public-site/match-centre-schema.ts";
 // registration-rules.ts above: this file is shared with the standalone
 // OpenAPI generator script, which has no `@/` alias resolution.
 import { streamUrlSchema } from "../../lib/stream-url.ts";
+// Streaming R1 (Task 9) — the capture QR's ONE schema (design §7.6), re-exported
+// in the relay block below, never re-typed. Relative + explicit `.ts`, same
+// reason as stream-url.ts above; lib/capture-qr.ts imports zod and nothing else.
+import { CaptureQrV1 } from "../../lib/capture-qr.ts";
 // m2 — the ONE Intl-backed zone validator, reused rather than restated, so
 // `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
 // and `organizations.timezone` (api/orgs/[id]/route.ts) already refuse.
@@ -1267,6 +1271,126 @@ export const FixtureStream = z.object({
   stream_url: z.string().nullable(),
 });
 export type FixtureStream = z.infer<typeof FixtureStream>;
+
+// ---------------------------------------------------------------------------
+// Streaming R1 — relay sessions (design §6.3 / §6.4 / §7.6). Every shape a
+// route or the panel exchanges lives here; the QR payload's schema is
+// lib/capture-qr.ts (client-safe — the panel renders it) and is RE-EXPORTED,
+// never re-typed (imported at the top of this file with the other relative
+// `.ts` imports the standalone OpenAPI generator needs).
+// ---------------------------------------------------------------------------
+export { CaptureQrV1 };
+
+export const StreamMode = z.enum(["passthrough", "composed"]);
+export type StreamMode = z.infer<typeof StreamMode>;
+export const StreamSessionState = z.enum(["requested", "provisioning", "warming", "live", "ending", "completed", "failed"]);
+export type StreamSessionState = z.infer<typeof StreamSessionState>;
+/** §6.4 — NOT storage_exhausted (E5: a create-time refusal with no row). */
+export const StreamFailReason = z.enum([
+  "no_inbound_timeout", "target_rejected", "no_credits",
+  // the Fly machine lifecycle's reasons (plan §"Fly machine lifecycle"; domain/runner.ts RunnerFailReason)
+  "machine_create_failed", "machine_boot_timeout", "machine_exit_nonzero", "machine_oom", "machine_crash",
+  // The two TIMED exits the domain's expiry owns (Task 2B `evaluate`): a create
+  // that never finished (F16) and a row admitted but never provisioned (F18).
+  // They belong HERE and not in StreamEndReason: a failed session carries no
+  // end reason at all (P1-F-b). Ten members — the copy map (Task 13) is total
+  // over this enum, so adding one here owes four dictionary keys there.
+  "provision_timeout", "admission_timeout",
+]);
+/** How a COMPLETED session ended — the deadline is not a failure. */
+export const StreamEndReason = z.enum(["stopped", "max_duration"]);
+export type StreamFailReason = z.infer<typeof StreamFailReason>;
+export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);
+export type StreamTargetKind = z.infer<typeof StreamTargetKind>;
+
+export const CreateStreamSession = z
+  .object({ mode: StreamMode, targetId: z.string().uuid(), themeId: z.string().min(1).max(40).optional() })
+  .strict();
+export type CreateStreamSession = z.infer<typeof CreateStreamSession>;
+export const StreamSessionCreated = z.object({ sessionId: z.string() });
+export type StreamSessionCreated = z.infer<typeof StreamSessionCreated>;
+
+export const StreamHealth = z.object({
+  fps: z.number().nullable(),
+  bitrateKbps: z.number().nullable(),
+  lastBeatAt: z.string().nullable(),
+});
+/** C6: the ingest STATE, worded as what it is — never "healthy". */
+export const StreamIngest = z.object({
+  state: z.enum(["connected", "disconnected", "unknown"]),
+  protocol: z.enum(["srt", "rtmps"]).nullable(),
+});
+
+export const StreamSessionCurrent = z
+  .object({
+    id: z.string(),
+    fixtureId: z.string(),
+    mode: StreamMode,
+    state: StreamSessionState,
+    desiredState: z.enum(["live", "ending"]),
+    failReason: StreamFailReason.nullable(),
+    health: StreamHealth.nullable(),
+    ingest: StreamIngest.nullable(),
+    /** Present only while provisioning/warming and only when the slot row exists — else null, never a default object. */
+    qr: CaptureQrV1.nullable(),
+    balance: z.number().int(),
+    startedAt: z.string().nullable(),
+    endedAt: z.string().nullable(),
+    replayUrl: z.string().nullable(),
+    target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
+    fixtureDecided: z.boolean(),
+    endReason: StreamEndReason.nullable(),
+  })
+  .strict();
+export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
+
+const rtmpUrl = z
+  .string()
+  .max(500)
+  .refine((u) => /^rtmps?:\/\/[^\s/]+\/.+/.test(u), "an rtmp:// or rtmps:// ingest URL");
+
+export const CreateStreamTarget = z
+  .object({
+    kind: StreamTargetKind,
+    label: z.string().min(1).max(80),
+    rtmpUrl,
+    streamKey: z.string().min(1).max(200),
+    /** The destination's PUBLIC watch link (R16 allowlist) — what the replay fill copies. */
+    watchUrl: streamUrlSchema.optional(),
+  })
+  .strict();
+export type CreateStreamTarget = z.infer<typeof CreateStreamTarget>;
+export const StreamTarget = z.object({
+  id: z.string(),
+  kind: StreamTargetKind,
+  label: z.string(),
+  watchUrl: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type StreamTarget = z.infer<typeof StreamTarget>;
+
+/** The Machine's beat (§6.3) — the control channel; the reply carries desired_state. */
+export const RelayHeartbeat = z
+  .object({
+    state: z.enum(["starting", "playing", "stalled", "stopped"]),
+    videoState: z.string().max(40).nullable().optional(),
+    fps: z.number().nonnegative().nullable().optional(),
+    bitrateKbps: z.number().nonnegative().nullable().optional(),
+    egressBytes: z.number().int().nonnegative().optional(),
+    measuredLatencyMs: z.number().int().nonnegative().nullable().optional(),
+    // A29 — the encoder facts the R2 supervisor can read off ffmpeg. All
+    // OPTIONAL: the supervisor sends what it has, and a field it omits is NULL
+    // in the sample rather than a zero that reads as "measured and fine".
+    // Declared HERE, in the one schema the route parses; Task 10's `heartbeat`
+    // is their only consumer and writes them to typed sample columns.
+    droppedFrames: z.number().int().nonnegative().nullable().optional(),
+    encoderSpeed: z.number().nonnegative().nullable().optional(),
+    cpuPct: z.number().nonnegative().nullable().optional(),
+    memMb: z.number().nonnegative().nullable().optional(),
+  })
+  .strict();
+export type RelayHeartbeat = z.infer<typeof RelayHeartbeat>;
+export const RelayHeartbeatReply = z.object({ desiredState: z.enum(["live", "ending"]) });
 
 /** D4a (P5) i18n pattern ref for a not-yet-filled slot — {key, params}, never
  *  a prebuilt string. Named rather than inlined because THREE published

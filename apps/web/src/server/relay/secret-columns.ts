@@ -95,8 +95,25 @@ export async function readInputBySlot(tx: Tx, sessionId: string, slot: number): 
   return { id: row.id, slot: row.slot, ingestInputId: row.ingest_input_id, srt, rtmps };
 }
 
-export async function storeTargetSecret(tx: Tx, targetRowId: string, rtmp: { url: string; streamKey: string }): Promise<void> {
-  await tx`update org_stream_targets set rtmp_enc = ${seal(JSON.stringify(rtmp))} where id = ${targetRowId}`;
+/** Insert a destination with its RTMPS url + key sealed. The row's only
+ *  writer: `rtmp_enc` is NOT NULL, so the insert and the seal are one call. */
+export async function insertStreamTarget(
+  tx: Tx,
+  args: { orgId: string; kind: string; label: string; watchUrl: string | null; rtmp: { url: string; streamKey: string } },
+): Promise<string> {
+  const [row] = await tx<{ id: string }[]>`
+    insert into org_stream_targets (org_id, kind, label, rtmp_enc, watch_url)
+    values (${args.orgId}, ${args.kind}, ${args.label}, ${seal(JSON.stringify(args.rtmp))}, ${args.watchUrl})
+    returning id`;
+  return row!.id;
+}
+
+/** The session's FIRST input (lowest slot) — the row the organiser projection
+ *  reads. The slot VALUE travels with the row; nothing types a `0`. */
+export async function readFirstInput(tx: Tx, sessionId: string): Promise<InputRow | null> {
+  const [row] = await tx<{ slot: number }[]>`
+    select slot from fixture_stream_inputs where session_id = ${sessionId} order by slot asc limit 1`;
+  return row ? readInputBySlot(tx, sessionId, row.slot) : null;
 }
 
 /** Open an org's destination credential. The `orgId` is NOT decoration and it is not the caller's convenience — it is

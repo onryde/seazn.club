@@ -333,6 +333,13 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /fixtures/:id/device-links",
   "DELETE /fixtures/:id/device-links/:linkId",
   "POST /fixtures/:id/device-links/reissue",
+  // Streaming R1: a session consumes money and a target carries a stream key —
+  // both structural bans, the device-links reasoning.
+  "POST /fixtures/:id/stream-sessions",
+  "GET /fixtures/:id/stream-sessions/current",
+  "POST /fixtures/:id/stream-sessions/:sid/stop",
+  "GET /orgs/:id/stream-targets",
+  "POST /orgs/:id/stream-targets",
   "POST /registrations/:id/refund",
   // Destructive + money-adjacent (payments-hardening P0-1): deleting a
   // competition cascades registrations/passes; console has no button —
