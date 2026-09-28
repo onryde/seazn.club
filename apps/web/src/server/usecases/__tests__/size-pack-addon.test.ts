@@ -219,6 +219,30 @@ describe.skipIf(!HAS_DB)("size-pack add-on — webhook → resolver", () => {
     );
     expect(await getLimit(org.id, FEATURE, comp)).toBe(planBase);
   });
+
+  it("a 100%-promotion-code session ('no_payment_required') still lifts the cap", async () => {
+    // `buildSizePackCheckoutParams` sets `allow_promotion_codes: true`
+    // (lib/size-packs.ts), so a coupon covering the whole price is reachable
+    // in production. Such a session completes with
+    // `payment_status: "no_payment_required"` — never `"paid"` — and it is
+    // SETTLED, not unpaid. Gating on `"paid"` alone wrote no org_addons row
+    // at all: the buyer redeemed a valid code and the cap never moved.
+    const org = await createOrgForUser(await makeUser(), "SizePack Promo");
+    const comp = await makeComp(org.id);
+    const walletId = await walletIdFor(org.id);
+    await processStripeEvent(
+      sizePackEvent({
+        targetOrgId: org.id,
+        targetCompId: comp,
+        paymentStatus: "no_payment_required",
+      }),
+    );
+    expect(await getLimit(org.id, FEATURE, comp)).toBe(planBase + 32);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_addons
+       where wallet_id = ${walletId} and status = 'active'`;
+    expect(n).toBe(1);
+  });
 });
 
 describe.skipIf(!HAS_DB)("size_pack_catalog V325 guard", () => {
