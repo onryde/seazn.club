@@ -218,6 +218,18 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
   const refusals = new Map<string, CallRefusal>();
   const db = await deps.openDb();
   try {
+    // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
+    // harness's OWN SQL connection, never the server's. That the server at
+    // SMOKE_BASE writes the same DB is proven only by these two, each of which
+    // fails when it does not:
+    //   1. userIdForEmail must find the owner the server's magic-link sign-in
+    //      just created (a server on another DB leaves no such row here);
+    //   2. every case's switchToCaseOrg (seed-org.ts, the seazn_org cookie)
+    //      passes only if the server's membership lookup sees the org this
+    //      harness has just inserted through the gated SQL.
+    // The sign-in is the one HTTP write before either proof. Switching orgs by
+    // any other route (an API token, say) silently drops proof 2 — replace it
+    // with an equivalent server-reads-our-write check before doing that.
     const session = await deps.signIn(base, owner); // ONE sign-in per run (single worker)
     const userId = await db.userIdForEmail(owner);
     const plan = await db.chooseTopPublicPlan();
@@ -304,6 +316,17 @@ const REAL_DB: DbFactories = {
   planSql: () => createRealPlanSql(),
 };
 
+/** Final review m-6: the commit that produced the evidence, and whether the
+ *  tree matched it — `<sha>-dirty` when a TRACKED file differs from HEAD, so
+ *  evidence never names a commit that did not produce it. Untracked files do
+ *  not count (as with `git describe --dirty`): the worktree's own tooling
+ *  leaves some, and they are not the harness. */
+export function describeCommit(git: (args: string[]) => string): string {
+  const sha = git(["rev-parse", "--short", "HEAD"]).trim();
+  const dirty = git(["status", "--porcelain", "--untracked-files=no"]).trim() !== "";
+  return dirty ? `${sha}-dirty` : sha;
+}
+
 export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
   return {
     env: process.env,
@@ -311,7 +334,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
     // Promise executor, whose throw REJECTS — exactly what the `async` arrow
     // with no `await` did — so a failing git or handle open still reaches the
     // caller as a rejection, never a synchronous throw.
-    harnessCommit: () => new Promise<string>((resolve) => { resolve(execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim()); }),
+    harnessCommit: () => new Promise<string>((resolve) => { resolve(describeCommit((args) => execFileSync("git", args, { encoding: "utf8" }))); }),
     preflight: async (base) => {
       const { probes, dispose } = createRealPreflightProbes();
       try { return await runPreflight(base, probes); } finally { await dispose(); }

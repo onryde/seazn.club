@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
+import { NOTES_CAP, closeHandles, describeCommit, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -599,5 +599,45 @@ describe("run.ts as a CLI — refusal paths only (no DB, no server)", () => {
     const r = cli(["--bogus"], {});
     expect(r.status, r.stderr).toBe(2);
     expect(r.stderr).toMatch(/usage: run\.ts/);
+  });
+});
+
+describe("describeCommit (final review m-6) — evidence never names a commit that did not produce it", () => {
+  it("clean → the short sha; a tracked change → <sha>-dirty; untracked files are not asked about", () => {
+    const calls: string[][] = [];
+    const git = (status: string) => (args: string[]) => { calls.push(args); return args[0] === "rev-parse" ? "abc1234\n" : status; };
+    expect(describeCommit(git(""))).toBe("abc1234");
+    expect(describeCommit(git("\n"))).toBe("abc1234");
+    expect(describeCommit(git(" M scripts/matrix/run.ts\n"))).toBe("abc1234-dirty");
+    expect(calls).toContainEqual(["status", "--porcelain", "--untracked-files=no"]);
+    expect(calls).toContainEqual(["rev-parse", "--short", "HEAD"]);
+  });
+
+  it("against a real repository: committed → clean, a tracked edit → dirty, a staged edit → dirty, an untracked file alone → clean", () => {
+    const root = mkdtempSync(join(tmpdir(), "fm-git-"));
+    try {
+      const g = (args: string[]) => execFileSync("git", ["-c", "user.name=Matrix Test", "-c", "user.email=matrix@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { cwd: root, encoding: "utf8" });
+      g(["init", "-q"]);
+      writeFileSync(join(root, "a.txt"), "one\n");
+      g(["add", "a.txt"]);
+      g(["commit", "-q", "-m", "one"]);
+      const sha = g(["rev-parse", "--short", "HEAD"]).trim();
+      expect(describeCommit(g)).toBe(sha);
+      writeFileSync(join(root, "new.txt"), "untracked\n");
+      expect(describeCommit(g)).toBe(sha);
+      writeFileSync(join(root, "a.txt"), "two\n");
+      expect(describeCommit(g)).toBe(`${sha}-dirty`);
+      g(["add", "a.txt"]);
+      expect(describeCommit(g)).toBe(`${sha}-dirty`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("realDeps' harnessCommit is describeCommit over real git (comments stripped, so a comment cannot stand in)", () => {
+    const code = readFileSync(RUN, "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    const body = /harnessCommit: \(\) => ([^\n]+)/.exec(code)?.[1] ?? "";
+    expect(body).toContain('describeCommit((args) => execFileSync("git", args');
+    expect(code).not.toMatch(/execFileSync\("git", \["rev-parse"/);
   });
 });
