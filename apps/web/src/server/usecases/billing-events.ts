@@ -2275,9 +2275,11 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
 }
 
 /** STAFF_ALERT_EMAIL guard + fire-and-forget, at the CALL SITE (the builder
- *  itself reads no env). One helper for the four call sites above so the guard
- *  cannot be forgotten on one of them; `void … .catch(() => {})` so an alerting
- *  hiccup can never undo a claw-back or block the ACK. */
+ *  itself reads no env). ONE helper for all four call sites — the three in
+ *  `handleStreamPackChargeRefunded` above (partial, short refund, ungranted)
+ *  and the short lost-dispute one in `handlePlatformDispute` below — so the
+ *  guard cannot be forgotten on one of them; `void … .catch(() => {})` so an
+ *  alerting hiccup can never undo a claw-back or block the ACK. */
 function alertStreamClawback(args: {
   chargeId: string;
   orgId: string;
@@ -2429,9 +2431,31 @@ async function handlePlatformDispute(
       if (phase === "closed" && dispute.status === "lost") {
         // The SAME writer, the SAME key (`stream_pack_refund:${intent}`) as the
         // refund arm — a dispute AFTER a refund cannot double-claw, and the key
-        // is what makes that true: the balance cap cannot, because an org that
-        // has since bought another pack has a non-zero balance again.
-        await recordStreamPackRefund({ paymentIntentId: intent, via: "dispute", reference: dispute.id });
+        // is what makes that true where the refund WROTE a row: the balance cap
+        // cannot, because an org that has since bought another pack has a
+        // non-zero balance again. Where the refund clawed nothing there is no
+        // key, and the writer's attribution bound is what holds instead.
+        const res = await recordStreamPackRefund({ paymentIntentId: intent, via: "dispute", reference: dispute.id });
+        // The ruling says a lost dispute claws back ON THE SAME TERMS as a
+        // refund, and the staff alert is part of those terms. Without these two
+        // lines a lost dispute is the only money write on this path with no
+        // figure anywhere a human reads: the ledger row is the whole trail,
+        // `notifyStaffDispute`'s audit detail carries no credit counts, and the
+        // outcome copy says "capped at the balance left" without saying by how
+        // much. Same condition as the refund arm, so the two cannot drift.
+        log.info(
+          { disputeId: dispute.id, intent, orgId: res.orgId, purchased: res.purchased, clawedBack: res.clawedBack, applied: res.applied },
+          "billing: match-credit pack clawed back on a lost dispute",
+        );
+        if (res.matched && res.clawedBack < res.purchased) {
+          alertStreamClawback({
+            chargeId: dispute.id,
+            orgId: res.orgId ?? stream.orgId,
+            purchased: res.purchased,
+            clawedBack: res.clawedBack,
+            reason: STREAM_CLAWBACK_REASON.short,
+          });
+        }
       }
       await notifyStaffDispute("stream_credits", stream.orgId, dispute, phase);
       return true;

@@ -793,7 +793,8 @@ export async function sendStreamCreditGrantFailedAlertEmail(
 
 export interface StreamCreditClawbackAlertEmail {
   to: string;
-  /** The Stripe charge that was refunded — the id a staffer opens in Stripe. */
+  /** The Stripe object a staffer opens: the refunded charge, or the dispute id
+   *  when a lost chargeback is what triggered the claw-back. */
   chargeId: string;
   orgId: string;
   /** What the refunded pack granted. Absent when no purchase row matched. */
@@ -804,9 +805,12 @@ export interface StreamCreditClawbackAlertEmail {
 }
 
 /** Internal staff alert (streaming R1 lane-B tail, OWNER RULING 2026-09-28): a
- *  match-credit pack charge was refunded or partially refunded and the webhook
- *  could not reverse it cleanly. Three shapes, one builder:
- *   * a FULL refund that clawed back FEWER credits than the pack granted — the
+ *  match-credit pack charge was refunded, partially refunded or lost at dispute,
+ *  and the webhook could not reverse it cleanly. Three reason shapes across four
+ *  call sites (the short one serves both the refund and the lost-dispute arm),
+ *  one builder:
+ *   * a FULL refund, or a LOST dispute, that clawed back FEWER credits than the
+ *     pack granted — the
  *     customer bought, streamed, then asked for the money back. Cloudflare has
  *     already billed us for the minutes that went out, so the difference is a
  *     real loss. The webhook records and alerts; a human decides whether to chase.

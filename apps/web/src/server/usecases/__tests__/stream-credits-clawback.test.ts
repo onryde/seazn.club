@@ -153,6 +153,24 @@ async function spend(orgId: string, n: number): Promise<void> {
   }
 }
 
+/** The `created_at` Postgres stamped on a purchase row — the attribution
+ *  boundary the claw-back reads. Needed to force the EXACT-TIE case, which is
+ *  otherwise unreachable (two transactions never take the same `now()`). */
+async function purchasedAt(intent: string): Promise<Date> {
+  const [row] = await sql<{ created_at: Date }[]>`
+    select created_at from org_stream_credits
+     where reason = 'purchase' and stripe_payment_intent_id = ${intent}`;
+  return new Date(row!.created_at);
+}
+
+/** One `consume` row stamped at an EXPLICIT instant, for the boundary cases. */
+async function spendAt(orgId: string, at: Date): Promise<void> {
+  const bal = await creditBalance(sql, orgId);
+  await sql`
+    insert into org_stream_credits (org_id, delta, reason, balance_after, created_at)
+    values (${orgId}, -1, 'consume', ${bal - 1}, ${at})`;
+}
+
 interface LedgerRow {
   delta: number;
   reason: string;
@@ -254,6 +272,155 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     expect(clawbackAlert.mock.calls[0]![0].purchased).toBe(5);
   });
 
+  // ---- ATTRIBUTION: the claw-back is bounded by what THAT purchase still has
+  // outstanding, not by the org's whole balance (review C-1 / G-1, orchestrator
+  // ruling 2026-09-28). `min(purchased, balance)` alone lets a refund of pack A
+  // eat pack B, on the FIRST delivery, with no alert — `clawedBack === purchased`
+  // reads as a clean reversal.
+
+  it("a refund of pack A never touches pack B: a fully-spent pack has nothing outstanding", async () => {
+    const { auth } = await seedOrg();
+    const { intent: a } = await buyPack(auth.orgId, 5);
+    await spend(auth.orgId, 5); // pack A is gone — those streams went out
+    await buyPack(auth.orgId, 5); // pack B, paid for separately, untouched
+    expect(await creditBalance(sql, auth.orgId)).toBe(5);
+
+    await processStripeEvent(refundEvent({ paymentIntent: a }));
+
+    // Bounded by A's outstanding (0), NOT by the balance (5).
+    expect(await creditBalance(sql, auth.orgId)).toBe(5);
+    expect(await revokeRows(auth.orgId)).toHaveLength(0);
+    // …and the short claw-back IS reported, which `min(purchased, balance)`
+    // would have suppressed by clawing the full 5 out of the wrong pack.
+    expect(clawbackAlert).toHaveBeenCalledTimes(1);
+    expect(clawbackAlert.mock.calls[0]![0]).toMatchObject({ purchased: 5, clawedBack: 0 });
+  });
+
+  it("a refund of pack A claws only A's unspent remainder while B is held", async () => {
+    const { auth } = await seedOrg();
+    const { intent: a } = await buyPack(auth.orgId, 5);
+    await spend(auth.orgId, 3); // 3 of A's 5 streamed
+    await buyPack(auth.orgId, 5); // B arrives after
+    expect(await creditBalance(sql, auth.orgId)).toBe(7);
+
+    await processStripeEvent(refundEvent({ paymentIntent: a }));
+
+    // 2 — A's remainder — never 5, and never the 7 the balance would allow.
+    expect(await creditBalance(sql, auth.orgId)).toBe(5);
+    const rows = await revokeRows(auth.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.delta).toBe(-2);
+    expect(rows[0]!.balance_after).toBe(5);
+    expect(clawbackAlert.mock.calls[0]![0]).toMatchObject({ purchased: 5, clawedBack: 2 });
+  });
+
+  it("credits spent BEFORE a purchase are not charged against it", async () => {
+    // The negative pair of the two above: attribution must not run backwards.
+    // Without the `created_at >= <this purchase>` bound, the earlier pack's
+    // five consumes would be counted against A and claw back nothing.
+    const { auth } = await seedOrg();
+    await buyPack(auth.orgId, 5); // an EARLIER pack…
+    await spend(auth.orgId, 5); // …entirely spent before A is bought
+    const { intent: a } = await buyPack(auth.orgId, 5);
+    expect(await creditBalance(sql, auth.orgId)).toBe(5);
+
+    await processStripeEvent(refundEvent({ paymentIntent: a }));
+
+    expect(await creditBalance(sql, auth.orgId)).toBe(0);
+    const rows = await revokeRows(auth.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.delta).toBe(-5);
+    expect(clawbackAlert).not.toHaveBeenCalled(); // clean, full reversal
+  });
+
+  it("a consume stamped in the SAME instant as the purchase counts AGAINST it", async () => {
+    // `org_stream_credits.id` is `gen_random_uuid()` (V410:251) — random, not
+    // time-sortable — and there is no sequence column, so a `created_at` tie
+    // CANNOT be broken. The bound is `>=`, so a tie counts the consume as
+    // spent from this purchase: more counted spent ⇒ LESS clawed back, which
+    // is the conservative way to be wrong on a money path. Pinned here because
+    // flipping `>=` to `>` is otherwise invisible.
+    const { auth } = await seedOrg();
+    const { intent: a } = await buyPack(auth.orgId, 5);
+    await spendAt(auth.orgId, await purchasedAt(a)); // the exact same instant
+    await buyPack(auth.orgId, 5); // a second pack, so the balance cannot bind
+    expect(await creditBalance(sql, auth.orgId)).toBe(9);
+
+    await processStripeEvent(refundEvent({ paymentIntent: a }));
+
+    // 4, not 5: the tied consume is counted against A. With `>` it would be 5.
+    const rows = await revokeRows(auth.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.delta).toBe(-4);
+    expect(await creditBalance(sql, auth.orgId)).toBe(5);
+  });
+
+  it("the balance is still a floor: credits expired after purchase cannot be over-clawed", async () => {
+    // `outstanding` alone is not enough — a non-consume reduction (an expiry,
+    // or a staff revoke) lowers the balance without touching attribution. An
+    // uncapped revoke here would write balance_after -3 and V410's CHECK would
+    // throw inside the webhook.
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, balance_after)
+      values (${auth.orgId}, -3, 'expire', 2)`;
+    expect(await creditBalance(sql, auth.orgId)).toBe(2);
+
+    await processStripeEvent(refundEvent({ paymentIntent: intent }));
+
+    expect(await creditBalance(sql, auth.orgId)).toBe(0);
+    const rows = await revokeRows(auth.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.delta).toBe(-2);
+    expect(rows[0]!.balance_after).toBe(0);
+    expect(clawbackAlert.mock.calls[0]![0]).toMatchObject({ purchased: 5, clawedBack: 2 });
+  });
+
+  it("a ledger that sums below zero is REFUSED, not silently clamped", async () => {
+    // "Cannot happen" is a guard, not a comment (TEST-STRATEGY.md rule 4).
+    // V410's `balance_after >= 0` CHECK constrains each row's SNAPSHOT, not
+    // sum(delta), so a corrupt row can still drive the true balance negative —
+    // and a silent clamp would quietly claw back nothing instead of paging
+    // anybody. The webhook must fail loudly so Stripe retries and a human looks.
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, balance_after)
+      values (${auth.orgId}, -10, 'consume', 0)`;
+    expect(await creditBalance(sql, auth.orgId)).toBe(-5);
+
+    await expect(processStripeEvent(refundEvent({ paymentIntent: intent }))).rejects.toThrow(
+      /match-credit balance/i,
+    );
+    expect(await revokeRows(auth.orgId)).toHaveLength(0);
+  });
+
+  it("a replayed SHORT claw-back reports the EARLIER amount, writes no second row, and alerts again", async () => {
+    // The replay branch returns `-prior.delta`, not 0, so the caller's
+    // `clawedBack < purchased` verdict is the same on every delivery. Every
+    // other replay case here uses an UNSPENT pack, where that number equals
+    // `purchased` and any value >= purchased would pass — this is the only
+    // case that can witness it.
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    await spend(auth.orgId, 3);
+    const ev = refundEvent({ paymentIntent: intent });
+
+    await processStripeEvent(ev);
+    expect(clawbackAlert).toHaveBeenCalledTimes(1);
+    expect(clawbackAlert.mock.calls[0]![0]).toMatchObject({ purchased: 5, clawedBack: 2 });
+
+    await processStripeEvent(ev); // the same charge again
+
+    expect(await revokeRows(auth.orgId)).toHaveLength(1);
+    expect(await creditBalance(sql, auth.orgId)).toBe(0);
+    // The replay reports 2 — the amount the FIRST call clawed — so the abuse
+    // alert fires again rather than falling silent.
+    expect(clawbackAlert).toHaveBeenCalledTimes(2);
+    expect(clawbackAlert.mock.calls[1]![0]).toMatchObject({ purchased: 5, clawedBack: 2 });
+  });
+
   it("a refund of a DIFFERENT charge leaves another org's pack alone, and no PaymentIntent metadata makes it ours", async () => {
     const { auth } = await seedOrg();
     await buyPack(auth.orgId, 5);
@@ -353,20 +520,72 @@ describe.skipIf(!HAS_DB)("charge.dispute.* → match-credit claw-back", () => {
     vi.unstubAllEnvs();
   });
 
-  it("a LOST closed dispute claws back on the refund's terms and notifies staff as a match-credit dispute", async () => {
+  it("a LOST closed dispute claws back on the refund's terms, names the DISPUTE in the note, and alerts on the short claw-back", async () => {
     const { auth } = await seedOrg();
     const { intent } = await buyPack(auth.orgId, 5);
     await spend(auth.orgId, 1);
+    const disputeId = `dp_stream_${uniq()}`;
 
-    await processStripeEvent(disputeEvent({ paymentIntent: intent, phase: "closed", status: "lost" }));
+    await processStripeEvent(
+      disputeEvent({ paymentIntent: intent, phase: "closed", status: "lost", disputeId }),
+    );
 
     expect(await creditBalance(sql, auth.orgId)).toBe(0);
     const rows = await revokeRows(auth.orgId);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.delta).toBe(-4); // capped at the balance, exactly as a refund is
+    expect(rows[0]!.delta).toBe(-4); // bounded by what the purchase still held
     expect(rows[0]!.idempotency_key).toBe(`stream_pack_refund:${intent}`);
+    // The note is the human audit trail for a money row: it must say WHICH
+    // Stripe object caused it and that it was a dispute, not a refund.
+    expect(rows[0]!.note).toMatch(/lost dispute/i);
+    expect(rows[0]!.note).toContain(disputeId);
     expect(disputeAlert).toHaveBeenCalledTimes(1);
     expect(disputeAlert.mock.calls[0]![0].kind).toBe("stream_credits");
+    // "A lost dispute claws back ON THE SAME TERMS" — the alert is part of
+    // those terms. 4 of 5 means a stream went out and was then charged back.
+    expect(clawbackAlert).toHaveBeenCalledTimes(1);
+    expect(clawbackAlert.mock.calls[0]![0]).toMatchObject({ purchased: 5, clawedBack: 4 });
+  });
+
+  it("a LOST dispute that reverses the pack cleanly does NOT raise a claw-back alert", async () => {
+    // The positive pair for the assertion above: the dispute arm's alert is
+    // conditional on the SHORT claw-back, not fired on every lost dispute.
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+
+    await processStripeEvent(disputeEvent({ paymentIntent: intent, phase: "closed", status: "lost" }));
+
+    expect(await revokeRows(auth.orgId)).toHaveLength(1);
+    expect(await creditBalance(sql, auth.orgId)).toBe(0);
+    expect(disputeAlert).toHaveBeenCalledTimes(1);
+    expect(clawbackAlert).not.toHaveBeenCalled();
+  });
+
+  it("a lost dispute after a refund that clawed NOTHING still cannot revoke a later pack", async () => {
+    // Review C-1. The refund of a fully-spent pack writes no row (V410's
+    // `delta <> 0`), so it mints no idempotency key — the key guard is absent
+    // on exactly this branch, and the dispute arrives as a DIFFERENT Stripe
+    // event id, so the billing_events claim does not stop it either. What
+    // stops it is attribution: the purchase has nothing outstanding and never
+    // will, because consumption only ever grows.
+    const { auth } = await seedOrg();
+    const { intent: a } = await buyPack(auth.orgId, 5);
+    await spend(auth.orgId, 5);
+    await processStripeEvent(refundEvent({ paymentIntent: a }));
+    expect(await revokeRows(auth.orgId)).toHaveLength(0); // nothing clawed, no key minted
+    const [{ n }] = await sql<{ n: string }[]>`
+      select count(*)::text as n from org_stream_credits
+       where org_id = ${auth.orgId} and idempotency_key is not null`;
+    expect(n).toBe("0");
+
+    await buyPack(auth.orgId, 5); // weeks later, within the dispute window
+    expect(await creditBalance(sql, auth.orgId)).toBe(5);
+
+    await processStripeEvent(disputeEvent({ paymentIntent: a, phase: "closed", status: "lost" }));
+
+    expect(await creditBalance(sql, auth.orgId)).toBe(5); // the NEW pack is untouched
+    expect(await revokeRows(auth.orgId)).toHaveLength(0);
+    expect(disputeAlert).toHaveBeenCalledTimes(1); // still reported to a human
   });
 
   it("a CREATED dispute on a pack charge is MATCHED — no throw — and claws back nothing yet", async () => {

@@ -1,7 +1,9 @@
 // Body copy for the staff alert sent when a match-credit pack charge is
 // refunded and the webhook could not reverse it cleanly
-// (`sendStreamCreditClawbackAlertEmail`, wired into the four claw-back exits of
-// billing-events.ts's `handleStreamPackChargeRefunded`).
+// (`sendStreamCreditClawbackAlertEmail`, wired into four claw-back exits in
+// billing-events.ts: partial, short refund and ungranted in
+// `handleStreamPackChargeRefunded`, plus the short lost-dispute one in
+// `handlePlatformDispute`).
 //
 // The webhook suite proves it FIRES; nothing there proves it is READABLE,
 // because it mocks this function. Asserted through the real send path with
