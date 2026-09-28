@@ -38,6 +38,7 @@ import { readFirstInput, readTargetSecret, storeInputCredentials } from "@/serve
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
+import { captureError } from "@/lib/sentry";
 import { NoCreditsError, consumeForSession, creditBalance, lockOrg, reuseWindowOpen } from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
 import { setFixtureStreamUrl } from "./fixtures";
@@ -345,6 +346,38 @@ async function recordEffect<T>(s: Session, type: string, source: "ingest" | "run
   }
 }
 
+/** A forced Machine destroy (both sites: the runner table's `force_destroy` effect, and a stale create's Machine). The
+ *  PROVIDER call failing is recorded (recordEffect's `failed` row), REPORTED to Sentry and logged — and returned as
+ *  `false`, never thrown at the reader (Task 11 review m5). The report is the alarm: a Machine whose destroy failed may
+ *  still be running, billing and pushing to a public destination, and since m5 no route wrapper sees the error to report
+ *  it (re-review N1). It names the session and the Machine — never the destination, its key or any URL.
+ *
+ *  Narrowed to the provider call (re-review N3): if the LEDGER write fails — recordEffect's own `write`, before or after
+ *  the DELETE — nothing recorded the outcome, and that database fault is thrown on untouched (the route wrapper reports
+ *  it). Told apart by identity: only the exact error the provider call threw is caught here. */
+async function forceDestroy(
+  s: Session, machineId: string, site: "force_destroy" | "stale_create", payload: Record<string, unknown>, deps: SessionDeps,
+): Promise<boolean> {
+  const provider: { failure?: unknown } = {};
+  try {
+    await recordEffect(s, "force_destroy", "runner", async () => {
+      try {
+        return await deps.drivers.runner.destroy(machineId);
+      } catch (err) {
+        provider.failure = err;
+        throw err;
+      }
+    }, payload);
+    return true;
+  } catch (err) {
+    if (!("failure" in provider) || err !== provider.failure) throw err;   // the ledger failed, not the provider
+    const extra = { sessionId: s.id, machineId, machineName: s.runner.name, attempt: s.runner.attempt, site };
+    captureError(err, { orgId: s.orgId, route: "relay.force_destroy", extra });
+    log.error({ ...extra, err: String(err) }, "stream session: forced Machine destroy failed — recorded and reported; the table retries it");
+    return false;
+  }
+}
+
 /** The lazy expiry path (recommendation B). */
 export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise<Session | null> {
   // `none` is the T5-a null command — write nothing, run nothing (post-2C-post plan sync). The committed domain REFUSES
@@ -476,8 +509,12 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
       }, deps);
       if (foreign) {
         // Nobody's Machine: the row never learned it, so no cell will ever destroy it — do it here, recorded like any effect.
+        // A failed DELETE is recorded and ALARMED (forceDestroy) rather than thrown at the organiser's create or poll. On a
+        // LIVE session it leaves a second Machine on the destination's key with no retry owner — Task 12's sweep rule
+        // (destroy any listed Machine whose name's attempt is not the session's current one), routed; the alarm is what
+        // tells a person meanwhile.
         log.warn({ sid: s.id, attempt: s.runner.attempt, machineId: handle.runnerId, transition: "stale_create" }, "stream session: a create returned after its attempt moved on — destroyed");
-        await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(handle.runnerId), { machineId: handle.runnerId, staleAttempt: s.runner.attempt });
+        await forceDestroy(s, handle.runnerId, "stale_create", { machineId: handle.runnerId, staleAttempt: s.runner.attempt }, deps);
       }
       return next ?? s;
     }
@@ -497,20 +534,13 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
         const mine = (await deps.drivers.runner.list()).find((m) => m.sessionId === s.id && m.name === s.runner.name);   // T5-a: THIS attempt's, by name
         id = mine?.runnerId ?? null;
       }
-      if (id) {
-        try {
-          await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(id), { machineId: id });   // 404 = success (C7)
-        } catch (err) {
-          // Task 11 review m5: a DELETE that fails is already a `failed` effect row on this session's ledger (recordEffect),
-          // and the table owns the retry — a LOST runner's teardown is re-issued on the next stale beat; a TERMINAL
-          // session's orphan is destroyed by the next admission on its fixture or destination (tearDownPriorMachines), and
-          // by Task 12's daily orphan sweep once it lands. Throwing it on to the READER re-issued nothing: it turned the organiser's poll (or the
-          // Machine's own facts read) into a 500 carrying the provider's text at the moment a stream ended, and skipped
-          // every effect after this one in the same decision (a completion's fill_replay). No destroy_ok: nothing was confirmed.
-          log.error({ sid: s.id, attempt: s.runner.attempt, machineId: id, err: String(err) }, "stream session: forced Machine destroy failed — recorded; the table retries it");
-          return s;
-        }
-      }
+      // Task 11 review m5: a DELETE that fails is not the READER's error — the table owns the retry (a LOST runner's
+      // teardown is re-issued on the next stale beat; a TERMINAL session's orphan is destroyed by the next admission on its
+      // fixture or destination, tearDownPriorMachines, and by Task 12's daily orphan sweep once it lands). Throwing it on
+      // re-issued nothing: it 500-ed the organiser's poll (or the Machine's facts read) with the provider's text at the
+      // moment a stream ended, and skipped every effect after this one in the same decision (a completion's fill_replay).
+      // No destroy_ok when it failed: nothing was confirmed.
+      if (id && !(await forceDestroy(s, id, "force_destroy", { machineId: id }, deps))) return s;   // 404 = success (C7)
       // F-B (orchestrator ruling, post-2C-post plan sync): this effect runs after commit, and while the DELETE was out another
       // request may have confirmed this attempt's Machine gone (an observed `destroyed`) and run the ONE retry — the row now names
       // attempt + 1 in `creating` or `booting`, where `destroy_ok` is ✗ (InvalidRunnerTransition: a 500 out of the organiser's

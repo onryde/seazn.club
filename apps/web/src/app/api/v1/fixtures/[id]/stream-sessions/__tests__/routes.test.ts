@@ -33,6 +33,11 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
+// The house's server-side Sentry helper, spied: a forced destroy that fails is not the reader's error any more (m5),
+// so it must still ALARM (Task 11 re-review N1) — the upgrade page's test spies the same helper the same way.
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
+
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { baseUrl } from "@/lib/oauth";
@@ -83,13 +88,29 @@ async function organiser(opts: { credits?: number; overlay?: boolean; relay?: bo
   await override(auth.orgId, "streaming.relay", opts.relay ?? true);
   const credits = opts.credits ?? 1;
   if (credits > 0) await grantCredits({ orgId: auth.orgId, delta: credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
-  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", rtmpUrl: YT, streamKey: `k-${randomUUID().slice(0, 8)}` });
+  const streamKey = `k-${randomUUID().slice(0, 8)}`;
+  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", rtmpUrl: YT, streamKey });
   // The fake ingest never connects inside a test, so a passthrough session stays `warming` (its QR on show).
   const ingest = new FakeIngest({ connectAfterMs: 10 * 60_000 });
   ingest.storage = opts.storage ?? ROOMY;
   const runner = new FakeRunner();
   setRelayDriversForTest({ ingest, runner });
-  return { auth, fixtureId: d.fixtureId, fixtureIds: d.fixtureIds, target, ingest, runner };
+  return { auth, fixtureId: d.fixtureId, fixtureIds: d.fixtureIds, target, streamKey, ingest, runner };
+}
+
+/** A provider DELETE that fails — ONE instance per test, so a capture can be asserted to carry THIS error. */
+const destroyFailure = () => Object.assign(new Error("fake destroy failed"), { status: 503 });
+
+/** N1's contract for one capture: the error itself, the org, and the session / Machine it concerns — and nothing that
+ *  could carry the destination: neither the stream key nor any URL reaches Sentry. */
+function expectCapture(call: unknown[] | undefined, want: { err: Error; orgId: string; extra: Record<string, unknown>; streamKey: string }) {
+  expect(call, "captureError was called").toBeDefined();
+  const [err, ctx] = call as [unknown, { orgId?: string; extra?: Record<string, unknown> }];
+  expect(err).toBe(want.err);
+  expect(ctx).toMatchObject({ orgId: want.orgId, extra: want.extra });
+  const serialised = JSON.stringify(ctx);
+  expect(serialised).not.toContain(want.streamKey);
+  expect(serialised).not.toMatch(/rtmps?:|srt:|https?:/);
 }
 
 function request(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Request {
@@ -356,10 +377,13 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     // Seeded as Task 10's I1 test seeds it: a stop past grace + slack, so the next look completes the row.
     await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = now(), runner_state = 'stopping',
                   runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${old}`;
+    const [{ runner_name: machineName }] = await sql<{ runner_name: string }[]>`select runner_name from fixture_stream_sessions where id = ${old}`;
+    const failure = destroyFailure();
     const failing = Object.assign(Object.create(o.runner) as FakeRunner, {
-      async destroy() { throw Object.assign(new Error("fake destroy failed"), { status: 503 }); },
+      async destroy() { throw failure; },
     });
     setRelayDriversForTest({ ingest: o.ingest, runner: failing });
+    sentry.captureError.mockClear();
     // Task 11 review m5: the organiser's poll completes A and its forced destroy fails. That failure is recorded on A's
     // ledger and retried by admission (below) and the orphan sweep — it is not the organiser's error: the poll answers
     // the session as it now stands, completed as STOPPED.
@@ -369,6 +393,13 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     const [{ result }] = await sql<{ result: string }[]>`
       select result from fixture_stream_events where session_id = ${old} and kind = 'effect' and type = 'force_destroy' order by seq desc limit 1`;
     expect(result, "the failed destroy is on A's ledger").toBe("failed");
+    // Re-review N1: not the reader's error — but still an ALARM, exactly once, naming the session and the Machine that may
+    // still be running (and billing, and pushing to a public destination).
+    expect(sentry.captureError).toHaveBeenCalledTimes(1);
+    expectCapture(sentry.captureError.mock.calls[0], {
+      err: failure, orgId: o.auth.orgId, streamKey: o.streamKey,
+      extra: { sessionId: old, machineId: machine, machineName, attempt: 1, site: "force_destroy" },
+    });
     expect((await o.runner.list()).map((m) => m.runnerId)).toContain(machine);
     const refused = await create(b, { mode: "passthrough", targetId: o.target.id });
     expect(refused.status).toBe(409);
@@ -377,6 +408,71 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     // The positive pair: once the provider confirms the orphan's destroy, the same start is admitted.
     setRelayDriversForTest({ ingest: o.ingest, runner: o.runner });
     expect((await create(b, { mode: "passthrough", targetId: o.target.id })).status).toBe(201);
+  });
+
+  // Re-review N3: the completion a failed forced destroy belongs to carries a SECOND effect — `session.ts` orders a
+  // completion's effects [...runner, ...replayFill] — and a destroy that threw used to skip it. The replay link is filled
+  // from the destination THIS test saved (ruling F: YouTube, a watch URL, the fixture's stream_url still empty).
+  it("N3: a completion whose forced destroy FAILS still fills the replay link — the fill_replay effect after it runs", async () => {
+    const o = await organiser();
+    const watchUrl = `https://www.youtube.com/watch?v=${randomUUID().slice(0, 11)}`;
+    const replayTarget = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Replay", rtmpUrl: YT, streamKey: `k-${randomUUID().slice(0, 8)}`, watchUrl });
+    const sid = (await create(o.fixtureId, { mode: "composed", targetId: replayTarget.id })).body.data!.sessionId;
+    await heartbeat(sid, o.runner.created[0]!.jobToken, { state: "playing" }, defaultDeps("http://app.test"));   // live: startedAt set
+    const streamUrl = async () => (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${o.fixtureId}`)[0]!.stream_url;
+    expect(await streamUrl(), "nothing filled before the session ends").toBeNull();
+    await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = now(), runner_state = 'stopping',
+                  runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${sid}`;
+    const failure = destroyFailure();
+    setRelayDriversForTest({ ingest: o.ingest, runner: Object.assign(Object.create(o.runner) as FakeRunner, { async destroy() { throw failure; } }) });
+    sentry.captureError.mockClear();
+    const polled = await current(o.fixtureId);
+    expect(polled.status).toBe(200);
+    expect(polled.body.data).toMatchObject({ id: sid, state: "completed", endReason: "stopped" });
+    const effects = await sql<{ type: string; result: string }[]>`
+      select type, result from fixture_stream_events where session_id = ${sid} and kind = 'effect' and type in ('force_destroy', 'fill_replay') order by seq`;
+    expect(effects).toEqual([{ type: "force_destroy", result: "failed" }, { type: "fill_replay", result: "ok" }]);
+    expect(await streamUrl(), "the replay link is the destination's saved watch URL").toBe(watchUrl);
+    expect(sentry.captureError).toHaveBeenCalledTimes(1);
+  });
+
+  // Re-review (3b): the SECOND forced-destroy site. A create that returns after its attempt moved on is nobody's Machine —
+  // the row never learned it, so it is destroyed where it lands. If that DELETE fails the reader still gets its answer
+  // (the organiser's create is 201), but the failure is recorded AND alarmed, never swallowed: a live session may now
+  // have two Machines on one key. (Its missing retry owner is Task 12's sweep.) The attempt is moved on by hand inside
+  // the create call — the window production hits when a create is slow.
+  it("stale_create: a returned-after-its-attempt Machine whose destroy FAILS is recorded and alarmed once — and the organiser's create is still 201", async () => {
+    const o = await organiser();
+    const failure = destroyFailure();
+    const made: { runnerId?: string; name?: string } = {};
+    const racing = Object.assign(Object.create(o.runner) as FakeRunner, {
+      async create(spec: Parameters<FakeRunner["create"]>[0]) {
+        const handle = await o.runner.create(spec);
+        const [row] = await sql<{ runner_name: string }[]>`
+          update fixture_stream_sessions set runner_name = runner_name || '-moved' where id = ${spec.sessionId} returning runner_name`;
+        made.runnerId = handle.runnerId;
+        made.name = row!.runner_name.replace(/-moved$/, "");
+        return handle;
+      },
+      async destroy() { throw failure; },
+    });
+    setRelayDriversForTest({ ingest: o.ingest, runner: racing });
+    sentry.captureError.mockClear();
+    const res = await create(o.fixtureId, { mode: "composed", targetId: o.target.id });
+    expect(res.status, "the organiser's create is not failed by a stale Machine's teardown").toBe(201);
+    const sid = res.body.data!.sessionId;
+    expect(made.runnerId).toBeDefined();
+    // The stale attempt is the row's own `attempt` column (recordEffect). The call site's `staleAttempt` payload key is not
+    // on sanitise.ts's allowlist and never reaches the ledger — redundant with that column; routed in the Task 11 report.
+    const effects = await sql<{ result: string; attempt: number | null; payload: Record<string, unknown> }[]>`
+      select result, attempt, payload from fixture_stream_events where session_id = ${sid} and kind = 'effect' and type = 'force_destroy' order by seq`;
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ result: "failed", attempt: 1, payload: { machineId: made.runnerId } });
+    expect(sentry.captureError).toHaveBeenCalledTimes(1);
+    expectCapture(sentry.captureError.mock.calls[0], {
+      err: failure, orgId: o.auth.orgId, streamKey: o.streamKey,
+      extra: { sessionId: sid, machineId: made.runnerId, machineName: made.name, attempt: 1, site: "stale_create" },
+    });
   });
 
   // Task 11 review m1: the destination index's race loser. createSession reads the storage pool AFTER its destination

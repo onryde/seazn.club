@@ -18,24 +18,28 @@ import { randomUUID } from "node:crypto";
 // cost a beat its lifecycle half (Task 11 review I1b). Every other test runs the real writer.
 vi.mock("@/server/relay/telemetry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/relay/telemetry")>();
-  return { ...actual, recordSample: vi.fn(actual.recordSample) };
+  return { ...actual, recordSample: vi.fn(actual.recordSample), recordEvent: vi.fn(actual.recordEvent) };
 });
+
+// The house Sentry helper, spied: the forced-destroy capture is for PROVIDER failures only (re-review N3).
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, STALE_HEARTBEAT_SECONDS } from "@/server/relay/config";
+import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS } from "@/server/relay/config";
 import { failReasonFromExit, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
-import { recordSample } from "@/server/relay/telemetry";
+import { recordEvent, recordSample } from "@/server/relay/telemetry";
 import { mintRelayToken, verifyRelayToken } from "@/server/relay/tokens";
 import { GET as facts } from "@/app/api/internal/relay/sessions/[sid]/route";
 import { POST as beat } from "@/app/api/internal/relay/sessions/[sid]/heartbeat/route";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
-import { createSession, defaultDeps, stopSession } from "../stream-sessions";
+import { createSession, defaultDeps, sessionFactsForJob, stopSession } from "../stream-sessions";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -314,6 +318,50 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     const gone = await getFacts(p.sessionId, { token: p.jobToken });
     expect(gone.status).toBe(410);
     expectNoStore(gone, "410");
+  });
+
+  // Re-review N3: the forced-destroy catch is narrowed to the PROVIDER call. Only the Fly DELETE failing is "recorded,
+  // alarmed, not the reader's error"; if the LEDGER write that records it fails too, nothing recorded it — that is a
+  // database fault, and it is thrown on (the wrapper's own Sentry call reports it), never swallowed. Driven through the
+  // Machine's own read (the facts usecase) at the grace-expired completion, where the forced destroy runs.
+  it("N3: a forced destroy whose provider call fails AND whose ledger write fails is thrown — the ledger error, not the provider's — and is not treated as a provider failure", async () => {
+    const providerFailure = Object.assign(new Error("fake destroy failed"), { status: 503 });
+    /** A live composed session one look away from its grace-expired completion, on a runner whose DELETE fails. */
+    const atTheBrink = async () => {
+      const x = await session();
+      expect((await postBeat(x.sessionId, { state: "playing" }, { token: x.jobToken })).status).toBe(200);
+      await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = now(), runner_state = 'stopping',
+                    runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${x.sessionId}`;
+      setRelayDriversForTest({ ingest: x.ingest, runner: Object.assign(Object.create(x.runner) as FakeRunner, { async destroy() { throw providerFailure; } }) });
+      return x;
+    };
+    const s = await atTheBrink();
+    const ledgerFailure = Object.assign(new Error("could not write the effect row"), { code: "57P01" });
+    const real = vi.mocked(recordEvent).getMockImplementation()!;
+    let refused = 0;
+    vi.mocked(recordEvent).mockImplementation(async (tx, e) => {
+      if (e.type === "force_destroy" && e.result === "failed") { refused += 1; throw ledgerFailure; }
+      return real(tx, e);
+    });
+    sentry.captureError.mockClear();
+    try {
+      const err = await sessionFactsForJob(s.sessionId, s.jobToken, defaultDeps("http://app.test")).catch((e: unknown) => e);
+      expect(err, "the LEDGER failure reaches the caller").toBe(ledgerFailure);
+    } finally {
+      vi.mocked(recordEvent).mockImplementation(real);
+    }
+    expect(refused, "the failed-destroy ledger write was attempted").toBe(1);
+    expect(sentry.captureError, "not reported as a provider failure — the wrapper reports what is thrown").not.toHaveBeenCalled();
+    // The positive pair, a second session at the same brink with the ledger working: the same failed DELETE is recorded,
+    // alarmed once and answered — the completed session's credential is refused 410, never a 500.
+    const t = await atTheBrink();
+    const answered = await getFacts(t.sessionId, { token: t.jobToken });
+    expect(answered.status).toBe(410);
+    expect(sentry.captureError).toHaveBeenCalledTimes(1);
+    expect(sentry.captureError.mock.calls[0]![0]).toBe(providerFailure);
+    const [{ result }] = await sql<{ result: string }[]>`
+      select result from fixture_stream_events where session_id = ${t.sessionId} and kind = 'effect' and type = 'force_destroy'`;
+    expect(result).toBe("failed");
   });
 
   it("second call: a replayed beat is answered the same and recorded twice (every beat is a sample); a replayed read serves the same facts", async () => {
