@@ -214,21 +214,82 @@ describe("I3 table-points-equal-declared", () => {
     const noRow = stage({ field: ["a", "b"], fixtures: [decided], standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }] }] });
     expect(evaluateInvariant(I3, run([noRow])).evidence.join(" ")).toMatch(/b has results but no row/);
   });
-  it("skips an entrant whose result changed after the harness declared it (a server cascade), counting the skip", () => {
-    const changed = fx({ home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b" }, declared: { home: 3, away: 0, forOutcome: win("a") } });
-    const s = stage({ field: ["a", "b", "c"], fixtures: [changed, fx({ home: "c", away: "a", outcome: win("c"), declared: { home: 3, away: 0, forOutcome: win("c") } })],
-      standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 2, points: 0 }, { entrantId: "b", rank: 3, points: 3 }, { entrantId: "c", rank: 1, points: 3 }] }] });
-    const r = evaluateInvariant(I3, run([s]));
-    expect(r).toMatchObject({ verdict: "pass", checked: 1 });
-    expect(r.evidence.join(" ")).toMatch(/skipped 2/);
+  // Final review I-1 corrects a frozen bug here. This test used to pin a
+  // CHANGED result with no cascade recorded as "skipped (a server cascade)"
+  // and read ✅. A result the harness posted and the product then stores
+  // differently is a defect unless the recorded cascade explains it.
+  describe("I-1: a result the harness did not post, or one stored differently, FAILS unless a bye or the recorded cascade explains it", () => {
+    const table = (a: number, b: number, c: number) => [{ poolId: null, rows: [{ entrantId: "a", rank: 2, points: a }, { entrantId: "b", rank: 3, points: b }, { entrantId: "c", rank: 1, points: c }] }];
+    const ca = () => fx({ home: "c", away: "a", outcome: win("c"), declared: { home: 3, away: 0, forOutcome: win("c") } });
+    it("the review's shape: a 4-entrant league where one fixture was stored with the OTHER winner and the table follows it", () => {
+      const flipped = fx({ id: "flip", home: "a", away: "b", outcome: win("b"), declared: { home: 3, away: 0, forOutcome: win("a") } });
+      const cd = fx({ home: "c", away: "d", outcome: win("c"), declared: { home: 3, away: 0, forOutcome: win("c") } });
+      const s = stage({ field: ["a", "b", "c", "d"], fixtures: [flipped, cd], standings: [{ poolId: null, rows: [
+        { entrantId: "b", rank: 1, points: 3 }, { entrantId: "c", rank: 2, points: 3 }, { entrantId: "a", rank: 3, points: 0 }, { entrantId: "d", rank: 4, points: 0 },
+      ] }] });
+      const r = evaluateInvariant(I3, run([s]));
+      expect(r).toMatchObject({ verdict: "fail", checked: 4 });
+      expect(r.evidence).toEqual(["flip: stored decided win b, but the harness posted win a"]);
+    });
+    it("a changed result with NO withdrawal recorded fails, naming what was stored and what was posted", () => {
+      const changed = fx({ id: "chg", home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b" }, declared: { home: 3, away: 0, forOutcome: win("a") } });
+      const r = evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [changed, ca()], standings: table(0, 3, 3) })]));
+      expect(r).toMatchObject({ verdict: "fail", checked: 3 });
+      expect(r.evidence).toEqual(["chg: stored forfeited award b, but the harness posted win a"]);
+    });
+    it("a two-sided result the harness never posted (the product decided it by itself) fails", () => {
+      const own = fx({ id: "own", home: "a", away: "b", status: "decided", outcome: win("b"), declared: null });
+      const r = evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [own, ca()], standings: table(0, 3, 3) })]));
+      expect(r).toMatchObject({ verdict: "fail", checked: 3 });
+      expect(r.evidence).toEqual(["own: decided win b that the harness never posted, and no bye or recorded cascade explains"]);
+    });
+    it("a walkover the RECORDED cascade wrote (pending before it, forfeited to the opponent after) is skipped and counted", () => {
+      const wo = fx({ id: "wo", home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b" }, declared: null });
+      const w = { entrantId: "a", afterRound: 1, policy: "walkover" as const, walkovers: 1, voided: 0, skippedFinalized: 0, before: [{ id: "wo", status: "scheduled", outcome: null }] };
+      const r = evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [wo, ca()], standings: table(0, 3, 3) })], { facts: facts("withdrawn"), withdrawal: w }));
+      expect(r).toMatchObject({ verdict: "pass", checked: 1 });
+      expect(r.evidence).toEqual(["skipped 2 entrant(s) whose results a bye or the recorded cascade wrote"]);
+      // The cascade touches only what was PENDING: the same row finished before it is not the cascade's.
+      const played = { ...w, before: [{ id: "wo", status: "decided", outcome: win("a") }] };
+      expect(evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [wo, ca()], standings: table(0, 3, 3) })], { withdrawal: played })))
+        .toMatchObject({ verdict: "fail", evidence: ["wo: forfeited award b that the harness never posted, and no bye or recorded cascade explains"] });
+      // …nor a fixture of ANOTHER entrant.
+      expect(evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [wo, ca()], standings: table(0, 3, 3) })], { withdrawal: { ...w, entrantId: "c" } })).verdict).toBe("fail");
+      // …nor a forfeit under EXPUNGE: that cascade only abandons.
+      expect(evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [wo, ca()], standings: table(0, 3, 3) })], { withdrawal: { ...w, policy: "expunge" } })).verdict).toBe("fail");
+    });
+    // Parked Task-5 (a), review R-a: the engine's only legitimate one-sided
+    // finished shape is a forfeited AWARD to the seated side.
+    it("a one-sided finished row that is not a bye fails, instead of being skipped with a note", () => {
+      const sides = (over: Partial<ObservedFixture>) => {
+        const one = fx({ id: "one", home: "a", away: null, declared: null, ...over });
+        return evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [one, ca()], standings: table(0, 0, 3) })]));
+      };
+      expect(sides({ status: "decided", outcome: win("a") })).toMatchObject({ verdict: "fail", evidence: ["one: one-sided decided win a that the harness never posted, and no bye or recorded cascade explains"] });
+      expect(sides({ status: "abandoned", outcome: null })).toMatchObject({ verdict: "fail", evidence: ["one: one-sided abandoned no outcome that the harness never posted, and no bye or recorded cascade explains"] });
+      // An award to the EMPTY seat is not a bye either.
+      expect(sides({ status: "forfeited", outcome: { kind: "award", winner: "z" } }).verdict).toBe("fail");
+      // Nor an award row that is not forfeited.
+      expect(sides({ status: "decided", outcome: { kind: "award", winner: "a" } }).verdict).toBe("fail");
+      // The bye itself is the one shape that is skipped (declared by the harness in practice — snapshot's byeDeclared).
+      expect(sides({ status: "forfeited", outcome: { kind: "award", winner: "a" } })).toMatchObject({ verdict: "pass", checked: 2 });
+    });
+    it("a walkover cascade's void of a TBD opponent (one-sided, abandoned, pending before) is the cascade's, skipped", () => {
+      const tbd = fx({ id: "tbd", home: "a", away: null, status: "abandoned", outcome: { kind: "no_result" }, declared: null });
+      const w = { entrantId: "a", afterRound: 1, policy: "walkover" as const, walkovers: 0, voided: 1, skippedFinalized: 0, before: [{ id: "tbd", status: "scheduled", outcome: null }] };
+      expect(evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [tbd, ca()], standings: table(0, 0, 3) })], { withdrawal: w })))
+        .toMatchObject({ verdict: "pass", checked: 2, evidence: ["skipped 1 entrant(s) whose results a bye or the recorded cascade wrote"] });
+    });
   });
-  it("a voided fixture (no outcome) contributes 0 — expunged results are checked, not skipped", () => {
-    const voided = fx({ home: "a", away: "b", status: "abandoned", outcome: null, declared: { home: 3, away: 0, forOutcome: win("a") } });
+  it("a voided fixture (no outcome) the harness never posted contributes 0; one it DID post and the product voided with no cascade fails", () => {
+    const voided = fx({ home: "a", away: "b", status: "abandoned", outcome: null, declared: null });
     const s = stage({ field: ["a", "b", "c"], fixtures: [voided, fx({ home: "c", away: "a", outcome: win("c"), declared: { home: 3, away: 0, forOutcome: win("c") } })],
       standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 2, points: 0 }, { entrantId: "b", rank: 3, points: 0 }, { entrantId: "c", rank: 1, points: 3 }] }] });
     expect(evaluateInvariant(I3, run([s]))).toMatchObject({ verdict: "pass", checked: 3 });
     const stale = stage({ ...s, standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "b", rank: 3, points: 0 }, { entrantId: "c", rank: 2, points: 3 }] }] });
     expect(evaluateInvariant(I3, run([stale])).evidence.join(" ")).toMatch(/a: table 3, declared Σ 0/);
+    const postedThenVoided = stage({ ...s, fixtures: [{ ...voided, id: "pv", declared: { home: 3, away: 0, forOutcome: win("a") } }, s.fixtures[1]!] });
+    expect(evaluateInvariant(I3, run([postedThenVoided]))).toMatchObject({ verdict: "fail", evidence: ["pv: stored abandoned no outcome, but the harness posted win a"] });
   });
   // Task 11 live run (fm-w1a-a, league|generic|score|R4): generic folds
   // core.abandon to {kind:"no_result"} (badminton to null), so an expunge
@@ -260,17 +321,44 @@ describe("I3 table-points-equal-declared", () => {
     it("negative: a table that drops the LOCKED result (finalized, never struck) reds", () => {
       expect(evaluateInvariant(I3, expunged(s(3, 0, 0))).evidence.join(" ")).toMatch(/d: table 0, declared Σ 3/);
     });
-    it("scoped to expunge: no withdrawal, or a walkover policy, leaves a no_result abandon unjudged (skipped, counted)", () => {
+    // Final review I-1 corrects two frozen bugs here. Both tests used to pin
+    // "skipped 3, pass": an abandon that nothing recorded explains read ✅.
+    it("scoped to expunge: with no withdrawal, or under WALKOVER (which never abandons a played game), the same abandons are unexplained and FAIL", () => {
       for (const r of [run([s(3, 0, 3)]), run([s(3, 0, 3)], { facts: facts("withdrawn"), withdrawal: withdrawal("walkover") })]) {
         const out = evaluateInvariant(I3, r);
-        expect(out).toMatchObject({ verdict: "pass", checked: 1 });
-        expect(out.evidence.join(" ")).toMatch(/skipped 3/);
+        expect(out.verdict).toBe("fail");
+        expect(out.evidence.slice(0, 2)).toEqual([
+          `${struckAB.id}: stored abandoned no_result, but the harness posted win a`,
+          `${struckBC.id}: abandoned no_result that the harness never posted, and no bye or recorded cascade explains`,
+        ]);
       }
     });
-    it("scoped to the withdrawn entrant: another entrant's no_result abandon stays unjudged under expunge", () => {
+    it("scoped to the withdrawn entrant: another entrant's no_result abandon under expunge is unexplained and FAILS", () => {
       const out = evaluateInvariant(I3, expunged(s(3, 0, 3), "d"));
-      expect(out).toMatchObject({ verdict: "pass", checked: 1 });
-      expect(out.evidence.join(" ")).toMatch(/skipped 3/);
+      expect(out.verdict).toBe("fail");
+      expect(out.evidence.slice(0, 2)).toEqual([
+        `${struckAB.id}: stored abandoned no_result, but the harness posted win a`,
+        `${struckBC.id}: abandoned no_result that the harness never posted, and no bye or recorded cascade explains`,
+      ]);
+    });
+    // Task 11 review Minor 1: the no-row check keyed "struck" on a null outcome.
+    it("M1: the withdrawn entrant's row may be OMITTED under expunge — its struck no_result rows are worth 0, not 'results but no row'", () => {
+      const omitted = stage({ field: ["a", "b", "c", "d"], fixtures: [struckAB, struckBC, playedAC], standings: [{ poolId: null, rows: [
+        { entrantId: "a", rank: 1, points: 3 }, { entrantId: "d", rank: 2, points: 0 }, { entrantId: "c", rank: 3, points: 0 },
+      ] }] });
+      expect(evaluateInvariant(I3, expunged(omitted))).toMatchObject({ verdict: "pass", checked: 3 });
+      // Its twin: a LOCKED result on the withdrawn entrant still stands, so an omitted row is a defect.
+      const withLocked = stage({ ...omitted, fixtures: [...omitted.fixtures, lockedBD] });
+      expect(evaluateInvariant(I3, expunged(withLocked)).evidence).toContain("b has results but no row");
+    });
+    // Task 11 review Minor 2: "struck" is the ABANDONED status only.
+    it("M2: under expunge, a decided or forfeited fixture of the withdrawn entrant with a declared result still COUNTS — never struck", () => {
+      for (const status of ["decided", "forfeited"]) {
+        const kept = fx({ home: "b", away: "c", status, outcome: win("c"), declared: { home: 0, away: 3, forOutcome: win("c") } });
+        const st = (c: number) => stage({ field: ["a", "b", "c", "d"], fixtures: [struckAB, kept, lockedBD, playedAC], standings: table(3, c, 3) });
+        expect(evaluateInvariant(I3, expunged(st(3))), status).toMatchObject({ verdict: "pass", checked: 4 });
+        expect(evaluateInvariant(I3, expunged(st(0))).evidence, status).toContain("c: table 0, declared Σ 3");
+      }
     });
   });
   it("only FINISHED fixtures count: an in_play fixture carrying a provisional outcome is not a result yet", () => {
@@ -410,7 +498,9 @@ describe("I6 swiss-no-rematch", () => {
 
 describe("evaluateInvariants + observed helpers", () => {
   it("emits one invariant CheckResult per spec, carrying verdict, checked and reason", () => {
-    const out = evaluateInvariants(run([stage({ field: ["a", "b"], fixtures: rr(["a", "b"]) })]));
+    // Harness-posted (declared) results, so I3's first reason is the missing row — not an unposted result (final review I-1).
+    const posted = rr(["a", "b"]).map((f) => ({ ...f, declared: { home: 3, away: 0, forOutcome: f.outcome! } }));
+    const out = evaluateInvariants(run([stage({ field: ["a", "b"], fixtures: posted })]));
     expect(out.map((c) => c.id)).toEqual(INVARIANTS.map((s) => s.id));
     expect(out.every((c) => c.kind === "invariant" && Number.isInteger(c.checked))).toBe(true);
     expect(out.map((c) => [c.verdict, c.checked])).toEqual([["pass", 1], ["abstain", 0], ["fail", 0], ["fail", 0], ["abstain", 0], ["abstain", 0]]);

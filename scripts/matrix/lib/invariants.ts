@@ -121,6 +121,57 @@ const I2: InvariantSpec = {
   },
 };
 
+/** What one finished fixture is worth to I3's Σ, or why it cannot be:
+ *  - `counts`: the harness declared it and the stored result is that one;
+ *  - `zero`: struck by a recorded expunge, or no result on either side;
+ *  - `unjudged`: a bye, or a result the RECORDED cascade wrote — the two
+ *    server-written results that have an explanation (skipped, counted);
+ *  - `unexplained`: anything else the harness did not post, or a stored
+ *    result that differs from the one it posted (final review I-1). */
+type Judged =
+  | { kind: "counts"; home: number; away: number }
+  | { kind: "zero" }
+  | { kind: "unjudged" }
+  | { kind: "unexplained"; why: string };
+
+const outcomeText = (o: ObservedFixture["outcome"]): string => (o === null ? "no outcome" : `${o.kind}${winnerOf(o) === null ? "" : ` ${winnerOf(o)}`}`);
+
+/** A bye is the engine's only legitimate one-sided finished shape: a
+ *  forfeited AWARD to the seated side (competition/stage.ts:30-34). */
+const isBye = (f: ObservedFixture): boolean =>
+  !twoSided(f) && (f.home !== null || f.away !== null) && f.status === "forfeited" && f.outcome?.kind === "award" && f.outcome.winner === (f.home ?? f.away);
+
+/** Pending, in the product's reading (lib/table-withdrawal.ts). */
+const PENDING_STATUSES: readonly string[] = ["scheduled", "in_play"];
+/** Locked: the cascade reports these and never touches them (withdrawal.ts:102). */
+const LOCKED_STATUSES: readonly string[] = ["finalized", "cancelled"];
+
+function judge(f: ObservedFixture, w: ObservedRun["withdrawal"]): Judged {
+  // The recorded withdrawal, when this fixture seats the withdrawn entrant.
+  const mine = w !== null && (f.home === w.entrantId || f.away === w.entrantId) ? w : null;
+  // Under the expunge policy the engine reported, the cascade abandons every
+  // unlocked fixture of the withdrawn entrant and the table strikes it. The
+  // sport decides what an abandon FOLDS to — null for badminton, no_result
+  // for generic (Task 11 live run) — so "struck" is the cascade's status on
+  // that entrant's fixture, not a null outcome.
+  if (mine !== null && mine.policy === "expunge" && f.status === "abandoned") return { kind: "zero" };
+  const d = f.declared;
+  if (d !== null && sameOutcome(f.outcome, d.forOutcome)) return { kind: "counts", home: d.home, away: d.away };
+  // What the recorded cascade itself wrote: a fixture of the withdrawn
+  // entrant that the cascade could touch (pending under walkover, unlocked
+  // under expunge — read off the snapshot taken just before it) and that now
+  // carries a status the cascade writes (a walkover forfeit, or the void of a
+  // TBD opponent).
+  const before = mine?.before.find((b) => b.id === f.id);
+  if (mine !== null && before !== undefined
+    && (mine.policy === "walkover" ? PENDING_STATUSES.includes(before.status) : !LOCKED_STATUSES.includes(before.status))
+    && (f.status === "abandoned" || (mine.policy === "walkover" && f.status === "forfeited"))) return { kind: "unjudged" };
+  if (d !== null) return { kind: "unexplained", why: `stored ${f.status} ${outcomeText(f.outcome)}, but the harness posted ${outcomeText(d.forOutcome)}` };
+  if (isBye(f)) return { kind: "unjudged" };
+  if (f.outcome === null && twoSided(f)) return { kind: "zero" };
+  return { kind: "unexplained", why: `${twoSided(f) ? "" : "one-sided "}${f.status} ${outcomeText(f.outcome)} that the harness never posted, and no bye or recorded cascade explains` };
+}
+
 const I3: InvariantSpec = {
   id: "I3-table-points-equal-declared",
   description: "each table row's points equal Σ the sport's declared points over its results",
@@ -132,40 +183,32 @@ const I3: InvariantSpec = {
     const fails: string[] = [];
     let checked = 0;
     let skipped = 0;
-    // Under the expunge policy the engine reported, the cascade abandons every
-    // unlocked fixture of the withdrawn entrant and the table strikes it. The
-    // sport decides what an abandon FOLDS to — null for badminton, no_result
-    // for generic (Task 11 live run) — so "struck" is the cascade's status on
-    // that entrant's fixture, not a null outcome. Any other abandon keeps its
-    // outcome and stays unjudged below (its meaning is W2's rulebook).
-    const w = run.withdrawal;
-    const struck = (f: ObservedFixture) => w !== null && w.policy === "expunge" && f.status === "abandoned" && (f.home === w.entrantId || f.away === w.entrantId);
     for (const s of stages) {
       const rows = new Map(s.standings.flatMap((p) => p.rows).map((r) => [r.entrantId, r]));
-      const byEntrant = new Map<string, ObservedFixture[]>();
+      const byEntrant = new Map<string, { f: ObservedFixture; j: Judged }[]>();
       // Every SEATED side of a finished fixture, one-sided rows included: the
       // engine's odd-field Swiss bye is its own forfeited award row with the
       // other seat null, and the fold credits it as a win (I-2). Dropping it
-      // here would compare the bye credit against a Σ that omits it.
+      // here would compare the bye credit against a Σ that omits it. Each
+      // fixture is judged once, so an unexplained one is named once.
       for (const f of s.fixtures.filter((x) => isTerminal(x.status))) {
-        for (const e of [f.home, f.away]) if (e !== null) byEntrant.set(e, [...(byEntrant.get(e) ?? []), f]);
+        const j = judge(f, run.withdrawal);
+        if (j.kind === "unexplained") fails.push(`${f.id}: ${j.why}`);
+        for (const e of [f.home, f.away]) if (e !== null) byEntrant.set(e, [...(byEntrant.get(e) ?? []), { f, j }]);
       }
-      for (const [e, fx] of byEntrant) if (!rows.has(e) && fx.some((f) => f.outcome !== null)) fails.push(`${e} has results but no row`);
+      for (const [e, fx] of byEntrant) if (!rows.has(e) && fx.some(({ f, j }) => f.outcome !== null && j.kind !== "zero")) fails.push(`${e} has results but no row`);
       for (const [e, row] of rows) {
-        // A fixture with NO outcome (voided), or one the expunge cascade struck,
-        // contributes 0. One WITH an outcome counts only if the harness
-        // declared exactly that result; a result the server wrote on its own
-        // (cascade walkover, bye) makes the entrant unjudgeable here → skipped
-        // and counted.
-        const fx = (byEntrant.get(e) ?? []).filter((f) => f.outcome !== null && !struck(f));
-        if (fx.some((f) => f.declared === null || !sameOutcome(f.outcome, f.declared.forOutcome))) { skipped++; continue; }
+        const fx = byEntrant.get(e) ?? [];
+        if (fx.some(({ j }) => j.kind === "unjudged")) { skipped++; continue; }
         checked++;
-        const expected = fx.reduce((sum, f) => sum + (f.home === e ? f.declared!.home : f.declared!.away), 0);
+        // An unexplained fixture already failed above; its Σ has no right answer.
+        if (fx.some(({ j }) => j.kind === "unexplained")) continue;
+        const expected = fx.reduce((sum, { f, j }) => sum + (j.kind === "counts" ? (f.home === e ? j.home : j.away) : 0), 0);
         if (row.points === null) fails.push(`${e}: row has no points`);
         else if (Math.abs(row.points - expected) > 1e-9) fails.push(`${e}: table ${row.points}, declared Σ ${expected}`);
       }
     }
-    return result(fails, checked, skipped > 0 ? [`skipped ${skipped} entrant(s) with undeclared or changed results`] : []);
+    return result(fails, checked, skipped > 0 ? [`skipped ${skipped} entrant(s) whose results a bye or the recorded cascade wrote`] : []);
   },
 };
 
