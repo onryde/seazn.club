@@ -27,6 +27,12 @@ import {
   recordPassRefund,
   walletIdFor,
 } from "@/lib/credits";
+// MATCH credits — a different currency from @/lib/credits above, on its own
+// table and its own writer. Kept adjacent deliberately so the next reader sees
+// that the two are distinct rather than duplicated.
+import { streamPack } from "@/lib/stream-credit-packs";
+import { recordPurchase } from "@/server/usecases/stream-credits";
+import { HttpError } from "@/lib/errors";
 import { isPassKey, type PassKey } from "@/lib/currency";
 import { SEAT_ADDON, isSeatAddonItem } from "@/lib/seat-addons";
 import {
@@ -268,6 +274,100 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
             reason: "no credits snapshot and no resolvable pack_key",
           }).catch(() => {});
         }
+      }
+    }
+    return;
+  }
+
+  // Match credits (streaming R1, design §5.2): a separate ledger on the AI
+  // wallet's shape — DIFFERENT currency, different table, so never the branch
+  // above. `stream_credits` and `credit_pack` are disjoint discriminators on
+  // purpose: routing one into the other's writer tops up the wrong balance and
+  // sells the buyer something they did not ask for. The grant is the SNAPSHOT
+  // stamped at checkout creation (lib/relay-checkout.ts), falling back to the
+  // catalogue by pack size only with a logged error, never a silent zero.
+  //
+  // `orgId` is the enclosing gate's `session.metadata.org_id` (:202) — the same
+  // IMMUTABLE session metadata `runEvent` keys its own claim on. Orgs move
+  // between billing groups (billing_group_transfers), so resolving the org any
+  // other way here would let a transfer redirect a paid purchase.
+  //
+  // Replay-safe TWICE, on two independent floors. runEvent's claim on
+  // billing_events.id stops a redelivery before this branch is reached at all;
+  // org_stream_credits.stripe_event_id — keyed on the Checkout Session id, the
+  // one id every redelivery of this purchase carries — stops a second row if
+  // one ever does reach it (runEvent deliberately RE-CLAIMS an event whose
+  // lease is older than ten minutes, and replayEvent is staff-reachable, so
+  // this code IS met more than once). The `billing-events` cron retries rows
+  // left UNPROCESSED: it selects `processed_at is null` only, so it never
+  // re-enters here for a purchase the webhook already handled, and can witness
+  // NEITHER floor (FT0-5). Mutate them one at a time — two guards covering for
+  // each other are each untested: the outer claim's killer is the webhook
+  // test's `runEvent(ev)` → false, the inner one's is Task 7's replay test.
+  if (session.metadata?.kind === "stream_credits") {
+    if (session.payment_status === "paid") {
+      const snapshot = Number(session.metadata.credits);
+      const credits =
+        Number.isInteger(snapshot) && snapshot > 0
+          ? snapshot
+          : (() => {
+              const fallback = streamPack(Number(session.metadata?.pack))?.credits;
+              if (fallback) {
+                log.error(
+                  { sessionId: session.id, packRaw: session.metadata?.pack },
+                  "billing: stream_credits session had no usable credits snapshot — fell back to the catalogue",
+                );
+              }
+              return fallback;
+            })();
+      if (credits) {
+        // Ruling 13 item 6: the purchase link rides on the ledger row — ids and amounts, never card data.
+        const link = {
+          checkoutSessionId: session.id,
+          paymentIntentId:
+            typeof session.payment_intent === "string"
+              ? session.payment_intent
+              : (session.payment_intent?.id ?? null),
+          pack: streamPack(Number(session.metadata?.pack))?.lookupKey ?? null,
+          amountMinor: session.amount_total ?? null,
+          currency: session.currency ?? null,
+        };
+        // `stripe_event_org_mismatch` is TERMINAL, and the only refusal here
+        // that is. org_stream_credits.stripe_event_id is unique TABLE-wide, so
+        // a Checkout Session id already recorded against a DIFFERENT org is
+        // refused with nothing written — and no number of Stripe redeliveries
+        // can turn that into a grant. Letting it reach the webhook's generic
+        // error path would answer 500 and have Stripe retry the same event for
+        // days while a human is the only thing that can fix it. ACK it and
+        // shout in the log instead. Every OTHER error still propagates: a
+        // transient database fault genuinely is worth a redelivery.
+        const recorded = await recordPurchase({
+          orgId,
+          delta: credits,
+          stripeEventId: session.id,
+          link,
+        }).catch((err: unknown) => {
+          if (err instanceof HttpError && err.code === "stripe_event_org_mismatch") {
+            log.error(
+              { orgId, sessionId: session.id, credits },
+              "billing: stream_credits session id already recorded for another organisation — acknowledged, nothing granted",
+            );
+            return null;
+          }
+          throw err;
+        });
+        // Nothing was written, so there is no customer to link and no currency
+        // to pin off a purchase that did not happen.
+        if (!recorded) return;
+        const { applied, balance } = recorded;
+        log.info({ orgId, sessionId: session.id, credits, applied, balance }, "billing: stream credits purchase");
+        if (session.customer) await linkStripeCustomer(orgId, session.customer as string);
+        await pinBillingCurrency(orgId, session.currency);
+      } else {
+        log.error(
+          { sessionId: session.id, orgId },
+          "billing: stream_credits session paid but ungranted — no credits snapshot and no resolvable pack",
+        );
       }
     }
     return;

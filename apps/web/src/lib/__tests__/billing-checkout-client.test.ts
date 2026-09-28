@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   fetchCheckoutClientSecret,
   fetchPassCheckoutClientSecret,
+  fetchRelayCheckoutClientSecret,
 } from "@/lib/billing-checkout-client";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -185,5 +186,52 @@ describe("fetchPassCheckoutClientSecret", () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBeNull();
+  });
+});
+
+// Match credits (streaming R1) — a DIFFERENT currency from the AI packs above:
+// this one posts to /api/billing/relay-checkout and lands in the
+// org_stream_credits ledger, never the wallet. The paywall refusal is read off
+// `status` alone: `CheckoutSecretResult` carries no `code` field, so a
+// `result.code === "plan_lacks_relay"` assertion would compare
+// `undefined === undefined` and pass forever (Task 14's container keys on
+// `status`).
+describe("fetchRelayCheckoutClientSecret", () => {
+  it("returns the client_secret and posts the org, fixture and pack to the relay route", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({ ok: true, data: { client_secret: "cs_x" } }),
+    );
+    const r = await fetchRelayCheckoutClientSecret(
+      { orgId: "org-1", fixtureId: "fx-1", pack: 5 },
+      fetchFn as unknown as typeof fetch,
+    );
+    expect(r).toEqual({ ok: true, clientSecret: "cs_x" });
+    const [path, init] = fetchFn.mock.calls[0]!;
+    // A pack bought on the AI-credit path would top up the wrong balance, so
+    // the PATH is pinned, not just the method.
+    expect(path).toBe("/api/billing/relay-checkout");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ orgId: "org-1", fixtureId: "fx-1", pack: 5 });
+  });
+
+  it("carries the 402 paywall refusal back as a status, with the server's sentence", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({ ok: false, error: "This plan does not include phone streaming" }, 402),
+    );
+    const r = await fetchRelayCheckoutClientSecret(
+      { orgId: "org-1", fixtureId: "fx-1", pack: 1 },
+      fetchFn as unknown as typeof fetch,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(402);
+      // English-only server copy — logged, never rendered to a buyer. Asserted
+      // as non-empty rather than pinned, so a reworded sentence is not a red.
+      expect(typeof r.error).toBe("string");
+      expect(r.error.length).toBeGreaterThan(0);
+    }
+    const [path, init] = fetchFn.mock.calls[0]!;
+    expect(path).toBe("/api/billing/relay-checkout");
+    expect(JSON.parse(init.body as string)).toEqual({ orgId: "org-1", fixtureId: "fx-1", pack: 1 });
   });
 });
