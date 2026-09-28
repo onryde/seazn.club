@@ -11,7 +11,7 @@
 // the one number that stays global — recording storage is ONE account-wide pool — so it is bracketed, never equated.
 // The ONE exception is the m3 test, which drives the unscoped production call: it moves its own rows decades back and
 // runs the sweep on a clock there, and the sweep's rule that it judges only rows existing at its clock keeps it off
-// every other file's.
+// every other file's. It deletes its two orgs afterwards: the events the sweep writes at that clock are append-only.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): every rig rides seedOrg's `generic` division. Relay is sport-agnostic —
 // nothing in relay-sweep.ts or the stream-sessions.ts paths it drives reads the sport.
@@ -381,6 +381,17 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(again).toMatchObject({ machinesListed: 3, orphansDestroyed: 0, foreignRunnersSkipped: 3, runnerGoneConfirmed: 0 });
     expect(foreignReports()).toHaveLength(2);
     expect(r.runner.destroyed.filter((id) => planted.includes(id))).toEqual(["m-mine-sessionless"]);
+    // The day after, the other environment's fleet has grown by one. The report is ONE grouped Sentry issue across
+    // passes: the message is constant, and the count — which changes day to day — rides in `extra` only (a count in
+    // the message splits the issue per distinct number and buries the history).
+    r.runner.addOrphan("m-foreign-day-three", null, FOREIGN);
+    expect(await sweep(r)).toMatchObject({ machinesListed: 4, orphansDestroyed: 0, foreignRunnersSkipped: 4 });
+    const reports = foreignReports();
+    expect(reports.map(([, ctx]) => (ctx as { extra: { count: number } }).extra.count)).toEqual([3, 3, 4]);
+    const messages = reports.map(([err]) => (err as Error).message);
+    expect(messages).toHaveLength(3);
+    expect(new Set(messages).size).toBe(1);
+    expect(messages[0]).not.toMatch(/\d/);
   });
 
   it("I1(a), the seam from the REAL producer: createSession stamps this environment on the Machine it creates, and that is what lets the sweep destroy it once its session has ended (mutant: drop `environment` from createRunner → red)", async () => {
@@ -949,9 +960,16 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(cols).toEqual(expect.arrayContaining(["created_at", "ended_at", "heartbeat_at", "runner_gone_confirmed_at"]));
     const moved = (sign: "-" | "+") => cols.map((c) => `${c} = ${c} ${sign} interval '30 years'`).join(", ");
     const shift = (sign: "-" | "+") => sql.unsafe(`update fixture_stream_sessions set ${moved(sign)} where id in ($1, $2)`, [a.sessionId, b.sessionId]);
+    // fixture_stream_events is append-only (V410: a direct UPDATE or DELETE raises 23001), so its rows cannot be moved
+    // home with the sessions — they leave only by the FK cascade, which is why cleanup deletes the rigs' ORGS. Scoped to
+    // THIS test's two orgs: a developer database can hold older runs' debris, which is not this run's to judge.
+    const decadesOldEvents = () => sql<{ session_id: string; type: string; to_state: string | null }[]>`
+      select session_id, type, to_state from fixture_stream_events
+       where org_id in (${a.orgId}, ${b.orgId}) and occurred_at < now() - interval '20 years' order by session_id, seq`;
     // A run killed before its `finally` leaves its rows decades back, where they would sit under the next run's clock. No
-    // other code writes a session that old, so a row there is this test's debris: brought home first, not swept.
-    await sql.unsafe(`update fixture_stream_sessions set ${moved("+")} where created_at < now() - interval '20 years'`);
+    // other code writes a session that old, so a row there is this test's debris: its org is deleted first (taking the
+    // decades-old events with it), not swept.
+    await sql`delete from organizations where id in (select org_id from fixture_stream_sessions where created_at < now() - interval '20 years')`;
     await shift("-");
     let clock: Date | null = null;
     try {
@@ -991,10 +1009,20 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
         select id, state, fail_reason, runner_gone_confirmed_at as gone from fixture_stream_sessions where id in (${a.sessionId}, ${b.sessionId})`;
       expect(rows.find((x) => x.id === a.sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
       expect(rows.find((x) => x.id === b.sessionId)!.gone?.getTime()).toBe(at.getTime());
+      // The sweep wrote history at its clock (a's failure transition, b's finalised recording): real debris, decades
+      // back, that the cleanup below owes. Counted here so the "none left" after it cannot pass on an empty table.
+      const debris = await decadesOldEvents();
+      expect(debris.filter((e) => e.session_id === a.sessionId).map((e) => e.to_state)).toContain("failed");
+      expect(debris.filter((e) => e.session_id === b.sessionId).map((e) => e.type)).toContain("recording_finalised");
     } finally {
-      await shift("+");
+      // The rows cannot all be shifted home (the events refuse), so the two rigs' orgs go, and the cascade takes their
+      // sessions, the events the sweep dated decades back, samples and credits with them.
+      await sql`delete from organizations where id in (${a.orgId}, ${b.orgId})`;
       if (clock) await sql`delete from stream_storage_snapshots where source = 'sweep' and taken_at = ${clock}`;
     }
+    // Nothing of this test is left dated decades before now — not a session, not an event row.
+    expect(await decadesOldEvents()).toEqual([]);
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where id in (${a.sessionId}, ${b.sessionId})`)[0]!.n).toBe(0);
   });
 });
 

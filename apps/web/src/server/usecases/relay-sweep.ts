@@ -304,8 +304,9 @@ export async function sweepStreamSessions(
     }
     out.foreignRunnersSkipped = foreign.length;
     if (foreign.length > 0) {
-      // ONCE per pass, however many: a shared app lists the other environment's whole fleet every day.
-      captureError(new Error(`relay sweep: ${foreign.length} orphan-shaped Machine(s) not stamped with this environment were left untouched`), {
+      // ONCE per pass, however many: a shared app lists the other environment's whole fleet every day. The message is
+      // CONSTANT so every pass groups into one Sentry issue; the count, which moves day to day, lives in `extra` only.
+      captureError(new Error("relay sweep: orphan-shaped Machines not stamped with this environment were left untouched"), {
         route: "relay.sweep.foreign_runners", extra: { count: foreign.length, environment: ownEnv, sample: foreign.slice(0, 10) },
       });
       log.warn({ count: foreign.length, environment: ownEnv, sample: foreign.slice(0, 10) }, "relay sweep: Machines this environment cannot prove it created were skipped — never destroyed");
