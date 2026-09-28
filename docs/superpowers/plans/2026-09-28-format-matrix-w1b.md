@@ -5898,6 +5898,37 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec &
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && grep -acE 'seazn_org|sb-|@|Bearer|postgres://' docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-abandon/abandon-probe.json; echo "secret-shaped lines above (expect 0)"
 ```
 
+- [ ] **Step 3c: The tied-knockout check (ruling 32; candidate defect CD-T6)**
+
+This step answers one question by driving the product: what happens to a knockout bracket when a cricket match at the builder default (t20, super over off) ends on equal runs?
+
+What is known before the run:
+- The engine folds equal runs at the builder default to `{kind:"tie"}`. Task 6 proved this offline with a real fold, `applicability.ts` tie probe.
+- The product's knockout draw guard checks only `kind === "draw"` (`append-event.ts:335-345`).
+- `competition.ts:147-163` assumes a tie never reaches a bracket.
+
+That is a reading, not a run.
+
+**Setup.** One case org and one cricket division at the builder-default variant (`builderDefaultVariant`, never a typed `"t20"`). One knockout stage (`stagesForRow("knockout")`) with **4** entrants, so a semi-final tie shows whether the final gets seated. Start it, then take the first seated semi-final.
+
+**Build the stream.** Reuse the equal-runs stream builder that Task 6's tie probe uses; import it, don't copy it. **Guard:** fold the exact stream through the real engine before posting. It must fold to `kind === "tie"`, or the run is `PROBE-BROKEN`. Then post the stream event by event through `HttpDriver`, and record every status and error code.
+
+**Observe and record** in `truth-runs/w1b-tie-ko/tie-ko-probe.json`:
+- (a) Was any post refused? Record the named code and the event index.
+- (b) The fixture's status and result after the last post.
+- (c) Whether the final is seated with a winner of that semi-final: its home/away entrant ids.
+- (d) The stage's completion state after the other semi-final is completed with an ordinary win. Use the generator's normal win stream, folded and guarded to `kind === "win"`.
+
+**Control.** Run the same division shape with an ordinary win in the first semi. Its final MUST be seated, or the probe cannot tell a stall from a slow seat and proves nothing.
+
+**Verdicts:**
+- **`CONFIRMED`:** the tie posts without refusal, the fixture completes, and the final is never seated (the control is seated). Record this in `_INDEX.md` as a finding with the evidence path, **routed to W5 (brackets) and W2 (what a tie is worth in a knockout)**. Change no product code, and never loosen a verdict to pass.
+- **`GUARDED`:** a post is refused with a named code, so the product blocks the tie. Record the code. CD-T6 is refuted as a stall. Route "a tied T20 knockout cannot be completed at the builder default, and the organiser's recovery path is unknown" to W2 as a product question.
+- **`RESOLVED`:** the final is seated with a winner the engine chose (for example, a tiebreak the reading missed). Record it as a refuted hypothesis in "False premises found", and name the rule that resolved it.
+- **`UNRESOLVED`:** anything else. Say exactly what was observed. A team-roster refusal at `addEntrants` is the `W1-driving` deferral showing up live. Record it, and do not build rosters here.
+
+**Where the probe lives.** Write it with the Write tool to `$TMPDIR/w1b-tie-ko-probe.mts`, alongside the Step 3b probe. Take its imports and shape from that probe: synthetic identities, `ownerEmail`, `requireOwnDataDir`, and a run id of `w1b-tie-ko-0928a`. Never commit it. Copy the evidence to `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-tie-ko/`, then run the same secret-shape grep as Step 3b (expect 0). Add the Step 3c verdict line (`CD-T6 <verdict> — control seated`) to the Step 6 commit message body.
+
 - [ ] **Step 4: The model on the slice, fences on**
 
 ```bash

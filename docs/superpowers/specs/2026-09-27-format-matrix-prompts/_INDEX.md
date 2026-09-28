@@ -246,6 +246,33 @@ a peer session as the other.
     - **The suspected abandon→void defect** (ST-G1) is confirmed or refuted
       live in W1b Task 15.
     - Applied in the W1b plan (Tasks 4, 6, 7, 15 and 16) and in design §4.
+31. **No set-to-1: the points-per-set floor is 5 for volleyball and table
+    tennis** (2026-09-28). The owner said "5 points OK" to the controller's
+    recommendation.
+    - **Why.** W1b's variant sweep (Task 5) found 40 unscorable
+      volleyball and table tennis cases: sets to 1 point with win-by-2.
+    - **Who owns it.** W2 owns the change: raise the `SPORT_RULES` minimum
+      in `match-rules.ts`.
+    - **Re-read the bounds first.** W2 reads the current bounds before
+      editing; they have not been re-read since W1b's plan.
+    - **Regenerate the catalogue.** The regenerated variant catalogue ships
+      in the same PR, as a reviewed diff.
+    - **Cricket is separate.** The 38 unscorable cricket cases at 3–5 a
+      side ("wickets exceed all-out") are not covered by this ruling. They
+      stay with W2 as their own item.
+32. **A tied T20 knockout is checked live in W1b Task 15 (Step 3c)**
+    (2026-09-28). The owner said "yes" to the controller's recommendation.
+    - **The suspicion** (candidate defect CD-T6, from reading the code, not
+      a run):
+      - At cricket's builder default (t20, super over off), equal runs
+        fold to `{kind:"tie"}`.
+      - The knockout draw guard checks only `kind === "draw"`
+        (`append-event.ts:335-345`).
+      - `competition.ts:147-163` assumes a tie never reaches a bracket.
+      - So a tied knockout may complete with no advancer and stall the
+        bracket.
+    - **If confirmed,** route it to W5 (brackets) and W2 (what a tie is
+      worth in a knockout). No check is loosened to pass.
 
 ## Recommendations (mine — not rulings)
 
