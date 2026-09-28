@@ -379,6 +379,7 @@ a mock), and `recordPurchase`'s codeless 422. M1 — the replay branch echoes th
 original row's `balance_after` — is carried into the route's response CONTRACT rather than changed, because
 the panel is what echoes it. **7A-ii** is Steps 10-20 (the Option B panel, its component test, the
 walkthrough, the mount, the six screenshots, the smoke wiring) and reads 7A-i's report first.
+
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
