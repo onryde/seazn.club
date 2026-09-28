@@ -96,7 +96,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
 
   it("a watchUrl off the R16 allowlist is refused (422) and writes nothing; omitted and blank both store null — the VALIDATED value, never the raw one", async () => {
     const { auth } = await seedOrg();
-    const base = { kind: "custom_rtmp" as const, label: "x", rtmpUrl: "rtmp://h/app", streamKey: "k" };
+    const base = { kind: "custom_rtmp" as const, label: "x", rtmpUrl: "rtmp://live.restream.io/live", streamKey: "k" };
     await expect(createStreamTarget(auth, auth.orgId, { ...base, watchUrl: "https://evil.example/watch" }))
       .rejects.toMatchObject({ status: 422 });
     // A lookalike that CONTAINS an allowed host is not one (exact-host rule, lib/stream-url.ts).
@@ -114,16 +114,56 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     expect(stored).toEqual([{ id: omitted.id, watch_url: null }, { id: blank.id, watch_url: null }]);
   });
 
+  it("A18: an rtmpUrl off the destination allowlist is refused 422 DESTINATION_NOT_ALLOWED + its rule, BEFORE anything is sealed or written — twice over, then an allowlisted one lands", async () => {
+    const { auth } = await seedOrg();
+    const streamKey = key();
+    // Expected rules are A18's categories, typed here — not read back from the validator.
+    const cases: [string, string][] = [
+      ["rtmp://localhost/live", "host"],
+      ["rtmp://127.0.0.1/live", "ip_literal"],
+      ["rtmp://[::1]/live", "ip_literal"],
+      ["rtmp://top1.nearest.of.seazn-relay.internal/live", "host"],
+      ["rtmp://seazn-relay.flycast/live", "host"],
+      ["rtmps://evilyoutube.com/live2", "host"],
+      ["rtmps://user:pw@a.rtmps.youtube.com/live2", "userinfo"],
+      ["http://a.rtmp.youtube.com/live2", "scheme"],
+      ["rtmps://a.rtmps.youtube.com:1936/live2", "port"],
+      ["rtmps://a.rtmps.youtube.com", "path"],
+      ["", "scheme"],
+    ];
+    let checked = 0;
+    // Second call: the same refusal twice is refused twice — no state makes the second one pass.
+    for (const round of [1, 2]) {
+      for (const [rtmpUrl, rule] of cases) {
+        const err = await createStreamTarget(auth, auth.orgId, { kind: "custom_rtmp", label: `r${round}`, rtmpUrl, streamKey }).then(
+          () => null,
+          (e: unknown) => e as { status?: number; code?: string; extra?: Record<string, unknown>; message?: string },
+        );
+        expect(err, `${round} ${rtmpUrl}`).toMatchObject({ status: 422, code: "DESTINATION_NOT_ALLOWED", extra: { rule } });
+        // The message is a sentence about the rule — never the URL, which can carry the key in its path.
+        if (rtmpUrl !== "") expect(err!.message).not.toContain(rtmpUrl);
+        expect(err!.message).not.toContain(streamKey);
+        checked++;
+      }
+    }
+    expect(checked).toBe(22);
+    const [row] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId}`;
+    expect(row!.n).toBe(0);
+    // The positive pair: the same org, key and door accept a listed host.
+    const made = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "ok", rtmpUrl: "rtmp://a.rtmp.youtube.com/live2", streamKey });
+    expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.id)).toEqual([made.id]);
+  });
+
   it("tenancy: B's list never shows A's target, and a caller authenticated for B cannot list or create under A's id (404, nothing written anywhere)", async () => {
     const a = await seedOrg();
     const b = await seedOrg();
     expect(b.auth.orgId).not.toBe(a.auth.orgId);
-    const made = await createStreamTarget(a.auth, a.auth.orgId, { kind: "twitch", label: "A", rtmpUrl: "rtmps://live.twitch.tv/app", streamKey: key() });
+    const made = await createStreamTarget(a.auth, a.auth.orgId, { kind: "twitch", label: "A", rtmpUrl: "rtmp://live-jfk.twitch.tv/app", streamKey: key() });
     expect((await listStreamTargets(a.auth, a.auth.orgId)).map((t) => t.id)).toEqual([made.id]);   // the positive pair
     expect(await listStreamTargets(b.auth, b.auth.orgId)).toEqual([]);
     await expect(listStreamTargets(b.auth, a.auth.orgId)).rejects.toMatchObject({ status: 404 });
     await expect(
-      createStreamTarget(b.auth, a.auth.orgId, { kind: "twitch", label: "B into A", rtmpUrl: "rtmps://live.twitch.tv/app", streamKey: key() }),
+      createStreamTarget(b.auth, a.auth.orgId, { kind: "twitch", label: "B into A", rtmpUrl: "rtmp://live-jfk.twitch.tv/app", streamKey: key() }),
     ).rejects.toMatchObject({ status: 404 });
     expect((await listStreamTargets(a.auth, a.auth.orgId)).map((t) => t.id)).toEqual([made.id]);
     expect(await listStreamTargets(b.auth, b.auth.orgId)).toEqual([]);
@@ -150,7 +190,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
     let checked = 0;
     for (const kind of StreamTargetKind.options) {
-      const t = await createStreamTarget(auth, auth.orgId, { kind, label: `dest ${kind}`, rtmpUrl: "rtmp://ingest.example/app", streamKey: key() });
+      const t = await createStreamTarget(auth, auth.orgId, { kind, label: `dest ${kind}`, rtmpUrl: "rtmps://live.cloudflare.com:443/live/", streamKey: key() });
       expect(t.kind).toBe(kind);
       checked++;
     }
@@ -188,7 +228,7 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () =>
   it("a signed-in organiser POSTs (201, the wire shape, no key) and GETs it back; a bad body is 400 and writes nothing", async () => {
     const auth = await organiser();
     const streamKey = key();
-    const bad = await post(auth.orgId, { kind: "youtube", label: "x", rtmpUrl: "https://not-an-ingest.example/app", streamKey });
+    const bad = await post(auth.orgId, { kind: "youtube", label: "x", rtmpUrl: 42, streamKey });
     expect(bad.status).toBe(400);
     const unknownField = await post(auth.orgId, { kind: "youtube", label: "x", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey, stream_key: streamKey });
     expect(unknownField.status).toBe(400);
@@ -206,6 +246,34 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () =>
     const listText = await listed.text();
     expect(listText).not.toContain(streamKey);
     expect(JSON.parse(listText).data).toEqual([created]);
+  });
+
+  it("A18: an off-list destination is 422 DESTINATION_NOT_ALLOWED with its rule, over the real route — the reply echoes neither the URL nor the key, and nothing is written", async () => {
+    const auth = await organiser();
+    const streamKey = key();
+    const cases: [string, string][] = [
+      ["rtmp://seazn-relay.internal:1935/live", "host"],
+      ["rtmps://169.254.169.254/latest", "ip_literal"],
+      ["rtmps://a.rtmps.youtube.com.evil.io/live2", "host"],
+      ["https://not-an-ingest.example/app", "scheme"],
+    ];
+    let checked = 0;
+    for (const [rtmpUrl, rule] of cases) {
+      const res = await post(auth.orgId, { kind: "custom_rtmp", label: "x", rtmpUrl, streamKey });
+      expect(res.status, rtmpUrl).toBe(422);
+      const text = await res.text();
+      const body = JSON.parse(text);
+      expect(body.error, rtmpUrl).toMatchObject({ code: "DESTINATION_NOT_ALLOWED", rule });
+      expect(text).not.toContain(rtmpUrl);
+      expect(text).not.toContain(streamKey);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+    // The positive pair on the same org and door: an allowlisted destination is created.
+    const ok = await post(auth.orgId, { kind: "custom_rtmp", label: "Restream", rtmpUrl: "rtmp://live.restream.io/live", streamKey });
+    expect(ok.status).toBe(201);
+    expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.label)).toEqual(["Restream"]);
   });
 
   it("roles: a viewer (READ_ROLES, not EDITOR_ROLES) lists the destinations but cannot add one (403, nothing written)", async () => {
@@ -235,7 +303,7 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () =>
     }
     const { secret } = await createApiKey(auth, { name: "integration", scopes: ["manage"] });
     const bearer = { authorization: `Bearer ${secret}` };
-    const keyedPost = await post(auth.orgId, { kind: "kick", label: "k", rtmpUrl: "rtmps://ingest.kick.example/app", streamKey: key() }, bearer);
+    const keyedPost = await post(auth.orgId, { kind: "kick", label: "k", rtmpUrl: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app", streamKey: key() }, bearer);
     expect(keyedPost.status).toBe(403);
     const keyedGet = await get(auth.orgId, bearer);
     expect(keyedGet.status).toBe(403);

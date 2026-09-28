@@ -1344,16 +1344,15 @@ export const StreamSessionCurrent = z
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
 
-const rtmpUrl = z
-  .string()
-  .max(500)
-  .refine((u) => /^rtmps?:\/\/[^\s/]+\/.+/.test(u), "an rtmp:// or rtmps:// ingest URL");
-
 export const CreateStreamTarget = z
   .object({
     kind: StreamTargetKind,
     label: z.string().min(1).max(80),
-    rtmpUrl,
+    /** Shape only here. Every destination rule — rtmp/rtmps, an allowlisted
+     *  provider host, its documented port, a path — lives in ONE place,
+     *  lib/stream-destinations.ts, applied by the usecase so its refusal is a
+     *  typed 422 DESTINATION_NOT_ALLOWED rather than a generic 400 (A18). */
+    rtmpUrl: z.string().max(500),
     streamKey: z.string().min(1).max(200),
     /** The destination's PUBLIC watch link (R16 allowlist) — what the replay fill copies. */
     watchUrl: streamUrlSchema.optional(),

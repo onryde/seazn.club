@@ -22,6 +22,9 @@ import { CompetitionHubDoc } from "../public-site/competition-hub-schema.ts";
 // Spectator W2, Task 14 — the player page's match lines. Same reasoning as the
 // hub's import above: `player-matches-schema.ts` imports zod and nothing else.
 import { PublicPlayerMatches } from "../public-site/player-matches-schema.ts";
+// Streaming R1, A18 — the destination refusal rules, for the 422 envelope below.
+// Zero imports in that file (it is client-safe), so the generator stays clean.
+import { DESTINATION_REFUSALS } from "../../lib/stream-destinations.ts";
 
 // ---------------------------------------------------------------------------
 // Route registry — one row per (path, method). The coverage test asserts this
@@ -218,7 +221,7 @@ export const ROUTES: RouteSpec[] = [
   // "fixtures" with the relay sessions they feed: there is no "organizations" tag (lane C A11).
   // Never key-reachable (key-scopes.ts).
   { path: "/orgs/{id}/stream-targets", method: "get", summary: "The organisation's streaming destinations (never the stream key)", tag: "fixtures", response: z.array(S.StreamTarget) },
-  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM)", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 422] },
+  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM). rtmpUrl must be rtmp/rtmps on an allowlisted provider ingest host (YouTube, Facebook, Twitch, Kick, Vimeo, LinkedIn, Restream, Cloudflare Stream) at a documented port, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 422] },
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/live", method: "get", summary: "Public org live status: every competition the org home lists, with its status and how many of its public fixtures are in play — what the org home's status chips poll", tag: "public", public: true, response: S.PublicOrgLive },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
@@ -556,6 +559,32 @@ const TEMPLATE_INSTANTIATION_FAILED_ENVELOPE = {
   },
 } as const;
 
+// SCOPED to POST /orgs/{id}/stream-targets' 422 only (Streaming R1, A18 — G2):
+// the destination allowlist's refusal carries `rule`, which check refused, as
+// a real HttpError `extra` (usecases/stream-targets.ts DestinationNotAllowedError).
+// The enum IS lib/stream-destinations.ts's list, imported, not retyped.
+const DESTINATION_NOT_ALLOWED_ENVELOPE = {
+  type: "object",
+  required: ["ok", "error", "requestId"],
+  properties: {
+    ok: { const: false },
+    error: {
+      type: "object",
+      required: ["code", "message"],
+      properties: {
+        ...BASE_ERROR_PROPERTIES,
+        rule: {
+          type: "string",
+          enum: [...DESTINATION_REFUSALS],
+          description: "On DESTINATION_NOT_ALLOWED (422): which destination rule refused rtmpUrl — never the URL itself",
+        },
+      },
+      additionalProperties: true,
+    },
+    requestId: { type: "string", format: "uuid" },
+  },
+} as const;
+
 // `"METHOD /path"` (the literal `RouteSpec.path`, `{id}` un-substituted) ->
 // status -> the envelope THAT route x status uses instead of the plain
 // ERROR_ENVELOPE. Consulted once, inside `operation()`'s `route.errors`
@@ -566,6 +595,7 @@ const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> =
     409: TEMPLATE_VERSION_RETIRED_ENVELOPE,
     422: TEMPLATE_INSTANTIATION_FAILED_ENVELOPE,
   },
+  "POST /orgs/{id}/stream-targets": { 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
 };
 
 function pathParams(path: string): object[] {

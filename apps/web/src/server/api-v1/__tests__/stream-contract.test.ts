@@ -13,6 +13,7 @@ import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
 import { MIGRATION } from "@/server/relay/__tests__/_stream-migration";
+import { DESTINATION_REFUSALS, destinationRefusal } from "@/lib/stream-destinations";
 
 /** The quoted members of `<column> text … check (<column> in ('a','b'))` inside ONE table of V410. */
 function checkList(table: string, column: string): string[] {
@@ -76,26 +77,33 @@ describe("relay wire enums equal their declarations", () => {
 describe("relay request schemas refuse what they must", () => {
   const target = { kind: "youtube", label: "Club", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" };
 
-  it("CreateStreamTarget: an rtmp:// or rtmps:// ingest URL with a host AND a path — nothing else", () => {
-    for (const rtmpUrl of ["rtmp://h/app", "rtmps://a.rtmps.youtube.com/live2", "rtmps://live.twitch.tv/app/sub"]) {
-      expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl }).success, rtmpUrl).toBe(true);
-    }
-    const refused = [
+  it("CreateStreamTarget checks rtmpUrl's TYPE and LENGTH only — every destination rule is lib/stream-destinations.ts's, so its refusal reaches the typed 422 (A18)", () => {
+    // Off-list destinations PARSE here: were the schema to refuse them, the route would answer a generic
+    // 400 VALIDATION and DESTINATION_NOT_ALLOWED could never be sent. The one validator refuses each.
+    const offList = [
       "https://a.rtmps.youtube.com/live2", // not an ingest scheme
       "srt://live.cloudflare.com:778/x",   // the phone's leg, not a destination
       "rtmps://a.rtmps.youtube.com",       // no path
-      "rtmps://a.rtmps.youtube.com/",      // empty path
-      "rtmps:///live2",                    // no host
-      "rtmp://h st/app",                   // whitespace in the host
-      " rtmp://h/app",                     // leading space
-      `rtmp://h/${"a".repeat(500)}`,       // over 500
+      "rtmp://127.0.0.1/live",             // an IP literal
+      "rtmp://seazn-relay.internal/live",  // the Fly private network
+      "",
     ];
     let checked = 0;
-    for (const rtmpUrl of refused) {
-      expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl }).success, rtmpUrl).toBe(false);
+    for (const rtmpUrl of offList) {
+      expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl }).success, rtmpUrl).toBe(true);
+      expect(destinationRefusal(rtmpUrl), rtmpUrl).not.toBeNull();
       checked++;
     }
-    expect(checked).toBe(refused.length);
+    expect(checked).toBe(6);
+    // What the schema DOES own: a string of at most 500.
+    const at500 = `rtmps://a.rtmps.youtube.com/${"a".repeat(500 - "rtmps://a.rtmps.youtube.com/".length)}`;
+    expect(at500.length).toBe(500);
+    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: at500 }).success).toBe(true);
+    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: at500 + "a" }).success).toBe(false);
+    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: 42 }).success).toBe(false);
+    const missing: Record<string, unknown> = { ...target };
+    delete missing.rtmpUrl;
+    expect(S.CreateStreamTarget.safeParse(missing).success).toBe(false);
   });
 
   it("CreateStreamTarget: strict, bounded label and key, the one watch-link allowlist", () => {
@@ -200,5 +208,31 @@ describe("the relay's routes are never key-reachable", () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  // A18: the refusal's `rule` is a real wire field (HttpError `extra`), so the spec documents it — SCOPED to this
+  // route's 422 (ERROR_SCHEMA_OVERRIDES), never folded into the shared envelope (openapi-coverage.test.ts's rule).
+  it("POST stream-targets documents 422 DESTINATION_NOT_ALLOWED and its `rule` enum; no other route's 422 gains `rule`", () => {
+    type ErrorProps = { properties?: Record<string, { enum?: string[] }> };
+    type Doc = {
+      paths: Record<string, Record<string, { summary?: string; responses: Record<string, { content: { "application/json": { schema: { properties: { error: ErrorProps } } } } }> }>>;
+    };
+    const doc = buildOpenApiDocument() as Doc;
+    const op = doc.paths["/api/v1/orgs/{id}/stream-targets"]!.post!;
+    expect(op.summary).toContain("DESTINATION_NOT_ALLOWED");
+    const err422 = op.responses["422"]!.content["application/json"].schema.properties.error;
+    expect(Object.keys(err422.properties ?? {}).sort()).toEqual(["code", "current_seq", "message", "rule"]);
+    expect([...(err422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
+    let others = 0;
+    for (const [path, ops] of Object.entries(doc.paths)) {
+      for (const [method, o] of Object.entries(ops)) {
+        if (path === "/api/v1/orgs/{id}/stream-targets" && method === "post") continue;
+        const e = o.responses["422"]?.content["application/json"].schema.properties.error;
+        if (!e) continue;
+        expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("rule");
+        others++;
+      }
+    }
+    expect(others, "other routes with a 422 checked").toBeGreaterThan(0);
   });
 });

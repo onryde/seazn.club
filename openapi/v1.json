@@ -53207,7 +53207,7 @@
         ]
       },
       "post": {
-        "summary": "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM)",
+        "summary": "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM). rtmpUrl must be rtmp/rtmps on an allowlisted provider ingest host (YouTube, Facebook, Twitch, Kick, Vimeo, LinkedIn, Restream, Cloudflare Stream) at a documented port, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`",
         "tags": [
           "fixtures"
         ],
@@ -53567,6 +53567,18 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "rule": {
+                          "type": "string",
+                          "enum": [
+                            "scheme",
+                            "userinfo",
+                            "ip_literal",
+                            "host",
+                            "port",
+                            "path"
+                          ],
+                          "description": "On DESTINATION_NOT_ALLOWED (422): which destination rule refused rtmpUrl — never the URL itself"
                         }
                       },
                       "additionalProperties": true
