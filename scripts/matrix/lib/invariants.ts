@@ -128,10 +128,18 @@ const I3: InvariantSpec = {
   abstainOn: [],
   abstainOnStageConfig: ["points", "carry_deltas", "rank_overrides"],
   requiresCompletedStage: false,
-  check(stages) {
+  check(stages, run) {
     const fails: string[] = [];
     let checked = 0;
     let skipped = 0;
+    // Under the expunge policy the engine reported, the cascade abandons every
+    // unlocked fixture of the withdrawn entrant and the table strikes it. The
+    // sport decides what an abandon FOLDS to — null for badminton, no_result
+    // for generic (Task 11 live run) — so "struck" is the cascade's status on
+    // that entrant's fixture, not a null outcome. Any other abandon keeps its
+    // outcome and stays unjudged below (its meaning is W2's rulebook).
+    const w = run.withdrawal;
+    const struck = (f: ObservedFixture) => w !== null && w.policy === "expunge" && f.status === "abandoned" && (f.home === w.entrantId || f.away === w.entrantId);
     for (const s of stages) {
       const rows = new Map(s.standings.flatMap((p) => p.rows).map((r) => [r.entrantId, r]));
       const byEntrant = new Map<string, ObservedFixture[]>();
@@ -144,11 +152,12 @@ const I3: InvariantSpec = {
       }
       for (const [e, fx] of byEntrant) if (!rows.has(e) && fx.some((f) => f.outcome !== null)) fails.push(`${e} has results but no row`);
       for (const [e, row] of rows) {
-        // A fixture with NO outcome (voided/expunged) contributes 0. One WITH an
-        // outcome counts only if the harness declared exactly that result; a
-        // result the server wrote on its own (cascade walkover, bye) makes the
-        // entrant unjudgeable here → skipped and counted.
-        const fx = (byEntrant.get(e) ?? []).filter((f) => f.outcome !== null);
+        // A fixture with NO outcome (voided), or one the expunge cascade struck,
+        // contributes 0. One WITH an outcome counts only if the harness
+        // declared exactly that result; a result the server wrote on its own
+        // (cascade walkover, bye) makes the entrant unjudgeable here → skipped
+        // and counted.
+        const fx = (byEntrant.get(e) ?? []).filter((f) => f.outcome !== null && !struck(f));
         if (fx.some((f) => f.declared === null || !sameOutcome(f.outcome, f.declared.forOutcome))) { skipped++; continue; }
         checked++;
         const expected = fx.reduce((sum, f) => sum + (f.home === e ? f.declared!.home : f.declared!.away), 0);

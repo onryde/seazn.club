@@ -230,6 +230,49 @@ describe("I3 table-points-equal-declared", () => {
     const stale = stage({ ...s, standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "b", rank: 3, points: 0 }, { entrantId: "c", rank: 2, points: 3 }] }] });
     expect(evaluateInvariant(I3, run([stale])).evidence.join(" ")).toMatch(/a: table 3, declared Σ 0/);
   });
+  // Task 11 live run (fm-w1a-a, league|generic|score|R4): generic folds
+  // core.abandon to {kind:"no_result"} (badminton to null), so an expunge
+  // cascade leaves the withdrawn entrant's fixtures abandoned WITH an outcome.
+  // Keying "struck" on outcome === null skipped all 8 entrants and I3 checked
+  // 0. Under the expunge policy the engine reported, a struck fixture is worth
+  // nothing — the live table showed the other 7 at P6 and the withdrawn one at
+  // P0. Scoped to that policy and that entrant: any other abandon stays
+  // unjudged (its per-sport meaning is W2's rulebook).
+  describe("an expunge cascade's struck fixtures contribute 0, whatever outcome the sport folds abandon to", () => {
+    const noResult: ObservedOutcome = { kind: "no_result" };
+    const struckAB = fx({ home: "a", away: "b", status: "abandoned", outcome: noResult, declared: { home: 3, away: 0, forOutcome: win("a") } });
+    const struckBC = fx({ home: "b", away: "c", status: "abandoned", outcome: noResult, declared: null });
+    const lockedBD = fx({ home: "b", away: "d", status: "finalized", outcome: win("d"), declared: { home: 0, away: 3, forOutcome: win("d") } });
+    const playedAC = fx({ home: "a", away: "c", outcome: win("a"), declared: { home: 3, away: 0, forOutcome: win("a") } });
+    const table = (a: number, c: number, d: number) => [{ poolId: null, rows: [
+      { entrantId: "a", rank: 1, points: a }, { entrantId: "d", rank: 2, points: d }, { entrantId: "c", rank: 3, points: c }, { entrantId: "b", rank: 4, points: 0 },
+    ] }];
+    const s = (a: number, c: number, d: number) => stage({ field: ["a", "b", "c", "d"], fixtures: [struckAB, struckBC, lockedBD, playedAC], standings: table(a, c, d) });
+    const withdrawal = (policy: "expunge" | "walkover", entrantId = "b") => ({ entrantId, afterRound: 1, policy, walkovers: 0, voided: 2, skippedFinalized: 1, before: [] });
+    const expunged = (st: ObservedStage, entrantId = "b") => run([st], { facts: facts("withdrawn", "expunged"), withdrawal: withdrawal("expunge", entrantId) });
+
+    it("positive: every entrant is judged — the struck no_result rows count 0, the locked result still counts", () => {
+      expect(evaluateInvariant(I3, expunged(s(3, 0, 3)))).toMatchObject({ verdict: "pass", checked: 4 });
+    });
+    it("negative: a table that still credits a struck fixture (generic no_result = shared draw points) reds", () => {
+      expect(evaluateInvariant(I3, expunged(s(4, 1, 3))).evidence.join(" ")).toMatch(/a: table 4, declared Σ 3/);
+    });
+    it("negative: a table that drops the LOCKED result (finalized, never struck) reds", () => {
+      expect(evaluateInvariant(I3, expunged(s(3, 0, 0))).evidence.join(" ")).toMatch(/d: table 0, declared Σ 3/);
+    });
+    it("scoped to expunge: no withdrawal, or a walkover policy, leaves a no_result abandon unjudged (skipped, counted)", () => {
+      for (const r of [run([s(3, 0, 3)]), run([s(3, 0, 3)], { facts: facts("withdrawn"), withdrawal: withdrawal("walkover") })]) {
+        const out = evaluateInvariant(I3, r);
+        expect(out).toMatchObject({ verdict: "pass", checked: 1 });
+        expect(out.evidence.join(" ")).toMatch(/skipped 3/);
+      }
+    });
+    it("scoped to the withdrawn entrant: another entrant's no_result abandon stays unjudged under expunge", () => {
+      const out = evaluateInvariant(I3, expunged(s(3, 0, 3), "d"));
+      expect(out).toMatchObject({ verdict: "pass", checked: 1 });
+      expect(out.evidence.join(" ")).toMatch(/skipped 3/);
+    });
+  });
   it("only FINISHED fixtures count: an in_play fixture carrying a provisional outcome is not a result yet", () => {
     const live = fx({ home: "a", away: "b", status: "in_play", outcome: win("a"), declared: null });
     const s = stage({ field: ["a", "b"], fixtures: [live], standings: [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 0 }, { entrantId: "b", rank: 2, points: 0 }] }] });
