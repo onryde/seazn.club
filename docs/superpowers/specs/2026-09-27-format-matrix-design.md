@@ -174,6 +174,10 @@ wave per §8 — division-level D1, D2, R13 in W9; D4 in W4; Q4 in W4; C5 in W5.
 
 **Cases that need times** (E4, the printed-sheet surface, X1, D5) are excluded
 from L3 by predicate — L3 skips scheduling — and covered in L1/L2.
+Within D5 only **D5b** (re-draw after fixtures are timed) needs times; **D5a**
+(re-draw after an untimed board is published) runs in L3, because
+`publishSchedule` accepts an untimed board (`schedule.ts:3650-3656`) — W1b
+atomisation, recorded in `_INDEX.md` decision log 2026-09-28.
 
 **Known UI-only 🚫** (ruling 30): an API route exists but no screen can send
 it, so the atom is 🚫 in L2 and still runs over HTTP in L3. M12b — the team

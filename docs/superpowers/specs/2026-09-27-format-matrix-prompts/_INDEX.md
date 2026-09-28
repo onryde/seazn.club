@@ -353,6 +353,10 @@ a peer session as the other.
     control, a cricket no-result, a cricket two-innings draw, a football
     award) and records CONFIRMED, REFUTED or UNRESOLVED. No check is loosened
     to pass.
+- **2026-09-28** — W1b atomisation: of the needs-times parent D5 only D5b
+  (re-draw after timing) is L3-excluded; D5a (re-draw after an untimed board
+  is published) runs in L3 — `publishSchedule` accepts an untimed board
+  (`schedule.ts:3650-3656`). Design §4 updated to say so (Task 4 review I-1).
 
 ## False premises found
 
