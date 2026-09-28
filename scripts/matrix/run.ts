@@ -74,6 +74,9 @@ export interface RunDeps {
   signIn(base: string, email: string): Promise<Session>;
   prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }>;
   driverFor(base: string, session: Session, orgId: string): OrganiserDriver;
+  /** MATRIX.md from the results just written (realDeps: renderMatrix). A seam
+   *  so the render-failure path is testable without bending shared state. */
+  render(results: RunResults): string;
 }
 
 /** The product refusal behind an error red (PF4): what a reader needs to find the call. */
@@ -259,7 +262,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
   // (renderMatrix refuses a case off the run's grid) cannot lose it.
   printSummary(summariseRun(cases, refusals));
   try {
-    writeFileSync(join(dir, "MATRIX.md"), renderMatrix(results));
+    writeFileSync(join(dir, "MATRIX.md"), deps.render(results));
   } catch (e) {
     warn(`matrix: results.json kept at ${resultsPath}; MATRIX.md failed — ${errText(e)}`);
     return EXIT.ABORTED;
@@ -334,6 +337,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
     // Promise executor, whose throw REJECTS — exactly what the `async` arrow
     // with no `await` did — so a failing git or handle open still reaches the
     // caller as a rejection, never a synchronous throw.
+    render: renderMatrix,
     harnessCommit: () => new Promise<string>((resolve) => { resolve(describeCommit((args) => execFileSync("git", args, { encoding: "utf8" }))); }),
     preflight: async (base) => {
       const { probes, dispose } = createRealPreflightProbes();

@@ -6,14 +6,15 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
-import type { CaseResult, CheckResult } from "../lib/results.ts";
+import { renderMatrix } from "../lib/render-matrix.ts";
+import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
 import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
-import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
+import { SLICE_ROWS } from "../lib/slice.ts";
 import { NOTES_CAP, closeHandles, describeCommit, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 
@@ -52,6 +53,7 @@ function deps(over: Partial<RunDeps> = {}): Deps {
     signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return session; },
     prepareCaseOrg: async (ctx, i) => { orgs.push(i); ctxs.push(ctx); return { orgId: `org-${i.slug}`, orgSlug: i.slug }; },
     driverFor: (base, s, orgId) => { const driver = new FakeLeagueDriver(orgId); drivers.push({ base, session: s, orgId, driver }); return driver; },
+    render: renderMatrix,
     ...over,
   };
   return d;
@@ -473,23 +475,23 @@ describe("runSlice — aborts after the start gates", () => {
   it("MATRIX.md failing to render still prints the PF4 summary and keeps results.json (exit 3)", async () => {
     const io = capture();
     const dir = dirFor();
-    // A sport off the catalogue grid: the case itself errors red (unknown sport),
-    // results.json takes it, and renderMatrix then refuses the off-grid case.
-    const sports = SLICE_SPORTS as unknown as string[];
-    const saved = [...sports];
-    sports.splice(1, 1, "nosuchsport");
-    try {
-      expect(await runSlice(deps(), ["--only", "league|nosuchsport", "--scenario", "LIFECYCLE", "--run-id", "a5", "--report-dir", dir])).toBe(3);
-    } finally {
-      sports.splice(0, sports.length, ...saved);
-    }
-    expect([...SLICE_SPORTS]).toEqual(saved);
-    expect(resultsIn(dir, "a5").cases.map((c) => [c.caseId, c.state])).toEqual([["league|nosuchsport|bwf|LIFECYCLE", "red"]]);
+    // Parked Task 9: the render is injected to throw (the refusal renderMatrix
+    // makes for a case off the grid), rather than splicing the exported
+    // SLICE_SPORTS in place — a test that needs a shared constant to be mutable.
+    const rendered: RunResults[] = [];
+    const render = (r: RunResults): string => { rendered.push(r); throw new Error("renderMatrix: case league|generic|score|LIFECYCLE (row 'league', sport 'generic') is not on the catalogue grid"); };
+    expect(await runSlice(deps({ render }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "a5", "--report-dir", dir])).toBe(3);
+    // The render was handed exactly what results.json holds.
+    expect(rendered).toHaveLength(1);
+    expect(JSON.parse(JSON.stringify(rendered[0]))).toEqual(resultsIn(dir, "a5"));
+    expect(resultsIn(dir, "a5").cases.map((c) => [c.caseId, c.state])).toEqual([["league|generic|score|LIFECYCLE", "works"]]);
     expect(existsSync(join(dir, "a5", "MATRIX.md"))).toBe(false);
     expect(io.out()).toContain("vacuous: none");
-    expect(io.out()).toContain("error reds: 1");
-    expect(io.out()).toMatch(/error-red league\|nosuchsport\|bwf\|LIFECYCLE: /);
-    expect(io.err()).toMatch(/matrix: results\.json kept at .*a5\/results\.json; MATRIX\.md failed — Error: renderMatrix: case league\|nosuchsport\|bwf\|LIFECYCLE .* is not on the catalogue grid/);
+    expect(io.out()).toContain("error reds: none");
+    expect(io.err()).toMatch(/matrix: results\.json kept at .*a5\/results\.json; MATRIX\.md failed — Error: renderMatrix: case league\|generic\|score\|LIFECYCLE .* is not on the catalogue grid/);
+  });
+  it("realDeps renders MATRIX.md with renderMatrix (the seam is wired, not inert)", () => {
+    expect(realDeps().render).toBe(renderMatrix);
   });
 });
 
