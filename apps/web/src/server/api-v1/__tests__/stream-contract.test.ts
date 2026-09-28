@@ -6,7 +6,8 @@
 //  - the key bans from the design ("an API key can never start a stream or
 //    read a destination", §9a Deny by default) applied to the ROUTES rows.
 // Pure — no DB.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { z } from "zod";
 import * as S from "../schemas";
 import { CaptureQrV1 } from "@/lib/capture-qr";
 import { buildOpenApiDocument, ROUTES } from "../openapi";
@@ -71,6 +72,29 @@ describe("relay wire enums equal their declarations", () => {
   it("the QR schema is RE-EXPORTED, never re-typed: schemas.ts's CaptureQrV1 IS lib/capture-qr.ts's", () => {
     expect(S.CaptureQrV1).toBe(CaptureQrV1);
     expect(S.StreamSessionCurrent.shape.qr.unwrap()).toBe(CaptureQrV1);
+  });
+
+  it("the four inferred types the Task 9 brief promised are EXPORTED, each exactly its schema's z.infer (review minor 6)", () => {
+    // Type-level, so tsc is the checker: in type position `S.X` names the exported TYPE, and with no `export type X`
+    // tsc refuses this file ("refers to a value, but is being used as a type"). A type that drifted from its schema
+    // fails toEqualTypeOf the same way.
+    expectTypeOf<S.StreamEndReason>().toEqualTypeOf<z.infer<typeof S.StreamEndReason>>();
+    expectTypeOf<S.StreamHealth>().toEqualTypeOf<z.infer<typeof S.StreamHealth>>();
+    expectTypeOf<S.StreamIngest>().toEqualTypeOf<z.infer<typeof S.StreamIngest>>();
+    expectTypeOf<S.RelayHeartbeatReply>().toEqualTypeOf<z.infer<typeof S.RelayHeartbeatReply>>();
+    // The runtime twin: a value written against each exported type is one its schema accepts unchanged.
+    const samples: [string, { parse(v: unknown): unknown }, unknown][] = [
+      ["StreamEndReason", S.StreamEndReason, "max_duration" satisfies S.StreamEndReason],
+      ["StreamHealth", S.StreamHealth, { fps: 30, bitrateKbps: null, lastBeatAt: null } satisfies S.StreamHealth],
+      ["StreamIngest", S.StreamIngest, { state: "connected", protocol: "srt" } satisfies S.StreamIngest],
+      ["RelayHeartbeatReply", S.RelayHeartbeatReply, { desiredState: "ending" } satisfies S.RelayHeartbeatReply],
+    ];
+    let checked = 0;
+    for (const [name, schema, value] of samples) {
+      expect(schema.parse(value), name).toEqual(value);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
 

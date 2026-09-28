@@ -1299,6 +1299,7 @@ export const StreamFailReason = z.enum([
 ]);
 /** How a COMPLETED session ended — the deadline is not a failure. */
 export const StreamEndReason = z.enum(["stopped", "max_duration"]);
+export type StreamEndReason = z.infer<typeof StreamEndReason>;
 export type StreamFailReason = z.infer<typeof StreamFailReason>;
 export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);
 export type StreamTargetKind = z.infer<typeof StreamTargetKind>;
@@ -1315,11 +1316,13 @@ export const StreamHealth = z.object({
   bitrateKbps: z.number().nullable(),
   lastBeatAt: z.string().nullable(),
 });
+export type StreamHealth = z.infer<typeof StreamHealth>;
 /** C6: the ingest STATE, worded as what it is — never "healthy". */
 export const StreamIngest = z.object({
   state: z.enum(["connected", "disconnected", "unknown"]),
   protocol: z.enum(["srt", "rtmps"]).nullable(),
 });
+export type StreamIngest = z.infer<typeof StreamIngest>;
 
 export const StreamSessionCurrent = z
   .object({
@@ -1390,6 +1393,7 @@ export const RelayHeartbeat = z
   .strict();
 export type RelayHeartbeat = z.infer<typeof RelayHeartbeat>;
 export const RelayHeartbeatReply = z.object({ desiredState: z.enum(["live", "ending"]) });
+export type RelayHeartbeatReply = z.infer<typeof RelayHeartbeatReply>;
 
 /** D4a (P5) i18n pattern ref for a not-yet-filled slot — {key, params}, never
  *  a prebuilt string. Named rather than inlined because THREE published

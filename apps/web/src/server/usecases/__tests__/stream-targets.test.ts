@@ -177,6 +177,36 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     expect(checked).toBe(3);
   });
 
+  it("pasted SURROUNDING whitespace is trimmed from rtmpUrl and streamKey (Task 9 review minor 7): the sealed pair is the clean one, and the same destination as the clean paste; a whitespace-only key is refused 422 and writes nothing", async () => {
+    const { auth } = await seedOrg();
+    const url = "rtmps://a.rtmps.youtube.com/live2";
+    // Each pad is a paste artifact from a platform dashboard: a leading space, a trailing newline, a CRLF, a tab.
+    const pads: [string, string][] = [[" ", "\n"], ["\t", " "], ["", "\r\n"], ["  ", "\t\n"]];
+    let checked = 0;
+    for (const [before, after] of pads) {
+      const streamKey = key();
+      const made = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "pasted", rtmpUrl: `${before}${url}${after}`, streamKey: `${before}${streamKey}${after}` });
+      expect(await sql.begin((tx) => readTargetSecret(tx, auth.orgId, made.id)), JSON.stringify([before, after])).toEqual({ url, streamKey });
+      // The same destination: the clean paste of the same pair is THIS row (A19 dedupes on what was sealed).
+      expect((await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "clean", rtmpUrl: url, streamKey })).id).toBe(made.id);
+      checked++;
+    }
+    expect(checked).toBe(pads.length);
+    expect(await listStreamTargets(auth, auth.orgId)).toHaveLength(pads.length);
+    // A key that is ONLY whitespace passes the schema's min(1) and is nothing once trimmed: refused, nothing sealed.
+    let refused = 0;
+    for (const blank of [" ", "\n", " \t\r\n "]) {
+      await expect(createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "blank", rtmpUrl: url, streamKey: blank }), JSON.stringify(blank))
+        .rejects.toMatchObject({ status: 422, message: "The stream key is empty" });
+      refused++;
+    }
+    expect(refused).toBe(3);
+    expect(await listStreamTargets(auth, auth.orgId)).toHaveLength(pads.length);
+    // Only the SURROUNDING bytes go: whitespace inside the url is still the validator's to refuse.
+    await expect(createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "inner", rtmpUrl: "rtmps://a.rtmps.youtube.com/live 2", streamKey: key() }))
+      .rejects.toMatchObject({ status: 422, code: "DESTINATION_NOT_ALLOWED" });
+  });
+
   it("tenancy: B's list never shows A's target, and a caller authenticated for B cannot list or create under A's id (404, nothing written anywhere)", async () => {
     const a = await seedOrg();
     const b = await seedOrg();
@@ -391,8 +421,39 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () =>
     expect(keyedPost.status).toBe(403);
     const keyedGet = await get(auth.orgId, bearer);
     expect(keyedGet.status).toBe(403);
+    // WHICH refusal (Task 9 review minor 4): apiKeyAuth has four 403 exits (auth.ts); the route ban is the one that
+    // says a key cannot use this endpoint at all — never the scope refusal a manage key would otherwise meet.
+    let doors = 0;
+    for (const [door, res] of [["POST", keyedPost], ["GET", keyedGet]] as const) {
+      const message = (await res.json()).error?.message as string;
+      expect(message, door).toMatch(/^API keys cannot access this endpoint/);
+      expect(message, door).not.toMatch(/scope/);
+      doors++;
+    }
+    expect(doors).toBe(2);
     // The accepted twin: the same org's session reaches the same doors.
     expect((await get(auth.orgId)).status).toBe(200);
     expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+  });
+
+  // Task 9 review minor 1: `assertUuid` is the route's first guard, and nothing reached it. Without it a malformed id
+  // reaches the membership lookup's uuid compare. Each door is asked by a SIGNED-IN organiser (so authentication is not
+  // what refuses) with a body that would otherwise be created (so validation is not what refuses).
+  it("a malformed org id is 404 'organization not found' at BOTH doors, before auth or the body are read — and writes nothing", async () => {
+    const auth = await organiser();
+    const good = { kind: "youtube", label: "Club", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: key() };
+    let checked = 0;
+    for (const badId of ["not-a-uuid", `${auth.orgId}x`, ""]) {
+      for (const [door, res] of [["GET", await get(badId)], ["POST", await post(badId, good)]] as const) {
+        expect(res.status, `${door} ${JSON.stringify(badId)}`).toBe(404);
+        expect((await res.json()).error?.message, `${door} ${JSON.stringify(badId)}`).toBe("organization not found");
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+    // The accepted twin: the same organiser, body and doors on the WELL-FORMED id.
+    expect((await post(auth.orgId, good)).status).toBe(201);
+    expect((await get(auth.orgId)).status).toBe(200);
   });
 });

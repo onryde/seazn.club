@@ -87,6 +87,12 @@ describe("parseCaptureQr — the v1 contract", () => {
     expect(parseCaptureQr({ v: 2 }, new Date((EXP + 1) * 1000))).toEqual({ ok: false, reason: "wrong_version" });
     // …while the SAME malformed body at v 1 is merely invalid (the twin that shows the version check is what fired).
     expect(parseCaptureQr({ v: 1 }, BEFORE)).toEqual({ ok: false, reason: "invalid" });
+    // ALSO expired, and otherwise well-formed (Task 9 review minor 2): a v 2 body carrying a PAST `exp` is still
+    // wrong_version — an expiry read before the version would call it expired, and an old app would say "rescan"
+    // where it must say "update". The twin: the same body at v 1, the same instant, IS expired, so expiry would fire.
+    const pastExp = new Date((EXP + 1) * 1000);
+    expect(parseCaptureQr({ ...valid(), v: 2 }, pastExp)).toEqual({ ok: false, reason: "wrong_version" });
+    expect(parseCaptureQr(valid(), pastExp)).toEqual({ ok: false, reason: "expired" });
   });
 
   it("expiry is at exp itself: one millisecond before is ok, exp and after are expired", () => {

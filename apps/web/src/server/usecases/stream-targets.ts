@@ -43,16 +43,25 @@ export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<S
 
 export async function createStreamTarget(auth: AuthCtx, orgId: string, body: CreateStreamTarget): Promise<StreamTarget> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  // Task 9 review minor 7: surrounding whitespace is the commonest paste error from a platform dashboard, and it is
+  // part of no ingest URL or stream key any listed service issues. It is TRIMMED, not refused: the organiser cannot
+  // see it, so a refusal is a round trip over an invisible character, while the trimmed value is exactly what the
+  // platform issued — the validator still judges every byte that is left, and whitespace INSIDE the url is still its
+  // to refuse. Untrimmed, a key sealed with a trailing newline was a permanent dead row (no edit or delete surface, G3).
+  const rtmpUrl = body.rtmpUrl.trim();
+  const streamKey = body.streamKey.trim();
   // Seal the CANONICAL url the validator accepted, never the raw body: the bytes dialled are the bytes checked.
-  const destination = checkDestination(body.rtmpUrl);
+  const destination = checkDestination(rtmpUrl);
   if (!destination.ok) throw new DestinationNotAllowedError(destination.rule);
+  // A whitespace-only key passes the schema's min(1) and is nothing once trimmed.
+  if (streamKey === "") throw new HttpError(422, "The stream key is empty");
   const watch = body.watchUrl === undefined ? null : streamUrlSchema.safeParse(body.watchUrl);
   if (watch && !watch.success) throw new HttpError(422, "invalid watch link");
   const watchUrl = watch ? watch.data : null;
   // A19: the same destination again is the EXISTING target (insertStreamTarget dedupes on the fingerprint), so the
   // reply is the STORED row — its kind, label and watch link — never this body echoed onto an id it did not write.
   const stored = (await sql.begin((tx) =>
-    insertStreamTarget(tx, { orgId, kind: body.kind, label: body.label, watchUrl, rtmp: { url: destination.url, streamKey: body.streamKey } }),
+    insertStreamTarget(tx, { orgId, kind: body.kind, label: body.label, watchUrl, rtmp: { url: destination.url, streamKey } }),
   )) as StoredStreamTarget;
   return {
     id: stored.id, kind: stored.kind as StreamTarget["kind"], label: stored.label, watchUrl: stored.watchUrl,
