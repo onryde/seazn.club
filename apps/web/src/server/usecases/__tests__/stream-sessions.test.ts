@@ -1139,6 +1139,20 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
 });
 
 describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every timed exit", () => {
+  it("G7 (A22(d)): Cloudflare's FRACTIONAL storage minutes are admitted — used rounds UP and the limit DOWN into the integer columns — instead of 22P02-ing every start", async () => {
+    const r = await rig({ credits: 1 });
+    // R0 measured `totalStorageMinutes` 396.84 and 33.31. 396.34 and +0.84 are chosen so Math.round would give the OTHER
+    // answer on both sides — a rounding mutant, or a truncation of `used`, cannot pass.
+    r.ingest.storage = { totalStorageMinutes: 396.34, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES + 0.84, videoCount: 2 };
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const [row] = await sql<{ storage_minutes_at_admission: number }[]>`select storage_minutes_at_admission from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row!.storage_minutes_at_admission).toBe(397);
+    const [snap] = await sql<{ used_minutes: number; limit_minutes: number; headroom_minutes: number; reserved_minutes: number }[]>`
+      select used_minutes, limit_minutes, headroom_minutes, reserved_minutes from stream_storage_snapshots where source = 'admission' and session_id = ${sessionId}`;
+    expect(snap).toMatchObject({ used_minutes: 397, limit_minutes: ROOMY_STORAGE_MINUTES });
+    expect(snap!.headroom_minutes).toBe(ROOMY_STORAGE_MINUTES - 397 - snap!.reserved_minutes);   // the V410 CHECK's own arithmetic, in integers
+  });
+
   it("F22: ending_at is written in the SAME statement as the transition into ending, and survives the reload as endingAt", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);

@@ -327,7 +327,7 @@ export async function apply(
  *  after the effect (effects run post-commit by design; their result is a
  *  fact about the world, not about the row). Never throws past the effect's
  *  own error. */
-async function recordEffect<T>(s: Session, type: string, source: "ingest" | "runner" | "output" | "domain", fn: () => Promise<T>, payload: Record<string, unknown> = {}): Promise<T> {
+async function recordEffect<T>(s: Session, type: string, source: "ingest" | "runner" | "output" | "domain" | "sweep", fn: () => Promise<T>, payload: Record<string, unknown> = {}): Promise<T> {
   const started = Date.now();
   const write = (result: "ok" | "failed", extra: Record<string, unknown>) =>
     sql.begin(async (tx) => {
@@ -354,13 +354,21 @@ async function recordEffect<T>(s: Session, type: string, source: "ingest" | "run
  *
  *  Narrowed to the provider call (re-review N3): if the LEDGER write fails — recordEffect's own `write`, before or after
  *  the DELETE — nothing recorded the outcome, and that database fault is thrown on untouched (the route wrapper reports
- *  it). Told apart by identity: only the exact error the provider call threw is caught here. */
+ *  it). Told apart by identity: only the exact error the provider call threw is caught here.
+ *
+ *  THIRD site, `sweep` (Task 12, A22(b)): the daily sweep's orphan pass destroys a listed Machine its session no longer
+ *  owns through THIS helper — the retry owner of every forced destroy that failed at the other two sites — so its row is
+ *  the same `force_destroy` effect (source `sweep`) and its failure the same alarm. The alarm names the LISTED Machine
+ *  (`payload.machineName`) when the caller knows it: the row's own `runner.name` is a different attempt's there.
+ *
+ *  A FAILED destroy also CLEARS the session's `runner_gone_confirmed_at` (V422, A22(c)): that mark lets admission skip
+ *  the provider for this session, and a Machine that survived a DELETE is exactly what admission must find again. */
 async function forceDestroy(
-  s: Session, machineId: string, site: "force_destroy" | "stale_create", payload: Record<string, unknown>, deps: SessionDeps,
+  s: Session, machineId: string, site: "force_destroy" | "stale_create" | "sweep", payload: Record<string, unknown>, deps: SessionDeps,
 ): Promise<boolean> {
   const provider: { failure?: unknown } = {};
   try {
-    await recordEffect(s, "force_destroy", "runner", async () => {
+    await recordEffect(s, "force_destroy", site === "sweep" ? "sweep" : "runner", async () => {
       try {
         return await deps.drivers.runner.destroy(machineId);
       } catch (err) {
@@ -371,11 +379,25 @@ async function forceDestroy(
     return true;
   } catch (err) {
     if (!("failure" in provider) || err !== provider.failure) throw err;   // the ledger failed, not the provider
-    const extra = { sessionId: s.id, machineId, machineName: s.runner.name, attempt: s.runner.attempt, site };
+    await sql`update fixture_stream_sessions set runner_gone_confirmed_at = null where id = ${s.id} and runner_gone_confirmed_at is not null`;
+    const machineName = typeof payload.machineName === "string" ? payload.machineName : s.runner.name;
+    const extra = { sessionId: s.id, machineId, machineName, attempt: s.runner.attempt, site };
     captureError(err, { orgId: s.orgId, route: "relay.force_destroy", extra });
     log.error({ ...extra, err: String(err) }, "stream session: forced Machine destroy failed — recorded and reported; the table retries it");
     return false;
   }
+}
+
+/** Task 12's orphan pass (A22(b)): destroy a Machine the provider LISTS under `sessionId` that its row does not own,
+ *  through the shared forceDestroy above (site `sweep`) — recorded on that session's own ledger and alarmed on failure,
+ *  never duplicated here. The row is read fresh for the ledger's attempt. `null` when the row no longer exists: a
+ *  sessionless Machine has no ledger to write, and the caller destroys it directly. */
+export async function destroyListedMachine(
+  sessionId: string, machine: { runnerId: string; name: string | null }, deps: SessionDeps,
+): Promise<boolean | null> {
+  const row = await readRow(sessionId);
+  if (!row) return null;
+  return forceDestroy(toSession(row), machine.runnerId, "sweep", { machineId: machine.runnerId, machineName: machine.name, reason: "sweep" }, deps);
 }
 
 /** The lazy expiry path (recommendation B). */
@@ -566,6 +588,17 @@ async function createRunner(s: Session, deps: SessionDeps) {
 // ---------------------------------------------------------------------------
 // Admission (C3 + B: reservations exclude sessions the policy already expires)
 // ---------------------------------------------------------------------------
+/** G7 (lane C A22(d)): Cloudflare reports storage in FRACTIONAL minutes (R0 measured `totalStorageMinutes` 396.84 and
+ *  33.31), and every column that records it is an INTEGER (V410: `storage_minutes_at_admission`, and the snapshot's
+ *  used/limit/reserved/headroom, whose CHECK is `headroom = limit − used − reserved`). Postgres refuses a fraction for an
+ *  integer parameter outright (22P02), so an unfitted number failed EVERY start and every sweep snapshot. The ONE place
+ *  the reading is fitted, for admission and the sweep alike, and conservatively: `used` rounds UP and the limit DOWN, so
+ *  the headroom computed from the fitted pair can only UNDER-state the room — never admit a match the account cannot hold.
+ *  Integers pass through untouched. */
+export function storageUsageForColumns(u: StorageUsage): StorageUsage {
+  return { totalStorageMinutes: Math.ceil(u.totalStorageMinutes), totalStorageMinutesLimit: Math.floor(u.totalStorageMinutesLimit), videoCount: u.videoCount };
+}
+
 export async function storageHeadroomMinutes(exec: Tx | typeof sql, usage: StorageUsage, now: Date): Promise<number> {
   const rows = await exec<Row[]>`select ${COLS} from fixture_stream_sessions where state in ${sql([...ACTIVE_STATES])}`;
   const reservations = rows
@@ -664,7 +697,13 @@ async function targetHolderFor(
  *  fixture's → `target_in_use` naming its court (`otherFixture`; a fixture-less session, its fixture deleted, is another
  *  fixture's). An ACTIVE session is never in this query: an active holder on another fixture was already refused, untouched,
  *  by `targetHolderFor`, and this fixture's own active session is refused `active_session` by `admit` — a live Machine is
- *  never destroyed from an admission. */
+ *  never destroyed from an admission.
+ *
+ *  A22(c) (Task 10 minor n1, V422): a row the daily sweep CONFIRMED gone — runner `destroyed` AND
+ *  `runner_gone_confirmed_at` set, both — is left out, so a start whose every prior Machine is confirmed gone never asks
+ *  the provider: a Fly outage no longer 500s a PASSTHROUGH start on a fixture whose old Machine died days ago. Both halves
+ *  are read, never the mark alone: a late create_ok moves a marked row's runner `destroyed → lost`, which puts it back
+ *  here whatever the column holds, and a forced destroy that fails clears the mark (forceDestroy). */
 async function tearDownPriorMachines(
   fixtureId: string, targetId: string, orgId: string, deps: SessionDeps,
 ): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
@@ -674,7 +713,8 @@ async function tearDownPriorMachines(
     select p.*, t.label as holder_label, c.name as holder_court
       from (select ${COLS} from fixture_stream_sessions
              where org_id = ${orgId} and (fixture_id = ${fixtureId} or target_id = ${targetId})
-               and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}) p
+               and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}
+               and not (runner_state = 'destroyed' and runner_gone_confirmed_at is not null)) p
       join org_stream_targets t on t.id = p.target_id
       left join fixtures f on f.id = p.fixture_id
       left join courts c on c.id = f.court_id`;
@@ -777,7 +817,7 @@ export async function createSession(
     // it. The same authority consumeForSession asks at go-live, on the same clock (deps.now()).
     reuseWindowOpen(sql, { orgId, fixtureId }, deps.now()),
     sql<{ id: string }[]>`select id from org_stream_targets where id = ${body.targetId} and org_id = ${orgId}`,
-    deps.drivers.ingest.storageUsage(),   // outside the transaction
+    deps.drivers.ingest.storageUsage().then(storageUsageForColumns),   // outside the transaction; G7: fitted to the integer columns
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
     // existing single authority (it already filters expired overrides); no resolver edit. Under V402
     // every R1 admission is an override, so the FALSE branch is exercised as a unit-level assertion on
