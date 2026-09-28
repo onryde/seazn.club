@@ -40,7 +40,7 @@ export function renderMatrix(results: RunResults): string {
   const byCell = new Map<string, CaseState[]>();
   for (const c of results.cases) {
     if (!rows.includes(c.row) || !sports.includes(c.sport)) {
-      throw new Error(`renderMatrix: case ${c.caseId} (row '${c.row}', sport '${c.sport}') is not on the catalogue grid`);
+      throw new Error(`renderMatrix: case ${c.caseId} (row '${c.row}', sport '${c.sport}') is not on this run's own grid (results.grid)`);
     }
     const k = cellOf(c.row, c.sport);
     byCell.set(k, [...(byCell.get(k) ?? []), c.state]);

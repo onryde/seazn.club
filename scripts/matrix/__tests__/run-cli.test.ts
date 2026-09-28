@@ -479,7 +479,7 @@ describe("runSlice — aborts after the start gates", () => {
     // makes for a case off the grid), rather than splicing the exported
     // SLICE_SPORTS in place — a test that needs a shared constant to be mutable.
     const rendered: RunResults[] = [];
-    const render = (r: RunResults): string => { rendered.push(r); throw new Error("renderMatrix: case league|generic|score|LIFECYCLE (row 'league', sport 'generic') is not on the catalogue grid"); };
+    const render = (r: RunResults): string => { rendered.push(r); throw new Error("renderMatrix: case league|generic|score|LIFECYCLE (row 'league', sport 'generic') is not on this run's own grid (results.grid)"); };
     expect(await runSlice(deps({ render }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "a5", "--report-dir", dir])).toBe(3);
     // The render was handed exactly what results.json holds.
     expect(rendered).toHaveLength(1);
@@ -488,7 +488,7 @@ describe("runSlice — aborts after the start gates", () => {
     expect(existsSync(join(dir, "a5", "MATRIX.md"))).toBe(false);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
-    expect(io.err()).toMatch(/matrix: results\.json kept at .*a5\/results\.json; MATRIX\.md failed — Error: renderMatrix: case league\|generic\|score\|LIFECYCLE .* is not on the catalogue grid/);
+    expect(io.err()).toMatch(/matrix: results\.json kept at .*a5\/results\.json; MATRIX\.md failed — Error: renderMatrix: case league\|generic\|score\|LIFECYCLE .* is not on this run's own grid/);
   });
   it("realDeps renders MATRIX.md with renderMatrix (the seam is wired, not inert)", () => {
     expect(realDeps().render).toBe(renderMatrix);

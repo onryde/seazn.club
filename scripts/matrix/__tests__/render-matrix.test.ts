@@ -112,7 +112,7 @@ describe("renderMatrix — table safety", () => {
     expect(line).not.toContain("\n");
     expect(cells(line)[2]).toBe('error: ZodError: [ {"path": "a\\|b"} ]');
   });
-  it("a case off the catalogue grid is refused, never silently dropped from the grid", () => {
+  it("a case off the run's own grid is refused, never silently dropped from the grid", () => {
     expect(() => renderMatrix(run([kase({ caseId: "leauge|generic", row: "leauge" })]))).toThrow(/leauge/);
     expect(() => renderMatrix(run([kase({ caseId: "league|curling", sport: "curling" })]))).toThrow(/curling/);
   });
@@ -130,7 +130,7 @@ describe("renderMatrix — the grid is the run's own (T11 review M4)", () => {
     expect(lineStarting(md, "| row |")).not.toContain("badminton");
   });
   it("a case on the live catalogue but off the run's grid is refused — the check reads the stored grid", () => {
-    expect(() => renderMatrix(run([kase({ caseId: "league|badminton", sport: "badminton" })], small))).toThrow(/league\|badminton .*not on the catalogue grid/);
+    expect(() => renderMatrix(run([kase({ caseId: "league|badminton", sport: "badminton" })], small))).toThrow(/league\|badminton .*not on this run's own grid \(results\.grid\)/);
     expect(() => renderMatrix(run([kase({ caseId: "swiss|generic", row: "swiss" })], small))).toThrow(/swiss\|generic/);
   });
   it("a sport the live catalogue has never heard of renders when the run's grid has it", () => {
