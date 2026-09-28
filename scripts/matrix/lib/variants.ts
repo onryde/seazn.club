@@ -5,12 +5,13 @@
 // buildRuleOverride builds over the fields visibleRuleFields shows, validated
 // by the engine's configSchema. Deterministic greedy cover: no clock, no
 // randomness (R11) — a regeneration is a reviewed diff of variants.json.
-import type { StageKind } from "@seazn/engine/core";
+import { EngineError, type StageKind } from "@seazn/engine/core";
 import { SPORT_RULES, buildRuleOverride, visibleRuleFields, type RuleField } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, builderDefaultVariant, stagesForRow, type RowKey } from "./catalogue.ts";
 import { foldStream } from "./fold.ts";
-import { resolveSportCfg, sportModule, variantKeys } from "./sport-cfg.ts";
+import { CfgInvalid, resolveSportCfg, sportModule, variantKeys } from "./sport-cfg.ts";
 import { generateStream, matchesRequest } from "./streams/index.ts";
+import { GeneratorUnsupported, OutcomeUnreachable } from "./streams/types.ts";
 
 /** scripts/sync-sports.ts:32-36 (not exported there) — the display name every
  *  system variant is stored under, and so what the builder orders by
@@ -51,10 +52,12 @@ export class FieldUnbounded extends Error {
 export function levelsOf(field: RuleField): Level[] {
   switch (field.kind) {
     case "number": {
-      if (field.min === undefined || field.max === undefined) throw new FieldUnbounded(field.key);
-      const out: Level[] = [{ cls: "min", raw: String(field.min) }, { cls: "max", raw: String(field.max) }];
-      const mid = Math.round((field.min + field.max) / 2);
-      if (mid > field.min && mid < field.max) out.push({ cls: "interior", raw: String(mid) });
+      const min = field.min ?? Number.NaN;
+      const max = field.max ?? Number.NaN;
+      if (!Number.isFinite(min) || !Number.isFinite(max)) throw new FieldUnbounded(field.key);
+      const out: Level[] = [{ cls: "min", raw: String(min) }, { cls: "max", raw: String(max) }];
+      const mid = Math.round((min + max) / 2);
+      if (mid > min && mid < max) out.push({ cls: "interior", raw: String(mid) });
       out.push({ cls: "blank", raw: "" });
       return out;
     }
@@ -125,6 +128,23 @@ export class VariantGenerationStuck extends Error {
   }
 }
 
+/** Validations the rescue search may spend per sport. Today's registry spends
+ *  well under a tenth of it (the busiest sport, carrom, makes ~8.1k validate
+ *  calls in its whole generation, at ~40 µs each); football's non-row product
+ *  is ~590k, so one product change that refused a football level everywhere
+ *  would otherwise search for minutes. Past the budget the generation stops
+ *  by name instead. */
+export const RESCUE_BUDGET = 50_000;
+
+export class VariantRescueBudgetExceeded extends Error {
+  readonly sport: string;
+  constructor(sport: string, pair: string, budget: number) {
+    super(`variants: ${sport}: the rescue search spent ${budget} validations and reached ${pair} — refusing to search on; a product change likely refuses a level everywhere`);
+    this.name = "VariantRescueBudgetExceeded";
+    this.sport = sport;
+  }
+}
+
 export function buildSportVariants(sport: string, deps: { validate?: typeof buildVariant } = {}): SportVariants {
   const validate = deps.validate ?? buildVariant;
   const fs = factorsFor(sport);
@@ -155,10 +175,15 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
   // valid (its rescue: 1 level, then any 2, … up to all of them), or listed.
   // The search is exhaustive, so a listed pair has no valid completion at all.
   // Row is never varied: validate takes (sport, preset, values), so the row
-  // cannot change its answer.
+  // cannot change its answer. The search is bounded by RESCUE_BUDGET.
   const isDefault = (k: number, v: number): boolean => (k === 1 ? v === presetIx : lvl(k, v).raw === "");
+  let rescueSpent = 0;
+  let rescuing = "";
   const completeWith = (asg: number[], free: readonly number[], from: number, left: number): number[] | null => {
-    if (left === 0) return check(asg).ok ? [...asg] : null;
+    if (left === 0) {
+      if (++rescueSpent > RESCUE_BUDGET) throw new VariantRescueBudgetExceeded(sport, rescuing, RESCUE_BUDGET);
+      return check(asg).ok ? [...asg] : null;
+    }
     for (let x = from; x < free.length; x++) {
       const k = free[x];
       for (let v = 0; v < fs[k].levels.length; v++) {
@@ -181,6 +206,7 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     if (r.ok) continue;
     const free: number[] = [];
     for (let k = 1; k < F; k++) if (k !== i && k !== j) free.push(k);
+    rescuing = `${label(i, a)} × ${label(j, b)}`;
     let found: number[] | null = null;
     for (let depth = 1; depth <= free.length && found === null; depth++) found = completeWith(asg, free, 0, depth);
     if (found !== null) {
@@ -228,15 +254,27 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
 
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
+/** The refusals a generate-then-fold may answer with: the engine's own, and the
+ *  stream registry's two named gaps. Anything else is a harness fault. */
+const SCORABLE_REFUSALS = [EngineError, GeneratorUnsupported, OutcomeUnreachable] as const;
+
 /** Can the harness score a fixture under this case? Win for each side, on the
  *  row's first stage kind, generated then folded through the real engine.
+ *  Only a refusal becomes a reason (a schema refusal of the cfg, or one of
+ *  SCORABLE_REFUSALS); any other throw — an unknown preset, a TypeError in a
+ *  generator — is rethrown, so a harness crash reds instead of landing as data.
  *  `deps.generate` exists only so a test can reach the fold-mismatch reason:
  *  no shipped generator is known to produce a stream that folds to the other
  *  side, so the branch is a guard, and a guard owes a test that reaches it. */
 export function scorable(vc: VariantCase, deps: { generate?: typeof generateStream } = {}): string | null {
   const generate = deps.generate ?? generateStream;
   let cfg: unknown;
-  try { cfg = resolveSportCfg(vc.sport, vc.preset, vc.overrides); } catch (e) { return `cfg: ${errText(e)}`; }
+  try {
+    cfg = resolveSportCfg(vc.sport, vc.preset, vc.overrides);
+  } catch (e) {
+    if (!(e instanceof CfgInvalid)) throw e;
+    return `cfg: ${errText(e)}`;
+  }
   const stageKind = stagesForRow(vc.row)[0].kind as StageKind;
   for (const winner of ["home", "away"] as const) {
     const req = { sportKey: vc.sport, cfg, stageKind, home: "matrix-home", away: "matrix-away", outcome: { kind: "win", winner } as const };
@@ -245,6 +283,7 @@ export function scorable(vc: VariantCase, deps: { generate?: typeof generateStre
       const out = foldStream(sportModule(vc.sport), cfg, req.home, req.away, events).outcome;
       if (matchesRequest(req, out) !== "match") return `win-${winner}: folded ${JSON.stringify(out)}`;
     } catch (e) {
+      if (!SCORABLE_REFUSALS.some((C) => e instanceof C)) throw e;
       return `win-${winner}: ${errText(e)}`;
     }
   }
