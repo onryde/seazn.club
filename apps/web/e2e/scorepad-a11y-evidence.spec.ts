@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { apiJson, fixturePath, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -51,7 +52,7 @@ import {
  *
  * Each test drives exactly one interaction — tap the home half of the
  * scoreboard (ScoringPad v3, tapModel S: the half IS the button; repeated
- * once, just before the Tab walk, see the race below) and measure
+ * for the Tab walk, see the race below) and measure
  * with the detail dock open, BEFORE any chip is chosen. R7/A1 moved `generic`
  * onto the v3 lane, so the "Add points" form this file used to expand no
  * longer exists; the dock is its direct successor as the one state that is
@@ -66,8 +67,10 @@ import {
  * the build it tests. Every measurement below therefore runs against a dock
  * the caller has just opened, and `openAmendDock` asserts it is visible rather
  * than assuming it. The Tab walk comes last and CHANGES ANSWER when the dock
- * has closed, so `recordEvidence` re-opens the dock for it — a second tap on
- * the same half — and checks it stayed open on both sides of the walk.
+ * has closed, so it gets a dock of its own (`openFreshAmendDock`), must find
+ * that dock open on both sides of the walk, and is redone in a new hold a
+ * bounded number of times when it does not; see `recordEvidence` for the two
+ * ways the dock closes under it.
  *
  * The horizontal-scroll number is measured with the SAME clip-lifting
  * technique `expectNoHorizontalScroll` (helpers.ts) uses, not a naive
@@ -184,6 +187,48 @@ async function openAmendDock(scope: Locator): Promise<void> {
   });
 }
 
+/** How many complete Tab walks `recordEvidence` tries before it reports
+ *  every attempt as a failure. Each attempt runs in a fresh hold of its own,
+ *  so a walk that lost to the hold tick is redone in a whole new window
+ *  rather than resumed in what is left of the old one. */
+const TAB_WALK_ATTEMPTS = 3;
+
+/** `openAmendDock`, but guaranteed to open a NEW dock — one whose hold
+ *  window starts now — rather than to find the old one still on screen.
+ *
+ *  `openAmendDock` alone cannot promise that while a dock is already up. A
+ *  second tap does not re-arm the dock in place: queue.ts's `enqueueHeld`
+ *  first flushes the tap already held (`flushHeldBefore` → its `onDue` →
+ *  pad-host's `setHeld(null)`: dock unmounted), then stores the new one, and
+ *  only then does pad-host set `held` again (dock mounted). The click
+ *  returns before any of that, so `toBeVisible` passes at once on the OLD
+ *  dock, and whatever samples the dock next can land in the gap between the
+ *  two — main's run 36358901720 (device @320 on both attempts, console
+ *  @1280/375 once each): `dockOpenBeforeWalk: false`, followed by a walk that
+ *  began at the NEW dock's "Send now".
+ *
+ *  So the held tap is sent first with the dock's own "Send now" (the
+ *  user-reachable way to end a hold early — `releaseHeld`, the same `onDue`
+ *  as the natural tick), the dock is waited on until it is GONE, and only
+ *  then is the half tapped; a dock that shows after that can only be the new
+ *  tap's. The click may miss — the hold can lapse on its own between the
+ *  check and the click — because the `toBeHidden` after it is the actual
+ *  guard, budgeted from `HOLD_MS` (AGENTS.md rule 20), so a missed click
+ *  still ends in the natural close. */
+async function openFreshAmendDock(scope: Locator): Promise<void> {
+  const dock = scope.locator('[data-role="v3-dock"]');
+  if (await dock.isVisible()) {
+    await dock
+      .getByTestId("pad-send-now")
+      .click({ timeout: 2_000 })
+      .catch(() => {});
+  }
+  await expect(dock, "the previous hold must end before a fresh dock can be told apart from it").toBeHidden({
+    timeout: HOLD_MS + 5_000,
+  });
+  await openAmendDock(scope);
+}
+
 interface FocusStep {
   name: string;
   tag: string;
@@ -199,13 +244,18 @@ interface FocusStep {
  *  attribute (not a derived coordinate/text key) is the identity check for
  *  "have we already visited this exact node" — the only reliable way to
  *  detect a genuine focus trap without a false positive from two
- *  similarly-labelled controls. */
+ *  similarly-labelled controls. The stamps are cleared first: a walk redone
+ *  on the same page (`recordEvidence`'s retry) would otherwise read every
+ *  node the previous walk visited as a trap. */
 async function tabThroughPad(
   page: Page,
   scopeSelector: string,
   maxSteps = 60,
 ): Promise<{ order: FocusStep[]; trapped: boolean; exitedCleanly: boolean }> {
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.evaluate(() => {
+    for (const el of document.querySelectorAll("[data-a11y-tab-seen]")) el.removeAttribute("data-a11y-tab-seen");
+    (document.activeElement as HTMLElement | null)?.blur();
+  });
   const order: FocusStep[] = [];
   let enteredPad = false;
   let exitedCleanly = false;
@@ -357,44 +407,62 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
   const axeViolations = scan.violations;
   expect.soft(scan.serious, JSON.stringify(scan.serious, null, 2)).toEqual([]);
 
-  // RE-ARM THE DOCK, THEN WALK. Everything above takes four to six seconds on
-  // a 2-vCPU CI runner, against a dock CI holds for three, so by this line the
-  // dock the caller opened has usually flushed and closed — and the walk's
-  // answer CHANGES rather than merely ages: with the dock open, Tab from the
-  // tapped half lands on the dock's own controls (Send now, then the amount
-  // chips); once it has closed, Tab from that same point lands on the
-  // Activity list's first Void button, BELOW the pad, and the walk records
-  // zero pad controls — `no interactive control in the pad was reachable by
-  // Tab` on every console width (PR #888's dispatched e2e run 36337877584;
-  // main reproduces it locally). So the walk gets a dock of its own: tap the
-  // same half again, which is also exactly the start point the walk has
-  // always had.
+  // A FRESH DOCK FOR THE WALK, AND A NEW ONE IF IT DID NOT HOLD. Everything
+  // above takes four to six seconds on a 2-vCPU CI runner, against a dock CI
+  // holds for three, and the walk's answer CHANGES rather than merely ages
+  // once the dock is gone: with it open, Tab from the tapped half lands on the
+  // dock's own controls (Send now, then the amount chips); after it closes,
+  // Tab from that same point lands on the Activity list's first Void button,
+  // BELOW the pad, and the walk records zero pad controls (PR #888's
+  // dispatched run 36337877584).
+  //
+  // The dock closes for exactly two reasons, and neither is focus or blur —
+  // nothing in pad-host.tsx or detail-dock.tsx listens for either, and no
+  // interaction extends a hold: (1) the hold tick, one plain `setTimeout` of
+  // `HOLD_MS` armed in queue.ts's `enqueueHeld` and never pushed back; (2) the
+  // NEXT tap, which flushes the held one before holding its own — see
+  // `openFreshAmendDock` for why a bare re-tap here sampled the gap between
+  // the two docks on CI (run 36358901720).
+  //
+  // So every attempt starts from a dock that is provably new and must find it
+  // open on BOTH sides of the walk. Nothing during a walk can open a dock —
+  // only a tap holds one, and Tab taps nothing — so open before and open
+  // after is open throughout, and the recorded ORDER is that state's order. A
+  // walk the hold tick cut short is thrown away and redone in a whole new
+  // window, up to `TAB_WALK_ATTEMPTS` times. When every attempt loses, the
+  // assertion fails with each attempt's timings — the signal that a walk has
+  // become slower than `HOLD_MS` itself, not a flake to retry past.
   //
   // Not "walk first": that pushes the hit-target sweep into the dock's
   // closing, where `measureHitTargets`' `nth(i)` outlives the element it
   // counted and `boundingBox()` waits out the whole test timeout (seen
-  // locally, device @1280, 90s). Re-arming here leaves every measurement
-  // above exactly where it was, against the caller's tap.
-  //
-  // The dock is checked on BOTH sides of the walk. Open before is what makes
-  // the start point the dock-open state; open after is what makes the
-  // recorded ORDER that state's order, rather than one the dock closed
-  // halfway through. A runner slow enough to lose even this race fails here,
-  // by name, instead of as an empty walk.
+  // locally, device @1280, 90s). Walking last leaves every measurement above
+  // exactly where it was, against the caller's tap.
   const dock = scope.locator('[data-role="v3-dock"]');
-  try {
-    await openAmendDock(scope);
-  } catch (err) {
-    expect.soft(false, `re-arming the dock for the Tab walk: ${err instanceof Error ? err.message : String(err)}`).toBe(true);
+  const attempts: Array<Record<string, unknown>> = [];
+  let focus: Awaited<ReturnType<typeof tabThroughPad>> = { order: [], trapped: false, exitedCleanly: false };
+  let dockOpenBeforeWalk = false;
+  let dockOpenAfterWalk = false;
+  for (let attempt = 1; attempt <= TAB_WALK_ATTEMPTS; attempt++) {
+    try {
+      await openFreshAmendDock(scope);
+    } catch (err) {
+      attempts.push({ attempt, rearmFailed: err instanceof Error ? err.message.split("\n")[0] : String(err) });
+      continue;
+    }
+    const walkStart = Date.now();
+    dockOpenBeforeWalk = await dock.isVisible();
+    focus = await tabThroughPad(page, scopeSelector);
+    dockOpenAfterWalk = await dock.isVisible();
+    attempts.push({ attempt, dockOpenBeforeWalk, dockOpenAfterWalk, steps: focus.order.length, walkMs: Date.now() - walkStart });
+    if (dockOpenBeforeWalk && dockOpenAfterWalk) break;
   }
-  const dockOpenBeforeWalk = await dock.isVisible();
-  const focus = await tabThroughPad(page, scopeSelector);
-  const dockOpenAfterWalk = await dock.isVisible();
+  console.log(`[a11y-walk ${comboName}] HOLD_MS=${HOLD_MS} ${JSON.stringify(attempts)}`);
   const jumps = backwardJumps(focus.order);
   expect
     .soft(
       { dockOpenBeforeWalk, dockOpenAfterWalk },
-      `the amend dock must be open for the whole Tab walk, or the order below is not the dock-open state's: ${JSON.stringify(focus.order)}`,
+      `the amend dock must be open for the whole Tab walk, or the order below is not the dock-open state's — ${attempts.length} attempt(s) at HOLD_MS ${HOLD_MS}: ${JSON.stringify(attempts)}; last order: ${JSON.stringify(focus.order)}`,
     )
     .toEqual({ dockOpenBeforeWalk: true, dockOpenAfterWalk: true });
   expect.soft(focus.order.length, "no interactive control in the pad was reachable by Tab").toBeGreaterThan(0);
@@ -460,6 +528,7 @@ async function recordEvidence(page: Page, comboName: string, scopeSelector: stri
           backwardJumps: jumps,
           dockOpenBeforeWalk,
           dockOpenAfterWalk,
+          walkAttempts: attempts,
         },
       },
       null,
