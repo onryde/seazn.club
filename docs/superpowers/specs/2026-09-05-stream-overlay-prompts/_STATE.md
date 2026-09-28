@@ -453,6 +453,22 @@ full polish; this exemption is `/admin` only.
   though the brand passed. If it does, it hits only the "Connect YouTube" consent, never login, because
   the scope is requested incrementally rather than at sign-in. Verify before planning around it.
 
+**OWNER RULING 2026-09-28 — `/admin` is DESKTOP-ONLY and exempt from the mobile bar.** Owner's words:
+*"we don't need to worry about /admin mobile responsive design, admin always view in desktop."* This
+goes further than the no-polish ruling earlier the same day and replaces the width half of the standing
+UI rule for `/admin` alone; `AGENTS.md`'s bullet was amended to say so. Consequences:
+- An `/admin` change is signed off at **1280 only** — no 320, no 768, no phone-width captures.
+- **The `/admin` page overflow at 320 (44px) and 360 (4px) is CLOSED as a non-issue**, not deferred. It
+  is `app/admin/layout.tsx:31-37`'s staff identity spans, it predates every branch in this programme, and
+  the panel was measured to contribute nothing (mounted vs removed identical at five widths). Do not fix
+  it, do not work around it, and do not re-raise it as a finding.
+- Task 7A-ii's fix round was narrowed mid-flight: the 320 and 768 captures are no longer owed, only the
+  1280 pair and the flow shot if the markup moved.
+- **Every other surface keeps the full bar** — mobile-first, 1280 / 320 / 768, no horizontal scroll. The
+  exemption is `/admin` and nothing else.
+- Guard against the obvious over-application: a test that proves real behaviour is NOT deleted merely
+  because it happens to run at a narrow width.
+
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
