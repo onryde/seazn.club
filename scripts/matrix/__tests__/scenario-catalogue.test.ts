@@ -1,14 +1,16 @@
 // Design §4's scenario catalogue as data (W1b Task 4; rulings 26, 28, 30).
 // Every expected value here is parsed from the design doc, the rulings in
-// _INDEX.md or W1a's own scenario registry — never read back from
-// scenario-catalogue.ts. No count is typed (pre-flight ruling R-PF2): the
+// _INDEX.md, the W1b plan or W1a's own scenario registry — never read back
+// from scenario-catalogue.ts. No count is typed (pre-flight ruling R-PF2): the
 // design declares its own parent count and the test reads it.
 //
 // The catalogue is sport-free (a scenario id does not vary by sport); the one
 // sport-shaped input, a regression's cell, is swept over the whole registry.
 import { readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type * as TS from "typescript";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
@@ -17,11 +19,19 @@ import {
   ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions,
 } from "../lib/scenario-catalogue.ts";
 
+// `typescript` through require, not import: vite's transform chokes on the
+// ~9 MB CJS bundle and the file then fails to collect (see
+// apps/web/src/__tests__/app-module-exports.test.ts). The type side is erased.
+const ts: typeof TS = createRequire(import.meta.url)("typescript");
+
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const design = readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-design.md"), "utf8");
+const design =readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-design.md"), "utf8");
+const INDEX = readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md"), "utf8");
+const PLAN = readFileSync(resolve(REPO, "docs/superpowers/plans/2026-09-28-format-matrix-w1b.md"), "utf8");
 const flat = design.replace(/\n/g, " ");
 const section = design.slice(design.indexOf("Catalogue ("), design.indexOf("**Known 🚫"));
 const ID = /\b([RMFDPQXCE]\d{1,2}) /g;
+const PARENT_ID = /^[RMFDPQXCE]\d{1,2}$/;
 /** Each design id with its text up to the next id or line end. */
 const designTexts = (): Map<string, string> => {
   const out = new Map<string, string>();
@@ -31,6 +41,9 @@ const designTexts = (): Map<string, string> => {
   }
   return out;
 };
+/** Design prose without its markdown emphasis or code ticks. */
+const plain = (s: string): string => s.replace(/\*\*/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
+const words = (s: string): string[] => (plain(s).toLowerCase().match(/[a-z0-9][a-z0-9'-]*/g) ?? []).filter((w) => w.length >= 3);
 
 describe("scenario catalogue — parents are the design's §4 list, in order", () => {
   it("the design declares its own count, and PARENTS has exactly those ids in design order", () => {
@@ -39,6 +52,26 @@ describe("scenario catalogue — parents are the design's §4 list, in order", (
     expect(declared).toBeGreaterThan(0);
     expect(ids.length).toBe(declared);
     expect(PARENTS.map((p) => p.id)).toEqual(ids);
+  });
+  it("titles are the design's: an unsplit parent's is its design text, a split parent's stem uses only the design's words", () => {
+    const texts = designTexts();
+    let whole = 0;
+    let stems = 0;
+    for (const p of PARENTS) {
+      const text = texts.get(p.id);
+      expect(text, p.id).toBeDefined();
+      if (p.atoms.length === 0) {
+        whole++;
+        expect(p.title, p.id).toBe(plain(text!));
+      } else {
+        stems++;
+        const vocab = new Set(words(text!));
+        const stray = words(p.title).filter((w) => !vocab.has(w));
+        expect(stray, `${p.id} "${p.title}" vs "${text}"`).toEqual([]);
+      }
+    }
+    expect(whole).toBeGreaterThan(0);
+    expect(stems).toBeGreaterThan(0);
   });
   it("every compound the design names is split", () => {
     const named = /such as ([A-Z0-9, ]+) become/.exec(flat)?.[1]?.split(/,\s*/).map((s) => s.trim()) ?? [];
@@ -83,23 +116,81 @@ describe("atomic cases", () => {
     }
     expect(split).toBeGreaterThan(0);
   });
+  it("the atomisation is the reviewed W1b plan's (Task 4 PARENTS block): every atom id, in order", () => {
+    // Until design §4 names every split parent's atoms (as it does for M4 and
+    // M12), the reviewed plan is the written source of the atomisation.
+    const start = PLAN.indexOf("export const PARENTS");
+    expect(start, "the plan's Task 4 PARENTS block is gone").toBeGreaterThan(-1);
+    const block = PLAN.slice(start, PLAN.indexOf("\n]);", start));
+    const planned: { id: string; atoms: string[] }[] = [];
+    for (const m of block.matchAll(/\bP\("([A-Z]\d{1,2})"|\bA\("([a-c])"/g)) {
+      if (m[1] !== undefined) planned.push({ id: m[1], atoms: [] });
+      else planned.at(-1)!.atoms.push(m[2]!);
+    }
+    // The plan parse is itself pinned to the design's parent list, so a broken
+    // parse cannot pass as "no atoms".
+    expect(planned.map((p) => p.id)).toEqual([...designTexts().keys()]);
+    const ids = planned.flatMap((p) => (p.atoms.length === 0 ? [p.id] : p.atoms.map((s) => `${p.id}${s}`)));
+    expect(ids.length).toBeGreaterThan(planned.length); // some parent is split
+    expect(ATOMIC.map((a) => a.id)).toEqual(ids);
+  });
   it("every atom id the design or ruling 26 names exists (M4a/M4b, M12a–c, E4a/E4b as of 2026-09-28)", () => {
     const named = [...section.matchAll(/\(([RMFDPQXCE]\d{1,2}[a-c])\)/g)].map((m) => m[1]!);
-    const index = readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md"), "utf8");
-    const r26 = /\n26\. \*\*O9[^(]*\(([^)]*)\)/.exec(index)?.[1] ?? "";
+    const r26 = /\n26\. \*\*O9[^(]*\(([^)]*)\)/.exec(INDEX)?.[1] ?? "";
     const fromRuling = [...r26.matchAll(/\b([RMFDPQXCE]\d{1,2}[a-c])\b/g)].map((m) => m[1]!);
     expect(named.length).toBeGreaterThan(0);
     expect(fromRuling.length).toBeGreaterThan(0);
     const ids = new Set(ATOMIC.map((a) => a.id));
     for (const id of [...named, ...fromRuling]) expect(ids.has(id), id).toBe(true);
   });
-  it("the design's needs-times parents each have an L3-excluded atom", () => {
-    const named = (/Cases that need times\*\* \(([^)]+)\)/.exec(flat)?.[1] ?? "")
-      .split(/,\s*/).filter((s) => /^[RMFDPQXCE]\d{1,2}$/.test(s));
-    expect(named.length).toBeGreaterThan(0); // E4, X1, D5 as of 2026-09-28
-    for (const p of named) {
-      const atoms = ATOMIC.filter((a) => a.parent === p);
-      expect(atoms.some((a) => a.l3Excluded !== null), p).toBe(true);
+  it("atoms that declare distinguishing facts are pairwise disjoint (R4: half-played side, then finalized fixtures)", () => {
+    let parents = 0;
+    let pairs = 0;
+    for (const p of PARENTS) {
+      const withFacts = p.atoms.filter((a) => a.facts !== undefined);
+      if (withFacts.length === 0) continue;
+      parents++;
+      // Facts on some atoms but not all would leave the others unjudged.
+      expect(withFacts.length, `${p.id}: every atom states its facts`).toBe(p.atoms.length);
+      for (let i = 0; i < p.atoms.length; i++) {
+        for (let j = i + 1; j < p.atoms.length; j++) {
+          const [x, y] = [p.atoms[i]!.facts!, p.atoms[j]!.facts!];
+          const differs = Object.keys(x).some((k) => k in y && x[k] !== y[k]);
+          expect(differs, `${p.id}${p.atoms[i]!.suffix} and ${p.id}${p.atoms[j]!.suffix} overlap: ${JSON.stringify(x)} vs ${JSON.stringify(y)}`).toBe(true);
+          pairs++;
+        }
+      }
+    }
+    expect(parents).toBeGreaterThan(0);
+    expect(pairs).toBeGreaterThan(0);
+  });
+  it("needs times (design §4): every atom of a needs-times parent is off L3, except the atoms the design says run in L3", () => {
+    const list = /Cases that need times\*\* \(([^)]+)\)/.exec(flat)?.[1];
+    expect(list, "the design's 'Cases that need times' sentence is gone").toBeDefined();
+    const items = list!.split(/,\s*/).map((s) => s.trim());
+    const parents = items.filter((s) => PARENT_ID.test(s));
+    const surfaces = items.filter((s) => !PARENT_ID.test(s));
+    expect(parents.length).toBeGreaterThan(0); // E4, X1, D5 as of 2026-09-28
+    // "Within D5 only **D5b** (…) needs times; **D5a** (…) runs in L3"
+    const ex = /Within ([RMFDPQXCE]\d{1,2}) only \*\*([RMFDPQXCE]\d{1,2}[a-c])\*\*[^;]*? needs times; \*\*([RMFDPQXCE]\d{1,2}[a-c])\*\*[^.]*? runs in L3/.exec(flat);
+    expect(ex, "the design's 'Within D5 only D5b needs times; D5a runs in L3' sentence is gone").not.toBeNull();
+    const [, exParent, timed, runsInL3] = ex!;
+    expect(parents).toContain(exParent);
+    expect([timed, runsInL3].map((id) => ATOMIC.find((a) => a.id === id)?.parent)).toEqual([exParent, exParent]);
+    let judged = 0;
+    for (const a of ATOMIC.filter((x) => parents.includes(x.parent))) {
+      judged++;
+      if (a.id === runsInL3) expect(a.l3Excluded, `${a.id} runs in L3 (design §4)`).toBeNull();
+      else expect(a.l3Excluded, `${a.id} needs times (design §4)`).not.toBeNull();
+    }
+    expect(judged).toBeGreaterThan(parents.length); // the parents are split
+    // A non-id entry is a surface; each must name the atom that carries it.
+    const SURFACE_ATOM: Readonly<Record<string, string>> = { "the printed-sheet surface": "E4b" };
+    expect(surfaces.length).toBeGreaterThan(0);
+    for (const s of surfaces) {
+      const atom = ATOMIC.find((a) => a.id === SURFACE_ATOM[s]);
+      expect(atom, `needs-times entry "${s}" is neither a scenario id nor a known surface`).toBeDefined();
+      expect(atom!.l3Excluded, s).not.toBeNull();
     }
   });
   it("ruling 26: E2 is the only entry-path atom in L3", () => {
@@ -171,13 +262,58 @@ describe("regression cases (R29)", () => {
     expect(loadRegressions()).toEqual(parseRegressions(JSON.parse(readFileSync(resolve(REPO, REGRESSIONS_PATH), "utf8"))));
     expect(() => loadRegressions(resolve(REPO, "scripts"))).toThrow(/ENOENT/);
   });
-  it("a well-formed entry parses; an unknown cell, a duplicate id, a bad id or a missing seed is refused", () => {
+  it("a well-formed entry parses; a duplicate id is refused", () => {
     expect(parseRegressions(file(base))).toHaveLength(1);
-    expect(() => parseRegressions(file({ ...base, cell: "nope|generic" }))).toThrow();
     expect(() => parseRegressions(file(base, base))).toThrow(/duplicate/);
-    expect(() => parseRegressions(file({ ...base, id: "X-1" }))).toThrow();
-    const { seed: _s, ...noSeed } = base;
-    expect(() => parseRegressions(file(noSeed))).toThrow();
+  });
+  it("every field is guarded: a missing one, and each wrong value for it, is refused", () => {
+    // Keyed by the entry's own fields, so a new field without a refusal case is a type error.
+    const BAD: Readonly<Record<keyof typeof base, readonly unknown[]>> = {
+      id: ["X-1", "MB-NNN", "MB-01"],
+      title: [""],
+      issue: ["879", ""],
+      cell: ["nope|generic", ""],
+      variant: [""],
+      check: [""],
+      seed: [1.5, "42"],
+      path: [""],
+      replayPath: [""],
+      fence: [""],
+      status: ["stale"],
+      found: ["YYYY-MM-DD", "2026-9-28"],
+      runId: [""],
+    };
+    expect(Object.keys(BAD).sort()).toEqual(Object.keys(base).sort());
+    let refused = 0;
+    for (const key of Object.keys(base) as (keyof typeof base)[]) {
+      const { [key]: _gone, ...missing } = base;
+      expect(() => parseRegressions(file(missing)), `missing ${key}`).toThrow();
+      refused++;
+      for (const bad of BAD[key]) {
+        expect(() => parseRegressions(file({ ...base, [key]: bad })), `${key}: ${JSON.stringify(bad)}`).toThrow();
+        refused++;
+      }
+    }
+    expect(refused).toBeGreaterThan(Object.keys(base).length);
+  });
+  it("the Task 14 paste stub, as the plan prints it, is refused until its id, title and date are filled", () => {
+    const line = PLAN.split("\n").find((l) => l.includes("regression stub for scripts/matrix/catalogue/regressions.json"));
+    expect(line, "the plan's Task 14 stub line is gone").toBeDefined();
+    const body = /JSON\.stringify\(\{ (.*?) \}, null, 2\)/.exec(line!)?.[1];
+    expect(body).toBeDefined();
+    // Literal fields exactly as printed; run-time fields (r.cell, slugged, …) take valid values.
+    const stub: Record<string, unknown> = {};
+    for (const entry of body!.split(/, (?=\w+: )/)) {
+      const [, key, expr] = /^(\w+): (.*)$/.exec(entry)!;
+      stub[key!] = /^(".*"|null)$/.test(expr!) ? JSON.parse(expr!) : base[key as keyof typeof base];
+    }
+    expect(Object.keys(stub).sort()).toEqual(Object.keys(base).sort());
+    expect(stub.id).toBe("MB-NNN");
+    expect(() => parseRegressions(file(stub))).toThrow();
+    expect(() => parseRegressions(file({ ...stub, id: "MB-001" }))).toThrow(); // title and date still empty
+    expect(() => parseRegressions(file({ ...stub, id: "MB-001", title: "named" }))).toThrow(); // date still YYYY-MM-DD
+    // Positive pair: completed by a human, the same stub parses.
+    expect(parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28" }))).toHaveLength(1);
   });
   it("a stray key or another schema version is refused (the file is reviewed, so drift is loud)", () => {
     expect(() => parseRegressions(file({ ...base, extra: 1 }))).toThrow();
@@ -206,49 +342,116 @@ describe("regression cases (R29)", () => {
   });
 });
 
-describe("Q-A guard — a deferral never names a finished wave (ruling 28)", () => {
-  const MATRIX = resolve(REPO, "scripts/matrix");
-  /** Every module the harness ships (test files and fixtures excluded). */
-  const shipped = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? (e.name === "__tests__" ? [] : shipped(join(d, e.name)))
-      : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [join(d, e.name)] : []);
-  /** A deferral's wave argument: a string literal, or DRIVING_WAVE by value. */
-  const waveOf = (arg: string): string | null => {
-    const a = arg.trim();
-    const lit = /^["'`]([^"'`]+)["'`]$/.exec(a)?.[1];
-    if (lit !== undefined) return lit;
-    return a === "DRIVING_WAVE" ? DRIVING_WAVE : null;
+// --- Q-A guard (ruling 28) ------------------------------------------------------
+/** The deferral classes, each with the index of its wave argument. */
+const DEFERRALS: Readonly<Record<string, number>> = { ScenarioUnsupported: 0, RowBuildDeferred: 1 };
+interface DeferralScan { sites: number; waves: string[]; unread: string[] }
+/** Every use of a deferral class in `src`, read from the TypeScript AST (so a
+ *  comment or a string is never a site). A `new` with a literal or
+ *  DRIVING_WAVE wave is read; the declaration, a plain import/re-export,
+ *  `instanceof` and a type position construct nothing. ANY other use — a
+ *  subclass (its wave hides in `super(`), an `as` alias, a value alias,
+ *  `Reflect.construct` — is unread, and an unread use fails the guard. */
+function scanDeferrals(src: string, file = "synthetic.ts"): DeferralScan {
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const out: DeferralScan = { sites: 0, waves: [], unread: [] };
+  const at = (n: TS.Node) => `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+  const waveOf = (arg: TS.Expression | undefined): string | null => {
+    if (arg === undefined) return null;
+    if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) return arg.text;
+    return ts.isIdentifier(arg) && arg.text === "DRIVING_WAVE" ? DRIVING_WAVE : null;
   };
-  it("every wave a ScenarioUnsupported/RowBuildDeferred names has an _INDEX status row that is not done", () => {
-    const index = readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md"), "utf8");
-    const start = index.indexOf("## Status");
-    const status = index.slice(start, index.indexOf("\n## ", start + 1));
+  const classify = (id: TS.Identifier, waveIndex: number): void => {
+    const p = id.parent;
+    const callee: TS.Node = ts.isPropertyAccessExpression(p) && p.name === id ? p : id;
+    const host = callee.parent;
+    if (ts.isNewExpression(host) && host.expression === callee) {
+      out.sites++;
+      const w = waveOf(host.arguments?.[waveIndex]);
+      if (w === null) out.unread.push(`${at(id)} ${host.getText(sf)}`); else out.waves.push(w);
+      return;
+    }
+    if (ts.isClassDeclaration(p) && p.name === id) return;
+    if ((ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) && p.propertyName === undefined) return;
+    if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && p.right === id) return;
+    if (ts.isTypeReferenceNode(p)) return;
+    out.unread.push(`${at(id)} ${id.text} used as ${ts.SyntaxKind[p.kind]}`);
+  };
+  const visit = (n: TS.Node): void => {
+    if (ts.isIdentifier(n) && Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+/** A Status-table state that is still owed work. Markdown emphasis is not part of the state. */
+const isOpen = (state: string): boolean => /^(not started|in progress|awaiting)/i.test(state.replace(/[*_]/g, "").trim());
+/** Every module the harness ships (test files and fixtures excluded). */
+const shipped = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? (e.name === "__tests__" ? [] : shipped(join(d, e.name)))
+    : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [join(d, e.name)] : []);
+
+describe("Q-A guard — the deferral reader", () => {
+  it("reads a literal wave, DRIVING_WAVE by value, RowBuildDeferred's second argument, and a namespaced class", () => {
+    expect(scanDeferrals(`throw new ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+    expect(scanDeferrals(`throw new ScenarioUnsupported(DRIVING_WAVE, "x");`)).toEqual({ sites: 1, waves: [DRIVING_WAVE], unread: [] });
+    expect(scanDeferrals(`throw new RowBuildDeferred("ladder", "W7");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
+    expect(scanDeferrals(`import * as T from "./types.ts";\nthrow new T.ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+  });
+  it("ignores what constructs nothing: the declaration, a plain import, instanceof, a type, a comment, a string", () => {
+    const src = [
+      `import { ScenarioUnsupported, RowBuildDeferred } from "./types.ts";`,
+      `export class ScenarioUnsupported extends Error {}`,
+      `// a comment: new ScenarioUnsupported("W1a", "x")`,
+      `const name = "new RowBuildDeferred(row, \\"W1a\\")";`,
+      `function f(e: ScenarioUnsupported | RowBuildDeferred) { return e instanceof ScenarioUnsupported; }`,
+    ].join("\n");
+    expect(scanDeferrals(src)).toEqual({ sites: 0, waves: [], unread: [] });
+  });
+  it("refuses what hides the wave: an unreadable argument, a missing one, a subclass, an import alias, a value alias, Reflect.construct", () => {
+    const hidden = {
+      unreadable: `throw new ScenarioUnsupported(pick(), "x");`,
+      missing: `throw new RowBuildDeferred("ladder");`,
+      subclass: `class Late extends ScenarioUnsupported { constructor() { super("W1a", "x"); } }`,
+      importAlias: `import { ScenarioUnsupported as SU } from "./types.ts";\nthrow new SU("W1a", "x");`,
+      valueAlias: `const SU = ScenarioUnsupported;\nthrow new SU("W1a", "x");`,
+      reflect: `throw Reflect.construct(ScenarioUnsupported, ["W1a", "x"]);`,
+    };
+    for (const [shape, src] of Object.entries(hidden)) {
+      const scan = scanDeferrals(src);
+      expect(scan.unread.length, `${shape}: ${JSON.stringify(scan)}`).toBeGreaterThan(0);
+      expect(scan.waves, shape).not.toContain("W1a");
+    }
+  });
+  it("a Status state is open when it says not started / in progress / awaiting, with or without emphasis", () => {
+    // W1b's and W1a's cells as written on 2026-09-28, then the plain forms.
+    expect(isOpen("**in progress** — plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md` (rulings 25–30)")).toBe(true);
+    expect(isOpen("**Tasks 1–11 done; final review (R21) fix batch landed**")).toBe(false);
+    expect(isOpen("not started (ruling 28)")).toBe(true);
+    expect(isOpen("_awaiting owner_")).toBe(true);
+    expect(isOpen("done")).toBe(false);
+  });
+});
+
+describe("Q-A guard — a deferral or an owning wave never names a finished wave (ruling 28)", () => {
+  it("every wave a deferral or the catalogue's knownNoPath / l2NoPath names has an _INDEX status row that is open", () => {
+    const start = INDEX.indexOf("## Status");
+    const status = INDEX.slice(start, INDEX.indexOf("\n## ", start + 1));
     const rows = new Map([...status.matchAll(/^\| (W[\w-]+) \| [^|]* \| (.*) \|$/gm)].map((m) => [m[1]!, m[2]!]));
     expect(rows.size).toBeGreaterThan(0);
-    const waves = new Set<string>();
-    const unread: string[] = [];
-    let sites = 0;
-    const modules = shipped(MATRIX);
+    const modules = shipped(resolve(REPO, "scripts/matrix"));
     expect(modules.length).toBeGreaterThan(0);
-    for (const f of modules) {
-      const src = readFileSync(f, "utf8");
-      const args = [
-        ...[...src.matchAll(/new ScenarioUnsupported\(\s*([^,)]+)[,)]/g)].map((m) => m[1]!),
-        ...[...src.matchAll(/new RowBuildDeferred\(\s*[^,)]+,\s*([^,)]+)[,)]/g)].map((m) => m[1]!),
-      ];
-      for (const arg of args) {
-        sites++;
-        const w = waveOf(arg);
-        if (w === null) unread.push(`${f}: ${arg}`); else waves.add(w);
-      }
-    }
-    // A site whose wave the guard cannot read would be skipped silently.
-    expect(unread, "a deferral names its wave by an expression this guard cannot read").toEqual([]);
-    expect(sites).toBeGreaterThan(0);
-    expect(waves.size).toBeGreaterThan(0);
-    for (const w of waves) {
+    const scans = modules.map((f) => scanDeferrals(readFileSync(f, "utf8"), f));
+    // A site whose wave the reader cannot see would be skipped silently.
+    expect(scans.flatMap((s) => s.unread), "a deferral names its wave in a shape this guard cannot read").toEqual([]);
+    expect(scans.reduce((n, s) => n + s.sites, 0)).toBeGreaterThan(0);
+    const deferred = new Set(scans.flatMap((s) => s.waves));
+    const owing = new Set(ATOMIC.flatMap((a) => [a.knownNoPath, a.l2NoPath]).filter((w): w is string => w !== null));
+    expect(deferred.size).toBeGreaterThan(0);
+    expect(owing.size).toBeGreaterThan(0);
+    for (const w of new Set([...deferred, ...owing])) {
       expect(rows.has(w), `${w} has no status row in _INDEX.md`).toBe(true);
-      expect(rows.get(w), w).toMatch(/^(not started|in progress|awaiting)/i);
+      expect(isOpen(rows.get(w)!), `${w}: "${rows.get(w)}" is not open`).toBe(true);
     }
   });
 });

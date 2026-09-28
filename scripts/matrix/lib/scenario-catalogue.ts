@@ -15,28 +15,37 @@ import type { ScenarioKey } from "./scenarios/types.ts";
 
 export type Family = "R" | "M" | "F" | "D" | "P" | "Q" | "X" | "C" | "E";
 export type Layer = "L2" | "L3";
-interface Atom { readonly suffix: "a" | "b" | "c"; readonly title: string }
+/** `facts`: the organiser-input facts that tell an atom from its siblings,
+ *  where the titles alone could read as overlapping. Every pair of atoms in a
+ *  parent that states them differs on a shared fact (scenario-catalogue.test.ts). */
+interface Atom { readonly suffix: "a" | "b" | "c"; readonly title: string; readonly facts?: Readonly<Record<string, string>> }
 export interface ParentScenario { readonly id: string; readonly title: string; readonly atoms: readonly Atom[]; readonly noSplit?: string }
 
 const P = (id: string, title: string, atoms: readonly Atom[] = [], noSplit?: string): ParentScenario =>
   Object.freeze(noSplit === undefined ? { id, title, atoms } : { id, title, atoms, noSplit });
-const A = (suffix: Atom["suffix"], title: string): Atom => ({ suffix, title });
+const A = (suffix: Atom["suffix"], title: string, facts?: Atom["facts"]): Atom =>
+  facts === undefined ? { suffix, title } : { suffix, title, facts: Object.freeze({ ...facts }) };
 
 export const PARENTS: readonly ParentScenario[] = Object.freeze([
   P("R1", "late entry before Start"),
   P("R2", "late entry after Start"),
   P("R3", "withdrawal before Start"),
   // Split on WHEN the organiser withdraws the entrant; expunge-vs-keep is the
-  // engine's answer to that input (design §4), asserted, never picked.
+  // engine's answer to that input (design §4), asserted, never picked. The
+  // finalized (locked) fixtures matter only under half played: only an
+  // expunge plans played fixtures, so only it can meet a locked one and skip
+  // it (withdrawal.ts applyUpdate; r4-withdrawal.ts skippedItem). At or after
+  // half the pending fixtures are walked over and a finalized one is never
+  // planned, so R4b states no finalized fact.
   P("R4", "withdrawal mid-event after some results", [
-    A("a", "before half the entrant's matches are played"),
-    A("b", "at or after half the entrant's matches are played"),
-    A("c", "with some of the entrant's fixtures already finalized"),
+    A("a", "under half the entrant's matches played, none of its fixtures finalized", { played: "under half", finalized: "none" }),
+    A("b", "half or more of the entrant's matches played", { played: "half or more" }),
+    A("c", "under half the entrant's matches played, some of its fixtures already finalized", { played: "under half", finalized: "some" }),
   ]),
   P("R5", "withdrawal after the entrant has played all their matches"),
   P("R6", "withdrawal of an entrant already drawn into a later bracket/playoff slot", [],
     "bracket vs playoff slot is the row's shape (applicability), not an organiser input"),
-  P("R7", "disqualification (status only, no fixture cascade today)"),
+  P("R7", "disqualification (today: status only, no fixture cascade)"),
   P("R8", "entrant deleted"),
   P("R9", "pair/team rename or lineup change mid-event", [A("a", "pair/team rename mid-event"), A("b", "lineup change mid-event")]),
   P("R10", "waitlist promotion after the draw"),
@@ -44,7 +53,7 @@ export const PARENTS: readonly ParentScenario[] = Object.freeze([
   P("R12", "doubles partner withdraws", [A("a", "→ a substitute joins"), A("b", "→ the pair is dissolved")]),
   P("R13", "entrant moved to another division after the draw"),
   P("R14", "retires from one match, continues in the next"),
-  P("R15", "leaves after their last match and is still paired next round"),
+  P("R15", "entrant leaves after their last match and is still paired next round"),
   P("R16", "substitute / different lineup in a team match (stats attribution)", [],
     "'substitute' and 'different lineup' name one input: a changed team lineup"),
   P("M1", "walkover in only one match"),
@@ -56,7 +65,7 @@ export const PARENTS: readonly ParentScenario[] = Object.freeze([
     A("b", "with a result (a cricket DLS decision, a football award-policy abandon)"),
   ]),
   P("M5", "draw in a stage that cannot end level"),
-  P("M6", "tie after regulation → decider", [], "the decider is the sport's mechanism (variant axis), not an organiser input"),
+  P("M6", "tie after regulation → decider (shoot-out, super over, extra time, chess tiebreak)", [], "the decider is the sport's mechanism (variant axis), not an organiser input"),
   P("M7", "void a decided result", [A("a", "before the next match started"), A("b", "after the next match started")]),
   P("M8", "correct a finalized score", [A("a", "winner stays"), A("b", "winner flips")]),
   P("M9", "forfeit/award by the organiser", [A("a", "forfeit (core.forfeit)"), A("b", "award (core.award)")]),
@@ -90,15 +99,15 @@ export const PARENTS: readonly ParentScenario[] = Object.freeze([
   P("P5", "undo", [A("a", "undo Generate"), A("b", "undo Pair next round")]),
   P("P6", "per-stage rule override (a best-of-3 final)"),
   P("P7", "rank override"),
-  P("Q1", "qualifier decided then corrected after the knockout draw", [A("a", "decided by lots"), A("b", "decided by the organiser")]),
-  P("Q2", "group winner withdraws after qualifying", [], "promote-next vs bye is the rulebook's answer (an expected value), not an input"),
+  P("Q1", "qualifier decided, then a correction changes it after the knockout draw", [A("a", "decided by lots"), A("b", "decided by the organiser")]),
+  P("Q2", "group winner withdraws after qualifying → promote next or bye", [], "promote-next vs bye is the rulebook's answer (an expected value), not an input"),
   P("Q3", "third-place match skipped → shared 3rd"),
   P("Q4", "final not played", [A("a", "→ joint winners"), A("b", "→ decided by table")]),
   P("Q5", "plate", [A("a", "plate entrant withdraws"), A("b", "a main-draw loser declines the plate")]),
   P("X1", "weather stops play mid-round", [A("a", "resumed next day"), A("b", "cancelled")]),
-  P("X2", "event cut short: standings and winner from an incomplete table"),
-  P("X3", "round shortened on the fly (fixture-level format override before start)"),
-  P("X4", "a disrupted match", [A("a", "resumed from its saved score"), A("b", "replayed from scratch"), A("c", "replayed after a protest")]),
+  P("X2", "event cut short: remaining rounds cancelled, standings and winner from an incomplete table"),
+  P("X3", "a round shortened on the fly (fixture-level format override before start)"),
+  P("X4", "a match resumed or replayed", [A("a", "resumed from its saved score"), A("b", "replayed from scratch"), A("c", "replayed after a protest")]),
   P("C1", "scores swapped home/away", [], "one input: the two sides' scores exchanged"),
   P("C2", "result entered on the wrong match"),
   P("C3", "protest upheld", [A("a", "result overturned"), A("b", "replayed a day later")]),
@@ -107,13 +116,15 @@ export const PARENTS: readonly ParentScenario[] = Object.freeze([
   P("C6", "late correction", [A("a", "after the stage is complete"), A("b", "after the event is complete")]),
   P("C7", "result annulled weeks later"),
   P("E1", "phone pad"),
-  P("E2", "single-event result over the API"),
+  P("E2", "single-event result over the API (there is no separate quick-result endpoint)"),
   P("E3", "Bo1 points editor"),
   P("E4", "device link / printed scorer-sheet scan", [A("a", "device link"), A("b", "printed scorer-sheet scan")]),
 ]);
 
 /** Design §4 "Cases that need times" and the browser-only entry paths: never
- *  L3. Keyed by ATOM: D5a (published, untimed) needs no times, D5b does. */
+ *  L3. Keyed by ATOM: every atom of a needs-times parent, except the ones
+ *  design §4 says run in L3 ("Within D5 only D5b … needs times; D5a … runs in
+ *  L3" — publishSchedule accepts an untimed board). */
 const L3_EXCLUDED: Readonly<Record<string, string>> = Object.freeze({
   E1: "browser-only: the phone pad (L2)",
   E3: "browser-only: the Bo1 points editor (L2)",
