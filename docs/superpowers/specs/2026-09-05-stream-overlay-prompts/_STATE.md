@@ -380,6 +380,15 @@ original row's `balance_after` — is carried into the route's response CONTRACT
 the panel is what echoes it. **7A-ii** is Steps 10-20 (the Option B panel, its component test, the
 walkthrough, the mount, the six screenshots, the smoke wiring) and reads 7A-i's report first.
 
+**OWNER RULING 2026-09-28 — the admin panel gets NO polish.** Owner's words: *"Admin panel doesn't need
+fancy look or cosmetic changes."* Said while Task 7A-ii was in flight and relayed to it as a scope
+NARROWING. It confirms AGENTS.md's functional bar for `/admin` rather than changing it: copy the donor
+`admin-credits-panel.tsx`'s classes and shape, decide nothing aesthetic, add no polish the donor lacks, and
+do not improve the surrounding admin page in passing. **The six screenshots stay** — they are a LAYOUT gate
+(a modal that never opened, a control that never rendered, horizontal scroll at 320), not a design review,
+and the standing "verify visually, always" rule is unaffected. Every other surface in this programme keeps
+full polish; this exemption is `/admin` only.
+
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
