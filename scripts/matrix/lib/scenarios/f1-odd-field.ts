@@ -29,6 +29,7 @@ export const f1OddField: Scenario = {
     return {
       observed,
       events: rec.events,
+      notes: rec.notes,
       assertions: [
         builtAsPosted(setup.built, observed),
         foldParity(rec),

@@ -43,10 +43,13 @@ export interface CaseResult {
   checks: CheckResult[];
   counts: { calls: number; fixtures: number; events: number };
   durationMs: number;
+  /** m-5: the scenario's notes, redacted and capped (run.ts). */
+  notes: string[];
 }
 
 export interface RunResults {
-  schemaVersion: 1;
+  /** 2: cases carry `notes` (final review m-5). */
+  schemaVersion: 2;
   runId: string;
   harnessCommit: string;
   startedAt: string;
@@ -75,10 +78,11 @@ const CaseSchema = z.strictObject({
   checks: z.array(CheckSchema),
   counts: z.strictObject({ calls: z.number().int().nonnegative(), fixtures: z.number().int().nonnegative(), events: z.number().int().nonnegative() }),
   durationMs: z.number().nonnegative(),
+  notes: z.array(z.string()),
 });
 
 export const RunResultsSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   runId: z.string().min(1),
   harnessCommit: z.string().min(1),
   startedAt: z.string().min(1),

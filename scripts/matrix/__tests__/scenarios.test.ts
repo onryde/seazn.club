@@ -14,7 +14,7 @@ import {
   MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
-import { cascadeItems } from "../lib/scenarios/r4-withdrawal.ts";
+import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
@@ -643,6 +643,16 @@ describe("pilots on the fake league", () => {
     expect(failed(r.checks)).toEqual(["r4-cascade-consistent"]);
     expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.voided} voided, observed ${w.voided - 1}`]);
   });
+  it("R4 (m-5): a skipped_finalized count that disagrees with the fixtures the cascade had to leave fails r4-cascade-consistent, naming both", async () => {
+    class MiscountsSkipped extends FakeLeagueDriver {
+      override async withdraw(id: string) { const o = await super.withdraw(id); return { ...o, skipped_finalized: o.skipped_finalized + 1 }; }
+    }
+    const r = await runOn(new MiscountsSkipped(), "R4");
+    const w = r.out.observed.withdrawal!;
+    expect(w.policy).toBe("expunge");
+    expect(failed(r.checks)).toEqual(["r4-cascade-consistent"]);
+    expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.skippedFinalized} locked fixture(s) skipped, observed ${w.skippedFinalized - 1}`]);
+  });
   it("R4: a withdrawal the product reports as policy 'none' fails r4-policy-reported", async () => {
     class NoPolicy extends FakeLeagueDriver {
       override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "none" as const }; }
@@ -1151,5 +1161,33 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z" }), good[2]!];
     expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 1))).toEqual([true, false, true, true, true]);
     expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 1))).toEqual([true, true, false, true, false]);
+  });
+});
+
+describe("skippedItem (m-5) — the locked fixtures withdrawal.ts reports it skipped", () => {
+  const before = [
+    { id: "a", status: "finalized", outcome: { kind: "win" as const, winner: "w" } },
+    { id: "b", status: "finalized", outcome: { kind: "win" as const, winner: "x" } },
+    { id: "c", status: "decided", outcome: { kind: "win" as const, winner: "w" } },
+    { id: "d", status: "cancelled", outcome: null },
+    { id: "e", status: "scheduled", outcome: null },
+  ];
+  it("expunge plans the PLAYED fixtures, so the finalized ones with a result are the ones it must skip", () => {
+    expect(skippedItem("expunge", before, 2)).toEqual({ ok: true, note: "reported 2 locked fixture(s) skipped, observed 2" });
+    expect(skippedItem("expunge", before, 0)).toEqual({ ok: false, note: "reported 0 locked fixture(s) skipped, observed 2" });
+    expect(skippedItem("expunge", before, 3).ok).toBe(false);
+  });
+  it("a cancelled fixture has no result, so an expunge never planned it — it is not counted as skipped", () => {
+    expect(skippedItem("expunge", [before[3]!], 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
+    expect(skippedItem("expunge", [before[3]!], 1).ok).toBe(false);
+  });
+  it("a finalized fixture WITHOUT a result was never played (lib/table-withdrawal.ts), so an expunge never planned it either", () => {
+    const noResult = [{ id: "f", status: "finalized", outcome: null }];
+    expect(skippedItem("expunge", noResult, 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
+    expect(skippedItem("expunge", noResult, 1).ok).toBe(false);
+  });
+  it("walkover plans pending fixtures only, and a pending fixture is never locked — it skips none", () => {
+    expect(skippedItem("walkover", before, 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
+    expect(skippedItem("walkover", before, 2).ok).toBe(false);
   });
 });

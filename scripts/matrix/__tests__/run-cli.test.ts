@@ -14,7 +14,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
-import { closeHandles, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
+import { NOTES_CAP, closeHandles, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -340,6 +340,41 @@ describe("runSlice — a run", () => {
     expect(io.err()).not.toMatch(/SecretInResults/);
   });
 
+  it("m-5: the scenario's own notes reach results.json — the stage status after start among them", async () => {
+    capture();
+    const seen = wrapScenario("LIFECYCLE", (out) => out);
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t5n", "--report-dir", dir])).toBe(0);
+    const notes = resultsIn(dir, "t5n").cases[0]!.notes;
+    expect(seen[0]!.notes.length).toBeGreaterThan(0);
+    expect(notes).toEqual(seen[0]!.notes);
+    expect(notes.some((n) => /^stage league status after start: /.test(n))).toBe(true);
+  });
+
+  it("m-5: a secret-shaped note is redacted before writeResults, so the run is KEPT (exit 0)", async () => {
+    const io = capture();
+    wrapScenario("LIFECYCLE", (out) => ({ ...out, notes: ["complete refused from postgres://bench:hunter22@localhost:5433/seazn"] }));
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t5r", "--report-dir", dir])).toBe(0);
+    expect(resultsIn(dir, "t5r").cases[0]!.notes).toEqual(["complete refused from [redacted]"]);
+    expect(io.err()).not.toMatch(/SecretInResults/);
+  });
+
+  it.each([
+    ["none", 0, []],
+    ["exactly the cap", NOTES_CAP, []],
+    ["one over the cap", NOTES_CAP + 1, ["… 1 more note(s) not kept"]],
+    ["ten over the cap", NOTES_CAP + 10, ["… 10 more note(s) not kept"]],
+  ])("m-5: keepNotes keeps the first NOTES_CAP notes, then counts the rest — %s", (_t, n, tail) => {
+    const notes = Array.from({ length: n }, (_, i) => `note ${i}`);
+    expect(keepNotes(notes)).toEqual([...notes.slice(0, NOTES_CAP), ...tail]);
+  });
+
+  it("m-5: NOTES_CAP is 24, and keepNotes redacts every note it keeps", () => {
+    expect(NOTES_CAP).toBe(24);
+    expect(keepNotes(["ok", "saw token=abcdefghijklmnopqrstuvwxyz0123456789ABCD"])).toEqual(["ok", "saw [redacted]"]);
+  });
+
   it("a case's error is redacted in results.json and on stdout (R14a)", async () => {
     const io = capture();
     const driverFor = () => new (class extends FakeLeagueDriver { override async createCompetition(): Promise<never> { throw new Error("config DATABASE_URL=postgres://bench:hunter22@localhost:5433/seazn"); } })("org-fake");
@@ -451,7 +486,7 @@ describe("runSlice — aborts after the start gates", () => {
 });
 
 describe("summariseRun (PF4) — empty first", () => {
-  const base = { row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0 };
+  const base = { row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [] };
   const chk = (verdict: CheckResult["verdict"], checked: number): CheckResult => ({ id: `k-${verdict}-${checked}`, kind: "invariant", verdict, checked, reason: "", evidence: [] });
   const kase = (caseId: string, state: CaseResult["state"], reason: string, checks: CheckResult[]): CaseResult => ({ ...base, caseId, state, reason, checks });
 

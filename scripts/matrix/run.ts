@@ -132,6 +132,17 @@ function printSummary(s: RunSummary): void {
   }
 }
 
+/** m-5: how many notes a case keeps. A loop that notes every fixture would
+ *  otherwise swell results.json; the count of the rest is kept instead. */
+export const NOTES_CAP = 24;
+
+/** m-5: a scenario's notes as a case keeps them — each redacted (R14a),
+ *  at most NOTES_CAP, then one line saying how many more there were. */
+export function keepNotes(notes: readonly string[]): string[] {
+  const kept = notes.slice(0, NOTES_CAP).map((n) => redact(n));
+  return notes.length > NOTES_CAP ? [...kept, `… ${notes.length - NOTES_CAP} more note(s) not kept`] : kept;
+}
+
 /** PF6: every check is redacted BEFORE it is kept, so one secret-shaped string
  *  never makes writeResults throw the whole run away (it still refuses, as the backstop). */
 const redactCheck = (c: CheckResult): CheckResult => ({ ...c, reason: redact(c.reason), evidence: c.evidence.map((x) => redact(x)) });
@@ -146,6 +157,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   let refusal: CallRefusal | null = null;
   let driver: OrganiserDriver | null = null;
   let counts = { calls: 0, fixtures: 0, events: 0 };
+  let notes: string[] = [];
   try {
     const org = await deps.prepareCaseOrg(
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
@@ -155,6 +167,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
     const out = await SCENARIOS[spec.scenario].run({ driver, spec, orgSlug: org.orgSlug, cfg: resolveSportCfg(spec.sport, spec.variant), tag: `${run.runId}-${i + 1}` });
     checks = [...evaluateInvariants(out.observed), ...out.assertions].map(redactCheck);
     counts = { calls: driver.callCount, fixtures: out.observed.stages.reduce((n, s) => n + s.fixtures.length, 0), events: out.events };
+    notes = keepNotes(out.notes);
   } catch (e) {
     // The DB stopped proving it is ours: that is the environment, not this
     // case. Abort the run rather than record it as a product red.
@@ -169,7 +182,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   const { state, reason } = decideState({ checks, deferred, error });
   const result: CaseResult = {
     caseId: spec.caseId, row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
-    state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0,
+    state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0, notes,
   };
   return { result, refusal };
 }
@@ -223,7 +236,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string): Promise<number> {
     try { await db.dispose(); } catch (e) { warn(`matrix: db dispose failed — ${errText(e)}`); }
   }
 
-  const results: RunResults = { schemaVersion: 1, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), cases };
+  const results: RunResults = { schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), cases };
   const resultsPath = writeResults(dir, results);
   say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);

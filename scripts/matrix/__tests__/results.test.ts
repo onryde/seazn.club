@@ -75,9 +75,11 @@ describe("glyphs and schema", () => {
     expect(GLYPH.not_run).toBe("░");
   });
   it("parseResults refuses a wrong schemaVersion and an unknown state", () => {
-    const ok: RunResults = { schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
+    const ok: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
     expect(parseResults(ok)).toEqual(ok);
-    expect(() => parseResults({ ...ok, schemaVersion: 2 })).toThrow();
+    // v1 had no case notes (m-5): its files are refused, not read with notes missing.
+    expect(() => parseResults({ ...ok, schemaVersion: 1 })).toThrow();
+    expect(() => parseResults({ ...ok, schemaVersion: 3 })).toThrow();
     expect(() => parseResults({ ...ok, cases: [{ state: "green" }] })).toThrow();
   });
 
@@ -89,8 +91,9 @@ describe("glyphs and schema", () => {
       { id: "lifecycle-complete", kind: "assertion", verdict: "abstain", checked: 0, reason: "", evidence: ["abstain: no bracket"] },
     ],
     counts: { calls: 12, fixtures: 6, events: 30 }, durationMs: 1234.5,
+    notes: ["stage league status after start: active", "complete refused 409 STAGE_INCOMPLETE"],
   };
-  const withCase = (c: unknown) => ({ schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [c] });
+  const withCase = (c: unknown) => ({ schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [c] });
 
   it("a fully populated case round-trips unchanged (the schema carries every interface field)", () => {
     expect(parseResults(withCase(FULL))).toEqual(withCase(FULL));
@@ -111,6 +114,8 @@ describe("glyphs and schema", () => {
     ["missing counts.events", { ...FULL, counts: { calls: 1, fixtures: 1 } }],
     ["negative durationMs", { ...FULL, durationMs: -1 }],
     ["canary not boolean", { ...FULL, canary: "no" }],
+    ["missing notes (m-5)", (({ notes: _n, ...rest }) => rest)(FULL)],
+    ["a note that is not a string", { ...FULL, notes: [1] }],
   ])("parseResults refuses %s", (_name, bad) => {
     expect(() => parseResults(withCase(bad))).toThrow();
   });
@@ -130,7 +135,7 @@ describe("redaction (R14a)", () => {
   });
   it("writeResults refuses to write a secret and writes a clean file", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
-    const base: RunResults = { schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
+    const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
     const bad = { ...base, runId: "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl" };
     expect(() => writeResults(dir, bad)).toThrow(SecretInResults);
     const path = writeResults(dir, base);
@@ -217,13 +222,13 @@ const EVIDENCE: readonly [string, string][] = [
   ["single-quoted authorization word", "authorization: 'none'"],
 ];
 
-const base: RunResults = { schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
+const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
 const withEvidence = (evidence: string[]): RunResults => ({
   ...base,
   cases: [{
     caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
     state: "works", reason: "1 checks, 1 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 1, reason: "", evidence }],
-    counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 1,
+    counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 1, notes: [],
   }],
 });
 /** writeResults into a fresh dir: the thrown value (or null) and whether a file landed. */
@@ -310,7 +315,7 @@ describe("writeResults", () => {
   });
   it("refuses results the schema refuses, and writes nothing", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
-    expect(() => writeResults(dir, { ...base, schemaVersion: 2 } as unknown as RunResults)).toThrow();
+    expect(() => writeResults(dir, { ...base, schemaVersion: 1 } as unknown as RunResults)).toThrow();
     expect(existsSync(join(dir, "results.json"))).toBe(false);
   });
 });

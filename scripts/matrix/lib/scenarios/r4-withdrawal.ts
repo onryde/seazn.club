@@ -50,6 +50,17 @@ export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before:
   return items;
 }
 
+/** m-5: the reported count of LOCKED fixtures the cascade skipped.
+ *  withdrawal.ts applyUpdate counts a PLANNED fixture that is finalized or
+ *  cancelled. Only an expunge plans played fixtures — a played status with a
+ *  result (lib/table-withdrawal.ts) — so it is the finalized ones with a
+ *  result; a walkover plans pending ones only, and a pending fixture is never
+ *  locked. */
+export function skippedItem(policy: WithdrawalObs["policy"], before: readonly FixtureSnap[], reported: number): Item {
+  const observed = policy === "expunge" ? before.filter((b) => b.status === "finalized" && b.outcome !== null).length : 0;
+  return { ok: reported === observed, note: `reported ${reported} locked fixture(s) skipped, observed ${observed}` };
+}
+
 export const r4Withdrawal: Scenario = {
   key: "R4",
   entrantCount: ENTRANTS,
@@ -79,6 +90,7 @@ export const r4Withdrawal: Scenario = {
       return {
         observed,
         events: rec.events,
+        notes: rec.notes,
         assertions: [builtAsPosted(setup.built, observed), foldParity(rec), resultsAsPosted(rec, observed), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
       };
     }
@@ -89,14 +101,15 @@ export const r4Withdrawal: Scenario = {
     return {
       observed,
       events: rec.events,
+      notes: rec.notes,
       assertions: [
         builtAsPosted(setup.built, observed),
         foldParity(rec),
         resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }]),
         assertion("r4-cascade-consistent", withCanary(
-          cascadeItems(w.policy, w.entrantId, w.before, mine, w.walkovers, w.voided),
-          cascadeItems(opposite, w.entrantId, w.before, mine, w.walkovers, w.voided),
+          [...cascadeItems(w.policy, w.entrantId, w.before, mine, w.walkovers, w.voided), skippedItem(w.policy, w.before, w.skippedFinalized)],
+          [...cascadeItems(opposite, w.entrantId, w.before, mine, w.walkovers, w.voided), skippedItem(opposite, w.before, w.skippedFinalized)],
           ctx.spec.canary,
         )),
         assertion("r4-not-paired-later",

@@ -38,6 +38,7 @@ export const m1Walkover: Scenario = {
     return {
       observed,
       events: rec.events,
+      notes: rec.notes,
       assertions: [
         builtAsPosted(setup.built, observed),
         foldParity(rec),

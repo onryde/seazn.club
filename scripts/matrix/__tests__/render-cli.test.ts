@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const CLI = join(REPO, "scripts/matrix/render.ts");
 const cli = (...args: string[]) => spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", CLI, ...args], { cwd: REPO, encoding: "utf8", timeout: 25_000 });
-const results = (cases: unknown[]) => ({ schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "s", finishedAt: "f", cases });
-const works = { caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, state: "works", reason: "1 checks, 2 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 2, reason: "", evidence: [] }], counts: { calls: 3, fixtures: 1, events: 4 }, durationMs: 7 };
+const results = (cases: unknown[]) => ({ schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "s", finishedAt: "f", cases });
+const works = { caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, state: "works", reason: "1 checks, 2 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 2, reason: "", evidence: [] }], counts: { calls: 3, fixtures: 1, events: 4 }, durationMs: 7, notes: [] };
 
 describe("render CLI", () => {
   it("zero cases: writes the 'No cases run' banner and exits 1", () => {
@@ -21,7 +21,7 @@ describe("render CLI", () => {
   });
   it("canary results are never rendered", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
-    const c = { caseId: "c", row: "league", sport: "generic", variant: "score", scenario: "M1", canary: true, state: "red", reason: "", checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0 };
+    const c = { caseId: "c", row: "league", sport: "generic", variant: "score", scenario: "M1", canary: true, state: "red", reason: "", checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [] };
     writeFileSync(join(dir, "results.json"), JSON.stringify(results([c])));
     const r = cli(join(dir, "results.json"));
     expect(r.status).toBe(1);
@@ -62,7 +62,7 @@ describe("render CLI", () => {
   it.each<[string, (dir: string) => string, RegExp]>([
     ["a missing file", (dir) => join(dir, "nope.json"), /render: .*ENOENT/],
     ["bad JSON", (dir) => { writeFileSync(join(dir, "results.json"), "{not json"); return join(dir, "results.json"); }, /render: SyntaxError/],
-    ["results the schema refuses", (dir) => { writeFileSync(join(dir, "results.json"), JSON.stringify({ ...results([]), schemaVersion: 2 })); return join(dir, "results.json"); }, /render: ZodError/],
+    ["results the schema refuses", (dir) => { writeFileSync(join(dir, "results.json"), JSON.stringify({ ...results([]), schemaVersion: 1 })); return join(dir, "results.json"); }, /render: ZodError/],
     ["a case off the catalogue grid", (dir) => { writeFileSync(join(dir, "results.json"), JSON.stringify(results([{ ...works, caseId: "leauge|generic", row: "leauge" }]))); return join(dir, "results.json"); }, /render: .*leauge\|generic/],
   ])("%s is an input error: exit 2, a reason on stderr, no MATRIX.md", (_name, setup, why) => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));

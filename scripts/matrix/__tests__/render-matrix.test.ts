@@ -3,10 +3,10 @@ import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { SEVERITY, renderMatrix, worstState } from "../lib/render-matrix.ts";
 import { CASE_STATES, GLYPH, type CaseResult, type RunResults } from "../lib/results.ts";
 
-const run = (cases: CaseResult[]): RunResults => ({ schemaVersion: 1, runId: "r1", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", cases });
+const run = (cases: CaseResult[]): RunResults => ({ schemaVersion: 2, runId: "r1", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", cases });
 const kase = (p: Partial<CaseResult>): CaseResult => ({
   caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
-  state: "works", reason: "", checks: [], counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 5, ...p,
+  state: "works", reason: "", checks: [], counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 5, notes: [], ...p,
 });
 
 /** Split a markdown table row on UNESCAPED pipes; drops the outer empties. */

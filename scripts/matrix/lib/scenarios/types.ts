@@ -17,6 +17,10 @@ export interface ScenarioOutput {
   assertions: CheckResult[];
   /** Events the harness posted (PF8): run.ts writes it to counts.events. */
   events: number;
+  /** Final review m-5: what the scenario noticed on the way (a refused
+   *  complete, foreign events, the loop cap, the stage status after start).
+   *  run.ts writes them, redacted and capped, to the case's `notes`. */
+  notes: string[];
 }
 
 export interface Scenario {
