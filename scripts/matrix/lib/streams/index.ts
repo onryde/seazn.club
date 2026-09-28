@@ -3,7 +3,14 @@
 // composed here; a sport generator only builds a win or a draw.
 import type { MatchOutcome } from "@seazn/engine/core";
 import { drawsAllowed } from "../sport-cfg.ts";
+import { boardgameGenerator } from "./boardgame.ts";
+import { carromGenerator } from "./carrom.ts";
+import { cricketGenerator } from "./cricket.ts";
+import { footballGenerator } from "./football.ts";
 import { genericGenerator } from "./generic.ts";
+import { periodGenerator } from "./period.ts";
+import { setbasedGenerator } from "./setbased.ts";
+import { tennisGenerator } from "./tennis.ts";
 import {
   GeneratorUnsupported,
   OutcomeUnreachable,
@@ -30,7 +37,10 @@ export function register(...gens: SportStreamGenerator[]): Readonly<Record<strin
   return Object.freeze(out);
 }
 
-export const STREAM_GENERATORS = register(genericGenerator);
+export const STREAM_GENERATORS = register(
+  genericGenerator, setbasedGenerator, tennisGenerator, periodGenerator,
+  footballGenerator, cricketGenerator, boardgameGenerator, carromGenerator,
+);
 
 export function generateStream(req: StreamRequest): StreamEvent[] {
   const label = outcomeLabel(req.outcome);
