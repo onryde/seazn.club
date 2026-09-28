@@ -11,14 +11,16 @@
 //    `orgs:<uid>` for 120s, but only when its REDIS_URL is set (lib/cache.ts;
 //    the seazn-local-env recipe sets none, so every read is fresh). The harness
 //    has no Redis client and no product route drops that key harmlessly, so on
-//    a Redis-backed server the switch refuses loudly (OrgSwitchFailed) until
-//    the entry expires. A stale list can only LACK the new org, never invent
-//    one, so it cannot make the switch check pass falsely.
+//    a Redis-backed server the switch itself refuses loudly (its membership
+//    check reads that list) until the entry expires. A stale list can only
+//    LACK the new org, never invent one, so it cannot make a switch pass.
 //
 // Refuses to run on a DB it cannot prove is its own: BENCH_EXPECTED_DATA_DIR is
 // MANDATORY here (the bench preflight compares data_directory only when it is
-// set — env.ts checkOwnDatabase), and every MatrixSql query waits on its own
-// `show data_directory` comparison.
+// set — env.ts checkOwnDatabase). The reads wait on one `show data_directory`
+// comparison per client; every insertCaseOrg repeats it inside its own
+// transaction, on the connection the writes use, because postgres.js
+// reconnects silently and a reconnect can land on another server.
 import postgres from "postgres";
 import type { Session } from "../../bench/lib/http.ts";
 import type { PlanCandidateInfo } from "../../bench/lib/plan.ts";
@@ -90,19 +92,15 @@ export function chooseTopPublicPlan(candidates: readonly PlanCandidateInfo[]): s
 
 export class OrgSwitchFailed extends Error {
   constructor(orgId: string, why: string) {
-    super(redact(`seed-org: could not make ${orgId} the active org — ${why}. If the server has REDIS_URL set, its user-orgs cache (orgs:<uid>, 120s) may predate this SQL-seeded org`));
+    super(redact(`seed-org: could not make ${orgId} the active org — ${why}`));
     this.name = "OrgSwitchFailed";
   }
 }
 
-export function orgIdsFromListing(json: unknown): string[] {
-  const list = Array.isArray(json) ? json
-    : Array.isArray((json as { orgs?: unknown } | null)?.orgs) ? (json as { orgs: unknown[] }).orgs
-    : Array.isArray((json as { data?: unknown } | null)?.data) ? (json as { data: unknown[] }).data
-    : null;
-  if (list === null) throw new Error("seed-org: unrecognised GET /api/orgs shape");
-  return list.map((o) => String((o as { id?: unknown } | null)?.id));
-}
+/** The active-org cookie (apps/web/src/lib/auth.ts ORG_COOKIE; text-pinned by
+ *  seed-org.test.ts). setActiveOrgId writes the org id into it, and every
+ *  session-authenticated api-v1 call resolves its org from it. */
+export const ORG_COOKIE = "seazn_org";
 
 /** The legacy handler's success (lib/http.ts): 2xx AND `{ok:true}`. A 2xx
  *  without it is bench raw()'s non-JSON fallback — e.g. a followed redirect. */
@@ -112,16 +110,23 @@ function refusal(r: { status: number; json: unknown }): string | null {
   return `${r.status}: ${typeof body?.error === "string" ? body.error : "(no reason)"}`;
 }
 
-/** RF4: switch the session's active org, then prove the product lists it —
- *  a switch that did not hold would put the next case's rows in another org. */
+/** RF4: switch the session's active org and prove it held. What the switch
+ *  changes is one cookie, which bench raw() copies into `session.cookies`;
+ *  a switch that did not reach the jar would put the next case's rows in
+ *  another org. The cookie is dropped first, so only THIS answer's Set-Cookie
+ *  can satisfy the check. (GET /api/orgs cannot: the route authorises the
+ *  switch from the same membership list, so a listing check is always true.) */
 export async function switchToCaseOrg(t: Transport, base: string, session: Session, orgId: string): Promise<void> {
+  delete session.cookies[ORG_COOKIE];
   const sw = await t.raw(base, session, "/api/orgs/active", "POST", { org_id: orgId });
-  const swRefused = refusal(sw);
-  if (swRefused !== null) throw new OrgSwitchFailed(orgId, `POST /api/orgs/active → ${swRefused}`);
-  const listed = await t.raw(base, session, "/api/orgs", "GET");
-  const listRefused = refusal(listed);
-  if (listRefused !== null) throw new OrgSwitchFailed(orgId, `GET /api/orgs → ${listRefused}`);
-  if (!orgIdsFromListing(listed.json).includes(orgId)) throw new OrgSwitchFailed(orgId, "the org is not in GET /api/orgs");
+  const refused = refusal(sw);
+  if (refused !== null) {
+    throw new OrgSwitchFailed(orgId, `POST /api/orgs/active → ${refused}. If the server has REDIS_URL set, its user-orgs cache (orgs:<uid>, 120s) may predate this SQL-seeded org`);
+  }
+  const held = session.cookies[ORG_COOKIE];
+  if (held !== orgId) {
+    throw new OrgSwitchFailed(orgId, `POST /api/orgs/active answered ok but the session's ${ORG_COOKIE} cookie is ${held === undefined ? "unset" : `"${held}"`}, so the next call would act in another org`);
+  }
 }
 
 export interface PrepareCaseOrgDeps {
@@ -162,6 +167,10 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
     },
     async insertCaseOrg({ userId, name, slug }) {
       return db.begin(async (tx) => {
+        // Re-proven on THIS transaction's connection, before its first write.
+        const [dir] = await tx<{ data_directory: string }[]>`show data_directory`;
+        const actual = dir?.data_directory ?? "";
+        if (actual !== expectedDataDir) throw new DataDirMismatch(expectedDataDir, actual);
         const [sub] = await tx<{ id: string }[]>`
           insert into subscriptions (owner_user_id, plan_key, status, quantity_paid)
           values (${userId}, 'community', 'active', 1)

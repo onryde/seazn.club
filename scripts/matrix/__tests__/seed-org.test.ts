@@ -5,12 +5,17 @@ import { describe, expect, it } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import type { Transport } from "../lib/driver/http-driver.ts";
 import {
-  DataDirMismatch, DataDirUnset, NoPublicPlan, OrgSwitchFailed, chooseTopPublicPlan, createRealMatrixSql, gateOnOwnDataDir,
-  matrixSqlOver, orgIdsFromListing, ownerEmail, prepareCaseOrg, requireOwnDataDir, switchToCaseOrg, type MatrixSql,
+  DataDirMismatch, DataDirUnset, NoPublicPlan, ORG_COOKIE, OrgSwitchFailed, chooseTopPublicPlan, createRealMatrixSql, gateOnOwnDataDir,
+  matrixSqlOver, ownerEmail, prepareCaseOrg, requireOwnDataDir, switchToCaseOrg, type MatrixSql,
 } from "../lib/seed-org.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const session: Session = { cookies: {} };
+const AUTH = readFileSync(resolve(REPO, "apps/web/src/lib/auth.ts"), "utf8");
+/** The active-org cookie's name as the PRODUCT spells it (auth.ts), never typed
+ *  here: the fakes write this name, so a seed-org constant that drifts from it
+ *  fails the switch tests as well as the pin below. */
+const PRODUCT_ORG_COOKIE = /\nconst ORG_COOKIE = "([^"]+)";/.exec(AUTH)?.[1] ?? "(ORG_COOKIE not found in auth.ts)";
+const fresh = (): Session => ({ cookies: {} });
 const reply = (status: number, json: unknown): RawResult => ({ status, json: json as never });
 // The legacy `handler` envelope both /api/orgs routes answer through
 // (apps/web/src/lib/http.ts handlerInner): `{ok:true, data}` or
@@ -83,7 +88,10 @@ describe("createRealMatrixSql — refuses before it configures a client", () => 
   it("a dir but no DATABASE_URL names DATABASE_URL", () => {
     expect(() => createRealMatrixSql({ BENCH_EXPECTED_DATA_DIR: "/tmp/pg-fm" })).toThrow(/DATABASE_URL is not set/);
   });
-  it("with both set it opens no connection until a query runs (dispose settles with nothing listening)", async () => {
+  // Construction is all this can show: the client is built inside, so no fake
+  // can count connects. That no query runs before the proof is shown over a
+  // fake client in the matrixSqlOver block below.
+  it("with both set it constructs without throwing, and dispose settles (nothing listens on the port)", async () => {
     const { dispose } = createRealMatrixSql({ BENCH_EXPECTED_DATA_DIR: "/tmp/pg-fm", DATABASE_URL: "postgres://matrix@localhost:1/none" });
     await expect(dispose()).resolves.toBeUndefined();
   });
@@ -94,21 +102,32 @@ describe("createRealMatrixSql — refuses before it configures a client", () => 
 // client or inside `begin`'s transaction. Test files are outside
 // tsconfig.scripts.json, so the cast costs no type safety in shipped code.
 type Stmt = { via: "db" | "tx"; text: string; values: unknown[] };
-function fakeClient(dataDir: string | null, rows: (text: string) => unknown[] = () => []) {
-  const seen: (Stmt | "BEGIN" | "COMMIT")[] = [];
+/** `txDataDir` is what `show data_directory` answers INSIDE a transaction —
+ *  standing in for the connection postgres.js silently reconnected to. */
+function fakeClient(dataDir: string | null, rows: (text: string) => unknown[] = () => [], txDataDir: string | null = dataDir) {
+  const seen: (Stmt | "BEGIN" | "COMMIT" | "ROLLBACK")[] = [];
   const tag = (via: "db" | "tx") => (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join("$").replace(/\s+/g, " ").trim();
     seen.push({ via, text, values });
-    if (text === "show data_directory") return Promise.resolve(dataDir === null ? [] : [{ data_directory: dataDir }]);
+    const dir = via === "db" ? dataDir : txDataDir;
+    if (text === "show data_directory") return Promise.resolve(dir === null ? [] : [{ data_directory: dir }]);
     return Promise.resolve(rows(text));
   };
   const db = Object.assign(tag("db"), {
-    begin: async (cb: (tx: unknown) => Promise<unknown>) => { seen.push("BEGIN"); const out = await cb(tag("tx")); seen.push("COMMIT"); return out; },
+    begin: async (cb: (tx: unknown) => Promise<unknown>) => {
+      seen.push("BEGIN");
+      try { const out = await cb(tag("tx")); seen.push("COMMIT"); return out; } catch (e) { seen.push("ROLLBACK"); throw e; }
+    },
     end: async () => {},
   });
   return { db: db as unknown as Parameters<typeof matrixSqlOver>[0], seen };
 }
 const PROBE: Stmt = { via: "db", text: "show data_directory", values: [] };
+const INSERT_ROWS = (text: string): unknown[] =>
+  text.startsWith("insert into subscriptions") ? [{ id: "s1" }]
+  : text.startsWith("insert into organizations") ? [{ id: "o1", slug: "m-r-1" }]
+  : [];
+const shape = (seen: ReturnType<typeof fakeClient>["seen"]) => seen.map((s) => (typeof s === "string" ? s : `${s.via} ${s.text.split(" (")[0]}`));
 
 describe("matrixSqlOver — the real queries, driven over a fake client", () => {
   it("a foreign data_directory refuses every method and runs nothing but the one probe", async () => {
@@ -122,18 +141,37 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
   });
 
   it("insertCaseOrg: createOrgForUser's three inserts, in its order, in ONE transaction, owner bound", async () => {
-    const { db, seen } = fakeClient("/tmp/pg-fm", (text) =>
-      text.startsWith("insert into subscriptions") ? [{ id: "s1" }]
-      : text.startsWith("insert into organizations") ? [{ id: "o1", slug: "m-r-1" }]
-      : []);
+    const { db, seen } = fakeClient("/tmp/pg-fm", INSERT_ROWS);
     const out = await matrixSqlOver(db, "/tmp/pg-fm").insertCaseOrg({ userId: "u1", name: "Matrix 1", slug: "m-r-1" });
     expect(out).toEqual({ orgId: "o1", orgSlug: "m-r-1" });
-    expect(seen.map((s) => (typeof s === "string" ? s : `${s.via} ${s.text.split(" (")[0]}`))).toEqual([
-      "db show data_directory", "BEGIN", "tx insert into subscriptions", "tx insert into organizations", "tx insert into org_members", "COMMIT",
+    expect(shape(seen)).toEqual([
+      "db show data_directory", "BEGIN", "tx show data_directory", "tx insert into subscriptions", "tx insert into organizations", "tx insert into org_members", "COMMIT",
     ]);
     const stmts = seen.filter((s): s is Stmt => typeof s !== "string");
-    expect(stmts.map((s) => s.values)).toEqual([[], ["u1"], ["Matrix 1", "m-r-1", "u1", "s1", null], ["o1", "u1"]]);
-    expect(stmts[3]!.text).toMatch(/values \(\$, \$, 'owner'\)$/);
+    expect(stmts.map((s) => s.values)).toEqual([[], [], ["u1"], ["Matrix 1", "m-r-1", "u1", "s1", null], ["o1", "u1"]]);
+    expect(stmts[4]!.text).toMatch(/values \(\$, \$, 'owner'\)$/);
+  });
+
+  it("insertCaseOrg re-proves the data dir on the transaction's own connection: a reconnect to a foreign server aborts before any insert", async () => {
+    // The memoised client-level proof passed; the connection the writes ride
+    // on now answers another server's directory.
+    const { db, seen } = fakeClient("/tmp/pg-fm", INSERT_ROWS, "/usr/local/var/postgres");
+    await expect(matrixSqlOver(db, "/tmp/pg-fm").insertCaseOrg({ userId: "u1", name: "n", slug: "s" })).rejects.toBeInstanceOf(DataDirMismatch);
+    expect(shape(seen)).toEqual(["db show data_directory", "BEGIN", "tx show data_directory", "ROLLBACK"]);
+  });
+
+  it("insertCaseOrg: the transaction's probe answering no row is a mismatch too, not a pass", async () => {
+    const { db, seen } = fakeClient("/tmp/pg-fm", INSERT_ROWS, null);
+    await expect(matrixSqlOver(db, "/tmp/pg-fm").insertCaseOrg({ userId: "u1", name: "n", slug: "s" })).rejects.toBeInstanceOf(DataDirMismatch);
+    expect(shape(seen)).toEqual(["db show data_directory", "BEGIN", "tx show data_directory", "ROLLBACK"]);
+  });
+
+  it("insertCaseOrg proves EVERY case's transaction, not just the first", async () => {
+    const { db, seen } = fakeClient("/tmp/pg-fm", INSERT_ROWS);
+    const sql = matrixSqlOver(db, "/tmp/pg-fm");
+    await sql.insertCaseOrg({ userId: "u1", name: "Matrix 1", slug: "m-r-1" });
+    await sql.insertCaseOrg({ userId: "u1", name: "Matrix 2", slug: "m-r-2" });
+    expect(shape(seen).filter((s) => s.endsWith("show data_directory"))).toEqual(["db show data_directory", "tx show data_directory", "tx show data_directory"]);
   });
 
   it("show data_directory answering no row is a mismatch, and nothing else runs", async () => {
@@ -175,59 +213,61 @@ describe("chooseTopPublicPlan — empty first", () => {
   });
 });
 
-describe("switchToCaseOrg (Review Focus 4)", () => {
-  const transport = (listing: RawResult, switched: RawResult = okData({ ok: true })) => {
+describe("switchToCaseOrg (Review Focus 4) — the switch holds only if the session carries the org cookie", () => {
+  // What the switch changes is ONE cookie: setActiveOrgId writes the product's
+  // ORG_COOKIE (auth.ts) and bench raw() copies each Set-Cookie into the
+  // session jar. `sets` is what this fake answer's Set-Cookie would write.
+  const transport = (switched: RawResult, sets: (orgId: string) => string | undefined = (orgId) => orgId) => {
     const calls: { method: string; path: string; body: unknown }[] = [];
     const t: Transport = {
-      async raw(_b, _s, path, method = "GET", body) {
+      async raw(_b, s, path, method = "GET", body) {
         calls.push({ method, path, body });
-        return path === "/api/orgs/active" ? switched : listing;
+        const value = sets((body as { org_id: string }).org_id);
+        if (value !== undefined) s.cookies[PRODUCT_ORG_COOKIE] = value;
+        return switched;
       },
     };
     return { t, calls };
   };
 
-  it("switches with the product's body, then proves the org is listed", async () => {
-    const { t, calls } = transport(okData([{ id: "o1", role: "owner" }, { id: "o2", role: "owner" }]));
-    await switchToCaseOrg(t, "http://localhost:1", session, "o2");
-    expect(calls).toEqual([
-      { method: "POST", path: "/api/orgs/active", body: { org_id: "o2" } },
-      { method: "GET", path: "/api/orgs", body: undefined },
-    ]);
+  it("posts the product's body once, and the session then carries the org cookie for that org", async () => {
+    const { t, calls } = transport(okData({ ok: true }));
+    const s = fresh();
+    await switchToCaseOrg(t, "http://localhost:1", s, "o2");
+    expect(calls).toEqual([{ method: "POST", path: "/api/orgs/active", body: { org_id: "o2" } }]);
+    expect(s.cookies[PRODUCT_ORG_COOKIE]).toBe("o2");
   });
-  it("a listing without the org is OrgSwitchFailed naming the user-orgs cache", async () => {
-    const { t } = transport(okData([{ id: "o1", role: "owner" }]));
-    const err = await switchToCaseOrg(t, "http://localhost:1", session, "o2").catch((e: unknown) => e);
+  it("200 {ok:true} that sets no cookie is OrgSwitchFailed — the next call would act in another org", async () => {
+    const { t } = transport(okData({ ok: true }), () => undefined);
+    const err = await switchToCaseOrg(t, "http://localhost:1", fresh(), "o2").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(OrgSwitchFailed);
-    expect((err as Error).message).toMatch(/not in GET \/api\/orgs/);
-    expect((err as Error).message).toMatch(/orgs:<uid>/);
+    expect((err as Error).message).toMatch(/cookie is unset/);
   });
-  it("a refused switch is OrgSwitchFailed carrying the product's (redacted) reason", async () => {
+  it("a cookie for a different org is OrgSwitchFailed", async () => {
+    const { t } = transport(okData({ ok: true }), () => "o1");
+    const err = await switchToCaseOrg(t, "http://localhost:1", fresh(), "o2").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OrgSwitchFailed);
+    expect((err as Error).message).toMatch(/cookie is "o1"/);
+  });
+  it("a cookie already holding this org does not count: only THIS answer's Set-Cookie proves the switch", async () => {
+    const { t } = transport(okData({ ok: true }), () => undefined);
+    const s: Session = { cookies: { [PRODUCT_ORG_COOKIE]: "o2" } };
+    await expect(switchToCaseOrg(t, "http://localhost:1", s, "o2")).rejects.toBeInstanceOf(OrgSwitchFailed);
+  });
+  it("a refused switch is OrgSwitchFailed carrying the product's (redacted) reason and naming the user-orgs cache", async () => {
     // What a stale orgs:<uid> cache actually produces: getOrgRole misses the
     // SQL-seeded org, the route throws a plain Error, the handler answers 500.
-    const { t, calls } = transport(okData([{ id: "o2" }]), reply(500, { ok: false, error: "You are not a member of this organization token=abc123secret" }));
-    const err = await switchToCaseOrg(t, "http://localhost:1", session, "o2").catch((e: unknown) => e);
+    const { t, calls } = transport(reply(500, { ok: false, error: "You are not a member of this organization token=abc123secret" }), () => undefined);
+    const err = await switchToCaseOrg(t, "http://localhost:1", fresh(), "o2").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(OrgSwitchFailed);
     expect((err as Error).message).toMatch(/POST \/api\/orgs\/active → 500: You are not a member of this organization/);
+    expect((err as Error).message).toMatch(/orgs:<uid>/);
     expect((err as Error).message).not.toContain("abc123secret");
     expect(calls).toHaveLength(1);
   });
-  it("a 2xx that is not the handler's ok envelope (a followed redirect, raw()'s 'no json') is a refused switch", async () => {
-    const { t } = transport(okData([{ id: "o2" }]), reply(200, { ok: false, error: "no json" }));
-    await expect(switchToCaseOrg(t, "http://localhost:1", session, "o2")).rejects.toThrow(/POST \/api\/orgs\/active → 200: no json/);
-  });
-  it("a failed listing is OrgSwitchFailed with its status and reason, not a shape error", async () => {
-    const { t } = transport(reply(401, { ok: false, error: "Not signed in" }));
-    const err = await switchToCaseOrg(t, "http://localhost:1", session, "o2").catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(OrgSwitchFailed);
-    expect((err as Error).message).toMatch(/GET \/api\/orgs → 401: Not signed in/);
-  });
-  it("orgIdsFromListing accepts array, {orgs}, {data}; refuses anything else", () => {
-    expect(orgIdsFromListing([{ id: "a" }])).toEqual(["a"]);
-    expect(orgIdsFromListing({ orgs: [{ id: "b" }] })).toEqual(["b"]);
-    expect(orgIdsFromListing({ data: [{ id: "c" }] })).toEqual(["c"]);
-    // The named refusal, not a TypeError from mapping over null.
-    expect(() => orgIdsFromListing({ nope: 1 })).toThrow(/unrecognised GET \/api\/orgs shape/);
+  it("a 2xx that is not the handler's ok envelope (a followed redirect, raw()'s 'no json') is a refused switch, cookie or not", async () => {
+    const { t } = transport(reply(200, { ok: false, error: "no json" }));
+    await expect(switchToCaseOrg(t, "http://localhost:1", fresh(), "o2")).rejects.toThrow(/POST \/api\/orgs\/active → 200: no json/);
   });
 });
 
@@ -241,15 +281,15 @@ describe("prepareCaseOrg", () => {
 
   it("inserts, switches, then provisions — in that order", async () => {
     const order: string[] = [];
-    const t: Transport = { async raw(_b, _s, path, method = "GET") { order.push(`${method} ${path}`); return path === "/api/orgs" ? okData([{ id: "o9", role: "owner" }]) : okData({ ok: true }); } };
-    const out = await prepareCaseOrg({ sql: fakeSql(order), transport: t, base: "http://localhost:1", session, userId: "u1", plan: "pro", provision: async (o, p) => { order.push(`provision ${o} ${p}`); } }, { name: "Matrix 1", slug: "m-r-1" });
+    const t: Transport = { async raw(_b, s, path, method = "GET", body) { order.push(`${method} ${path}`); s.cookies[PRODUCT_ORG_COOKIE] = (body as { org_id: string }).org_id; return okData({ ok: true }); } };
+    const out = await prepareCaseOrg({ sql: fakeSql(order), transport: t, base: "http://localhost:1", session: fresh(), userId: "u1", plan: "pro", provision: async (o, p) => { order.push(`provision ${o} ${p}`); } }, { name: "Matrix 1", slug: "m-r-1" });
     expect(out).toEqual({ orgId: "o9", orgSlug: "m-r-1" });
-    expect(order).toEqual(["insert u1 Matrix 1 m-r-1", "POST /api/orgs/active", "GET /api/orgs", "provision o9 pro"]);
+    expect(order).toEqual(["insert u1 Matrix 1 m-r-1", "POST /api/orgs/active", "provision o9 pro"]);
   });
   it("a failed switch never provisions (provisioning elevates the owner to superadmin in SQL)", async () => {
     const order: string[] = [];
-    const t: Transport = { async raw(_b, _s, path, method = "GET") { order.push(`${method} ${path}`); return okData([{ id: "o1" }]); } };
-    await expect(prepareCaseOrg({ sql: fakeSql(order), transport: t, base: "http://localhost:1", session, userId: "u1", plan: "pro", provision: async () => { order.push("provision"); } }, { name: "Matrix 1", slug: "m-r-1" })).rejects.toBeInstanceOf(OrgSwitchFailed);
+    const t: Transport = { async raw(_b, _s, path, method = "GET") { order.push(`${method} ${path}`); return okData({ ok: true }); } }; // sets no cookie
+    await expect(prepareCaseOrg({ sql: fakeSql(order), transport: t, base: "http://localhost:1", session: fresh(), userId: "u1", plan: "pro", provision: async () => { order.push("provision"); } }, { name: "Matrix 1", slug: "m-r-1" })).rejects.toBeInstanceOf(OrgSwitchFailed);
     expect(order).not.toContain("provision");
   });
 });
@@ -283,7 +323,6 @@ describe("R14a: every seed-org error that echoes an input redacts it", () => {
 // drifts from them — so both sides are read from source, never typed in.
 // ---------------------------------------------------------------------------
 
-const AUTH = readFileSync(resolve(REPO, "apps/web/src/lib/auth.ts"), "utf8");
 const SEED = readFileSync(resolve(REPO, "scripts/matrix/lib/seed-org.ts"), "utf8");
 
 /** From `start` to the next top-level `export` (or the end of the file). */
@@ -323,6 +362,16 @@ describe("mirror pin: createOrgForUser's inserts (a product change reds here)", 
 
   it("seed-org's inserts equal the product's: same tables, same columns, same literal values ('owner', 'community', 'active', 1)", () => {
     expect(insertsIn(fnBody(SEED, "export function matrixSqlOver"))).toEqual(insertsIn(body));
+  });
+});
+
+describe("mirror pin: the active-org cookie (auth.ts ORG_COOKIE → setActiveOrgId ← POST /api/orgs/active)", () => {
+  it("seed-org checks the product's cookie, the product writes the org id into it, and the switch route calls that writer", () => {
+    expect(PRODUCT_ORG_COOKIE, "auth.ts no longer declares ORG_COOKIE").not.toMatch(/not found/);
+    expect(ORG_COOKIE).toBe(PRODUCT_ORG_COOKIE);
+    expect(fnBody(AUTH, "export async function setActiveOrgId")).toMatch(/jar\.set\(ORG_COOKIE, orgId,/);
+    const ROUTE = readFileSync(resolve(REPO, "apps/web/src/app/api/orgs/active/route.ts"), "utf8");
+    expect(ROUTE).toMatch(/await setActiveOrgId\(org_id\);/);
   });
 });
 
