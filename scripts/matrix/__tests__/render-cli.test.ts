@@ -57,4 +57,27 @@ describe("render CLI", () => {
     expect(cli(join(dir, "results.json"), join(dir, "results.json")).status).toBe(2);
     expect(existsSync(join(dir, "MATRIX.md"))).toBe(false);
   });
+  // Review M2: an uncaught throw exits 1, which is the "zero cases / canary"
+  // code. Every input failure is exit 2 with a reason, and writes nothing.
+  it.each<[string, (dir: string) => string, RegExp]>([
+    ["a missing file", (dir) => join(dir, "nope.json"), /render: .*ENOENT/],
+    ["bad JSON", (dir) => { writeFileSync(join(dir, "results.json"), "{not json"); return join(dir, "results.json"); }, /render: SyntaxError/],
+    ["results the schema refuses", (dir) => { writeFileSync(join(dir, "results.json"), JSON.stringify({ ...results([]), schemaVersion: 2 })); return join(dir, "results.json"); }, /render: ZodError/],
+    ["a case off the catalogue grid", (dir) => { writeFileSync(join(dir, "results.json"), JSON.stringify(results([{ ...works, caseId: "leauge|generic", row: "leauge" }]))); return join(dir, "results.json"); }, /render: .*leauge\|generic/],
+  ])("%s is an input error: exit 2, a reason on stderr, no MATRIX.md", (_name, setup, why) => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    const r = cli(setup(dir));
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(why);
+    expect(existsSync(join(dir, "MATRIX.md"))).toBe(false);
+  });
+  it("an input error never prints a secret: JSON.parse quotes short bad input whole, so the message is redacted (R14a)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    // V8 echoes an input this short in full: `Unexpected token 'o', "token=abc123secret" is not valid JSON`.
+    writeFileSync(join(dir, "results.json"), "token=abc123secret");
+    const r = cli(join(dir, "results.json"));
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/render: SyntaxError: .*\[redacted\]/);
+    expect(r.stderr).not.toContain("abc123secret");
+  });
 });

@@ -117,10 +117,23 @@ export class SecretInResults extends Error {
   }
 }
 
+/** Every string value in the results, RAW. The secret scan reads these, never
+ *  the JSON body: JSON.stringify turns a newline into `\` + `n`, which erases
+ *  the \b in front of a JWT / `sk_` / `dl_` / `postgres://`, so a secret at the
+ *  start of a line passed a body scan and was written (review I1). Keys need no
+ *  scan: the strict schema fixes every one of them. */
+function stringsIn(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") out.push(value);
+  // Arrays included: Object.values of an array is its elements.
+  else if (value !== null && typeof value === "object") for (const v of Object.values(value)) stringsIn(v, out);
+  return out;
+}
+
 export function writeResults(dir: string, results: RunResults): string {
-  const body = `${JSON.stringify(RunResultsSchema.parse(results), null, 2)}\n`;
-  const hits = findSecrets(body);
+  const parsed = RunResultsSchema.parse(results);
+  const hits = stringsIn(parsed).flatMap((s) => findSecrets(s));
   if (hits.length > 0) throw new SecretInResults(hits.length);
+  const body = `${JSON.stringify(parsed, null, 2)}\n`;
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "results.json");
   writeFileSync(path, body);

@@ -139,11 +139,11 @@ describe("redaction (R14a)", () => {
 });
 
 // PF6: Task 9 maps every reason and evidence string through redact() before
-// writeResults scans the file, so findSecrets must (a) catch every credential
-// shape this harness can meet, (b) leave ordinary evidence alone, and (c) find
-// nothing in redact()'s own output — including once JSON.stringify has escaped
-// it, because writeResults scans the serialised body. A negative needs its
-// positive pair: each block below has both.
+// writeResults scans each RAW string, so findSecrets must (a) catch every
+// credential shape this harness can meet, (b) leave ordinary evidence alone,
+// and (c) find nothing in redact()'s own output. Each row is also driven
+// through writeResults itself: refused raw, written once redacted (positives);
+// written as-is (negatives). A negative needs its positive pair.
 const TOKEN43 = "Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFu_Ab-9xYzQwE"; // synthetic; 43 base64url chars, the shape of randomBytes(32)
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTEiLCJhdWQiOiJzZWF6biJ9.c2lnbmF0dXJlLXNpZ25hdHVyZQ";
 
@@ -178,6 +178,19 @@ const SECRETS: readonly [string, string, string][] = [
   ["PGPASSWORD", "PGPASSWORD=hunter22 psql -h localhost", "hunter22"],
   ["JWT alone", `jwt ${JWT} expired`, JWT],
   ["stripe secret key", "sk_live_51HxYzAbCdEfGhIjKl", "51HxYzAbCdEfGhIjKl"],
+  // Review I1: a secret at the start of a line or after a tab. JSON escaping
+  // turns the newline into `\n`, erasing the \b these patterns anchor on.
+  ["JWT at the start of a line", `line1\n${JWT}`, JWT],
+  ["stripe key after a tab", "a\tsk_live_51HxYzAbCdEfGhIjKl", "51HxYzAbCdEfGhIjKl"],
+  ["short dl_ secret after a newline", "x\ndl_ABCDEFGH12345", "ABCDEFGH12345"],
+  ["postgres URL at the start of a line", "connect failed:\npostgres://localhost:55432/seazn_fm", "localhost:55432/seazn_fm"],
+  // Review M3: a quoted value is redacted whole, spaces included.
+  ["single-quoted password with a space", "password: 'hunter 22'", " 22"],
+  ["double-quoted password with a space", '{"password": "hunter 22"}', " 22"],
+  // Review M4's positive pairs: the word test must not cost these.
+  ["plain-word password", "PGPASSWORD=hunter", "hunter"],
+  ["short numeric token", "token=123456", "123456"],
+  ["long all-letter api key", "api_key=abcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvwxyz"],
 ];
 
 /** Ordinary evidence the harness writes on every run (PF6). */
@@ -196,7 +209,29 @@ const EVIDENCE: readonly [string, string][] = [
   ["localhost with port", "SMOKE_BASE http://localhost:3123 answered 200"],
   ["notes", "stage league status after start: in_progress; config knockout: 400 FORMAT_LOCKED; loop cap 64 reached"],
   ["variant names", "doubles-noad-mtb10 bwf score"],
+  // Review M4: an ordinary word under a key whose real values are minted.
+  ["authorization: none", "request sent with authorization: none"],
+  ["token_count", "token_count=abc"],
+  ["cookie consent", "cookie_consent=granted; cookie_consent=accepted"],
+  ["quoted consent flag", '{"cookie_consent": "granted"}'],
+  ["single-quoted authorization word", "authorization: 'none'"],
 ];
+
+const base: RunResults = { schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
+const withEvidence = (evidence: string[]): RunResults => ({
+  ...base,
+  cases: [{
+    caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
+    state: "works", reason: "1 checks, 1 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 1, reason: "", evidence }],
+    counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 1,
+  }],
+});
+/** writeResults into a fresh dir: the thrown value (or null) and whether a file landed. */
+const tryWrite = (r: RunResults): { error: unknown; wrote: boolean } => {
+  const dir = mkdtempSync(join(tmpdir(), "fm-"));
+  try { writeResults(dir, r); return { error: null, wrote: existsSync(join(dir, "results.json")) }; }
+  catch (e) { return { error: e, wrote: existsSync(join(dir, "results.json")) }; }
+};
 
 describe("findSecrets / redact — positives (PF6)", () => {
   it("discovery guard: the tables are not empty", () => {
@@ -210,34 +245,43 @@ describe("findSecrets / redact — positives (PF6)", () => {
     expect(clean).not.toContain(payload);
     expect(clean).toContain("[redacted]");
   });
-  it.each(SECRETS)("%s: redact() is a fixpoint, raw and JSON-serialised", (_label, text) => {
+  it.each(SECRETS)("%s: redact() is a fixpoint", (_label, text) => {
     const clean = redact(text);
     expect(findSecrets(clean)).toEqual([]);
     expect(redact(clean)).toBe(clean);
-    expect(findSecrets(JSON.stringify({ evidence: [clean] }))).toEqual([]);
+  });
+  it.each(SECRETS)("%s: writeResults refuses it raw (writing nothing) and writes it redacted", (_label, text) => {
+    const raw = tryWrite(withEvidence([text]));
+    expect(raw.error).toBeInstanceOf(SecretInResults);
+    expect(raw.wrote).toBe(false);
+    expect(tryWrite(withEvidence([redact(text)]))).toEqual({ error: null, wrote: true });
   });
 });
 
 describe("findSecrets / redact — negatives (PF6)", () => {
-  it.each(EVIDENCE)("%s is not a secret and survives redact() unchanged", (_label, text) => {
+  it.each(EVIDENCE)("%s is not a secret, survives redact() unchanged, and writes", (_label, text) => {
     expect(findSecrets(text)).toEqual([]);
     expect(redact(text)).toBe(text);
-    expect(findSecrets(JSON.stringify({ evidence: [text] }))).toEqual([]);
+    expect(tryWrite(withEvidence([text]))).toEqual({ error: null, wrote: true });
   });
-  it("JSON escaping cannot manufacture a secret out of short, redaction-clean text", () => {
-    // `token=ab` is under the 3-char floor raw; serialised, the newline becomes
-    // `\n` and must not stretch the value to `ab\ncd`. Same for a URL whose
-    // userinfo is broken by a newline.
-    for (const text of ["token=ab\ncd", "https://u:pa\nss@h/x", "postgres\n://x"]) {
-      expect(findSecrets(redact(text))).toEqual([]);
-      expect(findSecrets(JSON.stringify({ evidence: [redact(text)] }))).toEqual([]);
+  it("text that only LOOKS secret once JSON-escaped is written (the scan reads raw strings)", () => {
+    // Raw, `token=ab` is under the 3-char floor and the URL's userinfo is cut
+    // by a newline. Serialised, `\n` is `\` + `n` and would stretch both into
+    // matches, so a body scan would throw the run away.
+    for (const text of ["token=ab\ncd", "https://u:pa\nss@h/x"]) {
+      expect(findSecrets(text)).toEqual([]);
+      expect(tryWrite(withEvidence([text]))).toEqual({ error: null, wrote: true });
     }
   });
 });
 
 describe("findSecrets / redact — cost", () => {
-  it("long repetitive input stays cheap (an unanchored key prefix took 23 s here)", () => {
-    const inputs = ["token_".repeat(700), "x".repeat(20_000), "m-fm-w1a-a-".repeat(2_000), `sb-${"a-".repeat(2_000)}!`];
+  it("long repetitive input stays cheap (unanchored or unbounded runs took 1–23 s here)", () => {
+    const inputs = [
+      "token_".repeat(700), "x".repeat(20_000), "m-fm-w1a-a-".repeat(2_000), `sb-${"a-".repeat(2_000)}!`,
+      // Review M1: an uncapped key suffix and an unanchored JWT start.
+      "token.".repeat(10_000), "sb-a.".repeat(5_000), "eyJ-".repeat(10_000),
+    ];
     const t0 = performance.now();
     for (const s of inputs) { findSecrets(s); redact(s); }
     expect(performance.now() - t0).toBeLessThan(2_000);
@@ -245,16 +289,13 @@ describe("findSecrets / redact — cost", () => {
 });
 
 describe("writeResults", () => {
-  const base: RunResults = { schemaVersion: 1, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", cases: [] };
-  const withEvidence = (evidence: string[]): RunResults => ({
-    ...base,
-    cases: [{
-      caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
-      state: "works", reason: "1 checks, 1 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 1, reason: "", evidence }],
-      counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 1,
-    }],
+  it("review I1: a secret after a newline or tab is refused, though JSON-escaping hides it from a body scan", () => {
+    for (const secret of [`line1\n${JWT}`, "a\tsk_live_51HxYzAbCdEfGhIjKl", "x\ndl_ABCDEFGH12345"]) {
+      const r = tryWrite(withEvidence([secret]));
+      expect(r.error, secret).toBeInstanceOf(SecretInResults);
+      expect(r.wrote).toBe(false);
+    }
   });
-
   it("refuses a secret nested in check evidence, writes NOTHING, and does not echo the secret", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
     const e = (() => { try { writeResults(dir, withEvidence([`cookie: seazn_session=${TOKEN43}`])); } catch (x) { return x; } return null; })();
