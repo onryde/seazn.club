@@ -4,8 +4,9 @@ import {
   CfgInvalid, UnknownSport, UnknownVariant, drawsAllowed, entrantKindFor, resolveSportCfg, sportModule, variantKeys,
 } from "../lib/sport-cfg.ts";
 import { FOLD_OPTIONS, declaredPoints, envelopes, foldStream, lineupsFor } from "../lib/fold.ts";
-import { ALL_OUTCOMES, OutcomeUnreachable, START, outcomeLabel, type StreamRequest } from "../lib/streams/types.ts";
-import { generateStream, matchesRequest } from "../lib/streams/index.ts";
+import { ALL_OUTCOMES, GeneratorUnsupported, OutcomeUnreachable, START, outcomeLabel, type StreamRequest } from "../lib/streams/types.ts";
+import { genericGenerator } from "../lib/streams/generic.ts";
+import { generateStream, matchesRequest, register } from "../lib/streams/index.ts";
 
 const H = "H";
 const A = "A";
@@ -25,7 +26,13 @@ describe("sport-cfg — empty/unknown first", () => {
   });
 
   it("variant keys come from the module in declaration order, never an empty list", () => {
+    // Empty case first: an empty module list would pass the loop vacuously (R25).
+    expect(builtinModules.length).toBeGreaterThan(0);
     for (const m of builtinModules) expect(variantKeys(m.key).length, m.key).toBeGreaterThan(0);
+    // Declaration order: generic declares win_loss before score, the reverse of
+    // alphabetical, so a sorted list differs from the declared one.
+    expect(variantKeys("generic")).toEqual(Object.keys(sportModule("generic").variants));
+    expect(variantKeys("generic")).not.toEqual([...variantKeys("generic")].sort());
   });
 });
 
@@ -41,6 +48,15 @@ describe("sport-cfg — derived from declarations", () => {
 
   it("entrantKindFor reads the effective entrant model", () => {
     expect(["individual", "pair"]).toContain(entrantKindFor("badminton", resolveSportCfg("badminton", "bwf")));
+    // The answer differs by sport. A constant "individual" mis-sets every team sport.
+    for (const v of variantKeys("football")) expect(entrantKindFor("football", resolveSportCfg("football", v)), v).toBe("team");
+  });
+
+  it("entrantKindFor honours the division cfg's entrants override", () => {
+    // A raw cfg, NOT resolveSportCfg: badminton's configSchema strips `entrants`,
+    // so bwf + {entrants:{kinds:["pair"]}} would resolve to "individual".
+    expect(entrantKindFor("badminton", { entrants: { kinds: ["pair"] } })).toBe("pair");
+    expect(entrantKindFor("badminton", {})).toBe("individual");
   });
 });
 
@@ -59,11 +75,11 @@ describe("fold", () => {
     expect(declaredPoints(m, cfg, { kind: "league" }, H, A, [])).toBeNull();
   });
 
-  it("a strict fold throws on an invalid event instead of returning a plausible state", () => {
+  it("the fold refuses a draw result under win_loss (allowDraws false) instead of returning a plausible state", () => {
     const m = sportModule("generic");
     const winLoss = resolveSportCfg("generic", "win_loss");
     // The draw the score variant would accept: refused where supportsDraws says false.
-    expect(() => foldStream(m, winLoss, H, A, [START, { type: "generic.result", payload: { isDraw: true } }])).toThrow();
+    expect(() => foldStream(m, winLoss, H, A, [START, { type: "generic.result", payload: { isDraw: true } }])).toThrow(/draws are not allowed/);
   });
 
   // The draw refusal above is NOT strict-gated (generic.ts applyResult checks
@@ -95,6 +111,21 @@ describe("fold", () => {
     expect(win.forOutcome).toMatchObject({ kind: "win", winner: A });
     const draw = declaredPoints(m, cfg, { kind: "league" }, H, A, generateStream(req("score", { kind: "draw" })))!;
     expect(draw.home).toBe(draw.away);
+  });
+
+  // Generic's default points are {w:3,d:1,l:0}, the very table a lazy
+  // implementation would type. Only a cfg whose points differ can tell
+  // delegation to standingsDelta from a typed 3/1/0 (R9, class 19).
+  it("declaredPoints follows the cfg's own points, not a typed 3/1/0 table", () => {
+    const m = sportModule("generic");
+    const cfg = resolveSportCfg("generic", "score", { points: { w: 5, d: 2, l: 1 } });
+    const pts = (cfg as { points: { w: number; d: number; l: number } }).points;
+    expect(pts).toEqual({ w: 5, d: 2, l: 1 }); // the override survived the schema
+    const at = (outcome: StreamRequest["outcome"]) =>
+      declaredPoints(m, cfg, { kind: "league" }, H, A, generateStream({ ...req("score", outcome), cfg }));
+    expect(at({ kind: "win", winner: "away" })).toMatchObject({ home: pts.l, away: pts.w });
+    expect(at({ kind: "draw" })).toMatchObject({ home: pts.d, away: pts.d });
+    expect(at({ kind: "forfeit", by: "away", reason: "walkover" })).toMatchObject({ home: pts.w, away: pts.l });
   });
 });
 
@@ -130,5 +161,14 @@ describe("generic streams + matchesRequest", () => {
 
   it("an unregistered sport is GeneratorUnsupported, never an empty stream", () => {
     expect(() => generateStream({ ...req("score", { kind: "win", winner: "home" }), sportKey: "curling" })).toThrow(/no generator/);
+  });
+
+  it("the registry refuses a sport key claimed twice, and inherits no prototype keys", () => {
+    expect(Object.keys(register(genericGenerator))).toEqual(["generic"]);
+    expect(() => register(genericGenerator, { sportKeys: ["generic"], decided: () => [] })).toThrow(/duplicate generator for sport 'generic'/);
+    // A forfeit is composed before any generator runs, so a prototype-inherited
+    // "generator" would have returned a stream here.
+    expect(() => generateStream({ ...req("score", { kind: "forfeit", by: "away", reason: "walkover" }), sportKey: "constructor" }))
+      .toThrow(GeneratorUnsupported);
   });
 });

@@ -1,7 +1,20 @@
-// Sport configuration resolved exactly as createDivision does it: the variant
+// Sport configuration resolved the way createDivision does it: the variant
 // preset merged under the overrides, parsed by the module's own configSchema
 // (divisions.ts createDivision; mirrors validate-pack.ts resolveDivisionCfg,
-// which this harness may not import — ruling 17).
+// which this harness may not import — ruling 17). The two agree ONLY under
+// these conditions, and nothing here checks them:
+//  - The preset source differs. The product merges the DB row
+//    `sport_variants.config`, preferring an org-owned row. This file merges the
+//    engine's `module.variants`. They are equal only after `sync:sports` has
+//    written the rows from `module.variants`, and only while the org has no
+//    variant rows of its own. A fresh matrix DB and a fresh org satisfy both
+//    (R14).
+//  - The product folds a fixture under `stageScopedCfg(division.config,
+//    stage.config)`, which overlays `rules`, `shootout` and `extraTime` from
+//    the stage. The builder's template stage configs (format-templates.ts)
+//    carry none of those keys, so today the overlay is the identity. A wave
+//    that adds stage rules must resolve them here too, or the in-process fold
+//    diverges from the product's.
 import type { StageKind } from "@seazn/engine/core";
 import { effectiveEntrantModel, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";

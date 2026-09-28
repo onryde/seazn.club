@@ -16,9 +16,17 @@ import {
   type StreamRequest,
 } from "./types.ts";
 
-function register(...gens: SportStreamGenerator[]): Readonly<Record<string, SportStreamGenerator>> {
-  const out: Record<string, SportStreamGenerator> = {};
-  for (const g of gens) for (const k of g.sportKeys) out[k] = g;
+/** Builds the registry. A sport key claimed twice throws: a silent overwrite
+ *  would shadow a generator that Task 3's key-set check cannot see. The object
+ *  has a null prototype, so `toString` and `constructor` are not generators. */
+export function register(...gens: SportStreamGenerator[]): Readonly<Record<string, SportStreamGenerator>> {
+  const out = Object.create(null) as Record<string, SportStreamGenerator>;
+  for (const g of gens) {
+    for (const k of g.sportKeys) {
+      if (Object.hasOwn(out, k)) throw new Error(`streams: duplicate generator for sport '${k}'`);
+      out[k] = g;
+    }
+  }
   return Object.freeze(out);
 }
 
