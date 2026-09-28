@@ -32,6 +32,12 @@ describe("sanitise — allowlist", () => {
     expect(sanitise(SECRET)).toEqual({});
     expect(sanitise(42)).toEqual({});
   });
+  it("every payload key the usecase's forced destroys write survives (a key the list lacks never reaches the ledger — `staleAttempt` did not, Task 10 → lane-close sweep)", () => {
+    // The keys stream-sessions.ts hands forceDestroy at its three sites, typed here from those call sites.
+    const written = { machineId: "m1", staleAttempt: 1, machineName: "relay-x-r1", reason: "sweep" };
+    expect(sanitise(written)).toEqual(written);
+    expect(Object.keys(written).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
+  });
   it("the allowlist holds no key that names a credential (the list is the guard; this pins it)", () => {
     for (const k of ALLOWED_KEYS) expect(k).not.toMatch(/key|secret|pass|token|auth|cookie|env/i);
   });

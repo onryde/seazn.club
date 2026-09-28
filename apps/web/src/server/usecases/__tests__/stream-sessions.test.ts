@@ -940,6 +940,32 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect((await g.row(s3.sessionId)).state).toBe("completed");
   });
 
+  it("the stale create's force_destroy row carries WHICH attempt's Machine it destroyed — `staleAttempt` reaches the ledger through the sanitiser's allowlist (Task 11 review: the key was dropped since Task 10)", async () => {
+    const r = await rig({ credits: 1 });
+    let m1 = "";
+    let issuedFor = 0;
+    const slow = Object.assign(Object.create(r.runner) as FakeRunner, {
+      async create(spec: RunnerSpec) {
+        const handle = await r.runner.create(spec);
+        m1 = handle.runnerId;
+        issuedFor = spec.attempt;   // the attempt this create was ISSUED for — the producer's own fact
+        await sql`update fixture_stream_sessions set runner_state = 'creating', runner_attempts = ${spec.attempt + 1}, runner_retries = 1,
+                      runner_name = ${machineNameFor(spec.sessionId, spec.attempt + 1)} where id = ${spec.sessionId}`;
+        return handle;
+      },
+    });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), { ...r.deps, drivers: { ...r.deps.drivers, runner: slow } });
+    expect(issuedFor, "the create was issued").toBeGreaterThan(0);
+    expect(r.runner.destroyed).toEqual([m1]);
+    const rows = await sql<{ result: string; attempt: number | null; payload: Record<string, unknown> }[]>`
+      select result, attempt, payload from fixture_stream_events where session_id = ${sessionId} and kind = 'effect' and type = 'force_destroy' order by seq`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ result: "ok", attempt: issuedFor, payload: { machineId: m1, staleAttempt: issuedFor } });
+    // The row the stale Machine was NOT made for: the session now names the next attempt.
+    const [now] = await sql<{ runner_attempts: number }[]>`select runner_attempts from fixture_stream_sessions where id = ${sessionId}`;
+    expect(now!.runner_attempts).toBe(issuedFor + 1);
+  });
+
   it("F-B: a force_destroy whose confirmation lands after ANOTHER request's retry moved the runner on — to the next attempt's creating, or its booting — drops that confirmation: no throw out of the organiser's poll, the moved runner untouched, the provider call still recorded (mutant: feed destroy_ok without the name gate in force_destroy → creating|booting × destroy_ok → InvalidRunnerTransition → red)", async () => {
     let checked = 0;
     for (const moved of ["creating", "booting"] as const) {

@@ -10,7 +10,7 @@ const MAX_ARRAY = 50;
 export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   // domain
   "state", "from", "to", "trigger", "effect", "event", "reason", "endReason", "failReason", "desiredState",
-  "mode", "slot", "attempt", "attempts", "retries", "expiry", "deadlineAt", "at", "seconds", "minutes",
+  "mode", "slot", "attempt", "attempts", "staleAttempt", "retries", "expiry", "deadlineAt", "at", "seconds", "minutes",
   // runner / Fly (config.env VALUES are never here — only ids and states)
   "runnerState", "observed", "machineId", "machineName", "region", "cpus", "memoryMb", "cpuKind", "instanceId",
   "exit", "exitCode", "oomKilled", "requestedStop", "signal", "timeoutSeconds", "flyState", "eventType", "status",
