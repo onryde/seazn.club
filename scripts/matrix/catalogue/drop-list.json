@@ -4,11 +4,13 @@
   "basis": "builder-default variant per sport, derived offline; variant-dependent scenarios bound to variants.json first",
   "kinds": {
     "inapplicable": "the scenario cannot happen in the cell — the reason says why",
-    "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap"
+    "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
+    "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
   "total": 4857,
-  "inapplicable": 4843,
+  "inapplicable": 4840,
   "harnessGap": 14,
+  "unscorableOnly": 3,
   "groups": [
     {
       "scenario": "R4b",
@@ -1970,7 +1972,7 @@
     },
     {
       "scenario": "M5",
-      "kind": "inapplicable",
+      "kind": "unscorable-only",
       "reason": "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing) — the committed variants that enable it (24: cricket#004, cricket#008, cricket#012, …) cannot be scored by the harness",
       "count": 3,
       "cells": {

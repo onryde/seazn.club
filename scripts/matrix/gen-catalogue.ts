@@ -1,18 +1,23 @@
 // Writes or checks the committed W1b catalogue files (R11: regenerating is a
-// reviewed diff). Default --check: exit 1 on drift, naming each file. --write
-// refuses (exit 2) to lower a committed floor unless --accept-lower-floors,
-// and always refuses a zero floor (trap 1). Bad arguments also exit 2 (a
-// usage refusal) — never 1, which would read as drift. --root redirects only
-// where the committed files are read and written, and where regressions.json
-// is read from; the generators read the product and engine through imports.
+// reviewed diff). Exit codes, each with one meaning:
+//   0  the files match (--check) or were written (--write);
+//   1  drift: a committed file differs from the generator or is missing;
+//   2  a refusal: bad arguments, or --write asked to lower a committed floor
+//      without --accept-lower-floors (a missing or unparseable committed
+//      floors.json counts: it would accept any lowering), or any zero floor
+//      (trap 1, even with --accept-lower-floors);
+//   3  the generator crashed — never 1, which would read as drift.
+// --root redirects only where the committed files are read and written, and
+// where regressions.json is read from; the generators read the product and
+// engine through imports.
 // Deterministic: registry order or an explicit sort, no clock (R11, trap 5).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { ROW_KEYS, SPORT_KEYS } from "./lib/catalogue.ts";
-import { planL3, rowCounts, scenarioCounts } from "./lib/applicability.ts";
+import { planL3, rowCounts, scenarioCounts, type DropKind } from "./lib/applicability.ts";
 import { computeCounts } from "./lib/counts.ts";
+import { isMainModule } from "./lib/main-module.ts";
 import { L2_WIDTHS, planL2 } from "./lib/pairs.ts";
 import { ATOMIC, LIFECYCLE_ID, l2Atomic, l3Atomic, loadRegressions } from "./lib/scenario-catalogue.ts";
 import { buildSportVariants } from "./lib/variants.ts";
@@ -24,7 +29,6 @@ export type Generated = (typeof GENERATED)[number];
  *  scenario, L2 runs per scenario. Never lowered silently (--write refuses). */
 export interface Floors { schemaVersion: 1; perRow: Record<string, number>; perScenarioL3: Record<string, number>; perScenarioL2: Record<string, number> }
 
-type DropKind = "inapplicable" | "harness-gap";
 interface DropGroup { scenario: string; kind: DropKind; reason: string; count: number; cells: Record<string, string[]> }
 
 const json = (v: unknown): string => `${JSON.stringify(v, null, 2)}\n`;
@@ -44,16 +48,15 @@ export function generateCatalogue(repoRoot: string): Record<Generated, string> {
   const order = [LIFECYCLE_ID, ...ATOMIC.map((a) => a.id)];
   const groups = new Map<string, DropGroup>();
   for (const d of l3.drops) {
-    const kind: DropKind = d.harnessGap ? "harness-gap" : "inapplicable";
-    const k = JSON.stringify([d.scenario, kind, d.reason]);
-    const g = groups.get(k) ?? { scenario: d.scenario, kind, reason: d.reason, count: 0, cells: {} };
+    const k = JSON.stringify([d.scenario, d.kind, d.reason]);
+    const g = groups.get(k) ?? { scenario: d.scenario, kind: d.kind, reason: d.reason, count: 0, cells: {} };
     (g.cells[d.row] ??= []).push(d.sport);
     g.count++;
     groups.set(k, g);
   }
   const dropGroups = [...groups.values()].sort((a, b) =>
     order.indexOf(a.scenario) - order.indexOf(b.scenario) || byCodepoint(a.kind, b.kind) || byCodepoint(a.reason, b.reason));
-  const harnessGap = l3.drops.filter((d) => d.harnessGap).length;
+  const ofKind = (k: DropKind): number => l3.drops.filter((d) => d.kind === k).length;
 
   const perRow = rowCounts(l3.cases);
   const perScenario = scenarioCounts(l3.cases);
@@ -72,10 +75,12 @@ export function generateCatalogue(repoRoot: string): Record<Generated, string> {
       kinds: {
         inapplicable: "the scenario cannot happen in the cell — the reason says why",
         "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
+        "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them",
       },
       total: l3.drops.length,
-      inapplicable: l3.drops.length - harnessGap,
-      harnessGap,
+      inapplicable: ofKind("inapplicable"),
+      harnessGap: ofKind("harness-gap"),
+      unscorableOnly: ofKind("unscorable-only"),
       groups: dropGroups,
     }),
     "floors.json": json(floors),
@@ -125,17 +130,32 @@ export function main(argv: string[], deps: { generate?: (repoRoot: string) => Re
   if (values.write === true && values.check === true) { warn(`--write and --check are exclusive\n${USAGE}`); return 2; }
   if (values["accept-lower-floors"] === true && values.write !== true) { warn(`--accept-lower-floors applies to --write only\n${USAGE}`); return 2; }
   const root = values.root ?? process.cwd();
-  const out = (deps.generate ?? generateCatalogue)(root);
+  try {
+    return run(root, values.write === true, values["accept-lower-floors"] === true, deps.generate ?? generateCatalogue);
+  } catch (e) {
+    warn(`the generator failed (exit 3 — not drift): ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`);
+    return 3;
+  }
+}
+
+function run(root: string, write: boolean, acceptLower: boolean, generate: (repoRoot: string) => Record<Generated, string>): number {
+  const out = generate(root);
   const path = (f: Generated): string => resolve(root, CATALOGUE_DIR, f);
   const read = (f: Generated): string | null => { try { return readFileSync(path(f), "utf8"); } catch { return null; } };
 
-  if (values.write === true) {
+  if (write) {
     const next = parseFloors(out["floors.json"]);
     if (typeof next === "string") { warn(`refusing — the generated floors.json does not parse: ${next}`); return 2; }
     const z = zeros(next);
     if (z.length > 0) { warn(`refusing — zero floor(s): ${z.join(", ")}`); return 2; }
     const prevText = read("floors.json");
-    if (prevText !== null && values["accept-lower-floors"] !== true) {
+    // A missing floors.json beside the other committed files is a deletion, not
+    // a first write: it would accept any lowering. Only an empty root is new.
+    if (prevText === null && !acceptLower && GENERATED.some((f) => read(f) !== null)) {
+      warn("refusing — the committed floors.json is missing beside the other catalogue files, so no lowering could be caught; restore it, or pass --accept-lower-floors");
+      return 2;
+    }
+    if (prevText !== null && !acceptLower) {
       const prev = parseFloors(prevText);
       if (typeof prev === "string") { warn(`refusing — the committed floors.json does not parse (${prev}); fix it, or pass --accept-lower-floors to replace it`); return 2; }
       const low = lowered(prev, next);
@@ -155,4 +175,4 @@ export function main(argv: string[], deps: { generate?: (repoRoot: string) => Re
   return 0;
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) process.exitCode = main(process.argv.slice(2));
+if (isMainModule(import.meta.url)) process.exitCode = main(process.argv.slice(2));

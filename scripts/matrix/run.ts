@@ -31,7 +31,6 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { newSession, raw, signIn, type Session } from "../bench/lib/http.ts";
 import { createRealPlanSql, provisionPlan } from "../bench/lib/plan.ts";
@@ -40,6 +39,7 @@ import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant } from ".
 import { HttpDriver } from "./lib/driver/http-driver.ts";
 import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
+import { isMainModule } from "./lib/main-module.ts";
 import { redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { decideState, writeResults, type CaseResult, type CheckResult, type RunResults } from "./lib/results.ts";
@@ -418,6 +418,6 @@ export async function main(argv: string[]): Promise<number> {
   return runSlice(realDeps(), argv);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   process.exitCode = await main(process.argv.slice(2));
 }

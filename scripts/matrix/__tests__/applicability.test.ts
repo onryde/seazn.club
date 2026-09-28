@@ -323,11 +323,11 @@ describe("M5's tie arm — a level result supportsDraws does not declare (I-1)",
     let flagged = 0;
     for (const row of ROW_KEYS) {
       const d = base.drops.find((x) => x.cell === `${row}|cricket` && x.scenario === "M5")!;
-      expect(d.harnessGap, row).toBe(stagesForRow(row).some((st) => BRACKET_STAGE_KINDS.has(st.kind)));
+      expect(d.kind === "harness-gap", row).toBe(stagesForRow(row).some((st) => BRACKET_STAGE_KINDS.has(st.kind)));
       flagged++;
     }
     expect(flagged).toBe(ROW_KEYS.length);
-    expect(base.drops.filter((x) => x.harnessGap).length).toBe(bracketRows);
+    expect(base.drops.filter((x) => x.kind === "harness-gap").length).toBe(bracketRows);
     // The gap is the tie arm ALONE: where a refused draw also holds, the
     // generator's draw request drives M5, so there is no gap. No committed cfg
     // has both (a two-innings level stream is undecided), so the facts are
@@ -497,10 +497,18 @@ describe("applicability — the L3 plan", () => {
     const p = planL3({ variants: [...variants.filter((v) => v.sport !== "cricket"), allBad], only: ["M4b"] });
     const drops = p.drops.filter((d) => d.sport === "cricket");
     expect(drops.length).toBe(ROW_KEYS.length);
-    for (const d of drops) expect(d.reason).toMatch(/cannot be scored by the harness/);
-    // …and with no variants at all it says no variant enables it.
+    for (const d of drops) {
+      expect(d.reason).toMatch(/cannot be scored by the harness/);
+      // T8 fix round 1 (I-2): a drop that only unscorable variants would lift
+      // is its own kind — the rule may apply once the harness can score them.
+      expect(d.kind, d.cell).toBe("unscorable-only");
+    }
+    // …and with no variants at all it says no variant enables it, and is a real inapplicability.
     const bare = planL3({ variants: [], only: ["M4b"] });
-    expect(bare.drops.filter((d) => d.sport === "cricket").every((d) => /no committed variant enables it/.test(d.reason))).toBe(true);
+    const bareCricket = bare.drops.filter((d) => d.sport === "cricket");
+    expect(bareCricket.length).toBe(ROW_KEYS.length);
+    expect(bareCricket.every((d) => /no committed variant enables it/.test(d.reason))).toBe(true);
+    expect(bareCricket.every((d) => d.kind === "inapplicable")).toBe(true);
   });
   it("the planner is deterministic and walks the registry in order", () => {
     expect(planL3({ variants })).toEqual(base);

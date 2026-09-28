@@ -10,8 +10,8 @@
 // rather than left to read as "zero cases".
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { isMainModule } from "./lib/main-module.ts";
 import { redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { parseResults } from "./lib/results.ts";
@@ -52,6 +52,6 @@ export function main(argv: string[]): number {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2));
 }
