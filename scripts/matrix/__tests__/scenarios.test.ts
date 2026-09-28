@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stagesForRow } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
@@ -816,10 +817,16 @@ describe("deferrals are named", () => {
     expect(named).toBeDefined();
     expect(DRIVING_WAVE).toBe(named);
   });
-  it("a multi-stage row is ScenarioUnsupported(DRIVING_WAVE), not a crash, before any driver call", async () => {
+  // group_group_ko is the API-only multi-stage row Task 10's probe expects to
+  // read ⏳ W1-driving; league_ko is the template one. The cast: CaseSpec.row
+  // is still TemplateRowKey (scenarios/types.ts), though setUpDivision takes
+  // any catalogue row at runtime.
+  it.each(["league_ko", "group_group_ko"] as const)("%s (multi-stage) is ScenarioUnsupported(DRIVING_WAVE), not a crash, before any driver call", async (key) => {
+    const row = key as Row;
+    expect(stagesForRow(row).length).toBeGreaterThan(1);
     const driver = new FakeLeagueDriver();
-    await expect(runOn(driver, "LIFECYCLE", { row: "league_ko" })).rejects.toBeInstanceOf(ScenarioUnsupported);
-    await expect(runOn(driver, "LIFECYCLE", { row: "league_ko" })).rejects.toMatchObject({ wave: DRIVING_WAVE, message: expect.stringMatching(/multi-stage/) });
+    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toBeInstanceOf(ScenarioUnsupported);
+    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ wave: DRIVING_WAVE, message: expect.stringMatching(/multi-stage/) });
     expect(driver.calls).toEqual([]);
   });
   it.each(["ladder", "americano", "mexicano"] as const)("%s is ScenarioUnsupported(DRIVING_WAVE) before any driver call", async (row) => {

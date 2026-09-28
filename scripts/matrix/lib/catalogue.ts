@@ -140,12 +140,18 @@ function apiOnlyStages(row: ApiOnlyRowKey, knobs: TemplateKnobs): StageDraft[] {
         { kind: "knockout", name: "Knockout", config: {}, progression: feed("rank_order") },
       ];
     }
-    case "knockout_third_place":
-      return [{ ...builderStages("knockout", knobs)[0], config: { thirdPlace: true } }];
+    case "knockout_third_place": {
+      const ko = builderStages("knockout", knobs)[0];
+      return [{ ...ko, config: { ...ko.config, thirdPlace: true } }];
+    }
     case "page_playoff_only":
       return [{ ...builderStages("group_playoffs", knobs)[1], progression: null }];
     case "stepladder_only":
       return [{ ...builderStages("group_stepladder", knobs)[1], progression: null }];
+    default:
+      // tsc proves exhaustiveness, but run.ts executes under strip-types: an
+      // API_ONLY_ROWS key with no case would return undefined and crash later.
+      throw new UnknownRow(row);
   }
 }
 

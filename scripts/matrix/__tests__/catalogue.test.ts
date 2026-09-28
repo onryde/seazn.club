@@ -145,18 +145,46 @@ describe("catalogue — rows", () => {
   it("cellId is row|sport", () => { expect(cellId("league", "generic")).toBe("league|generic"); });
 });
 
+const STAGES_TS = () => readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+
+/** A top-level function's text, from its header to its closing `\n}\n`.
+ *  Throws on a missing header OR closer — never reads on to EOF. */
+function fnBody(src: string, header: string): string {
+  const at = src.indexOf(`\n${header}`);
+  if (at < 0) throw new Error(`stages.ts: ${header} not found`);
+  const end = src.indexOf("\n}\n", at);
+  if (end < 0) throw new Error(`stages.ts: ${header} has no closer`);
+  return src.slice(at, end);
+}
+
 /** The `case "<kind>":` arm of stages.ts's generate() — what the product's
- *  Generate builds per stage kind. A missing function or arm throws, so the
- *  pin cannot pass on text it never found. */
-function generateArm(kind: string): string {
-  const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
-  const fn = src.indexOf("\nfunction generate(");
-  if (fn < 0) throw new Error("stages.ts: function generate( not found");
-  const body = src.slice(fn, src.indexOf("\n}\n", fn));
+ *  Generate builds per stage kind. A missing function, closer or arm throws,
+ *  so the pin cannot pass on text it never found. */
+function generateArm(kind: string, src: string = STAGES_TS()): string {
+  const body = fnBody(src, "function generate(");
   const at = body.indexOf(`\n    case "${kind}":`);
   if (at < 0) throw new Error(`stages.ts generate(): no case "${kind}"`);
   const next = body.indexOf("\n    case ", at + 1);
   return body.slice(at, next < 0 ? undefined : next);
+}
+
+/** The stage-config key the knockout arm of generate() reads as its
+ *  third-place flag (`thirdPlace: cfg.<key> === true`). */
+function thirdPlaceKey(): string {
+  const key = /\bthirdPlace: cfg\.(\w+) === true/.exec(generateArm("knockout"))?.[1];
+  if (key === undefined) throw new Error("stages.ts generate(): the knockout arm no longer reads a third-place flag from cfg");
+  return key;
+}
+
+/** Config keys createStages refuses although StageConfig declares them (D2a:
+ *  `assertConfigCarriesNoRules`, called through assertNoRulesKey). */
+function refusedConfigKeys(): string[] {
+  const src = STAGES_TS();
+  expect(fnBody(src, "export async function createStages(")).toContain("assertNoRulesKey(inputs);");
+  expect(fnBody(src, "function assertNoRulesKey(")).toContain("assertConfigCarriesNoRules(s.config)");
+  const keys = [...fnBody(src, "export function assertConfigCarriesNoRules(").matchAll(/"(\w+)" in config/g)].map((m) => m[1]!);
+  if (keys.length === 0) throw new Error("stages.ts: assertConfigCarriesNoRules refuses no key");
+  return keys;
 }
 
 /** The top-level keys of api-v1/schemas.ts's StageConfig — a strictObject,
@@ -226,16 +254,58 @@ describe("API-only rows — bodies derived from product authorities", () => {
   });
 
   it("knockout_third_place sets config.thirdPlace, the key the product's knockout generate reads", () => {
-    expect(generateArm("knockout")).toContain("thirdPlace: cfg.thirdPlace === true");
-    expect(stagesForRow("knockout_third_place")).toEqual([{ ...product("knockout")[0], config: { thirdPlace: true }, seq: 1 }]);
+    const key = thirdPlaceKey();
+    expect(key).toBe("thirdPlace");
+    const ko = product("knockout")[0]!;
+    expect(stagesForRow("knockout_third_place")).toEqual([{ ...ko, config: { ...ko.config, [key]: true }, seq: 1 }]);
   });
 
-  it("every config key any row posts is declared by the product's strict StageConfig (a stray key is a live 400)", () => {
+  it("knockout_third_place is the builder's knockout PLUS thirdPlace: a config key the builder gains survives", () => {
+    const at = STAGE_TEMPLATES.findIndex((t) => t.key === "knockout");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const real = STAGE_TEMPLATES[at]!;
+    STAGE_TEMPLATES[at] = { key: "knockout", build: (k) => real.build(k).map((s) => ({ ...s, config: { ...s.config, bracketReset: false } })) };
+    try {
+      const ko = product("knockout")[0]!;
+      expect(ko.config).toHaveProperty("bracketReset", false); // the swap took
+      const got = stagesForRow("knockout_third_place");
+      expect(got).toEqual([{ ...ko, config: { ...ko.config, [thirdPlaceKey()]: true }, seq: 1 }]);
+      for (const k of Object.keys(ko.config)) expect(got[0]!.config, k).toHaveProperty(k);
+    } finally {
+      STAGE_TEMPLATES[at] = real;
+    }
+    expect(product("knockout")[0]!.config).not.toHaveProperty("bracketReset");
+  });
+
+  it("an API-only key with no body is a named refusal, not a TypeError (the switch's default guard)", () => {
+    const rows = API_ONLY_ROWS as unknown as string[];
+    rows.push("zz_api_only");
+    try {
+      expect(() => stagesForRow("zz_api_only")).toThrow(UnknownRow);
+    } finally {
+      rows.splice(rows.indexOf("zz_api_only"), 1);
+    }
+    expect(API_ONLY_ROWS).toHaveLength(5);
+  });
+
+  it("generateArm fails loudly on source it cannot bound — no closer, no function, no arm", () => {
+    const open = "\nfunction generate(\n  switch (kind) {\n    case \"knockout\": {\n      thirdPlace: cfg.thirdPlace === true,\n";
+    expect(() => generateArm("knockout", open)).toThrow(/closer/);
+    expect(() => generateArm("knockout", `${open}}\n`.replace("function generate(", "function generateX("))).toThrow(/not found/);
+    expect(() => generateArm("league", `${open}  }\n}\n`)).toThrow(/no case "league"/);
+    expect(generateArm("knockout", `${open}  }\n}\n`)).toContain("thirdPlace: cfg.thirdPlace === true");
+  });
+
+  it("every config key any row posts is one the product's POST /stages accepts: declared by the strict StageConfig, not refused by createStages", () => {
     const declared = stageConfigKeys();
     expect(declared).toContain("thirdPlace");
+    const refused = refusedConfigKeys();
+    expect(refused).toEqual(["rules"]);
+    expect(declared).toContain("rules"); // declared-but-refused: why the declared list alone is not enough
     let checked = 0;
     for (const row of ROW_KEYS) for (const s of stagesForRow(row)) for (const key of Object.keys(s.config)) {
       expect(declared, `${row}: config.${key}`).toContain(key);
+      expect(refused, `${row}: config.${key}`).not.toContain(key);
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
