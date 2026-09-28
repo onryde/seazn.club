@@ -356,6 +356,12 @@ function scanDeferrals(src: string, file = "synthetic.ts"): DeferralScan {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const out: DeferralScan = { sites: 0, waves: [], unread: [] };
   const at = (n: TS.Node) => `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+  // Fail closed on a parse error: an unclosed comment or template swallows
+  // the code after it, and a deferral inside would read as "no sites".
+  // `parseDiagnostics` is the parser's own list (not on the public type).
+  for (const d of (sf as unknown as { parseDiagnostics: readonly TS.DiagnosticWithLocation[] }).parseDiagnostics) {
+    out.unread.push(`${file}: parse error at ${d.start}: ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`);
+  }
   const waveOf = (arg: TS.Expression | undefined): string | null => {
     if (arg === undefined) return null;
     if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) return arg.text;
@@ -416,6 +422,9 @@ describe("Q-A guard — the deferral reader", () => {
       importAlias: `import { ScenarioUnsupported as SU } from "./types.ts";\nthrow new SU("W1a", "x");`,
       valueAlias: `const SU = ScenarioUnsupported;\nthrow new SU("W1a", "x");`,
       reflect: `throw Reflect.construct(ScenarioUnsupported, ["W1a", "x"]);`,
+      // A parse error can swallow a deferral whole: fail closed, never "sites: 0".
+      unclosedComment: `/* never closed\nthrow new ScenarioUnsupported("W1a", "x");`,
+      unterminatedTemplate: `const s = \`never closed\nthrow new ScenarioUnsupported("W1a", "x");`,
     };
     for (const [shape, src] of Object.entries(hidden)) {
       const scan = scanDeferrals(src);
