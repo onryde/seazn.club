@@ -165,13 +165,22 @@ export function drawPathExercised(rec: Recorder, observed: ObservedRun, drawOk: 
   return assertion("life-draw-path-exercised", [{ ok: rec.drawsPosted > 0 && draws.length === rec.drawsPosted, note: `posted ${rec.drawsPosted} draws, product shows ${draws.length}` }]);
 }
 
-/** R28: a locked format is a NAMED refusal, never a silent accept or a 500.
- *  Every api-v1 error carries some code, so "has a code" proves nothing — the
- *  code must be a domain one (observed.ts isNamedRefusal). */
+/** The format lock's answer: usecases/divisions.ts `formatLocked()` throws
+ *  `new HttpError(409, …, "FORMAT_LOCKED")` (pinned against that text by
+ *  scenarios.test.ts). */
+export const FORMAT_LOCK = Object.freeze({ status: 409, code: "FORMAT_LOCKED" });
+
+/** R28: a locked format is refused BY THE LOCK, never a silent accept or a
+ *  500. Final review m-3: any named 4xx is not enough — a new domain refusal
+ *  on the same PATCH (ENTRANT_KIND_IN_USE, say) would pass with the lock
+ *  gone — so the answer must be the lock's own status and code. */
 export function formatEditRefusedNamed(edit: ConfigEditObs): CheckResult {
   const fmt = edit.attempts.filter((a) => a.kind === "format");
   if (fmt.length === 0) return assertion("life-format-edit-refused-named", [], "no format field to edit for this sport");
-  return assertion("life-format-edit-refused-named", fmt.map((a) => ({ ok: isNamedRefusal(a.status, a.code), note: `format edit → ${a.status} ${a.code ?? "(no code)"}` })));
+  return assertion("life-format-edit-refused-named", fmt.map((a) => ({
+    ok: isNamedRefusal(a.status, a.code) && a.status === FORMAT_LOCK.status && a.code === FORMAT_LOCK.code,
+    note: `format edit → ${a.status} ${a.code ?? "(no code)"}, expected ${FORMAT_LOCK.status} ${FORMAT_LOCK.code}`,
+  })));
 }
 
 /** Controller ruling (fix round 1, I-2): the entrants-only save is the one

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
@@ -5,7 +8,7 @@ import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRu
 import { decideState } from "../lib/results.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
-  CANARY_MARK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
+  CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
   MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
@@ -16,6 +19,7 @@ import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type Scenario
 import { START } from "../lib/streams/types.ts";
 import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
 
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 type Row = CaseSpec["row"];
 interface Opts { canary?: boolean; row?: Row; sport?: string; variant?: string }
 
@@ -244,13 +248,25 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(drawPathExercised(rec, run([], [fx({ outcome: { kind: "draw" } }), fx({ id: "f2", outcome: { kind: "draw" } })]), true)).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
-  it("formatEditRefusedNamed: no format field abstains; only a NAMED 4xx passes (not 200, not generic CONFLICT, not 500)", () => {
+  it("formatEditRefusedNamed: no format field abstains; only the lock's own 409 FORMAT_LOCKED passes (not 200, not generic CONFLICT, not 500, not another named 4xx)", () => {
     const edit = (status: number, code: string | null) => ({ attempts: [{ kind: "format" as const, status, code }], before: [], after: [] });
     expect(formatEditRefusedNamed({ attempts: [{ kind: "entrants_only", status: 200, code: null }], before: [], after: [] })).toMatchObject({ verdict: "abstain", checked: 0 });
     expect(formatEditRefusedNamed(edit(409, "FORMAT_LOCKED"))).toMatchObject({ verdict: "pass", checked: 1 });
     expect(formatEditRefusedNamed(edit(200, null))).toMatchObject({ verdict: "fail" });
     expect(formatEditRefusedNamed(edit(409, "CONFLICT"))).toMatchObject({ verdict: "fail" });
     expect(formatEditRefusedNamed(edit(500, "MODULE_DUPLICATE"))).toMatchObject({ verdict: "fail" });
+    // m-3: a named 4xx that is not the lock's (the lock gone, another domain guard answering) fails too.
+    expect(formatEditRefusedNamed(edit(409, "ENTRANT_KIND_IN_USE")))
+      .toMatchObject({ verdict: "fail", evidence: ["format edit → 409 ENTRANT_KIND_IN_USE, expected 409 FORMAT_LOCKED"] });
+    expect(formatEditRefusedNamed(edit(422, "FORMAT_LOCKED"))).toMatchObject({ verdict: "fail" });
+  });
+  it("m-3: FORMAT_LOCK is the product's own lock answer, read from usecases/divisions.ts (derived, not typed)", () => {
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
+    const all = [...src.matchAll(/"FORMAT_LOCKED"/g)];
+    const thrown = [...src.matchAll(/new HttpError\((\d{3}),[^()]*?,\s*"FORMAT_LOCKED"\)/g)];
+    expect(all.length).toBeGreaterThan(0);
+    expect(thrown).toHaveLength(all.length); // every mention is a throw we read
+    for (const m of thrown) expect({ status: Number(m[1]), code: "FORMAT_LOCKED" }).toEqual({ ...FORMAT_LOCK });
   });
 
   it("loopBounded (I-1): only a loop that ran dry AND left every fixture finished passes", () => {
