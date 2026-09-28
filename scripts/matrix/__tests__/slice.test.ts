@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+import { SCENARIOS } from "../lib/scenarios/index.ts";
+import {
+  CANARY_CHECK, SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, UnknownFilter, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases,
+} from "../lib/slice.ts";
+
+const v = (s: string) => (s === "generic" ? "score" : "bwf");
+
+describe("planSliceCases — empty/unknown first", () => {
+  it("an unknown --only or --scenario throws instead of running zero cases", () => {
+    expect(() => planSliceCases(v, { only: "league|genric" })).toThrow(UnknownFilter);
+    expect(() => planSliceCases(v, { scenario: "M9" })).toThrow(UnknownFilter);
+    expect(() => planCanaryCase(v, "LIFECYCLE")).toThrow(UnknownFilter); // LIFECYCLE has no canary
+  });
+  it("an EMPTY filter value is refused, never read as 'no filter' (which would run the whole slice)", () => {
+    expect(() => planSliceCases(v, { only: "" })).toThrow(UnknownFilter);
+    expect(() => planSliceCases(v, { scenario: "" })).toThrow(UnknownFilter);
+    expect(() => planCanaryCase(v, "")).toThrow(UnknownFilter);
+  });
+  it("the refusal names the flag, the value and every allowed value", () => {
+    expect(() => planSliceCases(v, { only: "league|genric" })).toThrow(
+      "slice: unknown --only cell 'league|genric' (allowed: league|generic, league|badminton, knockout|generic, knockout|badminton, swiss|generic, swiss|badminton)",
+    );
+    expect(() => planSliceCases(v, { scenario: "M9" })).toThrow("slice: unknown --scenario 'M9' (allowed: LIFECYCLE, M1, R4, F1)");
+    expect(() => planCanaryCase(v, "LIFECYCLE")).toThrow("slice: unknown --canary 'LIFECYCLE' (allowed: M1, R4, F1)");
+  });
+  it("PF13: run.ts's pre-I/O checks refuse exactly what the planners refuse, and need no variants", () => {
+    expect(() => checkSliceFilter({ only: "league|genric" })).toThrow(UnknownFilter);
+    expect(() => checkSliceFilter({ scenario: "M9" })).toThrow(UnknownFilter);
+    expect(() => checkSliceFilter({ only: "" })).toThrow(UnknownFilter);
+    expect(() => checkCanary("LIFECYCLE")).toThrow(UnknownFilter);
+    expect(() => checkCanary("M9")).toThrow(UnknownFilter);
+    expect(() => checkSliceFilter({})).not.toThrow();
+    expect(() => checkSliceFilter({ only: "swiss|badminton", scenario: "F1" })).not.toThrow();
+    expect(checkCanary("R4")).toBe("R4");
+  });
+});
+
+describe("planSliceCases", () => {
+  it("the full slice is 3 rows × 2 sports × 4 scenarios = 24 unique cases", () => {
+    const cases = planSliceCases(v);
+    expect(cases).toHaveLength(24);
+    expect(new Set(cases.map((c) => c.caseId)).size).toBe(24);
+    expect(cases.every((c) => !c.canary)).toBe(true);
+    expect(cases[0]).toMatchObject({ caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score" });
+  });
+  it("the slice is the product of its three lists, each variant read from variantFor per sport", () => {
+    const cases = planSliceCases(v);
+    const want = SLICE_ROWS.flatMap((row) => SLICE_SPORTS.flatMap((sport) => SCENARIO_KEYS.map((scenario) => `${row}|${sport}|${v(sport)}|${scenario}`)));
+    expect(cases.map((c) => c.caseId)).toEqual(want);
+    for (const c of cases) expect(c.caseId).toBe(`${c.row}|${c.sport}|${c.variant}|${c.scenario}`);
+  });
+  it("filters narrow to exactly one case", () => {
+    expect(planSliceCases(v, { only: "swiss|badminton", scenario: "F1" }).map((c) => c.caseId)).toEqual(["swiss|badminton|bwf|F1"]);
+  });
+  it("each filter alone narrows along its own axis only", () => {
+    expect(planSliceCases(v, { only: "knockout|generic" }).map((c) => c.caseId)).toEqual(SCENARIO_KEYS.map((k) => `knockout|generic|score|${k}`));
+    expect(planSliceCases(v, { scenario: "R4" }).map((c) => c.caseId)).toEqual(
+      ["league|generic|score", "league|badminton|bwf", "knockout|generic|score", "knockout|badminton|bwf", "swiss|generic|score", "swiss|badminton|bwf"].map((p) => `${p}|R4`),
+    );
+  });
+  it("every scenario key is registered, and each pilot names its canary check", () => {
+    expect([...SCENARIO_KEYS].sort()).toEqual(Object.keys(SCENARIOS).sort());
+    for (const k of ["M1", "R4", "F1"] as const) {
+      expect(SCENARIOS[k].canaryCheck).not.toBeNull();
+      expect(planCanaryCase(v, k)).toMatchObject({ canary: true, row: "league", sport: "generic", scenario: k });
+    }
+  });
+});
+
+describe("CANARY_CHECK and planCanaryCase", () => {
+  it("CANARY_CHECK is a view of the registry, never a second table", () => {
+    expect(CANARY_CHECK).toEqual(Object.fromEntries(Object.entries(SCENARIOS).map(([k, s]) => [k, s.canaryCheck])));
+    expect(CANARY_CHECK.LIFECYCLE).toBeNull();
+  });
+  it("a canary case is league|generic under generic's builder variant, with an id no slice case can hold", () => {
+    const c = planCanaryCase(v, "M1");
+    expect(c).toEqual({ caseId: "league|generic|score|M1|canary", row: "league", sport: "generic", variant: "score", scenario: "M1", canary: true });
+    expect(planSliceCases(v).map((x) => x.caseId)).not.toContain(c.caseId);
+  });
+});
