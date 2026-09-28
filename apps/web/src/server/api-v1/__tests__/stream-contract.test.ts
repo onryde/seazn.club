@@ -236,10 +236,16 @@ describe("the relay's routes are never key-reachable", () => {
     const err422 = op.responses["422"]!.content["application/json"].schema.properties.error;
     expect(Object.keys(err422.properties ?? {}).sort()).toEqual(["code", "current_seq", "message", "rule"]);
     expect([...(err422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
+    // Task 11 (A20): starting a session RE-CHECKS the saved destination and refuses with the same typed 422, so that
+    // route's 422 documents the same `rule` — the ONE other route whose 422 is DESTINATION_NOT_ALLOWED. Named, not
+    // pattern-matched, so a third route gaining `rule` still reds below.
+    const sessionErr422 = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.responses["422"]!.content["application/json"].schema.properties.error;
+    expect([...(sessionErr422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
+    const refusesDestinations = new Set(["post /api/v1/orgs/{id}/stream-targets", "post /api/v1/fixtures/{id}/stream-sessions"]);
     let others = 0;
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
-        if (path === "/api/v1/orgs/{id}/stream-targets" && method === "post") continue;
+        if (refusesDestinations.has(`${method} ${path}`)) continue;
         const e = o.responses["422"]?.content["application/json"].schema.properties.error;
         if (!e) continue;
         expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("rule");

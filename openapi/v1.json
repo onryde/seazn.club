@@ -37886,7 +37886,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions": {
       "post": {
-        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (the existing id is returned), 409 overlay_required, 402 no_credits, 503 storage_exhausted (no row is written)",
+        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is streaming for another fixture), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)",
         "tags": [
           "fixtures"
         ],
@@ -38104,6 +38104,22 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "featureKey": {
+                          "type": "string",
+                          "description": "On no_credits (402): the entitlement whose match credits ran out (streaming.relay)"
+                        },
+                        "feature_key": {
+                          "type": "string",
+                          "description": "On PAYMENT_REQUIRED (402): the plan feature the organisation lacks (streaming.overlay or streaming.relay)"
+                        },
+                        "feature": {
+                          "type": "string",
+                          "description": "On PAYMENT_REQUIRED (402): the same key, kept for pre-PROMPT-13 clients"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "description": "On PAYMENT_REQUIRED (402): the human sentence for the paywall"
                         }
                       },
                       "additionalProperties": true
@@ -38236,6 +38252,70 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "sessionId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "uuid",
+                          "description": "On active_session (409): the fixture's running session — resume it rather than start another"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "rule": {
+                          "type": "string",
+                          "enum": [
+                            "scheme",
+                            "userinfo",
+                            "ip_literal",
+                            "host",
+                            "port",
+                            "path"
+                          ],
+                          "description": "On DESTINATION_NOT_ALLOWED (422): which destination rule refused rtmpUrl — never the URL itself"
                         }
                       },
                       "additionalProperties": true
@@ -38280,6 +38360,10 @@
                         "current_seq": {
                           "type": "integer",
                           "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        },
+                        "headroomMinutes": {
+                          "type": "integer",
+                          "description": "On storage_exhausted (503): recording minutes left once every active session's reservation is subtracted — below one session's maximum duration"
                         }
                       },
                       "additionalProperties": true
@@ -38320,6 +38404,18 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "reveal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; any other value, or none, is a poll and counts nothing"
           }
         ],
         "responses": {
@@ -38942,7 +39038,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions/{sid}/stop": {
       "post": {
-        "summary": "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once",
+        "summary": "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once. Idempotent: a session already ending or ended answers the same projection and writes nothing; 409 not_active when the fixture has since started a newer session",
         "tags": [
           "fixtures"
         ],

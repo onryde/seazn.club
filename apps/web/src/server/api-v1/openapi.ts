@@ -163,9 +163,9 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}", method: "patch", summary: "Schedule move, venue, officials, pin/lock — blocking conflicts → 409, warn-level ones come back in `conflicts`", tag: "fixtures", request: S.PatchFixture, response: S.PatchedFixture, errors: [402, 409, 422] },
   { path: "/fixtures/{id}/stream", method: "put", summary: "Set or clear the fixture's public broadcast link (https, exact-host allowlist: YouTube, Facebook, Twitch, Kick) — surfaces as \"Watch live\" on the public match page", tag: "fixtures", request: S.PutFixtureStream, response: S.FixtureStream, errors: [403, 404, 422] },
   // Streaming R1 — phone relay sessions (design §6.3). Never key-reachable (key-scopes.ts).
-  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (the existing id is returned), 409 overlay_required, 402 no_credits, 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 503] },
-  { path: "/fixtures/{id}/stream-sessions/current", method: "get", summary: "The fixture's latest relay session as the organiser sees it (state, health, the QR payload while warming) — null when none exists", tag: "fixtures", response: S.StreamSessionCurrent.nullable(), errors: [403, 404] },
-  { path: "/fixtures/{id}/stream-sessions/{sid}/stop", method: "post", summary: "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once", tag: "fixtures", response: S.StreamSessionCurrent, errors: [403, 404, 409] },
+  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is streaming for another fixture), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
+  { path: "/fixtures/{id}/stream-sessions/current", method: "get", summary: "The fixture's latest relay session as the organiser sees it (state, health, the QR payload while warming) — null when none exists", tag: "fixtures", response: S.StreamSessionCurrent.nullable(), query: { reveal: { schema: { type: "string", enum: ["1"] }, description: "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; any other value, or none, is a poll and counts nothing" } }, errors: [403, 404] },
+  { path: "/fixtures/{id}/stream-sessions/{sid}/stop", method: "post", summary: "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once. Idempotent: a session already ending or ended answers the same projection and writes nothing; 409 not_active when the fixture has since started a newer session", tag: "fixtures", response: S.StreamSessionCurrent, errors: [403, 404, 409] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "put", summary: "Replace a side's lineup", tag: "fixtures", request: S.PutLineup, errors: [422] },
   { path: "/fixtures/{id}/events", method: "post", summary: "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer", tag: "scoring", request: S.AppendEventRequest, response: S.AppendEventResponse, status: 201, errors: [403, 409, 422, 429] },
@@ -585,6 +585,45 @@ const DESTINATION_NOT_ALLOWED_ENVELOPE = {
   },
 } as const;
 
+// SCOPED to POST /fixtures/{id}/stream-sessions (Streaming R1, lane C A21): the
+// typed refusals of `createSession` carry machine-readable extras as real
+// HttpError `extra`s (usecases/stream-sessions.ts `refuse`), and the v1
+// envelope merges them into `error`. One envelope per status, built from the
+// same base, because a status can carry two refusals with different extras
+// (402: the plan paywall's feature_key/reason vs no_credits' featureKey).
+// routes.test.ts beside the route asserts wire ⊆ spec for every refusal.
+function scopedErrorEnvelope(extra: Record<string, unknown>) {
+  return {
+    type: "object",
+    required: ["ok", "error", "requestId"],
+    properties: {
+      ok: { const: false },
+      error: {
+        type: "object",
+        required: ["code", "message"],
+        properties: { ...BASE_ERROR_PROPERTIES, ...extra },
+        additionalProperties: true,
+      },
+      requestId: { type: "string", format: "uuid" },
+    },
+  } as const;
+}
+const STREAM_SESSION_CREATE_ERRORS = {
+  402: scopedErrorEnvelope({
+    featureKey: { type: "string", description: "On no_credits (402): the entitlement whose match credits ran out (streaming.relay)" },
+    feature_key: { type: "string", description: "On PAYMENT_REQUIRED (402): the plan feature the organisation lacks (streaming.overlay or streaming.relay)" },
+    feature: { type: "string", description: "On PAYMENT_REQUIRED (402): the same key, kept for pre-PROMPT-13 clients" },
+    reason: { type: "string", description: "On PAYMENT_REQUIRED (402): the human sentence for the paywall" },
+  }),
+  409: scopedErrorEnvelope({
+    sessionId: { type: ["string", "null"], format: "uuid", description: "On active_session (409): the fixture's running session — resume it rather than start another" },
+  }),
+  422: DESTINATION_NOT_ALLOWED_ENVELOPE,
+  503: scopedErrorEnvelope({
+    headroomMinutes: { type: "integer", description: "On storage_exhausted (503): recording minutes left once every active session's reservation is subtracted — below one session's maximum duration" },
+  }),
+};
+
 // `"METHOD /path"` (the literal `RouteSpec.path`, `{id}` un-substituted) ->
 // status -> the envelope THAT route x status uses instead of the plain
 // ERROR_ENVELOPE. Consulted once, inside `operation()`'s `route.errors`
@@ -596,6 +635,7 @@ const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> =
     422: TEMPLATE_INSTANTIATION_FAILED_ENVELOPE,
   },
   "POST /orgs/{id}/stream-targets": { 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
+  "POST /fixtures/{id}/stream-sessions": STREAM_SESSION_CREATE_ERRORS,
 };
 
 function pathParams(path: string): object[] {
