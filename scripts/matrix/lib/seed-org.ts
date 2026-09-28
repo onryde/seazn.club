@@ -1,0 +1,215 @@
+// One org per case, seeded by SQL in the harness's OWN DB (design §6.4, §9;
+// the bench's setPlan precedent). Why SQL rather than POST /api/orgs: that
+// route is capped by `orgs.max_owned` per user, and a run needs one org per
+// case. So this mirrors createOrgForUser (apps/web/src/lib/auth.ts) minus its
+// quota check — pinned both ways by seed-org.test.ts.
+//
+// What the mirror deliberately leaves out of createOrgForUser:
+//  - the advisory lock + assertMayOwnAnotherOrg (the quota — the whole reason);
+//  - the AI-credit wallet bootstrap (best-effort there too; no format uses it);
+//  - invalidateUserOrgs. The server caches a user's org list under
+//    `orgs:<uid>` for 120s, but only when its REDIS_URL is set (lib/cache.ts;
+//    the seazn-local-env recipe sets none, so every read is fresh). The harness
+//    has no Redis client and no product route drops that key harmlessly, so on
+//    a Redis-backed server the switch refuses loudly (OrgSwitchFailed) until
+//    the entry expires. A stale list can only LACK the new org, never invent
+//    one, so it cannot make the switch check pass falsely.
+//
+// Refuses to run on a DB it cannot prove is its own: BENCH_EXPECTED_DATA_DIR is
+// MANDATORY here (the bench preflight compares data_directory only when it is
+// set — env.ts checkOwnDatabase), and every MatrixSql query waits on its own
+// `show data_directory` comparison.
+import postgres from "postgres";
+import type { Session } from "../../bench/lib/http.ts";
+import type { PlanCandidateInfo } from "../../bench/lib/plan.ts";
+import type { Transport } from "./driver/http-driver.ts";
+import { redact } from "./redact.ts";
+
+type Env = Readonly<Record<string, string | undefined>>;
+
+export interface MatrixSql {
+  userIdForEmail(email: string): Promise<string>;
+  insertCaseOrg(input: { userId: string; name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }>;
+  listPlanKeys(): Promise<string[]>;
+  variantKeysInBuilderOrder(sportKey: string): Promise<string[]>;
+}
+
+export class DataDirUnset extends Error {
+  constructor() {
+    super(redact("seed-org: BENCH_EXPECTED_DATA_DIR is unset — the matrix refuses to touch a database it cannot prove is its own (R14; seazn-local-env `env`)"));
+    this.name = "DataDirUnset";
+  }
+}
+
+export class DataDirMismatch extends Error {
+  constructor(expected: string, actual: string) {
+    super(redact(`seed-org: show data_directory returned "${actual}", not BENCH_EXPECTED_DATA_DIR "${expected}" — this DATABASE_URL reaches someone else's Postgres; refusing every query`));
+    this.name = "DataDirMismatch";
+  }
+}
+
+export function requireOwnDataDir(env: Env): string {
+  const dir = env.BENCH_EXPECTED_DATA_DIR?.trim();
+  if (dir === undefined || dir === "") throw new DataDirUnset();
+  return dir;
+}
+
+/** Wraps a MatrixSql so no query of its own runs until `show data_directory`
+ *  has been read once and equals `expected`. A mismatch refuses that call and
+ *  every later one (the rejected proof is kept). */
+export function gateOnOwnDataDir(inner: MatrixSql, readDataDir: () => Promise<string>, expected: string): MatrixSql {
+  if (expected.trim() === "") throw new DataDirUnset();
+  let proof: Promise<void> | null = null;
+  const proven = (): Promise<void> =>
+    (proof ??= readDataDir().then((actual) => {
+      if (actual !== expected) throw new DataDirMismatch(expected, actual);
+    }));
+  return {
+    async userIdForEmail(email) { await proven(); return inner.userIdForEmail(email); },
+    async insertCaseOrg(input) { await proven(); return inner.insertCaseOrg(input); },
+    async listPlanKeys() { await proven(); return inner.listPlanKeys(); },
+    async variantKeysInBuilderOrder(sportKey) { await proven(); return inner.variantKeysInBuilderOrder(sportKey); },
+  };
+}
+
+export class NoPublicPlan extends Error {
+  constructor(candidates: number) {
+    super(redact(`seed-org: no public plan among ${candidates} candidate(s) — the plans catalogue is empty or all private (is this DB migrated?)`));
+    this.name = "NoPublicPlan";
+  }
+}
+
+/** The most-privileged plan a real customer can buy, so no format is refused
+ *  for want of a feature (the ⛔ state is W1b's, with an explicit deny). */
+export function chooseTopPublicPlan(candidates: readonly PlanCandidateInfo[]): string {
+  const pub = candidates.filter((c) => c.is_public);
+  const top = [...pub].sort((a, b) => b.privilege - a.privilege || (a.plan_key < b.plan_key ? -1 : a.plan_key > b.plan_key ? 1 : 0))[0];
+  if (top === undefined) throw new NoPublicPlan(candidates.length);
+  return top.plan_key;
+}
+
+export class OrgSwitchFailed extends Error {
+  constructor(orgId: string, why: string) {
+    super(redact(`seed-org: could not make ${orgId} the active org — ${why}. If the server has REDIS_URL set, its user-orgs cache (orgs:<uid>, 120s) may predate this SQL-seeded org`));
+    this.name = "OrgSwitchFailed";
+  }
+}
+
+export function orgIdsFromListing(json: unknown): string[] {
+  const list = Array.isArray(json) ? json
+    : Array.isArray((json as { orgs?: unknown } | null)?.orgs) ? (json as { orgs: unknown[] }).orgs
+    : Array.isArray((json as { data?: unknown } | null)?.data) ? (json as { data: unknown[] }).data
+    : null;
+  if (list === null) throw new Error("seed-org: unrecognised GET /api/orgs shape");
+  return list.map((o) => String((o as { id?: unknown } | null)?.id));
+}
+
+/** The legacy handler's success (lib/http.ts): 2xx AND `{ok:true}`. A 2xx
+ *  without it is bench raw()'s non-JSON fallback — e.g. a followed redirect. */
+function refusal(r: { status: number; json: unknown }): string | null {
+  const body = r.json as { ok?: unknown; error?: unknown } | null;
+  if (r.status >= 200 && r.status < 300 && body?.ok === true) return null;
+  return `${r.status}: ${typeof body?.error === "string" ? body.error : "(no reason)"}`;
+}
+
+/** RF4: switch the session's active org, then prove the product lists it —
+ *  a switch that did not hold would put the next case's rows in another org. */
+export async function switchToCaseOrg(t: Transport, base: string, session: Session, orgId: string): Promise<void> {
+  const sw = await t.raw(base, session, "/api/orgs/active", "POST", { org_id: orgId });
+  const swRefused = refusal(sw);
+  if (swRefused !== null) throw new OrgSwitchFailed(orgId, `POST /api/orgs/active → ${swRefused}`);
+  const listed = await t.raw(base, session, "/api/orgs", "GET");
+  const listRefused = refusal(listed);
+  if (listRefused !== null) throw new OrgSwitchFailed(orgId, `GET /api/orgs → ${listRefused}`);
+  if (!orgIdsFromListing(listed.json).includes(orgId)) throw new OrgSwitchFailed(orgId, "the org is not in GET /api/orgs");
+}
+
+export interface PrepareCaseOrgDeps {
+  sql: MatrixSql;
+  transport: Transport;
+  base: string;
+  session: Session;
+  userId: string;
+  plan: string;
+  provision: (orgId: string, plan: string) => Promise<void>;
+}
+
+export async function prepareCaseOrg(deps: PrepareCaseOrgDeps, input: { name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }> {
+  const org = await deps.sql.insertCaseOrg({ userId: deps.userId, name: input.name, slug: input.slug });
+  await switchToCaseOrg(deps.transport, deps.base, deps.session, org.orgId);
+  await deps.provision(org.orgId, deps.plan);
+  return org;
+}
+
+/** R14a: the run's owner is a synthetic resend.dev sink. The run id must be
+ *  slug-safe, so nothing but `[a-z0-9-]` can reach the local part. */
+export function ownerEmail(runId: string): string {
+  if (!/^[a-z0-9-]+$/.test(runId)) throw new Error(redact(`seed-org: run id "${runId}" is not slug-safe ([a-z0-9-]+)`));
+  return `delivered+matrix-${runId}@resend.dev`;
+}
+
+// seed-org.test.ts reads matrixSqlOver's source and compares every insert in it
+// with createOrgForUser's, table by table — and drives it over a fake client.
+/** The queries, over any client, handed out ONLY behind the data-dir gate. */
+export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: string): MatrixSql {
+  const sql: MatrixSql = {
+    async userIdForEmail(email) {
+      // The predicate the magic-link sign-in resolves its user by
+      // (lib/users.ts resolveOrCreateUser) — the same row, never a case-folded twin.
+      const [row] = await db<{ id: string }[]>`select id from users where email = ${email} and deleted_at is null`;
+      if (row === undefined) throw new Error("seed-org: the signed-in owner has no users row");
+      return row.id;
+    },
+    async insertCaseOrg({ userId, name, slug }) {
+      return db.begin(async (tx) => {
+        const [sub] = await tx<{ id: string }[]>`
+          insert into subscriptions (owner_user_id, plan_key, status, quantity_paid)
+          values (${userId}, 'community', 'active', 1)
+          returning id`;
+        if (sub === undefined) throw new Error("seed-org: subscriptions insert returned no row");
+        const [org] = await tx<{ id: string; slug: string }[]>`
+          insert into organizations (name, slug, created_by, subscription_id, referred_by_org_id)
+          values (${name}, ${slug}, ${userId}, ${sub.id}, ${null})
+          returning id, slug`;
+        if (org === undefined) throw new Error("seed-org: organizations insert returned no row");
+        await tx`
+          insert into org_members (org_id, user_id, role)
+          values (${org.id}, ${userId}, 'owner')`;
+        return { orgId: org.id, orgSlug: org.slug };
+      });
+    },
+    async listPlanKeys() {
+      return (await db<{ key: string }[]>`select key from plans order by key`).map((r) => r.key);
+    },
+    async variantKeysInBuilderOrder(sportKey) {
+      // The division builder (app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx)
+      // selects every sport_variants row under withTenant, ordered
+      // `is_system desc, name`, and filters by sport client-side. Its scoping
+      // is RLS (V227: `org_id is null or org_id = current_org_id()`), which
+      // this connection does not run under — so it is restated. A fresh case
+      // org owns no presets, so what the builder shows it is `org_id is null`.
+      return (await db<{ key: string }[]>`
+        select key from sport_variants where sport_key = ${sportKey} and org_id is null
+        order by is_system desc, name`).map((r) => r.key);
+    },
+  };
+  const readDataDir = async (): Promise<string> => {
+    const [row] = await db<{ data_directory: string }[]>`show data_directory`;
+    return row?.data_directory ?? "";
+  };
+  return gateOnOwnDataDir(sql, readDataDir, expectedDataDir);
+}
+
+export function createRealMatrixSql(env: Env = process.env): { sql: MatrixSql; dispose: () => Promise<void> } {
+  const expected = requireOwnDataDir(env); // before a client is even configured
+  const url = env.DATABASE_URL;
+  if (!url) throw new Error("seed-org: DATABASE_URL is not set (seazn-local-env `env`)");
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  const db = postgres(url, {
+    connection: { search_path: env.DB_SCHEMA ?? "seazn_club" },
+    ssl: env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !url.includes(":6543"),
+    max: 1,
+  });
+  return { sql: matrixSqlOver(db, expected), dispose: async () => { await db.end({ timeout: 5 }); } };
+}
