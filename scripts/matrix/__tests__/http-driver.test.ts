@@ -215,6 +215,12 @@ describe("HttpDriver — reads and probes", () => {
       ["POST", "/api/v1/divisions/d1/entrants", [{ kind: "individual", display_name: "Matrix Player 1", seed: 1 }]],
     ]);
   });
+  it("listEntrants GETs the division's stored entrants (the I-2 read-back, not the add answer)", async () => {
+    const rows = [{ id: "e1", display_name: "Matrix Player 1", seed: 1, status: "active" }];
+    const { t, calls } = fake([(c) => (c.method === "GET" && c.path === "/api/v1/divisions/d1/entrants" ? ok(rows) : undefined)]);
+    expect(await drv(t).listEntrants("d1")).toEqual(rows);
+    expect(calls).toEqual([{ path: "/api/v1/divisions/d1/entrants", method: "GET", body: undefined, cookies: 1 }]);
+  });
   it("counts every HTTP call", async () => {
     const { t } = fake([() => ok({ created: 0, existing: 1, fixtures: [] })]);
     const d = drv(t);

@@ -34,6 +34,9 @@ export interface OrganiserDriver {
   postStages(divisionId: string, stages: readonly StagePostBody[]): Promise<StageRef[]>;
   listStages(divisionId: string): Promise<StageRef[]>;
   addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]>;
+  /** The division's stored entrants (GET, ordered by seed) — the read-back
+   *  life-built-as-posted compares with what was posted (final review I-2). */
+  listEntrants(divisionId: string): Promise<EntrantRow[]>;
   start(divisionId: string): Promise<StartOut>;
   generate(stageId: string): Promise<GenerateOut>;
   listFixtures(divisionId: string): Promise<FixtureRow[]>;

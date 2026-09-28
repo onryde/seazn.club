@@ -4,7 +4,7 @@
 import type { PublicStandingsOut } from "../driver/types.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
-import type { Recorder } from "./common.ts";
+import type { BuiltReadback, Recorder } from "./common.ts";
 
 export interface Item { ok: boolean; note: string }
 
@@ -13,6 +13,46 @@ export function assertion(id: string, items: readonly Item[], abstainReason: str
   if (items.length === 0) return { id, kind: "assertion", verdict: "fail", checked: 0, reason: "checked 0 items (vacuous, R25)", evidence: [] };
   const bad = items.filter((i) => !i.ok).map((i) => i.note);
   return { id, kind: "assertion", verdict: bad.length > 0 ? "fail" : "pass", checked: items.length, reason: bad[0] ?? `${items.length} ok`, evidence: bad.slice(0, 12) };
+}
+
+/** Key-sorted JSON: a config value read back with its keys reordered is the same value. */
+function canonical(v: unknown): string {
+  return JSON.stringify(v, (_k, x: unknown) => (x !== null && typeof x === "object" && !Array.isArray(x)
+    ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+    : x)) ?? "undefined";
+}
+
+/** Final review I-2: the product built what the harness POSTED. Every item is
+ *  derived from the posted bodies, never a typed table: the division's sport
+ *  and variant; one stage per body, of the body's kind, with every config key
+ *  the body set reading back equal (keys the server adds are not judged); and
+ *  every posted entrant stored exactly once and seated in some fixture of the
+ *  stage. Without it a knockout body built as a league, a dropped config key
+ *  or 7 of 8 entrants seated is judged against the product's own description. */
+export function builtAsPosted(built: BuiltReadback, observed: ObservedRun): CheckResult {
+  const { posted, division } = built;
+  const items: Item[] = [
+    { ok: division.sportKey === posted.sport, note: `division sport ${division.sportKey}, posted ${posted.sport}` },
+    { ok: division.variantKey === posted.variant, note: `division variant ${division.variantKey}, posted ${posted.variant}` },
+    { ok: built.stages.length === posted.stages.length, note: `${built.stages.length} stage(s) built, ${posted.stages.length} posted` },
+  ];
+  for (const body of posted.stages) {
+    const s = built.stages.find((x) => x.seq === body.seq);
+    items.push({ ok: s?.kind === body.kind, note: `stage ${body.seq}: built ${s?.kind ?? "nothing"}, posted ${body.kind}` });
+    for (const [k, v] of Object.entries(body.config)) {
+      const got = s === undefined ? undefined : s.config[k];
+      items.push({ ok: s !== undefined && canonical(got) === canonical(v), note: `stage ${body.seq} config.${k}: built ${canonical(got)}, posted ${canonical(v)}` });
+    }
+  }
+  items.push({ ok: built.entrants.length === posted.entrants.length, note: `${built.entrants.length} entrant(s) stored, ${posted.entrants.length} posted` });
+  items.push({ ok: built.echo.length === posted.entrants.length, note: `add answered ${built.echo.length} entrant(s), ${posted.entrants.length} posted` });
+  for (const e of posted.entrants) {
+    const n = built.entrants.filter((r) => r.seed === e.seed && r.display_name === e.displayName).length;
+    items.push({ ok: n === 1, note: `posted seed ${e.seed} (${e.displayName}) stored ${n} time(s)` });
+  }
+  const seated = new Set(observed.stages.flatMap((s) => s.fixtures.flatMap((f) => [f.home, f.away])));
+  for (const r of built.entrants) items.push({ ok: seated.has(r.id), note: `${r.id} (seed ${r.seed}) is seated in no fixture of the stage` });
+  return assertion("life-built-as-posted", items);
 }
 
 /** R15: the product's outcome for every posted stream equals the engine's

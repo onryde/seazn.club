@@ -3,7 +3,7 @@
 // (R9): points from the module's standingsDelta over the folded stream, draw
 // reachability from supportsDraws.
 import type { MatchOutcome, StageCtx, StageKind } from "@seazn/engine/core";
-import { stagesForRow } from "../catalogue.ts";
+import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { RefusedCall, type CompetitionRef, type DivisionRef, type EntrantRow, type FixtureRow, type StageRef } from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
 import {
@@ -16,11 +16,24 @@ import { generateStream, matchesRequest, type RequestMatch } from "../streams/in
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
 import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
 
+/** Final review I-2: what the harness POSTED beside what the product says it
+ *  built, read back after start rather than taken from the create/add
+ *  answers. life-built-as-posted compares the two. */
+export interface BuiltReadback {
+  posted: { sport: string; variant: string; stages: readonly StagePostBody[]; entrants: readonly { displayName: string; seed: number }[] };
+  division: DivisionRef;
+  stages: StageRef[];
+  entrants: EntrantRow[];
+  /** addEntrants' own answer — what the rest of the scenario keys on. */
+  echo: EntrantRow[];
+}
+
 export interface DivisionSetup {
   competition: CompetitionRef;
   division: DivisionRef;
   stage: StageRef;
   entrants: EntrantRow[];
+  built: BuiltReadback;
   seedOf: (id: string) => number;
   idOfSeed: (seed: number) => string;
 }
@@ -83,14 +96,23 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
   const division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant });
   await ctx.driver.postStages(division.id, bodies);
-  const entrants = await ctx.driver.addEntrants(division.id, Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1, kind })));
+  const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
+  const entrants = await ctx.driver.addEntrants(division.id, inputs.map((e) => ({ ...e, kind })));
   await ctx.driver.start(division.id);
-  const stage = (await ctx.driver.listStages(division.id))[0];
+  const stages = await ctx.driver.listStages(division.id);
+  const stage = stages[0];
   if (stage === undefined) throw new Error(`scenario: division ${division.id} has no stage after start`);
+  const built: BuiltReadback = {
+    posted: { sport: ctx.spec.sport, variant: ctx.spec.variant, stages: bodies, entrants: inputs },
+    division: await ctx.driver.getDivision(division.id),
+    stages,
+    entrants: await ctx.driver.listEntrants(division.id),
+    echo: entrants,
+  };
   const seeds = new Map(entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER]));
   rec.notes.push(`stage ${stage.kind} status after start: ${stage.status}`);
   return {
-    competition, division, stage, entrants,
+    competition, division, stage, entrants, built,
     seedOf: (id) => seeds.get(id) ?? Number.MAX_SAFE_INTEGER,
     idOfSeed: (seed) => {
       const e = entrants.find((x) => x.seed === seed);

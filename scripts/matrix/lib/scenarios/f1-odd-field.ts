@@ -1,7 +1,7 @@
 // F1: an odd field of 7. Everyone is drawn, and each inspected round seats
 // floor(7/2) pairs with one sit-out. Canary: expect ceil — the answer that
 // differs from the right one.
-import { assertion, foldParity, resultsAsPosted, loopBounded, stageCompleted } from "./assertions.ts";
+import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -29,6 +29,7 @@ export const f1OddField: Scenario = {
       observed,
       events: rec.events,
       assertions: [
+        builtAsPosted(setup.built, observed),
         foldParity(rec),
         resultsAsPosted(rec, observed),
         assertion("f1-everyone-drawn", s.field.map((e) => ({ ok: s.fixtures.some((f) => f.home === e || f.away === e), note: `${e} appears in no fixture` }))),

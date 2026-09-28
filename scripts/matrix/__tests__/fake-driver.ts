@@ -103,6 +103,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       return this.entrants.map((e) => ({ ...e }));
     });
   }
+  listEntrants(): Promise<EntrantRow[]> { return settle(() => { this.log("listEntrants"); return this.entrants.map((e) => ({ ...e })); }); }
   /** Circle-method rounds over the entrant ids, "BYE" padding an odd field. */
   circle(): [string, string][][] {
     const ring = this.entrants.length % 2 === 0 ? this.entrants.map((e) => e.id) : [...this.entrants.map((e) => e.id), "BYE"];

@@ -122,6 +122,10 @@ export class HttpDriver implements OrganiserDriver {
     return Array.isArray(out) ? out : [out];
   }
 
+  async listEntrants(divisionId: string): Promise<EntrantRow[]> {
+    return this.#call(`/api/v1/divisions/${divisionId}/entrants`);
+  }
+
   async start(divisionId: string): Promise<StartOut> {
     return this.#call(`/api/v1/divisions/${divisionId}/start`, "POST", { acknowledge_warnings: true });
   }

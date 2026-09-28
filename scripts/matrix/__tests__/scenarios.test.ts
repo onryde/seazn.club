@@ -5,10 +5,10 @@ import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRu
 import { decideState } from "../lib/results.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
-  assertion, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
+  assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type DivisionSetup, type ParityObs,
+  MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems } from "../lib/scenarios/r4-withdrawal.ts";
@@ -84,6 +84,40 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(one(a, a, "mismatch")).toMatchObject({ verdict: "fail", checked: 1, evidence: ['f1: engine {"kind":"win","winner":"a"} vs product {"kind":"win","winner":"a"} — not the outcome the harness asked for'] });
     // An abandon is recorded, not asserted: a fold with no outcome is its answer.
     expect(one(null, null, "unasserted")).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+
+  it("builtAsPosted (final review I-2): each item is derived from the POSTED bodies; every way the build can differ fails", () => {
+    const body = { kind: "swiss", name: "Swiss", config: { rounds: 5, tiebreak: { a: 1, b: 2 } }, progression: null, seq: 1 };
+    const posted = { sport: "generic", variant: "score", stages: [body], entrants: [{ displayName: "Matrix Player 1", seed: 1 }, { displayName: "Matrix Player 2", seed: 2 }] };
+    const rows = [{ id: "a", display_name: "Matrix Player 1", seed: 1, status: "active" }, { id: "b", display_name: "Matrix Player 2", seed: 2, status: "active" }];
+    const good: BuiltReadback = {
+      posted,
+      division: { id: "d1", slug: "d", sportKey: "generic", variantKey: "score", config: {} },
+      // The server adds keys it owns (rngSeed) and may reorder a nested object: neither is a difference.
+      stages: [{ id: "s1", seq: 1, kind: "swiss", config: { tiebreak: { b: 2, a: 1 }, rounds: 5, rngSeed: 7 }, status: "active" }],
+      entrants: rows,
+      echo: rows,
+    };
+    const seatedBoth = run([], [fx({})]);
+    const ok = builtAsPosted(good, seatedBoth);
+    // 3 division/stage-count items + 1 kind + 2 config keys + 2 counts + 2 posted seeds + 2 seated = 12.
+    expect(ok).toMatchObject({ id: "life-built-as-posted", verdict: "pass", checked: 12 });
+    const bad = (over: Partial<BuiltReadback>, observed = seatedBoth) => builtAsPosted({ ...good, ...over }, observed);
+    expect(bad({ division: { ...good.division, sportKey: "badminton" } })).toMatchObject({ verdict: "fail", evidence: ["division sport badminton, posted generic"] });
+    expect(bad({ division: { ...good.division, variantKey: "win_loss" } })).toMatchObject({ verdict: "fail", evidence: ["division variant win_loss, posted score"] });
+    // A knockout body built as a league.
+    expect(bad({ stages: [{ ...good.stages[0]!, kind: "league" }] })).toMatchObject({ verdict: "fail", evidence: ["stage 1: built league, posted swiss"] });
+    expect(bad({ stages: [{ ...good.stages[0]!, config: { rounds: 3, tiebreak: { a: 1, b: 2 } } }] })).toMatchObject({ verdict: "fail", evidence: ["stage 1 config.rounds: built 3, posted 5"] });
+    expect(bad({ stages: [{ ...good.stages[0]!, config: { rounds: 5 } }] })).toMatchObject({ verdict: "fail", evidence: ['stage 1 config.tiebreak: built undefined, posted {"a":1,"b":2}'] });
+    expect(bad({ stages: [{ ...good.stages[0]!, config: { rounds: 5, tiebreak: { a: 1, b: 3 } } }] })).toMatchObject({ verdict: "fail" });
+    expect(bad({ stages: [] })).toMatchObject({ verdict: "fail", evidence: ["0 stage(s) built, 1 posted", "stage 1: built nothing, posted swiss", "stage 1 config.rounds: built undefined, posted 5", 'stage 1 config.tiebreak: built undefined, posted {"a":1,"b":2}'] });
+    expect(bad({ stages: [...good.stages, { ...good.stages[0]!, id: "s2", seq: 2 }] })).toMatchObject({ verdict: "fail", evidence: ["2 stage(s) built, 1 posted"] });
+    // 7 of 8, in miniature: a posted entrant not stored; the add answer short; one stored twice; a stored one seated nowhere.
+    expect(bad({ entrants: rows.slice(0, 1) })).toMatchObject({ verdict: "fail", evidence: ["1 entrant(s) stored, 2 posted", "posted seed 2 (Matrix Player 2) stored 0 time(s)"] });
+    expect(bad({ echo: rows.slice(0, 1) })).toMatchObject({ verdict: "fail", evidence: ["add answered 1 entrant(s), 2 posted"] });
+    expect(bad({ entrants: [...rows, { ...rows[1]!, id: "c" }] })).toMatchObject({ verdict: "fail", evidence: ["3 entrant(s) stored, 2 posted", "posted seed 2 (Matrix Player 2) stored 2 time(s)", "c (seed 2) is seated in no fixture of the stage"] });
+    expect(bad({ entrants: [rows[0]!, { ...rows[1]!, display_name: "Someone Else" }] })).toMatchObject({ verdict: "fail", evidence: ["posted seed 2 (Matrix Player 2) stored 0 time(s)"] });
+    expect(bad({}, run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "a" } })]))).toMatchObject({ verdict: "fail", evidence: ["b (seed 2) is seated in no fixture of the stage"] });
   });
 
   it("resultsAsPosted (final review I-1): the STORED result of every finished fixture is the harness's fold, a bye, or the recorded cascade's — else it fails", () => {
@@ -239,7 +273,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
 describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
   it("drives the driver in lifecycle order and ends works", async () => {
     const { driver, state, out, checks } = await runFake("LIFECYCLE");
-    const firsts = ["createCompetition", "createDivision", "postStages", "addEntrants", "start", "listStages", "generate"];
+    const firsts = ["createCompetition", "createDivision", "postStages", "addEntrants", "start", "listStages", "getDivision", "listEntrants", "generate"];
     expect(driver.calls.slice(0, firsts.length)).toEqual(firsts);
     const i = (m: string) => driver.calls.lastIndexOf(m);
     expect(i("patchDivisionConfig")).toBeLessThan(i("completeStage"));
@@ -337,12 +371,93 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
-    ["LIFECYCLE", ["life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded"]],
-    ["M1", ["life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded"]],
-    ["R4", ["life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded"]],
-    ["F1", ["life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded"]],
+    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded"]],
+    ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded"]],
+    ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded"]],
+    ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded"]],
   ] as const)("%s", async (k, ids) => {
     expect((await runFake(k)).out.assertions.map((a) => a.id)).toEqual(ids);
+  });
+});
+
+describe("final review I-2 on the fakes: a product that builds something other than what was posted reds the case", () => {
+  /** Accepts any single stage body, and builds a league with its default config. */
+  class SilentLeague extends FakeLeagueDriver {
+    override acceptsStage(): boolean { return true; }
+    override async postStages(d: string, stages: Parameters<FakeLeagueDriver["postStages"]>[1]) {
+      return super.postStages(d, stages.map((b) => ({ ...b, kind: "league", config: { legs: 1 } })));
+    }
+  }
+  /** Stores (and answers) only 7 of the 8 posted entrants. */
+  class StoresSeven extends FakeLeagueDriver {
+    override async addEntrants(d: string, es: Parameters<FakeLeagueDriver["addEntrants"]>[1]) { return super.addEntrants(d, es.slice(0, -1)); }
+  }
+  /** Stores all 8, but draws only 7. */
+  class SeatsSeven extends FakeLeagueDriver {
+    override circle() {
+      const all = this.entrants;
+      this.entrants = all.slice(0, -1);
+      try { return super.circle(); } finally { this.entrants = all; }
+    }
+  }
+  it.each(SCENARIO_KEYS)("knockout %s built as a league reds life-built-as-posted (it read works before)", async (k) => {
+    const r = await runOn(new SilentLeague(), k, { row: "knockout" });
+    expect(r.state.state).toBe("red");
+    expect(failed(r.checks)).toContain("life-built-as-posted");
+    expect(r.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["stage 1: built league, posted knockout"]);
+  });
+  // F1 posts 7, not 8: its twin is the next test.
+  it.each(SCENARIO_KEYS.filter((k) => k !== "F1"))("%s: 7 of 8 stored, or 8 stored and 7 seated, reds life-built-as-posted", async (k) => {
+    const stored = await runOn(new StoresSeven(), k);
+    expect(stored.state.state).toBe("red");
+    expect(stored.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["7 entrant(s) stored, 8 posted", "add answered 7 entrant(s), 8 posted", "posted seed 8 (Matrix Player 8) stored 0 time(s)"]);
+    const seats = await runOn(new SeatsSeven(), k);
+    expect(seats.state.state).toBe("red");
+    expect(seats.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["e8 (seed 8) is seated in no fixture of the stage"]);
+  });
+  it("F1 (7 posted): 6 stored, or 7 stored and 6 seated, reds it too", async () => {
+    expect((await runOn(new StoresSeven(), "F1")).checks.find((c) => c.id === "life-built-as-posted")).toMatchObject({ verdict: "fail", evidence: ["6 entrant(s) stored, 7 posted", "add answered 6 entrant(s), 7 posted", "posted seed 7 (Matrix Player 7) stored 0 time(s)"] });
+    expect((await runOn(new SeatsSeven(), "F1")).checks.find((c) => c.id === "life-built-as-posted")).toMatchObject({ verdict: "fail", evidence: ["e7 (seed 7) is seated in no fixture of the stage"] });
+  });
+  it("the READ-BACK is judged, not the create/add answers: echoing what was posted while storing something else still reds", async () => {
+    /** Answers the posted sport/variant on create, but stores (and later reads back) another variant. */
+    class StoresOtherVariant extends FakeLeagueDriver {
+      override async getDivision() { return { ...(await super.getDivision()), variantKey: "win_loss" }; }
+    }
+    expect((await runOn(new StoresOtherVariant(), "LIFECYCLE")).checks.find((c) => c.id === "life-built-as-posted"))
+      .toMatchObject({ verdict: "fail", evidence: ["division variant win_loss, posted score"] });
+    /** Labels the division with a different variant from the one posted, in its create answer AND its read-back: the POSTED value is the spec's, never an answer. */
+    class LabelsOtherVariant extends FakeLeagueDriver {
+      override async createDivision(c: string, i: Parameters<FakeLeagueDriver["createDivision"]>[1]) {
+        const d = await super.createDivision(c, i);
+        this.variant = "win_loss";
+        return { ...d, variantKey: this.variant };
+      }
+    }
+    expect((await runOn(new LabelsOtherVariant(), "M1")).checks.find((c) => c.id === "life-built-as-posted"))
+      .toMatchObject({ verdict: "fail", evidence: ["division variant win_loss, posted score"] });
+    /** Answers all 8 on add, but stores and draws only 7. */
+    class EchoesEight extends FakeLeagueDriver {
+      override async addEntrants(d: string, es: Parameters<FakeLeagueDriver["addEntrants"]>[1]) {
+        const echo = await super.addEntrants(d, es);
+        this.entrants = this.entrants.slice(0, -1);
+        return echo;
+      }
+    }
+    expect((await runOn(new EchoesEight(), "LIFECYCLE")).checks.find((c) => c.id === "life-built-as-posted"))
+      .toMatchObject({ verdict: "fail", evidence: ["7 entrant(s) stored, 8 posted", "posted seed 8 (Matrix Player 8) stored 0 time(s)"] });
+  });
+  it("the unmodified fakes pass it on every scenario, row and field size, reading back what was posted", async () => {
+    const runs = [
+      ...SCENARIO_KEYS.map((k) => runOn(new FakeLeagueDriver(), k)),
+      runOn(new FakeKnockoutDriver(), "M1", { row: "knockout" }), runOn(new FakeKnockoutDriver(), "F1", { row: "knockout" }),
+      runOn(new FakeSwissDriver(), "F1", { row: "swiss" }), runOn(new FakeSwissDriver(), "LIFECYCLE", { row: "swiss" }),
+    ];
+    for (const r of await Promise.all(runs)) {
+      const c = r.checks.find((x) => x.id === "life-built-as-posted")!;
+      expect(c, r.out.observed.caseId).toMatchObject({ verdict: "pass" });
+      expect(c.checked, r.out.observed.caseId).toBeGreaterThanOrEqual(3 + 1 + 2 + 2 * 7);
+    }
   });
 });
 

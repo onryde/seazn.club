@@ -3,7 +3,7 @@
 // the rulebook's call (W2+). Canary: judge the cascade against the opposite
 // policy.
 import { isTerminal, sameResult, snap, toObservedOutcome, winnerOf, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
-import { assertion, foldParity, resultsAsPosted, loopBounded, stageCompleted, type Item } from "./assertions.ts";
+import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -79,7 +79,7 @@ export const r4Withdrawal: Scenario = {
       return {
         observed,
         events: rec.events,
-        assertions: [foldParity(rec), resultsAsPosted(rec, observed), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
+        assertions: [builtAsPosted(setup.built, observed), foldParity(rec), resultsAsPosted(rec, observed), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
       };
     }
     const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
@@ -90,6 +90,7 @@ export const r4Withdrawal: Scenario = {
       observed,
       events: rec.events,
       assertions: [
+        builtAsPosted(setup.built, observed),
         foldParity(rec),
         resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }]),
