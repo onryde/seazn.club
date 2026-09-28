@@ -61,7 +61,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
     ({ id: "f1", stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status: "decided", outcome: { kind: "win", winner: "a" }, declared: null, ...over });
   const run = (standings: ObservedRun["stages"][number]["standings"], fixtures: ObservedFixture[] = []): ObservedRun => ({
     caseId: "c", facts: [], withdrawal: null, configEdit: null,
-    stages: [{ id: "s1", seq: 1, kind: "league", config: {}, field: ["a", "b"], fixtures, standings, generates: [], pairRounds: [], complete: null }],
+    stages: [{ id: "s1", seq: 1, kind: "league", config: {}, field: ["a", "b"], fieldSource: "division", fixtures, standings, generates: [], pairRounds: [], complete: null }],
   });
 
   it("foldParity: nothing posted is vacuous; a differing product outcome fails; foreign events are unjudgeable", () => {
@@ -303,6 +303,11 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
     expect(i("publicStandings")).toBeGreaterThan(i("completeStage"));
     expect(out.observed.stages[0]!.fixtures).toHaveLength(28); // 8 entrants, single RR
+    // snapshot observes the ROOT stage, so its field is the division's (W1a carry 1)…
+    expect(out.observed.stages.map((s) => [s.seq, s.fieldSource])).toEqual([[1, "division"]]);
+    // …and the step-safe checks judge the whole lifecycle: C(8,2) pairs, every Generate answer.
+    expect(checks.find((c) => c.id === "I7-rr-no-pair-over-legs")).toMatchObject({ verdict: "pass", checked: 28 });
+    expect(checks.find((c) => c.id === "I8-generate-named")).toMatchObject({ verdict: "pass", checked: driver.calls.filter((c) => c === "generate").length });
     expect(state, JSON.stringify(checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
     expect(checks.find((c) => c.id === "life-draw-path-exercised")).toMatchObject({ verdict: "pass" });
     expect(checks.find((c) => c.id === "life-fold-parity")!.checked).toBe(28);

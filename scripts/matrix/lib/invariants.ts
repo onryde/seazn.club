@@ -17,6 +17,9 @@ export interface InvariantSpec {
   readonly abstainOn: readonly CaseFact[];
   readonly abstainOnStageConfig: readonly string[];
   readonly requiresCompletedStage: boolean;
+  /** Holds after EVERY organiser action, not only at the end of a lifecycle —
+   *  the fast-check model (W1b Task 13) evaluates only these after each step. */
+  readonly stepSafe: boolean;
   check(stages: readonly ObservedStage[], run: ObservedRun): InvariantResult;
 }
 
@@ -32,10 +35,15 @@ const I1: InvariantSpec = {
   abstainOn: ["withdrawn", "expunged", "voided", "cut_short", "late_entry"],
   abstainOnStageConfig: [],
   requiresCompletedStage: false,
+  stepSafe: false, // it owes every pair: incomplete until generated
   check(stages) {
     const fails: string[] = [];
     let checked = 0;
     for (const s of stages) {
+      if (s.seq > 1 && s.fieldSource !== "seeded") {
+        fails.push(`stage seq ${s.seq}: field is division-wide — per-stage entrants were not observed (W1a carry 1)`);
+        continue;
+      }
       const legs = typeof s.config.legs === "number" ? s.config.legs : 1;
       const met = new Map<string, number>();
       for (const f of s.fixtures.filter(twoSided)) {
@@ -91,6 +99,7 @@ const I2: InvariantSpec = {
   abstainOn: ["shared_place_declared", "cut_short"],
   abstainOnStageConfig: [],
   requiresCompletedStage: true,
+  stepSafe: false, // it needs a completed bracket
   check(stages) {
     const fails: string[] = [];
     let checked = 0;
@@ -163,6 +172,7 @@ const I3: InvariantSpec = {
   abstainOn: [],
   abstainOnStageConfig: ["points", "carry_deltas", "rank_overrides"],
   requiresCompletedStage: false,
+  stepSafe: false, // a mid-sequence void or cascade leaves the table's truth to W2/W5's rulebooks
   check(stages, run) {
     const fails: string[] = [];
     let checked = 0;
@@ -203,6 +213,7 @@ const I4: InvariantSpec = {
   abstainOn: ["cut_short"],
   abstainOnStageConfig: [],
   requiresCompletedStage: false,
+  stepSafe: false, // it fails by construction before complete
   check(stages) {
     const fails: string[] = [];
     let checked = 0;
@@ -240,6 +251,7 @@ const I5: InvariantSpec = {
   abstainOn: [],
   abstainOnStageConfig: [],
   requiresCompletedStage: false,
+  stepSafe: false, // its producer is the config probe, not a step
   check(_stages, run) {
     const edit = run.configEdit;
     if (edit === null || edit.attempts.length === 0) return ABSTAIN("no config edit attempted");
@@ -262,6 +274,7 @@ const I6: InvariantSpec = {
   abstainOn: [],
   abstainOnStageConfig: [],
   requiresCompletedStage: false,
+  stepSafe: true, // a rematch is a rematch the moment it is paired
   check(stages) {
     const fails: string[] = [];
     let checked = 0;
@@ -279,7 +292,61 @@ const I6: InvariantSpec = {
   },
 };
 
-export const INVARIANTS: readonly InvariantSpec[] = Object.freeze([I1, I2, I3, I4, I5, I6]);
+const I7: InvariantSpec = {
+  id: "I7-rr-no-pair-over-legs",
+  description: "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+  stageKinds: ["league", "group"],
+  // Deliberately none: this is the check that still speaks after a late entry,
+  // a withdrawal or a void — where I1 abstains and #879 lives.
+  abstainOn: [],
+  abstainOnStageConfig: [],
+  requiresCompletedStage: false,
+  stepSafe: true,
+  check(stages) {
+    const fails: string[] = [];
+    let checked = 0;
+    for (const s of stages) {
+      const legs = typeof s.config.legs === "number" ? s.config.legs : 1;
+      const met = new Map<string, string[]>();
+      for (const f of s.fixtures.filter(twoSided)) {
+        const k = pairKey(f.home!, f.away!);
+        met.set(k, [...(met.get(k) ?? []), f.id]);
+      }
+      for (const [k, ids] of [...met].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+        checked++;
+        if (ids.length > legs) fails.push(`${k} meets ${ids.length}× in stage ${s.seq} (legs ${legs}): ${ids.join(", ")}`);
+      }
+    }
+    // Before Generate there is nothing to judge: abstain, never a vacuous pass.
+    // The model's per-cell rule (Task 14) still demands checked > 0 over a cell.
+    if (checked === 0) return ABSTAIN("no two-sided fixture yet");
+    return result(fails, checked);
+  },
+};
+
+const I8: InvariantSpec = {
+  id: "I8-generate-named",
+  description: "every Generate answer is fixtures (2xx) or a named refusal",
+  stageKinds: "any",
+  abstainOn: [],
+  abstainOnStageConfig: [],
+  requiresCompletedStage: false,
+  stepSafe: true,
+  check(stages) {
+    const fails: string[] = [];
+    let checked = 0;
+    for (const s of stages) for (const g of s.generates) {
+      checked++;
+      const ok = (g.status >= 200 && g.status < 300) || isNamedRefusal(g.status, g.code);
+      if (!ok) fails.push(`stage ${s.seq}: generate → ${g.status} ${g.code ?? "(no code)"}`);
+    }
+    if (checked === 0) return ABSTAIN("no generate recorded");
+    return result(fails, checked);
+  },
+};
+
+export const INVARIANTS: readonly InvariantSpec[] = Object.freeze([I1, I2, I3, I4, I5, I6, I7, I8]);
+export const STEP_INVARIANTS: readonly InvariantSpec[] = Object.freeze(INVARIANTS.filter((s) => s.stepSafe));
 
 export function evaluateInvariant(spec: InvariantSpec, run: ObservedRun): InvariantResult {
   const blocking = spec.abstainOn.filter((f) => run.facts.includes(f));
@@ -298,9 +365,16 @@ export function evaluateInvariant(spec: InvariantSpec, run: ObservedRun): Invari
   return r;
 }
 
+function toCheck(spec: InvariantSpec, r: InvariantResult): CheckResult {
+  return { id: spec.id, kind: "invariant", verdict: r.verdict, checked: r.checked, reason: r.verdict === "pass" ? spec.description : (r.evidence[0] ?? ""), evidence: r.evidence };
+}
+
 export function evaluateInvariants(run: ObservedRun): CheckResult[] {
-  return INVARIANTS.map((spec) => {
-    const r = evaluateInvariant(spec, run);
-    return { id: spec.id, kind: "invariant", verdict: r.verdict, checked: r.checked, reason: r.verdict === "pass" ? spec.description : (r.evidence[0] ?? ""), evidence: r.evidence };
-  });
+  return INVARIANTS.map((spec) => toCheck(spec, evaluateInvariant(spec, run)));
+}
+
+/** The step-safe subset only — what the fast-check model (Task 13) evaluates
+ *  after each organiser step. The rest hold only at the end of a lifecycle. */
+export function evaluateStepInvariants(run: ObservedRun): CheckResult[] {
+  return STEP_INVARIANTS.map((spec) => toCheck(spec, evaluateInvariant(spec, run)));
 }

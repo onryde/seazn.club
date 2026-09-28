@@ -122,7 +122,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   };
 }
 
-async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<FixtureRow[] | null> {
+export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<FixtureRow[] | null> {
   try {
     const g = await ctx.driver.generate(stageId);
     rec.generates.push({ status: 200, code: null, total: g.fixtures.length, created: g.created });
@@ -308,7 +308,10 @@ export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: Divis
     facts: [...rec.facts],
     stages: [{
       id: setup.stage.id, seq: setup.stage.seq, kind: setup.stage.kind, config: setup.stage.config,
-      field: setup.entrants.map((e) => e.id), fixtures, standings,
+      // W1a snapshots the single root stage only (multi-stage is deferred in
+      // setUpDivision), so the division's entrants ARE its field. A later
+      // stage snapshotted this way reds I1 by name (W1a carry 1).
+      field: setup.entrants.map((e) => e.id), fieldSource: "division", fixtures, standings,
       generates: rec.generates, pairRounds: rec.pairRounds, complete: extra.complete,
     }],
     withdrawal: extra.withdrawal,

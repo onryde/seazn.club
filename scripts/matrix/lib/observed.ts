@@ -38,6 +38,11 @@ export interface ObservedStage {
   config: Record<string, unknown>;
   /** Every entrant added to the division (withdrawn ones included). */
   field: string[];
+  /** Where `field` came from: "division" = every entrant of the division (right
+   *  for a root stage), "seeded" = the entrants the product placed into THIS
+   *  stage (a later stage). I1 refuses to judge a later stage on a
+   *  division-wide field (W1a carry 1). */
+  fieldSource: "division" | "seeded";
   fixtures: ObservedFixture[];
   standings: { poolId: string | null; rows: StandingsRowObs[] }[];
   generates: GenerateObs[];
