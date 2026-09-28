@@ -1,8 +1,10 @@
 // L2 (design §6.2): every applicable (row, scenario) and (sport, scenario)
-// pair runs at least once in the browser, widths rotating across the seven.
+// pair runs at least once in the browser, widths rotating across the seven —
+// per scenario, per format and per sport (controller ruling, T7 fix round 1).
 // Greedy and deterministic: per scenario in catalogue order, rows in registry
 // order take the first sport that still needs covering, then leftover sports
-// take the first applicable row. Committed by gen-catalogue.ts (R11).
+// take the first applicable row. Registry order, never the caller's: the
+// variants are looked up by sport. Committed by gen-catalogue.ts (R11).
 //
 // "Applicable" for L2 includes a pair whose ONLY drop is the rule's L3
 // harness gap (Rule.gap: the rule applies, the L3 generator cannot drive it):
@@ -50,6 +52,22 @@ export class UnknownL2Scenario extends Error {
   }
 }
 
+/** `variants` must hold exactly one entry per registry sport: decide() reads an
+ *  absent sport as "no committed variants" and would plan less, silently. */
+export class VariantsIncomplete extends Error {
+  readonly missing: readonly string[];
+  readonly duplicated: readonly string[];
+  readonly unknown: readonly string[];
+  constructor(missing: readonly string[], duplicated: readonly string[], unknown: readonly string[]) {
+    const list = (xs: readonly string[]) => (xs.length === 0 ? "none" : xs.join(", "));
+    super(`pairs: variants must hold exactly one entry per registry sport (SPORT_KEYS) — missing: ${list(missing)}; duplicated: ${list(duplicated)}; unknown: ${list(unknown)}. decide() reads an absent sport as "no committed variants" and would plan less, silently`);
+    this.name = "VariantsIncomplete";
+    this.missing = missing;
+    this.duplicated = duplicated;
+    this.unknown = unknown;
+  }
+}
+
 /** decide() reported the rule gapped at this pair, yet with the gap lifted it
  *  does not apply: the run's preset and bound would be invented. */
 export class GapUnbound extends Error {
@@ -81,6 +99,11 @@ function owed(id: string, r: Rule, row: RowKey, sport: string, variants: readonl
 
 export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants: readonly SportVariants[]; only?: readonly string[] }): L2Plan {
   const rules = input.rules ?? RULES;
+  const given = input.variants.map((v) => v.sport);
+  const missing = SPORT_KEYS.filter((s) => !given.includes(s));
+  const duplicated = SPORT_KEYS.filter((s) => given.indexOf(s) !== given.lastIndexOf(s));
+  const unknown = given.filter((s) => !SPORT_KEYS.includes(s));
+  if (missing.length + duplicated.length + unknown.length > 0) throw new VariantsIncomplete(missing, duplicated, unknown);
   const atoms = l2Atomic();
   const only = input.only;
   if (only !== undefined) {
@@ -91,6 +114,8 @@ export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants
   const runs: L2Run[] = [];
   const targets = { rowScenario: 0, sportScenario: 0 };
   const perScenario: Record<string, number> = {};
+  /** Earlier scenarios whose run count is a multiple of 7 (see the width). */
+  let laps = 0;
   for (const a of atoms.filter((x) => only === undefined || only.includes(x.id))) {
     const r = rules[a.id];
     if (r === undefined) throw new MissingRule(a.id);
@@ -105,17 +130,25 @@ export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants
     targets.rowScenario += byRow.length;
     targets.sportScenario += bySport.length;
     const sportsLeft = new Set(bySport.map((os) => os[0].sport));
-    const before = runs.length;
-    const push = (o: Owed, covers: ("row" | "sport")[]) => {
-      const n = runs.length + 1;
-      runs.push({ n, scenario: a.id, row: o.row, sport: o.sport, preset: o.preset, bound: o.bound, width: L2_WIDTHS[(n - 1) % L2_WIDTHS.length], covers, l3Gap: o.l3Gap });
-    };
+    const picks: { readonly o: Owed; readonly covers: ("row" | "sport")[] }[] = [];
     for (const os of byRow) {
       const o = os.find((x) => sportsLeft.has(x.sport)) ?? os[0];
-      push(o, sportsLeft.delete(o.sport) ? ["row", "sport"] : ["row"]);
+      picks.push({ o, covers: sportsLeft.delete(o.sport) ? ["row", "sport"] : ["row"] });
     }
-    for (const os of bySport) if (sportsLeft.has(os[0].sport)) push(os[0], ["sport"]);
-    perScenario[a.id] = runs.length - before;
+    for (const os of bySport) if (sportsLeft.has(os[0].sport)) picks.push({ o: os[0], covers: ["sport"] });
+    // Widths rotate by run number, (n - 1) % 7: run 1 is at 320, the split
+    // across widths is within one, and a scenario's runs take consecutive
+    // widths. A scenario of 7m runs puts m runs on every width wherever it
+    // starts, so its start alone is advanced one step per such scenario — the
+    // split is still exactly the plain rotation's. Without it the 21-run
+    // (one-per-row) scenarios all start on the same width and each row meets
+    // the same few widths: 12 (row, width) pairs never ran (T7 review I-1).
+    const shift = picks.length % L2_WIDTHS.length === 0 ? laps++ % L2_WIDTHS.length : 0;
+    for (const { o, covers } of picks) {
+      const n = runs.length + 1;
+      runs.push({ n, scenario: a.id, row: o.row, sport: o.sport, preset: o.preset, bound: o.bound, width: L2_WIDTHS[(n - 1 + shift) % L2_WIDTHS.length], covers, l3Gap: o.l3Gap });
+    }
+    perScenario[a.id] = picks.length;
   }
   return { runs, targets, perScenario };
 }

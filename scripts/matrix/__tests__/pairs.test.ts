@@ -1,8 +1,9 @@
 // The L2 pair file (design §6.2, W1b Task 7). State transitions and empty
 // cases first (TEST-STRATEGY rule 1): a scenario that applies nowhere, an empty
-// or unknown `only`, a missing rule, a second plan, one scenario planned alone,
-// a pair whose only drop is an L3 harness gap (controller ruling, T7 dispatch:
-// L2 plans it and marks it), another sport (every sweep walks the registry).
+// or unknown `only`, an empty or partial `variants`, a missing rule, a second
+// plan, the same inputs in another order, one scenario planned alone, a pair
+// whose only drop is an L3 harness gap (controller ruling, T7 dispatch: L2
+// plans it and marks it), another sport (every sweep walks the registry).
 // A withdrawal or void is not an input here: the planner is a pure function of
 // the rules, the catalogue and the committed variants.
 // Expected values come from applicability.ts's own `decide` (its `applies` and
@@ -14,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "../lib/catalogue.ts";
 import { MissingRule, RULES, decide, type Rule } from "../lib/applicability.ts";
-import { GapUnbound, L2_WIDTHS, UnknownL2Scenario, planL2, type L2Run } from "../lib/pairs.ts";
+import { GapUnbound, L2_WIDTHS, UnknownL2Scenario, VariantsIncomplete, planL2, type L2Run } from "../lib/pairs.ts";
 import { l2Atomic, l3Atomic } from "../lib/scenario-catalogue.ts";
 import { buildSportVariants, offlineBuilderDefault } from "../lib/variants.ts";
 
@@ -81,6 +82,19 @@ describe("L2 pair file", () => {
     expect(() => planL2({ variants, rules: noM1, only: ["M1"] })).toThrow(MissingRule);
   });
 
+  it("refuses an empty or partial `variants` — decide reads a missing sport as 'no variants' and would plan less, silently", () => {
+    expect(() => planL2({ variants: [] })).toThrow(VariantsIncomplete);
+    let checked = 0;
+    for (const s of SPORT_KEYS) {
+      expect(() => planL2({ variants: variants.filter((v) => v.sport !== s), only: ["M1"] }), s).toThrow(new RegExp(`missing: ${s}\\b`));
+      checked++;
+    }
+    expect(checked).toBe(SPORT_KEYS.length);
+    const first = variants[0]!;
+    expect(() => planL2({ variants: [...variants, first], only: ["M1"] })).toThrow(new RegExp(`duplicated: ${first.sport}\\b`));
+    expect(() => planL2({ variants: [...variants, { ...first, sport: "quidditch" }], only: ["M1"] })).toThrow(/unknown: quidditch\b/);
+  });
+
   it("every owed (row, scenario) and (sport, scenario) pair is covered by an owed run — counted", () => {
     let judged = 0;
     let runsChecked = 0;
@@ -116,6 +130,7 @@ describe("L2 pair file", () => {
   });
 
   it("a gap-only pair is planned and marked; a genuinely inapplicable pair stays dropped (synthetic rule, every cell)", () => {
+    // single-sport: the rule applies to ONE sport so the other ten witness the drop; it sweeps every row and cell.
     const id = "M1";
     const one = SPORT_KEYS[SPORT_KEYS.length - 1]!;
     const gapped: Rule = { when: (f) => f.sport === one, reason: "only one sport", variantDependent: false, witness: null, gap: { when: () => true, reason: "synthetic L3 gap" } };
@@ -133,17 +148,22 @@ describe("L2 pair file", () => {
     expect(open.runs.every((x) => x.l3Gap === null)).toBe(true);
   });
 
-  it("a gap-only pair that only a committed variant enables binds to that variant, not the builder default", () => {
-    // The first sport (registry order) with a scorable committed variant off
-    // its builder-default preset; decide walks cases in committed order.
-    const pick = variants.flatMap((v) => v.cases.filter((c) => c.preset !== offlineBuilderDefault(v.sport) && c.scorable === null).slice(0, 1))[0];
-    expect(pick, "no sport has a scorable variant off its default preset").toBeDefined();
-    const { sport, preset, id: bound } = pick!;
+  it("a gap-only pair that only a committed variant enables binds to that variant, not the builder default — every sport", () => {
+    // Per sport: its first scorable committed variant off the builder-default
+    // preset, in committed order (the order decide walks).
     const id = "M1";
-    const r: Rule = { when: (f) => f.sport === sport && f.preset !== offlineBuilderDefault(sport), reason: "off-default preset", variantDependent: true, witness: null, gap: { when: () => true, reason: "variant gap" } };
-    const p = planL2({ variants, rules: { ...RULES, [id]: r }, only: [id] });
-    expect(p.runs.length).toBe(ROW_KEYS.length);
-    for (const x of p.runs) expect({ sport: x.sport, preset: x.preset, bound: x.bound, l3Gap: x.l3Gap }).toEqual({ sport, preset, bound, l3Gap: "variant gap" });
+    let checked = 0;
+    for (const v of variants) {
+      const vc = v.cases.find((c) => c.preset !== offlineBuilderDefault(v.sport) && c.scorable === null);
+      if (vc === undefined) continue;
+      const r: Rule = { when: (f) => f.sport === v.sport && f.preset !== offlineBuilderDefault(v.sport), reason: "off-default preset", variantDependent: true, witness: null, gap: { when: () => true, reason: "variant gap" } };
+      const p = planL2({ variants, rules: { ...RULES, [id]: r }, only: [id] });
+      expect(p.runs.length, v.sport).toBe(ROW_KEYS.length);
+      for (const x of p.runs) expect({ sport: x.sport, preset: x.preset, bound: x.bound, l3Gap: x.l3Gap }, `${v.sport} ${x.row}`).toEqual({ sport: v.sport, preset: vc.preset, bound: vc.id, l3Gap: "variant gap" });
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+    console.info(`pairs: variant-bound gap checked on ${checked} of ${variants.length} sports`);
   });
 
   it("greedy, registry order: row runs walk ROW_KEYS taking the first uncovered sport, else the row's first; leftover sports take their first row", () => {
@@ -174,6 +194,7 @@ describe("L2 pair file", () => {
   });
 
   it("refuses a pair decide reports gapped that does not apply once the gap is lifted (the binding would be invented)", () => {
+    // single-sport: the flip answers yes once, at the first cell decided — one cell by construction.
     const id = "M1";
     let calls = 0;
     // Answers yes only on its first call: decide sees it apply under the gap,
@@ -221,17 +242,41 @@ describe("L2 pair file", () => {
   });
 
   it("widths rotate within a scenario: consecutive runs change width, and k runs see min(k, 7) widths", () => {
-    for (let i = 1; i < plan.runs.length; i++) expect(plan.runs[i]!.width, `run ${i + 1}`).not.toBe(plan.runs[i - 1]!.width);
     let checked = 0;
     for (const id of L2_IDS) {
       const ws = plan.runs.filter((x) => x.scenario === id).map((x) => x.width);
+      for (let i = 1; i < ws.length; i++) expect(ws[i], `${id} run ${i + 1}`).not.toBe(ws[i - 1]);
       expect(new Set(ws).size, id).toBe(Math.min(ws.length, L2_WIDTHS.length));
       checked++;
     }
-    expect(checked).toBeGreaterThan(0);
+    expect(checked).toBe(L2_IDS.length);
+  });
+
+  it("widths spread per format and per sport (controller ruling, fix round 1): every row and every sport with ≥ 7 runs runs at every width — counted", () => {
+    const spread = (axis: string, keys: readonly string[], key: (x: L2Run) => string) => {
+      let checked = 0;
+      let min = Infinity;
+      for (const k of keys) {
+        const runs = plan.runs.filter((x) => key(x) === k);
+        if (runs.length < L2_WIDTHS.length) continue;
+        for (const w of L2_WIDTHS) {
+          const c = runs.filter((x) => x.width === w).length;
+          expect(c, `${axis} ${k} never runs at ${w}`).toBeGreaterThan(0);
+          min = Math.min(min, c);
+          checked++;
+        }
+      }
+      return { checked, min };
+    };
+    const rows = spread("row", ROW_KEYS, (x) => x.row);
+    const sports = spread("sport", SPORT_KEYS, (x) => x.sport);
+    expect(rows.checked).toBeGreaterThan(0);
+    expect(sports.checked).toBeGreaterThan(0);
+    console.info(`pairs: (row, width) ${rows.checked} checked, min ${rows.min}; (sport, width) ${sports.checked} checked, min ${sports.min}`);
   });
 
   it("mobile-first: the rotation starts at the narrowest width, so a one-run plan runs at 320", () => {
+    // single-sport: a one-run plan is the point — the first cell alone.
     const narrowest = Math.min(...L2_WIDTHS);
     expect(plan.runs[0]!.width).toBe(narrowest);
     const id = "M1";
@@ -242,6 +287,15 @@ describe("L2 pair file", () => {
 
   it("deterministic: a second plan is byte-identical", () => {
     expect(JSON.stringify(planL2({ variants }))).toBe(JSON.stringify(plan));
+  });
+
+  it("deterministic across input order: reversed variants, rules and `only` plan byte-identically (registry order, never the caller's)", () => {
+    const base = JSON.stringify(plan);
+    const reversedRules = Object.fromEntries(Object.entries(RULES).reverse());
+    expect(Object.keys(reversedRules)[0]).not.toBe(Object.keys(RULES)[0]);
+    expect(JSON.stringify(planL2({ variants: [...variants].reverse() }))).toBe(base);
+    expect(JSON.stringify(planL2({ variants, only: [...L2_IDS].reverse() }))).toBe(base);
+    expect(JSON.stringify(planL2({ variants: [...variants].reverse(), rules: reversedRules, only: [...L2_IDS].reverse() }))).toBe(base);
   });
 
   it("a scenario planned alone gets the same cover as inside the full plan (no state leaks between scenarios)", () => {
