@@ -446,6 +446,28 @@ describe("I4 nothing-ends-stuck", () => {
     for (const c of codes) expect(isNamedRefusal(422, c), c).toBe(false);
     expect(isNamedRefusal(422, "STAGE_NOT_READY")).toBe(true);
   });
+  // Parked Task 5 (b): http.ts also hands errorResponse literal codes of its own
+  // (ZodError → VALIDATION, PaymentRequiredError, AuthError, the unhandled 500).
+  // A new literal there would reach the harness as a "named" refusal unseen.
+  /** The literal codes in `errorResponse(requestId, <status>, "<CODE>"` calls, and
+   *  how many calls pass a literal at all — so one the regex cannot read is not dropped. */
+  const directCodes = (src: string) => ({
+    codes: [...src.matchAll(/errorResponse\(\s*requestId,\s*\d{3},\s*"([A-Z_]+)"/g)].map((m) => m[1]!),
+    literalCalls: (src.match(/errorResponse\(\s*requestId,\s*[^,()]+,\s*"/g) ?? []).length,
+  });
+  it("GENERIC_ERROR_CODES also covers every code http.ts emits DIRECTLY — the pin is statusCode() ∪ those literals", () => {
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/http.ts"), "utf8");
+    const direct = directCodes(src);
+    expect(direct.codes.length).toBe(direct.literalCalls);
+    expect(direct.codes.length).toBeGreaterThanOrEqual(4);
+    const body = /\nfunction statusCode\(status: number\): string \{\n([\s\S]*?)\n\}\n/.exec(src)![1]!;
+    const fromStatus = [...body.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]!);
+    expect([...GENERIC_ERROR_CODES].sort()).toEqual([...new Set([...fromStatus, ...direct.codes])].sort());
+    // The reader finds a literal it has never seen, and one that is not generic.
+    expect(directCodes('return errorResponse(requestId, 402, "PAYWALL", m);')).toEqual({ codes: ["PAYWALL"], literalCalls: 1 });
+    expect(directCodes("return errorResponse(requestId, 402, code, m);").literalCalls).toBe(0);
+    expect(directCodes('return errorResponse(requestId, st, "PAYWALL", m);')).toEqual({ codes: [], literalCalls: 1 });
+  });
   it("abstain: a case deliberately cut short", () => {
     expect(evaluateInvariant(I4, run([stage({})], { facts: facts("cut_short") })).verdict).toBe("abstain");
   });
