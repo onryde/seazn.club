@@ -10,7 +10,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final branch review (R21) owed.** First live truth run 2026-09-28: 24/24 ✅ at harness `f013af525` (run `fm-w1a-a2`, evidence `truth-runs/w1a-slice/`), all three canaries red on their own check — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
+| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; the final review's (R21) fix batch landed 2026-09-28; re-review owed.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | not started |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | not started |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
@@ -26,14 +26,52 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 ## W1a session status
 
+**2026-09-28 — final review fix batch, live re-run** (`seazn-local-env` label
+`fm-w1a-fix`: fresh Postgres at v419, `db:apply` + `sync:sports` (11 sports,
+31 system variants), standalone prod server (build newer than every
+`apps/web` and engine source file) with `AUTH_DEV_LINKS=1`, no `REDIS_URL`,
+PostHog and Sentry keys blanked in the launching env, no non-loopback TCP
+from the server PID; `show data_directory` equal to
+`BENCH_EXPECTED_DATA_DIR`; the LISTEN PID equal to `server.pid`).
+
+- **Committed evidence (supersedes `fm-w1a-a2`):** `truth-runs/w1a-slice/results.json`
+  is run `fm-w1a-fix-b` at harness `e96a51ff1` (a clean tree: `harnessCommit`
+  now says `-dirty` otherwise), schema v2. v2 cases carry `notes`, and the file
+  carries the catalogue `grid` MATRIX.md renders from, so the render no longer
+  reads the live catalogue. `committed-matrix.test.ts` now also checks that each
+  case's state is `decideState` of its own checks, that the 24 caseIds are
+  distinct, that the commit is clean and that no raw string is secret-shaped.
+  Seven data mutants of the evidence are each red.
+- **Smoke** `fm-w1a-fix-smoke`: `league|generic|score|LIFECYCLE` → ✅, 13
+  checks, 194 items.
+- **Slice** `fm-w1a-fix-a` / `fm-w1a-fix-b`:
+  `{"cases":24,"counts":{"works":24},"differ":[]}`. The two runs agree check by
+  check, notes included. Vacuous: none. Error reds: none.
+- **The batch's new checks, live, in all 24 cases:**
+  - `life-built-as-posted` (I-2): pass, 20–23 items.
+  - `life-results-as-posted` (I-1): pass, 7–28 items.
+  - `life-fold-parity`: pass, 6–28 items.
+  - `r4-cascade-consistent` now includes `skipped_finalized`. It passed in all
+    six R4 cases.
+- **Notes (m-5) seen live:** only the stage status after start (`active` in
+  all 24) and the config-lock answers (`409 FORMAT_LOCKED` / `200`). There was
+  no SEQ_CONFLICT retry, no foreign event and no loop cap.
+- **Canaries** (each EXIT=0, red on its own check only, every failing evidence
+  line canary-marked):
+  - `canary M1: red on m1-walkover-recorded, as designed`
+  - `canary R4: red on r4-cascade-consistent, as designed`
+  - `canary F1: red on f1-round-size, as designed`
+- **Findings:** none. The live re-run found no product red.
+
 **2026-09-28 — Task 11, the first live truth run** (`seazn-local-env` label
 `fm-w1a`: fresh Postgres, `db:apply` + `sync:sports` (11 sports, 31 system
 variants), standalone prod server with `AUTH_DEV_LINKS=1`, no `REDIS_URL`,
 PostHog and Sentry keys blanked; `show data_directory` equal to
 `BENCH_EXPECTED_DATA_DIR`).
 
-- **Committed evidence:** `truth-runs/w1a-slice/results.json` is run
-  `fm-w1a-a2` at harness `f013af525`; `MATRIX.md` is its render, and
+- **Committed evidence (then; superseded by `fm-w1a-fix-b` above):**
+  `truth-runs/w1a-slice/results.json` was run `fm-w1a-a2` at harness
+  `f013af525`; `MATRIX.md` is its render, and
   `scripts/matrix/__tests__/committed-matrix.test.ts` keeps the two equal (R10).
 - **Smoke** `fm-w1a-smoke` (harness `22ac77387`): `league|generic|score|LIFECYCLE`
   → ✅, 11 applied checks, 143 items.
@@ -261,6 +299,19 @@ a peer session as the other.
     so the matrix makes no foreign write, but the bench on its own is exposed.
   - **The wave that adds the weekly schedule** must delete or invert
     `ci-wiring.test.ts`'s "no scheduled matrix workflow" test.
+  - **From the final review fix batch (harness hygiene, W1b or the first
+    wave allowed to edit `.github/`):**
+    - The fake's event refusal answers 409 for every engine code
+      (`fake-driver.ts` postStream). The product maps them via
+      `ENGINE_HTTP` (`api-v1/http.ts`): 422 for INVALID_EVENT, WRONG_PHASE
+      and ALREADY_DECIDED. No harness logic keys on that status today; it is
+      the class of the STAGE_NOT_READY fix (Task 8 m-7).
+    - `run-cli.test.ts`'s zero-cases test still empties the exported
+      `SLICE_ROWS` in place (restored and asserted). A valid filter always
+      plans cases, so a planner seam is the clean fix.
+    - Task 10 review Minor 3 is not done: an `rm -f vitest-results-matrix.json`
+      before vitest in the `ci.yml` matrix step, plus its wiring case. It is
+      under `.github/`, outside the batch's scope.
 
 ## False premises found
 

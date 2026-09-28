@@ -1,9 +1,47 @@
 {
-  "schemaVersion": 1,
-  "runId": "fm-w1a-a2",
-  "harnessCommit": "f013af525",
-  "startedAt": "2026-09-28T11:33:18.811Z",
-  "finishedAt": "2026-09-28T11:33:44.461Z",
+  "schemaVersion": 2,
+  "runId": "fm-w1a-fix-b",
+  "harnessCommit": "e96a51ff1",
+  "startedAt": "2026-09-28T13:33:13.060Z",
+  "finishedAt": "2026-09-28T13:33:37.264Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
   "cases": [
     {
       "caseId": "league|generic|score|LIFECYCLE",
@@ -13,7 +51,7 @@
       "scenario": "LIFECYCLE",
       "canary": false,
       "state": "works",
-      "reason": "11 checks, 143 items",
+      "reason": "13 checks, 194 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -71,7 +109,23 @@
           ]
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 28,
@@ -128,11 +182,16 @@
         }
       ],
       "counts": {
-        "calls": 135,
+        "calls": 137,
         "fixtures": 28,
         "events": 56
       },
-      "durationMs": 1922
+      "durationMs": 1673,
+      "notes": [
+        "stage league status after start: active",
+        "config format: 409 FORMAT_LOCKED",
+        "config entrants_only: 200"
+      ]
     },
     {
       "caseId": "league|generic|score|M1",
@@ -142,7 +201,7 @@
       "scenario": "M1",
       "canary": false,
       "state": "works",
-      "reason": "7 checks, 106 items",
+      "reason": "9 checks, 157 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -199,7 +258,23 @@
           ]
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 28,
@@ -220,6 +295,700 @@
           "verdict": "abstain",
           "checked": 0,
           "reason": "not a bracket stage",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 133,
+        "fixtures": 28,
+        "events": 56
+      },
+      "durationMs": 1418,
+      "notes": [
+        "stage league status after start: active"
+      ]
+    },
+    {
+      "caseId": "league|generic|score|R4",
+      "row": "league",
+      "sport": "generic",
+      "variant": "score",
+      "scenario": "R4",
+      "canary": false,
+      "state": "works",
+      "reason": "9 checks, 131 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn, expunged",
+          "evidence": [
+            "abstain: case fact withdrawn, expunged"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-policy-reported",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-cascade-consistent",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-paired-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 109,
+        "fixtures": 28,
+        "events": 44
+      },
+      "durationMs": 1399,
+      "notes": [
+        "stage league status after start: active"
+      ]
+    },
+    {
+      "caseId": "league|generic|score|F1",
+      "row": "league",
+      "sport": "generic",
+      "variant": "score",
+      "scenario": "F1",
+      "canary": false,
+      "state": "works",
+      "reason": "10 checks, 138 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 30,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-everyone-drawn",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-round-size",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 103,
+        "fixtures": 21,
+        "events": 42
+      },
+      "durationMs": 1125,
+      "notes": [
+        "stage league status after start: active"
+      ]
+    },
+    {
+      "caseId": "league|badminton|bwf|LIFECYCLE",
+      "row": "league",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "LIFECYCLE",
+      "canary": false,
+      "state": "works",
+      "reason": "12 checks, 193 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "a config edit (accepted or refused) never changes a finished fixture's result",
+          "evidence": [
+            "format: 409 FORMAT_LOCKED",
+            "entrants_only: 200"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-draw-path-exercised",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "supportsDraws is false for this stage",
+          "evidence": []
+        },
+        {
+          "id": "life-format-edit-refused-named",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-entrants-edit-accepted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 165,
+        "fixtures": 28,
+        "events": 84
+      },
+      "durationMs": 1795,
+      "notes": [
+        "stage league status after start: active",
+        "config format: 409 FORMAT_LOCKED",
+        "config entrants_only: 200"
+      ]
+    },
+    {
+      "caseId": "league|badminton|bwf|M1",
+      "row": "league",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M1",
+      "canary": false,
+      "state": "works",
+      "reason": "9 checks, 157 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-walkover-recorded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-winner-progresses",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a bracket stage",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 160,
+        "fixtures": 28,
+        "events": 83
+      },
+      "durationMs": 1639,
+      "notes": [
+        "stage league status after start: active"
+      ]
+    },
+    {
+      "caseId": "league|badminton|bwf|R4",
+      "row": "league",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R4",
+      "canary": false,
+      "state": "works",
+      "reason": "9 checks, 131 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn, expunged",
+          "evidence": [
+            "abstain: case fact withdrawn, expunged"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-policy-reported",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-cascade-consistent",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-paired-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a swiss stage",
           "evidence": []
         },
         {
@@ -242,606 +1011,12 @@
       "counts": {
         "calls": 131,
         "fixtures": 28,
-        "events": 56
-      },
-      "durationMs": 1586
-    },
-    {
-      "caseId": "league|generic|score|R4",
-      "row": "league",
-      "sport": "generic",
-      "variant": "score",
-      "scenario": "R4",
-      "canary": false,
-      "state": "works",
-      "reason": "7 checks, 79 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: case fact withdrawn, expunged",
-          "evidence": [
-            "abstain: case fact withdrawn, expunged"
-          ]
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
-          "evidence": [
-            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
-          ]
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "each table row's points equal Σ the sport's declared points over its results",
-          "evidence": []
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 37,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 22,
-          "reason": "22 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-policy-reported",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-cascade-consistent",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "8 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-not-paired-later",
-          "kind": "assertion",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "not a swiss stage",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 107,
-        "fixtures": 28,
-        "events": 44
-      },
-      "durationMs": 1538
-    },
-    {
-      "caseId": "league|generic|score|F1",
-      "row": "league",
-      "sport": "generic",
-      "variant": "score",
-      "scenario": "F1",
-      "canary": false,
-      "state": "works",
-      "reason": "8 checks, 96 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 21,
-          "reason": "every round-robin pair meets exactly once per leg",
-          "evidence": []
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
-          "evidence": [
-            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
-          ]
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "each table row's points equal Σ the sport's declared points over its results",
-          "evidence": []
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 30,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 21,
-          "reason": "21 ok",
-          "evidence": []
-        },
-        {
-          "id": "f1-everyone-drawn",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "7 ok",
-          "evidence": []
-        },
-        {
-          "id": "f1-round-size",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "7 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 101,
-        "fixtures": 21,
-        "events": 42
-      },
-      "durationMs": 1240
-    },
-    {
-      "caseId": "league|badminton|bwf|LIFECYCLE",
-      "row": "league",
-      "sport": "badminton",
-      "variant": "bwf",
-      "scenario": "LIFECYCLE",
-      "canary": false,
-      "state": "works",
-      "reason": "10 checks, 142 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 28,
-          "reason": "every round-robin pair meets exactly once per leg",
-          "evidence": []
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
-          "evidence": [
-            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
-          ]
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "each table row's points equal Σ the sport's declared points over its results",
-          "evidence": []
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 37,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 28,
-          "reason": "a config edit (accepted or refused) never changes a finished fixture's result",
-          "evidence": [
-            "format: 409 FORMAT_LOCKED",
-            "entrants_only: 200"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 28,
-          "reason": "28 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-public-standings-match",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "8 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-draw-path-exercised",
-          "kind": "assertion",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "supportsDraws is false for this stage",
-          "evidence": []
-        },
-        {
-          "id": "life-format-edit-refused-named",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-entrants-edit-accepted",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 163,
-        "fixtures": 28,
-        "events": 84
-      },
-      "durationMs": 1777
-    },
-    {
-      "caseId": "league|badminton|bwf|M1",
-      "row": "league",
-      "sport": "badminton",
-      "variant": "bwf",
-      "scenario": "M1",
-      "canary": false,
-      "state": "works",
-      "reason": "7 checks, 106 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 28,
-          "reason": "every round-robin pair meets exactly once per leg",
-          "evidence": []
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
-          "evidence": [
-            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
-          ]
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "each table row's points equal Σ the sport's declared points over its results",
-          "evidence": []
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 37,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 28,
-          "reason": "28 ok",
-          "evidence": []
-        },
-        {
-          "id": "m1-walkover-recorded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        },
-        {
-          "id": "m1-winner-progresses",
-          "kind": "assertion",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "not a bracket stage",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 158,
-        "fixtures": 28,
-        "events": 83
-      },
-      "durationMs": 1719
-    },
-    {
-      "caseId": "league|badminton|bwf|R4",
-      "row": "league",
-      "sport": "badminton",
-      "variant": "bwf",
-      "scenario": "R4",
-      "canary": false,
-      "state": "works",
-      "reason": "7 checks, 79 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: case fact withdrawn, expunged",
-          "evidence": [
-            "abstain: case fact withdrawn, expunged"
-          ]
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
-          "evidence": [
-            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
-          ]
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "each table row's points equal Σ the sport's declared points over its results",
-          "evidence": []
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 37,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 22,
-          "reason": "22 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-policy-reported",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-cascade-consistent",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "8 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-not-paired-later",
-          "kind": "assertion",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "not a swiss stage",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 129,
-        "fixtures": 28,
         "events": 66
       },
-      "durationMs": 1456
+      "durationMs": 1482,
+      "notes": [
+        "stage league status after start: active"
+      ]
     },
     {
       "caseId": "league|badminton|bwf|F1",
@@ -851,7 +1026,7 @@
       "scenario": "F1",
       "canary": false,
       "state": "works",
-      "reason": "8 checks, 96 items",
+      "reason": "10 checks, 138 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -908,7 +1083,23 @@
           ]
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 21,
@@ -949,11 +1140,14 @@
         }
       ],
       "counts": {
-        "calls": 122,
+        "calls": 124,
         "fixtures": 21,
         "events": 63
       },
-      "durationMs": 1345
+      "durationMs": 1316,
+      "notes": [
+        "stage league status after start: active"
+      ]
     },
     {
       "caseId": "knockout|generic|score|LIFECYCLE",
@@ -963,7 +1157,7 @@
       "scenario": "LIFECYCLE",
       "canary": false,
       "state": "works",
-      "reason": "9 checks, 48 items",
+      "reason": "11 checks, 77 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -1023,7 +1217,23 @@
           ]
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 7,
@@ -1056,601 +1266,6 @@
         },
         {
           "id": "life-entrants-edit-accepted",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 47,
-        "fixtures": 7,
-        "events": 14
-      },
-      "durationMs": 549
-    },
-    {
-      "caseId": "knockout|generic|score|M1",
-      "row": "knockout",
-      "sport": "generic",
-      "variant": "score",
-      "scenario": "M1",
-      "canary": false,
-      "state": "works",
-      "reason": "7 checks, 34 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group)",
-          "evidence": [
-            "abstain: no applicable stage (league/group)"
-          ]
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 9,
-          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
-          "evidence": []
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group/swiss)",
-          "evidence": [
-            "abstain: no applicable stage (league/group/swiss)"
-          ]
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 12,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "7 ok",
-          "evidence": []
-        },
-        {
-          "id": "m1-walkover-recorded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        },
-        {
-          "id": "m1-winner-progresses",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 43,
-        "fixtures": 7,
-        "events": 14
-      },
-      "durationMs": 512
-    },
-    {
-      "caseId": "knockout|generic|score|R4",
-      "row": "knockout",
-      "sport": "generic",
-      "variant": "score",
-      "scenario": "R4",
-      "canary": false,
-      "state": "works",
-      "reason": "7 checks, 35 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: case fact withdrawn",
-          "evidence": [
-            "abstain: case fact withdrawn"
-          ]
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 9,
-          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
-          "evidence": []
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group/swiss)",
-          "evidence": [
-            "abstain: no applicable stage (league/group/swiss)"
-          ]
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 12,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 6,
-          "reason": "6 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-policy-reported",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-cascade-consistent",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 4,
-          "reason": "4 ok",
-          "evidence": []
-        },
-        {
-          "id": "r4-not-paired-later",
-          "kind": "assertion",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "not a swiss stage",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 39,
-        "fixtures": 7,
-        "events": 12
-      },
-      "durationMs": 489
-    },
-    {
-      "caseId": "knockout|generic|score|F1",
-      "row": "knockout",
-      "sport": "generic",
-      "variant": "score",
-      "scenario": "F1",
-      "canary": false,
-      "state": "works",
-      "reason": "7 checks, 36 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group)",
-          "evidence": [
-            "abstain: no applicable stage (league/group)"
-          ]
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
-          "evidence": []
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group/swiss)",
-          "evidence": [
-            "abstain: no applicable stage (league/group/swiss)"
-          ]
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 11,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 6,
-          "reason": "6 ok",
-          "evidence": []
-        },
-        {
-          "id": "f1-everyone-drawn",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "7 ok",
-          "evidence": []
-        },
-        {
-          "id": "f1-round-size",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 37,
-        "fixtures": 7,
-        "events": 12
-      },
-      "durationMs": 447
-    },
-    {
-      "caseId": "knockout|badminton|bwf|LIFECYCLE",
-      "row": "knockout",
-      "sport": "badminton",
-      "variant": "bwf",
-      "scenario": "LIFECYCLE",
-      "canary": false,
-      "state": "works",
-      "reason": "9 checks, 48 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group)",
-          "evidence": [
-            "abstain: no applicable stage (league/group)"
-          ]
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 9,
-          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
-          "evidence": []
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group/swiss)",
-          "evidence": [
-            "abstain: no applicable stage (league/group/swiss)"
-          ]
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 12,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "a config edit (accepted or refused) never changes a finished fixture's result",
-          "evidence": [
-            "format: 409 FORMAT_LOCKED",
-            "entrants_only: 200"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "7 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-public-standings-match",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 8,
-          "reason": "8 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-draw-path-exercised",
-          "kind": "assertion",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "supportsDraws is false for this stage",
-          "evidence": []
-        },
-        {
-          "id": "life-format-edit-refused-named",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-entrants-edit-accepted",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-stage-completed",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 1,
-          "reason": "1 ok",
-          "evidence": []
-        },
-        {
-          "id": "life-loop-bounded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        }
-      ],
-      "counts": {
-        "calls": 54,
-        "fixtures": 7,
-        "events": 21
-      },
-      "durationMs": 616
-    },
-    {
-      "caseId": "knockout|badminton|bwf|M1",
-      "row": "knockout",
-      "sport": "badminton",
-      "variant": "bwf",
-      "scenario": "M1",
-      "canary": false,
-      "state": "works",
-      "reason": "7 checks, 34 items",
-      "checks": [
-        {
-          "id": "I1-rr-pair-once-per-leg",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group)",
-          "evidence": [
-            "abstain: no applicable stage (league/group)"
-          ]
-        },
-        {
-          "id": "I2-bracket-one-champion-ranks-permutation",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 9,
-          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
-          "evidence": []
-        },
-        {
-          "id": "I3-table-points-equal-declared",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (league/group/swiss)",
-          "evidence": [
-            "abstain: no applicable stage (league/group/swiss)"
-          ]
-        },
-        {
-          "id": "I4-nothing-ends-stuck",
-          "kind": "invariant",
-          "verdict": "pass",
-          "checked": 12,
-          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
-          "evidence": []
-        },
-        {
-          "id": "I5-config-edit-never-rescores",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no config edit attempted",
-          "evidence": [
-            "abstain: no config edit attempted"
-          ]
-        },
-        {
-          "id": "I6-swiss-no-rematch",
-          "kind": "invariant",
-          "verdict": "abstain",
-          "checked": 0,
-          "reason": "abstain: no applicable stage (swiss)",
-          "evidence": [
-            "abstain: no applicable stage (swiss)"
-          ]
-        },
-        {
-          "id": "life-fold-parity",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 7,
-          "reason": "7 ok",
-          "evidence": []
-        },
-        {
-          "id": "m1-walkover-recorded",
-          "kind": "assertion",
-          "verdict": "pass",
-          "checked": 2,
-          "reason": "2 ok",
-          "evidence": []
-        },
-        {
-          "id": "m1-winner-progresses",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 1,
@@ -1677,19 +1292,157 @@
       "counts": {
         "calls": 49,
         "fixtures": 7,
-        "events": 20
+        "events": 14
       },
-      "durationMs": 565
+      "durationMs": 493,
+      "notes": [
+        "stage knockout status after start: active",
+        "config format: 409 FORMAT_LOCKED",
+        "config entrants_only: 200"
+      ]
     },
     {
-      "caseId": "knockout|badminton|bwf|R4",
+      "caseId": "knockout|generic|score|M1",
       "row": "knockout",
-      "sport": "badminton",
-      "variant": "bwf",
+      "sport": "generic",
+      "variant": "score",
+      "scenario": "M1",
+      "canary": false,
+      "state": "works",
+      "reason": "9 checks, 63 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-walkover-recorded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-winner-progresses",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 45,
+        "fixtures": 7,
+        "events": 14
+      },
+      "durationMs": 466,
+      "notes": [
+        "stage knockout status after start: active"
+      ]
+    },
+    {
+      "caseId": "knockout|generic|score|R4",
+      "row": "knockout",
+      "sport": "generic",
+      "variant": "score",
       "scenario": "R4",
       "canary": false,
       "state": "works",
-      "reason": "7 checks, 35 items",
+      "reason": "9 checks, 65 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -1748,11 +1501,27 @@
           ]
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 6,
           "reason": "6 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
           "evidence": []
         },
         {
@@ -1767,8 +1536,8 @@
           "id": "r4-cascade-consistent",
           "kind": "assertion",
           "verdict": "pass",
-          "checked": 4,
-          "reason": "4 ok",
+          "checked": 5,
+          "reason": "5 ok",
           "evidence": []
         },
         {
@@ -1797,21 +1566,24 @@
         }
       ],
       "counts": {
-        "calls": 45,
+        "calls": 41,
         "fixtures": 7,
-        "events": 18
+        "events": 12
       },
-      "durationMs": 562
+      "durationMs": 444,
+      "notes": [
+        "stage knockout status after start: active"
+      ]
     },
     {
-      "caseId": "knockout|badminton|bwf|F1",
+      "caseId": "knockout|generic|score|F1",
       "row": "knockout",
-      "sport": "badminton",
-      "variant": "bwf",
+      "sport": "generic",
+      "variant": "score",
       "scenario": "F1",
       "canary": false,
       "state": "works",
-      "reason": "7 checks, 36 items",
+      "reason": "9 checks, 63 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -1870,11 +1642,27 @@
           ]
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 6,
           "reason": "6 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
           "evidence": []
         },
         {
@@ -1911,11 +1699,573 @@
         }
       ],
       "counts": {
-        "calls": 43,
+        "calls": 39,
+        "fixtures": 7,
+        "events": 12
+      },
+      "durationMs": 401,
+      "notes": [
+        "stage knockout status after start: active"
+      ]
+    },
+    {
+      "caseId": "knockout|badminton|bwf|LIFECYCLE",
+      "row": "knockout",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "LIFECYCLE",
+      "canary": false,
+      "state": "works",
+      "reason": "11 checks, 77 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "a config edit (accepted or refused) never changes a finished fixture's result",
+          "evidence": [
+            "format: 409 FORMAT_LOCKED",
+            "entrants_only: 200"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-draw-path-exercised",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "supportsDraws is false for this stage",
+          "evidence": []
+        },
+        {
+          "id": "life-format-edit-refused-named",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-entrants-edit-accepted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 56,
+        "fixtures": 7,
+        "events": 21
+      },
+      "durationMs": 572,
+      "notes": [
+        "stage knockout status after start: active",
+        "config format: 409 FORMAT_LOCKED",
+        "config entrants_only: 200"
+      ]
+    },
+    {
+      "caseId": "knockout|badminton|bwf|M1",
+      "row": "knockout",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M1",
+      "canary": false,
+      "state": "works",
+      "reason": "9 checks, 63 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-walkover-recorded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-winner-progresses",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 51,
+        "fixtures": 7,
+        "events": 20
+      },
+      "durationMs": 555,
+      "notes": [
+        "stage knockout status after start: active"
+      ]
+    },
+    {
+      "caseId": "knockout|badminton|bwf|R4",
+      "row": "knockout",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R4",
+      "canary": false,
+      "state": "works",
+      "reason": "9 checks, 65 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 6,
+          "reason": "6 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-policy-reported",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-cascade-consistent",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-paired-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 47,
         "fixtures": 7,
         "events": 18
       },
-      "durationMs": 515
+      "durationMs": 520,
+      "notes": [
+        "stage knockout status after start: active"
+      ]
+    },
+    {
+      "caseId": "knockout|badminton|bwf|F1",
+      "row": "knockout",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "F1",
+      "canary": false,
+      "state": "works",
+      "reason": "9 checks, 63 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 11,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 6,
+          "reason": "6 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-everyone-drawn",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-round-size",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 45,
+        "fixtures": 7,
+        "events": 18
+      },
+      "durationMs": 468,
+      "notes": [
+        "stage knockout status after start: active"
+      ]
     },
     {
       "caseId": "swiss|generic|score|LIFECYCLE",
@@ -1925,7 +2275,7 @@
       "scenario": "LIFECYCLE",
       "canary": false,
       "state": "works",
-      "reason": "11 checks, 113 items",
+      "reason": "13 checks, 156 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -1983,7 +2333,23 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 20,
@@ -2040,11 +2406,16 @@
         }
       ],
       "counts": {
-        "calls": 100,
+        "calls": 102,
         "fixtures": 20,
         "events": 40
       },
-      "durationMs": 1052
+      "durationMs": 1060,
+      "notes": [
+        "stage swiss status after start: active",
+        "config format: 409 FORMAT_LOCKED",
+        "config entrants_only: 200"
+      ]
     },
     {
       "caseId": "swiss|generic|score|M1",
@@ -2054,7 +2425,7 @@
       "scenario": "M1",
       "canary": false,
       "state": "works",
-      "reason": "7 checks, 84 items",
+      "reason": "9 checks, 127 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -2111,7 +2482,23 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 20,
@@ -2152,11 +2539,14 @@
         }
       ],
       "counts": {
-        "calls": 96,
+        "calls": 98,
         "fixtures": 20,
         "events": 40
       },
-      "durationMs": 1030
+      "durationMs": 1039,
+      "notes": [
+        "stage swiss status after start: active"
+      ]
     },
     {
       "caseId": "swiss|generic|score|R4",
@@ -2166,7 +2556,7 @@
       "scenario": "R4",
       "canary": false,
       "state": "works",
-      "reason": "9 checks, 86 items",
+      "reason": "11 checks, 130 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -2223,11 +2613,27 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 16,
           "reason": "16 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
           "evidence": []
         },
         {
@@ -2242,8 +2648,8 @@
           "id": "r4-cascade-consistent",
           "kind": "assertion",
           "verdict": "pass",
-          "checked": 3,
-          "reason": "3 ok",
+          "checked": 4,
+          "reason": "4 ok",
           "evidence": []
         },
         {
@@ -2272,11 +2678,14 @@
         }
       ],
       "counts": {
-        "calls": 80,
+        "calls": 82,
         "fixtures": 20,
         "events": 32
       },
-      "durationMs": 884
+      "durationMs": 881,
+      "notes": [
+        "stage swiss status after start: active"
+      ]
     },
     {
       "caseId": "swiss|generic|score|F1",
@@ -2286,7 +2695,7 @@
       "scenario": "F1",
       "canary": false,
       "state": "works",
-      "reason": "8 checks, 78 items",
+      "reason": "10 checks, 119 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -2343,11 +2752,27 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 15,
           "reason": "15 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
           "evidence": []
         },
         {
@@ -2384,11 +2809,14 @@
         }
       ],
       "counts": {
-        "calls": 74,
+        "calls": 76,
         "fixtures": 20,
         "events": 30
       },
-      "durationMs": 823
+      "durationMs": 815,
+      "notes": [
+        "stage swiss status after start: active"
+      ]
     },
     {
       "caseId": "swiss|badminton|bwf|LIFECYCLE",
@@ -2398,7 +2826,7 @@
       "scenario": "LIFECYCLE",
       "canary": false,
       "state": "works",
-      "reason": "10 checks, 112 items",
+      "reason": "12 checks, 155 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -2456,7 +2884,23 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 20,
@@ -2513,11 +2957,16 @@
         }
       ],
       "counts": {
-        "calls": 120,
+        "calls": 122,
         "fixtures": 20,
         "events": 60
       },
-      "durationMs": 1268
+      "durationMs": 1277,
+      "notes": [
+        "stage swiss status after start: active",
+        "config format: 409 FORMAT_LOCKED",
+        "config entrants_only: 200"
+      ]
     },
     {
       "caseId": "swiss|badminton|bwf|M1",
@@ -2527,7 +2976,7 @@
       "scenario": "M1",
       "canary": false,
       "state": "works",
-      "reason": "7 checks, 84 items",
+      "reason": "9 checks, 127 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -2584,7 +3033,23 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 20,
@@ -2625,11 +3090,14 @@
         }
       ],
       "counts": {
-        "calls": 115,
+        "calls": 117,
         "fixtures": 20,
         "events": 59
       },
-      "durationMs": 1313
+      "durationMs": 1248,
+      "notes": [
+        "stage swiss status after start: active"
+      ]
     },
     {
       "caseId": "swiss|badminton|bwf|R4",
@@ -2639,7 +3107,7 @@
       "scenario": "R4",
       "canary": false,
       "state": "works",
-      "reason": "9 checks, 86 items",
+      "reason": "11 checks, 130 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -2696,11 +3164,27 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 16,
           "reason": "16 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
           "evidence": []
         },
         {
@@ -2715,8 +3199,8 @@
           "id": "r4-cascade-consistent",
           "kind": "assertion",
           "verdict": "pass",
-          "checked": 3,
-          "reason": "3 ok",
+          "checked": 4,
+          "reason": "4 ok",
           "evidence": []
         },
         {
@@ -2745,11 +3229,14 @@
         }
       ],
       "counts": {
-        "calls": 96,
+        "calls": 98,
         "fixtures": 20,
         "events": 48
       },
-      "durationMs": 1234
+      "durationMs": 1064,
+      "notes": [
+        "stage swiss status after start: active"
+      ]
     },
     {
       "caseId": "swiss|badminton|bwf|F1",
@@ -2759,7 +3246,7 @@
       "scenario": "F1",
       "canary": false,
       "state": "works",
-      "reason": "8 checks, 78 items",
+      "reason": "10 checks, 119 items",
       "checks": [
         {
           "id": "I1-rr-pair-once-per-leg",
@@ -2816,11 +3303,27 @@
           "evidence": []
         },
         {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
           "id": "life-fold-parity",
           "kind": "assertion",
           "verdict": "pass",
           "checked": 15,
           "reason": "15 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
           "evidence": []
         },
         {
@@ -2857,11 +3360,14 @@
         }
       ],
       "counts": {
-        "calls": 89,
+        "calls": 91,
         "fixtures": 20,
         "events": 45
       },
-      "durationMs": 1115
+      "durationMs": 992,
+      "notes": [
+        "stage swiss status after start: active"
+      ]
     }
   ]
 }
