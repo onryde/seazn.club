@@ -22,4 +22,4 @@ If you've claimed a player profile, `/me` carries the same nudge — **Run your 
 
 **Can I turn off the WhatsApp/copy share bar?** No — it's on every public competition page, free and Pro alike; only the footer attribution line is plan-gated.
 
-**Does the Discover directory help here too?** Yes — public, discoverable competitions get listed there, each with its own "run your own" CTA back to `/start`; see [who can see what](/help/sharing/visibility) for the visibility switch that makes a competition eligible.
+**Does the Discover directory help here too?** Yes — public competitions you opt in with **Showcase on seazn.club** get listed there once they are published (a draft never is), each with its own "run your own" CTA back to `/start`; see [who can see what](/help/sharing/visibility) for the visibility switch that makes a competition eligible.

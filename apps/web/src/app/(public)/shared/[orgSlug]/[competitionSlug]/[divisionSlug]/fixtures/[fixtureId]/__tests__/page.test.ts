@@ -219,6 +219,27 @@ const meta = async (locale: string, fixtureOver: Record<string, unknown> = {}) =
   });
 };
 
+// Owner decision 2026-09-27: a DRAFT is unlisted until published, so its match
+// centre is link-only exactly as an unlisted competition's is.
+describe("FixturePage generateMetadata — link-only robots", () => {
+  const robotsFor = async (competition: { visibility: string; status: string }) => {
+    const d = baseData("en");
+    getPublicFixture.mockResolvedValue({ ...d, competition: { ...d.competition, ...competition } });
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    return m.robots;
+  };
+
+  it("keeps a public DRAFT's fixture out of the index like an unlisted one; a published or archived public one stays in it", async () => {
+    expect(await robotsFor({ visibility: "public", status: "draft" })).toEqual({ index: false, follow: false });
+    expect(await robotsFor({ visibility: "unlisted", status: "published" })).toEqual({ index: false, follow: false });
+    expect(await robotsFor({ visibility: "public", status: "published" })).toBeUndefined();
+    expect(await robotsFor({ visibility: "public", status: "archived" })).toBeUndefined();
+  });
+});
+
 describe("FixturePage generateMetadata — org-locale slot labels (P6 finding #2)", () => {
   it("resolves both slots via the org's default_locale, not hardcoded English", async () => {
     const m = await meta("es", {

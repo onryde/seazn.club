@@ -18,10 +18,15 @@ export const ACTIVE_COMPETITION_STATUSES = ["draft", "published", "live"] as con
  * Competition statuses that count against `dashboard.public.max` — the SAME
  * question asked of a different cap, and deliberately a smaller set.
  *
- * A draft shows the world nothing. `public_competitions_v` is keyed on
- * visibility, but a draft competition has no standings, no fixtures anyone is
- * reading and no link an organiser has handed out yet — so metering it charges
- * a PUBLIC DASHBOARD quota for something that is not a public dashboard.
+ * A draft is READABLE by link but LISTED nowhere. `public_competitions_v` is
+ * keyed on visibility, so a public draft's pages and registration form work
+ * for anyone holding the link — but since the owner decision of 2026-09-27 no
+ * listing surface enumerates it (the org home, the sitemap, discovery, another
+ * competition's player card; `lib/competition-listing.ts`) until it is
+ * published. It is work in progress an organiser is still setting up — at most
+ * a link they have handed to early registrants — not the public dashboard the
+ * cap sells, so it is not metered here; the cap is charged when it is
+ * published.
  *
  * This was not a hypothetical. With drafts counted, Free (cap 2) meant an
  * organiser planning next season with two drafts had their THIRD competition

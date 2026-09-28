@@ -72,6 +72,8 @@ interface Scene {
   unl: Comp;
   prv: Comp;
   ko: Comp;
+  /** Public but still a DRAFT — unlisted until published (owner decision 2026-09-27). */
+  drf: Comp;
   slugs: { singles: string; sib: string };
   doublesDivisionId: string;
   pairOpponent: { id: string; raw: string };
@@ -81,7 +83,7 @@ interface Scene {
   f: Record<
     | "di" | "bo" | "cy" | "hal" | "ian" | "jo" | "pair" | "seatNamed" | "seatTbd" | "setup"
     | "withdrawn" | "doneDivision" | "ned" | "archived" | "oli" | "pat" | "oldComp" | "foreign"
-    | "koFinal" | "koBye" | "koFlipBye" | "koFlipFinal" | "archivedComp" | "yaraCur" | "yaraSib",
+    | "koFinal" | "koBye" | "koFlipBye" | "koFlipFinal" | "archivedComp" | "yaraCur" | "yaraSib" | "drf",
     string
   >;
 }
@@ -193,6 +195,11 @@ async function seed(): Promise<Scene> {
       visibility,
       branding: {},
     });
+    // PUBLISHED: a competition is created as a draft, and a draft is unlisted
+    // until published (owner decision 2026-09-27) — so another competition's
+    // card would never show it. The org's competitions here are the ones its
+    // organiser has published; the draft case is `drf` below.
+    await sql`update competitions set status = 'published' where id = ${c.id}`;
     return { id: c.id, slug: c.slug, name: c.name };
   };
   const cur = await comp("Current Cup", "public");
@@ -311,6 +318,13 @@ async function seed(): Promise<Scene> {
   const oldL = await league(auth, old.id, "old-open", [adaSide(), await opponent("Rae Reed")]);
   const oldComp = vs(oldL, 0, 1); // undated leftover
   await sql`update competitions set status = 'completed' where id = ${old.id}`;
+  // A PUBLIC competition still in DRAFT, with a dated fixture that would
+  // otherwise be upcoming — listed only on its own card (the direct link).
+  const drf = await comp("Draft League", "public");
+  const drfL = await league(auth, drf.id, "drf-open", [adaSide(), await opponent("Dee Draft")]);
+  const drfFixture = vs(drfL, 0, 1);
+  await at(drfFixture, inHours(29));
+  await sql`update competitions set status = 'draft' where id = ${drf.id}`;
   // An ARCHIVED public competition, with a dated fixture that would otherwise be upcoming.
   const arc = await comp("Archived Cup", "public");
   const arcL = await league(auth, arc.id, "arc-open", [adaSide(), await opponent("Abe Ash")]);
@@ -409,6 +423,7 @@ async function seed(): Promise<Scene> {
     unl,
     prv,
     ko,
+    drf,
     slugs: { singles: singles.slug, sib: sibL.slug },
     doublesDivisionId: doubles.divisionId,
     pairOpponent: { id: doubles.entrantIds[1]!, raw: pairRaw },
@@ -417,6 +432,7 @@ async function seed(): Promise<Scene> {
     f: {
       di, bo, cy, hal, ian, jo, pair, seatNamed, seatTbd, setup, withdrawn, doneDivision, ned, archived, oli, pat, oldComp, foreign,
       koFinal, koBye, koFlipBye: flipBye.id, koFlipFinal: flipFinal.id, archivedComp, yaraCur, yaraSib,
+      drf: drfFixture,
     },
   };
 }
@@ -500,6 +516,21 @@ describe.skipIf(!HAS_DB)("readPlayerUpcoming against real Postgres", () => {
     const rows = await read(scene.unl.id);
     expect(byId(rows, scene.f.oli).isOtherCompetition).toBe(false);
     expect(byId(rows, scene.f.bo).isOtherCompetition).toBe(true);
+    expect(byId(rows, scene.f.ned).isOtherCompetition).toBe(true);
+  });
+
+  it("a DRAFT sibling — public, but not yet published — never reaches another competition's card", async () => {
+    expect(await premise(scene.f.drf)).toMatchObject({ status: "scheduled", ada_side: true });
+    const [c] = await sql<{ status: string; visibility: string }[]>`
+      select status, visibility from competitions where id = ${scene.drf.id}`;
+    expect(c, "premise: public, and a draft").toEqual({ status: "draft", visibility: "public" });
+    expect(ids(await read(scene.cur.id))).not.toContain(scene.f.drf);
+    expect(ids(await read(scene.unl.id))).not.toContain(scene.f.drf);
+  });
+
+  it("…but the draft's OWN card lists it — the direct link — beside the org's listed rows (the positive pair)", async () => {
+    const rows = await read(scene.drf.id);
+    expect(byId(rows, scene.f.drf).isOtherCompetition).toBe(false);
     expect(byId(rows, scene.f.ned).isOtherCompetition).toBe(true);
   });
 

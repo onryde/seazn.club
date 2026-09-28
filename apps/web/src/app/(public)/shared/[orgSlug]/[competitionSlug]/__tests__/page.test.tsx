@@ -106,7 +106,7 @@ const STARTS_ON = "2026-09-05";
 const ENDS_ON = "2026-09-20";
 const DATE_OPTS: Intl.DateTimeFormatOptions = { day: "numeric", month: "long", year: "numeric" };
 
-const shell = (over: { locale?: string; description?: string | null; visibility?: string } = {}) => ({
+const shell = (over: { locale?: string; description?: string | null; visibility?: string; status?: string } = {}) => ({
   org: {
     id: "o1",
     name: "Riverside SC",
@@ -127,7 +127,7 @@ const shell = (over: { locale?: string; description?: string | null; visibility?
     starts_on: STARTS_ON,
     ends_on: ENDS_ON,
     branding: {},
-    status: "active",
+    status: over.status ?? "active",
     visibility: over.visibility ?? "public",
   },
   divisions: [],
@@ -910,6 +910,20 @@ describe("generateMetadata", () => {
     expect((await meta()).robots).toEqual({ index: false, follow: false });
 
     stub.getPublicCompetition.mockResolvedValue(shell({ visibility: "public" }));
+    expect((await meta()).robots).toBeUndefined();
+  });
+
+  // Owner decision 2026-09-27: a DRAFT is unlisted until published, so its
+  // page is link-only exactly as an unlisted one is — the same robots value.
+  it("keeps a public DRAFT out of the index like an unlisted one; published and archived public competitions stay in it", async () => {
+    stub.getPublicCompetition.mockResolvedValue(shell({ visibility: "public", status: "draft" }));
+    expect((await meta()).robots).toEqual({ index: false, follow: false });
+    stub.getPublicCompetition.mockResolvedValue(shell({ visibility: "unlisted", status: "published" }));
+    expect((await meta()).robots).toEqual({ index: false, follow: false });
+
+    stub.getPublicCompetition.mockResolvedValue(shell({ visibility: "public", status: "published" }));
+    expect((await meta()).robots).toBeUndefined();
+    stub.getPublicCompetition.mockResolvedValue(shell({ visibility: "public", status: "archived" }));
     expect((await meta()).robots).toBeUndefined();
   });
 

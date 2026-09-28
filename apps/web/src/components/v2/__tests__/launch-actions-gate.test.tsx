@@ -118,6 +118,7 @@ const baseProps = (): LaunchProps => ({
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   stageKinds: ["league"],
   competitionStatus: "published",
+  competitionVisibility: "public",
   viewerPlan: "community",
 });
 

@@ -119,6 +119,10 @@ function orgKit(orgId: string, suffix: string) {
   // Created PRIVATE and moved to the visibility under test with one UPDATE:
   // `createCompetition` silently degrades an over-cap public create to
   // private, which would let a visibility assertion pass for the wrong reason.
+  // PUBLISHED in the same UPDATE: a competition is created as a draft, and a
+  // draft is unlisted until published (owner decision 2026-09-27,
+  // `draft-unlisted-db.test.ts`), so a listing test seeds what an organiser
+  // would have published. Scenes that need another status set it after.
   const competition = async (name: string, visibility: "public" | "unlisted" | "private", startsOn: string) => {
     const row = await createCompetition(auth, {
       name: `${name} ${suffix}`,
@@ -127,7 +131,7 @@ function orgKit(orgId: string, suffix: string) {
       starts_on: startsOn,
       ends_on: "2030-12-31",
     });
-    await sql`update competitions set visibility = ${visibility} where id = ${row.id}`;
+    await sql`update competitions set visibility = ${visibility}, status = 'published' where id = ${row.id}`;
     return row.id;
   };
 

@@ -13,7 +13,7 @@ export interface TipEntry {
 export const TIPS = {
   "division.visibility": {
     title: "Who can see a division",
-    body: "A division follows its competition: Private is team-only, Link only means anyone with the link, Public is findable on Google and our discover page.",
+    body: "A division follows its competition: Private is team-only, Link only means anyone with the link, Public is listed and findable on Google once the competition is published.",
     helpSlug: "sharing/visibility",
   },
   "division.start-locks": {

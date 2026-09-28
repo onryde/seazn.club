@@ -17,6 +17,7 @@ import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startClosesEntrantList } from "@/lib/open-entry-stages";
 import { startPromotesCompetition } from "@/lib/start-promotes-competition";
+import { publishWouldList } from "@/lib/competition-listing";
 import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
@@ -49,6 +50,10 @@ interface Props {
    *  `startClosesEntrantList`, so a unit test can drive all five statuses
    *  through it. */
   competitionStatus: string;
+  /** The PARENT competition's visibility, raw — with its status, whether it is
+   *  a public draft the confirmation should say is not listed yet (owner
+   *  decision 2026-09-27). Already in the page's COLS, like `status`. */
+  competitionVisibility: string;
   viewerPlan: ViewerPlan;
 }
 
@@ -63,6 +68,7 @@ export function LaunchActions({
   entrantNames,
   stageKinds,
   competitionStatus,
+  competitionVisibility,
   viewerPlan,
 }: Props) {
   const msg = useMsg();
@@ -161,6 +167,8 @@ export function LaunchActions({
         // The page already holds this division's fixtures for the gate sheet, so
         // the predicate costs no extra read — see `fixtures` above.
         formatLocked={formatAlreadyLocked(fixtures.length)}
+        unlistedDraft={publishWouldList({ visibility: competitionVisibility, status: competitionStatus })}
+        settingsHref={routes.competitionSettings(orgSlug, compSlug)}
         busy={busy}
         onConfirm={() => {
           setConfirming(false);

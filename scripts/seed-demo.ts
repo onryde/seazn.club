@@ -15,6 +15,7 @@
 // divisions that already exist, so tweak the PLANs below and rerun.
 import { writeFileSync, readFileSync } from "node:fs";
 import { findOrCreateCompetition } from "./seed-resume.ts";
+import { publishDrafts } from "./seed-publish.ts";
 import { completeStageIntoNext } from "./seed-progression.ts";
 import { TEMPLATES } from "./seed-demo-templates.ts";
 
@@ -895,6 +896,18 @@ async function main() {
   // as the one where it merely shows the warning (pro).
   await seedArchivedSlotHolder(PLAN[0].name);
 
+  // LAST, after every division start above: a start promotes a PUBLISHED
+  // competition to live, never a draft (see seed-publish.ts). A draft is
+  // listed nowhere since 2026-09-27, so without this the demo org home is
+  // empty. Not the registration demo's competition: it is deliberately
+  // UNLISTED (seedRegistrationDemo), which publishing would not list anyway.
+  // The closed one is already `completed`, which publishDrafts leaves alone.
+  const published = await publishDrafts(call, [
+    ...PLAN.map((c) => c.name),
+    ...(account === "pro" ? ["T20 Super League"] : []),
+  ]);
+  console.log(`published: ${published.length ? published.join(", ") : "nothing left in draft"}`);
+
   console.log("done");
 }
 
@@ -1151,15 +1164,14 @@ async function seedTemplateCompetition(): Promise<void> {
  * fires the self-link path since none of these entries set
  * `registering_self`.
  *
- * `visibility: "unlisted"` on the competition, not "public": every other
- * competition this file creates defaults to "private" (`CreateCompetition`'s
- * own schema default) and never clears `submitRegistrationGroup`'s /
- * `publicRegistrationInfo`'s `visibility in ('public','unlisted')` gate.
- * This competition needs to clear that gate to be registrable at all, but
- * "public" would additionally make it the first demo competition this file
- * has ever listed on seazn.club's own public discovery surface —
- * "unlisted" clears the identical registration gate while staying
- * reachable only by the direct link, which is all a product tour needs.
+ * `visibility: "unlisted"` on the competition, not "public". (Corrected
+ * 2026-09-27: `CreateCompetition`'s schema default is "public", not
+ * "private", so the other competitions here are public — and the seed's last
+ * step publishes them onto the org home, see seed-publish.ts.) This one must
+ * clear `submitRegistrationGroup`'s / `publicRegistrationInfo`'s
+ * `visibility in ('public','unlisted')` gate to be registrable at all, and
+ * "unlisted" clears it while staying reachable only by the direct link and
+ * off every listing, which is all a product tour needs. It is left a draft.
  *
  * Org slug resolved via `GET /api/orgs` (`getUserOrgs`, lib/auth.ts) — the
  * one authenticated endpoint in this app that actually returns the caller's

@@ -90,6 +90,7 @@ const baseProps = (over: Partial<LaunchProps> = {}): LaunchProps => ({
   entrantNames: { e1: "Alpha", e2: "Bravo" },
   stageKinds: ["league"],
   competitionStatus: "published",
+  competitionVisibility: "public",
   viewerPlan: "community",
   ...over,
 });
@@ -229,8 +230,8 @@ describe("Start tournament confirms first", () => {
   });
 
   it("says nothing about the competition becoming visible, because it does not", async () => {
-    // PUBLIC_DASHBOARD_STATUSES is ["published","live"] and
-    // `public_competitions_v` does not read `status` at all, so a
+    // PUBLIC_DASHBOARD_STATUSES is ["published","live"], and every listing
+    // surface excludes only DRAFTS (V419) — published and live alike — so a
     // published -> live move changes nothing anyone can see. The promotion
     // line states the status move and stops there.
     const island = renderIsland(LaunchActions, baseProps({ competitionStatus: "published" }));
@@ -347,5 +348,83 @@ describe("Start tournament confirms first", () => {
     // Nothing about conflicts: that is the reactive gate dialog's job, and an
     // advisory copy here could only go stale between showing and committing.
     expect(html.toLowerCase()).not.toContain("conflict");
+  });
+});
+
+// Owner decision 2026-09-27: a draft is unlisted until published, and nothing
+// publishes it for the organiser — `startDivision` promotes published → live
+// only, so a draft STAYS a draft through Start. The organiser is starting the
+// tournament believing it is out in the world; this is where they are told it
+// is not. A one-line note with the way to publish, shown exactly when
+// publishing would list it (a PUBLIC draft): for a private or unlisted draft
+// "until you publish" is false, publishing lists neither.
+describe("Start tournament — the still-a-draft note", () => {
+  const NOTE = "launch.confirm.draft";
+  const LINK = "launch.confirm.draftLink";
+  const SETTINGS = "/o/acme/c/champs/settings";
+
+  const dialogFor = async (over: Partial<LaunchProps>) => {
+    const island = renderIsland(LaunchActions, baseProps(over));
+    await pressStart(island);
+    return confirmProps(island.tree());
+  };
+
+  it("premise: the note and its link are real English copy", () => {
+    expect(enDict[NOTE], NOTE).toBeTruthy();
+    expect(enDict[LINK], LINK).toBeTruthy();
+  });
+
+  it("a PUBLIC DRAFT: the dialog says it is still a draft and links to where it is published", async () => {
+    const props = await dialogFor({ competitionStatus: "draft", competitionVisibility: "public" });
+    expect(props.unlistedDraft).toBe(true);
+    expect(props.settingsHref).toBe(SETTINGS);
+    const html = renderDialog(props);
+    expect(html).toContain('data-testid="start-confirm-draft"');
+    expect(html).toContain(esc(enDict[NOTE] as string));
+    expect(html).toContain(`href="${SETTINGS}"`);
+    expect(html).toContain(esc(enDict[LINK] as string));
+  });
+
+  it("a PUBLISHED competition: no note, no link — the other half of the pair", async () => {
+    const props = await dialogFor({ competitionStatus: "published", competitionVisibility: "public" });
+    expect(props.unlistedDraft).toBe(false);
+    const html = renderDialog(props);
+    expect(html).not.toContain('data-testid="start-confirm-draft"');
+    expect(html).not.toContain(esc(enDict[NOTE] as string));
+    expect(html).not.toContain(`href="${SETTINGS}"`);
+  });
+
+  it("no note once past draft (live, completed, archived), nor on a private or unlisted draft", async () => {
+    for (const competitionStatus of ["live", "completed", "archived"]) {
+      const props = await dialogFor({ competitionStatus, competitionVisibility: "public" });
+      expect(props.unlistedDraft, competitionStatus).toBe(false);
+      expect(renderDialog(props), competitionStatus).not.toContain('data-testid="start-confirm-draft"');
+    }
+    for (const competitionVisibility of ["private", "unlisted"]) {
+      const props = await dialogFor({ competitionStatus: "draft", competitionVisibility });
+      expect(props.unlistedDraft, competitionVisibility).toBe(false);
+      expect(renderDialog(props), competitionVisibility).not.toContain('data-testid="start-confirm-draft"');
+    }
+  });
+
+  it("the note sits outside the consequences list — it is not something Start does", async () => {
+    const html = renderDialog(await dialogFor({ competitionStatus: "draft", competitionVisibility: "public" }));
+    const list = /<ul[^>]*data-testid="start-confirm-consequences"[^>]*>([\s\S]*?)<\/ul>/.exec(html);
+    expect(list, "the consequences list rendered").not.toBeNull();
+    expect(list![1]).not.toContain("start-confirm-draft");
+    expect(html).toContain('data-testid="start-confirm-draft"');
+  });
+
+  it("carries the note and its link in all four locales, translated", async () => {
+    const props = await dialogFor({ competitionStatus: "draft", competitionVisibility: "public" });
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const html = renderDialog(props, locale);
+      for (const key of [NOTE, LINK]) {
+        const line = DICTS[locale]![key] as string | undefined;
+        expect(line, `${locale} is missing ${key}`).toBeTruthy();
+        expect(html, `${locale} ${key}`).toContain(esc(line!));
+        if (locale !== "en") expect(line, `${locale} ${key}`).not.toBe(enDict[key]);
+      }
+    }
   });
 });

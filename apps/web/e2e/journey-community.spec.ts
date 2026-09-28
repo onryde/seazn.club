@@ -85,6 +85,17 @@ test.describe.serial("community lifecycle", () => {
     // Start now confirms first (design 2026-09-20) — the button opens a dialog
     // and POSTs nothing. Selected by testid, not by copy: the confirm carries
     // the same "Start tournament" label as the trigger.
+    //
+    // The competition is still a PUBLIC DRAFT (the wizard creates drafts and
+    // Start never publishes one), so the confirmation says it is not listed yet
+    // and links to its settings — owner decision 2026-09-27. The pro journey
+    // publishes first and sees no note: the other half of the pair.
+    const draftNote = page.getByTestId("start-confirm-draft");
+    await expect(draftNote).toHaveText(/^Still a draft — not listed on your page or in search until you publish\./);
+    await expect(draftNote.getByRole("link")).toHaveAttribute(
+      "href",
+      new RegExp(`/c/${competitionSlug}/settings$`),
+    );
     await page.getByTestId("start-confirm-confirm").click();
     await expect
       .poll(
