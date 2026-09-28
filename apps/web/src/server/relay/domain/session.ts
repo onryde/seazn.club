@@ -39,12 +39,17 @@ export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lac
 export interface AdmitInput {
   overlay: boolean; relay: boolean; balance: number; targetBelongsToOrg: boolean;
   headroomMinutes: number; maxDurationMinutes: number; activeSessionId: string | null;
+  /** §5.2 "a restart after a failure is the same match": this FIXTURE already consumed inside the reuse window, so the
+   *  start will cost nothing and the balance gate does not apply to it (orchestrator ruling 2026-09-28, Task 10 I2). The
+   *  usecase computes it from the ledger through stream-credits.ts's `reuseWindowOpen` — the same authority
+   *  consumeForSession asks — and the domain stays pure. Required, so no caller can forget it and silently refuse. */
+  restartWithinReuseWindow: boolean;
 }
 export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: AdmitRefusal; activeSessionId?: string } {
   if (i.relay && !i.overlay) return { ok: false, refusal: "overlay_required" };  // r5: the implication check
   if (!i.overlay) return { ok: false, refusal: "plan_lacks_overlay" };
   if (!i.relay) return { ok: false, refusal: "plan_lacks_relay" };
-  if (i.balance < 1) return { ok: false, refusal: "no_credits" };
+  if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
   if (i.headroomMinutes < i.maxDurationMinutes) return { ok: false, refusal: "storage_exhausted" };
   if (i.activeSessionId) return { ok: false, refusal: "active_session", activeSessionId: i.activeSessionId };

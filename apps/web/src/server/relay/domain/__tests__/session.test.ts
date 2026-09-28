@@ -18,7 +18,7 @@ const S = (over: Partial<Session> = {}): Session => ({
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
   heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, ...over,
 });
-const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null };
+const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
 // per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once.
@@ -63,6 +63,21 @@ describe("admit — the §6.3 gates, in order", () => {
   });
   it("active_session carries the running id", () => {
     expect(admit({ ...OK, activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
+  });
+  // I2 (design §5.2, orchestrator ruling 2026-09-28): "a restart after a failure is the same match". Inside the fixture's
+  // reuse window the restart costs nothing, so the BALANCE gate does not apply to it — and ONLY that gate: a restart is
+  // still refused for a missing plan, a foreign target, no storage, or a session already running. The usecase computes
+  // the boolean (the window is a ledger read); the domain stays pure.
+  it("I2: a restart inside the reuse window is admitted at balance 0 — and the window waives ONLY the balance gate, every other gate on the ladder still refuses", () => {
+    expect(admit({ ...OK, balance: 0, restartWithinReuseWindow: true })).toEqual({ ok: true });
+    expect(admit({ ...OK, balance: 0, restartWithinReuseWindow: false })).toMatchObject({ refusal: "no_credits" });
+    let others = 0;
+    for (const [over, refusal] of REFUSAL_LADDER) {
+      if (refusal === "no_credits") continue;
+      others++;
+      expect(admit({ ...OK, ...over, balance: 0, restartWithinReuseWindow: true }), refusal).toMatchObject({ ok: false, refusal });
+    }
+    expect(others).toBe(REFUSAL_LADDER.length - 1);
   });
 });
 

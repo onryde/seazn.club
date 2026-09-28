@@ -65,7 +65,7 @@ import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import { adjustmentsForOrg } from "../admin-adjustments-log";
 import {
-  NoCreditsError, STAFF_CREDIT_MAX, STAFF_NOTE_MAX, consumeForSession, creditBalance, grantCredits, lockOrg, orgMoneyLockKey, recordPurchase, refundCredits, revokeCredits,
+  NoCreditsError, STAFF_CREDIT_MAX, STAFF_NOTE_MAX, consumeForSession, creditBalance, grantCredits, lockOrg, orgMoneyLockKey, recordPurchase, refundCredits, reuseWindowOpen, revokeCredits,
 } from "../stream-credits";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -220,6 +220,42 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
               where org_id = ${r.orgId} and reason = 'consume'`;
     const later = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: second }));
     expect(later).toEqual({ consumed: true, balance: 1, ledgerId: expect.any(String) });
+  });
+
+  // I2 (fix round 1): `reuseWindowOpen` is the ONE authority for "does this fixture have a consume inside the reuse window"
+  // — admission asks it to admit a free restart at balance 0, and consumeForSession asks it before debiting. The witness
+  // that they cannot drift: at every probe below, consumeForSession consumes EXACTLY when the window was closed.
+  it("I2: reuseWindowOpen — empty ledger false; a fixture-less session false; the same fixture a minute inside the window true and a minute past false; ANOTHER fixture false — and consumeForSession's answer is its negation at every probe", async () => {
+    const r = await rig(2);
+    const [f0, f1] = r.fixtureIds as [string, string];
+    await grantCredits({ orgId: r.orgId, delta: 3, createdBy: r.userId, note: "three", idempotencyKey: key() });
+    const at = new Date();
+    const open = (fixtureId: string | null) => reuseWindowOpen(sql, { orgId: r.orgId, fixtureId }, at);
+    expect(await open(f0), "the empty ledger has no window").toBe(false);
+    expect(await open(null), "no fixture is never a match").toBe(false);
+
+    const first = await r.session(f0, "failed");
+    await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: f0, sessionId: first }, at));
+    const redate = (minutesAgo: number) => sql`
+      update org_stream_credits set created_at = ${at}::timestamptz - make_interval(mins => ${minutesAgo})
+       where org_id = ${r.orgId} and reason = 'consume'`;
+    const probes: { label: string; minutesAgo: number; fixtureId: string; open: boolean }[] = [
+      { label: "same fixture, a minute inside", minutesAgo: CREDIT_REUSE_HOURS * 60 - 1, fixtureId: f0, open: true },
+      { label: "another fixture, a minute inside", minutesAgo: CREDIT_REUSE_HOURS * 60 - 1, fixtureId: f1, open: false },
+      { label: "same fixture, a minute past", minutesAgo: CREDIT_REUSE_HOURS * 60 + 1, fixtureId: f0, open: false },
+    ];
+    let checked = 0;
+    for (const p of probes) {
+      await redate(p.minutesAgo);
+      expect(await open(p.fixtureId), p.label).toBe(p.open);
+      const sid = await r.session(p.fixtureId, "failed");
+      const c = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: p.fixtureId, sessionId: sid }, at));
+      expect(c.consumed, `${p.label}: consumeForSession consumes exactly when the window is closed`).toBe(!p.open);
+      // Leave ONE consume row for the next probe's re-date: a consume just written is itself a fresh window.
+      if (c.consumed) await sql`delete from org_stream_credits where id = ${c.ledgerId}`;
+      checked++;
+    }
+    expect(checked).toBe(probes.length);
   });
 
   it("two concurrent consumers on two fixtures with balance 1: exactly one consumes, one gets no_credits (m2)", async () => {

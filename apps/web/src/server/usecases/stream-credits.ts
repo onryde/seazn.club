@@ -64,23 +64,42 @@ export async function lockOrg(tx: Tx, orgId: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext(${orgMoneyLockKey(orgId)}))`;
 }
 
+/** §5.2 — "a restart after a failure is the same match": does this FIXTURE have a consume inside the
+ *  reuse window? ONE authority for the rule's ledger read (Task 10 I2, orchestrator ruling 2026-09-28):
+ *  `consumeForSession` asks it before debiting, and admission (stream-sessions.ts `createSession`) asks
+ *  it so a restart at balance 0 is admitted — the two cannot drift.
+ *
+ *  The rule is per FIXTURE. A session whose fixture is gone (fixture_id is `on delete set null`) has
+ *  none to match, so it has no window; comparing `= null` would say the same thing by accident, and
+ *  `is not distinct from` would wrongly make every fixture-less session one fixture.
+ *
+ *  A17: ledger ids are random uuids, so the LATEST consume is found by `created_at` alone. A tie between
+ *  two consumes of one fixture is harmless here — both carry the same instant, so either answers the
+ *  same window. Unlocked when admission reads it (advisory there: consumeForSession re-asks under
+ *  `lockOrg` at go-live, and a window that closed in between refuses the credit then). */
+export async function reuseWindowOpen(
+  exec: Executor,
+  args: { orgId: string; fixtureId: string | null },
+  now: Date,
+): Promise<boolean> {
+  if (args.fixtureId === null) return false;
+  const [last] = await exec<{ created_at: string }[]>`
+    select c.created_at from org_stream_credits c
+      join fixture_stream_sessions s on s.id = c.session_id
+     where c.org_id = ${args.orgId} and c.reason = 'consume' and s.fixture_id = ${args.fixtureId}
+     order by c.created_at desc limit 1`;
+  return withinReuseWindow(last ? new Date(last.created_at) : null, now);   // the pure 24 h rule (domain/credits.ts)
+}
+
 export async function consumeForSession(
   tx: Tx,
   args: { orgId: string; fixtureId: string | null; sessionId: string },
   now: Date = new Date(),
 ): Promise<{ consumed: boolean; balance: number; ledgerId: string | null }> {
   await lockOrg(tx, args.orgId);
-  // The 24 h reuse rule is per FIXTURE. A session whose fixture is gone (fixture_id is
-  // `on delete set null`) has none to match, so it has no window and consumes; comparing
-  // `= null` would say the same thing by accident, and `is not distinct from` would wrongly
-  // make every fixture-less session one fixture.
-  const [last] = args.fixtureId === null ? [] : await tx<{ created_at: string }[]>`
-    select c.created_at from org_stream_credits c
-      join fixture_stream_sessions s on s.id = c.session_id
-     where c.org_id = ${args.orgId} and c.reason = 'consume' and s.fixture_id = ${args.fixtureId}
-     order by c.created_at desc limit 1`;
+  const reuse = await reuseWindowOpen(tx, args, now);
   const balance = await creditBalance(tx, args.orgId);
-  if (withinReuseWindow(last ? new Date(last.created_at) : null, now)) {   // the pure 24 h rule (domain/credits.ts)
+  if (reuse) {
     log.info({ orgId: args.orgId, fixtureId: args.fixtureId, sid: args.sessionId, reason: "reuse_24h" }, "stream credits: restart within the reuse window, no consume");
     return { consumed: false, balance, ledgerId: null };   // no row written, so no id
   }

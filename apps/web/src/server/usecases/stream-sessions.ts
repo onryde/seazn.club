@@ -38,7 +38,7 @@ import { readFirstInput, readTargetSecret, storeInputCredentials } from "@/serve
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
-import { NoCreditsError, consumeForSession, creditBalance, lockOrg } from "./stream-credits";
+import { NoCreditsError, consumeForSession, creditBalance, lockOrg, reuseWindowOpen } from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
 import { setFixtureStreamUrl } from "./fixtures";
 
@@ -606,26 +606,68 @@ async function targetHolderFor(
  *  `admit`: each such Machine is destroyed now, recorded as a `force_destroy` effect row on its own session. It answers the
  *  id of a session whose destroy FAILED — `admit` then refuses `active_session` naming it, which is the truth (that session's
  *  broadcast may still be running) and reuses the refusal the API, the Phone tab and its four dictionaries already carry —
- *  or null. The provider is asked ONLY when the fixture has a terminal composed session that ever held a runner, so a
- *  passthrough start (and every start while composed is off and FLY_API_TOKEN may be absent) never calls it. It destroys
- *  directly and feeds nothing to `decide` (T12-a's rule): a terminal row's runner converges on its next reconcile or the backstop. */
-async function tearDownPriorMachines(fixtureId: string, deps: SessionDeps): Promise<string | null> {
-  const prior = await sql<Row[]>`
-    select ${COLS} from fixture_stream_sessions
-     where fixture_id = ${fixtureId} and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}`;
-  if (prior.length === 0) return null;
-  const bySession = new Map(prior.map((r) => [r.id, toSession(r)]));
-  for (const m of await deps.drivers.runner.list()) {
-    const s = m.sessionId ? bySession.get(m.sessionId) : undefined;
-    if (!s) continue;
+ *  or null. The provider is asked ONLY when the fixture — or the destination, below — has a terminal composed session that
+ *  ever held a runner, so a start while composed is off (and FLY_API_TOKEN may be absent) never calls it. It destroys
+ *  directly and feeds nothing to `decide` (T12-a's rule): a terminal row's runner converges on its next reconcile or the backstop.
+ *
+ *  I1 (Task 10 fix round 1). The DESTINATION is the unit of exclusivity (V421), and the Machine pushes to the destination's
+ *  key whichever fixture it was made for — so the query also covers every terminal composed session on THIS target
+ *  (`fixture_id = $f OR target_id = $t`, inside the caller's org). A still-listed Machine of ANOTHER fixture's session is
+ *  never destroyed from here (orchestrator ruling 2026-09-28): it is answered as `otherFixture`, which admission refuses
+ *  `target_in_use` naming that session's court — the refusal `targetHolderFor` gives an ACTIVE holder, because to the
+ *  organiser it is the same fact. It is checked BEFORE any destroy, so a refused start destroys nothing. A fixture-less
+ *  session (its fixture deleted: `on delete set null`) is another fixture's. */
+async function tearDownPriorMachines(
+  fixtureId: string, targetId: string, orgId: string, deps: SessionDeps,
+): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
+  // ONE read carries each row's destination label and court (the target FK is `not null` and restricts deletes, so the
+  // inner join drops nothing): a refusal never needs a second read that could find the row gone.
+  const prior = await sql<(Row & { holder_label: string; holder_court: string | null })[]>`
+    select p.*, t.label as holder_label, c.name as holder_court
+      from (select ${COLS} from fixture_stream_sessions
+             where org_id = ${orgId} and (fixture_id = ${fixtureId} or target_id = ${targetId})
+               and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}) p
+      join org_stream_targets t on t.id = p.target_id
+      left join fixtures f on f.id = p.fixture_id
+      left join courts c on c.id = f.court_id`;
+  if (prior.length === 0) return { sameFixture: null, otherFixture: null };
+  const bySession = new Map(prior.map((r) => {
+    const holder: Holder = { sessionId: r.id, label: r.holder_label, courtName: r.holder_court, holderFixtureId: r.fixture_id };
+    return [r.id, { s: toSession(r), holder }] as const;
+  }));
+  const listed = (await deps.drivers.runner.list()).flatMap((m) => {
+    const hit = m.sessionId ? bySession.get(m.sessionId) : undefined;
+    return hit ? [{ m, ...hit }] : [];
+  });
+  const foreign = listed.find((x) => x.s.fixtureId !== fixtureId);
+  if (foreign) {
+    log.warn({ sid: foreign.s.id, fixtureId, holderFixtureId: foreign.s.fixtureId, targetId, machineId: foreign.m.runnerId }, "stream session: another fixture's ended session still has a Machine on this destination — start refused");
+    return { sameFixture: null, otherFixture: foreign.holder };
+  }
+  for (const { m, s } of listed) {
     try {
       await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(m.runnerId), { machineId: m.runnerId, machineName: m.name, reason: "admission" });
     } catch (err) {
       log.warn({ sid: s.id, fixtureId, machineId: m.runnerId, err: String(err) }, "stream session: a previous session's Machine is still listed and its destroy failed — start refused");
-      return s.id;
+      return { sameFixture: s.id, otherFixture: null };
     }
   }
-  return null;
+  return { sameFixture: null, otherFixture: null };
+}
+
+/** The `target_in_use` refusal, ONE shape for both holders — an active session (`targetHolderFor`) and another fixture's
+ *  ended session whose Machine is still listed (I1). `code` is what the client acts on (Task 13's `CreateErrorCode`, Task
+ *  14's dictionary key). The MESSAGE names the holder — the court when the fixture has one, else the fixture id — because
+ *  "in use" alone sends an organiser hunting; it is the operator's line in the log and in Sentry. The client renders the
+ *  DICTIONARY string keyed by `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal). */
+interface Holder { sessionId: string; label: string; courtName: string | null; holderFixtureId: string | null }
+
+function targetInUse(h: Holder): HttpError {
+  return new HttpError(
+    409,
+    `the destination "${h.label}" is already streaming for ${h.courtName ? `court ${h.courtName}` : `fixture ${h.holderFixtureId ?? "(deleted)"}`}`,
+    "target_in_use",
+  );
 }
 
 function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headroom: number): never {
@@ -663,25 +705,24 @@ export async function createSession(
   // RELEASE this very target. The one provider call that can precede it belongs to that OLD session's teardown.
   const holder = await targetHolderFor(body.targetId, orgId, fixtureId, deps);
   if (holder) {
-    // `code` is what the client acts on (Task 13's `CreateErrorCode`, Task 14's dictionary key). The MESSAGE names the
-    // holder — the court when the fixture has one, else the fixture id — because "in use" alone sends an organiser
-    // hunting; it is the operator's line in the log and in Sentry. The client renders the DICTIONARY string keyed by
-    // `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal; see Step 3c note 2).
     log.warn({ fixtureId, targetId: body.targetId, holder: holder.sessionId, court: holder.courtName }, "stream session: the destination is already held by another fixture — start refused");
-    throw new HttpError(
-      409,
-      `the destination "${holder.label}" is already streaming for ${holder.courtName ? `court ${holder.courtName}` : `fixture ${holder.holderFixtureId ?? "(deleted)"}`}`,
-      "target_in_use",
-    );
+    throw targetInUse(holder);
   }
   // 2C-post m5: a PREVIOUS session's Machine the provider still lists is destroyed before this one may start; while that
   // destroy fails, admission answers `active_session` naming its session (outside the transaction: it calls the provider).
-  const priorMachineSessionId = await tearDownPriorMachines(fixtureId, deps);
+  // I1: ANOTHER fixture's ended session whose Machine is still listed on this destination is `target_in_use`, like an
+  // active holder, and is not destroyed from here.
+  const prior = await tearDownPriorMachines(fixtureId, body.targetId, orgId, deps);
+  if (prior.otherFixture) throw targetInUse(prior.otherFixture);
+  const priorMachineSessionId = prior.sameFixture;
 
-  const [overlay, relay, balance, target, usage, relayOverride] = await Promise.all([
+  const [overlay, relay, balance, restartWithinReuseWindow, target, usage, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
     creditBalance(sql, orgId),
+    // I2 (§5.2): a restart of THIS fixture inside the reuse window costs nothing, so `admit` waives the balance gate for
+    // it. The same authority consumeForSession asks at go-live, on the same clock (deps.now()).
+    reuseWindowOpen(sql, { orgId, fixtureId }, deps.now()),
     sql<{ id: string }[]>`select id from org_stream_targets where id = ${body.targetId} and org_id = ${orgId}`,
     deps.drivers.ingest.storageUsage(),   // outside the transaction
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
@@ -697,7 +738,7 @@ export async function createSession(
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
-      overlay, relay, balance, targetBelongsToOrg: target.length === 1, headroomMinutes: headroom,
+      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: target.length === 1, headroomMinutes: headroom,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId)) ?? priorMachineSessionId,
     });
     if (!verdict.ok) {
@@ -786,7 +827,13 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
   });
   if (provisioning.mode === "composed") {
     // The lifecycle's first edge: none → creating (intent persisted) → create_machine → create_ok | create_failed.
-    await apply(sessionId, { type: "runner", trigger: { type: "create_started", name: machineNameFor(sessionId, 1), attempt: 1 } }, deps);
+    // m4 (fix round 1): only while the row is STILL provisioning, decided on the LOCKED row (the null command writes and
+    // runs nothing). Nothing holds a lock across the ingest call above, so the organiser's stop — or the provision timeout
+    // — can have ended the session meanwhile, and `decide` refuses a runner create on an ended session: InvalidTransition,
+    // a 500 on the organiser's own create. The session's state is then the answer; no Machine is asked for.
+    await apply(sessionId, (s) => (s.state === "provisioning"
+      ? { type: "runner", trigger: { type: "create_started", name: machineNameFor(sessionId, 1), attempt: 1 } }
+      : null), deps);
   }
   // `provisioned` is applied ONLY while the row is still provisioning. A stop, the wall clock, or the
   // new provision_timeout (F18) can have moved it to ending/completed/failed while the ingest call was
@@ -913,7 +960,14 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
 export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: string, deps: SessionDeps): Promise<StreamSessionCurrent> {
   const row = await readRow(sessionId);
   if (!row || row.fixture_id !== fixtureId || row.org_id !== auth.orgId) throw new HttpError(404, "session not found");
-  if (isTerminal(row.state)) throw new HttpError(409, "session is not running", "not_active");
+  // m7 (fix round 1): a REPEATED stop — a double tap, or a retry after a lost response — is idempotent. A session already
+  // stopping (`ending`) or stopped is answered with the same projection the first stop returned, and nothing is written:
+  // no action row, no decision, no provider call. A stop naming a session the fixture has since SUPERSEDED stays 409
+  // not_active: the fixture's projection would describe a DIFFERENT session.
+  if (row.state === "ending" || isTerminal(row.state)) {
+    if ((await latestRow(fixtureId))?.id !== sessionId) throw new HttpError(409, "session is not running", "not_active");
+    return (await currentSession(auth, fixtureId, deps))!;
+  }
   await apply(sessionId, { type: "stop" }, deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
   return (await currentSession(auth, fixtureId, deps))!;
 }

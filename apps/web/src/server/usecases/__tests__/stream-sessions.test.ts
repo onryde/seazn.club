@@ -28,7 +28,7 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { inputEnvelopesHex, resealTargetDestination, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
-  CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
+  CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
   PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
   RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS, STALE_HEARTBEAT_SECONDS,
@@ -347,25 +347,66 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(failed.failReason).toBe("no_credits");
   });
 
-  // The plan seeded ONE credit here — a false premise: Task 2A's committed `admit` refuses `balance < 1` at admission, before
-  // the 24 h reuse rule (which lives in consumeForSession) is ever consulted, so the restart read 402 no_credits. Two
-  // credits keep the claim — the restart consumes NOTHING — and make it a differential: a wiring that consumed twice
-  // leaves 0. Whether a club at 0 may restart inside the window is an owner question, recorded in the task report.
-  it("a restart on the same fixture within 24 h reaches live without consuming (m5 wiring)", async () => {
-    const r = await rig({ credits: 2 });
+  // The brief's ONE-credit seed, restored (fix round 1, I2). A club that bought exactly one credit, went live (1 → 0) and
+  // lost the stream restarts the SAME match: design §5.2 "a restart after a failure is the same match" (orchestrator
+  // ruling 2026-09-28, binding). The first build re-seeded 2 because `admit` refused `balance < 1` before the reuse rule
+  // was ever asked — the re-seed hid exactly the boundary this test exists for.
+  it("a restart on the same fixture within 24 h reaches live without consuming (m5 wiring) — from the brief's ONE credit, so the restart runs at balance 0", async () => {
+    const r = await rig({ credits: 1 });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     r.tick(3000);
     const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(cur.state).toBe("live");
     await stopSession(r.auth, r.fixtureId, cur.id, r.deps);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(0);                // the restart below really is AT zero
     const again = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     r.tick(3000);
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live.id).toBe(again.sessionId);
     expect(live.state).toBe("live");
-    expect(await creditBalance(sql, r.auth.orgId)).toBe(1);                // one consumed across the two sessions, not two
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(0);                // still 0: never negative, nothing consumed
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'consume'`;
-    expect(n).toBe(1);
+    expect(n).toBe(1);                                                      // one consume across the two sessions
+  });
+
+  // I2's boundary, from the DECLARED window (config.ts CREDIT_REUSE_HOURS — never a typed 24). The consume row is re-dated
+  // relative to the rig's clock, which is the `now` both admission and consumeForSession read, so "a minute inside" and
+  // "a minute past" differ from the rule's answer by exactly one minute each way. A different fixture has no window at all.
+  it("I2: at balance 0 a restart is admitted ONLY for the same fixture inside the reuse window — a minute inside → admitted, live, no new consume, balance 0; a minute past → 402 no_credits; a DIFFERENT fixture → 402 no_credits; nothing is written for a refusal", async () => {
+    const r = await rig({ credits: 1, fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    const first = await createSession(r.auth, a, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, a, r.deps))!.state).toBe("live");
+    await stopSession(r.auth, a, first.sessionId, r.deps);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(0);
+    const consumes = async () => (await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'consume'`)[0]!.n;
+    const rowsOn = async (f: string) => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${f}`)[0]!.n;
+    const redate = (minutesAgo: number) => sql`
+      update org_stream_credits set created_at = ${r.deps.now()}::timestamptz - make_interval(mins => ${minutesAgo})
+       where org_id = ${r.auth.orgId} and reason = 'consume'`;
+
+    // A DIFFERENT fixture at 0: the window is per fixture, so B has none.
+    await expect(createSession(r.auth, b, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+    expect(await rowsOn(b)).toBe(0);
+
+    // The SAME fixture, a minute inside the window → admitted, and it goes live without consuming.
+    await redate(CREDIT_REUSE_HOURS * 60 - 1);
+    const inside = await createSession(r.auth, a, body(r.target.id), r.deps);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, a, r.deps))!;
+    expect(live).toMatchObject({ id: inside.sessionId, state: "live" });
+    expect(await consumes()).toBe(1);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(0);
+    await stopSession(r.auth, a, inside.sessionId, r.deps);
+
+    // The SAME fixture, a minute past the window → the balance gate applies again.
+    await redate(CREDIT_REUSE_HOURS * 60 + 1);
+    const before = await rowsOn(a);
+    await expect(createSession(r.auth, a, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+    expect(await rowsOn(a)).toBe(before);
+    expect(await consumes()).toBe(1);
   });
 
   it("stop → ending → completed for passthrough; replay fill copies the YouTube watch URL only when stream_url is null", async () => {
@@ -1383,6 +1424,88 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect((await c.row(s2.sessionId)).runner_state).toBe("destroyed");    // forced, never adopted
   });
 
+  // m4 (fix round 1): the organiser's stop can land while `createSession`'s ingest call is out — nothing holds a lock across
+  // that call. The composed `create_started` was applied unguarded after it, and `decide` refuses a runner create on an
+  // ended session (InvalidTransition → a 500 on the organiser's own create). Driven through the REAL stopSession from
+  // inside the ingest call, so the race is the production one, not a rewritten row. Both modes: passthrough's
+  // `provisioned` guard was already there, and is the positive pair.
+  it.each(["composed", "passthrough"] as const)("m4 (%s): a STOP landing while the create's ingest call is out is the domain's answer — the create resolves (never a 500), the session ends `stopped`, no Machine is asked for and no credit moves", async (mode) => {
+    const r = await rig({ credits: 1 });
+    const real = r.ingest.createLiveInput.bind(r.ingest);
+    const seen: string[] = [];
+    const spy = vi.spyOn(r.ingest, "createLiveInput").mockImplementationOnce(async (args) => {
+      seen.push((await stopSession(r.auth, r.fixtureId, args.sessionId, r.deps)).state);
+      return real(args);
+    });
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, mode), r.deps);
+      expect(seen, "the stop really landed mid-create").toHaveLength(1);
+      expect(await r.row(sessionId)).toMatchObject({ state: "completed", end_reason: "stopped", runner_state: "none", machine_id: null });
+      expect(r.runner.created).toEqual([]);
+      expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // m7 (fix round 1): a repeated stop — a double tap, or a retry after a lost response — gets the same 200 projection the
+  // first stop gave, and writes nothing OF ITS OWN: no action row, no decision, no provider call. The projection is a
+  // poll, and a poll records what it observes (samples; a draining Machine's observation) — so for a live Machine the
+  // claim is "exactly what a poll writes", and for a completed session, which a poll does not reconcile, "nothing". A
+  // stop naming a session the fixture has since SUPERSEDED is still 409 not_active — the projection would describe a
+  // different session.
+  it("m7: a SECOND stop is idempotent — the same answer, nothing written of its own, no provider call — in both modes; a stop naming a SUPERSEDED session is 409 not_active", async () => {
+    // The whole history ledger, in order — so a moved row shows up in the diff by kind and type, not as a count.
+    const eventsOf = async (sid: string) => (await sql<{ seq: number; kind: string; type: string }[]>`
+      select seq, kind, type from fixture_stream_events where session_id = ${sid} order by seq`).map((e) => `${e.seq}:${e.kind}:${e.type}`);
+
+    // Passthrough: the first stop completes at once.
+    const p = await rig({ credits: 1 });
+    const s1 = await createSession(p.auth, p.fixtureId, body(p.target.id), p.deps);
+    const first = await stopSession(p.auth, p.fixtureId, s1.sessionId, p.deps);
+    expect(first.state).toBe("completed");
+    const before = await eventsOf(s1.sessionId);
+    const second = await stopSession(p.auth, p.fixtureId, s1.sessionId, p.deps);
+    expect(second).toMatchObject({ id: s1.sessionId, state: first.state, endReason: first.endReason });
+    expect(await eventsOf(s1.sessionId)).toEqual(before);
+    // Superseded: a newer session on the fixture — the old id is not the fixture's session any more.
+    const s2 = await createSession(p.auth, p.fixtureId, body(p.target.id), p.deps);
+    const s2Before = { events: await eventsOf(s2.sessionId), state: (await p.row(s2.sessionId)).state };
+    await expect(stopSession(p.auth, p.fixtureId, s1.sessionId, p.deps)).rejects.toMatchObject({ status: 409, code: "not_active" });
+    expect({ events: await eventsOf(s2.sessionId), state: (await p.row(s2.sessionId)).state }).toEqual(s2Before);
+
+    // Composed: the first stop sends SIGINT and the session is `ending` while the Machine drains.
+    const c = await rig({ credits: 1 });
+    const s3 = await createSession(c.auth, c.fixtureId, body(c.target.id, "composed"), c.deps);
+    await heartbeat(s3.sessionId, c.runner.created[0]!.jobToken, { state: "playing" }, c.deps);
+    // A Machine still DRAINING after the SIGINT: Fly reports it `stopping`, so no projection read moves the session. (The
+    // plain fake goes `stopped` and auto-destroys on the next look — the second stop's own projection would then complete
+    // the session, which is that poll's work and not the stop's.)
+    const draining = Object.assign(Object.create(c.runner) as FakeRunner, {
+      async stop(id: string, opts: { signal: "SIGINT"; timeoutSeconds: number }) { await c.runner.stop(id, opts); c.runner.setObserved(id, "stopping"); },
+    });
+    const dd: SessionDeps = { ...c.deps, drivers: { ...c.deps.drivers, runner: draining } };
+    const firstC = await stopSession(c.auth, c.fixtureId, s3.sessionId, dd);
+    expect(firstC.state).toBe("ending");
+    // The answer IS the projection, and the projection of a non-terminal session is a poll — its reconcile records what it
+    // observed (a `runner_transition:observed` row per look at a draining Machine), exactly as the first stop's answer did.
+    // So the claim is a DIFFERENTIAL: a repeated stop writes exactly what a plain poll writes, and nothing of its own (no
+    // action, no transition, no effect).
+    const delta = async (fn: () => Promise<unknown>) => {
+      const b = await eventsOf(s3.sessionId);
+      await fn();
+      return (await eventsOf(s3.sessionId)).slice(b.length).map((e) => e.replace(/^\d+:/, ""));
+    };
+    const pollDelta = await delta(() => currentSession(c.auth, c.fixtureId, dd));
+    let secondC: Awaited<ReturnType<typeof stopSession>> | null = null;
+    const stopDelta = await delta(async () => { secondC = await stopSession(c.auth, c.fixtureId, s3.sessionId, dd); });
+    expect(secondC).toMatchObject({ id: s3.sessionId, state: "ending" });
+    expect(stopDelta, "a repeated stop writes exactly what a poll writes").toEqual(pollDelta);
+    expect(stopDelta.filter((k) => /^(action|transition|effect):/.test(k)), "nothing of the stop's own").toEqual([]);
+    expect(c.runner.stops).toHaveLength(1);                                   // ONE SIGINT
+    expect(c.runner.destroyed).toEqual([]);
+  });
+
   it("stop with no Machine completes AT ONCE, and a stop while `creating` goes to ending and is torn down when the create returns", async () => {
     // Route 1: passthrough — no Machine ever existed.
     const p = await rig({ credits: 1 });
@@ -1487,6 +1610,58 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     expect(n).toBe(1);                                               // one live session per destination, still true
   });
 
+  // I1 (fix round 1): the index and `targetHolderFor` see ACTIVE sessions only, and the prior-Machine teardown saw only
+  // THIS fixture. A composed session on ANOTHER fixture that completed at grace + slack with its forced destroy
+  // UNCONFIRMED (the 2C-post m5 state) keeps a Machine pushing to the destination's key — invisible to both. The
+  // orchestrator's ruling: this fixture's create REFUSES `target_in_use` naming the holder's court and never destroys
+  // another fixture's Machine; once that destroy is confirmed at the provider, the start is admitted. Both modes of the
+  // NEW session, because a passthrough output lands on the same key as a Machine does.
+  async function zombieOnTarget() {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const [v] = await sql<{ id: string }[]>`insert into venues (org_id, name, address) values (${r.auth.orgId}, 'Main Arena', '12 Court Road') returning id`;
+    const [c] = await sql<{ id: string }[]>`insert into courts (venue_id, org_id, name) values (${v!.id}, ${r.auth.orgId}, 'Court 7') returning id`;
+    await sql`update fixtures set court_id = ${c!.id} where id = ${a}`;
+    const { sessionId: old } = await createSession(r.auth, a, body(r.target.id, "composed"), r.deps);
+    await heartbeat(old, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    const machine = (await r.row(old)).machine_id!;
+    // Seeded exactly as the 2C-post m5 test seeds it (its comment says why a real stop cannot reach this state on the fake).
+    await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = now(), runner_state = 'stopping',
+                  runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${old}`;
+    const destroyCalls: string[] = [];
+    const failing = Object.assign(Object.create(r.runner) as FakeRunner, {
+      async destroy(id: string) { destroyCalls.push(id); throw Object.assign(new Error("fake destroy failed"), { status: 503 }); },
+    });
+    const flaky: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: failing } };
+    await expect(currentSession(r.auth, a, flaky)).rejects.toMatchObject({ status: 503 });
+    expect(await r.row(old)).toMatchObject({ state: "completed", runner_state: "destroyed" });   // terminal: no index, no holder…
+    expect((await r.runner.list()).map((m) => m.runnerId)).toContain(machine);                  // …and the Machine still pushing
+    return { r, a, b, old, machine, flaky, destroyCalls };
+  }
+
+  it.each(["composed", "passthrough"] as const)("I1 (%s B): another fixture's terminal session whose Machine is still LISTED holds the destination — B is refused 409 target_in_use naming that court, nothing is created and A's Machine is not touched from B's create; once A's destroy is confirmed at the provider, B is admitted (mutant: the prior-Machine query scoped to this fixture only → 201 at the refusal)", async (mode) => {
+    const { r, b, machine, flaky, destroyCalls } = await zombieOnTarget();
+    const callsBefore = destroyCalls.length;
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    try {
+      const err = await createSession(r.auth, b, body(r.target.id, mode), flaky).catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 409, code: "target_in_use" });
+      expect((err as Error).message).toContain("Court 7");
+      expect(ingestSpy).not.toHaveBeenCalled();
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    expect(destroyCalls.length, "B's create must not destroy ANOTHER fixture's Machine").toBe(callsBefore);
+    expect(r.runner.created).toHaveLength(1);                                                   // A's, and nothing for B
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${b}`;
+    expect(n).toBe(0);
+
+    // The provider confirms A's destroy (Task 12's orphan pass, or Fly's own) — the destination is free again.
+    await r.runner.destroy(machine);
+    expect((await r.runner.list()).map((m) => m.runnerId)).not.toContain(machine);
+    const made = await createSession(r.auth, b, body(r.target.id, mode), r.deps);
+    expect((await r.row(made.sessionId)).state).not.toBe("failed");
+  });
+
   it("G-T5 the index is what survives a second writer: two non-terminal rows on ONE target_id (two fixtures, so the FIXTURE index cannot be what refuses) → 23505 NAMING fixture_stream_sessions_one_active_target; terminal rows never collide; and the name and predicate are pinned as text, derived from ACTIVE_STATES / TERMINAL_STATES", async () => {
     const { r, a, b } = await twoFixturesOneTarget();
     // Db/Dc: sport_key, competition_id, division_id and entitlement_via_override are NOT NULL with no default,
@@ -1585,7 +1760,7 @@ const REFUSAL_STATUSES = new Set([402, 404, 409, 410]);
 
 describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invariants after every step (rule 10)", () => {
   it("no ordering of starts, polls, beats, stops, clock ageing, Machine loss and a drained balance yields a 500, two live sessions on one fixture or destination, a negative balance, a second consume inside the reuse window, a gapped ledger, an inconsistent terminal row, or a Machine a destroyed runner still holds", async () => {
-    const tally = { runs: 0, steps: 0, invariantChecks: 0, refusals: 0, consumeRowsChecked: 0, sessionRowsChecked: 0, restartsLive: 0 };
+    const tally = { runs: 0, steps: 0, invariantChecks: 0, refusals: 0, consumeRowsChecked: 0, sessionRowsChecked: 0, restartsLive: 0, zeroBalanceRestarts: 0, zeroBalanceRefusals: 0 };
     const seen = new Set<Act["kind"]>();
     const reached = new Set<string>();
     await fc.assert(
@@ -1601,7 +1776,29 @@ describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invar
         const step = async (a: Act): Promise<void> => {
           const f = a.kind === "drain" ? null : fixtureIds[a.fixture]!;
           switch (a.kind) {
-            case "start": await createSession(r.auth, f!, { mode: a.mode, targetId: r.target.id }, r.deps); return;
+            case "start": {
+              // I2 (design §5.2): at balance 0 a start is admitted EXACTLY when this fixture already consumed inside the reuse
+              // window. Every consume here is inside it (the rig clock moves seconds and no action re-dates a ledger row), so
+              // "has a consume" IS "the window is open" — read from the ledger, never from the code under test.
+              const atZero = (await creditBalance(sql, r.auth.orgId)) === 0;
+              const windowOpen = atZero && (await sql`
+                select 1 from org_stream_credits c join fixture_stream_sessions s on s.id = c.session_id
+                 where c.org_id = ${r.auth.orgId} and c.reason = 'consume' and s.fixture_id = ${f!} limit 1`).length > 0;
+              try {
+                await createSession(r.auth, f!, { mode: a.mode, targetId: r.target.id }, r.deps);
+              } catch (err) {
+                if (atZero && (err as HttpError).code === "no_credits") {
+                  expect(windowOpen, "I2 — a restart INSIDE the reuse window was refused 402 at balance 0").toBe(false);
+                  tally.zeroBalanceRefusals++;
+                }
+                throw err;
+              }
+              if (atZero) {
+                expect(windowOpen, "I2 — a start at balance 0 was admitted with NO reuse window").toBe(true);
+                tally.zeroBalanceRestarts++;
+              }
+              return;
+            }
             case "poll": r.tick(a.ms); await currentSession(r.auth, f!, r.deps); return;
             case "beat": {
               const s = await latest(a.fixture);
@@ -1691,19 +1888,31 @@ describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invar
       }),
       {
         numRuns: MODEL_RUNS,
-        // One ordering pinned on top of the drawn ones, so a live session, a consume and a terminal row are reached on
-        // every run whatever the seed draws (anti-vacuity: m1, m5 and the terminal checks are otherwise satisfied by an
-        // empty table).
-        examples: [[[
-          { kind: "start", fixture: 0, mode: "passthrough" },
-          { kind: "poll", fixture: 0, ms: 5_000 },
-          { kind: "stop", fixture: 0 },
-          { kind: "age", fixture: 0, what: "ending" },
-          { kind: "poll", fixture: 0, ms: 1_000 },
-          { kind: "start", fixture: 0, mode: "passthrough" },   // the m5 restart: live again, inside the window
-          { kind: "poll", fixture: 0, ms: 5_000 },
-          { kind: "start", fixture: 1, mode: "composed" },     // the other fixture: 409 target_in_use, one destination
-        ]]],
+        // Two orderings pinned on top of the drawn ones (fast-check counts them INSIDE numRuns), so every run reaches, whatever
+        // the seed draws, a live session, a consume, a terminal row, an m5 restart, a refusal, and I2 in BOTH directions at
+        // balance 0 (anti-vacuity: each of those checks is otherwise satisfied by an empty table).
+        examples: [
+          // I2: drain to 0, then ANOTHER fixture (refused 402 — it has no window) and the SAME fixture (admitted, free).
+          [[
+            { kind: "start", fixture: 0, mode: "passthrough" },
+            { kind: "poll", fixture: 0, ms: 5_000 },
+            { kind: "stop", fixture: 0 },
+            { kind: "drain" },
+            { kind: "start", fixture: 1, mode: "passthrough" },
+            { kind: "start", fixture: 0, mode: "passthrough" },
+            { kind: "poll", fixture: 0, ms: 5_000 },
+          ]],
+          [[
+            { kind: "start", fixture: 0, mode: "passthrough" },
+            { kind: "poll", fixture: 0, ms: 5_000 },
+            { kind: "stop", fixture: 0 },
+            { kind: "age", fixture: 0, what: "ending" },
+            { kind: "poll", fixture: 0, ms: 1_000 },
+            { kind: "start", fixture: 0, mode: "passthrough" },   // the m5 restart: live again, inside the window
+            { kind: "poll", fixture: 0, ms: 5_000 },
+            { kind: "start", fixture: 1, mode: "composed" },     // the other fixture: 409 target_in_use, one destination
+          ]],
+        ],
       },
     );
     console.info(`lifecycle model: ${JSON.stringify(tally)} states reached ${JSON.stringify([...reached].sort())}`);
@@ -1714,6 +1923,8 @@ describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invar
     expect([...seen].sort()).toEqual(["age", "beat", "drain", "machine", "poll", "start", "stop"]);
     expect(tally.consumeRowsChecked, "no consume row was ever checked").toBeGreaterThan(0);
     expect(tally.restartsLive, "no fixture went live twice, so m5 was never witnessed").toBeGreaterThan(0);
+    expect(tally.zeroBalanceRestarts, "no start was ever admitted at balance 0, so I2 was never witnessed").toBeGreaterThan(0);
+    expect(tally.zeroBalanceRefusals, "no start was ever refused at balance 0, so I2's other direction was never witnessed").toBeGreaterThan(0);
     expect(tally.refusals, "no refusal was ever drawn, so the refusal guard was never reached").toBeGreaterThan(0);
     expect(tally.sessionRowsChecked, "no session row was ever checked").toBeGreaterThan(0);
     expect(reached.has("live"), "no drawn or pinned ordering reached live").toBe(true);
