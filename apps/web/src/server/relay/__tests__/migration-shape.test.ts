@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { MAX_DURATION_MINUTES } from "../config";
+import { ACTIVE_STATES, TERMINAL_STATES } from "../domain/session";
 import { STREAM_TABLES } from "./_stream-migration";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -506,5 +507,35 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(idx?.indexdef, "org_stream_targets_org_dest_fingerprint is missing or renamed").toMatch(
       /^CREATE UNIQUE INDEX org_stream_targets_org_dest_fingerprint ON \w+\.org_stream_targets USING btree \(org_id, dest_fingerprint\) WHERE \(dest_fingerprint IS NOT NULL\)$/,
     );
+  });
+
+  it("runner_gone_confirmed_at (V422, A22(c)): NULLABLE timestamptz with no default, so every existing row reads 'not confirmed'; the mark is REFUSED on every ACTIVE state and accepted on every TERMINAL one — both lists the domain's own, never typed here", async () => {
+    const r = await rig();
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'runner_gone_confirmed_at'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+    const mark = (sid: string) => sql`update fixture_stream_sessions set runner_gone_confirmed_at = now() where id = ${sid}`;
+    let refused = 0;
+    for (const state of ACTIVE_STATES) {
+      const sid = await insertSession(r, state);
+      const [fresh] = await sql<{ m: Date | null }[]>`select runner_gone_confirmed_at as m from fixture_stream_sessions where id = ${sid}`;
+      expect(fresh!.m, `${state}: a new row is not confirmed`).toBeNull();
+      await expect(mark(sid), state).rejects.toMatchObject({ code: "23514", constraint_name: "fixture_stream_sessions_runner_gone_terminal" });
+      refused++;
+      await sql`update fixture_stream_sessions set state = 'failed' where id = ${sid}`;   // frees the fixture's one-active slot for the next state
+    }
+    let accepted = 0;
+    for (const state of TERMINAL_STATES) {
+      const sid = await insertSession(r, state);
+      await mark(sid);
+      const [row] = await sql<{ m: Date | null }[]>`select runner_gone_confirmed_at as m from fixture_stream_sessions where id = ${sid}`;
+      expect(row!.m, state).toBeInstanceOf(Date);
+      accepted++;
+    }
+    // Anti-vacuity: each list was walked in full, and neither is empty.
+    expect(refused).toBe(ACTIVE_STATES.length);
+    expect(accepted).toBe(TERMINAL_STATES.length);
+    expect(refused * accepted).toBeGreaterThan(0);
   });
 });
