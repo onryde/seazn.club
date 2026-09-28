@@ -348,7 +348,7 @@ export class FakeSwissDriver extends FakeLeagueDriver {
       this.log("generate");
       const r = this.paired + 1;
       const undecided = this.fixtures.some((f) => f.round_no === r - 1 && (f.home_entrant_id !== null || f.away_entrant_id !== null) && !DECIDED.has(f.status));
-      if (r > 1 && r <= this.budget && undecided) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "current swiss round has undecided fixtures");
+      if (r > 1 && r <= this.budget && undecided) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 422, "STAGE_NOT_READY", "current swiss round has undecided fixtures");
       this.pairNext();
       return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
     });

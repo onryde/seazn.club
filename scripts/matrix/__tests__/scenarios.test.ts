@@ -20,6 +20,13 @@ import { START } from "../lib/streams/types.ts";
 import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+/** Task 8 m-7: the status api-v1 answers STAGE_NOT_READY with, read from the
+ *  product's own ENGINE_HTTP table (server/api-v1/http.ts), never typed here. */
+const STAGE_NOT_READY_STATUS = ((): number => {
+  const m = /^\s*STAGE_NOT_READY: (\d{3}),$/m.exec(readFileSync(resolve(REPO, "apps/web/src/server/api-v1/http.ts"), "utf8"));
+  if (m === null) throw new Error("server/api-v1/http.ts no longer maps STAGE_NOT_READY in ENGINE_HTTP");
+  return Number(m[1]);
+})();
 type Row = CaseSpec["row"];
 interface Opts { canary?: boolean; row?: Row; sport?: string; variant?: string }
 
@@ -727,7 +734,7 @@ describe("I-1: a stage the loop left unfinished is red in EVERY scenario, even w
   class StopsEarly extends FakeLeagueDriver {
     answered = 0;
     override async generate() {
-      if (this.answered++ >= 3) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "not ready");
+      if (this.answered++ >= 3) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", STAGE_NOT_READY_STATUS, "STAGE_NOT_READY", "not ready");
       return super.generate();
     }
     override async completeStage(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "open fixtures"); }
@@ -828,10 +835,10 @@ describe("setup, generate and complete — refusals are recorded, crashes propag
   });
   it("a generate refused with a code is recorded for I4 (a named refusal passes it); a crash is not swallowed", async () => {
     class Refuses extends FakeLeagueDriver {
-      override async generate(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "not ready"); }
+      override async generate(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/generate", STAGE_NOT_READY_STATUS, "STAGE_NOT_READY", "not ready"); }
     }
     const r = await runOn(new Refuses(), "F1");
-    expect(r.out.observed.stages[0]!.generates).toEqual([{ status: 409, code: "STAGE_NOT_READY", total: 0, created: 0 }]);
+    expect(r.out.observed.stages[0]!.generates).toEqual([{ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY", total: 0, created: 0 }]);
     class Crashes extends FakeLeagueDriver { override async generate(): Promise<never> { throw new TypeError("boom"); } }
     await expect(runOn(new Crashes(), "F1")).rejects.toThrow("boom");
   });
@@ -1038,12 +1045,12 @@ describe("the swiss branch of playStage on the swiss fake", () => {
   it("a Pair refused by name mid-stage stops the swiss loop and life-loop-bounded names the refusal", async () => {
     class RefusesRound3 extends FakeSwissDriver {
       override async generate() {
-        if (this.paired === 2) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "not ready");
+        if (this.paired === 2) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", STAGE_NOT_READY_STATUS, "STAGE_NOT_READY", "not ready");
         return super.generate();
       }
     }
     const r = await runOn(new RefusesRound3(), "LIFECYCLE", { row: "swiss" });
-    expect(r.out.observed.stages[0]!.generates.at(-1)).toEqual({ status: 409, code: "STAGE_NOT_READY", total: 0, created: 0 });
+    expect(r.out.observed.stages[0]!.generates.at(-1)).toEqual({ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY", total: 0, created: 0 });
     expect(r.checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "fail", evidence: ["play loop exited refused_generate", expect.stringMatching(/fixture\(s\) left unfinished/)] });
   });
   it("a swiss batch is round r only, even when the stage already lists a later seated fixture (an ad-hoc addFixture at maxRound + 1)", async () => {
@@ -1070,8 +1077,9 @@ describe("the swiss branch of playStage on the swiss fake", () => {
     expect(r1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)).toHaveLength(3);
     expect(r1.filter((f) => f.away_entrant_id === null)).toEqual([expect.objectContaining({ status: "forfeited", outcome: { kind: "award", winner: r1.find((f) => f.away_entrant_id === null)!.home_entrant_id } })]);
     expect(driver.fixtures.filter((f) => (f.round_no ?? 0) > 1).every((f) => f.home_entrant_id === null)).toBe(true);
-    // The next round is refused while this one has an undecided board (stages.ts swissGen gate).
-    await expect(driver.generate(setup.stage.id)).rejects.toMatchObject({ status: 409, code: "STAGE_NOT_READY" });
+    // The next round is refused while this one has an undecided board (stages.ts swissGen gate),
+    // with the status the product maps STAGE_NOT_READY to (Task 8 m-7: it is 422, not 409).
+    await expect(driver.generate(setup.stage.id)).rejects.toMatchObject({ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY" });
   });
   it("m-5: a withdrawal reshapes the next round's shells to the active field (8 → 7: one board shell dropped, a bye shell minted)", async () => {
     const r = await runOn(new FakeSwissDriver(), "R4", { row: "swiss" });
