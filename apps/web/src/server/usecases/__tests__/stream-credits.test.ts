@@ -26,6 +26,12 @@
 //   m24 drop `.toLowerCase()` on the audit row's target_id     → "a staff write made through an UPPER-CASE org id"
 //   m25 drop `|| args.delta > STAFF_CREDIT_MAX` from staffRow's range guard → "…between 1 and STAFF_CREDIT_MAX" (the "past the max (m25)" row)
 //   m26 drop `args.delta < 1 ||` from the same guard           → the same test (the "zero (m26)" row)
+// Fix round 2 (re-review N1): C2 normalised THREE surfaces and only the audit COLUMN had a mutant.
+// m13 proves the `prior` comparison EXISTS, not that it compares a normalised value, so both
+// comparisons survived all 18 tests. One mutant each, never one combined:
+//   m27 `prior.org_id === orgId` → `=== args.orgId`      → "a staff REPLAY made through an UPPER-CASE org id"
+//   m28 `existing!.org_id !== args.orgId.toLowerCase()` → `!== args.orgId`
+//                                                        → "a purchase replay made through an UPPER-CASE org id"
 // The races use the registration-concurrency.test.ts idiom: REAL calls, the lock held by
 // a transaction the test controls, and every waiter observed BLOCKED before release —
 // here in pg_locks (not granted), scoped to waiters blocked BY the holder's own backend
@@ -150,6 +156,24 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
       .toEqual({ id: first.id, applied: false, balance: 5 });
   });
 
+  it("a purchase replay made through an UPPER-CASE org id is that org's own idempotent no-op, NOT a cross-org refusal: applied false with the original id, one row, balance unchanged (m28)", async () => {
+    const r = await rig();
+    const evt = `evt_upper_${r.orgId}`;
+    const first = await recordPurchase({ orgId: r.orgId, delta: 5, stripeEventId: evt });
+    expect(first).toMatchObject({ applied: true, balance: 5 });
+    // The org-scoped read-back above compares the STORED org against this caller's. Postgres returns
+    // uuids lower-case, so the stored side is always lower-case; if the caller's side were compared
+    // RAW, this same org's own replay would be refused 409 stripe_event_org_mismatch — the guard
+    // firing on the org it is meant to protect. `m13` proves the comparison exists, never that it
+    // compares a normalised value, which is why this case is its own `it`.
+    expect(await recordPurchase({ orgId: r.orgId.toUpperCase(), delta: 5, stripeEventId: evt }))
+      .toEqual({ id: first.id, applied: false, balance: 5 });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where org_id = ${r.orgId}`;
+    expect(n).toBe(1);
+    expect(await creditBalance(sql, r.orgId)).toBe(5);
+  });
+
   it("balance 0 → NoCreditsError 402 no_credits; balance 1 → consumed (the positive pair)", async () => {
     const r = await rig();
     const sid = await r.session(r.fixtureIds[0]!);
@@ -240,6 +264,26 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
     ]);
     // …and the ledger agrees with it, so the balance panel and the log cannot disagree.
     expect(await creditBalance(sql, r.orgId)).toBe(3);
+  });
+
+  it("a staff REPLAY made through an UPPER-CASE org id is the SAME adjustment, not a reused key: applied false with the original id, still one ledger row and one audit row (m27)", async () => {
+    const r = await rig();
+    const k = key();
+    const first = await grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "pilot league", idempotencyKey: k });
+    expect(first).toMatchObject({ balance: 2, applied: true });
+    // The retry arrives from a hand-typed /admin/orgs/<ID> URL, carrying the same minted key. The
+    // stored row's org_id is lower-case (uuid), so comparing it against the RAW argument makes this
+    // legitimate replay a 409 idempotency_key_reused. That is not a harmless wrong status: the
+    // panel's documented answer to that 409 is to drop the card's key, reset, and let staff retry —
+    // and the retry mints a NEW key, so the grant lands a SECOND time. A double grant, reached by
+    // nothing worse than an org id typed in upper case.
+    expect(await grantCredits({ orgId: r.orgId.toUpperCase(), delta: 2, createdBy: r.userId, note: "pilot league", idempotencyKey: k }))
+      .toEqual({ id: first.id, balance: 2, applied: false });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where org_id = ${r.orgId}`;
+    expect(n).toBe(1);
+    expect(await auditRows(r.orgId)).toHaveLength(1);
+    expect(await creditBalance(sql, r.orgId)).toBe(2);
   });
 
   it("a staff write moves between 1 and STAFF_CREDIT_MAX credits: BOTH boundaries apply, while 0 and one past the maximum are refused 422 delta_out_of_range with no row — the bound is the exported constant, never a literal (m25, m26)", async () => {
