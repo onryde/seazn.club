@@ -469,6 +469,45 @@ UI rule for `/admin` alone; `AGENTS.md`'s bullet was amended to say so. Conseque
 - Guard against the obvious over-application: a test that proves real behaviour is NOT deleted merely
   because it happens to run at a narrow width.
 
+**LANE B REVIEW 2026-09-28 — Needs fixes, 0 Critical, 4 Important, 6 Minor.**
+`.superpowers/sdd/2026-09-13-streaming-r1/lane-b-review.md`. The reviewer's own words on the money core:
+it found nothing that moves credits twice, loses their trail, refuses a legitimate movement or crosses an
+org. **All four Importants are in Task 8's `billing-events.ts` branch — the one file no earlier review in
+this lane covered**, which is the lesson: a per-task review pass leaves whatever sits between the tasks
+unread, and the whole-lane pass is not optional.
+
+- **I4 (the one that would have shipped)** — three surfaces with NO mutant, all measured SURVIVING:
+  `link.paymentIntentId` → null (35/35), deleting `linkStripeCustomer` + `pinBillingCurrency` (10/10),
+  and deleting the arm's trailing `return;` (10/10, NOT equivalent).
+- **I2** — paid-but-ungranted logs and alerts nobody; the file's own convention (`:267`, `:418`, `:531`)
+  sends a `STAFF_ALERT_EMAIL` beside the `log.error`. A customer has paid and holds no credits.
+- **I3** — the producer/consumer metadata seam is a hand-typed literal on BOTH ends; a fixture on both
+  ends proves the fixture.
+- **I1** — `async_payment_succeeded` (`:2456`) dispatches `registration_group` only, so a delayed
+  notification method would take the money and never grant.
+- **M6, ruled fix-now rather than owner-deferred** — `no_payment_required` is dropped with no log while
+  promo codes are ON, so a 100% promo session pays zero, completes legitimately, and grants nothing.
+
+**Two judgements the review SETTLED, recorded so they are not re-opened:** keying `recordPurchase` on
+`session.id` rather than `payment_intent ?? session.id` is CORRECT here — `payment_intent` is null on a
+zero-amount session and `return_url` carries `{CHECKOUT_SESSION_ID}`, so a reconcile path can key on
+nothing else. And Task 8's `m34` equivalence is accepted; the guard it depends on was re-run and kills.
+
+**M9 — the buyer-facing half of Task 8 is INERT, not rendered.** `/api/billing/relay-checkout`,
+`fetchRelayCheckoutClientSecret` and the tile fields of `STREAM_CREDIT_PACKS` have no production consumer;
+**lane C wires the Phone tab**, and until it does, no real purchase can reach the webhook branch. Anything
+in this file or in a header comment that says those tiles "render" is a FORWARD CLAIM, not present fact.
+
+**Routed to lane C:** M7 (`stream_credits.stripe_event_id` holds a `cs_…`, so the column name understates
+what it holds) and M9's wiring. **Owner notes:** M10 — staff adjustments are capped at 1..50 per action
+with no aggregate cap or rate limit; and the `charge.refunded` clawback gap already recorded.
+
+**Not yet confirmed by anyone:** the reviewer ran only the nine lane suites, so NONE of the three
+environmental red families was re-confirmed by it. That confirmation is still owed at the gate, along with
+smoke, which has not run since `a87929516`. Playwright was not run by the review either — every e2e-killed
+guard (key lifetime, the 409 reset, double-submit, the seven widths, the linked-refund proof) is on the
+record rather than witnessed by this pass.
+
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 
 - `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
