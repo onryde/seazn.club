@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import type { Transport } from "../lib/driver/http-driver.ts";
-import { slugify as productSlugify } from "../../../apps/web/src/server/usecases/slugs.ts";
+import { slugify as productSlugify, uniqueSlug as productUniqueSlug } from "../../../apps/web/src/server/usecases/slugs.ts";
 import {
   CASE_ORG_SLUG_LIKE, CASE_OWNER_EMAIL_LIKE, DataDirMismatch, DataDirUnset, NoPublicPlan, NotACaseOrg, ORG_COOKIE, OrgSwitchFailed, caseOrgSlug,
   chooseTopPublicPlan, createRealMatrixSql, gateOnOwnDataDir, matrixSqlOver, ownerEmail, prepareCaseOrg, requireOwnDataDir, switchToCaseOrg, type MatrixSql,
@@ -350,7 +350,15 @@ const E2E_EMAIL_PREFIXES = [...HELPERS.matchAll(/\nexport const (\w+)_EMAIL_PREF
 const E2E_EMAIL_DOMAIN = /\nexport const proEmail = \(\) => `\$\{PRO_EMAIL_PREFIX\}\$\{TAG\}(@[a-z.]+)`;/.exec(HELPERS)?.[1] ?? "(proEmail moved)";
 /** The org a first sign-in auto-provisions (auth.ts), whose slug the product derives from its name. */
 const SIGNUP_ORG_NAME = /\n\s+const created = await createOrgForUser\(userId, "([^"]+)"/.exec(AUTH)?.[1] ?? "(createOrgForUser call moved)";
-const SIGNUP_SLUGS = [productSlugify(SIGNUP_ORG_NAME), `${productSlugify(SIGNUP_ORG_NAME)}-2`];
+/** Final batch FB-5: every slug that org can hold on a busy shared DB — the
+ *  product's own uniqueSlug with the first k candidates taken, k = 0 … depth-1
+ *  (the plain form, then -2, -3, …), not two forms typed here. */
+const SIGNUP_SLUG_DEPTH = 25;
+const SIGNUP_SLUGS: string[] = [];
+for (let k = 0; k < SIGNUP_SLUG_DEPTH; k++) {
+  let asked = 0;
+  SIGNUP_SLUGS.push(await productUniqueSlug(productSlugify(SIGNUP_ORG_NAME), async () => asked++ < k));
+}
 
 describe("denyFeature confinement (m-2) — only a case org can be denied, in the SQL itself", () => {
   const CASE: OrgRow = { id: "o-case", slug: caseOrgSlug("fm-r1", 1), ownerEmail: ownerEmail("fm-r1") };
@@ -363,6 +371,10 @@ describe("denyFeature confinement (m-2) — only a case org can be denied, in th
     expect(E2E_EMAIL_DOMAIN).toMatch(/^@[a-z.]+$/);
     expect(SIGNUP_ORG_NAME).not.toMatch(/moved/);
     expect(SIGNUP_SLUGS[0]).toMatch(/^[a-z0-9-]+$/);
+    // The busy-DB forms are the product's: distinct, and past -2.
+    expect(new Set(SIGNUP_SLUGS).size).toBe(SIGNUP_SLUG_DEPTH);
+    expect(SIGNUP_SLUGS.slice(1).every((s) => s.startsWith(`${SIGNUP_SLUGS[0]}-`))).toBe(true);
+    expect(SIGNUP_SLUGS.length).toBeGreaterThan(2);
   });
   it("the case org — slug from caseOrgSlug, owner from ownerEmail — is denied, and the read-back sees it", async () => {
     const { db, seen, overrides } = orgsDb([CASE]);
@@ -389,7 +401,8 @@ describe("denyFeature confinement (m-2) — only a case org can be denied, in th
     const proPrefix = E2E_EMAIL_PREFIXES.find((e) => e.who === "PRO")?.prefix ?? "(PRO prefix missing)";
     const cases: [string, OrgRow[], string][] = [
       ["slug holds, owner does not", [{ id: "o-x", slug: caseOrgSlug("fm-r1", 2), ownerEmail: `${proPrefix}t1${E2E_EMAIL_DOMAIN}` }], "o-x"],
-      ["owner holds, slug does not", [{ id: "o-x", slug: SIGNUP_SLUGS[0] ?? "", ownerEmail: ownerEmail("fm-r1") }], "o-x"],
+      // The slug conjunct alone, over every busy-DB form of the sign-up slug (FB-5).
+      ...SIGNUP_SLUGS.map((slug): [string, OrgRow[], string] => [`owner holds, slug ${slug} does not`, [{ id: "o-x", slug, ownerEmail: ownerEmail("fm-r1") }], "o-x"]),
       ["no such org (the case org exists under another id)", [CASE], "o-missing"],
     ];
     let n = 0;
@@ -399,7 +412,7 @@ describe("denyFeature confinement (m-2) — only a case org can be denied, in th
       expect(overrides.size, why).toBe(0);
       n++;
     }
-    expect(n).toBe(3);
+    expect(n).toBe(2 + SIGNUP_SLUGS.length);
   });
   it("the stamps satisfy the patterns, which carry no LIKE wildcard but their one %", () => {
     for (const runId of ["fm-r1", "fm-w1b-a", "a"]) {
@@ -722,6 +735,12 @@ describe("mirror pin: the deny is what the product's resolver reads as a live fa
       judged++;
     }
     expect(judged).toBe(creates.length);
+    // Final batch FB-5: the count above is incremented once per pass, so it
+    // is no pin. The creates the parser judged must be exactly the files
+    // whose raw text creates the table — read by a grep, not by the parser.
+    const creators = files.filter((f) => new RegExp(`\\bcreate\\s+table\\s+(if\\s+not\\s+exists\\s+)?(public\\.)?${TABLE}\\b`, "i").test(readFileSync(resolve(REPO, f), "utf8")));
+    expect(creators.length, "no migration creates the table").toBeGreaterThan(0);
+    expect(creates.map((c) => c.file)).toEqual(creators);
   });
 });
 
