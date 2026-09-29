@@ -23,7 +23,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, describeCommit, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
+import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -910,6 +910,16 @@ describe("RR-1: the case orgs' plan must grant every gate a planned case touches
     expect(want.length).toBeGreaterThan(0);
     expect(named).toEqual(want);
     expect(d.orgs).toEqual([]);
+  });
+  it("final batch FB-7: a case whose stages fire BOTH gates needs both — gatesNeeded takes every gate a row fires, not the first (task 10 review m-6)", () => {
+    const spec = (row: string, deny?: readonly string[]) => ({ caseId: `${row}|generic|score|${deny === undefined ? "LIFECYCLE" : "DENIED"}`, row, sport: "generic", variant: "score", scenario: deny === undefined ? "LIFECYCLE" : "DENIED", canary: false, ...(deny === undefined ? {} : { deny }) }) as never;
+    // No row needs both today (format-gates-copy.test.ts sweeps them), so the stages are injected.
+    const bothStages = () => [{ kind: DOUBLE_ELIM_KINDS[0]! }, { kind: "league", config: { placements: [] } }];
+    expect(gatesNeeded([spec("x")], bothStages).map((g) => [g.gate, g.path])).toEqual([["formats.double_elim", "allowed"], ["formats.advanced", "allowed"]]);
+    // The pairs: a real gated row needs exactly its one gate; a DENIED case needs what it denies.
+    expect(gatesNeeded([spec("double_elim")]).map((g) => g.gate)).toEqual([gateOf("double_elim")]);
+    expect(gatesNeeded([spec("double_elim", [gateOf("double_elim")])]).map((g) => [g.gate, g.path])).toEqual([[gateOf("double_elim"), "denied"]]);
+    expect(gatesNeeded([spec("league")])).toEqual([]);
   });
   it("a run whose cases touch no gate (the slice) never reads the plan's grants", async () => {
     const d = deps();

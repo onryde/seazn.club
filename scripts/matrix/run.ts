@@ -50,7 +50,7 @@ import { newSession, raw, signIn, type Session } from "../bench/lib/http.ts";
 import { createRealPlanSql, provisionPlan } from "../bench/lib/plan.ts";
 import { createRealPreflightProbes, runPreflight } from "../bench/lib/env.ts";
 import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "./lib/catalogue.ts";
-import { expectedGate } from "./lib/format-gates-copy.ts";
+import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
 import { HttpDriver } from "./lib/driver/http-driver.ts";
 import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
@@ -200,9 +200,10 @@ export class PlanLacksGate extends Error {
 }
 
 /** Every gate a planned case needs its org's plan to grant: a DENIED case, the
- *  keys its deny removes; any other case, its row's gate (the text-pinned
- *  product gate map). */
-function gatesNeeded(specs: readonly CaseSpec[]): GateGap[] {
+ *  keys its deny removes; any other case, EVERY gate its row's stages fire
+ *  (the text-pinned product gate map; final batch FB-7). `stagesOf` exists so
+ *  a test can reach a row that fires both — none in today's catalogue does. */
+export function gatesNeeded(specs: readonly CaseSpec[], stagesOf: (row: string) => readonly GateStage[] = stagesForRow): GateGap[] {
   const out: GateGap[] = [];
   for (const s of specs) {
     const deny = s.deny ?? [];
@@ -210,11 +211,11 @@ function gatesNeeded(specs: readonly CaseSpec[]): GateGap[] {
       for (const gate of deny) out.push({ caseId: s.caseId, gate, path: "denied" });
       continue;
     }
-    let gate: string | null = null;
+    let gates: readonly string[] = [];
     // A row that cannot be derived is not this guard's to judge: the case
     // derives it again in setUpDivision and reds on its own error there.
-    try { gate = expectedGate(stagesForRow(s.row)); } catch { gate = null; }
-    if (gate !== null) out.push({ caseId: s.caseId, gate, path: "allowed" });
+    try { gates = expectedGates(stagesOf(s.row)); } catch { gates = []; }
+    for (const gate of gates) out.push({ caseId: s.caseId, gate, path: "allowed" });
   }
   return out;
 }
