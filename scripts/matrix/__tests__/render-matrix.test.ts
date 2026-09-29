@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { SEVERITY, renderMatrix, worstState } from "../lib/render-matrix.ts";
-import { CASE_STATES, GLYPH, type CaseResult, type RunResults } from "../lib/results.ts";
+import { CASE_STATES, GLYPH, type CaseResult, type CaseResultV2, type RunResults, type RunResultsV2 } from "../lib/results.ts";
 
 // The catalogue as a run snapshots it (run.ts): the tests below that expect the
 // full 21 × 11 grid read it from here, the way a real results.json carries it.
 const GRID = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
-const run = (cases: CaseResult[], grid: RunResults["grid"] = GRID): RunResults => ({ schemaVersion: 2, runId: "r1", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", grid, cases });
-const kase = (p: Partial<CaseResult>): CaseResult => ({
+const run = (cases: CaseResultV2[], grid: RunResultsV2["grid"] = GRID): RunResultsV2 => ({ schemaVersion: 2, runId: "r1", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", grid, cases });
+const kase = (p: Partial<CaseResultV2>): CaseResultV2 => ({
   caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
   state: "works", reason: "", checks: [], counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 5, notes: [], ...p,
 });
@@ -136,5 +136,50 @@ describe("renderMatrix — the grid is the run's own (T11 review M4)", () => {
   it("a sport the live catalogue has never heard of renders when the run's grid has it", () => {
     const md = renderMatrix(run([kase({ caseId: "league|zeta", sport: "zeta", state: "red", reason: "x" })], small));
     expect(cells(lineStarting(md, "| league |")!)).toEqual(["league", "❌", "░"]);
+  });
+});
+
+// W1c Task 3 (D9): the renderer reads v3 as it reads v2. A ░ case alone is
+// indistinguishable in the grid from an EMPTY cell (both read ░), so each
+// glyph is witnessed beside a ✅ in the same cell — where only the case can
+// have put it — and in the totals and the cases table.
+describe("renderMatrix — v3 results, 🚫 and ░ (W1c Task 3)", () => {
+  const small = { rows: ["league", "knockout"], sports: ["generic", "badminton"] };
+  const run3 = (cases: CaseResult[], grid: RunResults["grid"] = small): RunResults => ({ schemaVersion: 3, runId: "r3", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", grid, layer: "L2", driver: "browser", cases });
+  const kase3 = (p: Partial<CaseResult>): CaseResult => ({ ...kase({}), layer: "L2", driver: "browser", width: 320, ...p });
+  const works = (row: string, sport: string) => kase3({ caseId: `${row}|${sport}|w`, row, sport });
+  const noPath = kase3({ caseId: "league|generic|np", state: "no_path", reason: "W6: no bracket UI" });
+  const notRun = kase3({ caseId: "knockout|badminton|nr", row: "knockout", sport: "badminton", state: "not_run", reason: "no scenario script yet (atom A1)" });
+
+  it("empty case first: a v3 run with zero cases renders the banner, naming schema v3", () => {
+    const md = renderMatrix(run3([]));
+    expect(md).toContain("**No cases run.**");
+    expect(md).toContain("schema v3");
+    expect(md).not.toContain("| row |");
+  });
+  it("a v3 run with one 🚫 and one ░ case renders both glyphs in their cells, the totals and the cases table", () => {
+    const md = renderMatrix(run3([works("league", "generic"), noPath, works("knockout", "badminton"), notRun]));
+    expect(cells(lineStarting(md, "| league |")!)).toEqual(["league", GLYPH.no_path, "░"]);
+    expect(cells(lineStarting(md, "| knockout |")!)).toEqual(["knockout", "░", GLYPH.not_run]);
+    expect(md).toContain(`| ${GLYPH.no_path} no_path | 1 |`);
+    expect(md).toContain(`| ${GLYPH.not_run} not_run | 1 |`);
+    expect(md).toContain(`| ${GLYPH.works} works | 2 |`);
+    expect(md).toContain("| total | 4 |");
+    expect(cells(lineStarting(md, "| `league\\|generic\\|np`")!)).toEqual(["`league\\|generic\\|np`", "🚫", "W6: no bracket UI", "0/0", "0"]);
+    expect(cells(lineStarting(md, "| `knockout\\|badminton\\|nr`")!)).toEqual(["`knockout\\|badminton\\|nr`", "░", "no scenario script yet (atom A1)", "0/0", "0"]);
+  });
+  it("a cell holding ✅ + 🚫 renders 🚫 (severity: no_path above works), whatever the case order", () => {
+    for (const cases of [[works("league", "generic"), noPath], [noPath, works("league", "generic")]]) {
+      expect(cells(lineStarting(renderMatrix(run3(cases)), "| league |")!)[1]).toBe("🚫");
+    }
+  });
+  it("v2 and v3 holding the same cases render identically, bar the schema version in the header", () => {
+    const v3cases = [works("league", "generic"), noPath, notRun];
+    const v2cases: CaseResultV2[] = v3cases.map(({ layer: _l, driver: _d, width: _w, ...c }) => c);
+    const v3md = renderMatrix(run3(v3cases));
+    const v2md = renderMatrix({ ...run(v2cases, small), runId: "r3" });
+    expect(v3md).toContain("schema v3");
+    expect(v2md).toContain("schema v2");
+    expect(v3md.replace("schema v3", "schema v2")).toBe(v2md);
   });
 });

@@ -15,6 +15,7 @@ import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "..
 import { LOCAL_BASE } from "../lib/redact.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
+import { main as renderMain } from "../render.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -287,6 +288,26 @@ describe("runSlice — a run", () => {
       expect(k.verdict, `${k.id}: ${k.reason}`).toBe("pass");
       expect(k.checked, k.id).toBeGreaterThan(0);
     }
+  });
+  // W1c Task 3 (D9): an HTTP run is L3 over http with no width (Task 6 makes
+  // these follow the CLI). Proven through the REAL producer (runSlice →
+  // writeResults) and the REAL consumer (render.ts → parseResults →
+  // renderMatrix), never a fixture on both ends.
+  it("D9: results.json is schema v3 — the run and every case read L3 over http, width null — and the render CLI reads it back to the MATRIX.md the run wrote", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--run-id", "v3", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "v3", "results.json"), "utf8")) as { schemaVersion: unknown; layer: unknown; driver: unknown; cases: Record<string, unknown>[] };
+    expect({ schemaVersion: raw.schemaVersion, layer: raw.layer, driver: raw.driver }).toEqual({ schemaVersion: 3, layer: "L3", driver: "http" });
+    let checked = 0;
+    for (const c of raw.cases) {
+      expect({ layer: c.layer, driver: c.driver, width: c.width }, String(c.caseId)).toEqual({ layer: "L3", driver: "http", width: null });
+      checked++;
+    }
+    expect(checked, "cases read").toBe(SCENARIO_KEYS.length);
+    const out = join(dir, "re-rendered.md");
+    expect(renderMain([join(dir, "v3", "results.json"), "--out", out])).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe(readFileSync(join(dir, "v3", "MATRIX.md"), "utf8"));
   });
   it("M4: results.json snapshots the catalogue grid as it is at run time, and MATRIX.md is its render", async () => {
     capture();

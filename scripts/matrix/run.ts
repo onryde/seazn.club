@@ -353,6 +353,8 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   const result: CaseResult = {
     caseId: spec.caseId, row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
     state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0, notes,
+    // D9 (W1c Task 3): this runner is L3 over HTTP; Task 6 makes these follow the CLI.
+    layer: "L3", driver: "http", width: null,
   };
   return { result, refusal };
 }
@@ -442,7 +444,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
   // writeResults scans, THEN writes the run's base as LOCAL_BASE (final batch
   // FB-1); MATRIX.md renders what it wrote, so the two files agree.
-  const results: RunResults = { schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, cases };
+  const results: RunResults = { schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, layer: "L3", driver: "http", cases };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);

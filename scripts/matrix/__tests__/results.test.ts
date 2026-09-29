@@ -1,9 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { L2_WIDTHS } from "../lib/pairs.ts";
 import { BaseNotUrl, LOCAL_BASE, baseScrubber, findSecrets, redact } from "../lib/redact.ts";
-import { CASE_STATES, GLYPH, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
+import { BROWSER_WIDTHS, CASE_STATES, GLYPH, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CaseResultV2, type CheckResult, type RunResults, type RunResultsV2 } from "../lib/results.ts";
 import { baseLiteralsIn, loopbackLiteralsIn } from "./loopback-literals.ts";
 
 /** The base every writeResults call below scrubs (FB-1): no evidence here names it unless a test says so. */
@@ -107,6 +109,41 @@ describe("decideState — mandated refusal (⛔, Task 9)", () => {
   });
 });
 
+// 🚫 / ░ (W1c Task 3): a layer planner (Task 12) records a cell it never runs —
+// one with no UI path (🚫, naming the wave that owes it) or no scenario script
+// yet (░). Precedence: an error, then a deferral, then 🚫, then ░, then the
+// vacuity rules. Setting both is a planner bug, refused by name whatever else
+// is set (the dispatch's contract: decideState throws when both are set).
+describe("decideState — 🚫 no_path and ░ not_run (W1c Task 3)", () => {
+  const pass = (id: string, checked = 1): CheckResult => ({ id, kind: "assertion", verdict: "pass", checked, reason: "", evidence: [] });
+  it("empty case first: neither set (absent or null) changes nothing — no checks is still vacuous red, a pass still works", () => {
+    expect(decideState({ checks: [], deferred: null, error: null, noPath: null, notRun: null })).toEqual({ state: "red", reason: "no checks ran (vacuous)" });
+    expect(decideState({ checks: [pass("a", 2)], deferred: null, error: null, noPath: null, notRun: null })).toEqual({ state: "works", reason: "1 checks, 2 items" });
+    expect(decideState({ checks: [pass("a", 2)], deferred: null, error: null })).toEqual({ state: "works", reason: "1 checks, 2 items" });
+  });
+  it("decideState: noPath yields 🚫 no_path naming the wave; notRun yields ░ not_run; both lose to an error and to a deferral", () => {
+    expect(decideState({ checks: [], deferred: null, error: null, noPath: { wave: "W4", reason: "no route" } })).toEqual({ state: "no_path", reason: "W4: no route" });
+    expect(decideState({ checks: [], deferred: null, error: null, notRun: "no scenario script yet" })).toEqual({ state: "not_run", reason: "no scenario script yet" });
+    expect(decideState({ checks: [], deferred: null, error: "boom", noPath: { wave: "W4", reason: "x" } }).state).toBe("red");
+    expect(decideState({ checks: [], deferred: { wave: "W1-driving", reason: "r" }, error: null, notRun: "x" }).state).toBe("later");
+    // …and the other two pairings, with the winner's own reason.
+    expect(decideState({ checks: [], deferred: null, error: "boom", notRun: "x" })).toEqual({ state: "red", reason: "error: boom" });
+    expect(decideState({ checks: [], deferred: { wave: "W1-driving", reason: "r" }, error: null, noPath: { wave: "W4", reason: "x" } })).toEqual({ state: "later", reason: "W1-driving: r" });
+  });
+  it("🚫 and ░ outrank every check verdict and the mandate: the cell never ran, so no check decides it", () => {
+    const failed: CheckResult = { ...pass("f"), verdict: "fail", reason: "wrong" };
+    expect(decideState({ checks: [pass("a"), failed], deferred: null, error: null, noPath: { wave: "W6", reason: "no bracket UI" } })).toEqual({ state: "no_path", reason: "W6: no bracket UI" });
+    expect(decideState({ checks: [pass("a")], deferred: null, error: null, mandated: "denied: x", notRun: "no scenario script yet (atom A1)" })).toEqual({ state: "not_run", reason: "no scenario script yet (atom A1)" });
+    expect(decideState({ checks: [pass("a", 0)], deferred: null, error: null, notRun: "r" }).state).toBe("not_run");
+  });
+  it("noPath and notRun are never set together (a named refusal)", () => {
+    expect(() => decideState({ checks: [], deferred: null, error: null, noPath: { wave: "W4", reason: "x" }, notRun: "y" })).toThrow(/both/);
+    // Whatever else is set: an error or a deferral does not launder a planner bug.
+    expect(() => decideState({ checks: [], deferred: null, error: "boom", noPath: { wave: "W4", reason: "x" }, notRun: "y" })).toThrow(/noPath and notRun both set/);
+    expect(() => decideState({ checks: [], deferred: { wave: "W9", reason: "r" }, error: null, noPath: { wave: "W4", reason: "x" }, notRun: "y" })).toThrow(/noPath and notRun both set/);
+  });
+});
+
 describe("glyphs and schema", () => {
   it("every state has a distinct glyph", () => {
     expect(new Set(CASE_STATES.map((s) => GLYPH[s])).size).toBe(CASE_STATES.length);
@@ -114,7 +151,7 @@ describe("glyphs and schema", () => {
     expect(GLYPH.not_run).toBe("░");
   });
   it("parseResults refuses a wrong schemaVersion, an unknown state, and a missing or malformed grid", () => {
-    const ok: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    const ok: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
     expect(parseResults(ok)).toEqual(ok);
     // T11 review M4: the grid MATRIX.md renders from is part of the file, and a malformed one is refused.
     expect(() => parseResults((({ grid: _g, ...rest }) => rest)(ok))).toThrow();
@@ -126,11 +163,13 @@ describe("glyphs and schema", () => {
     expect(() => parseResults({ ...ok, grid: { rows: ["league"], sports: ["generic"], extra: 1 } })).toThrow();
     // v1 had no case notes (m-5): its files are refused, not read with notes missing.
     expect(() => parseResults({ ...ok, schemaVersion: 1 })).toThrow();
+    // A v2 body relabelled v3 lacks the run's layer and driver (D9).
     expect(() => parseResults({ ...ok, schemaVersion: 3 })).toThrow();
+    expect(() => parseResults({ ...ok, schemaVersion: 4 })).toThrow();
     expect(() => parseResults({ ...ok, cases: [{ state: "green" }] })).toThrow();
   });
 
-  const FULL: CaseResult = {
+  const FULL: CaseResultV2 = {
     caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
     state: "works", reason: "2 checks, 5 items",
     checks: [
@@ -168,6 +207,151 @@ describe("glyphs and schema", () => {
   });
 });
 
+// D9 (W1c Task 3): results v3. Every case records the layer that ran it, the
+// driver and the browser width (null over HTTP); the run records its layer and
+// driver. Committed v2 evidence still parses, as v2. The widths are judged
+// against the harness's declared set — 1280 (ruling 39: L1 runs there) and the
+// seven L2 widths, which pairs.test.ts pins to apps/web/playwright.config.ts.
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const TRUTH_RUNS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs";
+/** The committed W1b slice (committed-matrix.test.ts:21-23): the v2 evidence the brief names. */
+const W1B_SLICE_RESULTS = resolve(REPO, TRUTH_RUNS, "w1b-slice", "results.json");
+/** Every committed results.json under truth-runs; at W1b's close three, all v2 (w1a-slice, w1b-probe, w1b-slice). */
+const COMMITTED_RESULTS = readdirSync(resolve(REPO, TRUTH_RUNS), { recursive: true, withFileTypes: true })
+  .filter((e) => e.isFile() && e.name === "results.json").map((e) => join(e.parentPath, e.name));
+const V2_FLOOR = 3;
+/** The widths a browser case may run at: 1280 (ruling 39) first, then L2's seven in their own order. */
+const DECLARED_WIDTHS: readonly number[] = [1280, ...L2_WIDTHS];
+
+const V3_CASE: CaseResult = {
+  caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
+  state: "works", reason: "1 checks, 3 items",
+  checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 3, reason: "every pair meets once", evidence: ["a~b met 1"] }],
+  counts: { calls: 12, fixtures: 6, events: 30 }, durationMs: 1234.5, notes: ["stage league status after start: active"],
+  layer: "L3", driver: "http", width: null,
+};
+const V3_RUN: RunResults = { schemaVersion: 3, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, layer: "L3", driver: "http", cases: [V3_CASE] };
+/** Every issue a refused parse raised, as `path: message` — union branches flattened. */
+const issuesOf = (json: unknown): string[] => {
+  try { parseResults(json); } catch (e) {
+    const flat = (issues: readonly { path: readonly PropertyKey[]; message: string; errors?: readonly (readonly unknown[])[] }[]): string[] =>
+      issues.flatMap((i) => [`${i.path.map(String).join(".")}: ${i.message}`, ...(i.errors ?? []).flatMap((b) => flat(b as never))]);
+    return flat((e as { issues: never }).issues);
+  }
+  return [];
+};
+
+describe("results v3 — layer, driver, width (D9, W1c Task 3)", () => {
+  it("empty case first: a v3 run with zero cases parses (the CLI, not the schema, refuses an empty run)", () => {
+    expect(parseResults({ ...V3_RUN, cases: [] }).schemaVersion).toBe(3);
+    expect(parseResults({ ...V3_RUN, cases: [] })).toEqual({ ...V3_RUN, cases: [] });
+  });
+  it("committed v2 evidence still parses as v2, every case kept — w1b-slice's 24 by name, and every committed results.json", () => {
+    const v2 = JSON.parse(readFileSync(W1B_SLICE_RESULTS, "utf8"));
+    const r = parseResults(v2);
+    expect(r.schemaVersion).toBe(2);
+    expect(r.cases.length).toBe(24);
+    // v2 predates D9: none of its cases carries a layer, driver or width, and the parse invents none.
+    expect(r).toEqual(v2);
+    let v2Files = 0;
+    for (const f of COMMITTED_RESULTS) {
+      const raw = JSON.parse(readFileSync(f, "utf8")) as { schemaVersion: number; cases: unknown[] };
+      const parsed = parseResults(raw);
+      expect(parsed.schemaVersion, f).toBe(raw.schemaVersion);
+      expect(parsed.cases.length, f).toBe(raw.cases.length);
+      if (parsed.schemaVersion === 2) v2Files++;
+    }
+    expect(COMMITTED_RESULTS.map((f) => basename(dirname(f))).sort()).toEqual(expect.arrayContaining(["w1a-slice", "w1b-probe", "w1b-slice"]));
+    expect(v2Files, "committed v2 results files read").toBeGreaterThanOrEqual(V2_FLOOR);
+  });
+  it("a v3 case must carry layer, driver and width; http carries width null, browser a width from the seven or 1280", () => {
+    expect(() => parseResults({ ...V3_RUN, cases: [{ ...V3_CASE, width: 1280, driver: "http" }] })).toThrow(/width/);
+    expect(() => parseResults({ ...V3_RUN, cases: [{ ...V3_CASE, driver: "browser", width: 999 }] })).toThrow(/width/);
+    expect(parseResults({ ...V3_RUN, cases: [{ ...V3_CASE, driver: "browser", width: 320, layer: "L1" }] }).cases[0]!.width).toBe(320);
+    // Each refusal is the v3 schema's own, on the case's width, naming the case — not a
+    // v2 branch complaining about keys it has never heard of.
+    expect(issuesOf({ ...V3_RUN, cases: [{ ...V3_CASE, width: 1280, driver: "http" }] })).toEqual([
+      "cases.0.width: case league|generic|score|LIFECYCLE: an http case carries width null, got 1280",
+    ]);
+    expect(issuesOf({ ...V3_RUN, cases: [{ ...V3_CASE, driver: "browser", width: 999 }] })).toEqual([
+      `cases.0.width: case league|generic|score|LIFECYCLE: a browser case runs at one of ${DECLARED_WIDTHS.join(", ")}, got 999`,
+    ]);
+    // Carry: each of the three is REQUIRED — refused by the schema's own
+    // required-field issue, never only by the width refine (whose messages
+    // name the case): an optional width would still be refused over http, as
+    // "got undefined", and read as a width rule rather than a missing field.
+    let missing = 0;
+    for (const key of ["layer", "driver", "width"] as const) {
+      const { [key]: _gone, ...rest } = V3_CASE;
+      const issues = issuesOf({ ...V3_RUN, cases: [rest] });
+      expect(issues, key).toHaveLength(1);
+      expect(issues[0]!.startsWith(`cases.0.${key}:`), `${key}: ${issues[0]}`).toBe(true);
+      expect(issues[0], key).not.toMatch(/: case league\|generic/);
+      missing++;
+    }
+    expect(missing).toBe(3);
+  });
+  it("every declared browser width parses — 1280 and each L2 width; every other width, null or a fraction is refused", () => {
+    let accepted = 0;
+    for (const w of DECLARED_WIDTHS) {
+      for (const layer of ["L1", "L2"] as const) expect(parseResults({ ...V3_RUN, layer, driver: "browser", cases: [{ ...V3_CASE, layer, driver: "browser", width: w }] }).cases[0]!.width).toBe(w);
+      accepted++;
+    }
+    expect(accepted).toBe(1 + L2_WIDTHS.length);
+    let refused = 0;
+    for (const w of [null, 0, -320, 319, 321, 1279, 1281, 1920, 320.5]) {
+      expect(issuesOf({ ...V3_RUN, cases: [{ ...V3_CASE, driver: "browser", width: w }] }).some((i) => i.startsWith("cases.0.width:")), String(w)).toBe(true);
+      refused++;
+    }
+    expect(refused).toBe(9);
+    // http refuses every width, a declared one included.
+    for (const w of [320, 1280, 0]) expect(issuesOf({ ...V3_RUN, cases: [{ ...V3_CASE, width: w }] }), String(w)).toEqual([`cases.0.width: case league|generic|score|LIFECYCLE: an http case carries width null, got ${w}`]);
+  });
+  it("BROWSER_WIDTHS is exactly [1280, ...L2_WIDTHS], in that order (Task 4's viewports read it)", () => {
+    expect([...BROWSER_WIDTHS]).toEqual(DECLARED_WIDTHS);
+    expect(Object.isFrozen(BROWSER_WIDTHS)).toBe(true);
+  });
+  it("an unknown layer or driver, on a case or on the run, is refused; the run must carry both", () => {
+    const refusals: [string, unknown][] = [
+      ["case layer L4", { ...V3_RUN, cases: [{ ...V3_CASE, layer: "L4" }] }],
+      ["case driver playwright", { ...V3_RUN, cases: [{ ...V3_CASE, driver: "playwright", width: 320 }] }],
+      ["run layer L0", { ...V3_RUN, layer: "L0" }],
+      ["run driver ws", { ...V3_RUN, driver: "ws" }],
+      ["run without layer", (({ layer: _l, ...rest }) => rest)(V3_RUN)],
+      ["run without driver", (({ driver: _d, ...rest }) => rest)(V3_RUN)],
+      ["an unknown run key", { ...V3_RUN, width: 320 }],
+      ["an unknown case key", { ...V3_RUN, cases: [{ ...V3_CASE, viewport: 320 }] }],
+    ];
+    let checked = 0;
+    for (const [name, bad] of refusals) {
+      expect(() => parseResults(bad), name).toThrow();
+      checked++;
+    }
+    expect(checked).toBe(refusals.length);
+  });
+  it("versions never cross: a v2 case carrying the v3 keys is refused, and so is a v3 case without them", () => {
+    const { layer: _l, driver: _d, width: _w, ...v2Case } = V3_CASE;
+    const v2Run = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] } };
+    expect(parseResults({ ...v2Run, cases: [v2Case] }).schemaVersion).toBe(2);
+    expect(() => parseResults({ ...v2Run, cases: [V3_CASE] })).toThrow();
+    expect(() => parseResults({ ...v2Run, layer: "L3", driver: "http", cases: [] })).toThrow();
+    expect(() => parseResults({ ...V3_RUN, cases: [v2Case] })).toThrow();
+  });
+  it("a fully populated v3 run round-trips unchanged, a browser case beside an http one", () => {
+    const run: RunResults = { ...V3_RUN, layer: "L2", driver: "browser", cases: [V3_CASE, { ...V3_CASE, caseId: "b", layer: "L2", driver: "browser", width: 834 }] };
+    expect(parseResults(run)).toEqual(run);
+  });
+  it("writeResults writes v3 only: a v2 run is refused and nothing is written; a v3 run is written as given", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    expect(() => writeResults(dir, v2 as unknown as RunResults, RUN_BASE)).toThrow();
+    expect(existsSync(join(dir, "results.json"))).toBe(false);
+    const { path, written } = writeResults(dir, V3_RUN, RUN_BASE);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(V3_RUN);
+    expect(written).toEqual(V3_RUN);
+  });
+});
+
 describe("redaction (R14a)", () => {
   it("scrubs tokens, JWTs, device-link secrets, DB URLs, stripe keys", () => {
     const dirty = 'token=abc123def cookie: sb-access=xyz eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl dl_ABCDEFGH12345 postgres://u:p@h/db sk_test_ABCDEFGHIJ';
@@ -182,7 +366,7 @@ describe("redaction (R14a)", () => {
   });
   it("writeResults refuses to write a secret and writes a clean file", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
-    const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    const base: RunResults = { schemaVersion: 3, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, layer: "L3", driver: "http", cases: [] };
     const bad = { ...base, runId: "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl" };
     expect(() => writeResults(dir, bad, RUN_BASE)).toThrow(SecretInResults);
     const { path } = writeResults(dir, base, RUN_BASE);
@@ -276,13 +460,13 @@ const EVIDENCE: readonly [string, string][] = [
   ["unclosed double-quoted consent flag", 'cookie_consent: "granted'],
 ];
 
-const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+const base: RunResults = { schemaVersion: 3, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, layer: "L3", driver: "http", cases: [] };
 const withEvidence = (evidence: string[]): RunResults => ({
   ...base,
   cases: [{
     caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false,
     state: "works", reason: "1 checks, 1 items", checks: [{ id: "I1", kind: "invariant", verdict: "pass", checked: 1, reason: "", evidence }],
-    counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 1, notes: [],
+    counts: { calls: 1, fixtures: 1, events: 1 }, durationMs: 1, notes: [], layer: "L3", driver: "http", width: null,
   }],
 });
 /** writeResults into a fresh dir: the thrown value (or null) and whether a file landed. */
