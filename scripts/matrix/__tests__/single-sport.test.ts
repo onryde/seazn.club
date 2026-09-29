@@ -415,6 +415,8 @@ describe("single-sport scanner (R26)", () => {
         `});`,
         `const picked = SPORT_KEYS.filter((k) => k !== "football");`,
         `const fixture = "badminton";`,
+        // the pin is in the OUTER call's argument, so only the chain makes it a sweep
+        `const chained = builtinModules.filter((m) => m.variants).map((m) => m.key === "volleyball");`,
       ].join("\n");
       const pins = pinsIn(text, "t.test.ts");
       expect(pins.map((p) => [p.line, p.sport, p.swept])).toEqual([
@@ -423,6 +425,7 @@ describe("single-sport scanner (R26)", () => {
         [12, "cricket", false],
         [15, "football", true],
         [16, "badminton", false],
+        [17, "volleyball", true],
       ]);
     });
 
@@ -565,9 +568,13 @@ describe("single-sport scanner (R26)", () => {
     const run = (...args: string[]) => cli([...args, "--root", root]);
     expect(run("--init").status).toBe(0);
 
-    // not a rename yet: OLD still exists
-    expect(run("--move", old, moved).status).toBe(2);
-    renameSync(join(root, old), join(root, moved));
+    // a copy is not a rename: NEW is in scope, but OLD still exists
+    writeFileSync(join(root, moved), readFileSync(join(root, old), "utf8"));
+    const copy = run("--move", old, moved);
+    expect(copy.status).toBe(2);
+    expect(copy.stderr).toMatch(/still exists/);
+    // the rename completes
+    rmSync(join(root, old));
     // the rename alone reads as a new entry
     expect(run("--check").status).toBe(1);
     for (const [from, to, why] of [
