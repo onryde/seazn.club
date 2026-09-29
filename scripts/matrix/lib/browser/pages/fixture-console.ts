@@ -68,9 +68,11 @@ export function forfeitBudgets(c: Pick<PageCtx, "holdMs">, steps: number): Forfe
   return { stepMs, responseMs: budgetMs({ base: steps * stepMs, taps: 1, holdMs: c.holdMs }) };
 }
 
-/** Taps `steps` on the open console, each within `b.stepMs`, and returns the
- *  product's answer to the core.forfeit they post, waited on for `b.responseMs`. */
-export async function postForfeit(page: Pick<Page, "waitForResponse"> & PadPage, fixtureId: string, steps: readonly TapStep[], b: ForfeitBudgets): Promise<PostedEvent> {
+/** Taps `steps` on the open console and returns the product's answer to the
+ *  core.forfeit they post. The bounds are forfeitBudgets for THESE steps, so
+ *  no caller can pass a step count that differs from the steps it taps. */
+export async function postForfeit(page: Pick<Page, "waitForResponse"> & PadPage, c: Pick<PageCtx, "holdMs">, fixtureId: string, steps: readonly TapStep[]): Promise<PostedEvent> {
+  const b = forfeitBudgets(c, steps.length);
   const { data } = await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixtureId) }, () => executeSteps(page, steps, b.stepMs), b.responseMs);
   return data;
 }
@@ -92,7 +94,7 @@ export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string,
     await awaitScreen(() => start.waitFor({ state: "detached", timeout: nav }), "the console, started", nav);
   }
   const before = await shoot(c, "07-forfeit-before");
-  posted.push(await postForfeit(page, fixture.id, steps, forfeitBudgets(c, steps.length)));
+  posted.push(await postForfeit(page, c, fixture.id, steps));
   await awaitScreen(() => page.getByTestId(FORFEIT_TESTID).waitFor({ state: "detached", timeout: nav }), "the console, decided by forfeit", nav);
   await shoot(c, "07-forfeit", before);
   return posted;

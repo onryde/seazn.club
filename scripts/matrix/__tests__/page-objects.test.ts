@@ -578,6 +578,7 @@ describe("the console, the run sheet and the public page", () => {
     const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
     const steps = forfeitSteps(fx, "e-away", "walkover");
     const b = forfeitBudgets({ holdMs: 3000 }, steps.length);
+    expect(steps.length).toBe(4);
     const submit = `[data-testid="${PROMPT_SUBMIT_TESTID}"]`;
     const stepWaits: number[] = [];
     const acts: string[] = [];
@@ -599,7 +600,7 @@ describe("the console, the run sheet and the public page", () => {
       goto: async () => null,
       setViewportSize: async () => undefined,
     };
-    const posted = await postForfeit(page as unknown as Parameters<typeof postForfeit>[0], fx.id, steps, b);
+    const posted = await postForfeit(page as unknown as Parameters<typeof postForfeit>[0], { holdMs: 3000 }, fx.id, steps);
     expect(posted).toEqual(answer);
     expect(acts.length).toBe(steps.length);
     expect(acts.at(-1)).toBe(`click ${submit}`);
