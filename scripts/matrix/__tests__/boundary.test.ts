@@ -140,4 +140,11 @@ describe("the widths leaf", () => {
     expect(reached).toContain("lib/widths.ts");
     expect(reached.filter((f) => f === "lib/pairs.ts" || f === "lib/catalogue.ts"), "results.ts must not load pairs.ts for a constant").toEqual([]);
   });
+  it("lib/browser/viewports.ts reaches the leaf and never pairs.ts or results.ts (the browser path stays off the engine)", () => {
+    const VIEWPORTS = join(MATRIX, "lib/browser/viewports.ts");
+    expect(MODULES).toContain(VIEWPORTS);
+    const reached = [...closure([VIEWPORTS])].map((f) => relative(MATRIX, f));
+    expect(reached).toContain("lib/widths.ts");
+    expect(reached.filter((f) => ["lib/pairs.ts", "lib/results.ts", "lib/catalogue.ts"].includes(f))).toEqual([]);
+  });
 });
