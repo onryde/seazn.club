@@ -32,12 +32,18 @@
 //      (BENCH_EXPECTED_DATA_DIR unset, or a data_directory mismatch at any
 //      point); a failed preflight; a committed regression whose variant is not
 //      its sport's (carry G-2); a live builder default that is not the offline
-//      one (BuilderDefaultDrift, Review Focus 5).
+//      one (BuilderDefaultDrift, Review Focus 5); a case-org plan that allows
+//      no division per competition (PlanAllowsNoDivision, final batch F-6 —
+//      read before any case org).
 //   3  aborted after the start gates: git, the DB, sign-in, a case org, or a
 //      report that cannot be written or still holds a secret after redaction;
 //      or, report written, some cell's request did not answer (RequestTimedOut:
 //      environmental, not a regression — a TIMEOUT line, no stub, re-run it).
 //      It outranks 1: the run is incomplete, whatever else it found (RR-2).
+//   (3 also: a crash while the CLI LOADS, before any of its code runs — a
+//   strip-types parse error, a missing export, a module that throws — through
+//   `pnpm matrix:model`, whose preload lib/crash-exit.ts maps it; a bare `node …`
+//   run exits 1 on one. Final batch F-6.)
 //
 // Every line printed, and every string written, passes through redact() (R14a).
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -186,6 +192,20 @@ function parseCli(argv: string[]): Cli | { usage: string } {
     runId, reportDir: v["report-dir"] ?? "matrix-report", cells, runs, maxCommands, timeLimitMs,
     seed, path: v.path, replayPath: v["replay-path"], fences: v["no-fences"] !== true, regressions: v.regressions === true, base: v.base, root: v.root,
   };
+}
+
+/** The case orgs' plan allows no division per competition (DIVISION_CAP_KEY):
+ *  the model builds one per property run, so nothing could run. A refusal,
+ *  before any case org (final batch F-6; was a plain Error, read as aborted). */
+export class PlanAllowsNoDivision extends Error {
+  readonly plan: string;
+  readonly cap: number;
+  constructor(plan: string, cap: number) {
+    super(`the case orgs' plan ${plan} allows ${cap} division(s) per competition (${DIVISION_CAP_KEY}) — the model builds one per property run`);
+    this.name = "PlanAllowsNoDivision";
+    this.plan = plan;
+    this.cap = cap;
+  }
 }
 
 /** A regression case whose variant is not one its sport declares (carry G-2):
@@ -342,13 +362,15 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         if (live !== offline) throw new BuilderDefaultDrift(sport, live, offline);
         variantOf.set(sport, live);
       }
+      // Final batch F-6: the plan's division cap is read once, before any
+      // case org — a plan that allows none is a refusal, like run.ts's PlanLacksGate.
+      const cap = await db.planLimit(plan, DIVISION_CAP_KEY);
+      if (cap !== null && cap < 1) throw new PlanAllowsNoDivision(plan, cap);
       for (const [i, job] of jobs.entries()) {
         const variant = job.replay?.variant ?? variantOf.get(job.sport);
         if (variant === undefined) throw new Error(`model: no variant read for ${job.sport}`);
         const org = await deps.prepareCaseOrg({ base, session, userId, plan }, { name: `Matrix model ${cli.runId} ${i + 1}`, slug: caseOrgSlug(cli.runId, i + 1) });
         const real = deps.driverFor(base, session, org.orgId);
-        const cap = await db.planLimit(plan, DIVISION_CAP_KEY);
-        if (cap !== null && cap < 1) throw new Error(`the case org's plan ${plan} allows ${cap} division(s) per competition (${DIVISION_CAP_KEY}) — the model builds one per property run`);
         const competitionFor = await competitionSlots(real, cap, (k) => ({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}${k === 1 ? "" : `-${k}`}` }));
         say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
         const rep = await runCell({
@@ -367,7 +389,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
       try { await db.dispose(); } catch (e) { warn(`model: db dispose failed — ${errText(e)}`); }
     }
   } catch (e) {
-    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift;
+    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanAllowsNoDivision;
     warn(`model: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }

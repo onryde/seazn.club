@@ -6,7 +6,7 @@
 // copy of the real src — the deliberate-violation proof, run in CI, never a
 // violating file committed into packages/reference/src.
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,8 +31,12 @@ function judged(files: Record<string, string>, setup?: (root: string) => void): 
     return checkReferenceBoundary(root).violations.map((v) => `${v.line} ${v.specifier}: ${v.reason}`);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
+/** `npm run reference:boundary`'s own flags, read from package.json (final batch F-6: they preload crash-exit.ts). */
+const SCRIPT = ((JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts["reference:boundary"] ?? "").split(" ");
 /** The CLI exactly as `npm run reference:boundary` starts it, optionally on another src dir. */
-const gate = (args: string[], cli = CLI) => spawnSync(process.execPath, ["--experimental-strip-types", cli, ...args], { cwd: REPO, encoding: "utf8", timeout: 20_000, env: { PATH: process.env.PATH ?? "" } });
+const gate = (args: string[], cli = CLI) => spawnSync(process.execPath, [...SCRIPT.slice(1, -1), cli, ...args], { cwd: REPO, encoding: "utf8", timeout: 20_000, env: { PATH: process.env.PATH ?? "" } });
+/** The CLI with no preload, as `node --experimental-strip-types scripts/reference-boundary.ts` starts it. */
+const bare = (args: string[]) => spawnSync(process.execPath, ["--experimental-strip-types", CLI, ...args], { cwd: REPO, encoding: "utf8", timeout: 20_000, env: { PATH: process.env.PATH ?? "" } });
 /** The package's non-test .ts sources, counted from the tree — never from the gate. */
 function sources(dir: string): number {
   let n = 0;
@@ -457,10 +461,29 @@ describe("reference:boundary CLI (spawned — its exit code is the CI verdict)",
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toContain(`reference:boundary: ${sources(join(PKG, "src"))} files, 0 violation(s)`);
   });
-  it("more than one argument is refused as usage (exit 2), never read as a src dir", () => {
+  it("more than one argument is refused as usage (exit 2), never read as a src dir; the usage states every exit, zero files scanned among the 1s (final batch F-6)", () => {
     const r = gate([join(PKG, "src"), join(PKG, "src")]);
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/usage/);
+    expect(r.stderr).toContain("exit 0 clean; 1 on a violation, or on zero files scanned (a vacuous verdict); 2 on usage; 3 on a crash");
+  });
+  it("final batch F-6: a scan that crashes (a source it cannot read) exits 3, naming the crash — never 1, which reads as a violation; bare, without the preload, too", () => {
+    const root = src({ "ok.ts": "export const a = 1;\n", "locked.ts": "export const b = 2;\n" });
+    try {
+      chmodSync(join(root, "locked.ts"), 0o000);
+      // The premise: the file really cannot be read here (a root user could).
+      let unreadable = false;
+      try { readFileSync(join(root, "locked.ts")); } catch { unreadable = true; }
+      expect(unreadable, "locked.ts is readable — the crash cannot be witnessed as this user").toBe(true);
+      let checked = 0;
+      for (const r of [gate([root]), bare([root])]) {
+        expect(r.status, r.stderr).toBe(3);
+        expect(r.stderr).toMatch(/reference:boundary crashed — .*EACCES/);
+        expect(r.stdout).not.toContain("violation(s)");
+        checked++;
+      }
+      expect(checked).toBe(2);
+    } finally { chmodSync(join(root, "locked.ts"), 0o644); rmSync(root, { recursive: true, force: true }); }
   });
   it("deliberate violation: a scratch copy of the real src goes clean → violated (exit 1, naming the file and line) → clean again", () => {
     const root = mkdtempSync(join(tmpdir(), "w1b-ref-proof-"));

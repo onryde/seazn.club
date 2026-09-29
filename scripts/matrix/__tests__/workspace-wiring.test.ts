@@ -103,7 +103,7 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
       expect(scripts[s], `packages/reference has no ${s} script`).toBeDefined();
       expect(pkg.scripts[s]).toContain(`npm run ${s} --workspace packages/reference`);
     }
-    expect(pkg.scripts["reference:boundary"]).toBe("node --experimental-strip-types scripts/reference-boundary.ts");
+    expect(pkg.scripts["reference:boundary"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/reference-boundary.ts");
   });
   it("packages/reference: turbo keys its lint AND typecheck on the engine's inputs, so an engine type change is a cache miss (review M-4)", () => {
     // The real consumer, spawned: turbo's own dry-run task graph. Both tasks

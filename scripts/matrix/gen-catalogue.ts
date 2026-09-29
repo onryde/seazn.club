@@ -7,6 +7,10 @@
 //      floors.json counts: it would accept any lowering), or any zero floor
 //      (trap 1, even with --accept-lower-floors);
 //   3  the generator crashed — never 1, which would read as drift.
+//   (3 also: a crash while the CLI LOADS, before any of its code runs — a
+//   strip-types parse error, a missing export, a module that throws — through
+//   `pnpm matrix:catalogue`, whose preload lib/crash-exit.ts maps it; a bare `node …`
+//   run exits 1 on one. Final batch F-6.)
 // --root redirects only where the committed files are read and written, and
 // where regressions.json is read from; the generators read the product and
 // engine through imports.

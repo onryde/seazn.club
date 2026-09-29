@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { builtinModules } from "@seazn/engine/sports";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -784,10 +784,33 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     expect(c.stderr).toContain(`HEAD has scripts/matrix/single-sport.ts but no ${BASELINE_PATH}`);
   });
 
+  it("final batch F-6: the R26 gate's load reaches no UI module — its runtime relative-import closure stays out of apps/ (it read SPORT_KEYS through lib/catalogue.ts, which value-imports a v2 component)", () => {
+    /** Every file the module's runtime relative imports reach (`import type` / `export type` are erased). */
+    const closure = (entry: string): string[] => {
+      const seen = new Set<string>();
+      const visit = (file: string): void => {
+        if (seen.has(file)) return;
+        seen.add(file);
+        const text = readFileSync(file, "utf8");
+        for (const m of text.matchAll(/^(import|export)(\s+type)?\b[^;]*?\bfrom\s+"(\.{1,2}\/[^"]+)"|^import\s+"(\.{1,2}\/[^"]+)"/gm)) {
+          if (m[2] !== undefined) continue;
+          visit(resolve(dirname(file), m[3] ?? m[4] ?? ""));
+        }
+      };
+      visit(entry);
+      return [...seen].map((f) => relative(REPO, f));
+    };
+    const gate = closure(CLI);
+    expect(gate, "the walker saw the gate's own import").toContain("scripts/matrix/lib/main-module.ts");
+    expect(gate.filter((f) => f.startsWith("apps/")), "the R26 gate loads a UI module").toEqual([]);
+    // The pair: the same walker sees the UI edge where it exists.
+    expect(closure(resolve(REPO, "scripts/matrix/lib/catalogue.ts")).filter((f) => f.startsWith("apps/")).length).toBeGreaterThan(0);
+  });
+
   it("final batch FB-8: the bootstrap keys on REF's package.json, not on the PR's own constants — a base that RUNS the ratchet (its package.json names the script) with the scanner renamed and the baseline moved is refused (task 11 review RR-3b, G1/G2)", () => {
     // The key is the product's: the real package.json runs the scanner under it.
     const realPkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(realPkg.scripts[RATCHET_SCRIPT]).toBe(`node --experimental-strip-types ${SCANNER_PATH}`);
+    expect(realPkg.scripts[RATCHET_SCRIPT]).toBe(`node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts ${SCANNER_PATH}`);
     const pkg = (scripts: Record<string, string>) => `${JSON.stringify({ name: "scratch", scripts }, null, 2)}\n`;
     let checked = 0;
     // G1: the scanner file renamed; G2: left in place under a typo'd constant — at REF neither sits at SCANNER_PATH.

@@ -37,6 +37,10 @@
 //      not declare (UndeclaredDeny), or writeResults refusing a secret
 //      (nothing written); or MATRIX.md failing to render (results.json kept,
 //      the PF4 summary already printed).
+//   (3 also: a crash while the CLI LOADS, before any of its code runs — a
+//   strip-types parse error, a missing export, a module that throws — through
+//   `pnpm matrix:l3`, whose preload lib/crash-exit.ts maps it; a bare `node …`
+//   run exits 1 on one. Final batch F-6.)
 // An uncaught throw would exit 1 — the "zero cases" code — and print an
 // unredacted stack, so every failure is caught here.
 //

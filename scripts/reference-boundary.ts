@@ -24,9 +24,12 @@
 // Residual limit, by construction: a loader name BUILT at runtime (string
 // concatenation, a computed key) is invisible to any static judge.
 //
-// Run: node --experimental-strip-types scripts/reference-boundary.ts [srcDir]
-// (default: this checkout's packages/reference/src). Exit 0 clean; 1 on any
-// violation or on zero files scanned; 2 on usage.
+// Run: npm run reference:boundary [-- srcDir] (default: this checkout's
+// packages/reference/src). Exit 0 clean; 1 on any violation, or on zero files
+// scanned (a vacuous verdict: kept as 1 by ruling, final batch F-6 — a scan
+// that finds nothing is a failed gate, not a usage error); 2 on usage; 3 on a
+// crash — inside the scan (a source it cannot read), or, through the package
+// script's crash-exit.ts preload, while the gate loads.
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -268,17 +271,27 @@ export function checkReferenceBoundary(srcDir: string): { scanned: number; viola
   return { scanned: files.length, violations };
 }
 
+const USAGE = "usage: node --experimental-strip-types scripts/reference-boundary.ts [srcDir]  (default: packages/reference/src) — exit 0 clean; 1 on a violation, or on zero files scanned (a vacuous verdict); 2 on usage; 3 on a crash";
+
 if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
   if (args.length > 1) {
-    process.stderr.write("usage: node --experimental-strip-types scripts/reference-boundary.ts [srcDir]  (default: packages/reference/src)\n");
+    process.stderr.write(`${USAGE}\n`);
     process.exitCode = 2;
   } else {
     const dir = args[0] ?? fileURLToPath(new URL("../packages/reference/src", import.meta.url));
-    const { scanned, violations } = checkReferenceBoundary(dir);
-    for (const v of violations) process.stderr.write(`FAIL ${v.file}:${v.line} ${v.specifier} — ${v.reason}\n`);
-    if (scanned === 0) process.stderr.write("reference:boundary scanned ZERO files — refusing\n");
-    process.stdout.write(`reference:boundary: ${scanned} files, ${violations.length} violation(s)\n`);
-    process.exitCode = scanned === 0 || violations.length > 0 ? 1 : 0;
+    let scan: { scanned: number; violations: Violation[] } | null = null;
+    // Final batch F-6: a crash is 3, never 1 — which reads as a violation.
+    try { scan = checkReferenceBoundary(dir); } catch (e) {
+      process.stderr.write(`reference:boundary crashed — ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}\n`);
+      process.exitCode = 3;
+    }
+    if (scan !== null) {
+      const { scanned, violations } = scan;
+      for (const v of violations) process.stderr.write(`FAIL ${v.file}:${v.line} ${v.specifier} — ${v.reason}\n`);
+      if (scanned === 0) process.stderr.write("reference:boundary scanned ZERO files — refusing\n");
+      process.stdout.write(`reference:boundary: ${scanned} files, ${violations.length} violation(s)\n`);
+      process.exitCode = scanned === 0 || violations.length > 0 ? 1 : 0;
+    }
   }
 }

@@ -794,7 +794,7 @@ describe("model.ts", () => {
 
   it("package.json runs the CLI under strip-types", () => {
     const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(pkg.scripts["matrix:model"]).toBe("node --experimental-strip-types scripts/matrix/model.ts");
+    expect(pkg.scripts["matrix:model"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/model.ts");
   });
 });
 
@@ -829,14 +829,17 @@ describe("the per-competition division cap (T15 fix round 1)", () => {
   type Rep = { cells: { verdict: string; executions: number; failure: { check: string } | null }[] };
   const run = async (cap: number | null, runId: string) => {
     const reads: [string, string][] = [];
+    const orgs: string[] = [];
     const fake = new CappedDivisions(cap);
     const dir = reportDir();
+    const base = deps();
     const exit = await runModel(deps({
       openDb: async () => ({ ...(await deps().openDb()), planLimit: async (planKey: string, key: string) => { reads.push([planKey, key]); return cap; } }),
+      prepareCaseOrg: async (c, i) => { orgs.push(i.slug); return base.prepareCaseOrg(c, i); },
       driverFor: () => fake,
     }), ["--run-id", runId, "--report-dir", dir, ...ONE]);
     const rep = existsSync(join(dir, runId, "model-report.json")) ? JSON.parse(readFileSync(join(dir, runId, "model-report.json"), "utf8")) as Rep : null;
-    return { exit, reads, fake, rep };
+    return { exit, reads, fake, rep, orgs, dir };
   };
 
   it("the premise: the model reads the key the product's division gate reads", () => {
@@ -869,11 +872,17 @@ describe("the per-competition division cap (T15 fix round 1)", () => {
     expect(fake.comps).toBe(Math.ceil(executions / cap));
   });
 
-  it("a plan that allows NO division (the key absent from its matrix reads as 0, getLimit) aborts the cell before any competition", async () => {
+  it("final batch F-6: a plan that allows NO division (the key absent from its matrix reads as 0, getLimit) is REFUSED by name — exit 2 like run.ts's PlanLacksGate, before any case org, competition or report", async () => {
     const io = capture();
-    const { exit, fake } = await run(0, "cpz");
-    expect(exit).toBe(3);
+    const { exit, fake, orgs, reads, dir } = await run(0, "cpz");
+    expect(exit).toBe(2);
+    expect(reads).toEqual([[PLAN, DIVISION_CAP_KEY]]);
+    expect(orgs, "refused before any case org").toEqual([]);
     expect(fake.comps).toBe(0);
-    expect(io.err()).toMatch(/divisions\.per_competition\.max/);
+    expect(readdirSync(dir), "nothing written").toEqual([]);
+    expect(io.err()).toMatch(/model: refused — PlanAllowsNoDivision: [^\n]*divisions\.per_competition\.max/);
+    // The pair: a cap of 1 is a plan the model can run on (one division per competition).
+    capture();
+    expect((await run(1, "cp1b")).exit).toBe(0);
   });
 });

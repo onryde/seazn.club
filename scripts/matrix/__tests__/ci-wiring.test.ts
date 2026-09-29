@@ -251,8 +251,8 @@ describe("matrix CI wiring", () => {
   });
 
   it("package scripts run the CLIs under strip-types", () => {
-    expect(pkg.scripts["matrix:l3"]).toBe("node --experimental-strip-types scripts/matrix/run.ts");
-    expect(pkg.scripts["matrix:render"]).toBe("node --experimental-strip-types scripts/matrix/render.ts");
+    expect(pkg.scripts["matrix:l3"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/run.ts");
+    expect(pkg.scripts["matrix:render"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/render.ts");
     expect(existsSync(resolve(REPO, "scripts/matrix/run.ts"))).toBe(true);
     expect(existsSync(resolve(REPO, "scripts/matrix/render.ts"))).toBe(true);
   });
@@ -274,7 +274,7 @@ describe("matrix CI wiring", () => {
       expect(lines[next]).toBe(SS_STEP);
       expect(lines.filter((l) => l.includes("matrix:single-sport") && !isComment(l))).toEqual([SS_STEP]);
       expect(jobAt(next)).toBe("  gates:");
-      expect(pkg.scripts["matrix:single-sport"]).toBe("node --experimental-strip-types scripts/matrix/single-sport.ts");
+      expect(pkg.scripts["matrix:single-sport"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/single-sport.ts");
       expect(existsSync(resolve(REPO, "scripts/matrix/single-sport.ts"))).toBe(true);
     });
 
@@ -357,7 +357,7 @@ describe("reference CI wiring (Task 12)", () => {
     expect(jobAt(at)).toBe("  gates:");
     expect(jobAt(lines.indexOf(`      - name: ${REF}`))).toBe("  gates:");
     expect(lines.filter((l) => l === `      - name: ${REF}`)).toHaveLength(1);
-    expect(pkg.scripts["reference:boundary"]).toBe("node --experimental-strip-types scripts/reference-boundary.ts");
+    expect(pkg.scripts["reference:boundary"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/reference-boundary.ts");
     expect(existsSync(resolve(REPO, "scripts/reference-boundary.ts"))).toBe(true);
   });
 

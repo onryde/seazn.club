@@ -71,9 +71,14 @@
 //   2  refused: bad arguments; a scope root that scanned ZERO files (a scope
 //      that finds nothing is wrong, not clean); a missing or malformed
 //      baseline (here or at REF); an unknown REF; REF that runs the ratchet
-//      but has no baseline, or whose package.json is not JSON; a recorded move that is not a rename since REF; --write that
-//      would raise a count; --init over an existing baseline; an invalid --move;
+//      but has no baseline, or whose package.json is not JSON; a recorded
+//      move that is not a rename since REF; --write that would raise a count;
+//      --init over an existing baseline; an invalid --move;
 //   3  the scanner crashed — never 1, which would read as a ratchet verdict.
+//   (3 also: a crash while the CLI LOADS, before any of its code runs — a
+//   strip-types parse error, a missing export, a module that throws — through
+//   `pnpm matrix:single-sport`, whose preload lib/crash-exit.ts maps it; a bare `node …`
+//   run exits 1 on one. Final batch F-6.)
 // Deterministic: files in codepoint order, pins in source order, keys sorted.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -82,8 +87,13 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type * as TS from "typescript";
-import { SPORT_KEYS } from "./lib/catalogue.ts";
+import { builtinModules } from "@seazn/engine/sports";
 import { isMainModule } from "./lib/main-module.ts";
+
+// The registry straight from the engine (final batch F-6): read through
+// lib/catalogue.ts, the R26 gate's load depended on a v2 UI module it
+// value-imports (format-templates.ts).
+const SPORT_KEYS: readonly string[] = builtinModules.map((m) => m.key);
 
 // `typescript` through require, not import: vite's transform chokes on the
 // ~9 MB CJS bundle and a test importing this module then fails to collect (as

@@ -461,7 +461,7 @@ describe("gen-catalogue CLI", { timeout: genMeter.budget }, () => {
     const r = cli(["--check"], REPO);
     expect(r.status, r.stderr).toBe(0);
     const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(pkg.scripts["matrix:catalogue"]).toBe("node --experimental-strip-types scripts/matrix/gen-catalogue.ts");
+    expect(pkg.scripts["matrix:catalogue"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/gen-catalogue.ts");
   });
 
   it("empty case: --write into a root with no committed files writes all five, a second --write changes no byte, then --check exits 0", () => {
