@@ -68,3 +68,48 @@ export function withdrawalReason(): string {
   if (r === null) throw new Error("product-text: withdrawal.ts REASON not found");
   return r[1];
 }
+
+export interface NextMatchText {
+  status: number;
+  /** The HttpError's code, resolved through fed-seats.ts's import. */
+  code: string;
+  /** The one fixture status fed-seats.ts hasStarted reads as not started. */
+  notStarted: string;
+  /** append-event.ts calls releaseFedSeats at the top level of the append:
+   *  every event, a void included, is judged. */
+  everyAppend: boolean;
+  /** next-match-started.ts nextMatchStartedMessage, for a label. */
+  message: (label: string) => string;
+}
+
+/** fed-seats.ts planRelease (ruling RR-1): a write that takes back a knockout
+ *  decision whose next match has started is refused by name. */
+export function nextMatchStartedText(): NextMatchText {
+  const fed = read("apps/web/src/server/engine-db/fed-seats.ts");
+  const thrown = /\n\s*if \(!reset && hasStarted\(t\)\) \{[\s\S]*?throw new HttpError\((\d{3}), nextMatchStartedMessage\([^;]*?\), ([A-Z_]+), \{ next_match: ref \}\);/.exec(fed);
+  if (thrown === null) throw new Error("product-text: fed-seats.ts NEXT_MATCH_STARTED refusal not found in the expected shape — re-read it and update the model's NEXT_MATCH_LOCK");
+  const from = new RegExp(`import \\{[^}]*\\b${thrown[2]}\\b[^}]*\\} from "@/([^"]+)";`).exec(fed);
+  if (from === null) throw new Error(`product-text: fed-seats.ts does not import ${thrown[2]} from an @/ module — resolve it`);
+  const lib = read(`apps/web/src/${from[1]}.ts`);
+  const code = new RegExp(`\\bexport const ${thrown[2]} = "([A-Z_]+)";`).exec(lib)?.[1];
+  if (code === undefined) throw new Error(`product-text: ${thrown[2]} is not a string constant in ${from[1]}.ts`);
+  const started = /\nfunction hasStarted\(t: Node\): boolean \{\s*return t\.status !== "([a-z_]+)" \|\| t\.outcome !== null \|\| t\.live_events > 0;\s*\}/.exec(fed);
+  if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule the model mirrors — re-read it");
+  const everyAppend = /\n {2}const \w+ = await releaseFedSeats\(tx, fixtureId, fixture\.outcome, outcome\);/.test(read("apps/web/src/server/engine-db/append-event.ts"));
+  const template = /\nexport function nextMatchStartedMessage\(label: string\): string \{\s*return `([^`]*)`;\s*\}/.exec(lib)?.[1];
+  if (template === undefined) throw new Error(`product-text: ${from[1]}.ts nextMatchStartedMessage not found`);
+  return { status: Number(thrown[1]), code, notStarted: started[1], everyAppend, message: (label) => template.replace("${label}", label) };
+}
+
+/** stages.ts bracketToGen: the round_no the product stores for an engine
+ *  bracket fixture — its lane's offset (a multiple of the lane depth), plus
+ *  the engine's 0-based round, plus one. */
+export function bracketRoundNoText(): (lane: string | undefined, round: number, laneDepth: number) => number {
+  const body = /\nfunction bracketToGen\(bracket: GeneratedBracket, laneDepth: number\): GenFixture\[\] \{([\s\S]*?)\n\}\n/.exec(read("apps/web/src/server/usecases/stages.ts"))?.[1];
+  const offset = body === undefined ? null : /const laneOffset = \(f: BracketFixtureGen\): number =>\s*f\.bracket === "LB" \? laneDepth : f\.bracket === "GF" \? laneDepth \* (\d+) : 0;/.exec(body);
+  if (body === undefined || offset === null || !body.includes("const roundNo = laneOffset(f) + f.round + 1;")) {
+    throw new Error("product-text: stages.ts bracketToGen's round_no is not lane offset + round + 1 — re-read it and re-check the model's later-round rule");
+  }
+  const gf = Number(offset[1]);
+  return (lane, round, laneDepth) => (lane === "LB" ? laneDepth : lane === "GF" ? laneDepth * gf : 0) + round + 1;
+}

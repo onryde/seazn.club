@@ -6,17 +6,19 @@
 //  - fold parity for every fixture whose whole ledger the model knows;
 //  - and, in the commands, every refusal named, every refusal of a command
 //    the model holds legal a violation, and the roster lock an EXPECTED
-//    refusal.
+//    refusal — as is a knockout take-back once the match it feeds has
+//    started (NEXT_MATCH_LOCK, ruling RR-1).
 // Every ledger that goes unknown is counted (`unknowns`), every step is
 // classed (`steps`), and informativeSteps() fails a cell with none that told
 // the model anything (R25).
+import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import type { FixtureRow, OrganiserDriver } from "../driver/types.ts";
 import { stagesForRow, type RowKey } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
 import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
-import { foldLedger, type LedgerEntry } from "./ledger-fold.ts";
+import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
 export const COMMAND_KINDS = ["Start", "AddEntrant", "Withdraw", "Score", "Walkover", "Void", "Correct", "Generate", "Rebuild", "Complete"] as const;
 export type CommandKind = (typeof COMMAND_KINDS)[number];
@@ -24,8 +26,9 @@ export type CommandKind = (typeof COMMAND_KINDS)[number];
 /** One fixture as the model knows it. `ledger` is every event the model
  *  posted to it, in order — or null once events the model did not write may
  *  exist (a withdrawal cascade, a refused post, a fixture first seen under
- *  way). Fold parity judges only a known, non-empty ledger. */
-export interface FixtureModel { id: string; home: string | null; away: string | null; status: string; ledger: LedgerEntry[] | null }
+ *  way). Fold parity judges only a known, non-empty ledger. `round` is the
+ *  product's round_no, which a bracket's feeds run up (nextMatchMayHaveStarted). */
+export interface FixtureModel { id: string; round: number | null; home: string | null; away: string | null; status: string; ledger: LedgerEntry[] | null }
 
 export class ModelViolation extends Error {
   readonly check: string;
@@ -117,6 +120,40 @@ export function rosterLocked(m: ModelState): boolean {
   return m.started && !ROSTER_LOCK.openKinds.includes(m.stageKind);
 }
 
+/** A take-back refused under NEXT_MATCH_LOCK that still moved the product's tip. */
+export const NEXT_MATCH_CHECK = "model-next-match-lock";
+
+/** fed-seats.ts planRelease, which append-event.ts runs on EVERY append (a
+ *  void included), before the first write: a write that changes who a
+ *  decision advances is refused, 409 NEXT_MATCH_STARTED, when the fixture it
+ *  feeds seats one of its entrants and has started — `status` not
+ *  `notStarted`, an outcome, or a live event (hasStarted). Only a bracket has
+ *  feeds: the engine's BRACKET_STAGE_KINDS, whose generators are the only
+ *  ones that emit homeFrom/awayFrom. Pinned against fed-seats.ts's text by
+ *  model-core.test.ts. */
+export const NEXT_MATCH_LOCK: { readonly status: number; readonly code: string; readonly notStarted: string; readonly kinds: readonly string[] } = Object.freeze({
+  status: 409,
+  code: "NEXT_MATCH_STARTED",
+  notStarted: "scheduled",
+  kinds: Object.freeze([...BRACKET_STAGE_KINDS]),
+});
+
+/** The product MAY refuse a take-back of `f` under NEXT_MATCH_LOCK here. The
+ *  model sees no feed edges, so it reads the rule's necessary condition: on a
+ *  bracket kind, a fixture in a LATER round (every feed runs to a later
+ *  round_no — engine bracket.ts through stages.ts bracketToGen, pinned) that
+ *  seats one of f's entrants has started, or its ledger is not known whole.
+ *  An upstream feeder, or a started match holding neither entrant, does not
+ *  count. Never true on a round robin: there the take-back must be accepted. */
+export function nextMatchMayHaveStarted(m: ModelState, f: FixtureModel): boolean {
+  const round = f.round;
+  if (!NEXT_MATCH_LOCK.kinds.includes(m.stageKind) || round === null) return false;
+  const mine = [f.home, f.away].filter((e): e is string => e !== null);
+  const holds = (g: FixtureModel) => (g.home !== null && mine.includes(g.home)) || (g.away !== null && mine.includes(g.away));
+  const started = (g: FixtureModel) => g.status !== NEXT_MATCH_LOCK.notStarted || g.ledger === null || liveEntries(g.ledger).length > 0;
+  return [...m.fixtures.values()].some((g) => g.round !== null && g.round > round && holds(g) && started(g));
+}
+
 export function recordFinding(m: ModelState, id: string, line: string): void {
   const f = m.findings.get(id) ?? { count: 0, evidence: [] };
   f.count++;
@@ -195,8 +232,9 @@ export function absorbFixtures(m: ModelState, rows: readonly FixtureRow[]): void
     const f = m.fixtures.get(r.id);
     if (f === undefined) {
       const known = r.status === "scheduled" && r.outcome === null;
-      m.fixtures.set(r.id, { id: r.id, home: r.home_entrant_id, away: r.away_entrant_id, status: r.status, ledger: known ? [] : null });
+      m.fixtures.set(r.id, { id: r.id, round: r.round_no, home: r.home_entrant_id, away: r.away_entrant_id, status: r.status, ledger: known ? [] : null });
     } else {
+      f.round = r.round_no;
       f.status = r.status;
       f.home = r.home_entrant_id;
       f.away = r.away_entrant_id;

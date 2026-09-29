@@ -8,6 +8,10 @@
 // EXPECTS (the roster lock after Start, finding CD-T13b), which is recorded
 // and walked past. A named refusal of a command the model holds legal is a
 // violation too (ruling I-1): an ordinary refusal is one the product may give.
+// One named refusal is PERMITTED where the model cannot see its whole reason:
+// a knockout take-back once the match it feeds has started (ruling RR-1,
+// fed-seats.ts NEXT_MATCH_STARTED) — expected when it comes, and judged to
+// have written nothing.
 import fc from "fast-check";
 import { RefusedCall, type OrganiserDriver, type PostedEvent } from "../driver/types.ts";
 import { isNamedRefusal, isTerminal } from "../observed.ts";
@@ -16,8 +20,8 @@ import { START, type StreamEvent } from "../streams/types.ts";
 import { fenceBlocking } from "./fences.ts";
 import { liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
-  COMMAND_KINDS, ModelViolation, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
-  absorbFixtures, checkStep, markUnknown, recordFinding, rosterLocked,
+  COMMAND_KINDS, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
+  absorbFixtures, checkStep, markUnknown, nextMatchMayHaveStarted, recordFinding, rosterLocked,
   type CommandKind, type FixtureModel, type ModelState, type StepVerdict,
 } from "./state.ts";
 
@@ -46,6 +50,34 @@ const open = (m: ModelState) => [...m.fixtures.values()].filter((f) => seated(f)
 const withLive = (m: ModelState) => [...m.fixtures.values()].filter((f) => f.ledger !== null && liveEntries(f.ledger).length > 0);
 const decided = (m: ModelState) => [...m.fixtures.values()].filter((f) => seated(f) && f.ledger !== null && f.status === "decided");
 
+/** A named refusal the product MAY give, for a reason the model cannot see
+ *  whole: matched on status AND code, it is an expected refusal, and `after`
+ *  judges what it left behind. */
+interface PermittedRefusal { status: number; code: string; after: (d: OrganiserDriver) => Promise<void> }
+
+/** Ruling RR-1: a take-back of `f` on a bracket whose fed match may have
+ *  started may be refused under NEXT_MATCH_LOCK (fed-seats.ts). The product
+ *  refuses before the first write, and a take-back's FIRST void (newest first)
+ *  already moves who `f` advances — voiding a win stream's last event
+ *  un-decides it, pinned per sport in model-core.test.ts — so the refusal
+ *  writes nothing: the tip must not move, and the ledger post() dropped on
+ *  the refusal is the model's again. */
+function takeBackLock(m: ModelState, f: FixtureModel): PermittedRefusal | null {
+  if (!nextMatchMayHaveStarted(m, f)) return null;
+  const known = [...knownLedger(f)];
+  return {
+    status: NEXT_MATCH_LOCK.status,
+    code: NEXT_MATCH_LOCK.code,
+    after: async (d) => {
+      const st = await d.fixtureState(f.id);
+      if (st.last_seq !== known.length) {
+        throw new ModelViolation(NEXT_MATCH_CHECK, [`fixture ${f.id}: refused ${NEXT_MATCH_LOCK.code}, yet the product's tip moved from ${known.length} to ${st.last_seq} — a refused take-back writes nothing (fed-seats.ts runs before the first write)`]);
+      }
+      f.ledger = known;
+    },
+  };
+}
+
 abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
   abstract readonly kind: CommandKind;
   readonly k: number;
@@ -68,6 +100,8 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
   /** A known code-less refusal: the finding it is recorded under, or null. */
   protected knownUnnamed(_e: RefusedCall): string | null { return null; }
   protected async afterExpectedRefusal(_m: ModelState, _d: OrganiserDriver): Promise<void> {}
+  /** A named refusal the product may give here, or null (ruling RR-1). */
+  protected permittedRefusal(_m: ModelState): PermittedRefusal | null { return null; }
   check(m: Readonly<ModelState>): boolean {
     if (!this.ready(m)) return false;
     const fence = fenceBlocking(m, this.kind, this.fences);
@@ -84,6 +118,7 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
     // Judged on the state the command was drawn in, before it acts.
     const must = this.mustAccept(m);
     const expected = this.expectsRefusal(m);
+    const permitted = this.permittedRefusal(m);
     const unknownsBefore = m.unknowns.length;
     let verdict: StepVerdict = "accepted";
     try {
@@ -103,6 +138,10 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
         c.expected++;
         verdict = "expected-refusal";
         await this.afterExpectedRefusal(m, d);
+      } else if (permitted !== null && e.status === permitted.status && e.code === permitted.code) {
+        c.expected++;
+        verdict = "expected-refusal";
+        await permitted.after(d);
       } else {
         if (!named) throw new ModelViolation("model-refusal-named", [line]);
         if (must) {
@@ -226,9 +265,12 @@ class Walkover extends Cmd {
 class Void extends Cmd {
   readonly kind = "Void" as const;
   protected ready(m: ModelState) { return m.started && withLive(m).length > 0; }
+  // Must-accept, except a take-back the product may refuse by name (RR-1).
   protected override mustAccept() { return true; }
+  protected override permittedRefusal(m: ModelState) { return takeBackLock(m, this.target(m)); }
+  private target(m: ModelState) { return pick(withLive(m), this.k, "fixture with a live event"); }
   protected async act(m: ModelState, d: OrganiserDriver) {
-    const f = pick(withLive(m), this.k, "fixture with a live event");
+    const f = this.target(m);
     const target = pick(liveEntries(knownLedger(f)).reverse(), 0, "live event");
     await post(m, d, f, [{ type: "core.void", payload: { event_id: target.id } }]);
   }
@@ -236,9 +278,12 @@ class Void extends Cmd {
 class Correct extends Cmd {
   readonly kind = "Correct" as const;
   protected ready(m: ModelState) { return m.started && decided(m).length > 0; }
+  // Must-accept, except a take-back the product may refuse by name (RR-1).
   protected override mustAccept() { return true; }
+  protected override permittedRefusal(m: ModelState) { return takeBackLock(m, this.target(m)); }
+  private target(m: ModelState) { return pick(decided(m), this.k, "decided fixture"); }
   protected async act(m: ModelState, d: OrganiserDriver) {
-    const f = pick(decided(m), this.k, "decided fixture");
+    const f = this.target(m);
     // Void every live event newest first, then record the result again.
     const voids = liveEntries(knownLedger(f)).reverse().map((t): StreamEvent => ({ type: "core.void", payload: { event_id: t.id } }));
     await post(m, d, f, voids);

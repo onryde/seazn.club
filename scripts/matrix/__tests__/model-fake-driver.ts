@@ -18,7 +18,14 @@
 //    score event or a result (stages.ts rebuildStageFixtures);
 //  - the roster locks at Start exactly as entrants.ts's TEXT says (read by
 //    product-text.ts, never typed): statuses, open-window kinds, status,
-//    message, and the code api-v1 puts on the wire.
+//    message, and the code api-v1 puts on the wire;
+//  - a bracket's feed edges (a test hook, `feed`) fill and give back seats as
+//    fed-seats.ts does (ruling RR-1): a decision seats its winner in the
+//    fixture it feeds, only ever into an empty seat (usecases/scoring.ts
+//    onDecided → fillSlot), and a write that changes who that decision
+//    advances empties the seat again — or, when the fed match has started,
+//    is refused by name before anything is written (planRelease). Status,
+//    code, message and the not-started rule are read from the product's text.
 // The faults are opt-in. fault879 reproduces issue #879's SHAPE, not a blanket
 // fault: only an entrant added while the stage already has fixtures makes the
 // next Generate seat every pair again (ruling C-1, superseding R-PF8's
@@ -30,7 +37,7 @@ import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantKind, type
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
-import { rosterLockText, withdrawalReason } from "./product-text.ts";
+import { nextMatchStartedText, rosterLockText, withdrawalReason } from "./product-text.ts";
 
 export interface ModelFakeOpts {
   /** #879: after an entrant is added while the stage has fixtures, the next Generate seats every pair again. */
@@ -49,9 +56,19 @@ export interface ModelFakeOpts {
   rosterLock?: "product" | "named" | "open";
   /** Every posted event is answered as landing on the SEQ_CONFLICT retry. */
   retriedPosts?: boolean;
+  /** A faulty fed-seat release: "always" refuses a take-back whether or not
+   *  the fed match has started; "leaky" refuses it after writing the event. */
+  fedSeatsFault?: "always" | "leaky";
 }
 
 const LOCK = rosterLockText();
+const NEXT = nextMatchStartedText();
+
+/** fed-seats.ts advancingSides' winner: a `win` or an `award` sends it onward. */
+function advancingWinner(outcome: unknown): string | undefined {
+  const o = (outcome ?? {}) as { kind?: string; winner?: string };
+  return o.kind === "win" || o.kind === "award" ? o.winner : undefined;
+}
 
 /** append-event.ts LOCKED_FIXTURE_STATUSES: refused before the fold. */
 const LOCKED = new Set(["finalized", "cancelled"]);
@@ -81,6 +98,8 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   #lateEntrant = false;
   /** divisions.status: setup until Start (the model has no publish). */
   #divisionStatus = "setup";
+  /** source fixture id → the seat its winner fills (winner_to_fixture / winner_to_slot). */
+  readonly feeds = new Map<string, { target: string; slot: 1 | 2 }>();
   constructor(opts: ModelFakeOpts = {}) {
     super("org-model");
     this.opts = opts;
@@ -91,6 +110,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     this.entrants = [];
     this.fixtures = [];
     this.ledgers.clear();
+    this.feeds.clear();
     this.stage = null;
     this.completed = false;
     this.#lateEntrant = false;
@@ -182,14 +202,53 @@ export class ModelFakeDriver extends FakeLeagueDriver {
           if (!EngineError.is(e)) throw e;
           throw new RefusedCall("POST", path, engineHttpStatus(e.code), e.code, e.message);
         }
+        // append-event.ts: releaseFedSeats after the fold, BEFORE the first write.
+        const refused = this.#release(f, outcome, path);
+        if (refused !== null && this.opts.fedSeatsFault !== "leaky") throw refused;
         ledger.push(entry);
         f.events = [...f.events, ev];
         f.outcome = this.opts.lieOutcome === true && outcome !== null ? { ...(outcome as object), winner: "nobody" } : outcome;
         f.status = statusFromFold(outcome, liveEntries(ledger));
+        if (refused !== null) throw refused;
+        this.#fill(f);
         out.push({ seq: ledger.length, status: f.status, outcome: f.outcome, event_id: eid, ...(this.opts.retriedPosts === true ? { retried: true } : {}) });
       }
       return out;
     });
+  }
+  /** A test hook for a bracket feed edge (stages.ts generate's second pass:
+   *  a target's homeFrom/awayFrom becomes the source's winner_to_fixture/slot). */
+  feed(source: string, target: string, slot: 1 | 2): void {
+    this.feeds.set(source, { target, slot });
+  }
+  /** fed-seats.ts hasStarted, its three terms. */
+  #started(t: FakeFixture): boolean {
+    return t.status !== NEXT.notStarted || t.outcome !== null || liveEntries(this.ledgers.get(t.id) ?? []).length > 0;
+  }
+  /** fed-seats.ts planRelease over one winner edge: only when who advances
+   *  changed, and only a seat holding one of this fixture's two entrants. The
+   *  refusal to throw, or null (the seat is given back). */
+  #release(f: FakeFixture, next: unknown, path: string): RefusedCall | null {
+    const edge = this.feeds.get(f.id);
+    const was = advancingWinner(f.outcome);
+    if (edge === undefined || was === undefined || was === advancingWinner(next)) return null;
+    const t = this.fixtures.find((x) => x.id === edge.target);
+    if (t === undefined) return null;
+    const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
+    if (occupant === null || (occupant !== f.home_entrant_id && occupant !== f.away_entrant_id)) return null;
+    if (this.opts.fedSeatsFault === "always" || this.#started(t)) return new RefusedCall("POST", path, NEXT.status, NEXT.code, NEXT.message(`R${t.round_no ?? 0}·${t.fixture_no ?? 0}`));
+    if (edge.slot === 1) t.home_entrant_id = null;
+    else t.away_entrant_id = null;
+    return null;
+  }
+  /** usecases/scoring.ts onDecided → fillSlot: the winner goes forward, into an empty seat only. */
+  #fill(f: FakeFixture): void {
+    const edge = this.feeds.get(f.id);
+    const w = advancingWinner(f.outcome);
+    const t = edge === undefined ? undefined : this.fixtures.find((x) => x.id === edge.target);
+    if (edge === undefined || w === undefined || t === undefined) return;
+    if (edge.slot === 1 && t.home_entrant_id === null) t.home_entrant_id = w;
+    if (edge.slot === 2 && t.away_entrant_id === null) t.away_entrant_id = w;
   }
   /** withdrawal.ts applyUpdate + voidAndAbandon: a played fixture has every
    *  live state-bearing event voided, newest first; then core.abandon. */
