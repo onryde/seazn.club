@@ -3,16 +3,22 @@
 // server for a suite that streams (e2e's stream-overlay spec and Phone tab, smoke's stream-overlay suite) must say
 // RELAY_DRIVERS=fake explicitly, or those suites go red on a 503 that looks like an outage.
 //
-// Swept by BEHAVIOUR, not by step name (AGENTS.md class 16): every line that boots the standalone server.js in the
-// streaming workflows is found, and the env map of the step that owns it must carry the explicit fake. bench.yml boots
-// one too and is exempt BY NAME with its reason — the bench drives the scheduler and never starts a stream.
+// Swept by BEHAVIOUR, not by file or step name (AGENTS.md class 16; Task 14b review M3): EVERY workflow under
+// .github/workflows is read, every line that boots a production server (a `node … server.js`, or `next start`) is found,
+// and the env map of the step that owns it must carry the explicit fake. A dev server (`npm run dev`, help-shots.yml)
+// runs NODE_ENV=development, where an unset RELAY_DRIVERS is already fake, so it is not a production boot. bench.yml
+// boots one and is exempt BY NAME with its reason — and the exemption is itself checked, so it cannot outlive its boot.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "../../../../..");
-const STREAMING = ["e2e.yml", "ci.yml"] as const;
-const BOOT = /node apps\/web\/\.next\/standalone\/apps\/web\/server\.js/;
+const WORKFLOWS = resolve(ROOT, ".github/workflows");
+/** Workflows whose production server never streams, each with its reason. */
+const EXEMPT: Readonly<Record<string, string>> = {
+  "bench.yml": "the scheduler bench drives placement and never starts a stream",
+};
+const BOOT = /\bnode\b.*\bserver\.js\b|\bnext start\b/;
 
 /** For each server.js boot line: the lines of the step that owns it (from its `- name:` down to the boot). */
 function bootSteps(text: string): { line: number; step: string }[] {
@@ -26,11 +32,19 @@ function bootSteps(text: string): { line: number; step: string }[] {
 }
 
 describe("R5: every production server a streaming suite boots runs the fake relay drivers EXPLICITLY", () => {
-  it("e2e.yml and ci.yml: each server.js boot's step env carries RELAY_DRIVERS: fake, and never an ENV_NAME that would refuse it", () => {
+  it("EVERY workflow: each production server boot's step env carries RELAY_DRIVERS: fake, and never an ENV_NAME that would refuse it — bench.yml exempt by name", () => {
+    const files = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f)).sort();
+    let swept = 0;
     let checked = 0;
-    for (const wf of STREAMING) {
-      const steps = bootSteps(readFileSync(resolve(ROOT, ".github/workflows", wf), "utf8"));
-      expect(steps.length, `${wf} boots no server.js — the premise of this test moved`).toBeGreaterThan(0);
+    let exempted = 0;
+    for (const wf of files) {
+      const steps = bootSteps(readFileSync(resolve(WORKFLOWS, wf), "utf8"));
+      swept++;
+      if (wf in EXEMPT) {
+        expect(steps.length, `${wf} is exempt (${EXEMPT[wf]}) but boots no production server — drop the exemption`).toBeGreaterThan(0);
+        exempted += steps.length;
+        continue;
+      }
       for (const { line, step } of steps) {
         expect(step, `${wf}:${line}`).toMatch(/^\s+RELAY_DRIVERS: fake\s*$/m);
         // An explicit fake is refused on a named deployment (config.ts relayDriverMode): stg/prod here would stop the boot.
@@ -38,6 +52,10 @@ describe("R5: every production server a streaming suite boots runs the fake rela
         checked++;
       }
     }
+    expect(swept, "no workflow was read").toBeGreaterThan(0);
+    expect(swept).toBe(files.length);
+    expect(Object.keys(EXEMPT).every((f) => files.includes(f)), "an exemption names a workflow that no longer exists").toBe(true);
+    expect(exempted, "bench.yml's boot was seen and excused").toBeGreaterThan(0);
     // 3 e2e jobs (parallel, serial, mobile) + ci's smoke server, today; a floor, so a NEW boot is swept, not excused.
     expect(checked).toBeGreaterThanOrEqual(4);
   });
@@ -47,6 +65,16 @@ describe("R5: every production server a streaming suite boots runs the fake rela
     const [only] = bootSteps(text);
     expect(only).toBeDefined();
     expect(only!.step).not.toMatch(/^\s+RELAY_DRIVERS: fake\s*$/m);
+    // Any production boot shape is a boot, not just the standalone path the repo uses today; a dev server and a comment
+    // are not.
+    let found = 0;
+    for (const run of ["node .next/standalone/server.js &", "node --env-file=.env server.js", "npx next start -p 3000"]) {
+      expect(bootSteps(`      - name: Boot\n        run: ${run}\n`), run).toHaveLength(1);
+      found++;
+    }
+    expect(found).toBe(3);
+    expect(bootSteps("      - name: Boot\n        run: npm run dev > dev-server.log 2>&1 &\n"), "a dev server").toHaveLength(0);
+    expect(bootSteps("      - name: Boot\n        # node apps/web/.next/standalone/apps/web/server.js\n        run: true\n"), "a comment").toHaveLength(0);
   });
 
   it("scripts/ci-local.sh (the local mirror of these jobs) boots server.js with the fake default", () => {
