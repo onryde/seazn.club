@@ -11,7 +11,7 @@ import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import { routes } from "@/lib/routes";
 import { NextResponse } from "next/server";
 import { captureError } from "@/lib/sentry";
-import { relayIsDisabled } from "@/server/relay/drivers";
+import { relayUnavailable } from "@/server/relay/drivers";
 import { log } from "@/server/logger";
 
 /** Every error the Stripe SDK raises for a request carries a `type` of `Stripe…Error` (invalid request, API, connection,
@@ -80,10 +80,11 @@ export async function POST(req: Request) {
 
     // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production, drivers.ts
     // `disabledRelayDrivers`) refuses every start with this same 503, so a pack sold meanwhile is real money for a
-    // credit nothing can spend. Refused BEFORE the entitlement read and any Stripe call, with the code the Phone tab
-    // already reads ("The streaming service is unavailable"). After the ownership checks: a fixture that is not this
-    // org's stays 404 whatever the deployment.
-    if (relayIsDisabled()) {
+    // credit nothing can spend — and so (m1) does a LIVE one missing a Cloudflare secret, whose drivers cannot be built.
+    // Refused BEFORE the entitlement read and any Stripe call, with the code the Phone tab already reads ("The
+    // streaming service is unavailable"). After the ownership checks: a fixture that is not this org's stays 404
+    // whatever the deployment.
+    if (relayUnavailable()) {
       throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
     }
 

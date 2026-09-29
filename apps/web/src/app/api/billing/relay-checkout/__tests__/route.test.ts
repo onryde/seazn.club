@@ -21,8 +21,10 @@
 //                           → "the return_url reopens the Phone tab on that fixture"
 //   RT7 disabled drivers    the `relayDrivers().disabled` gate deleted (Task 14b review I2)
 //                           → "I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED"
-//   RT8 the gate constructs  `relayIsDisabled()` → `relayDrivers().disabled` (Task 14b re-review N1)
-//                           → "N1: a LIVE deployment missing its Cloudflare secret still sells"
+//   RT8 the gate constructs  `relayUnavailable()` → `relayDrivers().disabled` (Task 14b re-review N1)
+//                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…" (the 500 it throws)
+//   RT9 m1 secret check      `relayUnavailable()` reverted to the mode alone (lane-close review m1)
+//                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…"
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -188,24 +190,51 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
   });
 
-  it("N1: a LIVE deployment missing its Cloudflare secret still sells — the disabled check never constructs the drivers", async () => {
-    // The route asks "is the relay off?" before anything else. Answered by constructing the drivers, a live deploy
-    // without CLOUDFLARE_* answered every checkout with a 500 from `new CloudflareIngest()`.
+  it("m1: a LIVE deployment missing a Cloudflare secret refuses with 503 ingest_unavailable and never calls Stripe — each secret alone; with both it sells", async () => {
+    // N1: answered by constructing the drivers, this was a 500 from `new CloudflareIngest()` on every checkout. m1: nor may
+    // it SELL — every start on such a deployment fails (the drivers cannot be built), so a pack bought there is money for
+    // a credit nothing can spend. The same 503 a disabled deployment answers, before any Stripe call.
     const rig = await streamRig();
     await callerFor(rig.orgId);
-    vi.stubEnv("RELAY_DRIVERS", "live");
-    vi.stubEnv("ENV_NAME", "prod");
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
-    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
-    setRelayDriversForTest(null);
+    const body = { orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 };
+    const cases = [
+      { CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "tok", sells: false },
+      { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "", sells: false },
+      { CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "", sells: false },
+      { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok", sells: true },
+    ];
+    let checked = 0;
     try {
-      expect(() => relayDrivers(), "premise: constructing the drivers here throws").toThrow(/CLOUDFLARE_ACCOUNT_ID/);
-      expect((await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 })).status).toBe(200);
-      expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
+      for (const c of cases) {
+        vi.unstubAllEnvs();
+        vi.stubEnv("RELAY_DRIVERS", "live");
+        vi.stubEnv("ENV_NAME", "prod");
+        vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", c.CLOUDFLARE_ACCOUNT_ID);
+        vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", c.CLOUDFLARE_STREAM_TOKEN);
+        setRelayDriversForTest(null);
+        createRelayCheckoutMock.mockClear();
+        const label = JSON.stringify(c);
+        // The premise, from the real constructor: it refuses exactly where the route must.
+        let builds = true;
+        try { relayDrivers(); } catch { builds = false; }
+        setRelayDriversForTest(null);
+        expect(builds, `${label}: premise`).toBe(c.sells);
+        const res = await post(body);
+        if (c.sells) {
+          expect(res.status, label).toBe(200);
+          expect(createRelayCheckoutMock, label).toHaveBeenCalledTimes(1);
+        } else {
+          expect(res.status, label).toBe(503);
+          expect(await res.json(), label).toMatchObject({ ok: false, code: "ingest_unavailable" });
+          expect(createRelayCheckoutMock, label).not.toHaveBeenCalled();
+        }
+        checked++;
+      }
     } finally {
       vi.unstubAllEnvs();
       setRelayDriversForTest(null);
     }
+    expect(checked).toBe(cases.length);
   });
 
   it("refuses a body naming another organisation (400), before the fixture is even looked up", async () => {

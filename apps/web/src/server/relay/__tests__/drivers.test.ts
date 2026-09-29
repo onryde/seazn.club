@@ -7,7 +7,7 @@
 // method sets the usecases call.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeIngest, FakeRunner } from "../fakes";
-import { RelayDriversDisabled, disabledRelayDrivers, relayDrivers, relayIsDisabled, setRelayDriversForTest } from "../drivers";
+import { RelayDriversDisabled, disabledRelayDrivers, relayDrivers, relayUnavailable, setRelayDriversForTest } from "../drivers";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -67,33 +67,58 @@ describe("R5: relayDrivers() in disabled mode", () => {
   });
 });
 
-// N1 (Task 14b fix round 2): the division page and the relay-checkout route ask "is the relay off?" on every render /
-// request. Answering by CONSTRUCTING the drivers took the fixtures tab down on a live deployment missing a Cloudflare
-// secret — `new CloudflareIngest()` throws — for every org, since V426 entitles the relay on every plan. The predicate
-// answers from the mode (or the test override) and never builds anything.
-describe("N1: relayIsDisabled() answers without constructing the drivers", () => {
-  it("live mode with NO Cloudflare env answers false and does not throw — while constructing the drivers there WOULD throw", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("RELAY_DRIVERS", "live");
-    vi.stubEnv("ENV_NAME", "prod");
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
-    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
-    setRelayDriversForTest(null);
-    expect(() => relayIsDisabled()).not.toThrow();
-    expect(relayIsDisabled()).toBe(false);
-    // The premise, witnessed: in this env the constructing read is exactly what fails.
-    expect(() => relayDrivers()).toThrow(/CLOUDFLARE_ACCOUNT_ID is not set/);
+// N1 (Task 14b fix round 2) + m1 (lane-close review): the division page and the relay-checkout route ask "can this
+// deployment stream at all?" on every render / request. N1: answering by CONSTRUCTING the drivers took the fixtures tab
+// down on a live deployment missing a Cloudflare secret — `new CloudflareIngest()` throws — for every org. m1: answering
+// "no" there was just as wrong the other way — the tab offered Go live and buy tiles, and the checkout SOLD packs, on a
+// deployment whose every start would fail. The predicate answers from the mode, the two Cloudflare env reads and the
+// test override, and never builds anything.
+describe("N1 + m1: relayUnavailable() answers without constructing the drivers — and a live deploy short a Cloudflare secret IS unavailable", () => {
+  it("live mode: unavailable EXACTLY when constructing the live drivers would throw — every Cloudflare env combination, derived from the real constructor", () => {
+    const combos = [
+      { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok" },
+      { CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "tok" },
+      { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "" },
+      { CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "" },
+    ];
+    let checked = 0;
+    let unavailable = 0;
+    for (const cf of combos) {
+      vi.unstubAllEnvs();
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("RELAY_DRIVERS", "live");
+      vi.stubEnv("ENV_NAME", "prod");
+      for (const [k, v] of Object.entries(cf)) vi.stubEnv(k, v);
+      setRelayDriversForTest(null);
+      const label = JSON.stringify(cf);
+      expect(() => relayUnavailable(), `${label}: the predicate never throws`).not.toThrow();
+      // The expected answer is the REAL constructor's own: does building the live pair refuse in this env?
+      let throws = false;
+      try {
+        relayDrivers();
+      } catch {
+        throws = true;
+      }
+      setRelayDriversForTest(null);
+      expect(relayUnavailable(), label).toBe(throws);
+      if (throws) unavailable++;
+      checked++;
+    }
+    expect(checked).toBe(combos.length);
+    expect(unavailable, "three of the four combinations lack a secret").toBe(3);
   });
 
   it("agrees with the drivers it would build — every mode, and the test override winning over the env", () => {
+    const CF = { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok" };
     const cells: { env: Record<string, string>; override: "disabled" | "fake" | null; want: boolean }[] = [
       { env: { NODE_ENV: "production", RELAY_DRIVERS: "" }, override: null, want: true },
       { env: { NODE_ENV: "test", RELAY_DRIVERS: "" }, override: null, want: false },
       { env: { NODE_ENV: "test", RELAY_DRIVERS: "fake" }, override: null, want: false },
-      { env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod" }, override: null, want: false },
+      { env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod", ...CF }, override: null, want: false },
       // setRelayDriversForTest keeps working: the override answers, whatever the env says.
-      { env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod" }, override: "disabled", want: true },
+      { env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod", ...CF }, override: "disabled", want: true },
       { env: { NODE_ENV: "production", RELAY_DRIVERS: "" }, override: "fake", want: false },
+      { env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod", CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "" }, override: "fake", want: false },
     ];
     let checked = 0;
     for (const c of cells) {
@@ -103,9 +128,9 @@ describe("N1: relayIsDisabled() answers without constructing the drivers", () =>
       if (c.override === "disabled") setRelayDriversForTest(disabledRelayDrivers());
       if (c.override === "fake") setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
       const label = JSON.stringify(c);
-      expect(relayIsDisabled(), label).toBe(c.want);
-      // Where constructing is safe (no live cell), the predicate and the built pair agree.
-      if (c.env.RELAY_DRIVERS !== "live" || c.override) expect(relayDrivers().disabled === true, label).toBe(c.want);
+      expect(relayUnavailable(), label).toBe(c.want);
+      // The predicate and the built pair agree (constructing is safe in every cell: a live one carries its secrets).
+      expect(relayDrivers().disabled === true, label).toBe(c.want);
       checked++;
     }
     expect(checked).toBe(cells.length);

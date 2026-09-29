@@ -253,21 +253,28 @@ describe("Task 14b: the Phone tab is handed the split and the monthly allowance 
     expect(relay.balance).toHaveBeenCalledTimes(1);
   });
 
-  it("N1: a LIVE deployment missing its Cloudflare secret still renders the fixtures tab — the render never constructs the drivers", async () => {
-    // The fixtures tab asks "is the relay off?" on every render. Answered by constructing the drivers, a live deploy
-    // without CLOUDFLARE_* threw here for every org (V426 entitles the relay on every plan).
+  it("N1 + m1: a LIVE deployment missing a Cloudflare secret renders the fixtures tab AND tells the Phone tab the relay is unavailable — no credits read; with both secrets it is live", async () => {
+    // N1: the fixtures tab asks "can this deployment stream?" on every render; answered by constructing the drivers, a
+    // live deploy without CLOUDFLARE_* threw here for every org. m1: answered "yes" there, the tab offered Go live and
+    // buy tiles on a deployment where every start fails.
     relay.balance.mockResolvedValue(4);
-    vi.stubEnv("RELAY_DRIVERS", "live");
-    vi.stubEnv("ENV_NAME", "prod");
-    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
-    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
-    setRelayDriversForTest(null);
+    type Stream = { relayEntitled?: unknown; relayDisabled?: unknown; streamBalance?: unknown };
+    const streamOf = async () => (find(await render({ tab: "fixtures" }), StagesPanel)!.props as { stream?: Stream }).stream;
     try {
+      vi.stubEnv("RELAY_DRIVERS", "live");
+      vi.stubEnv("ENV_NAME", "prod");
+      vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+      vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "tok");
+      setRelayDriversForTest(null);
       expect(() => relayDrivers(), "premise: constructing the drivers here throws").toThrow(/CLOUDFLARE_ACCOUNT_ID/);
-      const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as {
-        stream?: { relayEntitled?: unknown; relayDisabled?: unknown; streamBalance?: unknown };
-      }).stream;
-      expect(stream).toMatchObject({ relayEntitled: true, relayDisabled: false, streamBalance: 4 });
+      setRelayDriversForTest(null);
+      expect(await streamOf()).toMatchObject({ relayEntitled: true, relayDisabled: true, streamBalance: 0 });
+      expect(relay.balance, "no grant-and-read on a deployment that cannot stream").not.toHaveBeenCalled();
+      // The positive pair: the missing secret supplied — the tab is live and the credits are read.
+      vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct");
+      setRelayDriversForTest(null);
+      expect(await streamOf()).toMatchObject({ relayEntitled: true, relayDisabled: false, streamBalance: 4 });
+      expect(relay.balance).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllEnvs();
       setRelayDriversForTest(null);

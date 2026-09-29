@@ -32,7 +32,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
 import { openStreamFixtureIds, relayCredits } from "@/server/usecases/stream-sessions";
-import { relayIsDisabled } from "@/server/relay/drivers";
+import { relayUnavailable } from "@/server/relay/drivers";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
@@ -532,8 +532,9 @@ export default async function DivisionPage({
   // every pack checkout, so the Phone tab shows that instead of buy tiles and Go live. It also skips the credits read
   // below: that read GRANTS the month's free credits, and a relay-less deployment has no business writing them.
   // N1 (fix round 2): asked WITHOUT constructing the drivers — a live deploy missing a Cloudflare secret must not take this
-  // tab down (drivers.ts `relayIsDisabled`).
-  const streamRelayDisabled = streamRelayEntitled && relayIsDisabled();
+  // tab down. m1 (lane-close review): nor may it offer Go live and buy tiles — such a deploy cannot start anything, so
+  // it reads as unavailable too (drivers.ts `relayUnavailable`).
+  const streamRelayDisabled = streamRelayEntitled && relayUnavailable();
   // G1 (Task 14 fix round 1): the match-credit checkout returns HERE (`?checkout=success&session_id=…`), and this render
   // can beat Stripe's webhook — so reconcile the session before reading the balance, exactly as the billing, upgrade and
   // registration pages do on their own returns. Best-effort and idempotent (it and the webhook converge on one ledger

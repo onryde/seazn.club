@@ -124,13 +124,17 @@ export function relayDrivers(): RelayDrivers {
   return instance;
 }
 
-/** N1 (Task 14b fix round 2): is this process's relay DISABLED (R5 — production with RELAY_DRIVERS unset)? Answered from
- *  the mode, or from the test override, WITHOUT constructing anything. The division page asks on every fixtures render
- *  and the relay-checkout route on every request; `relayDrivers().disabled` built the live pair to answer, and
- *  `new CloudflareIngest()` throws when a Cloudflare secret is missing — so a live deploy short one secret took the
- *  fixtures tab down for every org. Ask this for the question; take `relayDrivers()` only to call a provider. */
-export function relayIsDisabled(): boolean {
-  return override ? override.disabled === true : relayDriverMode() === "disabled";
+/** Can this process stream at all? UNAVAILABLE when the relay is DISABLED (R5 — production with RELAY_DRIVERS unset), and
+ *  (m1, lane-close review) when it is LIVE but missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_STREAM_TOKEN — the pair the
+ *  live drivers cannot be built without, so every start there fails. Answered from the mode, the two env reads
+ *  (`CloudflareIngest.configured`) or the test override, WITHOUT constructing anything (N1, Task 14b fix round 2): the
+ *  division page asks on every fixtures render and the relay-checkout route on every request, and a constructing
+ *  answer took the fixtures tab down for every org on a live deploy short one secret. The page shows "unavailable"
+ *  and the checkout refuses 503 on it. Ask this for the question; take `relayDrivers()` only to call a provider. */
+export function relayUnavailable(): boolean {
+  if (override) return override.disabled === true;
+  const mode = relayDriverMode();
+  return mode === "disabled" || (mode === "live" && !CloudflareIngest.configured());
 }
 
 /** Tests only. `null` clears the override AND the cached instance. */

@@ -79,6 +79,13 @@ export class CloudflareIngest implements IngestProvider {
   private readonly accountId: string;
   private readonly rec: ProviderCallRecorder;
 
+  /** m1 (lane-close review): does this environment carry both secrets the constructor below refuses without? Asked by
+   *  `relayUnavailable()` (drivers.ts) WITHOUT constructing — the same two env reads, so the predicate cannot disagree
+   *  with the refusal it stands in for. */
+  static configured(env: NodeJS.ProcessEnv = process.env): boolean {
+    return Boolean(env.CLOUDFLARE_ACCOUNT_ID) && Boolean(env.CLOUDFLARE_STREAM_TOKEN);
+  }
+
   constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder } = {}) {
     const accountId = opts.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID;
     const token = opts.token ?? process.env.CLOUDFLARE_STREAM_TOKEN;
