@@ -252,6 +252,33 @@ describe("matrix CI wiring", () => {
     expect(existsSync(resolve(REPO, "scripts/matrix/render.ts"))).toBe(true);
   });
 
+  describe("R26: the single-sport ratchet", () => {
+    const SS_STEP = "      - run: pnpm matrix:single-sport --check";
+    const lines = ci.split("\n");
+
+    it("the gates job runs it right after engine:boundary, exactly once, through pnpm", () => {
+      const boundary = lines.indexOf("      - run: npm run engine:boundary");
+      expect(boundary).toBeGreaterThan(0);
+      expect(lines[boundary + 1]).toBe(SS_STEP);
+      expect(lines.filter((l) => l.includes("matrix:single-sport"))).toEqual([SS_STEP]);
+      // same job: the step sits inside `gates:`, before the next job key
+      const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+      expect(jobAt(boundary + 1)).toBe("  gates:");
+      expect(pkg.scripts["matrix:single-sport"]).toBe("node --experimental-strip-types scripts/matrix/single-sport.ts");
+      expect(existsSync(resolve(REPO, "scripts/matrix/single-sport.ts"))).toBe(true);
+    });
+
+    it("the step's command as ci.yml spells it, run the way CI runs it, reaches --check and passes on this tree", () => {
+      const step = lines.find((l) => l.includes("matrix:single-sport"));
+      expect(step).toBeDefined();
+      const cmd = (step ?? "").trim().replace(/^- run: /, "");
+      const r = spawnSync("bash", ["-c", cmd], { cwd: REPO, encoding: "utf8", timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      // only --check prints this line: the flag reached the CLI through pnpm
+      expect(r.stdout).toMatch(/single-sport: check passed against scripts\/matrix\/catalogue\/single-sport-baseline\.json/);
+    });
+  });
+
   it("matrix-report/ is ignored", () => {
     expect(readFileSync(resolve(REPO, ".gitignore"), "utf8")).toMatch(/^matrix-report\/$/m);
   });

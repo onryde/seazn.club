@@ -91,6 +91,7 @@ jobs:
       # line setting it, so this comment may name it plainly.
       - run: npx turbo run typecheck
       - run: npm run engine:boundary
+      - run: pnpm matrix:single-sport --check
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh

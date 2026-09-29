@@ -10,3 +10,5 @@ export * from "./simulation.ts";
 // W4 (#407) — stoppage-bearing stream generation. Pure: no node:fs, so unlike
 // the two disk-reading testkit modules it belongs in the published barrel.
 export * from "./stoppages.ts";
+// R26 (format-matrix W1b) — the shared sport sweep. Pure, so it belongs here.
+export * from "./for-each-sport.ts";
