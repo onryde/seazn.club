@@ -548,6 +548,21 @@ describe("compareTables — pairing by the product's own identity, pool membersh
   it("empty case: nothing on either side is nothing checked", () => {
     expect(compareTables([], [])).toEqual({ ok: true, checked: 0, evidence: [] });
   });
+  // Ruling E: never pair by position. Both cases put each pool's table where a
+  // positional pairing would meet the OTHER pool, so only a pairing by members
+  // names these differences (found by mutation: the evidence was unpinned).
+  it("pools are paired by their members, never by position: two reordered pools pair across positions, and swapped members leave both sides named", () => {
+    const api = [{ label: "pool 1", rows: uiRows("Bob", "Ann").rows }, { label: "pool 2", rows: uiRows("Cat", "Dan").rows }];
+    expect(compareTables(api, [uiRows("Dan", "Cat"), uiRows("Ann", "Bob")])).toEqual({
+      ok: false, checked: 2, evidence: ["pool 1: page order 1 Ann, 2 Bob; API order 1 Bob, 2 Ann", "pool 2: page order 1 Dan, 2 Cat; API order 1 Cat, 2 Dan"],
+    });
+    expect(compareTables(api, [uiRows("Ann", "Cat"), uiRows("Bob", "Dan")])).toEqual({
+      ok: false, checked: 2, evidence: [
+        "pool 1: the page draws no table with its 2 entrant(s) (Ann, Bob)", "pool 2: the page draws no table with its 2 entrant(s) (Cat, Dan)",
+        "page table #1 (Ann, Cat) matches no API table", "page table #2 (Bob, Dan) matches no API table",
+      ],
+    });
+  });
   it("rows are compared in the page's rank order: the API's rows sorted by rank as StandingsTable sorts them (public-site/standings-table.tsx, which both pages draw)", () => {
     const api = [{ label: "a", rows: [{ rank: 2, name: "Bob" }, { rank: 1, name: "Ann" }] }];
     expect(compareTables(api, [uiRows("Ann", "Bob")]).ok).toBe(true);
@@ -676,11 +691,13 @@ describe("BrowserDriver — forfeit and finalize on the console", () => {
     expect(usecase.slice(usecase.indexOf("export async function finalizeFixture"))).toMatch(new RegExp(`type: "${FINALIZE_EVENT.replace(".", "\\.")}"`));
   });
 
-  it("no row, the wrong row, or two rows after the tip each fail by name", async () => {
+  it("no row, the wrong row, two rows, or the one row at another seq than the console answered each fail by name", async () => {
     const cases: [string, LedgerRow[], RegExp][] = [
       ["none", [], /f1: 0 ledger rows after seq 2/],
       ["wrong", [{ id: "r3", seq: 3, type: "core.start", payload: {} }], /f1: seq 3 is core\.start/],
       ["two", [{ id: "r3", seq: 3, type: FINALIZE_EVENT, payload: {} }, { id: "r4", seq: 4, type: FINALIZE_EVENT, payload: {} }], /f1: 2 ledger rows after seq 2/],
+      // The console answered seq 3 (fakePages' finalizeUi); the ledger's only finalize is another append.
+      ["elsewhere", [{ id: "r4", seq: 4, type: FINALIZE_EVENT, payload: {} }], /f1: the ledger's core\.finalize is seq 4, the console's answer seq 3/],
     ];
     for (const [name, ledgerRows, want] of cases) {
       const { driver } = make({ http: consoleHttp(ledgerRows) });
