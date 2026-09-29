@@ -15,6 +15,36 @@
       "status": "open",
       "found": "2026-09-29",
       "runId": "w1b-model-0928b"
+    },
+    {
+      "id": "MB-002",
+      "title": "knockout withdraw of an entrant waiting for a TBD opponent is refused (422 WRONG_PHASE)",
+      "issue": null,
+      "cell": "knockout|generic",
+      "variant": "score",
+      "check": "model-unexpected-refusal",
+      "seed": -1372716623,
+      "path": "8:4:3:3",
+      "replayPath": "AAAK:K",
+      "fence": null,
+      "status": "open",
+      "found": "2026-09-29",
+      "runId": "w1b-model-0929b"
+    },
+    {
+      "id": "MB-003",
+      "title": "knockout withdraw of an entrant waiting for a TBD opponent is refused (422 WRONG_PHASE)",
+      "issue": null,
+      "cell": "knockout|badminton",
+      "variant": "bwf",
+      "check": "model-unexpected-refusal",
+      "seed": -355591138,
+      "path": "14:6:10:8:11:9:9:9:4:10",
+      "replayPath": "BDBCLkAE:qC",
+      "fence": null,
+      "status": "open",
+      "found": "2026-09-29",
+      "runId": "w1b-model-0929c"
     }
   ]
 }
