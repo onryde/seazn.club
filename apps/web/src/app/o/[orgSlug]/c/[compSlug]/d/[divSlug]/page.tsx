@@ -580,9 +580,13 @@ export default async function DivisionPage({
   // F1 (Task 14 fix round 2): a BILLING freeze takes the stream panel away with everything else editable, but it must not
   // strand a stream already on air — the stop route still serves a frozen org's organiser. So a frozen competition's
   // fixtures tab mounts the stop-only probe for each fixture with a session still up, named by its entrants. Never
-  // alongside the live panel (not frozen ⇒ the row's own Phone tab owns Stop), and never for a viewer who cannot edit.
+  // alongside the live panel (the row's own Phone tab owns Stop there), and never for a viewer who cannot edit.
+  // I-2 (lane-close review): the same holds when staff switch `streaming.overlay` OFF mid-stream. Since V426 an override
+  // is the only way it goes false, and the panel and the row's toggle are both gated on it — so without the probe the
+  // relay kept sending with no Stop anywhere. `streamEntitled` is false whenever the panel is not offered, so this also
+  // covers a frozen page (`editable` false) — `billingFrozen` stays named for the reader.
   const frozenOnAir =
-    tab === "fixtures" && canEdit && billingFrozen
+    tab === "fixtures" && canEdit && (billingFrozen || !streamEntitled)
       ? await openStreamFixtureIds(auth, fixtures.map((f) => f.id))
       : [];
   // An unfilled side reads as its slot ("Winner of R1·2") or TBD — the one resolver every fixture renderer uses.

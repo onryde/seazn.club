@@ -351,6 +351,35 @@ describe("F1: a billing-frozen competition still offers Stop for every stream on
     }
     expect(checked).toBe(3);
   });
+
+  // I-2 (lane-close review): since V426 every plan grants `streaming.overlay`, so the only way it goes false is a staff
+  // override — and the panel (with its Phone tab and Stop) is gated on it, the row's toggle too (run-sheet-row.tsx
+  // `showStream`). A club whose overlay was switched off MID-STREAM had no Stop anywhere while the relay kept sending.
+  // The page mounts the same labelled stop-only probes it mounts for a billing freeze.
+  it("I-2: NOT frozen, but an override switched streaming.overlay OFF — the same labelled probe per open stream, and still no panel", async () => {
+    scene.frozen = false;
+    relay.open.mockResolvedValue(["fx-1"]);
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.overlay");
+    try {
+      const tree = await render({ tab: "fixtures" });
+      expect(relay.open).toHaveBeenCalledTimes(1);
+      expect(relay.open.mock.calls[0]![1]).toEqual(["fx-1", "fx-2", "fx-3"]);
+      const probes = findAll(tree, PhoneStopProbe);
+      expect(probes.map((p) => (p.props as { fixtureId: string }).fixtureId)).toEqual(["fx-1"]);
+      expect(probes.map((p) => (p.props as { label?: string }).label)).toEqual(["Red Rovers schedule.vs Blue Jays"]);
+      // Premise: the switched-off org has no panel to find a Stop in — the probe is the only way out.
+      expect((find(tree, StagesPanel)!.props as { stream?: { entitled?: unknown } }).stream?.entitled).toBe(false);
+
+      // The pair: a viewer who cannot edit gets neither the query nor a probe, overlay or not.
+      relay.open.mockClear();
+      pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
+      const viewer = await render({ tab: "fixtures" });
+      expect(relay.open, "cannot edit").not.toHaveBeenCalled();
+      expect(findAll(viewer, PhoneStopProbe)).toEqual([]);
+    } finally {
+      vi.mocked(hasFeature).mockImplementation(async () => true);
+    }
+  });
 });
 
 // P1 (Task 14 fix round 2): the tiles quoted GBP while `/api/billing/relay-checkout` charged `preferredCurrency(orgId,
