@@ -118,6 +118,24 @@ export class DriverMisuse extends Error {
   }
 }
 
+/** A request that did not answer within the driver's bound (HttpDriver,
+ *  REQUEST_TIMEOUT_MS). Its outcome is unknown, and it is environmental — the
+ *  product did not answer, it did not refuse — so the model aborts the cell on
+ *  it rather than report a regression (T14 fix round 2, RR-2). Here, not in
+ *  http-driver.ts, so the model reads it without importing bench. */
+export class RequestTimedOut extends Error {
+  readonly method: string;
+  readonly path: string;
+  readonly ms: number;
+  constructor(method: string, path: string, ms: number) {
+    super(`driver: ${method} ${path} did not answer within ${ms} ms — its outcome is unknown`);
+    this.name = "RequestTimedOut";
+    this.method = method;
+    this.path = path;
+    this.ms = ms;
+  }
+}
+
 export class OrgMismatch extends Error {
   constructor(expected: string, got: string) {
     super(redact(`driver: competition landed in org ${got}, expected ${expected} — the active-org switch did not hold`));

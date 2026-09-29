@@ -10,8 +10,10 @@
 // regression, then by a FIXED one; an unexpected refusal (the check that
 // outranks every other); other checks met while shrinking; the time box
 // before, during and after a failure; a KNOWN first failure meeting a NEW one
-// while shrinking; fast-check giving up on skips; vacuity per stage kind
-// (vacuityOf). Empty cases FIRST: one run of one command; a cell whose every
+// while shrinking; a NEW target displaced by a KNOWN unexpected refusal
+// (fix round 2, RR-1), and a check met twice while shrinking; a request that
+// timed out, before and during a shrink (RR-2); fast-check giving up on skips;
+// vacuity per stage kind (vacuityOf). Empty cases FIRST: one run of one command; a cell whose every
 // step was refused; a time box already spent; every count covered.
 //
 // single-sport: the model fake is a round-robin (league) product, and #879 —
@@ -19,8 +21,8 @@
 // test sweeps the model's own sports (SLICE_SPORTS) instead.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { RefusedCall, type PostedEvent } from "../lib/driver/types.ts";
-import { COMMAND_KINDS, newModelState, type ModelState } from "../lib/model/commands.ts";
+import { RefusedCall, RequestTimedOut, type PostedEvent } from "../lib/driver/types.ts";
+import { COMMAND_KINDS, ModelViolation, newModelState, type ModelState } from "../lib/model/commands.ts";
 import { FENCES } from "../lib/model/fences.ts";
 import { runCell, shrinkTarget, vacuityOf, type RunCellInput } from "../lib/model/run-cell.ts";
 import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
@@ -71,6 +73,40 @@ class RefusingEverything extends ModelFakeDriver {
   override start() { return this.built ? this.#no("/start") : super.start(); }
   override generate() { return this.built ? this.#no("/generate") : super.generate(); }
   override addEntrants(d: string, es: Parameters<ModelFakeDriver["addEntrants"]>[1]) { return this.built ? this.#no("/entrants") : super.addEntrants(d, es); }
+}
+
+/** Fix round 2, RR-1 (the reviewer's product): per division, every result is
+ *  refused by NAME until an entrant is added after the build; from then on
+ *  results are taken and their outcome lied about (fold parity). */
+class GatedLiar extends ModelFakeDriver {
+  #adds = 0;
+  constructor() { super({ lieOutcome: true }); }
+  override createDivision(...a: Parameters<ModelFakeDriver["createDivision"]>) { this.#adds = 0; return super.createDivision(...a); }
+  override addEntrants(...a: Parameters<ModelFakeDriver["addEntrants"]>) { return super.addEntrants(...a).then((r) => { this.#adds++; return r; }); }
+  override postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
+    if (this.#adds < 2) return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, "TEST_POST_REFUSED", "test: refuses results until a late entrant"));
+    return super.postStream(id, events, prefix);
+  }
+}
+
+/** A product whose failures are scripted by their order: the nth run to reach
+ *  a post fails on `checkFor(n)`, and snapshots the commands it had run by then. */
+function scripted(checkFor: (nth: number) => string): { newDriverState: RunCellInput["newDriverState"]; seenBy: string[][] } {
+  const seenBy: string[][] = [];
+  return {
+    seenBy,
+    newDriverState: async (n) => {
+      let model: ModelState | null = null;
+      const real = new (class extends ModelFakeDriver {
+        override postStream(): Promise<PostedEvent[]> {
+          seenBy.push([...(model?.history ?? [])]);
+          return Promise.reject(new ModelViolation(checkFor(seenBy.length), [`scripted failure ${seenBy.length}`]));
+        }
+      })();
+      model = await newModelState({ driver: real, row: "league", sport: "generic", variant: "score", entrants: 4, tag: `t${n}` });
+      return { real, model };
+    },
+  };
 }
 
 const FOLD = "model-fold-parity";
@@ -280,9 +316,20 @@ describe("runCell", () => {
     const displaced = await runCell(input({ fences: false, newDriverState: seeded(true) }));
     expect(displaced.failure?.check).toBe(UNEXPECTED_REFUSAL);
     expect(displaced.failure?.evidence.join("\n")).toContain(I7);
+    // The displaced NEW failure is kept with its commands even when the refusal is NEW too (RR-1).
+    expect(Object.keys(displaced.maskedNew)).toEqual([I7]);
     // A regression on the displaced check does not make the unexpected refusal known.
     const reg = { id: "MB-001", title: "#879", issue: "#879", cell: CELL, variant: "score", check: I7, seed: 1, path: "0", replayPath: null, fence: FENCE_879, status: "open" as const, found: "2026-09-28", runId: "t" };
     expect((await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [reg] }))).failure?.known).toBeNull();
+    // Fix round 2, RR-1: when the unexpected refusal IS known, the NEW failure it
+    // displaced is kept in maskedNew with its commands (#879's shape), not dropped.
+    const knownRefusal = await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL)] }));
+    expect(knownRefusal.failure?.check).toBe(UNEXPECTED_REFUSAL);
+    expect(knownRefusal.failure?.known).toBe("MB-003");
+    expect(Object.keys(knownRefusal.maskedNew)).toEqual([I7]);
+    expectLateEntryShape(knownRefusal.maskedNew[I7] ?? []);
+    // A KNOWN displaced failure is not kept.
+    expect((await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL), reg] }))).maskedNew).toEqual({});
   });
 
   it("the shrink stays on its first failure's check: a candidate failing another check is passed over, counted in masked, never reported", async () => {
@@ -326,6 +373,63 @@ describe("runCell", () => {
     const both = await runCell(input({ driver: () => new RefusingPosts({ fault879: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL), openReg("MB-001", I7)] }));
     expect(both.masked[I7]).toBeGreaterThan(0);
     expect(both.maskedNew).toEqual({});
+  });
+
+  it("fix round 2, RR-1: a NEW target displaced by a KNOWN unexpected refusal is still reported, with the commands it ran", async () => {
+    // The reviewer's seeds 2, 11, 15, 16, 24 (GatedLiar, 12 commands, 40 runs):
+    // the first failing run added an entrant, then scored — accepted and lied
+    // about, so fold parity (NEW). Its shrink candidates that drop the late
+    // entrant have their Score refused by name: an unexpected refusal, which
+    // outranks it and is KNOWN here (MB-003). Before the fix the fold-parity
+    // target was overwritten and appeared nowhere; the cell read known.
+    for (const seed of [2, 11, 15, 16, 24]) {
+      const r = await runCell(input({ driver: () => new GatedLiar(), runs: 40, maxCommands: 12, seed, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL)] }));
+      expect(r.failure?.check, `seed ${seed}`).toBe(UNEXPECTED_REFUSAL);
+      expect(r.failure?.known, `seed ${seed}`).toBe("MB-003");
+      expect(Object.keys(r.maskedNew), `seed ${seed}`).toContain(FOLD);
+      // What it ran is GatedLiar's own precondition for a lie: an entrant added,
+      // then a result posted (a Score, or a Walkover, which posts one too).
+      const kinds = (r.maskedNew[FOLD] ?? []).map((c) => c.split("(")[0] ?? "");
+      const posted = Math.max(kinds.lastIndexOf("Score"), kinds.lastIndexOf("Walkover"));
+      expect(kinds.indexOf("AddEntrant"), `seed ${seed}: ${kinds.join(",")}`).toBeGreaterThan(-1);
+      expect(posted, `seed ${seed}: ${kinds.join(",")}`).toBeGreaterThan(kinds.indexOf("AddEntrant"));
+    }
+    // The refusal NEW as well (nothing committed): fold parity is still kept, not dropped.
+    const bare = await runCell(input({ driver: () => new GatedLiar(), runs: 40, maxCommands: 12, seed: 15 }));
+    expect(bare.failure?.check).toBe(UNEXPECTED_REFUSAL);
+    expect(bare.failure?.known).toBeNull();
+    expect(Object.keys(bare.maskedNew)).toContain(FOLD);
+    // With fold parity committed too, the displaced target is known: nothing new is kept.
+    const both = await runCell(input({ driver: () => new GatedLiar(), runs: 40, maxCommands: 12, seed: 15, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL), openReg("MB-002", FOLD)] }));
+    expect(both.failure?.known).toBe("MB-003");
+    expect(both.maskedNew).toEqual({});
+  });
+
+  it("fix round 2: a NEW check passed over more than once keeps the commands of the FIRST run that failed on it", async () => {
+    // The 1st failing run fails on an unexpected refusal (the target), the 2nd
+    // and 3rd on a NEW check X (passed over), every later one on the refusal.
+    const X = "test-new-check";
+    const s = scripted((nth) => (nth === 2 || nth === 3 ? X : UNEXPECTED_REFUSAL));
+    const r = await runCell(input({ newDriverState: s.newDriverState }));
+    expect(r.failure?.check).toBe(UNEXPECTED_REFUSAL);
+    expect(r.masked[X]).toBe(2);
+    const [, second, third] = s.seenBy;
+    // The witness needs the two meetings to differ, or keep-first and keep-last read the same.
+    expect(second, "the 2nd and 3rd failures ran the same commands: no witness").not.toEqual(third);
+    expect(r.maskedNew[X]).toEqual(second);
+  });
+
+  it("fix round 2, RR-1: a displaced NEW target keeps the commands of the LAST run that failed on it — the shrink's most shrunk", async () => {
+    // The 1st and 2nd failing runs fail on a NEW check X (the target, shrunk
+    // once), every later one on an unexpected refusal, which takes over.
+    const X = "test-new-check";
+    const s = scripted((nth) => (nth <= 2 ? X : UNEXPECTED_REFUSAL));
+    const r = await runCell(input({ newDriverState: s.newDriverState }));
+    expect(r.failure?.check).toBe(UNEXPECTED_REFUSAL);
+    expect(r.masked[X]).toBeUndefined();
+    const [first, second] = s.seenBy;
+    expect(first, "the 1st and 2nd failures ran the same commands: no witness").not.toEqual(second);
+    expect(r.maskedNew[X]).toEqual(second);
   });
 
   it("time box: once the clock passes the limit no further run starts — reported interrupted, numRuns short, never a failure", async () => {
@@ -411,6 +515,57 @@ describe("runCell", () => {
     expect(n).toBeGreaterThan(1);
     expect(r.failure?.check).toBe(I7);
     expect(r.masked).toEqual({});
+  });
+
+  it("fix round 2, RR-2: a request that did not answer is environmental — the cell stops, reports the timeout, never a model-error failure, and counts nothing refused", async () => {
+    // Every post hangs past the driver's bound (HttpDriver throws RequestTimedOut).
+    const built: number[] = [];
+    let timedOutIn: number | null = null;
+    const r = await runCell(input({
+      newDriverState: async (n) => {
+        built.push(n);
+        const real = new (class extends ModelFakeDriver {
+          override postStream(id: string, _e: readonly StreamEvent[], _p = ""): Promise<PostedEvent[]> {
+            timedOutIn ??= n;
+            return Promise.reject(new RequestTimedOut("POST", `/api/v1/fixtures/${id}/events`, 60_000));
+          }
+        })();
+        return { real, model: await newModelState({ driver: real, row: "league", sport: "generic", variant: "score", entrants: 4, tag: `t${n}` }) };
+      },
+    }));
+    expect(timedOutIn, "no post was ever sent: the test drove nothing").not.toBeNull();
+    expect(r.timeout).toMatch(/^driver: POST \/api\/v1\/fixtures\/[^ ]+\/events did not answer within 60000 ms/);
+    expect(r.failure).toBeNull();
+    expect(r.vacuous).toEqual([]);
+    // Not a refusal, named or otherwise: a result that never answered is neither.
+    for (const k of COMMAND_KINDS) expect([k, r.counts[k].refused, r.counts[k].expected, r.counts[k].unexpected]).toEqual([k, 0, 0, 0]);
+    expect(r.counts.Score.ran + r.counts.Walkover.ran).toBeGreaterThan(0);
+    // After the timeout no run starts: the division it hung in was the last one built.
+    expect(built.at(-1)).toBe(timedOutIn);
+    expect(r.executions).toBe(timedOutIn);
+  });
+
+  it("fix round 2, RR-2: a timeout while shrinking a KNOWN failure keeps that failure and aborts the cell — never a NEW model-error", async () => {
+    const reg = openReg("MB-001", I7);
+    const full = await runCell(input({ fault879: true, fences: false, regressions: [reg] }));
+    expect(full.failure?.check).toBe(I7);
+    expect(full.executions, "the failure was never shrunk: no candidate to time out in").toBeGreaterThan(full.numRuns);
+    // Every division after the first failing run hangs while it is built.
+    const r = await runCell(input({
+      fault879: true, fences: false, regressions: [reg],
+      newDriverState: async (n) => {
+        if (n > full.numRuns) throw new RequestTimedOut("POST", "/api/v1/competitions/c/divisions", 60_000);
+        const real = new ModelFakeDriver({ fault879: true });
+        return { real, model: await newModelState({ driver: real, row: "league", sport: "generic", variant: "score", entrants: 4, tag: `t${n}` }) };
+      },
+    }));
+    expect(r.timeout).toMatch(/did not answer/);
+    expect(r.failure?.check).toBe(I7);
+    expect(r.failure?.known).toBe("MB-001");
+    expect(r.maskedNew).toEqual({});
+    expect(r.masked).toEqual({});
+    // The first candidate hung, and no run started after it.
+    expect(r.executions).toBe(full.numRuns + 1);
   });
 
   it("deterministic: the same seed gives the same report", async () => {

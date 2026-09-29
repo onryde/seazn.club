@@ -26,7 +26,10 @@
 //      its sport's (carry G-2); a live builder default that is not the offline
 //      one (BuilderDefaultDrift, Review Focus 5).
 //   3  aborted after the start gates: git, the DB, sign-in, a case org, or a
-//      report that cannot be written or still holds a secret after redaction.
+//      report that cannot be written or still holds a secret after redaction;
+//      or, report written, some cell's request did not answer (RequestTimedOut:
+//      environmental, not a regression — a TIMEOUT line, no stub, re-run it).
+//      It outranks 1: the run is incomplete, whatever else it found (RR-2).
 //
 // Every line printed, and every string written, passes through redact() (R14a).
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -150,11 +153,13 @@ function checkRegressionVariants(regressions: readonly RegressionCase[]): void {
 
 interface Job extends SliceCell { seed: number; path?: string; replayPath?: string; runs: number; fences: boolean; replay: RegressionCase | null }
 
-export type Verdict = "ok" | "vacuous" | "known-failure" | "new-failure" | "not-reproduced";
+export type Verdict = "ok" | "vacuous" | "known-failure" | "new-failure" | "not-reproduced" | "aborted";
 export type ModelCell = CellReport & { replayOf: string | null; verdict: Verdict };
 const FAILING: readonly Verdict[] = ["vacuous", "new-failure", "not-reproduced"];
 
 function verdictOf(rep: CellReport, replay: RegressionCase | null): Verdict {
+  // The product did not answer: nothing this cell found is a verdict on it (fix round 2, RR-2).
+  if (rep.timeout !== null) return "aborted";
   if (rep.failure !== null && rep.failure.known === null) return "new-failure";
   // A NEW check the shrink passed over is a new failure too (fix round 1, I-1).
   if (Object.keys(rep.maskedNew).length > 0) return "new-failure";
@@ -180,10 +185,11 @@ function printCell(c: ModelCell): void {
       say(`  NEW ${check} (passed over while shrinking toward ${f.check}): ${cmds.length === 0 ? "(no command list)" : cmds.join(" → ")}`);
     }
   }
+  if (c.timeout !== null) say(`  TIMEOUT: ${c.timeout} — environmental, not a regression: no stub; re-run the cell`);
   if (c.verdict === "not-reproduced" && c.replayOf !== null) {
     say(`  NOT REPRODUCED ${c.replayOf}: the replay ${f === null ? "ran clean" : `failed on ${f.check} instead`} — fixed, or the replay no longer walks the committed path`);
   }
-  if (f === null && c.verdict !== "not-reproduced") {
+  if (f === null && c.verdict !== "not-reproduced" && c.verdict !== "aborted") {
     const head = c.verdict === "vacuous" ? `VACUOUS: ${c.vacuous.join("; ")}` : "ok";
     say(`  ${head} — ${c.numRuns} runs (${c.executions} executions), ${c.informativeSteps} informative steps, parity ${c.foldParity}, fenced ${JSON.stringify(c.fenced)}, unknowns ${JSON.stringify(c.unknowns)}${c.interrupted ? ", TIME BOX HIT" : ""}`);
   }
@@ -298,7 +304,8 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   say(`model report → ${file}`);
   for (const c of cells) if (c.verdict === "new-failure") printStub(c, cli.runId);
   const tally = (v: Verdict) => cells.filter((c) => c.verdict === v).length;
-  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT`);
+  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${tally("aborted")} aborted, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT`);
+  if (cells.some((c) => c.verdict === "aborted")) return EXIT.ABORTED;
   return cells.some((c) => FAILING.includes(c.verdict)) ? EXIT.NO_SIGNAL : EXIT.OK;
 }
 

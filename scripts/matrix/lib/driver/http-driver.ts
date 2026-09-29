@@ -11,7 +11,7 @@ import { newSession, raw as benchRaw, type RawResult, type Session } from "../..
 import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import {
-  DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded, idempotencyKey, retryKey,
+  DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, idempotencyKey, retryKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
@@ -39,20 +39,6 @@ export interface HttpDriverOptions {
  *  awaited: it may still land, which is why a timed-out /complete is recorded
  *  as an unknown outcome (completeStage). */
 export const REQUEST_TIMEOUT_MS = 60_000;
-
-/** A request that did not answer within the driver's bound. Its outcome is unknown. */
-export class RequestTimedOut extends Error {
-  readonly method: string;
-  readonly path: string;
-  readonly ms: number;
-  constructor(method: string, path: string, ms: number) {
-    super(`driver: ${method} ${path} did not answer within ${ms} ms — its outcome is unknown`);
-    this.name = "RequestTimedOut";
-    this.method = method;
-    this.path = path;
-    this.ms = ms;
-  }
-}
 
 /** api-v1's envelope (server/api-v1/http.ts): `{ok:true, data}` or
  *  `{ok:false, error:{code, message, current_seq?, feature_key?}}` (a 402

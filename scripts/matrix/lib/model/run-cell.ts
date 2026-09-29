@@ -16,8 +16,11 @@
 //    moves the shrink to it; one failing an equal or lower rank is passed
 //    over and counted in `masked`. A NEW check passed over (under a target
 //    that outranks it) is kept in `maskedNew`, with the commands it ran: the
-//    cell is still a new failure (fix round 1, I-1). A backstop after the
-//    check reports an unexpected refusal even if the lock were bypassed.
+//    cell is still a new failure (fix round 1, I-1). So is a NEW target a
+//    higher rank takes over from, with the commands of the last run that
+//    failed on it — its most shrunk (fix round 2, RR-1). A backstop after
+//    the check reports an unexpected refusal even if the lock were bypassed,
+//    and keeps a NEW failure it displaces the same way.
 //  - The time box is checked before each property run STARTS (fc.pre), never
 //    raced against one in flight: fast-check's interruptAfterTimeLimit races
 //    an async run (SkipAfterProperty: Promise.race with a timer) and abandons
@@ -25,9 +28,13 @@
 //    returned. The clock is injectable (`now`); the seed never touches it. It
 //    is a start gate, not a cap: a run in flight finishes. A hung live request
 //    is bounded by HttpDriver's per-request timeout (REQUEST_TIMEOUT_MS).
+//  - A request that timed out (RequestTimedOut) is environmental, not a
+//    failure (fix round 2, RR-2): it is never a check, never a shrink target
+//    and never a model-error. The run it hung in is skipped, no further run
+//    starts, and the cell reports `timeout`; the CLI aborts it.
 import fc from "fast-check";
 import type { RowKey } from "../catalogue.ts";
-import type { OrganiserDriver } from "../driver/types.ts";
+import { RequestTimedOut, type OrganiserDriver } from "../driver/types.ts";
 import { STEP_INVARIANTS } from "../invariants.ts";
 import type { RegressionCase } from "../scenario-catalogue.ts";
 import { COMMAND_KINDS, ModelViolation, modelCommands } from "./commands.ts";
@@ -89,8 +96,13 @@ export interface CellReport {
   /** The masked checks no open regression names — NEW failures the shrink
    *  passed over — each with the commands its first candidate ran. */
   maskedNew: Record<string, string[]>;
+  /** Empty when `timeout` is set: a cell cut short by the environment is not judged for coverage. */
   vacuous: string[];
   failure: CellFailure | null;
+  /** The request that did not answer (RequestTimedOut) — environmental, never
+   *  a failure. Set, the cell started no run after it and its counts are
+   *  partial; `failure` is whatever was found before it. */
+  timeout: string | null;
 }
 
 /** An unexpected refusal, then a NEW check, then a KNOWN one (fix round 1, I-1). */
@@ -164,7 +176,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   const knownFor = (check: string): string | null =>
     input.regressions.find((r) => r.status === "open" && r.cell === input.cell && r.check === check)?.id ?? null;
   const isKnown = (check: string): boolean => knownFor(check) !== null;
-  const seen = { stageKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false };
+  const seen = { stageKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false, timeout: null as string | null };
   const absorb = (m: ModelState): void => {
     for (const k of COMMAND_KINDS) {
       const into = counts[k];
@@ -187,12 +199,20 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   const now = input.now ?? Date.now;
   const deadline = now() + input.timeLimitMs;
   let target: string | null = null;
+  /** The commands of the last run that failed on `target`: shrinking only
+   *  continues from a failing candidate, so this is its most shrunk. */
+  let targetHistory: string[] = [];
+  /** A NEW check set aside for a higher rank is still a new failure: keep it, with the commands given, once. */
+  const keepNew = (check: string, commands: string[]): void => {
+    if (!isKnown(check) && maskedNew[check] === undefined) maskedNew[check] = commands;
+  };
   const constraints = { maxCommands: input.maxCommands, size: "max" as const, ...(input.replayPath === undefined ? {} : { replayPath: input.replayPath }) };
   const prop = fc.asyncProperty(fc.commands(modelCommands({ fences: input.fences }), constraints), async (cmds) => {
     if (now() >= deadline) {
       seen.timeBoxed = true;
       fc.pre(false);
     }
+    if (seen.timeout !== null) fc.pre(false);
     let model: ModelState | null = null;
     try {
       const setup = await input.newDriverState(++seen.executions);
@@ -202,13 +222,21 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     } catch (e) {
       // A skip (fc.pre) is fast-check's, never a failure: it must not become the target.
       if (fc.PreconditionFailure.isFailure(e)) throw e;
+      // The product did not answer: skip this run, like the time box — never a check (RR-2).
+      if (e instanceof RequestTimedOut) {
+        seen.timeout = e.message;
+        fc.pre(false);
+      }
       const check = checkOf(e);
       const next = shrinkTarget(target, check, isKnown);
       if (next === null) {
         masked[check] = (masked[check] ?? 0) + 1;
-        if (!isKnown(check) && maskedNew[check] === undefined) maskedNew[check] = [...(model?.history ?? [])];
+        keepNew(check, [...(model?.history ?? [])]);
         return;
       }
+      // A higher rank displacing the target: the displaced check is set aside, not lost (RR-1).
+      if (target !== null && next !== target) keepNew(target, targetHistory);
+      targetHistory = [...(model?.history ?? [])];
       target = next;
       throw e;
     } finally {
@@ -225,7 +253,8 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   // A failed check with no counterexample is fast-check giving up on skips.
   // The time box is the one skip that is not a failure; any other (a future
   // fc.pre in a command) would otherwise read as a clean cell (fix round 1, M-7).
-  if (details.failed && shrunk === undefined && !seen.timeBoxed) {
+  // A timeout skips runs the same way, and is reported as itself (RR-2).
+  if (details.failed && shrunk === undefined && !seen.timeBoxed && seen.timeout === null) {
     failure = {
       check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [],
       evidence: [`fast-check gave up after ${details.numSkips} skipped run(s) (${details.numRuns} ran) — only the time box may skip a run`],
@@ -249,6 +278,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   // it — and keeps what it displaced as evidence.
   const unexpected = COMMAND_KINDS.reduce((s, k) => s + counts[k].unexpected, 0);
   if (unexpected > 0 && failure?.check !== UNEXPECTED_REFUSAL) {
+    if (failure !== null) keepNew(failure.check, failure.commands);
     failure = {
       check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [],
       evidence: [
@@ -259,12 +289,12 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     };
   }
 
-  const vacuous = failure === null
+  const vacuous = failure === null && seen.timeout === null
     ? vacuityOf({ counts, stepChecks, foldParity: seen.foldParity, informative: seen.informative, stageKind: seen.stageKind })
     : [];
   return {
     cell: input.cell, variant: input.variant, seed: input.seed, runs: input.runs, maxCommands: input.maxCommands, fences: input.fences,
     numRuns: details.numRuns, executions: seen.executions, interrupted: seen.timeBoxed,
-    counts, stepChecks, foldParity: seen.foldParity, fenced, unknowns, findings, informativeSteps: seen.informative, masked, maskedNew, vacuous, failure,
+    counts, stepChecks, foldParity: seen.foldParity, fenced, unknowns, findings, informativeSteps: seen.informative, masked, maskedNew, vacuous, failure, timeout: seen.timeout,
   };
 }

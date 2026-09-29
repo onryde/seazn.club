@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
-import { HttpDriver, REQUEST_TIMEOUT_MS, RequestTimedOut, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded } from "../lib/driver/types.ts";
+import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
+import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }

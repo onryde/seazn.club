@@ -19,7 +19,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
 import { BUILDER_DEFAULT_KNOBS, SPORT_KEYS } from "../lib/catalogue.ts";
-import { RefusedCall, type FixtureRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
+import { RefusedCall, RequestTimedOut, type FixtureRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldStream } from "../lib/fold.ts";
 import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
 import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
@@ -1134,6 +1134,30 @@ describe("model guards — assumptions are refusals, not comments", () => {
     const { m, d } = await fresh({}, {}, new Overanswer());
     await play(m, d, [["Start", 0]]);
     await expect(commandOf("Score", 0, 0, true).run(m, d)).rejects.toThrow(/answered 3 events for 2 posted/);
+  });
+  it("T14 fix round 2, RR-3: a post that errors part-way (here, a request that did not answer after one event landed) leaves that fixture's ledger UNKNOWN, never a known empty one", async () => {
+    // single-sport: the rule is on the post's own bookkeeping.
+    class LandsOneThenHangs extends ModelFakeDriver {
+      armed = false;
+      postedTo: string | null = null;
+      override async postStream(id: string, events: Parameters<ModelFakeDriver["postStream"]>[1], prefix = ""): Promise<PostedEvent[]> {
+        if (!this.armed) return super.postStream(id, events, prefix);
+        this.postedTo = id;
+        await super.postStream(id, events.slice(0, 1), prefix);
+        throw new RequestTimedOut("POST", `/api/v1/fixtures/${id}/events`, 60_000);
+      }
+    }
+    const d = new LandsOneThenHangs();
+    const { m } = await fresh({}, {}, d);
+    await play(m, d, [["Start", 0]]);
+    const knownBefore = [...m.fixtures.values()].filter((f) => f.ledger !== null && f.ledger.length === 0).length;
+    expect(knownBefore, "no known empty ledger to lose").toBeGreaterThan(1);
+    d.armed = true;
+    await expect(commandOf("Score", 0, 0, true).run(m, d)).rejects.toBeInstanceOf(RequestTimedOut);
+    if (d.postedTo === null) throw new Error("test: the Score posted nothing");
+    expect(m.fixtures.get(d.postedTo)?.ledger).toBeNull();
+    // Only that fixture: every other ledger is still known and empty.
+    expect([...m.fixtures.values()].filter((f) => f.ledger !== null && f.ledger.length === 0).length).toBe(knownBefore - 1);
   });
   it("an addEntrants that answers no entrant is a harness fault, not a silently unchanged roster", async () => {
     // single-sport: the guard is on the driver's answer shape.

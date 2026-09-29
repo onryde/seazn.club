@@ -10,8 +10,9 @@
 // as KNOWN; the same regression replayed against a fixed product (not
 // reproduced), a replay failing on another open case's check, and a fixed
 // regression that comes back; an unexpected refusal; a known failure hiding a
-// new one; a failure the time box left unshrunk; two cells, --seed, a by-hand
-// replay.
+// new one, and a known unexpected refusal displacing one (fix round 2, RR-1);
+// a failure the time box left unshrunk; a request that timed out, beside a
+// cell that did not (RR-2); two cells, --seed, a by-hand replay.
 // Empty cases FIRST where they exist: --regressions with nothing committed on
 // the cells; a cell that ran one command. Refusals are proven by SPAWNING the
 // CLI (ruling R-h), through a symlink (isMainModule).
@@ -27,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
 import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
-import { RefusedCall, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
+import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
 import { parseRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
 import { DataDirMismatch } from "../lib/seed-org.ts";
@@ -58,6 +59,20 @@ const reportDir = () => mkdtempSync(join(scratch, "r-"));
 class RefusingPosts extends ModelFakeDriver {
   override postStream(id: string, _events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
     return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, "TEST_POST_REFUSED", "test: refuses every result"));
+  }
+}
+
+/** Fix round 2, RR-1 (the reviewer's product; twin in model-run-cell.test.ts):
+ *  per division, results are refused by NAME until an entrant is added after
+ *  the build, then taken and their outcome lied about (fold parity). */
+class GatedLiar extends ModelFakeDriver {
+  #adds = 0;
+  constructor() { super({ lieOutcome: true }); }
+  override createDivision(...a: Parameters<ModelFakeDriver["createDivision"]>) { this.#adds = 0; return super.createDivision(...a); }
+  override addEntrants(...a: Parameters<ModelFakeDriver["addEntrants"]>) { return super.addEntrants(...a).then((r) => { this.#adds++; return r; }); }
+  override postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
+    if (this.#adds < 2) return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, "TEST_POST_REFUSED", "test: refuses results until a late entrant"));
+    return super.postStream(id, events, prefix);
   }
 }
 
@@ -287,6 +302,48 @@ describe("model.ts", () => {
     expect(io.out()).not.toContain("regression stub");
     const rep = JSON.parse(readFileSync(join(dir, "i1b", "model-report.json"), "utf8")) as { cells: { verdict: string; maskedNew: Record<string, string[]> }[] };
     expect(rep.cells.map((c) => [c.verdict, Object.keys(c.maskedNew)])).toEqual([["new-failure", [I7]]]);
+  });
+
+  it("fix round 2, RR-1: a NEW failure the shrink was following, displaced by a KNOWN unexpected refusal, makes the cell NEW (exit 1) and is printed (the reviewer's seed 15)", async () => {
+    const io = capture();
+    const dir = reportDir();
+    const d = deps({ driverFor: () => new GatedLiar(), regs: [openReg("MB-003", UNEXPECTED_REFUSAL)] });
+    expect(await runModel(d, ["--run-id", "rr1", "--report-dir", dir, "--cell", CELL, "--runs", "40", "--max-commands", "12", "--seed", "15"])).toBe(1);
+    expect(failureLine(io.out())).toMatch(/^FAILURE model-unexpected-refusal \(known MB-003\): /);
+    expect(io.out()).toMatch(/\n {2}NEW model-fold-parity \(passed over while shrinking toward model-unexpected-refusal\): [^\n]*AddEntrant\([^\n]*(Score|Walkover)\(/);
+    expect(io.out()).toMatch(/no stub for model-fold-parity/);
+    expect(io.out()).toMatch(/model: 1 cell\(s\) — 0 ok, 0 known, 1 NEW/);
+    const rep = JSON.parse(readFileSync(join(dir, "rr1", "model-report.json"), "utf8")) as { cells: { verdict: string; maskedNew: Record<string, string[]> }[] };
+    expect(rep.cells.map((c) => [c.verdict, Object.keys(c.maskedNew).includes(FOLD)])).toEqual([["new-failure", true]]);
+  });
+
+  it("fix round 2, RR-2: a request timeout aborts its cell: a TIMEOUT line, no stub, no model-error; the report is written, the next cell still runs, and exit 3 outranks the next cell's NEW failure", async () => {
+    const io = capture();
+    const dir = reportDir();
+    let drivers = 0;
+    const hanging = class extends ModelFakeDriver {
+      override postStream(id: string, _e: readonly StreamEvent[], _p = ""): Promise<PostedEvent[]> {
+        return Promise.reject(new RequestTimedOut("POST", `/api/v1/fixtures/${id}/events`, 60_000));
+      }
+    };
+    // The first cell's product hangs on every post; the second refuses every post by name (a NEW failure).
+    const d = deps({ driverFor: () => (++drivers === 1 ? new hanging() : new RefusingPosts()) });
+    const cells = [CELL, "league|badminton"];
+    expect(await runModel(d, ["--run-id", "rr2", "--report-dir", dir, ...cells.flatMap((c) => ["--cell", c]), "--runs", "40"])).toBe(3);
+    expect(drivers).toBe(2);
+    const out = io.out();
+    expect(out).toMatch(/\n {2}TIMEOUT: driver: POST \/api\/v1\/fixtures\/[^\n]* did not answer within 60000 ms[^\n]*re-run/);
+    expect(out).not.toContain("model-error");
+    // The aborted cell prints no verdict line of its own — no FAILURE, no ok, no VACUOUS.
+    expect(out.match(/\n {2}FAILURE /g)?.length).toBe(1);
+    expect(failureLine(out)).toMatch(new RegExp(`^FAILURE ${UNEXPECTED_REFUSAL} \\(NEW\\): `));
+    expect(out).not.toMatch(/\n {2}(ok|VACUOUS)/);
+    // One stub, for the other cell's failure; none for the timeout.
+    expect(out.match(/regression stub for/g)?.length).toBe(1);
+    expect(out).toMatch(/"cell": "league\|badminton"/);
+    expect(out).toMatch(/model: 2 cell\(s\) — 0 ok, 0 known, 1 NEW, 0 vacuous, 0 not reproduced, 1 aborted/);
+    const rep = JSON.parse(readFileSync(join(dir, "rr2", "model-report.json"), "utf8")) as { cells: { cell: string; verdict: string; timeout: string | null; failure: unknown }[] };
+    expect(rep.cells.map((c) => [c.cell, c.verdict, c.timeout !== null, c.failure === null])).toEqual([[CELL, "aborted", true, true], ["league|badminton", "new-failure", false, false]]);
   });
 
   it("fix round 1, M-2: every cell gets its own seed, FNV-1a of `${runId}|${cell}`", async () => {
