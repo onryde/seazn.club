@@ -146,7 +146,11 @@ export async function watchFixtureRealtime(
     });
   });
 
-  await page.route("**/api/v1/public/fixtures/*/realtime-token", async (route) => {
+  // Matched on the PATH, never a glob: a Playwright glob matches the whole URL, query string included, so
+  // "**/realtime-token" silently missed the OBS overlay's keyed request (`?purpose=overlay&key=…`, RT) and the watch read
+  // "the overlay never asked" while it had. Measured 2026-09-29: the glob caught the bare path and not the queried one.
+  const TOKEN_PATH = /^\/api\/v1\/public\/fixtures\/[^/]+\/realtime-token$/;
+  await page.route((url) => TOKEN_PATH.test(url.pathname), async (route) => {
     if (!route.request().url().includes(fixtureId)) {
       await route.continue();
       return;
