@@ -11,7 +11,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | Wave | Scope | State |
 | --- | --- | --- |
 | W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28: ready to merge (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251).** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
-| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok, knockout\|badminton known MB-005, swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
+| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | not started |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
 | W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | not started (ruling 28) |
@@ -211,14 +211,18 @@ routed to W2, not applied. Rulings 34–36 were made during W1b.
 **The model, final run at HEAD** (harness `e9cda4a38`, clean tree; 30 commands
 per run, fences on; `truth-runs/w1b-model-final/`, whose `README.md` records
 why swiss\|badminton runs at 40). Every cell: 0 unexpected refusals, `masked`
-and `maskedNew` empty, no vacuity, no timeout.
+and `maskedNew` empty, no vacuity, no timeout. The two knockout rows are the
+final batch's re-run (F-1), run `w1b-model-final-ko` at harness `15d434d35`
+with the knockout fences on (`model-report-knockout.json`): the first final
+run's knockout\|badminton stopped at its known MB-005 after 2 of 20 runs with
+Rebuild never run, a vacuous cell the model did not then judge.
 
 | Cell | Variant | Seed | Runs | Verdict | Step-check items | CD-T13b |
 | --- | --- | --- | --- | --- | --- | --- |
 | league\|generic | score | -396057224 | 20 | ok | I7 1,236 · I8 165 | 8 |
 | league\|badminton | bwf | -1248422361 | 20 | ok (fence `late-entry-then-generate` blocked a command 2×) | I7 1,296 · I8 191 | 11 |
-| knockout\|generic | score | 894875997 | 20 | ok | I8 241 | 18 |
-| knockout\|badminton | bwf | -1682490066 | 20 | known MB-005, matched on the product's answer ("…would strand home_slot_label…") | I8 54 | 1 |
+| knockout\|generic | score | -1424798710 | 20/20 | ok; fences `ko-generate-after-roster-change` 15×, `ko-withdraw-waiting-on-tbd` 1× | I8 136 | 23 |
+| knockout\|badminton | bwf | -1451311303 | 20/20 | ok, every command kind ran; fence `ko-generate-after-roster-change` 8× | I8 68 | 16 |
 | swiss\|generic | score | 1377112074 | 20 | ok | I6 175 · I8 232 | 19 |
 | swiss\|badminton | bwf | -2002771143 | 40 | ok, every command kind ran | I6 288 · I8 371 | 26 |
 
@@ -232,7 +236,10 @@ and `maskedNew` empty, no vacuity, no timeout.
   only the run count differs.
 - **`--regressions`** (run `w1b-model-final-regressions`): 5 known, 0 NEW,
   0 not reproduced; every case replays its committed path, `replayPath` and
-  command list.
+  command list. Re-run after the final batch (run
+  `w1b-model-final-ko-regressions`, harness `15d434d35`,
+  `model-report-regressions-ko.json`): the same 5 known, each failure's check,
+  case, seed, path, `replayPath` and command list identical.
 - **Earlier model runs, superseded** (kept as evidence):
   - `w1b-model/` — Step 4 (`w1b-model-0928a`, pre-fix): 2 ok and 4 NEW. The
     knockout pair was a product finding (MB-002/003). The swiss pair was a
