@@ -84,6 +84,16 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1c Task 6's modules, named for the same reason. browser-run.ts is what
+  // run.ts loads lazily (a dynamic import the module load never follows), so
+  // its own row below is the only strip-types load it gets before a live run.
+  const W1C_T6 = ["lib/driver/mixed.ts", "lib/driver/browser-driver.ts", "lib/browser/browser-run.ts"];
+  it("W1c Task 6's modules are all in the walk", () => {
+    const missing = W1C_T6.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T6.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().
