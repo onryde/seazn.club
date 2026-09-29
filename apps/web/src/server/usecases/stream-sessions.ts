@@ -1143,21 +1143,16 @@ async function latestRow(fixtureId: string): Promise<Row | null> {
   return row ?? null;
 }
 
-/** C1: the org's balance, with NO session row required. `currentSession` returns
- *  `null` until a session exists and `balance` rides inside that projection, so the
- *  idle Phone tab had no source for it at all and read 0 for every credited org.
- *  One authority — `creditBalance` (Task 7). Tenancy is checked the same way the
- *  projection checks it: a mismatch is 404, never 403 (404 ≡ missing). */
-export async function relayBalance(auth: AuthCtx, orgId: string): Promise<number> {
-  if (orgId !== auth.orgId) throw new HttpError(404, "organisation not found");
-  return creditBalance(sql, orgId);
-}
-
 /** What the Phone tab's credits card shows (Task 14b, R2/R4): the balance split by bucket, plus the plan's monthly
  *  allowance for the "Your plan includes {n} free match credits" note. The division page's reader — it GRANTS this
  *  month's free credits first (R3b, `ensureMonthlyStreamGrant`, idempotent), so the idle tab of an org that has never
  *  started a stream already shows them. `total` is creditBalance's number (creditBreakdown sums the same rows), so the
- *  chip and the split cannot disagree. Tenancy as `relayBalance`: a mismatch is 404, never 403. */
+ *  chip and the split cannot disagree.
+ *
+ *  C1 lives here now (Task 14b review M9 retired `relayBalance`, which nothing but its own test called): the balance is
+ *  readable with NO session row. `currentSession` returns `null` until a session exists and `balance` rides inside that
+ *  projection, so the idle Phone tab had no other source and read 0 for every credited org. Tenancy is checked the way
+ *  the projection checks it: a mismatch is 404, never 403 (404 ≡ missing). */
 export interface RelayCredits extends StreamCreditBreakdown {
   /** The plan's `streaming.credits.monthly` (V426), on the org's RESOLVED plan. */
   monthlyAllowance: number;

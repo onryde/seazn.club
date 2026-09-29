@@ -51,7 +51,7 @@ import { createStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
-  openStreamFixtureIds, reconcileSession, relayBalance, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  openStreamFixtureIds, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
@@ -2077,10 +2077,11 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     // no balance chip, "Go live" unreachable. Task 14's body tests cannot see it — they
     // pass `balance: 2` into the pure component by hand, so the prop test is green in
     // exactly the state that is broken. This usecase IS the witness.
+    // M9: relayBalance is retired; relayCredits (the page's ONE reader) carries C1 now.
     expect(await currentSession(r.auth, r.fixtureId, r.deps)).toBeNull();
-    expect(await relayBalance(r.auth, r.auth.orgId)).toBe(2);
+    expect(await relayCredits(r.auth, r.auth.orgId)).toMatchObject({ total: 2, pack: 2 });
     const other = await rig({ credits: 1 });
-    await expect(relayBalance(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });   // 404 ≡ missing, never 403
+    await expect(relayCredits(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });   // 404 ≡ missing, never 403
   });
 
   // V426 (Task 14b, R3): the plan's free match credits, read from V426's own rows — never typed here.
