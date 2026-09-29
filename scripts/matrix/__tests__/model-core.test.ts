@@ -26,7 +26,7 @@ import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import {
   NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ORIENTATION_CHECK, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
-  absorbFixtures, informativeSteps, nextMatchMayHaveStarted, orientationBound, type FixtureModel,
+  absorbFixtures, fedCandidates, fedMatchStarted, informativeSteps, orientationBound, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
 import { entrantKindFor, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
@@ -74,6 +74,7 @@ const violation = async (p: Promise<unknown>): Promise<ModelViolation> => {
   return e as ModelViolation;
 };
 const lock = rosterLockText();
+const REASON_TEXT = withdrawalReason();
 
 /** Every command kind, fences off, each runnable where it stands: the pre-Start
  *  path (growth before fixtures exist, a pre-Start Generate and Rebuild), Start,
@@ -540,6 +541,8 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
     expect(NEXT_MATCH_LOCK.status).toBe(next.status);
     expect(NEXT_MATCH_LOCK.code).toBe(next.code);
     expect(NEXT_MATCH_LOCK.notStarted).toBe(next.notStarted);
+    expect(NEXT_MATCH_LOCK.cascade, "isCascadeWalkover: the walkover the system awarded is reset, never refused").toEqual(next.cascade);
+    expect(next.resetExempt, "planRelease refuses only `!reset && hasStarted(t)`").toBe(true);
     expect(next.everyAppend, "append-event.ts runs releaseFedSeats on every append, a void included").toBe(true);
     expect(isNamedRefusal(next.status, next.code), "a named refusal: the model can tell it apart").toBe(true);
     expect([...NEXT_MATCH_LOCK.kinds].sort()).toEqual([...BRACKET_STAGE_KINDS].sort());
@@ -677,27 +680,22 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
     expect(m.counts.Void).toEqual(counts(1, { unexpected: 1 }));
   });
 
-  it("the rule over one fed match, row by row: fed-seats.ts hasStarted's three terms, a later round only, one of the pair only, a bracket kind only — and the empty case first", async () => {
-    // single-sport: the rule reads fixture rows, not a sport.
+  it("the candidates of a take-back, row by row: a later round only, one of the pair only, a bracket kind only — and the empty case first", async () => {
+    // single-sport: the candidates read fixture rows, not a sport.
     const { m: base } = await fresh();
     const [e1, e2, e3, e4] = base.entrants;
-    const note: LedgerEntry = { id: "n1", seq: 1, type: "core.note", payload: {} };
     const f: FixtureModel = { id: "f", round: 1, home: e1, away: e2, status: "decided", ledger: [] };
     const g = (over: Partial<FixtureModel>): FixtureModel => ({ id: "g", round: 2, home: e1, away: null, status: next.notStarted, ledger: [], ...over });
     const ROWS: { what: string; kind?: string; f?: Partial<FixtureModel>; g: Partial<FixtureModel> | null; want: boolean }[] = [
       { what: "empty case: no other fixture", g: null, want: false },
-      { what: "fed match not started: the not-started status, a known empty ledger", g: {}, want: false },
-      { what: "its status has moved (hasStarted: status)", g: { status: "in_play" }, want: true },
-      { what: "a live event the model knows (hasStarted: live_events)", g: { ledger: [note] }, want: true },
-      { what: "…but a voided one is not live", g: { ledger: [note, { id: "v1", seq: 2, type: "core.void", payload: {}, voids: "n1" }] }, want: false },
-      { what: "a ledger the model does not know whole (hasStarted: outcome or events unseen)", g: { ledger: null }, want: true },
-      { what: "the away seat holds f's entrant", g: { home: e3, away: e2, status: "decided" }, want: true },
-      { what: "an EARLIER round (f's own feeder)", g: { round: 0, status: "decided" }, want: false },
-      { what: "the SAME round", g: { round: 1, status: "decided" }, want: false },
-      { what: "a started later match holding neither entrant", g: { home: e3, away: e4, status: "decided" }, want: false },
-      { what: "the fed match has no round_no", g: { round: null, status: "decided" }, want: false },
-      { what: "f has no round_no", f: { round: null }, g: { status: "decided" }, want: false },
-      { what: "a round-robin kind never", kind: "league", g: { status: "decided" }, want: false },
+      { what: "a later round seating f's home entrant — started or not: the driver's answer judges that", g: {}, want: true },
+      { what: "the away seat holds f's away entrant", g: { home: e3, away: e2 }, want: true },
+      { what: "an EARLIER round (f's own feeder)", g: { round: 0 }, want: false },
+      { what: "the SAME round", g: { round: 1 }, want: false },
+      { what: "a later match holding neither entrant", g: { home: e3, away: e4 }, want: false },
+      { what: "the fed match has no round_no", g: { round: null }, want: false },
+      { what: "f has no round_no", f: { round: null }, g: {}, want: false },
+      { what: "a round-robin kind never", kind: "league", g: {}, want: false },
     ];
     let checked = 0;
     for (const row of ROWS) {
@@ -705,18 +703,47 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
       const fixtures = new Map<string, FixtureModel>([[ff.id, ff]]);
       if (row.g !== null) fixtures.set("g", g(row.g));
       const m: ModelState = { ...base, stageKind: row.kind ?? "knockout", fixtures };
-      expect(nextMatchMayHaveStarted(m, ff), row.what).toBe(row.want);
+      expect(fedCandidates(m, ff).map((x) => x.id), row.what).toEqual(row.want ? ["g"] : []);
       checked++;
     }
     expect(checked).toBe(ROWS.length);
-    // Every bracket kind reads the rule; the row above names the round robin.
     let kinds = 0;
     for (const kind of NEXT_MATCH_LOCK.kinds) {
-      const m: ModelState = { ...base, stageKind: kind, fixtures: new Map([["f", f], ["g", g({ status: "decided" })]]) };
-      expect(nextMatchMayHaveStarted(m, f), kind).toBe(true);
+      const m: ModelState = { ...base, stageKind: kind, fixtures: new Map([["f", f], ["g", g({})]]) };
+      expect(fedCandidates(m, f).length, kind).toBe(1);
       kinds++;
     }
     expect(kinds).toBe(BRACKET_STAGE_KINDS.size);
+  });
+
+  it("has a candidate started, on the driver's answer — fed-seats.ts `!isCascadeWalkover(t) && hasStarted(t)`, row by row, the empty case first; a null ledger alone is no evidence", () => {
+    const note: LedgerEntry = { id: "n1", seq: 1, type: "core.note", payload: {} };
+    const voidOf = (id: string, seq: number): LedgerEntry => ({ id: `v${seq}`, seq, type: "core.void", payload: {}, voids: id });
+    const forfeit: LedgerEntry = { id: "w1", seq: 1, type: "core.forfeit", payload: { by: "a", reason: REASON_TEXT } };
+    const award = { kind: next.cascade.outcomeKind, winner: "h" };
+    const S = next.notStarted;
+    const ROWS: { what: string; status: string; outcome: unknown; lastSeq: number; ledger: LedgerEntry[] | null; want: "started" | "not-started" | "unverified" }[] = [
+      { what: "empty case: not-started status, no outcome, no event", status: S, outcome: null, lastSeq: 0, ledger: [], want: "not-started" },
+      { what: "…and the model's ledger unknown: 0 events is 0 live events (the review's probe)", status: S, outcome: null, lastSeq: 0, ledger: null, want: "not-started" },
+      { what: "hasStarted: the status has moved", status: "in_play", outcome: null, lastSeq: 1, ledger: null, want: "started" },
+      { what: "hasStarted: decided", status: "decided", outcome: { kind: "win", winner: "h" }, lastSeq: 3, ledger: null, want: "started" },
+      { what: "hasStarted: an outcome on a not-started status", status: S, outcome: { kind: "win", winner: "h" }, lastSeq: 0, ledger: [], want: "started" },
+      { what: "hasStarted: a live event the model knows whole (a note keeps the status)", status: S, outcome: null, lastSeq: 1, ledger: [note], want: "started" },
+      { what: "…but a voided one is not live", status: S, outcome: null, lastSeq: 2, ledger: [note, voidOf("n1", 2)], want: "not-started" },
+      { what: "events the model cannot see: unverified, never 'started'", status: S, outcome: null, lastSeq: 1, ledger: null, want: "unverified" },
+      { what: "a known ledger the product's tip has moved past: unverified", status: S, outcome: null, lastSeq: 1, ledger: [], want: "unverified" },
+      { what: "isCascadeWalkover: forfeited + award + no event → reset, not started", status: next.cascade.status, outcome: award, lastSeq: 0, ledger: null, want: "not-started" },
+      { what: "…an award whose only forfeit was voided has no live event: still the reset", status: next.cascade.status, outcome: award, lastSeq: 2, ledger: [forfeit, voidOf("w1", 2)], want: "not-started" },
+      { what: "an award WITH a live forfeit (a withdrawal's) is a recorded decision: started", status: next.cascade.status, outcome: award, lastSeq: 1, ledger: [forfeit], want: "started" },
+      { what: "an award whose events the model cannot see: unverified", status: next.cascade.status, outcome: award, lastSeq: 1, ledger: null, want: "unverified" },
+      { what: "forfeited with a WIN (a played walkover) is no cascade award: started", status: next.cascade.status, outcome: { kind: "win", winner: "h" }, lastSeq: 0, ledger: null, want: "started" },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      expect(fedMatchStarted({ status: r.status, outcome: r.outcome, last_seq: r.lastSeq }, r.ledger), r.what).toBe(r.want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
   });
 
   it("a DIFFERENT refusal of a knockout take-back after the fed match started is still model-unexpected-refusal: the permit is the code AND the status", async () => {
@@ -736,13 +763,115 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
       const d = new Refusing();
       const { m } = await bracket("knockout", 4, semis, {}, d);
       await play(m, d, [["Score", 0, 0], ["Score", 0, 0], ["Score", 0, 0]]);
-      expect(nextMatchMayHaveStarted(m, byOrder(m).sf1), "the fed match has started").toBe(true);
+      expect(fedCandidates(m, byOrder(m).sf1).map((x) => x.id), "the final is sf1's candidate").toEqual([byOrder(m).fin.id]);
+      expect(byOrder(m).fin.status, "…and it has started").toBe("decided");
       d.armed = c;
       const e = await violation(play(m, d, [["Void", 0]]));
       expect(e.check, `${c.status} ${c.code}`).toBe(UNEXPECTED_REFUSAL);
       checked++;
     }
     expect(checked).toBe(CASES.length);
+  });
+
+  it("(1) the fed match has really started, on the driver's answer → expected — even when the model no longer knows its ledger", async () => {
+    // single-sport: the judgement reads fixture state, not a sport.
+    let checked = 0;
+    for (const known of [true, false]) {
+      const { m, d } = await bracket("knockout", 4, semis);
+      await play(m, d, [["Score", 0, 0], ["Score", 0, 0], ["Score", 0, 0]]);
+      const { sf1, fin } = byOrder(m);
+      if (!known) fin.ledger = null;
+      const before = [...(sf1.ledger ?? [])];
+      await play(m, d, [["Void", 0]]);
+      expect(m.counts.Void, `known ${known}`).toEqual(counts(1, { expected: 1 }));
+      expect(m.steps.at(-1)?.verdict).toBe("expected-refusal");
+      expect(m.unknowns.filter((u) => u.cause === "next-match-unverified")).toEqual([]);
+      expect(sf1.ledger).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("(2) the fed match is scheduled with 0 events → model-unexpected-refusal, whether or not the model still knows its ledger (the review's probe: a null ledger is no evidence)", async () => {
+    // single-sport: as above.
+    let checked = 0;
+    for (const known of [true, false]) {
+      const { m, d } = await bracket("knockout", 4, semis, { fedSeatsFault: "always" });
+      await play(m, d, [["Score", 0, 0]]);
+      const { fin } = byOrder(m);
+      expect(fin.home, "sf1 seated the final").not.toBeNull();
+      expect(await d.fixtureState(fin.id)).toEqual({ status: next.notStarted, last_seq: 0, outcome: null });
+      if (!known) fin.ledger = null;
+      const e = await violation(play(m, d, [["Void", 0]]));
+      expect(e.check, `known ${known}`).toBe(UNEXPECTED_REFUSAL);
+      expect(e.evidence[0]).toContain(fin.id);
+      expect(m.counts.Void).toEqual(counts(1, { unexpected: 1 }));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("(3) the fed match is a zero-event cascade walkover → the product RESETS it (the take-back is accepted and the seat given back); a refusal instead is model-unexpected-refusal", async () => {
+    // single-sport: as above.
+    /** resolveBracketSeats' award on the final: forfeited + {kind: award}, no event. */
+    const awardFinal = (d: ModelFakeDriver, m: ModelState) => {
+      const row = d.fixtures.find((x) => x.id === byOrder(m).fin.id);
+      if (row === undefined || row.home_entrant_id === null) throw new Error("test: the final is not seated");
+      row.status = next.cascade.status;
+      row.outcome = { kind: next.cascade.outcomeKind, winner: row.home_entrant_id };
+      // Absorbed while forfeited, the model would never know its ledger (the review's sticky null).
+      byOrder(m).fin.ledger = null;
+    };
+    const ok = await bracket("knockout", 4, semis);
+    await play(ok.m, ok.d, [["Score", 0, 0]]);
+    awardFinal(ok.d, ok.m);
+    await play(ok.m, ok.d, [["Void", 0]]);
+    expect(ok.m.counts.Void, "the product resets a cascade walkover").toEqual(counts(1, { accepted: 1 }));
+    expect(byOrder(ok.m).fin).toMatchObject({ status: next.notStarted, home: null });
+
+    const bad = await bracket("knockout", 4, semis, { fedSeatsFault: "always" });
+    await play(bad.m, bad.d, [["Score", 0, 0]]);
+    awardFinal(bad.d, bad.m);
+    const e = await violation(play(bad.m, bad.d, [["Void", 0]]));
+    expect(e.check).toBe(UNEXPECTED_REFUSAL);
+    expect(bad.m.counts.Void).toEqual(counts(1, { unexpected: 1 }));
+  });
+
+  it("second candidate: a take-back over a chain is expected when ANY candidate has started — the fed match played, the one after it still unstarted", async () => {
+    // single-sport: as above.
+    const { m, d } = await bracket("knockout", 4, (dd, [e1, e2, e3, e4]) => {
+      const f1 = dd.seat(1, e1, e2);
+      const f2 = dd.seat(2, null, e3);
+      const f3 = dd.seat(3, null, e4);
+      dd.feed(f1.id, f2.id, 1);
+      dd.feed(f2.id, f3.id, 1);
+    });
+    await play(m, d, [["Score", 0, 0], ["Score", 0, 0]]);
+    const [f1, f2, f3] = [...m.fixtures.values()];
+    if (f1 === undefined || f2 === undefined || f3 === undefined) throw new Error("test: the chain has three fixtures");
+    expect(fedCandidates(m, f1).map((x) => x.id), "f2, then f3: both later, both holding f1's winner").toEqual([f2.id, f3.id]);
+    expect([f2.status, f3.status]).toEqual(["decided", next.notStarted]);
+    await play(m, d, [["Void", 0]]);
+    expect(m.counts.Void).toEqual(counts(1, { expected: 1 }));
+  });
+
+  it("a fed match whose events the model cannot see (scheduled, no outcome, last_seq > 0) → counted under unknowns: the refusal is neither expected nor a violation, and the step is not informative", async () => {
+    // single-sport: as above.
+    const { m, d } = await bracket("knockout", 4, semis);
+    await play(m, d, [["Score", 0, 0], ["Score", 0, 0]]);
+    const { sf1, fin } = byOrder(m);
+    // A second writer's note: the final stays scheduled, with a live event the model never posted.
+    await d.postStream(fin.id, [{ type: "core.note", payload: { text: "court change" } }]);
+    expect(await d.fixtureState(fin.id)).toEqual({ status: next.notStarted, last_seq: 1, outcome: null });
+    const before = [...(sf1.ledger ?? [])];
+    await play(m, d, [["Void", 0]]);
+    expect(m.counts.Void).toEqual(counts(1, { refused: 1 }));
+    expect(m.steps.at(-1)?.verdict).toBe("unknown");
+    const u = m.unknowns.filter((x) => x.cause === "next-match-unverified");
+    expect(u.map((x) => x.fixture)).toEqual([fin.id]);
+    expect(u[0]?.detail).toContain(sf1.id);
+    expect(sf1.ledger, "the refusal wrote nothing: sf1 is still known").toEqual(before);
+    expect(informativeSteps({ ...m, steps: m.steps.slice(-1) }).verdict).toBe("fail");
   });
 
   it("a NEXT_MATCH_STARTED refusal that nonetheless wrote the event → model-next-match-lock: a refused take-back leaves the tip where it was", async () => {

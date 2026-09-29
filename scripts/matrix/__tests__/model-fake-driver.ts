@@ -24,8 +24,10 @@
 //    fixture it feeds, only ever into an empty seat (usecases/scoring.ts
 //    onDecided → fillSlot), and a write that changes who that decision
 //    advances empties the seat again — or, when the fed match has started,
-//    is refused by name before anything is written (planRelease). Status,
-//    code, message and the not-started rule are read from the product's text.
+//    is refused by name before anything is written (planRelease). A cascade
+//    walkover (isCascadeWalkover) is RESET instead, and the reset follows its
+//    own winner one edge on. Status, code, message, the not-started rule and
+//    the exemption are read from the product's text.
 // The faults are opt-in. fault879 reproduces issue #879's SHAPE, not a blanket
 // fault: only an entrant added while the stage already has fixtures makes the
 // next Generate seat every pair again (ruling C-1, superseding R-PF8's
@@ -57,7 +59,8 @@ export interface ModelFakeOpts {
   /** Every posted event is answered as landing on the SEQ_CONFLICT retry. */
   retriedPosts?: boolean;
   /** A faulty fed-seat release: "always" refuses a take-back whether or not
-   *  the fed match has started; "leaky" refuses it after writing the event. */
+   *  the fed match has started — a cascade walkover included; "leaky"
+   *  refuses it after writing the event. */
   fedSeatsFault?: "always" | "leaky";
 }
 
@@ -203,13 +206,15 @@ export class ModelFakeDriver extends FakeLeagueDriver {
           throw new RefusedCall("POST", path, engineHttpStatus(e.code), e.code, e.message);
         }
         // append-event.ts: releaseFedSeats after the fold, BEFORE the first write.
-        const refused = this.#release(f, outcome, path);
+        const plan: (() => void)[] = [];
+        const refused = this.#release(f, outcome, path, plan);
         if (refused !== null && this.opts.fedSeatsFault !== "leaky") throw refused;
         ledger.push(entry);
         f.events = [...f.events, ev];
         f.outcome = this.opts.lieOutcome === true && outcome !== null ? { ...(outcome as object), winner: "nobody" } : outcome;
         f.status = statusFromFold(outcome, liveEntries(ledger));
         if (refused !== null) throw refused;
+        for (const step of plan) step();
         this.#fill(f);
         out.push({ seq: ledger.length, status: f.status, outcome: f.outcome, event_id: eid, ...(this.opts.retriedPosts === true ? { retried: true } : {}) });
       }
@@ -225,10 +230,17 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   #started(t: FakeFixture): boolean {
     return t.status !== NEXT.notStarted || t.outcome !== null || liveEntries(this.ledgers.get(t.id) ?? []).length > 0;
   }
+  /** fed-seats.ts isCascadeWalkover, its three terms. */
+  #cascade(t: FakeFixture): boolean {
+    const kind = (t.outcome as { kind?: unknown } | null)?.kind;
+    return t.status === NEXT.cascade.status && kind === NEXT.cascade.outcomeKind && liveEntries(this.ledgers.get(t.id) ?? []).length === 0;
+  }
   /** fed-seats.ts planRelease over one winner edge: only when who advances
-   *  changed, and only a seat holding one of this fixture's two entrants. The
-   *  refusal to throw, or null (the seat is given back). */
-  #release(f: FakeFixture, next: unknown, path: string): RefusedCall | null {
+   *  changed, and only a seat holding one of this fixture's two entrants. Every
+   *  seat is PLANNED (into `plan`) before any is given back; the refusal to
+   *  throw, or null. A cascade walkover is reset, and whatever it advanced
+   *  moves too. */
+  #release(f: FakeFixture, next: unknown, path: string, plan: (() => void)[]): RefusedCall | null {
     const edge = this.feeds.get(f.id);
     const was = advancingWinner(f.outcome);
     if (edge === undefined || was === undefined || was === advancingWinner(next)) return null;
@@ -236,10 +248,17 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (t === undefined) return null;
     const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
     if (occupant === null || (occupant !== f.home_entrant_id && occupant !== f.away_entrant_id)) return null;
-    if (this.opts.fedSeatsFault === "always" || this.#started(t)) return new RefusedCall("POST", path, NEXT.status, NEXT.code, NEXT.message(`R${t.round_no ?? 0}·${t.fixture_no ?? 0}`));
-    if (edge.slot === 1) t.home_entrant_id = null;
-    else t.away_entrant_id = null;
-    return null;
+    const reset = this.#cascade(t);
+    if (this.opts.fedSeatsFault === "always" || (!reset && this.#started(t))) return new RefusedCall("POST", path, NEXT.status, NEXT.code, NEXT.message(`R${t.round_no ?? 0}·${t.fixture_no ?? 0}`));
+    plan.push(() => {
+      if (edge.slot === 1) t.home_entrant_id = null;
+      else t.away_entrant_id = null;
+      if (reset) {
+        t.status = NEXT.notStarted;
+        t.outcome = null;
+      }
+    });
+    return reset ? this.#release(t, null, path, plan) : null;
   }
   /** usecases/scoring.ts onDecided → fillSlot: the winner goes forward, into an empty seat only. */
   #fill(f: FakeFixture): void {

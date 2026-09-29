@@ -12,7 +12,7 @@
 // classed (`steps`), and informativeSteps() fails a cell with none that told
 // the model anything (R25).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import type { FixtureRow, OrganiserDriver } from "../driver/types.ts";
+import type { FixtureRow, FixtureStateOut, OrganiserDriver } from "../driver/types.ts";
 import { stagesForRow, type RowKey } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
@@ -48,8 +48,10 @@ export type StepVerdict = "accepted" | "refused" | "expected-refusal" | "unknown
 export interface StepRecord { cmd: string; verdict: StepVerdict }
 /** A ledger that went unknown because the product's event count stopped
  *  matching the model's: a post answered on the SEQ_CONFLICT retry, or a tip
- *  that moved under the model (a second writer). */
-export interface UnknownLedger { cause: "retried" | "tip-moved"; fixture: string; detail: string }
+ *  that moved under the model (a second writer) — or a fed match whose events
+ *  the model cannot see, so a NEXT_MATCH_STARTED refusal over it could be
+ *  judged neither right nor wrong (ruling RR-1, fix round 3). */
+export interface UnknownLedger { cause: "retried" | "tip-moved" | "next-match-unverified"; fixture: string; detail: string }
 export interface CommandCounts { ran: number; accepted: number; refused: number; expected: number; unexpected: number }
 
 export interface ModelState {
@@ -126,32 +128,55 @@ export const NEXT_MATCH_CHECK = "model-next-match-lock";
 /** fed-seats.ts planRelease, which append-event.ts runs on EVERY append (a
  *  void included), before the first write: a write that changes who a
  *  decision advances is refused, 409 NEXT_MATCH_STARTED, when the fixture it
- *  feeds seats one of its entrants and has started — `status` not
- *  `notStarted`, an outcome, or a live event (hasStarted). Only a bracket has
- *  feeds: the engine's BRACKET_STAGE_KINDS, whose generators are the only
- *  ones that emit homeFrom/awayFrom. Pinned against fed-seats.ts's text by
- *  model-core.test.ts. */
-export const NEXT_MATCH_LOCK: { readonly status: number; readonly code: string; readonly notStarted: string; readonly kinds: readonly string[] } = Object.freeze({
+ *  feeds seats one of its entrants and `!reset && hasStarted(t)` —
+ *  hasStarted: `status` not `notStarted`, an outcome, or a live event; reset:
+ *  isCascadeWalkover, the walkover the system awarded (`cascade.status`, an
+ *  outcome of `cascade.outcomeKind`, no live event), which is put back rather
+ *  than refused. Only a bracket has feeds: the engine's BRACKET_STAGE_KINDS,
+ *  whose generators are the only ones that emit homeFrom/awayFrom. Pinned
+ *  against fed-seats.ts's text by model-core.test.ts. */
+export const NEXT_MATCH_LOCK: {
+  readonly status: number; readonly code: string; readonly notStarted: string;
+  readonly cascade: { readonly status: string; readonly outcomeKind: string }; readonly kinds: readonly string[];
+} = Object.freeze({
   status: 409,
   code: "NEXT_MATCH_STARTED",
   notStarted: "scheduled",
+  cascade: Object.freeze({ status: "forfeited", outcomeKind: "award" }),
   kinds: Object.freeze([...BRACKET_STAGE_KINDS]),
 });
 
-/** The product MAY refuse a take-back of `f` under NEXT_MATCH_LOCK here. The
- *  model sees no feed edges, so it reads the rule's necessary condition: on a
- *  bracket kind, a fixture in a LATER round (every feed runs to a later
- *  round_no — engine bracket.ts through stages.ts bracketToGen, pinned) that
- *  seats one of f's entrants has started, or its ledger is not known whole.
- *  An upstream feeder, or a started match holding neither entrant, does not
- *  count. Never true on a round robin: there the take-back must be accepted. */
-export function nextMatchMayHaveStarted(m: ModelState, f: FixtureModel): boolean {
+/** The fixtures a take-back of `f` could be refused over. The model sees no
+ *  feed edges, so it takes the structural superset: on a bracket kind, every
+ *  fixture in a LATER round (every feed runs to a later round_no — engine
+ *  bracket.ts through stages.ts bracketToGen, pinned) that seats one of f's
+ *  entrants. Whether any of them has STARTED is judged on the driver's
+ *  answer when the refusal comes (fedMatchStarted), never on the model's
+ *  memory. Empty on a round robin: there the take-back must be accepted. */
+export function fedCandidates(m: ModelState, f: FixtureModel): FixtureModel[] {
   const round = f.round;
-  if (!NEXT_MATCH_LOCK.kinds.includes(m.stageKind) || round === null) return false;
+  if (!NEXT_MATCH_LOCK.kinds.includes(m.stageKind) || round === null) return [];
   const mine = [f.home, f.away].filter((e): e is string => e !== null);
   const holds = (g: FixtureModel) => (g.home !== null && mine.includes(g.home)) || (g.away !== null && mine.includes(g.away));
-  const started = (g: FixtureModel) => g.status !== NEXT_MATCH_LOCK.notStarted || g.ledger === null || liveEntries(g.ledger).length > 0;
-  return [...m.fixtures.values()].some((g) => g.round !== null && g.round > round && holds(g) && started(g));
+  return [...m.fixtures.values()].filter((g) => g.round !== null && g.round > round && holds(g));
+}
+
+/** fed-seats.ts `!isCascadeWalkover(t) && hasStarted(t)` for one candidate,
+ *  on the driver's answer (`st`) and the model's ledger for it. Live events
+ *  are known when the product has none at all (last_seq 0), or when the
+ *  model's ledger is the product's whole ledger; otherwise, where the answer
+ *  turns on them, the candidate is "unverified" — a ledger the model lost is
+ *  no evidence either way. */
+export function fedMatchStarted(st: FixtureStateOut, ledger: readonly LedgerEntry[] | null): "started" | "not-started" | "unverified" {
+  const live = st.last_seq === 0 ? 0 : ledger !== null && ledger.length === st.last_seq ? liveEntries(ledger).length : null;
+  const outcome: unknown = st.outcome ?? null;
+  if (st.status === NEXT_MATCH_LOCK.cascade.status && (outcome as { kind?: unknown } | null)?.kind === NEXT_MATCH_LOCK.cascade.outcomeKind) {
+    if (live === null) return "unverified";
+    return live === 0 ? "not-started" : "started";
+  }
+  if (st.status !== NEXT_MATCH_LOCK.notStarted || outcome !== null) return "started";
+  if (live === null) return "unverified";
+  return live > 0 ? "started" : "not-started";
 }
 
 export function recordFinding(m: ModelState, id: string, line: string): void {

@@ -75,6 +75,11 @@ export interface NextMatchText {
   code: string;
   /** The one fixture status fed-seats.ts hasStarted reads as not started. */
   notStarted: string;
+  /** fed-seats.ts isCascadeWalkover: the walkover the system awarded (this
+   *  status, this outcome kind, no live event) is reset, never refused. */
+  cascade: { status: string; outcomeKind: string };
+  /** planRelease refuses only `!reset && hasStarted(t)`, `reset` being isCascadeWalkover(t). */
+  resetExempt: boolean;
   /** append-event.ts calls releaseFedSeats at the top level of the append:
    *  every event, a void included, is judged. */
   everyAppend: boolean;
@@ -95,10 +100,13 @@ export function nextMatchStartedText(): NextMatchText {
   if (code === undefined) throw new Error(`product-text: ${thrown[2]} is not a string constant in ${from[1]}.ts`);
   const started = /\nfunction hasStarted\(t: Node\): boolean \{\s*return t\.status !== "([a-z_]+)" \|\| t\.outcome !== null \|\| t\.live_events > 0;\s*\}/.exec(fed);
   if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule the model mirrors — re-read it");
+  const cascade = /\nfunction isCascadeWalkover\(t: Node\): boolean \{\s*return t\.status === "([a-z_]+)" && \(t\.outcome as \{ kind\?: string \} \| null\)\?\.kind === "([a-z_]+)" && t\.live_events === 0;\s*\}/.exec(fed);
+  if (cascade === null) throw new Error("product-text: fed-seats.ts isCascadeWalkover is not the three-term exemption the model mirrors — re-read it");
+  const resetExempt = /\n\s*const reset = isCascadeWalkover\(t\);\s*if \(!reset && hasStarted\(t\)\) \{/.test(fed);
   const everyAppend = /\n {2}const \w+ = await releaseFedSeats\(tx, fixtureId, fixture\.outcome, outcome\);/.test(read("apps/web/src/server/engine-db/append-event.ts"));
   const template = /\nexport function nextMatchStartedMessage\(label: string\): string \{\s*return `([^`]*)`;\s*\}/.exec(lib)?.[1];
   if (template === undefined) throw new Error(`product-text: ${from[1]}.ts nextMatchStartedMessage not found`);
-  return { status: Number(thrown[1]), code, notStarted: started[1], everyAppend, message: (label) => template.replace("${label}", label) };
+  return { status: Number(thrown[1]), code, notStarted: started[1], cascade: { status: cascade[1], outcomeKind: cascade[2] }, resetExempt, everyAppend, message: (label) => template.replace("${label}", label) };
 }
 
 /** stages.ts bracketToGen: the round_no the product stores for an engine

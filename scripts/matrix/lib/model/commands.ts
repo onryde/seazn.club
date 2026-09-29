@@ -9,9 +9,11 @@
 // and walked past. A named refusal of a command the model holds legal is a
 // violation too (ruling I-1): an ordinary refusal is one the product may give.
 // One named refusal is PERMITTED where the model cannot see its whole reason:
-// a knockout take-back once the match it feeds has started (ruling RR-1,
-// fed-seats.ts NEXT_MATCH_STARTED) — expected when it comes, and judged to
-// have written nothing.
+// a knockout take-back over a fed match (ruling RR-1, fed-seats.ts
+// NEXT_MATCH_STARTED). When it comes it is judged on what the driver says
+// then: it wrote nothing, and a fed match really has started by the
+// product's own rule — expected; none has — unexpected; the model cannot
+// see — an unknown.
 import fc from "fast-check";
 import { RefusedCall, type OrganiserDriver, type PostedEvent } from "../driver/types.ts";
 import { isNamedRefusal, isTerminal } from "../observed.ts";
@@ -21,7 +23,7 @@ import { fenceBlocking } from "./fences.ts";
 import { liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
   COMMAND_KINDS, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
-  absorbFixtures, checkStep, markUnknown, nextMatchMayHaveStarted, recordFinding, rosterLocked,
+  absorbFixtures, checkStep, fedCandidates, fedMatchStarted, markUnknown, recordFinding, rosterLocked,
   type CommandKind, type FixtureModel, type ModelState, type StepVerdict,
 } from "./state.ts";
 
@@ -51,29 +53,47 @@ const withLive = (m: ModelState) => [...m.fixtures.values()].filter((f) => f.led
 const decided = (m: ModelState) => [...m.fixtures.values()].filter((f) => seated(f) && f.ledger !== null && f.status === "decided");
 
 /** A named refusal the product MAY give, for a reason the model cannot see
- *  whole: matched on status AND code, it is an expected refusal, and `after`
- *  judges what it left behind. */
-interface PermittedRefusal { status: number; code: string; after: (d: OrganiserDriver) => Promise<void> }
+ *  whole: matched on status AND code, `judge` then decides it on what the
+ *  driver says now — expected, unexpected (with why), or unverified. */
+type Judged = { kind: "expected" } | { kind: "unverified" } | { kind: "unexpected"; detail: string };
+interface PermittedRefusal { status: number; code: string; judge: (d: OrganiserDriver) => Promise<Judged> }
 
-/** Ruling RR-1: a take-back of `f` on a bracket whose fed match may have
- *  started may be refused under NEXT_MATCH_LOCK (fed-seats.ts). The product
- *  refuses before the first write, and a take-back's FIRST void (newest first)
- *  already moves who `f` advances — voiding a win stream's last event
- *  un-decides it, pinned per sport in model-core.test.ts — so the refusal
- *  writes nothing: the tip must not move, and the ledger post() dropped on
- *  the refusal is the model's again. */
+/** Ruling RR-1 (fix rounds 2 and 3): a take-back of `f` on a bracket may be
+ *  refused under NEXT_MATCH_LOCK (fed-seats.ts). Judged in two parts:
+ *  - it wrote nothing. The product refuses before the first write, and a
+ *    take-back's FIRST void (newest first) already moves who `f` advances —
+ *    voiding a win stream's last event un-decides it, pinned per sport in
+ *    model-core.test.ts — so the tip must not move, and the ledger post()
+ *    dropped on the refusal is the model's again;
+ *  - it was right. Each candidate is re-read through the driver: one that has
+ *    started (fedMatchStarted, the product's own rule with its cascade-
+ *    walkover reset) makes it expected; none that has, and none unverified,
+ *    makes it an unexpected refusal; otherwise the candidates the model
+ *    cannot see are counted as unknowns and the refusal proves nothing. */
 function takeBackLock(m: ModelState, f: FixtureModel): PermittedRefusal | null {
-  if (!nextMatchMayHaveStarted(m, f)) return null;
+  const candidates = fedCandidates(m, f);
+  if (candidates.length === 0) return null;
   const known = [...knownLedger(f)];
   return {
     status: NEXT_MATCH_LOCK.status,
     code: NEXT_MATCH_LOCK.code,
-    after: async (d) => {
-      const st = await d.fixtureState(f.id);
-      if (st.last_seq !== known.length) {
-        throw new ModelViolation(NEXT_MATCH_CHECK, [`fixture ${f.id}: refused ${NEXT_MATCH_LOCK.code}, yet the product's tip moved from ${known.length} to ${st.last_seq} — a refused take-back writes nothing (fed-seats.ts runs before the first write)`]);
+    judge: async (d) => {
+      const tip = await d.fixtureState(f.id);
+      if (tip.last_seq !== known.length) {
+        throw new ModelViolation(NEXT_MATCH_CHECK, [`fixture ${f.id}: refused ${NEXT_MATCH_LOCK.code}, yet the product's tip moved from ${known.length} to ${tip.last_seq} — a refused take-back writes nothing (fed-seats.ts runs before the first write)`]);
       }
       f.ledger = known;
+      const read: { g: FixtureModel; line: string; verdict: ReturnType<typeof fedMatchStarted> }[] = [];
+      for (const g of candidates) {
+        const st = await d.fixtureState(g.id);
+        const verdict = fedMatchStarted(st, g.ledger);
+        if (verdict === "started") return { kind: "expected" };
+        read.push({ g, verdict, line: `${g.id} (${st.status}, outcome ${JSON.stringify(st.outcome ?? null)}, ${st.last_seq} events): ${verdict}` });
+      }
+      const unseen = read.filter((r) => r.verdict === "unverified");
+      for (const r of unseen) markUnknown(m, r.g, "next-match-unverified", `${f.id}'s take-back refused ${NEXT_MATCH_LOCK.code} over ${r.line}`);
+      if (unseen.length > 0) return { kind: "unverified" };
+      return { kind: "unexpected", detail: `no fed match has started — ${read.map((r) => r.line).join("; ")}` };
     },
   };
 }
@@ -139,9 +159,20 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
         verdict = "expected-refusal";
         await this.afterExpectedRefusal(m, d);
       } else if (permitted !== null && e.status === permitted.status && e.code === permitted.code) {
-        c.expected++;
-        verdict = "expected-refusal";
-        await permitted.after(d);
+        const j = await permitted.judge(d);
+        if (j.kind === "unexpected") {
+          c.unexpected++;
+          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — ${j.detail}`]);
+        }
+        if (j.kind === "expected") {
+          c.expected++;
+          verdict = "expected-refusal";
+        } else {
+          // Refused, and the model can hold it neither legal nor wrong. The
+          // unknowns judge() recorded say why, and make this step "unknown"
+          // below — one rule for every step that leaves the model unsure.
+          c.refused++;
+        }
       } else {
         if (!named) throw new ModelViolation("model-refusal-named", [line]);
         if (must) {
