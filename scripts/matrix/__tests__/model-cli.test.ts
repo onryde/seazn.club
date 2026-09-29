@@ -17,11 +17,12 @@
 // the cells; a cell that ran one command. Refusals are proven by SPAWNING the
 // CLI (ruling R-h), through a symlink (isMainModule).
 //
-// single-sport: every run here is league|generic but the per-cell seed test
+// Single-sport by design (a file-level reason: the scanner's `// single-sport:`
+// grammar heads a block, and a header heads none): every run here is league|generic but the per-cell seed test
 // (which needs two cells) — the model fake is a round-robin product and #879
 // is a league fault (the slice's sports are swept in model-run-cell.test.ts).
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,8 +41,10 @@ const MODEL = resolve(REPO, "scripts/matrix/model.ts");
 const CELL = "league|generic";
 const I7 = "I7-rr-no-pair-over-legs";
 const FOLD = "model-fold-parity";
-/** An open committed regression on CELL for `check` (R29). */
-const openReg = (id: string, check: string): RegressionCase => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, status: "open", found: "2026-09-29", runId: "t" });
+/** An open committed regression on CELL for `check` (R29); `match` as the schema requires it. */
+const openReg = (id: string, check: string, match: string | null = null): RegressionCase => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open", found: "2026-09-29", runId: "t" });
+/** The code both fake refusals below carry, in the model's line and the product's message. */
+const POST_REFUSED = "TEST_POST_REFUSED";
 const scratch = mkdtempSync(join(tmpdir(), "w1b-model-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 afterEach(() => { vi.restoreAllMocks(); });
@@ -177,6 +180,39 @@ describe("model.ts", () => {
     expect(existsSync(join(dir, "w1b-model"))).toBe(false);
   });
 
+  // T15 fix round 2 (R-h): the loader refuses a case on a generic check with
+  // no `match`, and the CLI exits 2 on it — before the base, the DB or the preflight.
+  it("the CLI itself refuses a committed case on a generic check without `match` (--root): exit 2 naming match, nothing written; the same file with its match gets past the loader", () => {
+    const committed = JSON.parse(readFileSync(resolve(REPO, "scripts/matrix/catalogue/regressions.json"), "utf8")) as { schemaVersion: 1; regressions: Record<string, unknown>[] };
+    const generic = committed.regressions.filter((r) => r.check === UNEXPECTED_REFUSAL);
+    expect(generic.length, "no committed case on model-unexpected-refusal to strip").toBeGreaterThan(0);
+    const spawnWith = (regressions: Record<string, unknown>[]) => {
+      const root = mkdtempSync(join(scratch, "root-"));
+      mkdirSync(join(root, "scripts/matrix/catalogue"), { recursive: true });
+      writeFileSync(join(root, "scripts/matrix/catalogue/regressions.json"), JSON.stringify({ schemaVersion: 1, regressions }));
+      const via = join(root, "link-model.ts");
+      symlinkSync(MODEL, via);
+      const dir = reportDir();
+      const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", via, "--report-dir", dir, "--root", root, "--regressions"], { cwd: REPO, encoding: "utf8", timeout: 25_000, env: { PATH: process.env.PATH ?? "" } });
+      return { ...r, wrote: existsSync(join(dir, "w1b-model")) };
+    };
+    const stripped = committed.regressions.map((r) => {
+      if (r.check !== UNEXPECTED_REFUSAL) return r;
+      const { match: _m, ...rest } = r;
+      return rest;
+    });
+    const refused = spawnWith(stripped);
+    expect(refused.stderr, "main never ran").toMatch(/^model: /m);
+    expect(refused.stderr).toMatch(/match/);
+    expect(refused.status, refused.stderr).toBe(2);
+    expect(refused.wrote).toBe(false);
+    // Control: the committed file as is passes the loader and stops at the next gate (no base URL).
+    const passed = spawnWith(committed.regressions);
+    expect(passed.stderr).toMatch(/no --base and no SMOKE_BASE/);
+    expect(passed.stderr).not.toMatch(/match/);
+    expect(passed.status, passed.stderr).toBe(2);
+  });
+
   it("one leading `--` (pnpm passes it through) is dropped; a second is still a usage refusal", async () => {
     capture();
     const dir = reportDir();
@@ -284,6 +320,19 @@ describe("model.ts", () => {
     expect(io.out()).not.toContain("replay caveat");
   });
 
+  it("T15 fix round 2: an open case on the same cell and check whose match is NOT in the evidence leaves a refusal NEW (exit 1, a stub); the matching case makes it known (exit 0)", async () => {
+    const io = capture();
+    const tbd = openReg("MB-002", UNEXPECTED_REFUSAL, "fixture has an unassigned entrant");
+    expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd] }), ["--run-id", "mn", "--report-dir", reportDir(), ...ONE])).toBe(1);
+    expect(failureLine(io.out())).toMatch(new RegExp(`^FAILURE ${UNEXPECTED_REFUSAL} \\(NEW\\): `));
+    expect(io.out()).toContain("regression stub");
+    // The product's own text reaches the printed evidence.
+    expect(io.out()).toMatch(/\n {4}evidence: [^\n]*HTTP 409 TEST_POST_REFUSED: test: refuses every result/);
+    const io2 = capture();
+    expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd, openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }), ["--run-id", "mn", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    expect(failureLine(io2.out())).toMatch(/\(known MB-003\)/);
+  });
+
   it("fix round 1, I-1: a NEW failure met while shrinking toward a KNOWN one is reported NEW and exits 1 (the reviewer's probe)", async () => {
     const io = capture();
     const d = deps({ driverFor: () => new ModelFakeDriver({ fault879: true, lieOutcome: true }), regs: [openReg("MB-002", FOLD)] });
@@ -295,7 +344,7 @@ describe("model.ts", () => {
   it("fix round 1, I-1: a NEW check passed over under a KNOWN unexpected refusal makes the cell NEW (exit 1): printed with what it ran, and no stub it could not replay", async () => {
     const io = capture();
     const dir = reportDir();
-    const d = deps({ driverFor: () => new RefusingPosts({ fault879: true }), regs: [openReg("MB-003", UNEXPECTED_REFUSAL)] });
+    const d = deps({ driverFor: () => new RefusingPosts({ fault879: true }), regs: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] });
     expect(await runModel(d, ["--run-id", "i1b", "--report-dir", dir, "--cell", CELL, "--runs", "40", "--max-commands", "12", "--seed", "62", "--no-fences"])).toBe(1);
     expect(failureLine(io.out())).toMatch(/\(known MB-003\)/);
     expect(io.out()).toMatch(/\n {2}NEW I7-rr-no-pair-over-legs \(passed over while shrinking toward model-unexpected-refusal\): [^\n]*Generate\(/);
@@ -308,7 +357,7 @@ describe("model.ts", () => {
   it("fix round 2, RR-1: a NEW failure the shrink was following, displaced by a KNOWN unexpected refusal, makes the cell NEW (exit 1) and is printed (the reviewer's seed 15)", async () => {
     const io = capture();
     const dir = reportDir();
-    const d = deps({ driverFor: () => new GatedLiar(), regs: [openReg("MB-003", UNEXPECTED_REFUSAL)] });
+    const d = deps({ driverFor: () => new GatedLiar(), regs: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] });
     expect(await runModel(d, ["--run-id", "rr1", "--report-dir", dir, "--cell", CELL, "--runs", "40", "--max-commands", "12", "--seed", "15"])).toBe(1);
     expect(failureLine(io.out())).toMatch(/^FAILURE model-unexpected-refusal \(known MB-003\): /);
     expect(io.out()).toMatch(/\n {2}NEW model-fold-parity \(passed over while shrinking toward model-unexpected-refusal\): [^\n]*AddEntrant\([^\n]*(Score|Walkover)\(/);
@@ -420,9 +469,29 @@ describe("model.ts", () => {
       const io2 = capture();
       const dir = reportDir();
       expect(await runModel(deps({ driverFor: lies, regs: [own, other] }), ["--run-id", "k5r", "--report-dir", dir, "--regressions"])).toBe(1);
-      expect(io2.out()).toMatch(/NOT REPRODUCED MB-001: the replay failed on model-fold-parity instead/);
+      expect(io2.out()).toMatch(/NOT REPRODUCED MB-001: the replay failed on model-fold-parity \(known MB-002\) instead/);
       const rep = JSON.parse(readFileSync(join(dir, "k5r", "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string }[] };
       expect(rep.cells.map((c) => [c.replayOf, c.verdict])).toEqual([["MB-001", "not-reproduced"], ["MB-002", "known-failure"]]);
+    });
+
+    it("T15 fix round 2: a replay that fails on its own check but as ANOTHER case (that case's match, not its own) did not reproduce — NOT REPRODUCED (exit 1)", async () => {
+      const io = capture();
+      expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "mm", "--report-dir", reportDir(), ...ONE])).toBe(1);
+      // The stub of a generic check says match is owed, and is refused without one.
+      expect(io.out()).toMatch(/\n {2}match owed: [^\n]*model-unexpected-refusal/);
+      expect(() => completedStub(io.out())).toThrow(/match/);
+      // One failure committed twice: MB-002 names the knockout TBD refusal, MB-003 this one.
+      const tbd = completedStub(io.out(), { id: "MB-002", issue: null, fence: null, match: "fixture has an unassigned entrant" });
+      const own = completedStub(io.out(), { id: "MB-003", issue: null, fence: null, match: "refuses every result" });
+      const io2 = capture();
+      const dir = reportDir();
+      expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd, own] }), ["--run-id", "mmr", "--report-dir", dir, "--regressions"])).toBe(1);
+      expect(io2.out()).toMatch(/NOT REPRODUCED MB-002: the replay failed on model-unexpected-refusal \(known MB-003\) instead/);
+      const rep = JSON.parse(readFileSync(join(dir, "mmr", "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string }[] };
+      expect(rep.cells.map((c) => [c.replayOf, c.verdict])).toEqual([["MB-002", "not-reproduced"], ["MB-003", "known-failure"]]);
+      // Its own case alone replays exactly: known, exit 0.
+      capture();
+      expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [own] }), ["--run-id", "mmo", "--report-dir", reportDir(), "--regressions"])).toBe(0);
     });
 
     it("a FIXED regression that comes back is a NEW failure (exit 1); one that stays fixed is ok (exit 0)", async () => {
@@ -438,7 +507,7 @@ describe("model.ts", () => {
 
     it("carry G-2: a committed case whose variant is not its sport's is refused (exit 2) before the DB", async () => {
       const io = capture();
-      const bad: RegressionCase = { id: "MB-009", title: "t", issue: null, cell: CELL, variant: "bwf", check: I7, seed: 1, path: "0", replayPath: null, fence: null, status: "open", found: "2026-09-29", runId: "t" };
+      const bad: RegressionCase = { id: "MB-009", title: "t", issue: null, cell: CELL, variant: "bwf", check: I7, seed: 1, path: "0", replayPath: null, fence: null, match: null, status: "open", found: "2026-09-29", runId: "t" };
       expect(await runModel(deps({ openDb: noDb(), regs: [bad] }), ["--run-id", "g2", "--report-dir", reportDir(), "--regressions"])).toBe(2);
       expect(await runModel(deps({ openDb: noDb(), regs: [bad] }), ["--run-id", "g2", "--report-dir", reportDir(), ...ONE])).toBe(2);
       expect(io.err()).toMatch(/MB-009.*'bwf'.*generic/);

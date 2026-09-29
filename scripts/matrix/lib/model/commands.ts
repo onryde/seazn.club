@@ -148,11 +148,14 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
     } catch (e) {
       if (!(e instanceof RefusedCall)) throw e;
       const line = `${this.toString()}: ${e.method} ${e.path} → ${e.status} ${e.code ?? "(no code)"}`;
+      // The product's own words (redacted, RefusedCall): a committed case's
+      // `match` names its failure by them (T15 fix round 2).
+      const said = e.message;
       const named = isNamedRefusal(e.status, e.code);
       if (expected) {
         if (!named) {
           const finding = this.knownUnnamed(e);
-          if (finding === null) throw new ModelViolation("model-refusal-named", [line]);
+          if (finding === null) throw new ModelViolation("model-refusal-named", [line, said]);
           recordFinding(m, finding, line);
         }
         c.expected++;
@@ -162,7 +165,7 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
         const j = await permitted.judge(d);
         if (j.kind === "unexpected") {
           c.unexpected++;
-          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — ${j.detail}`]);
+          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — ${j.detail}`, said]);
         }
         if (j.kind === "expected") {
           c.expected++;
@@ -174,10 +177,10 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
           c.refused++;
         }
       } else {
-        if (!named) throw new ModelViolation("model-refusal-named", [line]);
+        if (!named) throw new ModelViolation("model-refusal-named", [line, said]);
         if (must) {
           c.unexpected++;
-          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — the model holds ${this.kind} legal here`]);
+          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — the model holds ${this.kind} legal here`, said]);
         }
         c.refused++;
         verdict = "refused";

@@ -188,6 +188,13 @@ export const HARNESS_SCENARIO: Readonly<Record<string, ScenarioKey>> = Object.fr
 // --- R29: shrunk fast-check failures as named regression cases ---------------
 export const REGRESSIONS_PATH = "scripts/matrix/catalogue/regressions.json";
 const CELLS = new Set(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => cellId(r, s))));
+/** The model's generic checks — any refusal it held legal, any harness error —
+ *  which name no single failure: a case on one must carry `match` (T15 fix
+ *  round 2), or it would make every such failure on its cell "known". The
+ *  names are run-cell.ts's (MODEL_ERROR) and state.ts's (UNEXPECTED_REFUSAL);
+ *  model-run-cell.test.ts pins them. */
+export const MATCH_REQUIRED_CHECKS = ["model-unexpected-refusal", "model-error"] as const;
+const matchRequired = (check: string): boolean => (MATCH_REQUIRED_CHECKS as readonly string[]).includes(check);
 const RegressionSchema = z.strictObject({
   id: z.string().regex(/^MB-\d{3}$/),
   title: z.string().min(1),
@@ -202,9 +209,18 @@ const RegressionSchema = z.strictObject({
    *  null only when the counterexample carried none. */
   replayPath: z.string().min(1).nullable(),
   fence: z.string().min(1).nullable(),
+  /** Text that must appear in the failure's evidence (the product's message,
+   *  or a server assertion it carries) for this case to name it: a failure is
+   *  known only when cell, check AND match agree. null names every failure on
+   *  the check — refused on MATCH_REQUIRED_CHECKS. */
+  match: z.string().min(1).nullable(),
   status: z.enum(["open", "fixed"]),
   found: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   runId: z.string().min(1),
+}).superRefine((r, ctx) => {
+  if (r.match === null && matchRequired(r.check)) {
+    ctx.addIssue({ code: "custom", path: ["match"], message: `${r.id}: match is required on ${r.check} — the text in the failure's evidence that names it (the product's message)` });
+  }
 });
 export type RegressionCase = z.infer<typeof RegressionSchema>;
 const FileSchema = z.strictObject({ schemaVersion: z.literal(1), regressions: z.array(RegressionSchema) });

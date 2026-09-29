@@ -16,7 +16,7 @@ import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
-  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions,
+  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions,
 } from "../lib/scenario-catalogue.ts";
 
 // `typescript` through require, not import: vite's transform chokes on the
@@ -252,7 +252,7 @@ describe("atomic cases", () => {
 });
 
 describe("regression cases (R29)", () => {
-  const base = { id: "MB-001", title: "t", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 42, path: "0:1", replayPath: "CC:B", fence: null, status: "open", found: "2026-09-28", runId: "fm-w1b-model" };
+  const base = { id: "MB-001", title: "t", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 42, path: "0:1", replayPath: "CC:B", fence: null, match: null, status: "open", found: "2026-09-28", runId: "fm-w1b-model" };
   const file = (...regressions: unknown[]) => ({ schemaVersion: 1, regressions });
   it("empty case first: the committed file parses to a list (empty until a shrunk failure is committed)", () => {
     const rs = parseRegressions(JSON.parse(readFileSync(resolve(REPO, REGRESSIONS_PATH), "utf8")));
@@ -279,6 +279,7 @@ describe("regression cases (R29)", () => {
       path: [""],
       replayPath: [""],
       fence: [""],
+      match: [""],
       status: ["stale"],
       found: ["YYYY-MM-DD", "2026-9-28"],
       runId: [""],
@@ -307,13 +308,16 @@ describe("regression cases (R29)", () => {
       const [, key, expr] = /^(\w+): (.*)$/.exec(entry)!;
       stub[key!] = /^(".*"|null)$/.test(expr!) ? JSON.parse(expr!) : base[key as keyof typeof base];
     }
-    expect(Object.keys(stub).sort()).toEqual(Object.keys(base).sort());
+    // The plan's stub predates `match` (T15 fix round 2): every other field, and match only.
+    expect(Object.keys(stub).sort()).toEqual(Object.keys(base).filter((k) => k !== "match").sort());
     expect(stub.id).toBe("MB-NNN");
     expect(() => parseRegressions(file(stub))).toThrow();
     expect(() => parseRegressions(file({ ...stub, id: "MB-001" }))).toThrow(); // title and date still empty
     expect(() => parseRegressions(file({ ...stub, id: "MB-001", title: "named" }))).toThrow(); // date still YYYY-MM-DD
-    // Positive pair: completed by a human, the same stub parses.
-    expect(parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28" }))).toHaveLength(1);
+    // Completed as the plan knew it, it now lacks `match`: refused.
+    expect(() => parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28" }))).toThrow(/match/);
+    // Positive pair: completed by a human, with match, the same stub parses.
+    expect(parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28", match: null }))).toHaveLength(1);
   });
   it("a stray key or another schema version is refused (the file is reviewed, so drift is loud)", () => {
     expect(() => parseRegressions(file({ ...base, extra: 1 }))).toThrow();
@@ -328,6 +332,31 @@ describe("regression cases (R29)", () => {
     const { replayPath: _r, ...noReplay } = base;
     expect(() => parseRegressions(file(noReplay))).toThrow();
     expect(() => parseRegressions(file({ ...base, replayPath: "" }))).toThrow();
+  });
+  // T15 fix round 2: a generic check (any refusal the model held legal, any
+  // harness error) names WHICH failure only through `match`; without it one
+  // open case would make every such failure on its cell "known".
+  it("match: required on the generic checks (MATCH_REQUIRED_CHECKS) — null or missing refused naming match; a string parses", () => {
+    expect(MATCH_REQUIRED_CHECKS.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const check of MATCH_REQUIRED_CHECKS) {
+      const { match: _m, ...noMatch } = { ...base, check };
+      expect(() => parseRegressions(file(noMatch)), `${check}: match missing`).toThrow(/match/);
+      expect(() => parseRegressions(file({ ...base, check, match: null })), `${check}: match null`).toThrow(/match/);
+      expect(() => parseRegressions(file({ ...base, check, match: "" })), `${check}: match empty`).toThrow(/match/);
+      expect(parseRegressions(file({ ...base, check, match: "fixture has an unassigned entrant" }))[0]!.match).toBe("fixture has an unassigned entrant");
+      checked++;
+    }
+    expect(checked).toBe(MATCH_REQUIRED_CHECKS.length);
+    // Any other check may leave it null — and may still carry one.
+    expect(parseRegressions(file({ ...base, match: null }))[0]!.match).toBeNull();
+    expect(parseRegressions(file({ ...base, check: "model-refusal-named", match: "would strand home_slot_label" }))[0]!.match).toBe("would strand home_slot_label");
+  });
+  it("the committed file: every case on a generic check carries a match", () => {
+    const rs = loadRegressions();
+    const generic = rs.filter((r) => (MATCH_REQUIRED_CHECKS as readonly string[]).includes(r.check));
+    expect(generic.length, "no committed case on a generic check — the sweep would be vacuous").toBeGreaterThan(0);
+    for (const r of generic) expect(r.match, r.id).toEqual(expect.any(String));
   });
   it("every cell on the grid (every row × every registered sport) is accepted", () => {
     let checked = 0;

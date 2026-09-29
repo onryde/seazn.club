@@ -470,8 +470,8 @@ describe("model commands — each fault is caught at the step that causes it", (
 // so I6 had no two-sided fixture to judge and R25 turned its pass into a
 // failure. A step invariant with nothing to judge yet abstains for that step;
 // the per-cell R25 (vacuityOf) still fails a cell where it abstained every time.
-// single-sport: nothing is posted here — shells and pairings are sport-blind.
 describe("swiss: a step invariant with nothing to judge yet abstains for that step (T15 fix round 1)", () => {
+  // single-sport: nothing is posted here — shells and pairings are sport-blind.
   const I6 = "I6-swiss-no-rematch";
   const swiss = async (d: FakeSwissDriver) => ({ m: await newModelState({ driver: d, row: "swiss", sport: "generic", variant: "score", entrants: 4, tag: "t" }), d });
   const step = async (m: ModelState, d: FakeSwissDriver, kind: CommandKind): Promise<void> => {

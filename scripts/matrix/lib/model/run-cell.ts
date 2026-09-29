@@ -2,7 +2,9 @@
 // fresh division. Seeded (the caller derives the seed from the run id and the
 // cell), path-replayable, time-boxed. A shrunk failure reports its check,
 // seed, path, replayPath and the commands that RAN (R-PF9); it is KNOWN when
-// an open committed regression names the same cell and check (R29).
+// an open committed regression names the same cell and check (R29) and, when
+// the case carries one, its `match` is in the failure's evidence (T15 fix
+// round 2: regressionFor).
 // Anti-vacuity per cell, across runs (R25, vacuityOf): every command kind ran,
 // a Score was accepted, each step check its stage kind owes and fold parity
 // judged more than zero items, and at least one step was informative.
@@ -10,9 +12,11 @@
 // Two rules fast-check does not give on its own:
 //  - The shrink is LOCKED by rank (shrinkTarget): fast-check keeps any
 //    failing candidate while it shrinks, so a new bug could otherwise shrink
-//    into a KNOWN one and read as known. Ranks: an unexpected refusal (T14
-//    amendment: a NEW failure, never merely counted) > a NEW check (no open
-//    regression on the cell) > a KNOWN one. A candidate failing a higher rank
+//    into a KNOWN one and read as known. A failure is its check AND the case
+//    that names it (FailureKey, T15 fix round 2), so a NEW failure on a known
+//    case's check is another failure. Ranks: an unexpected refusal (T14
+//    amendment: a NEW failure, never merely counted) > anything else, and
+//    within each, NEW (no open case names it) > KNOWN. A candidate failing a higher rank
 //    moves the shrink to it; one failing an equal or lower rank is passed
 //    over and counted in `masked`. A NEW check passed over (under a target
 //    that outranks it) is kept in `maskedNew`, with the commands it ran: the
@@ -36,7 +40,7 @@ import fc from "fast-check";
 import type { RowKey } from "../catalogue.ts";
 import { RequestTimedOut, type OrganiserDriver } from "../driver/types.ts";
 import { STEP_INVARIANTS } from "../invariants.ts";
-import type { RegressionCase } from "../scenario-catalogue.ts";
+import { MATCH_REQUIRED_CHECKS, type RegressionCase } from "../scenario-catalogue.ts";
 import { COMMAND_KINDS, ModelViolation, modelCommands } from "./commands.ts";
 import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type CommandKind, type ModelState, type UnknownLedger } from "./state.ts";
 
@@ -105,19 +109,37 @@ export interface CellReport {
   timeout: string | null;
 }
 
-/** An unexpected refusal, then a NEW check, then a KNOWN one (fix round 1, I-1). */
-const rankOf = (check: string, isKnown: (check: string) => boolean): number => (check === UNEXPECTED_REFUSAL ? 2 : isKnown(check) ? 0 : 1);
+/** A failure's identity (T15 fix round 2): its check, and the open case that
+ *  names it — null when none does (NEW). */
+export interface FailureKey { readonly check: string; readonly known: string | null }
+const sameFailure = (a: FailureKey, b: FailureKey): boolean => a.check === b.check && a.known === b.known;
+/** An unexpected refusal, then anything else; NEW over KNOWN within each (fix round 1, I-1; T15 fix round 2). */
+const rankOf = (k: FailureKey): number => (k.check === UNEXPECTED_REFUSAL ? 2 : 0) + (k.known === null ? 1 : 0);
 
-/** The shrink lock: given the check the shrink follows (null before any
- *  failure) and the check a run just failed on, the check it follows now — or
- *  null when this failure is passed over. A check of a higher rank takes over. */
-export function shrinkTarget(current: string | null, thrown: string, isKnown: (check: string) => boolean): string | null {
-  if (current === null || thrown === current || rankOf(thrown, isKnown) > rankOf(current, isKnown)) return thrown;
+/** The shrink lock: given the failure the shrink follows (null before any)
+ *  and the failure a run just threw, the failure it follows now — or null
+ *  when this one is passed over. A failure of a higher rank takes over. */
+export function shrinkTarget(current: FailureKey | null, thrown: FailureKey): FailureKey | null {
+  if (current === null || sameFailure(thrown, current) || rankOf(thrown) > rankOf(current)) return thrown;
   return null;
 }
 
+/** The open committed case that names a failure (R29; T15 fix round 2): the
+ *  same cell and check, and — when the case carries a `match` — that text in
+ *  the failure's evidence. A case with a null match names every failure on
+ *  its check, which the loader refuses on MATCH_REQUIRED_CHECKS; a case that
+ *  bypassed the loader without one there names nothing. */
+export function regressionFor(regressions: readonly RegressionCase[], cell: string, check: string, evidence: readonly string[]): string | null {
+  const names = (r: RegressionCase): boolean => {
+    const m: unknown = r.match;
+    if (typeof m === "string") return evidence.some((line) => line.includes(m));
+    return m === null && !(MATCH_REQUIRED_CHECKS as readonly string[]).includes(check);
+  };
+  return regressions.find((r) => r.status === "open" && r.cell === cell && r.check === check && names(r))?.id ?? null;
+}
+
 /** The fast-check failure a run reports when fast-check gave up on skips. */
-const MODEL_ERROR = "model-error";
+export const MODEL_ERROR = "model-error";
 const checkOf = (e: unknown): string => (e instanceof ModelViolation ? e.check : MODEL_ERROR);
 const evidenceOf = (e: unknown): string[] => (e instanceof ModelViolation ? [...e.evidence] : [e instanceof Error ? `${e.name}: ${e.message}` : String(e)]);
 
@@ -173,9 +195,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   const findings: Record<string, { count: number; evidence: string[] }> = {};
   const masked: Record<string, number> = {};
   const maskedNew: Record<string, string[]> = {};
-  const knownFor = (check: string): string | null =>
-    input.regressions.find((r) => r.status === "open" && r.cell === input.cell && r.check === check)?.id ?? null;
-  const isKnown = (check: string): boolean => knownFor(check) !== null;
+  const knownFor = (check: string, evidence: readonly string[]): string | null => regressionFor(input.regressions, input.cell, check, evidence);
   const seen = { stageKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false, timeout: null as string | null };
   const absorb = (m: ModelState): void => {
     for (const k of COMMAND_KINDS) {
@@ -198,13 +218,13 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
 
   const now = input.now ?? Date.now;
   const deadline = now() + input.timeLimitMs;
-  let target: string | null = null;
+  let target: FailureKey | null = null;
   /** The commands of the last run that failed on `target`: shrinking only
    *  continues from a failing candidate, so this is its most shrunk. */
   let targetHistory: string[] = [];
-  /** A NEW check set aside for a higher rank is still a new failure: keep it, with the commands given, once. */
-  const keepNew = (check: string, commands: string[]): void => {
-    if (!isKnown(check) && maskedNew[check] === undefined) maskedNew[check] = commands;
+  /** A NEW failure set aside for a higher rank is still a new failure: keep it, with the commands given, once per check. */
+  const keepNew = (k: FailureKey, commands: string[]): void => {
+    if (k.known === null && maskedNew[k.check] === undefined) maskedNew[k.check] = commands;
   };
   const constraints = { maxCommands: input.maxCommands, size: "max" as const, ...(input.replayPath === undefined ? {} : { replayPath: input.replayPath }) };
   const prop = fc.asyncProperty(fc.commands(modelCommands({ fences: input.fences }), constraints), async (cmds) => {
@@ -228,14 +248,15 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
         fc.pre(false);
       }
       const check = checkOf(e);
-      const next = shrinkTarget(target, check, isKnown);
+      const thrown: FailureKey = { check, known: knownFor(check, evidenceOf(e)) };
+      const next = shrinkTarget(target, thrown);
       if (next === null) {
         masked[check] = (masked[check] ?? 0) + 1;
-        keepNew(check, [...(model?.history ?? [])]);
+        keepNew(thrown, [...(model?.history ?? [])]);
         return;
       }
-      // A higher rank displacing the target: the displaced check is set aside, not lost (RR-1).
-      if (target !== null && next !== target) keepNew(target, targetHistory);
+      // A higher rank displacing the target: the displaced failure is set aside, not lost (RR-1).
+      if (target !== null && !sameFailure(next, target)) keepNew(target, targetHistory);
       targetHistory = [...(model?.history ?? [])];
       target = next;
       throw e;
@@ -255,21 +276,19 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   // fc.pre in a command) would otherwise read as a clean cell (fix round 1, M-7).
   // A timeout skips runs the same way, and is reported as itself (RR-2).
   if (details.failed && shrunk === undefined && !seen.timeBoxed && seen.timeout === null) {
-    failure = {
-      check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [],
-      evidence: [`fast-check gave up after ${details.numSkips} skipped run(s) (${details.numRuns} ran) — only the time box may skip a run`],
-      known: knownFor(MODEL_ERROR),
-    };
+    const evidence = [`fast-check gave up after ${details.numSkips} skipped run(s) (${details.numRuns} ran) — only the time box may skip a run`];
+    failure = { check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [], evidence, known: knownFor(MODEL_ERROR, evidence) };
   }
   if (details.failed && shrunk !== undefined) {
     const err: unknown = details.errorInstance;
     const check = checkOf(err);
+    const evidence = evidenceOf(err);
     failure = {
       check, seed: details.seed, path: details.counterexamplePath ?? "", replayPath: replayPathOf(shrunk),
       // Only the commands that ran: the shrunk iterable also holds generated
       // commands the failing run never reached (R-PF9).
       commands: shrunk.commands.filter((c) => c.hasRan).map((c) => c.toString()),
-      evidence: evidenceOf(err), known: knownFor(check),
+      evidence, known: knownFor(check, evidence),
     };
   }
   // Backstop (T14 amendment): an unexpected refusal is a NEW failure, not a
@@ -278,15 +297,12 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   // it — and keeps what it displaced as evidence.
   const unexpected = COMMAND_KINDS.reduce((s, k) => s + counts[k].unexpected, 0);
   if (unexpected > 0 && failure?.check !== UNEXPECTED_REFUSAL) {
-    if (failure !== null) keepNew(failure.check, failure.commands);
-    failure = {
-      check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [],
-      evidence: [
-        `${unexpected} unexpected refusal(s) counted over the cell, yet the shrunk failure is ${failure === null ? "none" : failure.check} — an unexpected refusal outranks every other check`,
-        ...(failure === null ? [] : [`displaced ${failure.check} (path ${failure.path}): ${failure.commands.join(" → ")} — ${failure.evidence.join("; ")}`]),
-      ],
-      known: knownFor(UNEXPECTED_REFUSAL),
-    };
+    if (failure !== null) keepNew(failure, failure.commands);
+    const evidence = [
+      `${unexpected} unexpected refusal(s) counted over the cell, yet the shrunk failure is ${failure === null ? "none" : failure.check} — an unexpected refusal outranks every other check`,
+      ...(failure === null ? [] : [`displaced ${failure.check} (path ${failure.path}): ${failure.commands.join(" → ")} — ${failure.evidence.join("; ")}`]),
+    ];
+    failure = { check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [], evidence, known: knownFor(UNEXPECTED_REFUSAL, evidence) };
   }
 
   const vacuous = failure === null && seen.timeout === null

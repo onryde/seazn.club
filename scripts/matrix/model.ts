@@ -3,7 +3,10 @@
 //   node --experimental-strip-types scripts/matrix/model.ts
 //     [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N]
 //     [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences]
-//     [--regressions] [--time-limit MS] [--base URL]
+//     [--regressions] [--time-limit MS] [--base URL] [--root DIR]
+//
+// --root redirects where regressions.json is read from (default: this
+// checkout), like gen-catalogue's.
 //
 // Each cell gets one case org and a competition; each property run builds a
 // fresh division in it (runCell), and the cell moves to a fresh competition
@@ -21,7 +24,9 @@
 //      vacuous cell (R25), or a replayed OPEN regression that no longer
 //      reproduces; or nothing to run (--regressions with no committed case on
 //      the cells — decided before the DB, nothing written).
-//   2  refused, nothing written: a usage error; no base URL; no own-DB proof
+//   2  refused, nothing written: a usage error; a regressions.json the loader
+//      refuses (a case on a generic check without its `match`, T15 fix round 2
+//      — read first, before the base); no base URL; no own-DB proof
 //      (BENCH_EXPECTED_DATA_DIR unset, or a data_directory mismatch at any
 //      point); a failed preflight; a committed regression whose variant is not
 //      its sport's (carry G-2); a live builder default that is not the offline
@@ -43,7 +48,7 @@ import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { findSecrets, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
-import { loadRegressions, type RegressionCase } from "./lib/scenario-catalogue.ts";
+import { MATCH_REQUIRED_CHECKS, loadRegressions, type RegressionCase } from "./lib/scenario-catalogue.ts";
 import { DataDirMismatch, DataDirUnset, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "./lib/slice.ts";
 import { variantKeys } from "./lib/sport-cfg.ts";
@@ -51,13 +56,13 @@ import { offlineBuilderDefault } from "./lib/variants.ts";
 import { BuilderDefaultDrift, EXIT, RUN_ID_MAX, realDeps, type RunDeps } from "./run.ts";
 
 export type ModelDeps = Pick<RunDeps, "env" | "harnessCommit" | "preflight" | "openDb" | "signIn" | "prepareCaseOrg" | "driverFor"> & {
-  /** The committed regressions (default: regressions.json). A seam for the unit suite. */
-  loadRegressions?: () => RegressionCase[];
+  /** The committed regressions (default: regressions.json under --root, or this checkout). A seam for the unit suite. */
+  loadRegressions?: (root?: string) => RegressionCase[];
   /** The time box's clock (default Date.now). A seam for the unit suite. */
   now?: () => number;
 };
 
-export const MODEL_USAGE = "usage: model.ts [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N] [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences] [--regressions] [--time-limit MS] [--base URL]";
+export const MODEL_USAGE = "usage: model.ts [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N] [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences] [--regressions] [--time-limit MS] [--base URL] [--root DIR]";
 
 /** The defaults, chosen on the model fake (Task 14 report): fast-check's own
  *  size gives ~1.6 accepted steps per run; `size: "max"` (run-cell.ts) with 30
@@ -116,6 +121,7 @@ interface SliceCell { cell: string; row: RowKey; sport: string }
 interface Cli {
   runId: string; reportDir: string; cells: SliceCell[]; runs: number; maxCommands: number; timeLimitMs: number;
   seed: number | undefined; path: string | undefined; replayPath: string | undefined; fences: boolean; regressions: boolean; base: string | undefined;
+  root: string | undefined;
 }
 
 function parseCli(argv: string[]): Cli | { usage: string } {
@@ -124,7 +130,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const parse = (a: string[]) => parseArgs({ args: a, options: {
     "run-id": { type: "string" }, "report-dir": { type: "string" }, cell: { type: "string", multiple: true },
     runs: { type: "string" }, "max-commands": { type: "string" }, seed: { type: "string" }, path: { type: "string" }, "replay-path": { type: "string" },
-    "no-fences": { type: "boolean" }, regressions: { type: "boolean" }, "time-limit": { type: "string" }, base: { type: "string" },
+    "no-fences": { type: "boolean" }, regressions: { type: "boolean" }, "time-limit": { type: "string" }, base: { type: "string" }, root: { type: "string" },
   } });
   let v: ReturnType<typeof parse>["values"];
   try { v = parse(args).values; } catch (e) { return { usage: errText(e) }; }
@@ -154,7 +160,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
   return {
     runId, reportDir: v["report-dir"] ?? "matrix-report", cells, runs, maxCommands, timeLimitMs,
-    seed, path: v.path, replayPath: v["replay-path"], fences: v["no-fences"] !== true, regressions: v.regressions === true, base: v.base,
+    seed, path: v.path, replayPath: v["replay-path"], fences: v["no-fences"] !== true, regressions: v.regressions === true, base: v.base, root: v.root,
   };
 }
 
@@ -187,8 +193,9 @@ function verdictOf(rep: CellReport, replay: RegressionCase | null): Verdict {
   if (rep.failure !== null && rep.failure.known === null) return "new-failure";
   // A NEW check the shrink passed over is a new failure too (fix round 1, I-1).
   if (Object.keys(rep.maskedNew).length > 0) return "new-failure";
-  // An OPEN case that no longer fails on its own check did not reproduce: fixed, or the replay drifted.
-  if (replay !== null && replay.status === "open" && rep.failure?.check !== replay.check) return "not-reproduced";
+  // An OPEN case whose replay no longer fails AS ITSELF (its check and its
+  // match, T15 fix round 2) did not reproduce: fixed, or the replay drifted.
+  if (replay !== null && replay.status === "open" && rep.failure?.known !== replay.id) return "not-reproduced";
   if (rep.failure !== null) return "known-failure";
   // A replay walks one path; coverage is the exploring runs' business.
   if (replay === null && rep.vacuous.length > 0) return "vacuous";
@@ -211,7 +218,7 @@ function printCell(c: ModelCell): void {
   }
   if (c.timeout !== null) say(`  TIMEOUT: ${c.timeout} — environmental, not a regression: no stub; re-run the cell`);
   if (c.verdict === "not-reproduced" && c.replayOf !== null) {
-    say(`  NOT REPRODUCED ${c.replayOf}: the replay ${f === null ? "ran clean" : `failed on ${f.check} instead`} — fixed, or the replay no longer walks the committed path`);
+    say(`  NOT REPRODUCED ${c.replayOf}: the replay ${f === null ? "ran clean" : `failed on ${f.check}${f.known === null ? "" : ` (known ${f.known})`} instead`} — fixed, or the replay no longer walks the committed path`);
   }
   if (f === null && c.verdict !== "not-reproduced" && c.verdict !== "aborted") {
     const head = c.verdict === "vacuous" ? `VACUOUS: ${c.vacuous.join("; ")}` : "ok";
@@ -230,7 +237,10 @@ function printStub(c: ModelCell, runId: string): void {
   // A NEW check passed over while shrinking has no path of its own to replay.
   for (const check of Object.keys(c.maskedNew)) say(`  no stub for ${check}: it was passed over while shrinking toward ${f.check}, so it has no replay path — re-find it once ${f.check} is fixed or fenced`);
   if (f.known !== null) return;
-  say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, fence: null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
+  say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, fence: null, match: null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
+  if ((MATCH_REQUIRED_CHECKS as readonly string[]).includes(f.check)) {
+    say(`  match owed: ${f.check} names no single failure — set "match" to text from the evidence that does (the product's message), or regressions.json is refused`);
+  }
   // A replay regenerates the counterexample from the seed; the committed case
   // records neither --max-commands nor the fences. --regressions honours
   // --max-commands and always runs fences off, which replays a SHRUNK
@@ -247,6 +257,13 @@ function printStub(c: ModelCell, runId: string): void {
 export async function runModel(deps: ModelDeps, argv: string[]): Promise<number> {
   const cli = parseCli(argv);
   if ("usage" in cli) { warn(`model: ${cli.usage}\n${MODEL_USAGE}`); return EXIT.REFUSED; }
+  // The committed cases first: a file the loader refuses is refused before
+  // anything else is asked of the environment (T15 fix round 2).
+  let regressions: RegressionCase[];
+  try {
+    regressions = (deps.loadRegressions ?? loadRegressions)(cli.root);
+    checkRegressionVariants(regressions);
+  } catch (e) { warn(`model: ${errText(e)}`); return EXIT.REFUSED; }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("model: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }
   // RF3: the own-DB proof is mandatory, and comes before the preflight.
@@ -254,11 +271,6 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   let pf: Awaited<ReturnType<ModelDeps["preflight"]>>;
   try { pf = await deps.preflight(base); } catch (e) { warn(`model: preflight: ${errText(e)}`); return EXIT.REFUSED; }
   if (!pf.ok) { for (const r of pf.refusals) warn(`preflight refused: ${r.reason} — ${r.detail}`); return EXIT.REFUSED; }
-  let regressions: RegressionCase[];
-  try {
-    regressions = (deps.loadRegressions ?? loadRegressions)();
-    checkRegressionVariants(regressions);
-  } catch (e) { warn(`model: ${errText(e)}`); return EXIT.REFUSED; }
 
   const chosen = new Map(cli.cells.map((c) => [c.cell, c]));
   const jobs: Job[] = cli.regressions
