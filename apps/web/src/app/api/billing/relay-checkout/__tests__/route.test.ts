@@ -56,7 +56,12 @@ vi.mock("@/lib/currency-server", () => ({
   preferredCurrency: (...args: unknown[]) => preferredCurrencyMock(...args),
 }));
 
+// B5 (Task 14 fix round 1): a Stripe request error is REPORTED here, once, with context — and answered as a typed 502.
+const { captureErrorMock } = vi.hoisted(() => ({ captureErrorMock: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: (...args: unknown[]) => captureErrorMock(...args) }));
+
 import { POST } from "../route";
+import { HttpError } from "@/lib/errors";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -189,5 +194,49 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
       expect([res.status, JSON.stringify(body)]).toEqual([400, JSON.stringify(body)]);
     }
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+  });
+
+  // B5 — the browser pass met this for real: a sandbox account with no head-office address refuses automatic tax, and
+  // Stripe's 400 surfaced as an UNHANDLED 500 in the log. A Stripe request error is an outcome of THIS route, not a
+  // crash: reported once with the org and Stripe's own ids, answered 502 with a code, which the Phone tab already reads
+  // as "Checkout didn't open. Try again." Scoped both ways — the route's own typed refusals and a genuine bug keep
+  // their paths.
+  it("a Stripe request error is a handled 502 checkout_unavailable, reported once with context — never an unhandled 500", async () => {
+    const rig = await streamRig();
+    await entitle(rig.orgId);
+    await callerFor(rig.orgId);
+    const fixtureId = rig.fixtureIds[0]!;
+    captureErrorMock.mockReset();
+    let checked = 0;
+    for (const type of ["StripeInvalidRequestError", "StripeAPIError", "StripeConnectionError", "StripeRateLimitError"]) {
+      const stripeErr = Object.assign(new Error("Your head office address is required for automatic tax."), {
+        type, code: "parameter_missing", requestId: `req_${type}`, statusCode: 400,
+      });
+      createRelayCheckoutMock.mockRejectedValueOnce(stripeErr);
+      const res = await post({ orgId: rig.orgId, fixtureId, pack: 5 });
+      expect([type, res.status]).toEqual([type, 502]);
+      expect(await res.json()).toMatchObject({ ok: false, code: "checkout_unavailable" });
+      expect(captureErrorMock).toHaveBeenLastCalledWith(
+        stripeErr,
+        expect.objectContaining({ orgId: rig.orgId, route: "billing/relay-checkout", extra: expect.objectContaining({ stripeType: type, stripeRequestId: `req_${type}` }) }),
+      );
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(captureErrorMock).toHaveBeenCalledTimes(4);
+
+    // The route's OWN typed refusal (an account the pack prices were never synced to) keeps its status and is not
+    // re-reported as a Stripe failure.
+    captureErrorMock.mockReset();
+    createRelayCheckoutMock.mockRejectedValueOnce(new HttpError(503, "Billing is not yet configured. Please contact support."));
+    expect((await post({ orgId: rig.orgId, fixtureId, pack: 5 })).status).toBe(503);
+    // …and a genuine bug is still the unhandled 500 it is, not laundered into "try again".
+    createRelayCheckoutMock.mockRejectedValueOnce(new TypeError("cannot read properties of undefined"));
+    expect((await post({ orgId: rig.orgId, fixtureId, pack: 5 })).status).toBe(500);
+    // A `type` field alone is not Stripe's: node-fetch's FetchError carries `type: "system"`, and it is not a
+    // Stripe answer to this request.
+    createRelayCheckoutMock.mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { type: "system" }));
+    expect((await post({ orgId: rig.orgId, fixtureId, pack: 5 })).status).toBe(500);
+    expect(captureErrorMock).not.toHaveBeenCalled();
   });
 });
