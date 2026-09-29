@@ -13,7 +13,10 @@
 //  - builder-posted-as-harness: what the builder posted against the harness's
 //    own bodies for the row, path by path;
 //  - ui-standings-match / ui-public-standings-match / ui-champion-shown: the
-//    tables and the banner the pages draw, against the API;
+//    tables and the banner the pages draw, against the API. The public page
+//    is re-read until it matches or its freshness window (its own revalidate
+//    plus its data cache's) has passed since the case's last write; what still
+//    differs then is a FAIL verdict (ruling C as amended, fix round 1);
 //  - finalize-ledger-row: the ONE core.finalize the console's Finalize left
 //    (ruling D: the row is compared, never the route);
 //  - mixed-driver-coverage, then the case's Evidence checks.
@@ -40,7 +43,7 @@ import type { StreamEvent } from "../streams/types.ts";
 import type { HttpDriver } from "./http-driver.ts";
 import { MixedLedger, type ActionType, type PadPolicy } from "./mixed.ts";
 import {
-  DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded,
+  DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
@@ -106,30 +109,28 @@ export const ORGANISER_TABLE_KINDS: ReadonlySet<string> = new Set(["league", "gr
 export const PUBLIC_BRACKET_KINDS: ReadonlySet<string> = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 /** The public division page's `export const revalidate` (text-pinned): it may serve a render this old. */
 export const PUBLIC_REVALIDATE_S = 30;
+/** server/public-site/data.ts REVALIDATE_FAST, getPublicDivision's unstable_cache
+ *  window (text-pinned; data.ts is server runtime, never imported here): a
+ *  regeneration of the page may read a data entry this old. */
+export const PUBLIC_DATA_REVALIDATE_S = 30;
+/** The rules editor, not the builder, carries a division's match-rules
+ *  override; no wave in design §8 or the programme index owns driving it, so
+ *  it is W1-driving's (M-4 ruling, fix round 1). */
+const OVERRIDE_WAVE = "W1-driving";
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
 const STAGE_COMPLETED = "stage_completed";
 
-/** How long the public view may take to show what the API already answers:
- *  one revalidate window, then the navigation that brings the fresh render. */
+/** Ruling C (amended, fix round 1): how long after the case's last write the
+ *  public page may still show an older state. The page's own ISR window, plus
+ *  the data cache under it (a regeneration can read a data entry one data
+ *  window old), plus the navigation that brings the render and one
+ *  regeneration's slack. Past it, a difference is the product's. */
 export function publicFreshnessMs(c: Pick<PageCtx, "holdMs">): number {
-  return budgetMs({ base: PUBLIC_REVALIDATE_S * 1000 + navBudget(c), holdMs: c.holdMs });
+  return budgetMs({ base: (PUBLIC_REVALIDATE_S + PUBLIC_DATA_REVALIDATE_S) * 1000 + navBudget(c) + SLACK_MS, holdMs: c.holdMs });
 }
-
-/** Ruling C: the public page never matched the API within its freshness
- *  bound. A stale render is never a verdict, so this is a named refusal, not a
- *  mismatch; the last difference is named so a real one can be read. */
-export class PublicViewNeverFresh extends Error {
-  readonly attempts: number;
-  readonly ms: number;
-  constructor(attempts: number, ms: number, last: readonly string[]) {
-    super(`browser: the public division page never matched the API within ${ms} ms (${attempts} read(s); it revalidates every ${PUBLIC_REVALIDATE_S} s) — a stale page is never a verdict; last difference: ${last.slice(0, 3).join("; ") || "(none recorded)"}`);
-    this.name = "PublicViewNeverFresh";
-    this.attempts = attempts;
-    this.ms = ms;
-  }
-}
+const FRESHNESS_LAYERS = `the page's revalidate ${PUBLIC_REVALIDATE_S} s + its data cache's ${PUBLIC_DATA_REVALIDATE_S} s + a navigation`;
 
 export interface NamedTable { label: string; rows: readonly { rank: number; name: string }[] }
 
@@ -243,6 +244,9 @@ export class BrowserDriver implements OrganiserDriver {
   /** stage id → the finalRanks its completion answered (null: none). */
   readonly #finalRanks = new Map<string, readonly string[] | null>();
   #uiCalls = 0;
+  /** When the case's last write settled (either path; null before any): the
+   *  public page's freshness window runs from here (ruling C, amended). */
+  #lastWriteAt: number | null = null;
 
   constructor(o: BrowserDriverOptions) {
     this.#http = o.http;
@@ -258,6 +262,20 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   get callCount(): number { return this.#uiCalls + this.#http.callCount; }
+
+  /** The policy this driver was built with (the runner's wiring is proven by it). */
+  get padPolicy(): PadPolicy { return this.#policy; }
+
+  /** A write, on either path. Its time is taken when it SETTLES — answered,
+   *  refused or unknown, the latest moment it could have committed — and the
+   *  public page's freshness window restarts there. */
+  async #write<T>(act: () => Promise<T>): Promise<T> {
+    try {
+      return await act();
+    } finally {
+      this.#lastWriteAt = this.#clock.now();
+    }
+  }
 
   checks(): CheckResult[] {
     const fin = this.#finalized.length === 0 ? [] : [assertion("finalize-ledger-row", this.#finalized)];
@@ -304,13 +322,13 @@ export class BrowserDriver implements OrganiserDriver {
   async createCompetition(input: { name: string; slug: string }): Promise<CompetitionRef> {
     if (!this.#wants("createCompetition")) {
       this.#ledger.record("createCompetition", "http");
-      const ref = await this.#http.createCompetition(input);
+      const ref = await this.#write(() => this.#http.createCompetition(input));
       this.#competitions.set(ref.id, ref.slug);
       return ref;
     }
     this.#ledger.record("createCompetition", "browser");
     // The wizard takes no slug: the product picks it, and the answer is the one authority.
-    const c = await this.#ui((p) => p.createCompetitionUi(this.#ctx, { name: input.name }));
+    const c = await this.#write(() => this.#ui((p) => p.createCompetitionUi(this.#ctx, { name: input.name })));
     // The same refusals HttpDriver makes (http-driver.ts createCompetition).
     if (c.org_id !== this.#orgId) throw new OrgMismatch(this.#orgId, c.org_id);
     if (c.visibility !== "unlisted") throw new VisibilityDegraded(c.slug);
@@ -340,15 +358,18 @@ export class BrowserDriver implements OrganiserDriver {
     if (apiOnly || !this.#wants("createDivision")) {
       this.#ledger.record("createDivision", "http");
       if (apiOnly) this.#ledger.exempt("createDivision", this.#judgeApiOnlyPath(row));
-      const ref = await this.#http.createDivision(competitionId, input);
+      const ref = await this.#write(() => this.#http.createDivision(competitionId, input));
       this.#register(ref.id, compSlug, ref.slug);
       return ref;
     }
     const override = Object.keys(input.config ?? {});
-    if (override.length > 0) throw new DriverMisuse(`browser: the division builder cannot carry a rule override (${override.join(", ")}) — an override case has no organiser path to build it here`);
+    // M-4 ruling: a cell with no path in this layer (🚫, owned by a wave), never an error red.
+    if (override.length > 0) {
+      throw new NoOrganiserPath(OVERRIDE_WAVE, `the division builder takes no rule override (${override.join(", ")}); the rules editor that does is not driven in this layer`);
+    }
     this.#ledger.record("createDivision", "browser");
-    const { division, stages } = await this.#ui((p) => p.createDivisionUi(this.#ctx, compSlug, competitionId,
-      { name: input.name, sportKey: input.sportKey, variantKey: input.variantKey, row }));
+    const { division, stages } = await this.#write(() => this.#ui((p) => p.createDivisionUi(this.#ctx, compSlug, competitionId,
+      { name: input.name, sportKey: input.sportKey, variantKey: input.variantKey, row })));
     this.#register(division.id, compSlug, division.slug);
     for (const s of stages) this.#stageDivision.set(s.id, division.id);
     this.#built = { divisionId: division.id, stages };
@@ -371,7 +392,7 @@ export class BrowserDriver implements OrganiserDriver {
       this.#checks.push(builderVsHarness(b.stages, stages));
       return b.stages.map(toStageRef);
     }
-    const out = await this.#http.postStages(divisionId, stages);
+    const out = await this.#write(() => this.#http.postStages(divisionId, stages));
     for (const s of out) this.#stageDivision.set(s.id, divisionId);
     return out;
   }
@@ -383,13 +404,16 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   async addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+    // M-6: an empty add has no organiser act to drive — no click, no ledger row;
+    // the API answers it as it would any other caller.
+    if (entrants.length === 0) return this.#http.addEntrants(divisionId, entrants);
     if (!this.#wants("addEntrants")) {
       this.#ledger.record("addEntrants", "http");
-      return this.#http.addEntrants(divisionId, entrants);
+      return this.#write(() => this.#http.addEntrants(divisionId, entrants));
     }
     const where = this.#whereOf(divisionId);
     this.#ledger.record("addEntrants", "browser");
-    return this.#ui((p) => p.addEntrantsUi(this.#ctx, where, entrants.map((e) => ({ displayName: e.displayName, seed: e.seed, kind: e.kind }))));
+    return this.#write(() => this.#ui((p) => p.addEntrantsUi(this.#ctx, where, entrants.map((e) => ({ displayName: e.displayName, seed: e.seed, kind: e.kind })))));
   }
 
   listEntrants(divisionId: string): Promise<EntrantRow[]> { return this.#http.listEntrants(divisionId); }
@@ -397,21 +421,21 @@ export class BrowserDriver implements OrganiserDriver {
   async start(divisionId: string): Promise<StartOut> {
     if (!this.#wants("start")) {
       this.#ledger.record("start", "http");
-      return this.#http.start(divisionId);
+      return this.#write(() => this.#http.start(divisionId));
     }
     const where = this.#whereOf(divisionId);
     this.#ledger.record("start", "browser");
-    return this.#ui((p) => p.startUi(this.#ctx, where));
+    return this.#write(() => this.#ui((p) => p.startUi(this.#ctx, where)));
   }
 
   async generate(stageId: string): Promise<GenerateOut> {
     if (!this.#wants("generate")) {
       this.#ledger.record("generate", "http");
-      return this.#http.generate(stageId);
+      return this.#write(() => this.#http.generate(stageId));
     }
     const where = this.#whereOfStage(stageId);
     this.#ledger.record("generate", "browser");
-    return this.#ui((p) => p.generateUi(this.#ctx, where, stageId));
+    return this.#write(() => this.#ui((p) => p.generateUi(this.#ctx, where, stageId)));
   }
 
   listFixtures(divisionId: string): Promise<FixtureRow[]> { return this.#http.listFixtures(divisionId); }
@@ -425,30 +449,30 @@ export class BrowserDriver implements OrganiserDriver {
       throw new DriverMisuse(`browser: the ${this.#spec.sport} pad path lands in Task 7 — this driver cannot score it yet`);
     }
     this.#ledger.record("score", "http");
-    return this.#http.postStream(fixtureId, events, idempotencyPrefix);
+    return this.#write(() => this.#http.postStream(fixtureId, events, idempotencyPrefix));
   }
 
   async forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]> {
     if (!this.#wants("forfeit")) {
       this.#ledger.record("forfeit", "http");
-      return this.#http.forfeit(fixtureId, byEntrantId, reason, idempotencyPrefix);
+      return this.#write(() => this.#http.forfeit(fixtureId, byEntrantId, reason, idempotencyPrefix));
     }
     const { where, row, no } = await this.#findFixture(fixtureId);
     this.#ledger.record("forfeit", "browser");
     await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
-    return this.#ui((p) => p.forfeitUi(this.#ctx, row, byEntrantId, reason));
+    return this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, byEntrantId, reason)));
   }
 
   async withdraw(entrantId: string): Promise<WithdrawOut> {
     if (!this.#wants("withdraw")) {
       this.#ledger.record("withdraw", "http");
-      return this.#http.withdraw(entrantId);
+      return this.#write(() => this.#http.withdraw(entrantId));
     }
     for (const where of this.#wheres.values()) {
       const e = (await this.#http.listEntrants(where.divisionId)).find((x) => x.id === entrantId);
       if (e === undefined) continue;
       this.#ledger.record("withdraw", "browser");
-      return this.#ui((p) => p.withdrawUi(this.#ctx, where, { id: e.id, displayName: e.display_name }));
+      return this.#write(() => this.#ui((p) => p.withdrawUi(this.#ctx, where, { id: e.id, displayName: e.display_name })));
     }
     throw new DriverMisuse(`browser: entrant ${entrantId} is in no division this driver built — the entrants tab cannot find its row`);
   }
@@ -461,7 +485,7 @@ export class BrowserDriver implements OrganiserDriver {
     this.#ledger.record("completeStage", where === null ? "http" : "browser");
     let out: CompleteOut;
     try {
-      out = where === null ? await this.#http.completeStage(stageId) : await this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId));
+      out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId)));
     } catch (e) {
       // As HttpDriver: a named 4xx committed nothing and stays retryable; any
       // other ending may follow a committed completion, so it is never repeated.
@@ -475,7 +499,7 @@ export class BrowserDriver implements OrganiserDriver {
     return out;
   }
 
-  rebuild(stageId: string): Promise<void> { return this.#http.rebuild(stageId); }
+  rebuild(stageId: string): Promise<void> { return this.#write(() => this.#http.rebuild(stageId)); }
 
   /** The API's tables for every stage the organiser tab draws (TABLE_KINDS):
    *  one per pool its fixtures sit in, or the stage's own when they sit in none. */
@@ -511,10 +535,11 @@ export class BrowserDriver implements OrganiserDriver {
         : assertion("ui-standings-match", [{ ok: false, note: `the page draws ${ui.length} table(s) for ${kinds}, which the organiser tab draws no table for` }]));
       return out;
     }
+    // api.tables is non-empty here (#organiserTables answers null for no drawn
+    // stage, and one table per drawn stage at least), so r.checked ≥ 1: a
+    // missing page table is a fail row of compareTables, never a vacuous pass.
     const r = compareTables(api.tables, ui);
-    this.#checks.push(r.checked === 0
-      ? { id: "ui-standings-match", kind: "assertion", verdict: "fail", checked: 0, reason: "vacuous: a table stage, and no table on either side (checked 0 is a failure)", evidence: [] }
-      : { id: "ui-standings-match", kind: "assertion", verdict: r.ok ? "pass" : "fail", checked: r.checked, reason: r.ok ? `${r.checked} table(s) drawn as the API ranks them` : r.evidence[0], evidence: r.evidence });
+    this.#checks.push({ id: "ui-standings-match", kind: "assertion", verdict: r.ok ? "pass" : "fail", checked: r.checked, reason: r.ok ? `${r.checked} table(s) drawn as the API ranks them` : r.evidence[0], evidence: r.evidence });
     return out;
   }
 
@@ -547,8 +572,11 @@ export class BrowserDriver implements OrganiserDriver {
     return out;
   }
 
-  /** Ruling C: the page is read until it matches, within publicFreshnessMs;
-   *  a stale render is never judged. */
+  /** Ruling C, amended (fix round 1, I-1 + I-2): the page is read, SLACK_MS
+   *  apart, until it matches the API or a read STARTS a whole freshness window
+   *  after the case's last write — a render that late can no longer be a cache
+   *  serving an older state, so whatever it still shows is the verdict: a FAIL
+   *  recorded here, never a throw, so the case keeps every other check. */
   async #judgePublic(where: DivisionWhere, out: PublicStandingsOut): Promise<void> {
     const stages = await this.listStages(where.divisionId);
     const names = await this.#names(where.divisionId);
@@ -560,30 +588,41 @@ export class BrowserDriver implements OrganiserDriver {
         rows: s.rows.map((r) => ({ rank: r.rank, name: names.get(r.entrantId) ?? r.entrantId })),
       }));
     const want = this.#championWant(stages, names);
-    const deadline = publicFreshnessMs(this.#ctx);
-    const t0 = this.#clock.now();
-    for (let attempts = 1; ; attempts++) {
+    const kinds = [...new Set(stages.map((s) => s.kind))];
+    const tableKinds = kinds.filter((k) => !PUBLIC_BRACKET_KINDS.has(k));
+    const window = publicFreshnessMs(this.#ctx);
+    const since = this.#lastWriteAt ?? this.#clock.now();
+    for (let reads = 1; ; reads++) {
+      const startedAt = this.#clock.now();
       const view = await this.#ui((p) => p.readPublicUi(this.#ctx, where));
       const tables = compareTables(api, view.tables);
       const crowned = want.kind !== "name" || view.champion === want.name;
-      if (tables.ok && crowned) {
-        const bracketsOnly = [...new Set(stages.map((s) => s.kind))].join(", ") || "no stage";
-        this.#checks.push(tables.checked === 0
-          ? assertion("ui-public-standings-match", [], `no table to compare: the API publishes none and the page draws none (${bracketsOnly})`)
-          : { id: "ui-public-standings-match", kind: "assertion", verdict: "pass", checked: tables.checked, reason: `${tables.checked} table(s) drawn as the API ranks them, on read ${attempts}`, evidence: [] });
-        this.#checks.push(want.kind === "abstain" ? assertion("ui-champion-shown", [], want.reason)
-          : want.kind === "fail" ? assertion("ui-champion-shown", [{ ok: false, note: want.note }])
-          : assertion("ui-champion-shown", [{ ok: true, note: `the banner names ${want.name}` }]));
-        return;
+      const elapsed = startedAt - since;
+      if (!(tables.ok && crowned) && elapsed < window) {
+        await this.#clock.sleep(SLACK_MS);
+        continue;
       }
-      const last = [...tables.evidence, ...(crowned ? [] : [`champion: the banner names ${view.champion ?? "nobody"}; want ${(want as { name: string }).name}`])];
-      if (this.#clock.now() - t0 >= deadline) throw new PublicViewNeverFresh(attempts, deadline, last);
-      await this.#clock.sleep(SLACK_MS);
+      const late = `${elapsed} ms after the case's last write (window ${window} ms: ${FRESHNESS_LAYERS}), read ${reads}×`;
+      // M-7: nothing compared abstains only where no stage publishes a table;
+      // a table stage with no table compared is vacuous, and vacuous is a fail.
+      this.#checks.push(tables.checked === 0
+        ? tableKinds.length === 0
+          ? assertion("ui-public-standings-match", [], `no table to compare: every stage is a bracket (${kinds.join(", ") || "no stage"})`)
+          : { id: "ui-public-standings-match", kind: "assertion", verdict: "fail", checked: 0, reason: `vacuous: a table stage (${tableKinds.join(", ")}) and no table compared (checked 0 is a failure)`, evidence: [] }
+        : tables.ok
+          ? { id: "ui-public-standings-match", kind: "assertion", verdict: "pass", checked: tables.checked, reason: `${tables.checked} table(s) drawn as the API ranks them, on read ${reads}`, evidence: [] }
+          : { id: "ui-public-standings-match", kind: "assertion", verdict: "fail", checked: tables.checked, reason: `the public page still differs from the API ${late}: ${tables.evidence[0]}`, evidence: tables.evidence });
+      this.#checks.push(want.kind === "abstain" ? assertion("ui-champion-shown", [], want.reason)
+        : want.kind === "fail" ? assertion("ui-champion-shown", [{ ok: false, note: want.note }])
+        : crowned ? assertion("ui-champion-shown", [{ ok: true, note: `the banner names ${want.name}` }])
+        : assertion("ui-champion-shown", [{ ok: false, note: `the banner names ${view.champion ?? "nobody"}; want ${want.name} — still ${late}` }]));
+      return;
     }
   }
 
-  patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome> { return this.#http.patchDivisionConfig(divisionId, config); }
-  replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe> { return this.#http.replaceStagesProbe(divisionId, stages); }
+  // Probes are writes too: an accepted one changes what the public page must show.
+  patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome> { return this.#write(() => this.#http.patchDivisionConfig(divisionId, config)); }
+  replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe> { return this.#write(() => this.#http.replaceStagesProbe(divisionId, stages)); }
 
   /** Finalize is always the console's (not an ACTION_TYPES entry): the tap,
    *  then the ledger row it left after the tip it was read at — exactly one,
@@ -592,7 +631,7 @@ export class BrowserDriver implements OrganiserDriver {
     const { where, no } = await this.#findFixture(fixtureId);
     const tip = (await this.#http.fixtureState(fixtureId)).last_seq;
     await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
-    const posted = await this.#ui((p) => p.finalizeUi(this.#ctx, fixtureId));
+    const posted = await this.#write(() => this.#ui((p) => p.finalizeUi(this.#ctx, fixtureId)));
     const rows: readonly LedgerRow[] = await this.#http.ledger(fixtureId, tip);
     const row = rows[0];
     this.#finalized.push(rows.length !== 1 || row === undefined

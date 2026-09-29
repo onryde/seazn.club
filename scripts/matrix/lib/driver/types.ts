@@ -175,6 +175,20 @@ export class RequestTimedOut extends Error {
   }
 }
 
+/** 🚫 (W1c Task 6, M-4 ruling): the case asked this driver for a path the
+ *  product has but this layer does not drive; `wave` owes it. The runner
+ *  records it through decideState's `noPath`, never as an error red. */
+export class NoOrganiserPath extends Error {
+  readonly wave: string;
+  readonly reason: string;
+  constructor(wave: string, reason: string) {
+    super(redact(`driver: no organiser path in this layer — ${reason} → ${wave}`));
+    this.name = "NoOrganiserPath";
+    this.wave = wave;
+    this.reason = redact(reason);
+  }
+}
+
 export class OrgMismatch extends Error {
   constructor(expected: string, got: string) {
     super(redact(`driver: competition landed in org ${got}, expected ${expected} — the active-org switch did not hold`));

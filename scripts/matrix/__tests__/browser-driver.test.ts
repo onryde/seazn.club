@@ -19,10 +19,10 @@ import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/page
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, PUBLIC_BRACKET_KINDS, PUBLIC_REVALIDATE_S, PublicViewNeverFresh,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry,
 } from "../lib/driver/browser-driver.ts";
-import { DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
 import type { CheckResult } from "../lib/results.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
@@ -149,7 +149,6 @@ function only(d: BrowserDriver, id: string): CheckResult {
   expect(found, `checks with id ${id}`).toHaveLength(1);
   return found[0]!;
 }
-const has = (d: BrowserDriver, id: string) => d.checks().some((c) => c.id === id);
 
 describe("BrowserDriver — the mixed path", () => {
   it("empty case first: a driver that did nothing pushes no check of its own, and its coverage and evidence are vacuous (checked 0 → fail)", () => {
@@ -183,12 +182,31 @@ describe("BrowserDriver — the mixed path", () => {
   it("first call browser, second http: two generates reach generateUi once and the http side once — under policy all too (all widens only score)", async () => {
     for (const padPolicy of ["first", "all"] as const) {
       const { driver, http, pageCalls } = league({ padPolicy });
+      // The policy the driver was built with is the one it reports (read by the runner's wiring test).
+      expect(driver.padPolicy).toBe(padPolicy);
       await built(driver, spec("league"));
       await driver.generate("s1");
       await driver.generate("s1");
       expect(pageCalls.filter((c) => c === "generateUi"), padPolicy).toHaveLength(1);
       expect(http.calls.filter((c) => c === "generate"), padPolicy).toHaveLength(1);
     }
+  });
+
+  // M-3 (fix round 1): addEntrantsUi returns [] at once for no entrants
+  // (entrants.ts), so recording that as a browser run would pass coverage on a
+  // type that never clicked and send every later add over http.
+  it("an empty addEntrants is no click: the http side answers it unrecorded, and the next real add still takes the browser's turn", async () => {
+    const { driver, http, pageCalls } = league();
+    const b = await built(driver, spec("league"));
+    expect(await driver.addEntrants(b.divId, [])).toEqual([]);
+    expect(pageCalls.filter((c) => c === "addEntrantsUi")).toHaveLength(0);
+    expect(http.calls.filter((c) => c === "addEntrants")).toHaveLength(1);
+    // Nothing recorded: the ledger still counts only the two creates.
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 2 });
+    // Second call, a real one: the page gets it.
+    await driver.addEntrants(b.divId, [{ displayName: "Ann", seed: 1, kind: "individual" }]);
+    expect(pageCalls.filter((c) => c === "addEntrantsUi")).toHaveLength(1);
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 3 });
   });
 
   it("reads never touch the page: the eight reads and probes each reach the http side once, and record no action", async () => {
@@ -261,11 +279,19 @@ describe("BrowserDriver — the mixed path", () => {
     await expect(driver.completeStage("s-other")).rejects.toThrow(DriverMisuse);
     await expect(driver.withdraw("e-nobody")).rejects.toThrow(/e-nobody/);
     await expect(driver.forfeit("f-nobody", "e1", "walkover", "p")).rejects.toThrow(/f-nobody/);
-    // The division the organiser builds cannot carry a rule override: refused, never silently dropped.
+    // The division the organiser builds cannot carry a rule override: never silently dropped.
+    // M-4 ruling (fix round 1): that is a cell with no path in this layer, owned by a wave —
+    // a named NoOrganiserPath the runner records as 🚫, never an error red.
     const second = league();
     const c2 = await second.driver.createCompetition({ name: "x", slug: "asked" });
-    await expect(second.driver.createDivision(c2.id, { name: "x", slug: "d", sportKey: "generic", variantKey: "default", config: { pointsToWin: 15 } })).rejects.toThrow(/override/);
+    const err = await second.driver.createDivision(c2.id, { name: "x", slug: "d", sportKey: "generic", variantKey: "default", config: { pointsToWin: 15 } }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoOrganiserPath);
+    expect(err).not.toBeInstanceOf(DriverMisuse);
+    expect(err).toMatchObject({ wave: "W1-driving" });
+    expect((err as NoOrganiserPath).reason).toMatch(/rule override \(pointsToWin\)/);
     expect(second.pageCalls).toEqual(["createCompetitionUi"]);
+    // Not recorded: createDivision was never invoked on either path.
+    expect(only(second.driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 1 });
     expect(compId).toBe("c1");
     expect(divId).toBe("d1");
     expect(pageCalls).toEqual(["createCompetitionUi", "createDivisionUi"]);
@@ -578,43 +604,122 @@ describe("BrowserDriver — the public view (ruling C)", () => {
   });
   const ref = (b: { compSlug: string; divSlug: string }) => ({ orgSlug: ORG_SLUG, competitionSlug: b.compSlug, divisionSlug: b.divSlug });
 
-  it("the page's revalidate, the bracket kinds and the deadline are the product's (text pins), and the deadline is derived from them", () => {
+  // Ruling C, amended (fix round 1, I-1 + I-2): the public page may show an
+  // older state for its own revalidate window PLUS the data cache under it
+  // (getPublicDivision's unstable_cache): an ISR regeneration can read a data
+  // entry one data window old. Both windows are read from the product here,
+  // never from browser-driver.ts.
+  const pageRevalidateS = (): number => {
     const m = /export const revalidate = (\d+);/.exec(src(PUBLIC_DIV_PAGE));
-    expect(m).not.toBeNull();
-    expect(PUBLIC_REVALIDATE_S).toBe(Number(m![1]));
+    expect(m, `${PUBLIC_DIV_PAGE} no longer declares its revalidate`).not.toBeNull();
+    return Number(m![1]);
+  };
+  const DATA_TS = "apps/web/src/server/public-site/data.ts";
+  const dataRevalidateS = (): number => {
+    const text = src(DATA_TS);
+    const m = /export const REVALIDATE_FAST = (\d+);/.exec(text);
+    expect(m, `${DATA_TS} no longer declares REVALIDATE_FAST`).not.toBeNull();
+    // The window is getPublicDivision's own: its unstable_cache revalidates on REVALIDATE_FAST.
+    const fn = text.slice(text.indexOf("export async function getPublicDivision("));
+    const body = fn.slice(0, fn.indexOf("\nexport "));
+    expect(body.length, "getPublicDivision not found").toBeGreaterThan(0);
+    expect(body).toMatch(/unstable_cache\(/);
+    expect(body).toMatch(/revalidate: REVALIDATE_FAST,/);
+    return Number(m![1]);
+  };
+  const productWindowMs = (holdMs: number) => Math.max(FLOOR_MS, (pageRevalidateS() + dataRevalidateS()) * 1000 + navBudget({ holdMs }) + SLACK_MS);
+
+  it("the page's revalidate, its data cache's revalidate and the bracket kinds are the product's (text pins), and the freshness window is derived from both caches", () => {
+    expect(PUBLIC_REVALIDATE_S).toBe(pageRevalidateS());
+    expect(PUBLIC_DATA_REVALIDATE_S).toBe(dataRevalidateS());
     expect([...PUBLIC_BRACKET_KINDS].sort()).toEqual(setLiteral("apps/web/src/server/public-site/champion.ts", "BRACKET_KINDS").sort());
-    for (const holdMs of [500, 3000, 10_000]) expect(publicFreshnessMs({ holdMs })).toBe(Math.max(FLOOR_MS, Number(m![1]) * 1000 + navBudget({ holdMs })));
+    let checked = 0;
+    for (const holdMs of [500, 3000, 10_000, 60_000]) {
+      expect(publicFreshnessMs({ holdMs }), String(holdMs)).toBe(productWindowMs(holdMs));
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // Both layers count: the window is past the page's own revalidate plus a navigation.
+    expect(publicFreshnessMs({ holdMs: 3000 })).toBeGreaterThan(pageRevalidateS() * 1000 + navBudget({ holdMs: 3000 }));
   });
 
-  it("a stale page is read again, SLACK_MS apart, until it matches — the stale read is never the verdict", async () => {
+  it("a stale page is read again, SLACK_MS apart, until it matches on the Nth read — the stale reads are never the verdict", async () => {
     const clock = fakeClock();
     let reads = 0;
-    const { driver, pageCalls } = make({ http: pub(), clock, pages: { readPublicUi: async () => ({ tables: [++reads === 1 ? uiRows("Bob", "Ann") : uiRows("Ann", "Bob")], champion: null }) } });
+    const { driver, pageCalls } = make({ http: pub(), clock, pages: { readPublicUi: async () => ({ tables: [++reads < 3 ? uiRows("Bob", "Ann") : uiRows("Ann", "Bob")], champion: null }) } });
     const b = await built(driver, spec("league"));
     const out = await driver.publicStandings(ref(b));
     expect(out.standings).toHaveLength(1);
-    expect(pageCalls.filter((c) => c === "readPublicUi")).toHaveLength(2);
-    expect(clock.sleeps).toEqual([SLACK_MS]);
+    expect(pageCalls.filter((c) => c === "readPublicUi")).toHaveLength(3);
+    expect(clock.sleeps).toEqual([SLACK_MS, SLACK_MS]);
     expect(only(driver, "ui-public-standings-match")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(only(driver, "ui-public-standings-match").reason).toMatch(/on read 3/);
     expect(only(driver, "ui-champion-shown")).toMatchObject({ verdict: "abstain" });
     // A second public read is the data alone.
     await driver.publicStandings(ref(b));
-    expect(pageCalls.filter((c) => c === "readPublicUi")).toHaveLength(2);
+    expect(pageCalls.filter((c) => c === "readPublicUi")).toHaveLength(3);
   });
 
-  it("a page that never matches within the deadline is a NAMED refusal, not a mismatch verdict, and names what still differed", async () => {
+  it("a page still different once the window has passed since the case's last write is a FAIL verdict naming the difference — never a throw — and the case keeps every other check", async () => {
     const clock = fakeClock();
     let reads = 0;
-    const { driver, ctx } = make({ http: pub(), clock, pages: { readPublicUi: async () => { reads++; clock.t += 1000; return { tables: [uiRows("Bob", "Ann")], champion: null }; } } });
+    const { driver } = make({ http: pub(), clock, pages: { readPublicUi: async () => { reads++; return { tables: [uiRows("Bob", "Ann")], champion: null }; } } });
     const b = await built(driver, spec("league"));
-    const err = await driver.publicStandings(ref(b)).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(PublicViewNeverFresh);
-    const e = err as PublicViewNeverFresh;
-    expect(e.ms).toBe(publicFreshnessMs(ctx));
-    expect(e.attempts).toBe(reads);
-    expect(reads * (1000 + SLACK_MS)).toBeGreaterThanOrEqual(e.ms);
-    expect(e.message).toMatch(/page order 1 Bob, 2 Ann; API order 1 Ann, 2 Bob/);
-    expect(has(driver, "ui-public-standings-match")).toBe(false);
+    const windowMs = productWindowMs(3000);
+    // The case's last write was at t = 0 (built): the page is polled until a read STARTS at the window.
+    const out = await driver.publicStandings(ref(b));
+    expect(out.standings).toHaveLength(1);
+    expect(clock.sleeps.length).toBe(Math.ceil(windowMs / SLACK_MS));
+    expect(reads).toBe(clock.sleeps.length + 1);
+    expect(clock.t).toBeGreaterThanOrEqual(windowMs);
+    const c = only(driver, "ui-public-standings-match");
+    expect(c).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(c.evidence).toEqual(["league stage 1: page order 1 Bob, 2 Ann; API order 1 Ann, 2 Bob"]);
+    expect(c.reason).toMatch(new RegExp(`${clock.t} ms after the case's last write`));
+    expect(c.reason).toMatch(new RegExp(`window ${windowMs} ms`));
+    expect(c.reason).toMatch(/revalidate .*data cache/);
+    expect(c.reason).toMatch(new RegExp(`read ${reads}×`));
+    // Every other check survives the mismatch.
+    const ids = driver.checks().map((k) => k.id);
+    expect(ids).toEqual(expect.arrayContaining(["organiser-ui-path", "ui-public-standings-match", "ui-champion-shown", "mixed-driver-coverage", "visual-evidence"]));
+    expect(only(driver, "organiser-ui-path").verdict).toBe("pass");
+  });
+
+  it("the window counts from the case's LAST write: long after it, one read decides; a fresh write restarts it", async () => {
+    const windowMs = productWindowMs(3000);
+    const stale = { readPublicUi: async () => ({ tables: [uiRows("Bob", "Ann")], champion: null }) };
+    // Long after the last write: the first read is authoritative — no polling.
+    const clockA = fakeClock();
+    const a = make({ http: pub(), clock: clockA, pages: stale });
+    const bA = await built(a.driver, spec("league"));
+    clockA.t = windowMs;
+    await a.driver.publicStandings(ref(bA));
+    expect(clockA.sleeps).toEqual([]);
+    expect(a.pageCalls.filter((c) => c === "readPublicUi")).toHaveLength(1);
+    expect(only(a.driver, "ui-public-standings-match").verdict).toBe("fail");
+    // A write at t = window restarts it: polled for a whole window again.
+    const clockB = fakeClock();
+    const bDrv = make({ http: pub(), clock: clockB, pages: stale });
+    const bB = await built(bDrv.driver, spec("league"));
+    clockB.t = windowMs;
+    await bDrv.driver.generate("s1");
+    await bDrv.driver.publicStandings(ref(bB));
+    expect(clockB.sleeps.length).toBe(Math.ceil(windowMs / SLACK_MS));
+    expect(only(bDrv.driver, "ui-public-standings-match").verdict).toBe("fail");
+  });
+
+  // M-7 (fix round 1): zero tables compared abstains only where no stage is a table kind.
+  it("no table on either side abstains when every stage is a bracket, and FAILS as vacuous when a table stage has none", async () => {
+    const ko = make({ http: pub({ kind: "knockout", standings: [] }), spec: spec("knockout") });
+    const bKo = await built(ko.driver, spec("knockout"));
+    await ko.driver.publicStandings(ref(bKo));
+    expect(only(ko.driver, "ui-public-standings-match")).toMatchObject({ verdict: "abstain", checked: 0 });
+    expect(only(ko.driver, "ui-public-standings-match").reason).toMatch(/knockout/);
+    const lg = make({ http: pub({ standings: [] }) });
+    const bLg = await built(lg.driver, spec("league"));
+    await lg.driver.publicStandings(ref(bLg));
+    expect(only(lg.driver, "ui-public-standings-match")).toMatchObject({ verdict: "fail", checked: 0 });
+    expect(only(lg.driver, "ui-public-standings-match").reason).toMatch(/vacuous: .*league/);
   });
 
   it("a guard: the public ref must be this driver's org and the product's own slugs", async () => {
@@ -645,14 +750,22 @@ describe("BrowserDriver — the public view (ruling C)", () => {
     expect(only(early.driver, "ui-champion-shown")).toMatchObject({ verdict: "abstain", checked: 0 });
   });
 
-  it("the champion: a wrong banner never becomes the verdict (named refusal); a completion with no finalRanks fails by name; a table stage abstains", async () => {
-    const wrong = make({ http: pub({ kind: "knockout", standings: [] }), spec: spec("knockout"), pages: {
+  it("the champion: a banner still wrong after the window is a FAIL verdict naming both, and the case keeps its other checks; a completion with no finalRanks fails by name; a table stage abstains", async () => {
+    const clock = fakeClock();
+    const wrong = make({ http: pub({ kind: "knockout", standings: [] }), spec: spec("knockout"), clock, pages: {
       completeStageUi: async () => ({ completed: true, events: [{ type: "stage_completed", finalRanks: ["e2", "e1"] }] }),
       readPublicUi: async () => ({ tables: [], champion: "Ann" }),
     } });
     const b = await built(wrong.driver, spec("knockout"));
     await wrong.driver.completeStage("s1");
-    await expect(wrong.driver.publicStandings(ref(b))).rejects.toThrow(/banner names Ann; want Bob/);
+    const out = await wrong.driver.publicStandings(ref(b));
+    expect(out.standings).toEqual([]);
+    expect(clock.t).toBeGreaterThanOrEqual(productWindowMs(3000));
+    const shown = only(wrong.driver, "ui-champion-shown");
+    expect(shown).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(shown.evidence.join("\n")).toMatch(/the banner names Ann; want Bob/);
+    expect(only(wrong.driver, "ui-public-standings-match")).toMatchObject({ verdict: "abstain", checked: 0 });
+    expect(wrong.driver.checks().map((k) => k.id)).toEqual(expect.arrayContaining(["organiser-ui-path", "mixed-driver-coverage", "visual-evidence"]));
 
     const noRanks = make({ http: pub({ kind: "knockout", standings: [] }), spec: spec("knockout"), pages: { completeStageUi: async () => ({ completed: true, events: [] }) } });
     const b2 = await built(noRanks.driver, spec("knockout"));
