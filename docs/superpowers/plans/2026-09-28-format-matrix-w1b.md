@@ -5277,6 +5277,19 @@ Each cell runs `fc.check` over `fc.commands`, and each run of the property build
 - A failure that matches a committed open regression (same cell and check) is **known**; any other is **new**, and exits 1.
 - Per cell, zero is a failure: every command kind ran, a Score was accepted, each step invariant checked more than zero items, and fold parity compared more than zero fixtures (R25).
 
+**Controller amendment after Task 13's fix rounds (binding; it overrides any code block below that disagrees).** Task 13 grew `ModelState` after this task was written. Read `scripts/matrix/lib/model/state.ts` for the real shape before coding. The reducer and report must carry the new fields:
+- **`counts`:** `CommandCounts` is now `{ ran, accepted, refused, expected, unexpected }`. `absorb` sums all five, with no `as` cast that drops fields. `CellReport.counts` carries all five.
+- **Unknown ledgers:** `absorb` also sums `m.unknowns` into `CellReport.unknowns: Record<"retried" | "tip-moved", number>`.
+- **Findings:** it merges `m.findings` into `CellReport.findings: Record<string, { count: number; evidence: string[] }>`, keeping at most 3 evidence lines per id.
+- **Informative steps:** it sums `informativeSteps(m).checked` (state.ts; a `CheckResult` whose `checked` is the accepted-step count) into `CellReport.informativeSteps: number`. Aggregate **per cell, across runs**; one uninformative run is not a vacuous cell.
+- **Vacuity:** the vacuity block adds `informativeSteps === 0` → `vacuous.push("no informative step (model-informative-steps)")`.
+- **Unexpected refusals:** a non-zero `counts[k].unexpected` for any kind is reported as a NEW failure with check `model-unexpected-refusal` (unless a committed open regression matches), not merely counted.
+- **CLI output:**
+  - `model.ts` prints one `finding <id> ×<count>` line per finding id. A known finding (e.g. `CD-T13b`) never changes the exit code.
+  - The report JSON carries `unknowns`, `findings` and `informativeSteps` per cell.
+- **fast-check size:** pick the `fc.commands` size and `maxCommands` default. The fast-check default yields about 2 accepted steps per run. Measure accepted steps per run on the fake with the chosen setting, and record the number in the report file.
+- **#879 test:** the fences-OFF test expects the pre-Start shape `Generate → AddEntrant → Generate` with no Start (the test below is already amended).
+
 **Files:**
 - Create: `scripts/matrix/lib/model/run-cell.ts`, `scripts/matrix/model.ts`
 - Modify: `package.json` (`"matrix:model": "node --experimental-strip-types scripts/matrix/model.ts"`), `.gitignore` if `matrix-report/` does not already cover the new report (it does; the test pins it)
@@ -5345,12 +5358,14 @@ describe("runCell", () => {
     expect(r.failure).toBeNull();
     expect(r.fenced["late-entry-then-generate"]).toBeGreaterThan(0);
   });
-  it("fences OFF → #879 found on I7; the shrunk path is AddEntrant then Generate after a Start; seed and path logged", async () => {
+  it("fences OFF → #879 found on I7; the shrunk path is Generate, AddEntrant, Generate before any Start; seed and path logged", async () => {
     const r = await runCell(input({ fault879: true, fences: false }));
     expect(r.failure?.check).toBe("I7-rr-no-pair-over-legs");
     const cmds = r.failure!.commands.map((c) => c.split("(")[0]);
-    expect(cmds.indexOf("Start")).toBeGreaterThan(-1);
-    expect(cmds.indexOf("AddEntrant")).toBeGreaterThan(cmds.indexOf("Start"));
+    // #879 is pre-Start (T13 fix round 1): after Start the roster lock refuses AddEntrant.
+    expect(cmds.indexOf("Start")).toBe(-1);
+    expect(cmds.indexOf("Generate")).toBeGreaterThan(-1);
+    expect(cmds.indexOf("AddEntrant")).toBeGreaterThan(cmds.indexOf("Generate"));
     expect(cmds.lastIndexOf("Generate")).toBeGreaterThan(cmds.indexOf("AddEntrant"));
     // Only commands that RAN are listed (R-PF9): the step that threw is the last one.
     expect(cmds.at(-1)).toBe("Generate");
@@ -5962,7 +5977,7 @@ This step answers one question by driving the product: can an organiser withdraw
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:model -- --run-id w1b-model-0928a --report-dir matrix-report; echo EXIT=$?
 ```
 
-Expected: six `[i/6]` lines, each with its `seed=`, then `ok — N runs, parity P, fenced {…}` with P > 0. A `VACUOUS` line is a failure of this task, not of the product: raise `--runs` or `--max-commands` for that cell and record why. A `FAILURE … (NEW)` line is a finding. Keep its printed stub for Step 6.
+Expected: six `[i/6]` lines, each with its `seed=`, then `ok — N runs, parity P, fenced {…}` with P > 0. A `VACUOUS` line is a failure of this task, not of the product: raise `--runs` or `--max-commands` for that cell and record why. A `FAILURE … (NEW)` line is a finding. Keep its printed stub for Step 6. Expect a known-finding line `CD-T13b` (the roster lock's code-less 422) on any cell where Start then AddEntrant was drawn: a count, never a stop, routed to W9. Also expect **zero** `model-unexpected-refusal` on the knockout cells for a Void/Correct after the fed match started: that 409 NEXT_MATCH_STARTED is an expected refusal (T13 fix round 2). A non-zero count there is a model bug, not a product finding.
 
 - [ ] **Step 5: The model with fences off on the #879 cell**
 
@@ -5970,7 +5985,7 @@ Expected: six `[i/6]` lines, each with its `seed=`, then `ok — N runs, parity 
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1b-exec && npm run matrix:model -- --run-id w1b-model-0928b --report-dir matrix-report --cell 'league|generic' --no-fences; echo EXIT=$?
 ```
 
-Expected: EXIT=1 and `FAILURE I7-rr-no-pair-over-legs (NEW)`, with a shrunk path of `Start → … AddEntrant → … Generate`. That is #879 reproduced by the model. If it does **not** fail, record that as a finding (#879 may already be fixed on main; check the issue), and commit no regression.
+Expected: EXIT=1 and `FAILURE I7-rr-no-pair-over-legs (NEW)`, with a shrunk path of `Generate → … AddEntrant → … Generate` and **no Start** (#879 is pre-Start — after Start the roster lock refuses the entrant; T13 fix round 1). That is #879 reproduced by the model. If it does **not** fail, record that as a finding (#879 may already be fixed on main; check the issue), and commit no regression.
 
 - [ ] **Step 6: Commit the regression and replay it**
 
